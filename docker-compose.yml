@@ -1,21 +1,4 @@
 services:
-  postgres:
-    image: postgres:16
-    container_name: codejob-postgres
-    environment:
-      POSTGRES_USER: codejob
-      POSTGRES_PASSWORD: codejob
-      POSTGRES_DB: codejob
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U codejob -d codejob"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
   redis:
     image: redis:7
     container_name: codejob-redis
@@ -30,5 +13,4 @@ services:
       retries: 5
 
 volumes:
-  postgres_data:
   redis_data:

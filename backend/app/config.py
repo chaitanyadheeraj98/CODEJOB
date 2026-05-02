@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     app_env: str = "dev"
     debug: bool = True
 
-    postgres_dsn: str = "postgresql+psycopg://codejob:codejob@localhost:5432/codejob"
+    database_url: str = "sqlite:///./data/codejob.db"
     redis_url: str = "redis://localhost:6379/0"
     openai_api_key: str = ""
 
