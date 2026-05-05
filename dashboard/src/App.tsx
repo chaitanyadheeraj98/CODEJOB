@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import './App.css'
+import Sidebar from './components/Sidebar'
 
 type GmailStatus = {
   configured: boolean
@@ -80,6 +81,7 @@ function App() {
   const [failedQueue, setFailedQueue] = useState<Candidate[]>([])
   const [routingFixes, setRoutingFixes] = useState<Record<number, { to: string; cc: string }>>({})
   const [fixingId, setFixingId] = useState<number | null>(null)
+  const [activePage, setActivePage] = useState<'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs'>('run_queue')
 
   const loadStatus = async () => {
     const res = await fetch(`${apiBase}/gmail/status`)
@@ -252,76 +254,113 @@ function App() {
     }
   }
 
+  const gmailConnected = Boolean(status?.configured && status?.authenticated)
+  const totalActionItems = queue.length + failedQueue.length
+
   return (
     <main className="gmailShell">
-      <aside className="leftRail">
-        <div className="brand">CodeJob MailOps</div>
-        <button className="composeBtn" type="button" onClick={runAutomation} disabled={running}>
-          {running ? 'Running...' : 'Run Queue (1)'}
-        </button>
-        <nav className="navList">
-          <div className="navItem active">Needs Review <span>{queue.length}</span></div>
-          <div className="navItem">Failed Mapping <span>{failedQueue.length}</span></div>
-          <div className="navItem">Recent Runs <span>{logs.length}</span></div>
-        </nav>
-      </aside>
+      <Sidebar
+        running={running}
+        queueCount={queue.length}
+        failedCount={failedQueue.length}
+        runCount={logs.length}
+        activePage={activePage}
+        onNavigate={setActivePage}
+      />
 
       <section className="mainPane">
-        <header className="topBar">
-          <input
-            className="search"
-            value={settings.gmail_query}
-            onChange={(e) => setSettings({ ...settings, gmail_query: e.target.value })}
-            placeholder="Search/filter query"
-          />
-          <button type="button" onClick={runAutomation} disabled={running}>
-            {running ? 'Running...' : 'Sync + Queue'}
-          </button>
+        <header className="pageHeader">
+          <div>
+            <p className="eyebrow">Email Automation Dashboard</p>
+            <h1>Review, route, and ship candidate replies</h1>
+            <p className="subtle">
+              Keep the pipeline moving with one clear place for sync, approvals, and failed mapping recovery.
+            </p>
+          </div>
+          <div className="statusPills">
+            <span className={`pill ${gmailConnected ? 'ok' : 'warn'}`}>
+              Gmail {gmailConnected ? 'Connected' : 'Needs attention'}
+            </span>
+            <span className="pill neutral">Open items {totalActionItems}</span>
+          </div>
         </header>
 
-        <section className="card slim">
-          <h2>Gmail Access</h2>
-          <p><strong>Configured:</strong> {status?.configured ? 'Yes' : 'No'} | <strong>Authenticated:</strong> {status?.authenticated ? 'Yes' : 'No'}</p>
-          <p><strong>Status:</strong> {status?.detail ?? 'Loading...'}</p>
-          <p><strong>Last Sync:</strong> {status?.last_sync_at ?? 'Never'}</p>
+        <section className="statsGrid">
+          <article className="statCard">
+            <p>Needs Review</p>
+            <strong>{queue.length}</strong>
+          </article>
+          <article className="statCard">
+            <p>Failed Mapping</p>
+            <strong>{failedQueue.length}</strong>
+          </article>
+          <article className="statCard">
+            <p>Recent Runs</p>
+            <strong>{logs.length}</strong>
+          </article>
         </section>
 
-        <form className="card slim" onSubmit={saveSettings}>
-          <h2>Automation Filters</h2>
-          <label>
-            Qualification Threshold
-            <input
-              type="number"
-              min={0}
-              max={1}
-              step={0.01}
-              value={settings.qualification_threshold}
-              onChange={(e) => setSettings({ ...settings, qualification_threshold: Number(e.target.value) })}
-            />
-          </label>
-          <label>
-            Must-have Skills (comma-separated)
-            <input
-              value={settings.must_have_skills.join(',')}
-              onChange={(e) => setSettings({ ...settings, must_have_skills: e.target.value.split(',').map((v) => v.trim()).filter(Boolean) })}
-            />
-          </label>
-          <div className="rowBtns">
-            <button type="submit" disabled={saving}>{saving ? 'Saving...' : 'Save Filters'}</button>
-          </div>
-        </form>
+        {activePage === 'run_queue' ? (
+          <>
+            <header className="topBar">
+              <input
+                className="search"
+                value={settings.gmail_query}
+                onChange={(e) => setSettings({ ...settings, gmail_query: e.target.value })}
+                placeholder="Search/filter query"
+              />
+                <button type="button" onClick={runAutomation} disabled={running}>
+                  {running ? 'Running...' : 'Sync + Queue'}
+                </button>
+              </header>
 
-        <section className="card slim">
-          <h2>Resume</h2>
-          <input type="file" accept=".pdf,.doc,.docx" onChange={(e) => setResumeFile(e.target.files?.[0] ?? null)} />
-          <button type="button" onClick={uploadResume} disabled={!resumeFile}>Upload Resume</button>
-        </section>
+            <section className="card slim">
+              <h2>Gmail Access</h2>
+              <p><strong>Configured:</strong> {status?.configured ? 'Yes' : 'No'}</p>
+              <p><strong>Authenticated:</strong> {status?.authenticated ? 'Yes' : 'No'}</p>
+              <p><strong>Status:</strong> {status?.detail ?? 'Loading...'}</p>
+              <p><strong>Last Sync:</strong> {status?.last_sync_at ?? 'Never'}</p>
+            </section>
+
+            <form className="card slim" onSubmit={saveSettings}>
+              <h2>Automation Filters</h2>
+              <label>
+                Qualification Threshold
+                <input
+                  type="number"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={settings.qualification_threshold}
+                  onChange={(e) => setSettings({ ...settings, qualification_threshold: Number(e.target.value) })}
+                />
+              </label>
+              <label>
+                Must-have Skills (comma-separated)
+                <input
+                  value={settings.must_have_skills.join(',')}
+                  onChange={(e) => setSettings({ ...settings, must_have_skills: e.target.value.split(',').map((v) => v.trim()).filter(Boolean) })}
+                />
+              </label>
+              <div className="rowBtns">
+                <button type="submit" disabled={saving}>{saving ? 'Saving...' : 'Save Filters'}</button>
+              </div>
+            </form>
+
+            <section className="card slim">
+              <h2>Resume</h2>
+              <input type="file" accept=".pdf,.doc,.docx" onChange={(e) => setResumeFile(e.target.files?.[0] ?? null)} />
+              <button type="button" onClick={uploadResume} disabled={!resumeFile}>Upload Resume</button>
+            </section>
+          </>
+        ) : null}
 
         {error ? <p className="error">{error}</p> : null}
 
-        <section className="card">
+        {activePage === 'needs_review' ? (
+          <section className="card">
           <h2>Needs Review (Manual Approval Required)</h2>
-          {queue.length === 0 ? <p>No queued emails.</p> : null}
+          {queue.length === 0 ? <p className="subtle">No queued emails.</p> : null}
           {queue.map((item) => {
             const editedDraft = draftEdits[item.id] ?? item.draft_reply
             const canApprove =
@@ -364,11 +403,13 @@ function App() {
               </article>
             )
           })}
-        </section>
+          </section>
+        ) : null}
 
-        <section className="card">
+        {activePage === 'failed_mapping' ? (
+          <section className="card">
           <h2>Failed Recipient Mapping (Teach the model)</h2>
-          {failedQueue.length === 0 ? <p>No failed emails.</p> : null}
+          {failedQueue.length === 0 ? <p className="subtle">No failed emails.</p> : null}
           {failedQueue.map((item) => {
             const fix = routingFixes[item.id] ?? { to: '', cc: '' }
             return (
@@ -409,11 +450,13 @@ function App() {
               </article>
             )
           })}
-        </section>
+          </section>
+        ) : null}
 
-        <section className="card">
+        {activePage === 'recent_runs' ? (
+          <section className="card">
           <h2>Recent Runs</h2>
-          {logs.length === 0 ? <p>No runs yet.</p> : null}
+          {logs.length === 0 ? <p className="subtle">No runs yet.</p> : null}
           {logs.map((item, index) => (
             <article key={`${item.email_id ?? 'none'}-${index}`} className="emailItem">
               <p><strong>Status:</strong> {item.status}</p>
@@ -421,7 +464,8 @@ function App() {
               <p><strong>Email ID:</strong> {item.email_id ?? '-'}</p>
             </article>
           ))}
-        </section>
+          </section>
+        ) : null}
       </section>
     </main>
   )
