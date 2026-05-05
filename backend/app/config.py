@@ -1,3 +1,4 @@
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -9,6 +10,11 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./data/codejob.db"
     redis_url: str = "redis://localhost:6379/0"
     openai_api_key: str = ""
+    deepseek_api_key: str = Field(default="", validation_alias="Deepseek_API_KEY")
+    deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_model_fast: str = "deepseek-chat"
+    deepseek_timeout_seconds: float = 20.0
+    feature_deepseek_enabled: bool = False
     google_client_id: str = ""
     google_client_secret: str = ""
     google_redirect_uri: str = "http://localhost:8080/"
@@ -22,7 +28,11 @@ class Settings(BaseSettings):
     feature_auto_send: bool = False
     feature_retry_queue: bool = False
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        populate_by_name=True,
+    )
 
 
 settings = Settings()

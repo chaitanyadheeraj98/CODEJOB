@@ -72,6 +72,7 @@ def ensure_sqlite_phase0_columns() -> None:
         existing_settings = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(user_settings)")}
         settings_alter_statements = [
             ("mail_date", "ALTER TABLE user_settings ADD COLUMN mail_date VARCHAR(10)"),
+            ("feature_ai_enabled", "ALTER TABLE user_settings ADD COLUMN feature_ai_enabled BOOLEAN DEFAULT 0"),
         ]
         for column_name, statement in settings_alter_statements:
             if column_name not in existing_settings:
