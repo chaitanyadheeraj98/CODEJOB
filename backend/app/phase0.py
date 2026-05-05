@@ -351,15 +351,25 @@ def should_block_f2f(parsed: dict[str, str | int | bool]) -> tuple[bool, str]:
     return False, ""
 
 
-def _bold_skill(skill: str) -> str:
-    return f"**{skill.upper()}**"
+SKILL_DISPLAY_NAMES = {
+    "aws": "AWS",
+    "sql": "SQL",
+    "postgres": "Postgres",
+    "react": "React",
+    "spring boot": "Spring Boot",
+}
+
+
+def _format_skill(skill: str) -> str:
+    normalized = skill.strip().lower()
+    return SKILL_DISPLAY_NAMES.get(normalized, normalized.title())
 
 
 def draft_reply(sender: str, role: str, parsed: dict[str, str | int | bool]) -> str:
     include_contact_fields = bool(parsed.get("asks_contact_fields", False))
     matched_skills = str(parsed.get("skills_text", "none_detected"))
     skills = [s.strip() for s in matched_skills.split(",") if s.strip() and s.strip() != "none_detected"]
-    bold_skills = ", ".join(_bold_skill(s) for s in skills[:6]) if skills else "**FULL-STACK DEVELOPMENT**"
+    skill_summary = ", ".join(_format_skill(s) for s in skills[:6]) if skills else "Full-stack development"
     greeting = "Hi,"
     subject_line = f"Subject: Application for {role} - 7+ Years Full Stack Experience"
 
@@ -371,7 +381,7 @@ def draft_reply(sender: str, role: str, parsed: dict[str, str | int | bool]) -> 
         f"Thank you for sharing the {role} opportunity. I am interested in this role and bring 7+ years of experience building and delivering enterprise applications.",
         "I am currently working as a Full Stack Developer at Centier Bank in the banking domain, where I design and implement end-to-end solutions across backend services and modern web interfaces.",
         "My background aligns well with your requirements, especially across the following technologies:",
-        f"- {bold_skills}",
+        f"- {skill_summary}",
         "I have attached my resume for your review and would be glad to discuss how my experience matches your team's needs.",
     ]
 

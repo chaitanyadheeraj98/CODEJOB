@@ -1,6 +1,6 @@
 import unittest
 
-from app.phase0 import analyze_recipient_routing, email_domain, resolve_to_cc
+from app.phase0 import analyze_recipient_routing, draft_reply, email_domain, resolve_to_cc
 
 
 EMAIL_30_BODY = """
@@ -50,6 +50,19 @@ class RecipientRoutingTests(unittest.TestCase):
 
     def test_email_domain_extracts_from_display_name(self) -> None:
         self.assertEqual(email_domain("Prashanth Kinnera <kprashanth@horizonsoftech.net>"), "horizonsoftech.net")
+
+    def test_draft_reply_uses_plain_text_skill_labels(self) -> None:
+        draft = draft_reply(
+            "Recruiter <recruiter@example.com>",
+            "Java Developer",
+            {
+                "skills_text": "java, spring, spring boot, microservices, kafka, aws",
+                "asks_contact_fields": True,
+            },
+        )
+
+        self.assertNotIn("**", draft)
+        self.assertIn("- Java, Spring, Spring Boot, Microservices, Kafka, AWS", draft)
 
 
 if __name__ == "__main__":
