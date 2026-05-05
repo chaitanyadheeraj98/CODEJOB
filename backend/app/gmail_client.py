@@ -2,6 +2,7 @@ import base64
 import json
 import mimetypes
 import re
+import threading
 from datetime import UTC, datetime
 from email.message import EmailMessage
 from pathlib import Path
@@ -15,6 +16,9 @@ from googleapiclient.errors import HttpError
 from app.config import settings
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.modify", "https://www.googleapis.com/auth/gmail.send"]
+_oauth_lock = threading.Lock()
+_oauth_thread: threading.Thread | None = None
+_oauth_last_error: str | None = None
 
 
 def is_gmail_configured() -> bool:
@@ -80,6 +84,43 @@ def _load_credentials() -> Credentials:
 def _gmail_service():
     creds = _load_credentials()
     return build("gmail", "v1", credentials=creds)
+
+
+def _oauth_worker() -> None:
+    global _oauth_last_error
+    try:
+        _load_credentials()
+        _oauth_last_error = None
+    except Exception as exc:
+        _oauth_last_error = str(exc)
+
+
+def oauth_bootstrap_status() -> tuple[bool, str | None]:
+    global _oauth_thread
+    with _oauth_lock:
+        in_progress = bool(_oauth_thread and _oauth_thread.is_alive())
+        return in_progress, _oauth_last_error
+
+
+def start_oauth_bootstrap() -> tuple[str, str]:
+    global _oauth_thread, _oauth_last_error
+    if not is_gmail_configured():
+        return "oauth_not_configured", "Gmail OAuth is not configured."
+
+    configured, authenticated, _ = gmail_auth_status()
+    if configured and authenticated:
+        return "ready", "Gmail already authenticated."
+
+    with _oauth_lock:
+        if _oauth_thread and _oauth_thread.is_alive():
+            return "oauth_in_progress", "OAuth is already in progress. Check backend logs for the auth URL."
+        _oauth_last_error = None
+        _oauth_thread = threading.Thread(target=_oauth_worker, daemon=True, name="gmail-oauth-bootstrap")
+        _oauth_thread.start()
+    return (
+        "oauth_in_progress",
+        "OAuth started. Open the authorization URL from backend logs, complete sign-in, then retry Sync + Queue.",
+    )
 
 
 def _decode_chunk(data: str | None) -> str:

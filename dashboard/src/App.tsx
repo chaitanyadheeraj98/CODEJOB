@@ -25,12 +25,20 @@ type SettingsPayload = {
   feature_auto_polling: boolean
   feature_auto_send: boolean
   feature_retry_queue: boolean
+  feature_ai_enabled: boolean
 }
 
 type AutomationRunResponse = {
   status: string
   detail: string
   email_id: number | null
+}
+
+type OAuthStartResponse = {
+  status: string
+  detail: string
+  configured: boolean
+  authenticated: boolean
 }
 
 type ResumeAsset = {
@@ -78,7 +86,7 @@ type CandidateListResponse = {
 }
 
 function App() {
-  const apiBase = 'http://localhost:8000'
+  const apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
   const [status, setStatus] = useState<GmailStatus | null>(null)
   const [settings, setSettings] = useState<SettingsPayload>({
     enabled: true,
@@ -95,6 +103,7 @@ function App() {
     feature_auto_polling: false,
     feature_auto_send: false,
     feature_retry_queue: false,
+    feature_ai_enabled: false,
   })
   const [resumeFile, setResumeFile] = useState<File | null>(null)
   const [activeResume, setActiveResume] = useState<ResumeAsset | null>(null)
@@ -223,20 +232,55 @@ function App() {
     setRunning(true)
     setError('')
     try {
+      const controller = new AbortController()
+      const timeoutId = window.setTimeout(() => controller.abort(), 20000)
       const res = await fetch(`${apiBase}/automation/run-once`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mail_date: settings.mail_date || null }),
+        signal: controller.signal,
       })
+      window.clearTimeout(timeoutId)
       if (!res.ok) {
         const details = await res.json().catch(() => null)
         throw new Error(details?.detail ?? 'Automation run failed')
       }
       const data = (await res.json()) as AutomationRunResponse
       setLogs((prev) => [data, ...prev].slice(0, 20))
+      if (data.status === 'oauth_required' || data.status === 'oauth_in_progress') {
+        setError(data.detail)
+      }
       await loadStatus()
       await loadQueue()
       await loadFailedQueue()
+    } catch (e) {
+      if ((e as Error).name === 'AbortError') {
+        setError('Request timed out. OAuth may be waiting in backend logs. Complete Google sign-in, then retry.')
+      } else {
+        setError((e as Error).message)
+      }
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  const connectGmail = async () => {
+    setRunning(true)
+    setError('')
+    try {
+      const res = await fetch(`${apiBase}/gmail/oauth/start`, {
+        method: 'POST',
+      })
+      if (!res.ok) {
+        const details = await res.json().catch(() => null)
+        throw new Error(details?.detail ?? 'Failed to start Gmail OAuth')
+      }
+      const data = (await res.json()) as OAuthStartResponse
+      setLogs((prev) => [{ status: data.status, detail: data.detail, email_id: null }, ...prev].slice(0, 20))
+      if (data.status !== 'ready') {
+        setError(data.detail)
+      }
+      await loadStatus()
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -456,8 +500,13 @@ function App() {
                 {formattedMailDate} x
               </button>
             ) : null}
-            <button type="button" className="topBarAction" onClick={runAutomation} disabled={running}>
-              {running ? 'Running...' : 'Sync + Queue'}
+            <button
+              type="button"
+              className="topBarAction"
+              onClick={status?.authenticated ? runAutomation : connectGmail}
+              disabled={running}
+            >
+              {running ? 'Running...' : status?.authenticated ? 'Sync + Queue' : 'Connect Gmail'}
             </button>
           </div>
         </header>
@@ -474,6 +523,17 @@ function App() {
 
             <form className="card slim" onSubmit={saveSettings}>
               <h2>Automation Filters</h2>
+              <label className="toggleRow">
+                <span>Enable AI Features (beta)</span>
+                <span className="toggleSwitch">
+                  <input
+                    type="checkbox"
+                    checked={settings.feature_ai_enabled}
+                    onChange={(e) => setSettings({ ...settings, feature_ai_enabled: e.target.checked })}
+                  />
+                  <span className="toggleTrack" />
+                </span>
+              </label>
               <label>
                 Qualification Threshold
                 <input

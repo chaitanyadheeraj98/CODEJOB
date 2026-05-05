@@ -20,7 +20,9 @@ from app.gmail_client import (
     is_gmail_configured,
     list_unread_candidates_by_query,
     mark_message_processed,
+    oauth_bootstrap_status,
     send_reply_with_attachment,
+    start_oauth_bootstrap,
 )
 from app.models import DraftEditFeedback, RecruiterEmail, ResumeAsset, SyncRun, UserSettings
 from app.models import RecipientRoutingFeedback
@@ -46,6 +48,7 @@ from app.schemas import (
     GmailStatusResponse,
     GmailSyncResponse,
     IngestEmailRequest,
+    OAuthStartResponse,
     RejectRequest,
     ResolveRecipientsRequest,
     ResumeResponse,
@@ -97,6 +100,7 @@ def _ensure_default_settings() -> None:
             feature_auto_polling=settings.feature_auto_polling,
             feature_auto_send=settings.feature_auto_send,
             feature_retry_queue=settings.feature_retry_queue,
+            feature_ai_enabled=False,
         )
         db.add(default_settings)
         db.commit()
@@ -305,6 +309,7 @@ def get_settings(db: Session = Depends(get_db)) -> SettingsResponse:
         feature_auto_polling=s.feature_auto_polling,
         feature_auto_send=s.feature_auto_send,
         feature_retry_queue=s.feature_retry_queue,
+        feature_ai_enabled=s.feature_ai_enabled,
         owner_id=s.owner_id,
         created_at=s.created_at,
         updated_at=s.updated_at,
@@ -328,6 +333,7 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
     s.feature_auto_polling = payload.feature_auto_polling
     s.feature_auto_send = payload.feature_auto_send
     s.feature_retry_queue = payload.feature_retry_queue
+    s.feature_ai_enabled = payload.feature_ai_enabled
     db.commit()
     db.refresh(s)
     return get_settings(db)
@@ -519,10 +525,39 @@ def gmail_sync(db: Session = Depends(get_db)) -> GmailSyncResponse:
     )
 
 
+@app.post("/gmail/oauth/start", response_model=OAuthStartResponse)
+def gmail_oauth_start() -> OAuthStartResponse:
+    status, detail = start_oauth_bootstrap()
+    configured, authenticated, _ = gmail_auth_status()
+    return OAuthStartResponse(
+        status=status,
+        detail=detail,
+        configured=configured,
+        authenticated=authenticated,
+    )
+
+
 @app.post("/automation/run-once", response_model=AutomationRunResponse)
 def automation_run_once(payload: AutomationRunRequest | None = None, db: Session = Depends(get_db)) -> AutomationRunResponse:
     if not is_gmail_configured():
         raise HTTPException(status_code=400, detail="Gmail OAuth is not configured")
+    configured, authenticated, detail = gmail_auth_status()
+    if configured and not authenticated:
+        in_progress, last_error = oauth_bootstrap_status()
+        if in_progress:
+            return AutomationRunResponse(
+                status="oauth_in_progress",
+                detail="OAuth is in progress. Complete sign-in from backend logs, then retry Sync + Queue.",
+            )
+        if last_error:
+            return AutomationRunResponse(
+                status="oauth_required",
+                detail=f"OAuth required. Trigger Connect Gmail and complete sign-in. Last OAuth error: {last_error}",
+            )
+        return AutomationRunResponse(
+            status="oauth_required",
+            detail=f"{detail} Click Connect Gmail, open the auth URL from backend logs, complete sign-in, then retry.",
+        )
     user_settings = _get_settings(db)
     resume = _active_resume(db)
     if not resume:

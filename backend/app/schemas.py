@@ -51,6 +51,7 @@ class SettingsRequest(BaseModel):
     feature_auto_polling: bool = False
     feature_auto_send: bool = False
     feature_retry_queue: bool = False
+    feature_ai_enabled: bool = False
 
     @field_validator("mail_date")
     @classmethod
@@ -158,6 +159,13 @@ class GmailSyncResponse(BaseModel):
     imported_count: int
     skipped_count: int
     error_count: int
+
+
+class OAuthStartResponse(BaseModel):
+    status: str
+    detail: str
+    configured: bool
+    authenticated: bool
 
 
 class CandidateListResponse(BaseModel):
