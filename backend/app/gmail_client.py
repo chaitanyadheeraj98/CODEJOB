@@ -1,3 +1,5 @@
+# pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false, reportUnknownVariableType=false
+
 import base64
 import json
 import mimetypes
@@ -6,7 +8,7 @@ import threading
 from datetime import UTC, datetime
 from email.message import EmailMessage
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict, cast
 
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -19,6 +21,30 @@ SCOPES = ["https://www.googleapis.com/auth/gmail.modify", "https://www.googleapi
 _oauth_lock = threading.Lock()
 _oauth_thread: threading.Thread | None = None
 _oauth_last_error: str | None = None
+
+
+class GmailMessageCandidate(TypedDict):
+    external_message_id: str
+    external_thread_id: str
+    external_rfc_message_id: str
+    sender: str
+    recipient_email: str
+    subject: str
+    body: str
+    snippet: str
+    gmail_received_at: datetime | None
+
+
+def _as_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return cast(dict[str, Any], value)
+    return {}
+
+
+def _as_list_of_dicts(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [cast(dict[str, Any], item) for item in value if isinstance(item, dict)]
 
 
 def is_gmail_configured() -> bool:
@@ -68,20 +94,23 @@ def _load_credentials() -> Credentials:
     if settings.google_login_hint:
         extra_auth_kwargs["login_hint"] = settings.google_login_hint
 
-    creds = flow.run_local_server(
-        host="localhost",
-        bind_addr="0.0.0.0",
-        port=8080,
-        open_browser=False,
-        authorization_prompt_message="Please visit this URL to authorize this application: {url}",
-        **extra_auth_kwargs,
+    creds = cast(
+        Credentials,
+        flow.run_local_server(
+            host="localhost",
+            bind_addr="0.0.0.0",
+            port=8080,
+            open_browser=False,
+            authorization_prompt_message="Please visit this URL to authorize this application: {url}",
+            **extra_auth_kwargs,
+        ),
     )
     _ensure_token_parent()
     token_path.write_text(creds.to_json(), encoding="utf-8")
     return creds
 
 
-def _gmail_service():
+def _gmail_service() -> Any:
     creds = _load_credentials()
     return build("gmail", "v1", credentials=creds)
 
@@ -143,7 +172,7 @@ def _extract_from_parts(parts: list[dict[str, Any]]) -> tuple[str, str]:
         elif mime == "text/html" and body_data and not text_html:
             text_html = body_data
 
-        nested_parts = part.get("parts") or []
+        nested_parts = _as_list_of_dicts(part.get("parts"))
         if nested_parts:
             nested_plain, nested_html = _extract_from_parts(nested_parts)
             if nested_plain and not text_plain:
@@ -165,7 +194,7 @@ def _decode_body(payload: dict[str, Any]) -> str:
     if direct:
         return direct
 
-    plain, html = _extract_from_parts(payload.get("parts", []) or [])
+    plain, html = _extract_from_parts(_as_list_of_dicts(payload.get("parts")))
     if plain:
         return plain
     if html:
@@ -187,10 +216,10 @@ def _extract_email_address(from_header: str) -> str:
     return from_header.strip()
 
 
-def list_unread_candidates_by_query(query: str, max_results_per_page: int = 100) -> list[dict[str, Any]]:
+def list_unread_candidates_by_query(query: str, max_results_per_page: int = 100) -> list[GmailMessageCandidate]:
     service = _gmail_service()
     page_token: str | None = None
-    results: list[dict[str, str]] = []
+    results: list[GmailMessageCandidate] = []
 
     while True:
         req = service.users().messages().list(
@@ -199,15 +228,22 @@ def list_unread_candidates_by_query(query: str, max_results_per_page: int = 100)
             maxResults=max_results_per_page,
             pageToken=page_token,
         )
-        response = req.execute()
-        messages = response.get("messages", [])
+        response = _as_dict(req.execute())
+        messages = _as_list_of_dicts(response.get("messages"))
         for message in messages:
             message_id = message.get("id")
-            if not message_id:
+            if not isinstance(message_id, str) or not message_id:
                 continue
-            details = service.users().messages().get(userId="me", id=message_id, format="full").execute()
-            payload = details.get("payload", {})
-            headers = payload.get("headers", [])
+            details = _as_dict(service.users().messages().get(userId="me", id=message_id, format="full").execute())
+            payload = _as_dict(details.get("payload"))
+            header_items = _as_list_of_dicts(payload.get("headers"))
+            headers: list[dict[str, str]] = [
+                {
+                    "name": str(item.get("name", "")),
+                    "value": str(item.get("value", "")),
+                }
+                for item in header_items
+            ]
             from_header = _get_header(headers, "From")
             subject = _get_header(headers, "Subject") or "(No Subject)"
             rfc_message_id = _get_header(headers, "Message-ID")
@@ -225,7 +261,7 @@ def list_unread_candidates_by_query(query: str, max_results_per_page: int = 100)
             results.append(
                 {
                     "external_message_id": message_id,
-                    "external_thread_id": details.get("threadId", ""),
+                    "external_thread_id": str(details.get("threadId", "")),
                     "external_rfc_message_id": rfc_message_id,
                     "sender": from_header,
                     "recipient_email": _extract_email_address(from_header),
@@ -236,7 +272,8 @@ def list_unread_candidates_by_query(query: str, max_results_per_page: int = 100)
                 }
             )
 
-        next_token = response.get("nextPageToken")
+        next_token_raw = response.get("nextPageToken")
+        next_token = next_token_raw if isinstance(next_token_raw, str) and next_token_raw else None
         if not next_token:
             break
         page_token = next_token
@@ -245,7 +282,7 @@ def list_unread_candidates_by_query(query: str, max_results_per_page: int = 100)
 
 def get_message_rfc_message_id(message_id: str) -> str:
     service = _gmail_service()
-    details = (
+    details_raw = (
         service.users()
         .messages()
         .get(
@@ -256,7 +293,16 @@ def get_message_rfc_message_id(message_id: str) -> str:
         )
         .execute()
     )
-    headers = details.get("payload", {}).get("headers", [])
+    details = _as_dict(details_raw)
+    payload = _as_dict(details.get("payload"))
+    header_items = _as_list_of_dicts(payload.get("headers"))
+    headers: list[dict[str, str]] = [
+        {
+            "name": str(item.get("name", "")),
+            "value": str(item.get("value", "")),
+        }
+        for item in header_items
+    ]
     return _get_header(headers, "Message-ID")
 
 
@@ -286,8 +332,9 @@ def send_reply_with_attachment(
 
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
     payload = {"raw": raw, "threadId": thread_id}
-    response = service.users().messages().send(userId="me", body=payload).execute()
-    return response.get("id", "")
+    response = _as_dict(service.users().messages().send(userId="me", body=payload).execute())
+    message_id = response.get("id")
+    return message_id if isinstance(message_id, str) else ""
 
 
 def mark_message_processed(message_id: str) -> None:
