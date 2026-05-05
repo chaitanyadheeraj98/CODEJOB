@@ -39,6 +39,7 @@ class RoutingEvidenceResponse(BaseModel):
 class SettingsRequest(BaseModel):
     enabled: bool = True
     gmail_query: str = "is:unread in:inbox recruiter"
+    mail_date: str | None = None
     min_salary: int | None = None
     accepted_locations: list[str] = Field(default_factory=list)
     visa_required_allowed: bool = False
@@ -50,6 +51,14 @@ class SettingsRequest(BaseModel):
     feature_auto_polling: bool = False
     feature_auto_send: bool = False
     feature_retry_queue: bool = False
+
+    @field_validator("mail_date")
+    @classmethod
+    def validate_mail_date(cls, value: str | None) -> str | None:
+        if value in (None, ""):
+            return None
+        datetime.strptime(value, "%Y-%m-%d")
+        return value
 
 
 class SettingsResponse(SettingsRequest):
@@ -102,6 +111,7 @@ class EmailResponse(BaseModel):
     external_message_id: str | None
     external_thread_id: str | None
     external_rfc_message_id: str | None
+    gmail_received_at: datetime | None
     gmail_message_url: str | None = None
     recipient_email: str | None
     cc_email: str | None
@@ -160,3 +170,15 @@ class AutomationRunResponse(BaseModel):
     status: str
     detail: str
     email_id: int | None = None
+
+
+class AutomationRunRequest(BaseModel):
+    mail_date: str | None = None
+
+    @field_validator("mail_date")
+    @classmethod
+    def validate_mail_date(cls, value: str | None) -> str | None:
+        if value in (None, ""):
+            return None
+        datetime.strptime(value, "%Y-%m-%d")
+        return value

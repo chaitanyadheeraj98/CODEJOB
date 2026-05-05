@@ -150,12 +150,98 @@
 }
 
 .topBar {
+  --topbar-control-h: 2.75rem;
+  --topbar-radius: 0.75rem;
   display: flex;
-  gap: 0.65rem;
+  gap: 0.85rem;
+  align-items: center;
+  flex-wrap: wrap;
 }
 
 .search {
-  flex: 1;
+  flex: 1 1 22rem;
+  min-width: 16rem;
+  height: var(--topbar-control-h);
+  min-height: var(--topbar-control-h);
+  line-height: 1.2;
+  box-sizing: border-box;
+  border-radius: var(--topbar-radius);
+}
+
+.topBarRight {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin-left: auto;
+}
+
+.dateTrigger {
+  position: relative;
+  width: var(--topbar-control-h);
+  height: var(--topbar-control-h);
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.datePickerNative {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: auto;
+  cursor: pointer;
+  width: 100%;
+  height: 100%;
+}
+
+.iconBtn {
+  width: var(--topbar-control-h);
+  height: var(--topbar-control-h);
+  min-height: var(--topbar-control-h);
+  border-radius: var(--topbar-radius);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  line-height: 1;
+  box-sizing: border-box;
+}
+
+.iconBtn svg {
+  width: 1.15rem;
+  height: 1.15rem;
+  fill: currentColor;
+}
+
+.dateChip {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--surface) 88%, var(--brand-soft) 12%);
+  color: var(--muted-strong);
+  height: calc(var(--topbar-control-h) - 0.2rem);
+  padding: 0 0.8rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  box-sizing: border-box;
+}
+
+.topBarAction {
+  height: var(--topbar-control-h);
+  min-height: var(--topbar-control-h);
+  border-radius: var(--topbar-radius);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  box-sizing: border-box;
+  flex: 0 0 auto;
 }
 
 .card {
@@ -285,6 +371,20 @@
 
   .pageHeader {
     flex-direction: column;
+  }
+
+  .topBar {
+    align-items: stretch;
+  }
+
+  .search {
+    min-width: 100%;
+  }
+
+  .topBarRight {
+    margin-left: 0;
+    width: 100%;
+    justify-content: flex-end;
   }
 
   .evidenceGrid {

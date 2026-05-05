@@ -2,6 +2,7 @@ import base64
 import json
 import mimetypes
 import re
+from datetime import UTC, datetime
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Any
@@ -145,7 +146,7 @@ def _extract_email_address(from_header: str) -> str:
     return from_header.strip()
 
 
-def list_unread_candidates_by_query(query: str, max_results_per_page: int = 100) -> list[dict[str, str]]:
+def list_unread_candidates_by_query(query: str, max_results_per_page: int = 100) -> list[dict[str, Any]]:
     service = _gmail_service()
     page_token: str | None = None
     results: list[dict[str, str]] = []
@@ -169,6 +170,13 @@ def list_unread_candidates_by_query(query: str, max_results_per_page: int = 100)
             from_header = _get_header(headers, "From")
             subject = _get_header(headers, "Subject") or "(No Subject)"
             rfc_message_id = _get_header(headers, "Message-ID")
+            internal_date_ms = details.get("internalDate")
+            gmail_received_at = None
+            if internal_date_ms:
+                try:
+                    gmail_received_at = datetime.fromtimestamp(int(internal_date_ms) / 1000, tz=UTC)
+                except (TypeError, ValueError):
+                    gmail_received_at = None
             body = _decode_body(payload)
             snippet = (details.get("snippet") or "").strip()
             if not body.strip() and snippet:
@@ -183,6 +191,7 @@ def list_unread_candidates_by_query(query: str, max_results_per_page: int = 100)
                     "subject": subject,
                     "body": body,
                     "snippet": snippet,
+                    "gmail_received_at": gmail_received_at,
                 }
             )
 

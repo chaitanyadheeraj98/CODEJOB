@@ -25,6 +25,7 @@ def ensure_sqlite_phase0_columns() -> None:
             ("external_message_id", "ALTER TABLE recruiter_emails ADD COLUMN external_message_id VARCHAR(255)"),
             ("external_thread_id", "ALTER TABLE recruiter_emails ADD COLUMN external_thread_id VARCHAR(255)"),
             ("external_rfc_message_id", "ALTER TABLE recruiter_emails ADD COLUMN external_rfc_message_id VARCHAR(500)"),
+            ("gmail_received_at", "ALTER TABLE recruiter_emails ADD COLUMN gmail_received_at DATETIME"),
             ("recipient_email", "ALTER TABLE recruiter_emails ADD COLUMN recipient_email VARCHAR(255)"),
             ("cc_email", "ALTER TABLE recruiter_emails ADD COLUMN cc_email VARCHAR(255)"),
             ("routing_status", "ALTER TABLE recruiter_emails ADD COLUMN routing_status VARCHAR(50) DEFAULT 'unverified'"),
@@ -66,5 +67,13 @@ def ensure_sqlite_phase0_columns() -> None:
         ]
         for column_name, statement in feedback_alter_statements:
             if column_name not in existing_feedback:
+                conn.exec_driver_sql(statement)
+
+        existing_settings = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(user_settings)")}
+        settings_alter_statements = [
+            ("mail_date", "ALTER TABLE user_settings ADD COLUMN mail_date VARCHAR(10)"),
+        ]
+        for column_name, statement in settings_alter_statements:
+            if column_name not in existing_settings:
                 conn.exec_driver_sql(statement)
         conn.commit()

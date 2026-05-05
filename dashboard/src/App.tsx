@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import './App.css'
 import Sidebar from './components/Sidebar'
 
@@ -13,6 +13,7 @@ type GmailStatus = {
 type SettingsPayload = {
   enabled: boolean
   gmail_query: string
+  mail_date: string | null
   min_salary: number | null
   accepted_locations: string[]
   visa_required_allowed: boolean
@@ -30,6 +31,17 @@ type AutomationRunResponse = {
   status: string
   detail: string
   email_id: number | null
+}
+
+type ResumeAsset = {
+  id: number
+  file_name: string
+  mime_type: string
+  sha256: string
+  version: number
+  is_current: boolean
+  created_at: string
+  updated_at: string
 }
 
 type Candidate = {
@@ -71,6 +83,7 @@ function App() {
   const [settings, setSettings] = useState<SettingsPayload>({
     enabled: true,
     gmail_query: 'tx',
+    mail_date: null,
     min_salary: null,
     accepted_locations: [],
     visa_required_allowed: false,
@@ -84,6 +97,7 @@ function App() {
     feature_retry_queue: false,
   })
   const [resumeFile, setResumeFile] = useState<File | null>(null)
+  const [activeResume, setActiveResume] = useState<ResumeAsset | null>(null)
   const [running, setRunning] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -96,6 +110,17 @@ function App() {
   const [routingFixes, setRoutingFixes] = useState<Record<number, { to: string; cc: string }>>({})
   const [fixingId, setFixingId] = useState<number | null>(null)
   const [activePage, setActivePage] = useState<'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs'>('run_queue')
+  const datePickerRef = useRef<HTMLInputElement | null>(null)
+
+  const candidatesUrl = (state: 'needs_review' | 'failed') => {
+    const params = new URLSearchParams({
+      state,
+      limit: '20',
+      sort: 'newest',
+    })
+    if (settings.mail_date) params.set('mail_date', settings.mail_date)
+    return `${apiBase}/candidates?${params.toString()}`
+  }
 
   const loadStatus = async () => {
     const res = await fetch(`${apiBase}/gmail/status`)
@@ -110,7 +135,7 @@ function App() {
   }
 
   const loadQueue = async () => {
-    const res = await fetch(`${apiBase}/candidates?state=needs_review&limit=20&sort=newest`)
+    const res = await fetch(candidatesUrl('needs_review'))
     if (!res.ok) throw new Error('Failed to load review queue')
     const data = (await res.json()) as CandidateListResponse
     setQueue(data.items)
@@ -123,8 +148,16 @@ function App() {
     })
   }
 
+  const loadActiveResume = async () => {
+    const res = await fetch(`${apiBase}/settings/resumes`)
+    if (!res.ok) throw new Error('Failed to load resumes')
+    const items = (await res.json()) as ResumeAsset[]
+    const current = items.find((item) => item.is_current) ?? null
+    setActiveResume(current)
+  }
+
   const loadFailedQueue = async () => {
-    const res = await fetch(`${apiBase}/candidates?state=failed&limit=20&sort=newest`)
+    const res = await fetch(candidatesUrl('failed'))
     if (!res.ok) throw new Error('Failed to load failed queue')
     const data = (await res.json()) as CandidateListResponse
     setFailedQueue(data.items)
@@ -142,9 +175,15 @@ function App() {
   useEffect(() => {
     loadStatus().catch((e) => setError((e as Error).message))
     loadSettings().catch((e) => setError((e as Error).message))
+    loadActiveResume().catch((e) => setError((e as Error).message))
     loadQueue().catch((e) => setError((e as Error).message))
     loadFailedQueue().catch((e) => setError((e as Error).message))
   }, [])
+
+  useEffect(() => {
+    loadQueue().catch((e) => setError((e as Error).message))
+    loadFailedQueue().catch((e) => setError((e as Error).message))
+  }, [settings.mail_date])
 
   const saveSettings = async (event: React.FormEvent) => {
     event.preventDefault()
@@ -174,6 +213,7 @@ function App() {
       const res = await fetch(`${apiBase}/settings/resume`, { method: 'POST', body: fd })
       if (!res.ok) throw new Error('Failed to upload resume')
       setResumeFile(null)
+      await loadActiveResume()
     } catch (e) {
       setError((e as Error).message)
     }
@@ -183,7 +223,11 @@ function App() {
     setRunning(true)
     setError('')
     try {
-      const res = await fetch(`${apiBase}/automation/run-once`, { method: 'POST' })
+      const res = await fetch(`${apiBase}/automation/run-once`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mail_date: settings.mail_date || null }),
+      })
       if (!res.ok) {
         const details = await res.json().catch(() => null)
         throw new Error(details?.detail ?? 'Automation run failed')
@@ -280,6 +324,25 @@ function App() {
       .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
       .join(' ')
 
+  const openDatePicker = () => {
+    const picker = datePickerRef.current
+    if (!picker) return
+    if (typeof picker.showPicker === 'function') {
+      picker.showPicker()
+      return
+    }
+    picker.focus()
+    picker.click()
+  }
+
+  const formattedMailDate = settings.mail_date
+    ? new Date(`${settings.mail_date}T00:00:00`).toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      })
+    : ''
+
   const renderRoutingPanel = (item: Candidate) => (
     <div className={`routingPanel ${canTrustRouting(item) ? 'safe' : 'blocked'}`}>
       <div className="routingPanelHeader">
@@ -360,20 +423,47 @@ function App() {
           </article>
         </section>
 
+        <header className="topBar">
+          <input
+            className="search"
+            value={settings.gmail_query}
+            onChange={(e) => setSettings({ ...settings, gmail_query: e.target.value })}
+            placeholder="Search/filter query"
+          />
+          <div className="topBarRight">
+            <span className="dateTrigger">
+              <button type="button" className="iconBtn" onClick={openDatePicker} title="Filter by date">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M7 2a1 1 0 0 1 1 1v1h8V3a1 1 0 1 1 2 0v1h1a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h1V3a1 1 0 0 1 1-1Zm12 8H5v9h14v-9ZM6 6v2h12V6H6Z" />
+                </svg>
+              </button>
+              <input
+                ref={datePickerRef}
+                className="datePickerNative"
+                type="date"
+                value={settings.mail_date ?? ''}
+                onChange={(e) => setSettings({ ...settings, mail_date: e.target.value || null })}
+                aria-label="Mail date filter"
+              />
+            </span>
+            {settings.mail_date ? (
+              <button
+                type="button"
+                className="dateChip"
+                onClick={() => setSettings({ ...settings, mail_date: null })}
+                title="Clear date filter"
+              >
+                {formattedMailDate} x
+              </button>
+            ) : null}
+            <button type="button" className="topBarAction" onClick={runAutomation} disabled={running}>
+              {running ? 'Running...' : 'Sync + Queue'}
+            </button>
+          </div>
+        </header>
+
         {activePage === 'run_queue' ? (
           <>
-            <header className="topBar">
-              <input
-                className="search"
-                value={settings.gmail_query}
-                onChange={(e) => setSettings({ ...settings, gmail_query: e.target.value })}
-                placeholder="Search/filter query"
-              />
-                <button type="button" onClick={runAutomation} disabled={running}>
-                  {running ? 'Running...' : 'Sync + Queue'}
-                </button>
-              </header>
-
             <section className="card slim">
               <h2>Gmail Access</h2>
               <p><strong>Configured:</strong> {status?.configured ? 'Yes' : 'No'}</p>
@@ -409,8 +499,17 @@ function App() {
 
             <section className="card slim">
               <h2>Resume</h2>
+              {activeResume ? (
+                <p className="subtle">
+                  Active resume: <strong>{activeResume.file_name}</strong> (v{activeResume.version})
+                </p>
+              ) : (
+                <p className="subtle">No active resume uploaded yet.</p>
+              )}
               <input type="file" accept=".pdf,.doc,.docx" onChange={(e) => setResumeFile(e.target.files?.[0] ?? null)} />
-              <button type="button" onClick={uploadResume} disabled={!resumeFile}>Upload Resume</button>
+              <button type="button" onClick={uploadResume} disabled={!resumeFile}>
+                {activeResume ? 'Replace Resume' : 'Upload Resume'}
+              </button>
             </section>
           </>
         ) : null}

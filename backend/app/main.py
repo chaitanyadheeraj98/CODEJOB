@@ -4,7 +4,7 @@ import uuid
 from collections.abc import Generator
 from contextlib import asynccontextmanager
 from dataclasses import asdict
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
@@ -38,6 +38,7 @@ from app.phase0 import (
 )
 from app.schemas import (
     ApproveSendRequest,
+    AutomationRunRequest,
     AutomationRunResponse,
     BulkRejectRequest,
     CandidateListResponse,
@@ -91,6 +92,7 @@ def _ensure_default_settings() -> None:
             owner_id=settings.owner_id,
             enabled=True,
             gmail_query="is:unread in:inbox recruiter",
+            mail_date=None,
             qualification_threshold=settings.qualification_threshold,
             feature_auto_polling=settings.feature_auto_polling,
             feature_auto_send=settings.feature_auto_send,
@@ -111,6 +113,16 @@ def _get_settings(db: Session) -> UserSettings:
 
 def _to_csv(values: list[str]) -> str:
     return ",".join(v.strip() for v in values if v.strip())
+
+
+def _compose_gmail_query(base_query: str, mail_date: str | None = None) -> str:
+    parts = [base_query.strip(), "is:unread", "tx"]
+    if mail_date:
+        selected = date.fromisoformat(mail_date)
+        next_day = selected + timedelta(days=1)
+        parts.append(f"after:{selected.strftime('%Y/%m/%d')}")
+        parts.append(f"before:{next_day.strftime('%Y/%m/%d')}")
+    return " ".join(part for part in parts if part)
 
 
 def _active_resume(db: Session) -> ResumeAsset | None:
@@ -281,6 +293,7 @@ def get_settings(db: Session = Depends(get_db)) -> SettingsResponse:
     return SettingsResponse(
         enabled=s.enabled,
         gmail_query=s.gmail_query,
+        mail_date=s.mail_date,
         min_salary=s.min_salary,
         accepted_locations=[v for v in s.accepted_locations.split(",") if v],
         visa_required_allowed=s.visa_required_allowed,
@@ -303,6 +316,7 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
     s = _get_settings(db)
     s.enabled = payload.enabled
     s.gmail_query = payload.gmail_query
+    s.mail_date = payload.mail_date
     s.min_salary = payload.min_salary
     s.accepted_locations = _to_csv(payload.accepted_locations)
     s.visa_required_allowed = payload.visa_required_allowed
@@ -478,6 +492,7 @@ def gmail_sync(db: Session = Depends(get_db)) -> GmailSyncResponse:
                 external_message_id=item["external_message_id"],
                 external_thread_id=item["external_thread_id"],
                 external_rfc_message_id=item.get("external_rfc_message_id"),
+                gmail_received_at=item.get("gmail_received_at"),
                 recipient_email=item["recipient_email"],
             )
             db.add(email)
@@ -505,7 +520,7 @@ def gmail_sync(db: Session = Depends(get_db)) -> GmailSyncResponse:
 
 
 @app.post("/automation/run-once", response_model=AutomationRunResponse)
-def automation_run_once(db: Session = Depends(get_db)) -> AutomationRunResponse:
+def automation_run_once(payload: AutomationRunRequest | None = None, db: Session = Depends(get_db)) -> AutomationRunResponse:
     if not is_gmail_configured():
         raise HTTPException(status_code=400, detail="Gmail OAuth is not configured")
     user_settings = _get_settings(db)
@@ -513,7 +528,8 @@ def automation_run_once(db: Session = Depends(get_db)) -> AutomationRunResponse:
     if not resume:
         raise HTTPException(status_code=400, detail="No active resume uploaded")
 
-    effective_query = f"{user_settings.gmail_query} is:unread tx"
+    requested_mail_date = payload.mail_date if payload else None
+    effective_query = _compose_gmail_query(user_settings.gmail_query, requested_mail_date or user_settings.mail_date)
     items = list_unread_candidates_by_query(effective_query, max_results_per_page=20)
     if not items:
         return AutomationRunResponse(status="idle", detail="No unread matching emails found")
@@ -548,9 +564,11 @@ def automation_run_once(db: Session = Depends(get_db)) -> AutomationRunResponse:
             external_message_id=item["external_message_id"],
             external_thread_id=item["external_thread_id"],
             external_rfc_message_id=item.get("external_rfc_message_id"),
+            gmail_received_at=item.get("gmail_received_at"),
             recipient_email=item["recipient_email"],
         )
         email.external_rfc_message_id = email.external_rfc_message_id or item.get("external_rfc_message_id")
+        email.gmail_received_at = email.gmail_received_at or item.get("gmail_received_at")
         email.score = int(ai_score * 100)
         email.ai_score = ai_score
         email.ai_score_source = "v1_rules_plus_ai"
@@ -595,9 +613,11 @@ def automation_run_once(db: Session = Depends(get_db)) -> AutomationRunResponse:
             external_message_id=item["external_message_id"],
             external_thread_id=item["external_thread_id"],
             external_rfc_message_id=item.get("external_rfc_message_id"),
+            gmail_received_at=item.get("gmail_received_at"),
             recipient_email=item["recipient_email"],
         )
         email.external_rfc_message_id = email.external_rfc_message_id or item.get("external_rfc_message_id")
+        email.gmail_received_at = email.gmail_received_at or item.get("gmail_received_at")
         email.state = "failed"
         email.decision = "Reject"
         email.last_error = "Could not resolve recruiter To and employer CC"
@@ -633,9 +653,11 @@ def automation_run_once(db: Session = Depends(get_db)) -> AutomationRunResponse:
         external_message_id=item["external_message_id"],
         external_thread_id=item["external_thread_id"],
         external_rfc_message_id=item.get("external_rfc_message_id"),
+        gmail_received_at=item.get("gmail_received_at"),
         recipient_email=item["recipient_email"],
     )
     email.external_rfc_message_id = email.external_rfc_message_id or item.get("external_rfc_message_id")
+    email.gmail_received_at = email.gmail_received_at or item.get("gmail_received_at")
     email.score = int(ai_score * 100)
     email.ai_score = ai_score
     email.ai_score_source = "v1_rules_plus_ai"
@@ -710,12 +732,24 @@ def list_candidates(
     cursor: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
     sort: str = Query("newest"),
+    mail_date: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
     db: Session = Depends(get_db),
 ) -> CandidateListResponse:
     states = [s.strip() for s in state.split(",") if s.strip()]
     query = db.query(RecruiterEmail).filter(RecruiterEmail.owner_id == settings.owner_id)
     if states:
         query = query.filter(or_(*[RecruiterEmail.state == s for s in states]))
+
+    if mail_date:
+        try:
+            selected = date.fromisoformat(mail_date)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="mail_date must be a valid YYYY-MM-DD date") from exc
+        start = datetime(selected.year, selected.month, selected.day, tzinfo=UTC)
+        end = start + timedelta(days=1)
+        query = query.filter(RecruiterEmail.source == "gmail")
+        query = query.filter(RecruiterEmail.gmail_received_at.is_not(None))
+        query = query.filter(RecruiterEmail.gmail_received_at >= start, RecruiterEmail.gmail_received_at < end)
 
     if sort == "highest_score":
         query = query.order_by(RecruiterEmail.score.desc(), RecruiterEmail.created_at.desc())
