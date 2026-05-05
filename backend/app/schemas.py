@@ -1,6 +1,8 @@
 from datetime import datetime
+import json
+from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class IngestEmailRequest(BaseModel):
@@ -25,6 +27,13 @@ class BulkRejectRequest(BaseModel):
 class ResolveRecipientsRequest(BaseModel):
     to_email: str
     cc_email: str
+
+
+class RoutingEvidenceResponse(BaseModel):
+    role: str
+    email: str
+    source: str
+    detail: str
 
 
 class SettingsRequest(BaseModel):
@@ -92,8 +101,16 @@ class EmailResponse(BaseModel):
     source: str
     external_message_id: str | None
     external_thread_id: str | None
+    external_rfc_message_id: str | None
+    gmail_message_url: str | None = None
     recipient_email: str | None
     cc_email: str | None
+    routing_status: str
+    routing_confidence: float
+    routing_reason: str
+    routing_evidence: list[RoutingEvidenceResponse] = Field(default_factory=list)
+    routing_candidates: list[RoutingEvidenceResponse] = Field(default_factory=list)
+    routing_confirmed: bool
     resume_asset_id: int | None
     resume_file_name: str | None
     sent_at: datetime | None
@@ -103,6 +120,19 @@ class EmailResponse(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+    @field_validator("routing_evidence", "routing_candidates", mode="before")
+    @classmethod
+    def parse_routing_json(cls, value: Any) -> Any:
+        if value in (None, ""):
+            return []
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except json.JSONDecodeError:
+                return []
+            return parsed if isinstance(parsed, list) else []
+        return value
 
 
 class GmailStatusResponse(BaseModel):

@@ -37,12 +37,26 @@ type Candidate = {
   subject: string
   sender: string
   body: string
+  gmail_message_url: string | null
   recipient_email: string | null
   cc_email: string | null
+  routing_status: string
+  routing_confidence: number
+  routing_reason: string
+  routing_evidence: RoutingEvidence[]
+  routing_candidates: RoutingEvidence[]
+  routing_confirmed: boolean
   draft_reply: string
   resume_file_name: string | null
   state: string
   last_error: string | null
+}
+
+type RoutingEvidence = {
+  role: string
+  email: string
+  source: string
+  detail: string
 }
 
 type CandidateListResponse = {
@@ -256,6 +270,52 @@ function App() {
 
   const gmailConnected = Boolean(status?.configured && status?.authenticated)
   const totalActionItems = queue.length + failedQueue.length
+  const canTrustRouting = (candidate: Candidate) =>
+    candidate.routing_confirmed ||
+    (['safe', 'confirmed'].includes(candidate.routing_status) && candidate.routing_confidence >= 0.8)
+
+  const sourceLabel = (source: string) =>
+    source
+      .split('_')
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ')
+
+  const renderRoutingPanel = (item: Candidate) => (
+    <div className={`routingPanel ${canTrustRouting(item) ? 'safe' : 'blocked'}`}>
+      <div className="routingPanelHeader">
+        <strong>Routing: {item.routing_status || 'unverified'}</strong>
+        <span>{Math.round((item.routing_confidence ?? 0) * 100)}% confidence</span>
+      </div>
+      <p>{item.routing_reason || 'No routing evidence captured yet.'}</p>
+      {item.routing_evidence?.length ? (
+        <div className="evidenceGrid">
+          {item.routing_evidence.map((evidence, index) => (
+            <div key={`${item.id}-evidence-${index}`} className="evidenceItem">
+              <small>{evidence.role.toUpperCase()} from {sourceLabel(evidence.source)}</small>
+              <span>{evidence.email}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {!canTrustRouting(item) ? (
+        <p className="routingWarning">Approval is blocked until routing is safe or manually confirmed.</p>
+      ) : null}
+    </div>
+  )
+
+  const renderCandidateEmails = (item: Candidate) => {
+    if (!item.routing_candidates?.length) return null
+    return (
+      <div className="candidateEmailList">
+        <strong>Extracted email candidates</strong>
+        {item.routing_candidates.map((candidate, index) => (
+          <p key={`${item.id}-candidate-${index}`}>
+            <span>{candidate.role.toUpperCase()}</span> {candidate.email} <small>({sourceLabel(candidate.source)})</small>
+          </p>
+        ))}
+      </div>
+    )
+  }
 
   return (
     <main className="gmailShell">
@@ -367,14 +427,24 @@ function App() {
               Boolean(item.recipient_email) &&
               Boolean(item.cc_email) &&
               Boolean(editedDraft?.trim()) &&
-              Boolean(item.resume_file_name)
+              Boolean(item.resume_file_name) &&
+              canTrustRouting(item)
             return (
               <article key={item.id} className="emailItem">
                 <p><strong>Email ID:</strong> {item.id}</p>
                 <p><strong>From:</strong> {item.sender}</p>
                 <p><strong>Subject:</strong> {item.subject}</p>
+                {item.gmail_message_url ? (
+                  <p>
+                    <strong>Open:</strong>{' '}
+                    <a href={item.gmail_message_url} target="_blank" rel="noreferrer">
+                      Open exact email in Gmail
+                    </a>
+                  </p>
+                ) : null}
                 <p><strong>To:</strong> {item.recipient_email ?? '-'}</p>
                 <p><strong>CC:</strong> {item.cc_email ?? '-'}</p>
+                {renderRoutingPanel(item)}
                 <p><strong>Resume:</strong> {item.resume_file_name ?? '-'}</p>
                 <p><strong>Draft:</strong></p>
                 <textarea
@@ -388,7 +458,7 @@ function App() {
                     type="button"
                     onClick={() => approveSend(item)}
                     disabled={!canApprove || sendingId === item.id}
-                    title={!canApprove ? 'To, CC, body, and resume are required before send' : 'Approve and send'}
+                    title={!canApprove ? 'Safe routing, To, CC, body, and resume are required before send' : 'Approve and send'}
                   >
                     {sendingId === item.id ? 'Sending...' : 'Approve & Send'}
                   </button>
@@ -417,7 +487,17 @@ function App() {
                 <p><strong>Email ID:</strong> {item.id}</p>
                 <p><strong>From:</strong> {item.sender}</p>
                 <p><strong>Subject:</strong> {item.subject}</p>
+                {item.gmail_message_url ? (
+                  <p>
+                    <strong>Open:</strong>{' '}
+                    <a href={item.gmail_message_url} target="_blank" rel="noreferrer">
+                      Open exact email in Gmail
+                    </a>
+                  </p>
+                ) : null}
                 <p><strong>Reason:</strong> {item.last_error ?? item.state}</p>
+                {renderRoutingPanel(item)}
+                {renderCandidateEmails(item)}
                 <label>
                   Full Email Content (for recipient mapping)
                   <textarea value={item.body ?? ''} readOnly rows={8} />

@@ -1,4 +1,5 @@
 import re
+from dataclasses import asdict, dataclass
 
 from app.models import UserSettings
 
@@ -10,6 +11,11 @@ SKILL_KEYWORDS = [
     "sqlite",
     "react",
     "typescript",
+    "java",
+    "spring",
+    "spring boot",
+    "microservices",
+    "kafka",
     "aws",
     "docker",
 ]
@@ -26,7 +32,32 @@ RECRUITER_HINTS = [
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 TEXAS_RE = re.compile(r"\b(tx|texas)\b", re.IGNORECASE)
 F2F_RE = re.compile(r"\b(face[- ]to[- ]face|f2f)\b", re.IGNORECASE)
-EMPLOYER_DOMAIN = "horizonsofttech.net"
+EMPLOYER_DOMAINS = {"horizonsofttech.net", "horizonsoftech.net"}
+
+
+@dataclass
+class RoutingEvidence:
+    role: str
+    email: str
+    source: str
+    detail: str
+
+
+@dataclass
+class RoutingResult:
+    to_email: str | None
+    cc_email: str | None
+    status: str
+    confidence: float
+    reason: str
+    evidence: list[RoutingEvidence]
+    candidates: list[RoutingEvidence]
+
+    def to_payload(self) -> dict[str, object]:
+        payload = asdict(self)
+        payload["evidence"] = [asdict(item) for item in self.evidence]
+        payload["candidates"] = [asdict(item) for item in self.candidates]
+        return payload
 
 
 def is_recruiter_like(sender: str, subject: str, body: str) -> bool:
@@ -46,39 +77,141 @@ def extract_employer_email(body: str, recruiter_email: str | None = None) -> str
     return cleaned[0] if cleaned else None
 
 
-def resolve_to_cc(sender: str, subject: str, body: str, snippet: str = "") -> tuple[str | None, str | None]:
-    sender_email_match = EMAIL_RE.search(sender)
-    sender_email = sender_email_match.group(0).lower() if sender_email_match else sender.strip().lower()
-    combined_text = f"{subject}\n{body}\n{snippet}"
-    all_emails = [e.lower() for e in EMAIL_RE.findall(combined_text)]
-    unique_emails: list[str] = []
-    for e in all_emails:
-        if e not in unique_emails:
-            unique_emails.append(e)
+def extract_email_address(value: str) -> str:
+    match = EMAIL_RE.search(value)
+    return match.group(0).lower() if match else value.strip().lower()
 
-    employer_candidates = [e for e in unique_emails if e.endswith(f"@{EMPLOYER_DOMAIN}")]
-    recruiter_candidates = [
-        e for e in unique_emails if not e.endswith(f"@{EMPLOYER_DOMAIN}") and not e.endswith("@googlegroups.com")
-    ]
+
+def email_domain(value: str) -> str:
+    email = extract_email_address(value)
+    parts = email.split("@", 1)
+    return parts[1].lower() if len(parts) == 2 else ""
+
+
+def _is_employer_email(email: str) -> bool:
+    return email_domain(email) in EMPLOYER_DOMAINS
+
+
+def _is_ignored_email(email: str) -> bool:
+    domain = email_domain(email)
+    return domain == "googlegroups.com" or email.lower().endswith("+unsubscribe@googlegroups.com")
+
+
+def _append_unique(items: list[RoutingEvidence], item: RoutingEvidence) -> None:
+    key = (item.role, item.email, item.source)
+    if key not in {(existing.role, existing.email, existing.source) for existing in items}:
+        items.append(item)
+
+
+def analyze_recipient_routing(
+    sender: str,
+    subject: str,
+    body: str,
+    snippet: str = "",
+    learned_pairs: list[tuple[str, str]] | None = None,
+) -> RoutingResult:
+    sender_email = extract_email_address(sender)
+    combined_text = f"{subject}\n{body}\n{snippet}"
+    evidence: list[RoutingEvidence] = []
+    candidates: list[RoutingEvidence] = []
+
+    unique_emails: list[str] = []
+    for email in [e.lower() for e in EMAIL_RE.findall(combined_text)]:
+        if email not in unique_emails:
+            unique_emails.append(email)
+
+    if sender_email and "@" in sender_email and not _is_ignored_email(sender_email):
+        role = "cc" if _is_employer_email(sender_email) else "to"
+        item = RoutingEvidence(role=role, email=sender_email, source="sender_header", detail="Sender header")
+        _append_unique(candidates, item)
 
     # Prefer recruiter address from forwarded headers: "From: Name <recruiter@domain>"
     forwarded_from_matches = re.findall(r"(?im)^\s*from\s*:\s*.*?([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})", combined_text)
     forwarded_non_employer = [
         e.lower()
         for e in forwarded_from_matches
-        if not e.lower().endswith(f"@{EMPLOYER_DOMAIN}") and not e.lower().endswith("@googlegroups.com")
+        if not _is_employer_email(e.lower()) and not _is_ignored_email(e.lower())
     ]
+    for email in forwarded_non_employer:
+        _append_unique(
+            candidates,
+            RoutingEvidence(role="to", email=email, source="forwarded_from", detail="Forwarded From line"),
+        )
 
-    if sender_email and sender_email.endswith(f"@{EMPLOYER_DOMAIN}"):
-        if sender_email not in employer_candidates:
-            employer_candidates.insert(0, sender_email)
-    elif sender_email:
-        if sender_email not in recruiter_candidates:
-            recruiter_candidates.insert(0, sender_email)
+    for email in unique_emails:
+        if _is_ignored_email(email):
+            continue
+        role = "cc" if _is_employer_email(email) else "to"
+        source = "body_employer_contact" if role == "cc" else "body_recruiter_contact"
+        _append_unique(candidates, RoutingEvidence(role=role, email=email, source=source, detail="Email body"))
 
-    to_email = forwarded_non_employer[0] if forwarded_non_employer else (recruiter_candidates[0] if recruiter_candidates else None)
-    cc_email = employer_candidates[0] if employer_candidates else None
-    return to_email, cc_email
+    to_candidates = [item for item in candidates if item.role == "to"]
+    cc_candidates = [item for item in candidates if item.role == "cc"]
+    selected_to = to_candidates[0] if to_candidates else None
+    selected_cc = cc_candidates[0] if cc_candidates else None
+
+    learned_pairs = learned_pairs or []
+    text_lower = combined_text.lower()
+    for learned_to, learned_cc in learned_pairs:
+        learned_to = learned_to.strip().lower()
+        learned_cc = learned_cc.strip().lower()
+        if learned_to in text_lower and learned_cc in text_lower:
+            selected_to = RoutingEvidence(
+                role="to",
+                email=learned_to,
+                source="learned_correction",
+                detail="Prior correction matched current email evidence",
+            )
+            selected_cc = RoutingEvidence(
+                role="cc",
+                email=learned_cc,
+                source="learned_correction",
+                detail="Prior correction matched current email evidence",
+            )
+            break
+
+    if selected_to:
+        evidence.append(selected_to)
+    if selected_cc:
+        evidence.append(selected_cc)
+
+    if selected_to and selected_cc:
+        direct_sources = {item.source for item in evidence}
+        if "learned_correction" in direct_sources:
+            status = "confirmed"
+            confidence = 0.92
+            reason = "Matched a prior correction and both addresses appear in this email."
+        elif selected_to.email != selected_cc.email:
+            status = "safe"
+            confidence = 0.9
+            reason = "Found distinct recruiter and employer contacts in the current email."
+        else:
+            status = "ambiguous"
+            confidence = 0.45
+            reason = "To and CC resolved to the same address."
+    elif selected_to or selected_cc:
+        status = "ambiguous"
+        confidence = 0.45
+        reason = "Only one recipient side could be resolved."
+    else:
+        status = "missing"
+        confidence = 0.0
+        reason = "No usable recruiter or employer routing contacts found."
+
+    return RoutingResult(
+        to_email=selected_to.email if selected_to else None,
+        cc_email=selected_cc.email if selected_cc else None,
+        status=status,
+        confidence=confidence,
+        reason=reason,
+        evidence=evidence,
+        candidates=candidates,
+    )
+
+
+def resolve_to_cc(sender: str, subject: str, body: str, snippet: str = "") -> tuple[str | None, str | None]:
+    result = analyze_recipient_routing(sender, subject, body, snippet)
+    return result.to_email, result.cc_email
 
 
 def _extract_location(text: str) -> str:
@@ -92,18 +225,33 @@ def _extract_salary(text: str) -> str:
 
 
 def _extract_role(subject: str, body: str) -> str:
-    combined = f"{subject} {body}"
+    combined = f"{subject}\n{body}"
+    labeled_role = re.search(
+        r"(?im)^\s*(title|job title|role|position)\s*[:\-]\s*(.+?)\s*$",
+        combined,
+    )
+    if labeled_role:
+        role = labeled_role.group(2).strip(" .:-")
+        if role:
+            return role
+
     role_patterns = [
         r"(software engineer)",
         r"(backend engineer)",
         r"(frontend engineer)",
         r"(full[- ]stack engineer)",
+        r"(full[- ]stack developer)",
         r"(python developer)",
+        r"(java(?:\s+\w+){0,4}\s+developer)",
     ]
     for pattern in role_patterns:
         match = re.search(pattern, combined, re.IGNORECASE)
         if match:
             return match.group(1).title()
+
+    cleaned_subject = re.sub(r"(?i)^\s*(re|fw|fwd)\s*:\s*", "", subject).strip()
+    if cleaned_subject and cleaned_subject.lower() not in {"no subject", "(no subject)"}:
+        return cleaned_subject
     return "Unknown Role"
 
 

@@ -1,7 +1,10 @@
 import hashlib
+import json
 import uuid
 from collections.abc import Generator
-from datetime import datetime
+from contextlib import asynccontextmanager
+from dataclasses import asdict
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
@@ -12,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.db import Base, SessionLocal, engine, ensure_sqlite_phase0_columns
 from app.gmail_client import (
+    get_message_rfc_message_id,
     gmail_auth_status,
     is_gmail_configured,
     list_unread_candidates_by_query,
@@ -21,12 +25,15 @@ from app.gmail_client import (
 from app.models import DraftEditFeedback, RecruiterEmail, ResumeAsset, SyncRun, UserSettings
 from app.models import RecipientRoutingFeedback
 from app.phase0 import (
+    RoutingEvidence,
+    RoutingResult,
+    analyze_recipient_routing,
     ai_assist_score,
     draft_reply,
+    email_domain,
     hard_filter_check,
     is_recruiter_like,
     parse_email,
-    resolve_to_cc,
     should_block_f2f,
 )
 from app.schemas import (
@@ -45,7 +52,16 @@ from app.schemas import (
     SettingsResponse,
 )
 
-app = FastAPI(title=settings.app_name)
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    Base.metadata.create_all(bind=engine)
+    ensure_sqlite_phase0_columns()
+    _ensure_default_settings()
+    yield
+
+
+app = FastAPI(title=settings.app_name, lifespan=lifespan)
 last_gmail_sync_at: datetime | None = None
 
 app.add_middleware(
@@ -55,13 +71,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-@app.on_event("startup")
-def startup() -> None:
-    Base.metadata.create_all(bind=engine)
-    ensure_sqlite_phase0_columns()
-    _ensure_default_settings()
 
 
 def get_db() -> Generator[Session, None, None]:
@@ -118,26 +127,54 @@ def _is_terminal_state(email: RecruiterEmail) -> bool:
 
 
 def _email_domain(address: str) -> str:
-    parts = address.split("@")
-    return parts[1].lower() if len(parts) == 2 else ""
+    return email_domain(address)
 
 
-def _learned_recipient_override(db: Session, sender: str) -> tuple[str, str] | None:
+def _learned_recipient_pairs(db: Session, sender: str) -> list[tuple[str, str]]:
     sender_domain = _email_domain(sender)
     if not sender_domain:
-        return None
-    feedback = (
+        return []
+    feedback_rows = (
         db.query(RecipientRoutingFeedback)
         .filter(
             RecipientRoutingFeedback.owner_id == settings.owner_id,
             RecipientRoutingFeedback.sender_domain == sender_domain,
         )
         .order_by(RecipientRoutingFeedback.id.desc())
-        .first()
+        .limit(25)
+        .all()
     )
-    if not feedback:
-        return None
-    return feedback.corrected_to, feedback.corrected_cc
+    return [(row.corrected_to, row.corrected_cc) for row in feedback_rows]
+
+
+def _routing_payload_json(items: list[RoutingEvidence]) -> str:
+    return json.dumps([asdict(item) for item in items])
+
+
+def _apply_routing_result(email: RecruiterEmail, routing: RoutingResult) -> None:
+    email.recipient_email = routing.to_email
+    email.cc_email = routing.cc_email
+    email.routing_status = routing.status
+    email.routing_confidence = routing.confidence
+    email.routing_reason = routing.reason
+    email.routing_evidence = _routing_payload_json(routing.evidence)
+    email.routing_candidates = _routing_payload_json(routing.candidates)
+
+
+def _routing_is_sendable(email: RecruiterEmail) -> bool:
+    if email.routing_confirmed:
+        return True
+    return email.routing_status in {"safe", "confirmed"} and email.routing_confidence >= 0.8
+
+
+def _analyze_email_routing(db: Session, sender: str, subject: str, body: str, snippet: str = "") -> RoutingResult:
+    return analyze_recipient_routing(
+        sender,
+        subject,
+        body,
+        snippet,
+        learned_pairs=_learned_recipient_pairs(db, sender),
+    )
 
 
 def _learned_greeting(db: Session) -> str:
@@ -167,6 +204,70 @@ def _apply_draft_learning(db: Session, draft: str) -> str:
     if lines:
         return "\n".join([lines[0], "", greeting, *lines[1:]])
     return greeting
+
+
+def _fill_missing_gmail_rfc_ids(db: Session, emails: list[RecruiterEmail]) -> None:
+    if not is_gmail_configured() or not Path(settings.google_token_path).exists():
+        return
+
+    changed = False
+    for email in emails:
+        if email.source != "gmail" or email.external_rfc_message_id or not email.external_message_id:
+            continue
+        try:
+            rfc_message_id = get_message_rfc_message_id(email.external_message_id)
+        except Exception:
+            continue
+        if rfc_message_id:
+            email.external_rfc_message_id = rfc_message_id
+            changed = True
+    if changed:
+        db.commit()
+
+
+def _repair_unknown_role_drafts(db: Session, emails: list[RecruiterEmail]) -> None:
+    changed = False
+    for email in emails:
+        if email.state != "needs_review":
+            continue
+        if email.role != "Unknown Role" and "Unknown Role" not in email.draft_reply:
+            continue
+        parsed = parse_email(email.subject, email.body)
+        role = str(parsed["role"])
+        if role == "Unknown Role":
+            continue
+        email.role = role
+        email.location = str(parsed["location"])
+        email.salary_text = str(parsed["salary_text"])
+        email.skills_text = str(parsed["skills_text"])
+        if "Unknown Role" in email.draft_reply:
+            email.draft_reply = _apply_draft_learning(db, draft_reply(email.sender, role, parsed))
+        changed = True
+    if changed:
+        db.commit()
+
+
+def _refresh_unconfirmed_routing(db: Session, emails: list[RecruiterEmail]) -> None:
+    changed = False
+    for email in emails:
+        if email.source != "gmail" or email.routing_confirmed:
+            continue
+        routing = _analyze_email_routing(db, email.sender, email.subject, email.body)
+        if (
+            email.recipient_email == routing.to_email
+            and email.cc_email == routing.cc_email
+            and email.routing_status == routing.status
+            and float(email.routing_confidence or 0.0) == routing.confidence
+        ):
+            continue
+        _apply_routing_result(email, routing)
+        if routing.status == "missing":
+            email.state = "failed"
+            email.last_error = "Could not resolve recruiter To and employer CC"
+            email.skip_reason = "missing_to_or_cc"
+        changed = True
+    if changed:
+        db.commit()
 
 
 @app.get("/health")
@@ -259,7 +360,7 @@ def upload_resume(file: UploadFile = File(...), db: Session = Depends(get_db)) -
     db.add(resume)
     db.commit()
     db.refresh(resume)
-    return resume
+    return ResumeResponse.model_validate(resume)
 
 
 @app.get("/settings/resumes", response_model=list[ResumeResponse])
@@ -295,7 +396,7 @@ def gmail_sync(db: Session = Depends(get_db)) -> GmailSyncResponse:
         raise HTTPException(status_code=400, detail="Pipeline is disabled in settings")
 
     sync_batch_id = str(uuid.uuid4())
-    sync_run = SyncRun(owner_id=settings.owner_id, sync_batch_id=sync_batch_id, started_at=datetime.utcnow())
+    sync_run = SyncRun(owner_id=settings.owner_id, sync_batch_id=sync_batch_id, started_at=datetime.now(UTC))
     db.add(sync_run)
     db.commit()
 
@@ -376,6 +477,7 @@ def gmail_sync(db: Session = Depends(get_db)) -> GmailSyncResponse:
                 source="gmail",
                 external_message_id=item["external_message_id"],
                 external_thread_id=item["external_thread_id"],
+                external_rfc_message_id=item.get("external_rfc_message_id"),
                 recipient_email=item["recipient_email"],
             )
             db.add(email)
@@ -384,16 +486,16 @@ def gmail_sync(db: Session = Depends(get_db)) -> GmailSyncResponse:
         sync_run.imported_count = imported_count
         sync_run.skipped_count = skipped_count
         sync_run.error_count = error_count
-        sync_run.ended_at = datetime.utcnow()
+        sync_run.ended_at = datetime.now(UTC)
         db.commit()
     except Exception:
         error_count += 1
         sync_run.error_count = error_count
-        sync_run.ended_at = datetime.utcnow()
+        sync_run.ended_at = datetime.now(UTC)
         db.commit()
         raise
 
-    last_gmail_sync_at = datetime.utcnow()
+    last_gmail_sync_at = datetime.now(UTC)
     return GmailSyncResponse(
         sync_batch_id=sync_batch_id,
         imported_count=imported_count,
@@ -445,8 +547,10 @@ def automation_run_once(db: Session = Depends(get_db)) -> AutomationRunResponse:
             source="gmail",
             external_message_id=item["external_message_id"],
             external_thread_id=item["external_thread_id"],
+            external_rfc_message_id=item.get("external_rfc_message_id"),
             recipient_email=item["recipient_email"],
         )
+        email.external_rfc_message_id = email.external_rfc_message_id or item.get("external_rfc_message_id")
         email.score = int(ai_score * 100)
         email.ai_score = ai_score
         email.ai_score_source = "v1_rules_plus_ai"
@@ -470,16 +574,14 @@ def automation_run_once(db: Session = Depends(get_db)) -> AutomationRunResponse:
         mark_message_processed(item["external_message_id"])
         return AutomationRunResponse(status="skipped", detail="Email not qualified; skipped", email_id=email.id)
 
-    recruiter_email, employer_email = resolve_to_cc(
+    routing = _analyze_email_routing(
+        db,
         item["sender"],
         item["subject"],
         item["body"],
         item.get("snippet", ""),
     )
-    learned = _learned_recipient_override(db, item["sender"])
-    if learned:
-        recruiter_email, employer_email = learned
-    if not recruiter_email or not employer_email:
+    if not routing.to_email or not routing.cc_email:
         email = existing or RecruiterEmail(
             owner_id=settings.owner_id,
             sender=item["sender"],
@@ -492,15 +594,17 @@ def automation_run_once(db: Session = Depends(get_db)) -> AutomationRunResponse:
             source="gmail",
             external_message_id=item["external_message_id"],
             external_thread_id=item["external_thread_id"],
+            external_rfc_message_id=item.get("external_rfc_message_id"),
             recipient_email=item["recipient_email"],
         )
+        email.external_rfc_message_id = email.external_rfc_message_id or item.get("external_rfc_message_id")
         email.state = "failed"
         email.decision = "Reject"
         email.last_error = "Could not resolve recruiter To and employer CC"
         email.skip_reason = "missing_to_or_cc"
         email.decision_reason = "Recipient routing unresolved"
-        email.recipient_email = recruiter_email
-        email.cc_email = employer_email
+        _apply_routing_result(email, routing)
+        email.routing_confirmed = False
         email.resume_asset_id = resume.id
         email.resume_file_name = resume.file_name
         if not existing:
@@ -508,7 +612,11 @@ def automation_run_once(db: Session = Depends(get_db)) -> AutomationRunResponse:
         db.commit()
         db.refresh(email)
         mark_message_processed(item["external_message_id"])
-        return AutomationRunResponse(status="failed", detail=email.last_error, email_id=email.id)
+        return AutomationRunResponse(
+            status="failed",
+            detail=email.last_error or "Could not resolve recruiter To and employer CC",
+            email_id=email.id,
+        )
 
     # Manual approval gate: queue only, never auto-send from run-once.
     reply = _apply_draft_learning(db, draft_reply(item["sender"], str(parsed["role"]), parsed))
@@ -524,8 +632,10 @@ def automation_run_once(db: Session = Depends(get_db)) -> AutomationRunResponse:
         source="gmail",
         external_message_id=item["external_message_id"],
         external_thread_id=item["external_thread_id"],
+        external_rfc_message_id=item.get("external_rfc_message_id"),
         recipient_email=item["recipient_email"],
     )
+    email.external_rfc_message_id = email.external_rfc_message_id or item.get("external_rfc_message_id")
     email.score = int(ai_score * 100)
     email.ai_score = ai_score
     email.ai_score_source = "v1_rules_plus_ai"
@@ -540,8 +650,8 @@ def automation_run_once(db: Session = Depends(get_db)) -> AutomationRunResponse:
     email.sent_status = "not_sent"
     email.sent_at = None
     email.gmail_sent_id = None
-    email.recipient_email = recruiter_email
-    email.cc_email = employer_email
+    _apply_routing_result(email, routing)
+    email.routing_confirmed = False
     email.resume_asset_id = resume.id
     email.resume_file_name = resume.file_name
     email.skip_reason = None
@@ -615,8 +725,15 @@ def list_candidates(
     items = query.offset(cursor).limit(limit + 1).all()
     has_next = len(items) > limit
     visible = items[:limit]
+    _repair_unknown_role_drafts(db, visible)
+    _refresh_unconfirmed_routing(db, visible)
+    _fill_missing_gmail_rfc_ids(db, visible)
     next_cursor = cursor + limit if has_next else None
-    return CandidateListResponse(items=visible, next_cursor=next_cursor, has_next=has_next)
+    return CandidateListResponse(
+        items=[EmailResponse.model_validate(item) for item in visible],
+        next_cursor=next_cursor,
+        has_next=has_next,
+    )
 
 
 @app.get("/candidates/{email_id}", response_model=EmailResponse)
@@ -660,6 +777,9 @@ def approve_and_send(
             raise HTTPException(status_code=400, detail="Missing Gmail metadata")
         if not email.cc_email:
             raise HTTPException(status_code=400, detail="CC email is required before sending")
+        if not _routing_is_sendable(email):
+            detail = email.routing_reason or "Recipient routing must be confirmed before sending"
+            raise HTTPException(status_code=400, detail=f"Recipient routing is not safe to send: {detail}")
         if not email.draft_reply.strip():
             raise HTTPException(status_code=400, detail="Draft email body is required before sending")
         resume = _active_resume(db)
@@ -688,7 +808,7 @@ def approve_and_send(
     email.decision = "Qualified"
     email.approval_status = "approved"
     email.sent_status = "sent"
-    email.sent_at = datetime.utcnow()
+    email.sent_at = datetime.now(UTC)
     email.gmail_sent_id = sent_message_id
     if payload.edited_reply and payload.edited_reply.strip() != original_draft.strip():
         db.add(
@@ -770,21 +890,48 @@ def resolve_recipients(
     if not email:
         raise HTTPException(status_code=404, detail="Candidate not found")
 
-    email.recipient_email = payload.to_email.strip()
-    email.cc_email = payload.cc_email.strip()
+    to_email = payload.to_email.strip()
+    cc_email = payload.cc_email.strip()
+    email.recipient_email = to_email
+    email.cc_email = cc_email
+    email.routing_status = "confirmed"
+    email.routing_confidence = 1.0
+    email.routing_reason = "Recipient routing manually confirmed."
+    email.routing_evidence = json.dumps(
+        [
+            {
+                "role": "to",
+                "email": to_email,
+                "source": "manual_edit",
+                "detail": "Confirmed by user",
+            },
+            {
+                "role": "cc",
+                "email": cc_email,
+                "source": "manual_edit",
+                "detail": "Confirmed by user",
+            },
+        ]
+    )
+    email.routing_candidates = email.routing_evidence
+    email.routing_confirmed = True
     email.state = "needs_review"
     email.last_error = None
     email.skip_reason = None
     email.decision_reason = "Recipient routing corrected by user"
 
     sender_domain = _email_domain(email.sender)
+    body_lower = (email.body or "").lower()
     if sender_domain:
         db.add(
             RecipientRoutingFeedback(
                 owner_id=settings.owner_id,
                 sender_domain=sender_domain,
-                corrected_to=email.recipient_email,
-                corrected_cc=email.cc_email,
+                corrected_to=to_email,
+                corrected_cc=cc_email,
+                sample_sender=email.sender,
+                evidence_to_present=to_email.lower() in body_lower,
+                evidence_cc_present=cc_email.lower() in body_lower or cc_email.lower() in email.sender.lower(),
                 sample_body=email.body[:5000] if email.body else None,
             )
         )

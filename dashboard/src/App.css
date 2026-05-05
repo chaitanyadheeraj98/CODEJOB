@@ -178,6 +178,83 @@
   background: var(--panel);
 }
 
+.routingPanel {
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  margin: 0.8rem 0;
+  padding: 0.75rem;
+  background: var(--surface);
+}
+
+.routingPanel.safe {
+  border-color: var(--ok-line);
+  background: var(--ok-soft);
+}
+
+.routingPanel.blocked {
+  border-color: var(--warn-line);
+  background: var(--warn-soft);
+}
+
+.routingPanelHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.routingPanelHeader span,
+.evidenceItem small,
+.candidateEmailList small {
+  color: var(--muted);
+}
+
+.evidenceGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+  margin-top: 0.65rem;
+}
+
+.evidenceItem {
+  border: 1px solid var(--line);
+  border-radius: 0.45rem;
+  padding: 0.55rem;
+  background: var(--surface);
+}
+
+.evidenceItem span {
+  display: block;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.routingWarning {
+  color: var(--danger);
+  font-weight: 700;
+}
+
+.candidateEmailList {
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+  background: var(--surface);
+  margin: 0.8rem 0;
+}
+
+.candidateEmailList p {
+  overflow-wrap: anywhere;
+}
+
+.candidateEmailList span {
+  display: inline-block;
+  min-width: 2.2rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
 .rowBtns {
   display: flex;
   gap: 0.6rem;
@@ -208,5 +285,9 @@
 
   .pageHeader {
     flex-direction: column;
+  }
+
+  .evidenceGrid {
+    grid-template-columns: 1fr;
   }
 }

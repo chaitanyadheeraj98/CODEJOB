@@ -1,9 +1,14 @@
-from datetime import datetime
+from datetime import UTC, datetime
+from urllib.parse import quote
 
-from sqlalchemy import DateTime, Float, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
+
+
+def utc_now() -> datetime:
+    return datetime.now(UTC)
 
 
 class RecruiterEmail(Base):
@@ -35,15 +40,35 @@ class RecruiterEmail(Base):
     source: Mapped[str] = mapped_column(String(20), default="manual")
     external_message_id: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True, index=True)
     external_thread_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    external_rfc_message_id: Mapped[str | None] = mapped_column(String(500), nullable=True)
     recipient_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     cc_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    routing_status: Mapped[str] = mapped_column(String(50), default="unverified")
+    routing_confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    routing_reason: Mapped[str] = mapped_column(Text, default="")
+    routing_evidence: Mapped[str] = mapped_column(Text, default="[]")
+    routing_candidates: Mapped[str] = mapped_column(Text, default="[]")
+    routing_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
     resume_asset_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     resume_file_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     gmail_sent_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+    @property
+    def gmail_message_url(self) -> str | None:
+        if self.source != "gmail":
+            return None
+        if self.external_rfc_message_id:
+            query = quote(f"rfc822msgid:{self.external_rfc_message_id}", safe="")
+            return f"https://mail.google.com/mail/u/0/#search/{query}"
+        # Prefer message id for precise targeting, fallback to thread id.
+        token = self.external_message_id or self.external_thread_id
+        if not token:
+            return None
+        return f"https://mail.google.com/mail/u/0/#all/{token}"
 
 
 class UserSettings(Base):
@@ -64,8 +89,8 @@ class UserSettings(Base):
     feature_auto_polling: Mapped[bool] = mapped_column(default=False)
     feature_auto_send: Mapped[bool] = mapped_column(default=False)
     feature_retry_queue: Mapped[bool] = mapped_column(default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
 
 class ResumeAsset(Base):
@@ -79,8 +104,8 @@ class ResumeAsset(Base):
     sha256: Mapped[str] = mapped_column(String(64), index=True)
     version: Mapped[int] = mapped_column(Integer, default=1)
     is_current: Mapped[bool] = mapped_column(default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
 
 class SyncRun(Base):
@@ -89,13 +114,13 @@ class SyncRun(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     owner_id: Mapped[str] = mapped_column(String(100), index=True)
     sync_batch_id: Mapped[str] = mapped_column(String(100), unique=True, index=True)
-    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     imported_count: Mapped[int] = mapped_column(Integer, default=0)
     skipped_count: Mapped[int] = mapped_column(Integer, default=0)
     error_count: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
 
 class DraftEditFeedback(Base):
@@ -106,7 +131,7 @@ class DraftEditFeedback(Base):
     recruiter_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     original_draft: Mapped[str] = mapped_column(Text)
     edited_draft: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
 
 class RecipientRoutingFeedback(Base):
@@ -117,5 +142,8 @@ class RecipientRoutingFeedback(Base):
     sender_domain: Mapped[str] = mapped_column(String(255), index=True)
     corrected_to: Mapped[str] = mapped_column(String(255))
     corrected_cc: Mapped[str] = mapped_column(String(255))
+    sample_sender: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    evidence_to_present: Mapped[bool] = mapped_column(Boolean, default=False)
+    evidence_cc_present: Mapped[bool] = mapped_column(Boolean, default=False)
     sample_body: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)

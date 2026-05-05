@@ -168,6 +168,7 @@ def list_unread_candidates_by_query(query: str, max_results_per_page: int = 100)
             headers = payload.get("headers", [])
             from_header = _get_header(headers, "From")
             subject = _get_header(headers, "Subject") or "(No Subject)"
+            rfc_message_id = _get_header(headers, "Message-ID")
             body = _decode_body(payload)
             snippet = (details.get("snippet") or "").strip()
             if not body.strip() and snippet:
@@ -176,6 +177,7 @@ def list_unread_candidates_by_query(query: str, max_results_per_page: int = 100)
                 {
                     "external_message_id": message_id,
                     "external_thread_id": details.get("threadId", ""),
+                    "external_rfc_message_id": rfc_message_id,
                     "sender": from_header,
                     "recipient_email": _extract_email_address(from_header),
                     "subject": subject,
@@ -189,6 +191,23 @@ def list_unread_candidates_by_query(query: str, max_results_per_page: int = 100)
             break
         page_token = next_token
     return results
+
+
+def get_message_rfc_message_id(message_id: str) -> str:
+    service = _gmail_service()
+    details = (
+        service.users()
+        .messages()
+        .get(
+            userId="me",
+            id=message_id,
+            format="metadata",
+            metadataHeaders=["Message-ID"],
+        )
+        .execute()
+    )
+    headers = details.get("payload", {}).get("headers", [])
+    return _get_header(headers, "Message-ID")
 
 
 def send_reply_with_attachment(

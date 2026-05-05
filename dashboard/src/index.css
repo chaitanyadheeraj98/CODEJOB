@@ -47,6 +47,11 @@ p {
   margin: 0.45rem 0;
 }
 
+a {
+  color: var(--brand);
+  font-weight: 600;
+}
+
 label {
   display: block;
   margin-top: 0.8rem;

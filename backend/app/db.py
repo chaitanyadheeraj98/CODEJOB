@@ -24,8 +24,15 @@ def ensure_sqlite_phase0_columns() -> None:
             ("source", "ALTER TABLE recruiter_emails ADD COLUMN source VARCHAR(20) DEFAULT 'manual'"),
             ("external_message_id", "ALTER TABLE recruiter_emails ADD COLUMN external_message_id VARCHAR(255)"),
             ("external_thread_id", "ALTER TABLE recruiter_emails ADD COLUMN external_thread_id VARCHAR(255)"),
+            ("external_rfc_message_id", "ALTER TABLE recruiter_emails ADD COLUMN external_rfc_message_id VARCHAR(500)"),
             ("recipient_email", "ALTER TABLE recruiter_emails ADD COLUMN recipient_email VARCHAR(255)"),
             ("cc_email", "ALTER TABLE recruiter_emails ADD COLUMN cc_email VARCHAR(255)"),
+            ("routing_status", "ALTER TABLE recruiter_emails ADD COLUMN routing_status VARCHAR(50) DEFAULT 'unverified'"),
+            ("routing_confidence", "ALTER TABLE recruiter_emails ADD COLUMN routing_confidence FLOAT DEFAULT 0.0"),
+            ("routing_reason", "ALTER TABLE recruiter_emails ADD COLUMN routing_reason TEXT DEFAULT ''"),
+            ("routing_evidence", "ALTER TABLE recruiter_emails ADD COLUMN routing_evidence TEXT DEFAULT '[]'"),
+            ("routing_candidates", "ALTER TABLE recruiter_emails ADD COLUMN routing_candidates TEXT DEFAULT '[]'"),
+            ("routing_confirmed", "ALTER TABLE recruiter_emails ADD COLUMN routing_confirmed BOOLEAN DEFAULT 0"),
             ("resume_asset_id", "ALTER TABLE recruiter_emails ADD COLUMN resume_asset_id INTEGER"),
             ("resume_file_name", "ALTER TABLE recruiter_emails ADD COLUMN resume_file_name VARCHAR(255)"),
             ("sent_at", "ALTER TABLE recruiter_emails ADD COLUMN sent_at DATETIME"),
@@ -50,4 +57,14 @@ def ensure_sqlite_phase0_columns() -> None:
             "CREATE UNIQUE INDEX IF NOT EXISTS ix_recruiter_emails_external_message_id "
             "ON recruiter_emails (external_message_id)"
         )
+
+        existing_feedback = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(recipient_routing_feedback)")}
+        feedback_alter_statements = [
+            ("sample_sender", "ALTER TABLE recipient_routing_feedback ADD COLUMN sample_sender VARCHAR(255)"),
+            ("evidence_to_present", "ALTER TABLE recipient_routing_feedback ADD COLUMN evidence_to_present BOOLEAN DEFAULT 0"),
+            ("evidence_cc_present", "ALTER TABLE recipient_routing_feedback ADD COLUMN evidence_cc_present BOOLEAN DEFAULT 0"),
+        ]
+        for column_name, statement in feedback_alter_statements:
+            if column_name not in existing_feedback:
+                conn.exec_driver_sql(statement)
         conn.commit()
