@@ -1,4 +1,29 @@
 services:
+  backend:
+    build:
+      context: ./backend
+    container_name: codejob-backend
+    environment:
+      DATABASE_URL: sqlite:///./data/codejob.db
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8000:8000"
+      - "8080:8080"
+    volumes:
+      - backend_data:/app/data
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  dashboard:
+    build:
+      context: ./dashboard
+    container_name: codejob-dashboard
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+
   redis:
     image: redis:7
     container_name: codejob-redis
@@ -13,4 +38,5 @@ services:
       retries: 5
 
 volumes:
+  backend_data:
   redis_data:

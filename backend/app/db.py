@@ -20,12 +20,26 @@ def ensure_sqlite_phase0_columns() -> None:
     with engine.connect() as conn:
         existing = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(recruiter_emails)")}
         alter_statements = [
+            ("owner_id", "ALTER TABLE recruiter_emails ADD COLUMN owner_id VARCHAR(100) DEFAULT 'default-owner'"),
             ("source", "ALTER TABLE recruiter_emails ADD COLUMN source VARCHAR(20) DEFAULT 'manual'"),
             ("external_message_id", "ALTER TABLE recruiter_emails ADD COLUMN external_message_id VARCHAR(255)"),
             ("external_thread_id", "ALTER TABLE recruiter_emails ADD COLUMN external_thread_id VARCHAR(255)"),
             ("recipient_email", "ALTER TABLE recruiter_emails ADD COLUMN recipient_email VARCHAR(255)"),
+            ("cc_email", "ALTER TABLE recruiter_emails ADD COLUMN cc_email VARCHAR(255)"),
+            ("resume_asset_id", "ALTER TABLE recruiter_emails ADD COLUMN resume_asset_id INTEGER"),
+            ("resume_file_name", "ALTER TABLE recruiter_emails ADD COLUMN resume_file_name VARCHAR(255)"),
             ("sent_at", "ALTER TABLE recruiter_emails ADD COLUMN sent_at DATETIME"),
             ("last_error", "ALTER TABLE recruiter_emails ADD COLUMN last_error TEXT"),
+            ("state", "ALTER TABLE recruiter_emails ADD COLUMN state VARCHAR(50) DEFAULT 'auto_rejected'"),
+            ("decision_reason", "ALTER TABLE recruiter_emails ADD COLUMN decision_reason TEXT"),
+            ("hard_filter_result", "ALTER TABLE recruiter_emails ADD COLUMN hard_filter_result TEXT"),
+            ("auto_reject_reason", "ALTER TABLE recruiter_emails ADD COLUMN auto_reject_reason VARCHAR(120)"),
+            ("ai_score", "ALTER TABLE recruiter_emails ADD COLUMN ai_score FLOAT"),
+            ("ai_score_source", "ALTER TABLE recruiter_emails ADD COLUMN ai_score_source VARCHAR(80)"),
+            ("ai_summary", "ALTER TABLE recruiter_emails ADD COLUMN ai_summary TEXT"),
+            ("skip_reason", "ALTER TABLE recruiter_emails ADD COLUMN skip_reason VARCHAR(120)"),
+            ("sync_batch_id", "ALTER TABLE recruiter_emails ADD COLUMN sync_batch_id VARCHAR(100)"),
+            ("gmail_sent_id", "ALTER TABLE recruiter_emails ADD COLUMN gmail_sent_id VARCHAR(255)"),
         ]
 
         for column_name, statement in alter_statements:

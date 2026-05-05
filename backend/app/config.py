@@ -14,6 +14,13 @@ class Settings(BaseSettings):
     google_redirect_uri: str = "http://localhost:8080/"
     google_token_path: str = "./data/google_token.json"
     gmail_label_filter: str = ""
+    google_login_hint: str = ""
+    owner_id: str = "default-owner"
+    resume_storage_dir: str = "./data/resumes"
+    qualification_threshold: float = 0.6
+    feature_auto_polling: bool = False
+    feature_auto_send: bool = False
+    feature_retry_queue: bool = False
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

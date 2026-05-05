@@ -10,6 +10,7 @@ dependencies = [
     "google-api-python-client>=2.181.0",
     "google-auth-oauthlib>=1.2.2",
     "openai>=2.33.0",
+    "python-multipart>=0.0.20",
     "pydantic-settings>=2.14.0",
     "redis>=7.4.0",
     "rq>=2.8.0",

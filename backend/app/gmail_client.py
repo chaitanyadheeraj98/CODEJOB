@@ -1,5 +1,6 @@
 import base64
 import json
+import mimetypes
 import re
 from email.message import EmailMessage
 from pathlib import Path
@@ -57,7 +58,19 @@ def _load_credentials() -> Credentials:
         return creds
 
     flow = InstalledAppFlow.from_client_config(_credentials_payload(), SCOPES)
-    creds = flow.run_local_server(port=8080, open_browser=True)
+    # In Docker, there is no local browser in-container; user opens the printed URL manually.
+    extra_auth_kwargs: dict[str, str] = {"prompt": "select_account"}
+    if settings.google_login_hint:
+        extra_auth_kwargs["login_hint"] = settings.google_login_hint
+
+    creds = flow.run_local_server(
+        host="localhost",
+        bind_addr="0.0.0.0",
+        port=8080,
+        open_browser=False,
+        authorization_prompt_message="Please visit this URL to authorize this application: {url}",
+        **extra_auth_kwargs,
+    )
     _ensure_token_parent()
     token_path.write_text(creds.to_json(), encoding="utf-8")
     return creds
@@ -68,17 +81,53 @@ def _gmail_service():
     return build("gmail", "v1", credentials=creds)
 
 
-def _decode_body(payload: dict[str, Any]) -> str:
-    data = payload.get("body", {}).get("data")
-    if data:
+def _decode_chunk(data: str | None) -> str:
+    if not data:
+        return ""
+    try:
         return base64.urlsafe_b64decode(data).decode("utf-8", errors="ignore")
+    except Exception:
+        return ""
 
-    for part in payload.get("parts", []) or []:
-        mime = part.get("mimeType", "")
-        if mime in ("text/plain", "text/html"):
-            chunk = part.get("body", {}).get("data")
-            if chunk:
-                return base64.urlsafe_b64decode(chunk).decode("utf-8", errors="ignore")
+
+def _extract_from_parts(parts: list[dict[str, Any]]) -> tuple[str, str]:
+    text_plain = ""
+    text_html = ""
+    for part in parts:
+        mime = (part.get("mimeType") or "").lower()
+        body_data = _decode_chunk(part.get("body", {}).get("data"))
+        if mime == "text/plain" and body_data and not text_plain:
+            text_plain = body_data
+        elif mime == "text/html" and body_data and not text_html:
+            text_html = body_data
+
+        nested_parts = part.get("parts") or []
+        if nested_parts:
+            nested_plain, nested_html = _extract_from_parts(nested_parts)
+            if nested_plain and not text_plain:
+                text_plain = nested_plain
+            if nested_html and not text_html:
+                text_html = nested_html
+    return text_plain, text_html
+
+
+def _strip_html(html: str) -> str:
+    no_scripts = re.sub(r"(?is)<(script|style).*?>.*?</\\1>", " ", html)
+    no_tags = re.sub(r"(?is)<[^>]+>", " ", no_scripts)
+    compact = re.sub(r"[ \t]+", " ", no_tags)
+    return re.sub(r"\n\s*\n+", "\n\n", compact).strip()
+
+
+def _decode_body(payload: dict[str, Any]) -> str:
+    direct = _decode_chunk(payload.get("body", {}).get("data"))
+    if direct:
+        return direct
+
+    plain, html = _extract_from_parts(payload.get("parts", []) or [])
+    if plain:
+        return plain
+    if html:
+        return _strip_html(html)
     return ""
 
 
@@ -96,53 +145,76 @@ def _extract_email_address(from_header: str) -> str:
     return from_header.strip()
 
 
-def list_unread_recruiter_candidates(max_results: int = 25) -> list[dict[str, str]]:
+def list_unread_candidates_by_query(query: str, max_results_per_page: int = 100) -> list[dict[str, str]]:
     service = _gmail_service()
-    label_query = f" label:{settings.gmail_label_filter}" if settings.gmail_label_filter else ""
-    query = (
-        f"is:unread in:inbox ({label_query} "
-        "recruiter OR recruiting OR talent OR hiring OR opportunity)"
-    ).strip()
-    query = " ".join(query.split())
-
-    response = service.users().messages().list(userId="me", q=query, maxResults=max_results).execute()
-    messages = response.get("messages", [])
+    page_token: str | None = None
     results: list[dict[str, str]] = []
 
-    for message in messages:
-        message_id = message.get("id")
-        if not message_id:
-            continue
-        details = (
-            service.users()
-            .messages()
-            .get(userId="me", id=message_id, format="full")
-            .execute()
+    while True:
+        req = service.users().messages().list(
+            userId="me",
+            q=query,
+            maxResults=max_results_per_page,
+            pageToken=page_token,
         )
-        payload = details.get("payload", {})
-        headers = payload.get("headers", [])
-        from_header = _get_header(headers, "From")
-        subject = _get_header(headers, "Subject") or "(No Subject)"
-        body = _decode_body(payload)
-        results.append(
-            {
-                "external_message_id": message_id,
-                "external_thread_id": details.get("threadId", ""),
-                "sender": from_header,
-                "recipient_email": _extract_email_address(from_header),
-                "subject": subject,
-                "body": body,
-            }
-        )
+        response = req.execute()
+        messages = response.get("messages", [])
+        for message in messages:
+            message_id = message.get("id")
+            if not message_id:
+                continue
+            details = service.users().messages().get(userId="me", id=message_id, format="full").execute()
+            payload = details.get("payload", {})
+            headers = payload.get("headers", [])
+            from_header = _get_header(headers, "From")
+            subject = _get_header(headers, "Subject") or "(No Subject)"
+            body = _decode_body(payload)
+            snippet = (details.get("snippet") or "").strip()
+            if not body.strip() and snippet:
+                body = snippet
+            results.append(
+                {
+                    "external_message_id": message_id,
+                    "external_thread_id": details.get("threadId", ""),
+                    "sender": from_header,
+                    "recipient_email": _extract_email_address(from_header),
+                    "subject": subject,
+                    "body": body,
+                    "snippet": snippet,
+                }
+            )
+
+        next_token = response.get("nextPageToken")
+        if not next_token:
+            break
+        page_token = next_token
     return results
 
 
-def send_reply(thread_id: str, to: str, subject: str, body: str) -> str:
+def send_reply_with_attachment(
+    thread_id: str,
+    to: str,
+    cc: str | None,
+    subject: str,
+    body: str,
+    attachment_path: str | None = None,
+) -> str:
     service = _gmail_service()
     message = EmailMessage()
     message["To"] = to
+    if cc:
+        message["Cc"] = cc
     message["Subject"] = f"Re: {subject}" if not subject.lower().startswith("re:") else subject
     message.set_content(body)
+
+    if attachment_path:
+        file_path = Path(attachment_path)
+        if file_path.exists():
+            content = file_path.read_bytes()
+            mime_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
+            main_type, sub_type = mime_type.split("/", 1)
+            message.add_attachment(content, maintype=main_type, subtype=sub_type, filename=file_path.name)
+
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
     payload = {"raw": raw, "threadId": thread_id}
     response = service.users().messages().send(userId="me", body=payload).execute()
