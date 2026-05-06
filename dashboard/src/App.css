@@ -347,6 +347,62 @@
   flex-wrap: wrap;
 }
 
+.draftUnified {
+  margin-top: 0.4rem;
+}
+
+.draftPaneLabel {
+  margin: 0 0 0.35rem;
+  display: block;
+  font-size: 0.85rem;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.draftUnified textarea {
+  margin-top: 0.25rem;
+  margin-bottom: 0.55rem;
+  min-height: 13rem;
+}
+
+.draftPreview {
+  margin-top: 0.2rem;
+  min-height: 17rem;
+}
+
+.draftPreview {
+  min-height: 17rem;
+  border: 1px solid var(--line);
+  border-radius: 0.7rem;
+  padding: 0.72rem 0.82rem;
+  background: var(--surface);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.draftPreview p {
+  margin: 0 0 0.82rem;
+  line-height: 1.55;
+}
+
+.draftPreview p:last-child {
+  margin-bottom: 0;
+}
+
+.draftPreview ul {
+  margin: 0 0 0.82rem;
+  padding-left: 1.25rem;
+}
+
+.draftPreview li {
+  margin: 0.24rem 0;
+}
+
+.draftPreview strong {
+  font-weight: 800;
+  color: var(--ink);
+}
+
 .toggleRow {
   display: flex;
   align-items: center;
@@ -443,4 +499,5 @@
   .evidenceGrid {
     grid-template-columns: 1fr;
   }
+
 }

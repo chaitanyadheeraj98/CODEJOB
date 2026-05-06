@@ -4,6 +4,45 @@ import Sidebar from './components/Sidebar'
 import { withAiToggle } from './features/ai/state'
 import { getDraftSourceLabel } from './features/ai/ui'
 
+function escapeHtml(text: string): string {
+  return text
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;')
+}
+
+function renderInline(text: string): string {
+  const escaped = escapeHtml(text)
+  return escaped.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+}
+
+function draftToPreviewHtml(draftText: string): string {
+  const normalized = (draftText ?? '').replaceAll('\r\n', '\n').trim()
+  if (!normalized) return '<p></p>'
+  const blocks = normalized.split(/\n\s*\n/).map((part) => part.trim()).filter(Boolean)
+  return blocks
+    .map((block) => {
+      const lines = block.split('\n').map((line) => line.trimEnd())
+      const allBullets = lines.length > 0 && lines.every((line) => line.trimStart().startsWith('- '))
+      if (allBullets) {
+        const items = lines
+          .map((line) => line.trimStart().slice(2).trim())
+          .map((line) => `<li>${renderInline(line)}</li>`)
+          .join('')
+        return `<ul>${items}</ul>`
+      }
+      const paragraph = lines
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => renderInline(line))
+        .join('<br>')
+      return `<p>${paragraph}</p>`
+    })
+    .join('')
+}
+
 type GmailStatus = {
   configured: boolean
   authenticated: boolean
@@ -674,11 +713,19 @@ function App() {
                 </p>
                 {item.draft_ai_error ? <p className="subtle"><strong>AI fallback:</strong> {item.draft_ai_error}</p> : null}
                 <p><strong>Draft:</strong></p>
-                <textarea
-                  value={editedDraft}
-                  rows={8}
-                  onChange={(e) => setDraftEdits((prev) => ({ ...prev, [item.id]: e.target.value }))}
-                />
+                <div className="draftUnified">
+                  <label className="draftPaneLabel">Editable Draft</label>
+                  <textarea
+                    value={editedDraft}
+                    rows={10}
+                    onChange={(e) => setDraftEdits((prev) => ({ ...prev, [item.id]: e.target.value }))}
+                  />
+                  <label className="draftPaneLabel">Live Preview</label>
+                  <div
+                    className="draftPreview"
+                    dangerouslySetInnerHTML={{ __html: draftToPreviewHtml(editedDraft) }}
+                  />
+                </div>
                 {item.last_error ? <p className="error"><strong>Last Error:</strong> {item.last_error}</p> : null}
                 <div className="rowBtns">
                   <button

@@ -1,6 +1,12 @@
 import unittest
 
-from app.phase0 import analyze_recipient_routing, draft_reply, email_domain, resolve_to_cc
+from app.phase0 import (
+    analyze_recipient_routing,
+    draft_reply,
+    email_domain,
+    greeting_from_to_contact,
+    resolve_to_cc,
+)
 
 
 EMAIL_30_BODY = """
@@ -61,8 +67,23 @@ class RecipientRoutingTests(unittest.TestCase):
             },
         )
 
-        self.assertNotIn("**", draft)
-        self.assertIn("- Java, Spring, Spring Boot, Microservices, Kafka, AWS", draft)
+        self.assertIn("- **Java**", draft)
+        self.assertIn("Best regards,", draft)
+        self.assertIn("📞 +1 940-629-6920", draft)
+
+    def test_greeting_uses_name_from_to_contact_evidence(self) -> None:
+        body = """
+Thanks,
+Sudarsan
+Email: sudarsan@cystemslogic.com
+"""
+        greeting = greeting_from_to_contact("sudarsan@cystemslogic.com", body)
+        self.assertEqual(greeting, "Hi Sudarsan,")
+
+    def test_greeting_falls_back_to_generic_for_role_mailbox(self) -> None:
+        body = "Please send your resume to jobs@yvstech.com"
+        greeting = greeting_from_to_contact("jobs@yvstech.com", body)
+        self.assertEqual(greeting, "Hi,")
 
 
 if __name__ == "__main__":

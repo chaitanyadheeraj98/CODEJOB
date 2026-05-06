@@ -34,6 +34,7 @@ from app.phase0 import (
     ai_assist_score,
     draft_reply,
     email_domain,
+    greeting_from_to_contact,
     hard_filter_check,
     is_recruiter_like,
     parse_email,
@@ -201,33 +202,9 @@ def _analyze_email_routing(db: Session, sender: str, subject: str, body: str, sn
     )
 
 
-def _learned_greeting(db: Session) -> str:
-    latest = (
-        db.query(DraftEditFeedback)
-        .filter(DraftEditFeedback.owner_id == settings.owner_id)
-        .order_by(DraftEditFeedback.id.desc())
-        .first()
-    )
-    if not latest:
-        return "Hi,"
-    for line in latest.edited_draft.splitlines():
-        if line.strip():
-            if line.strip().lower().startswith("hi"):
-                return line.strip()
-            break
-    return "Hi,"
-
-
 def _apply_draft_learning(db: Session, draft: str) -> str:
-    greeting = _learned_greeting(db)
-    lines = draft.splitlines()
-    for i, line in enumerate(lines):
-        if line.strip().lower().startswith("hi"):
-            lines[i] = greeting
-            return "\n".join(lines)
-    if lines:
-        return "\n".join([lines[0], "", greeting, *lines[1:]])
-    return greeting
+    _ = db
+    return draft
 
 
 def _fill_missing_gmail_rfc_ids(db: Session, emails: list[RecruiterEmail]) -> None:
@@ -265,7 +242,8 @@ def _repair_unknown_role_drafts(db: Session, emails: list[RecruiterEmail]) -> No
         email.salary_text = str(parsed["salary_text"])
         email.skills_text = str(parsed["skills_text"])
         if "Unknown Role" in email.draft_reply:
-            email.draft_reply = _apply_draft_learning(db, draft_reply(email.sender, role, parsed))
+            greeting_line = greeting_from_to_contact(email.recipient_email, email.body)
+            email.draft_reply = _apply_draft_learning(db, draft_reply(email.sender, role, parsed, greeting_line))
             email.draft_source = "rules_only"
             email.draft_model = None
             email.draft_ai_error = None
@@ -501,7 +479,12 @@ def gmail_sync(db: Session = Depends(get_db)) -> GmailSyncResponse:
                     auto_reject_reason = "f2f_non_texas"
                     draft = ""
                 else:
-                    draft = _apply_draft_learning(db, draft_reply(item["sender"], str(parsed["role"]), parsed))
+                    routed = _analyze_email_routing(db, item["sender"], item["subject"], item["body"], item.get("snippet", ""))
+                    greeting_line = greeting_from_to_contact(routed.to_email, item["body"])
+                    draft = _apply_draft_learning(
+                        db,
+                        draft_reply(item["sender"], str(parsed["role"]), parsed, greeting_line),
+                    )
 
             email = RecruiterEmail(
                 owner_id=settings.owner_id,
@@ -712,7 +695,8 @@ def automation_run_once(payload: AutomationRunRequest | None = None, db: Session
         )
 
     # Manual approval gate: queue only, never auto-send from run-once.
-    fallback_reply = _apply_draft_learning(db, draft_reply(item["sender"], str(parsed["role"]), parsed))
+    greeting_line = greeting_from_to_contact(routing.to_email, item["body"])
+    fallback_reply = _apply_draft_learning(db, draft_reply(item["sender"], str(parsed["role"]), parsed, greeting_line))
     if user_settings.feature_ai_enabled:
         ai_running = True
         ai_last_error = None
@@ -723,6 +707,8 @@ def automation_run_once(payload: AutomationRunRequest | None = None, db: Session
         try:
             ai_reply = generate_reply_with_ai_or_fallback(
                 sender=item["sender"],
+                recruiter_to_email=routing.to_email,
+                greeting_line=greeting_line,
                 subject=item["subject"],
                 body=item["body"],
                 role=str(parsed["role"]),
@@ -826,7 +812,10 @@ def ingest_email(payload: IngestEmailRequest, db: Session = Depends(get_db)) -> 
         ai_score=ai_score,
         ai_score_source="v1_rules_plus_ai",
         ai_summary=ai_summary,
-        draft_reply=_apply_draft_learning(db, draft_reply(payload.sender, str(parsed["role"]), parsed))
+        draft_reply=_apply_draft_learning(
+            db,
+            draft_reply(payload.sender, str(parsed["role"]), parsed, greeting_from_to_contact(None, payload.body)),
+        )
         if state == "needs_review"
         else "",
         draft_source="rules_only" if state == "needs_review" else None,

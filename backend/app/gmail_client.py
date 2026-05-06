@@ -15,6 +15,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
+from app.ai.draft_formatting import draft_text_to_html
 from app.config import settings
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.modify", "https://www.googleapis.com/auth/gmail.send"]
@@ -321,7 +322,14 @@ def send_reply_with_attachment(
     if cc:
         message["Cc"] = cc
     message["Subject"] = f"Re: {subject}" if not subject.lower().startswith("re:") else subject
-    message.set_content(body)
+    plain_body = body or ""
+    message.set_content(plain_body)
+    try:
+        html_body = draft_text_to_html(plain_body)
+        message.add_alternative(html_body, subtype="html")
+    except Exception:
+        # Fallback to plain text if HTML rendering fails.
+        pass
 
     if attachment_path:
         file_path = Path(attachment_path)
