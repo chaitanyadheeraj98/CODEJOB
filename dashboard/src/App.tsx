@@ -116,6 +116,7 @@ type Candidate = {
   subject: string
   sender: string
   body: string
+  sent_at?: string | null
   gmail_message_url: string | null
   recipient_email: string | null
   cc_email: string | null
@@ -181,12 +182,13 @@ function App() {
   const [rejectingId, setRejectingId] = useState<number | null>(null)
   const [draftEdits, setDraftEdits] = useState<Record<number, string>>({})
   const [failedQueue, setFailedQueue] = useState<Candidate[]>([])
+  const [sentQueue, setSentQueue] = useState<Candidate[]>([])
   const [routingFixes, setRoutingFixes] = useState<Record<number, { to: string; cc: string }>>({})
   const [fixingId, setFixingId] = useState<number | null>(null)
-  const [activePage, setActivePage] = useState<'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs'>('run_queue')
+  const [activePage, setActivePage] = useState<'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items'>('run_queue')
   const datePickerRef = useRef<HTMLInputElement | null>(null)
 
-  const candidatesUrl = (state: 'needs_review' | 'failed') => {
+  const candidatesUrl = (state: 'needs_review' | 'failed' | 'approved_sent') => {
     const params = new URLSearchParams({
       state,
       limit: String(QUEUE_LIMIT),
@@ -252,6 +254,13 @@ function App() {
     })
   }
 
+  const loadSentQueue = async () => {
+    const res = await fetch(candidatesUrl('approved_sent'))
+    if (!res.ok) throw new Error('Failed to load sent items')
+    const data = (await res.json()) as CandidateListResponse
+    setSentQueue(data.items)
+  }
+
   useEffect(() => {
     loadStatus().catch((e) => setError((e as Error).message))
     loadSettings().catch((e) => setError((e as Error).message))
@@ -259,11 +268,13 @@ function App() {
     loadAiStatus().catch((e) => setError((e as Error).message))
     loadQueue().catch((e) => setError((e as Error).message))
     loadFailedQueue().catch((e) => setError((e as Error).message))
+    loadSentQueue().catch((e) => setError((e as Error).message))
   }, [])
 
   useEffect(() => {
     loadQueue().catch((e) => setError((e as Error).message))
     loadFailedQueue().catch((e) => setError((e as Error).message))
+    loadSentQueue().catch((e) => setError((e as Error).message))
   }, [settings.mail_date])
 
   useEffect(() => {
@@ -337,6 +348,7 @@ function App() {
       await loadAiStatus()
       await loadQueue()
       await loadFailedQueue()
+      await loadSentQueue()
     } catch (e) {
       if ((e as Error).name === 'AbortError') {
         if (!status?.authenticated) {
@@ -394,6 +406,7 @@ function App() {
       }
       await loadQueue()
       await loadFailedQueue()
+      await loadSentQueue()
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -416,6 +429,7 @@ function App() {
       }
       await loadQueue()
       await loadFailedQueue()
+      await loadSentQueue()
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -440,6 +454,7 @@ function App() {
       }
       await loadQueue()
       await loadFailedQueue()
+      await loadSentQueue()
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -525,6 +540,7 @@ function App() {
         queueCount={queue.length}
         failedCount={failedQueue.length}
         runCount={logs.length}
+        sentCount={sentQueue.length}
         activePage={activePage}
         onNavigate={setActivePage}
       />
@@ -840,6 +856,29 @@ function App() {
                   ]
                     .filter(Boolean)
                     .join(' | ')}
+                </p>
+              ) : null}
+            </article>
+          ))}
+          </section>
+        ) : null}
+
+        {activePage === 'sent_items' ? (
+          <section className="card">
+          <h2>Sent Items</h2>
+          {sentQueue.length === 0 ? <p className="subtle">No approved and sent emails yet.</p> : null}
+          {sentQueue.map((item) => (
+            <article key={`sent-${item.id}`} className="emailItem">
+              <p><strong>Email ID:</strong> {item.id}</p>
+              <p><strong>From:</strong> {item.sender}</p>
+              <p><strong>Subject:</strong> {item.subject}</p>
+              <p><strong>Sent at:</strong> {item.sent_at ? new Date(item.sent_at).toLocaleString() : '-'}</p>
+              {item.gmail_message_url ? (
+                <p>
+                  <strong>Open:</strong>{' '}
+                  <a href={item.gmail_message_url} target="_blank" rel="noreferrer">
+                    Open exact email in Gmail
+                  </a>
                 </p>
               ) : null}
             </article>

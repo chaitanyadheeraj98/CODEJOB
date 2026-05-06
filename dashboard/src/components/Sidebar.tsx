@@ -3,8 +3,9 @@ type SidebarProps = {
   queueCount: number
   failedCount: number
   runCount: number
-  activePage: 'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs'
-  onNavigate: (section: 'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs') => void
+  sentCount: number
+  activePage: 'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items'
+  onNavigate: (section: 'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items') => void
 }
 
 export default function Sidebar({
@@ -12,6 +13,7 @@ export default function Sidebar({
   queueCount,
   failedCount,
   runCount,
+  sentCount,
   activePage,
   onNavigate,
 }: SidebarProps) {
@@ -45,6 +47,13 @@ export default function Sidebar({
           onClick={() => onNavigate('failed_mapping')}
         >
           <span>Failed Mapping</span> <span>{failedCount}</span>
+        </button>
+        <button
+          className={`navItem ${activePage === 'sent_items' ? 'active' : ''}`}
+          type="button"
+          onClick={() => onNavigate('sent_items')}
+        >
+          <span>Sent Items</span> <span>{sentCount}</span>
         </button>
         <button
           className={`navItem ${activePage === 'recent_runs' ? 'active' : ''}`}
