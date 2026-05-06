@@ -3,6 +3,8 @@ services:
     build:
       context: ./backend
     container_name: codejob-backend
+    env_file:
+      - ./backend/.env
     environment:
       DATABASE_URL: sqlite:///./data/codejob.db
       REDIS_URL: redis://redis:6379/0

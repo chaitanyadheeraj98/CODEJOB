@@ -208,6 +208,11 @@ class AutomationRunResponse(BaseModel):
     decision_reason: str | None = None
     skip_reason: str | None = None
     routing_reason: str | None = None
+    effective_query: str | None = None
+    matched_count: int | None = None
+    queued_count: int | None = None
+    skipped_count: int | None = None
+    failed_count: int | None = None
 
 
 class AutomationRunRequest(BaseModel):

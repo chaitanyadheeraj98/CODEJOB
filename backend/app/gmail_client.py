@@ -19,6 +19,9 @@ from app.ai.draft_formatting import draft_text_to_html
 from app.config import settings
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.modify", "https://www.googleapis.com/auth/gmail.send"]
+SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
+if SHEETS_SCOPE not in SCOPES:
+    SCOPES.append(SHEETS_SCOPE)
 _oauth_lock = threading.Lock()
 _oauth_thread: threading.Thread | None = None
 _oauth_last_error: str | None = None
@@ -115,6 +118,11 @@ def _load_credentials() -> Credentials:
 def _gmail_service() -> Any:
     creds = _load_credentials()
     return build("gmail", "v1", credentials=creds)
+
+
+def _sheets_service() -> Any:
+    creds = _load_credentials()
+    return build("sheets", "v4", credentials=creds)
 
 
 def _oauth_worker() -> None:
@@ -368,3 +376,111 @@ def gmail_auth_status() -> tuple[bool, bool, str]:
         return True, False, "Token exists but is not valid yet"
     except (ValueError, OSError, HttpError) as exc:
         return True, False, f"Token read error: {exc}"
+
+
+def _extract_phone(text: str) -> str:
+    if not text:
+        return ""
+    match = re.search(r"(?:\+?\d[\d\-\s()]{7,}\d)", text)
+    if not match:
+        return ""
+    return re.sub(r"\s+", " ", match.group(0)).strip()
+
+
+def _extract_name_from_sender(sender: str) -> str:
+    if "<" in sender:
+        return sender.split("<", 1)[0].strip().strip('"')
+    return ""
+
+
+def _extract_company_from_email(address: str) -> str:
+    if "@" not in address:
+        return ""
+    domain = address.split("@", 1)[1].lower()
+    for suffix in (".com", ".net", ".org", ".io", ".co", ".ai"):
+        if domain.endswith(suffix):
+            domain = domain[: -len(suffix)]
+            break
+    company = domain.split(".")[0].strip()
+    return company.upper() if company else ""
+
+
+def _infer_client_name(body: str) -> str:
+    patterns = [
+        r"\bclient\s*[:\-]\s*([A-Za-z0-9&., \-/]{2,80})",
+        r"\bimplementation client\s*[:\-]\s*([A-Za-z0-9&., \-/]{2,80})",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, body, flags=re.IGNORECASE)
+        if match:
+            return match.group(1).strip(" .,-")
+    return ""
+
+
+def build_tracking_sheet_row(
+    *,
+    role: str,
+    sender: str,
+    subject: str,
+    body: str,
+    to_email: str | None,
+    cc_email: str | None,
+) -> list[str]:
+    recruiter_email = (to_email or "").strip()
+    recruiter_name = _extract_name_from_sender(sender)
+    recruiter_contact = _extract_phone(body)
+    vendor = _extract_company_from_email(recruiter_email) if recruiter_email else ""
+    prime_client = _extract_company_from_email(cc_email or "") if cc_email else ""
+    client = _infer_client_name(body)
+
+    position = role.strip() if role.strip() and role.strip() != "Unknown Role" else subject.strip()
+
+    # Sheet columns:
+    # A S.No, B Position, C Vendor, D Name, E Email, F Contact,
+    # G Prime Vendor/Implementation Client, H Contact, I Email, J Client
+    return [
+        "",
+        position,
+        vendor,
+        recruiter_name,
+        recruiter_email,
+        recruiter_contact,
+        prime_client,
+        "",
+        (cc_email or "").strip(),
+        client,
+    ]
+
+
+def append_tracking_sheet_row(
+    *,
+    role: str,
+    sender: str,
+    subject: str,
+    body: str,
+    to_email: str | None,
+    cc_email: str | None,
+) -> None:
+    if not settings.google_sheets_tracking_enabled:
+        return
+    if not settings.google_sheets_tracking_spreadsheet_id:
+        raise RuntimeError("Google Sheets tracking is enabled but spreadsheet id is missing")
+
+    service = _sheets_service()
+    tab_name = settings.google_sheets_tracking_tab_name or "Sheet1"
+    row = build_tracking_sheet_row(
+        role=role,
+        sender=sender,
+        subject=subject,
+        body=body,
+        to_email=to_email,
+        cc_email=cc_email,
+    )
+    payload = {"values": [row]}
+    service.spreadsheets().values().append(
+        spreadsheetId=settings.google_sheets_tracking_spreadsheet_id,
+        range=f"{tab_name}!A:J",
+        valueInputOption="RAW",
+        insertDataOption="INSERT_ROWS",
+        body=payload,
+    ).execute()

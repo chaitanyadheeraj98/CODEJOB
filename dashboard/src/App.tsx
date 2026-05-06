@@ -91,6 +91,11 @@ type AutomationRunResponse = {
   decision_reason?: string | null
   skip_reason?: string | null
   routing_reason?: string | null
+  effective_query?: string | null
+  matched_count?: number | null
+  queued_count?: number | null
+  skipped_count?: number | null
+  failed_count?: number | null
 }
 
 type OAuthStartResponse = {
@@ -156,7 +161,7 @@ function App() {
   const [aiStatus, setAiStatus] = useState<AiStatus | null>(null)
   const [settings, setSettings] = useState<SettingsPayload>({
     enabled: true,
-    gmail_query: 'tx',
+    gmail_query: 'is:unread',
     mail_date: null,
     min_salary: null,
     accepted_locations: [],
@@ -853,6 +858,20 @@ function App() {
                     item.decision_reason ? `Decision: ${item.decision_reason}` : null,
                     item.skip_reason ? `Skip: ${item.skip_reason}` : null,
                     item.routing_reason ? `Routing: ${item.routing_reason}` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(' | ')}
+                </p>
+              ) : null}
+              {item.effective_query || item.matched_count != null || item.queued_count != null || item.skipped_count != null || item.failed_count != null ? (
+                <p className="subtle">
+                  <strong>Summary:</strong>{' '}
+                  {[
+                    item.effective_query ? `Query: ${item.effective_query}` : null,
+                    item.matched_count != null ? `Matched: ${item.matched_count}` : null,
+                    item.queued_count != null ? `Queued: ${item.queued_count}` : null,
+                    item.skipped_count != null ? `Skipped: ${item.skipped_count}` : null,
+                    item.failed_count != null ? `Failed: ${item.failed_count}` : null,
                   ]
                     .filter(Boolean)
                     .join(' | ')}

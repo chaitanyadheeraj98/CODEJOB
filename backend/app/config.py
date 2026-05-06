@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     google_token_path: str = "./data/google_token.json"
     gmail_label_filter: str = ""
     google_login_hint: str = ""
+    google_sheets_tracking_enabled: bool = False
+    google_sheets_tracking_spreadsheet_id: str = "1F73Iax75j2rGGb53GGqTmAkEK0o19nmg"
+    google_sheets_tracking_tab_name: str = "Sheet1"
     owner_id: str = "default-owner"
     resume_storage_dir: str = "./data/resumes"
     qualification_threshold: float = 0.6
