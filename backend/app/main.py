@@ -226,6 +226,20 @@ def _fill_missing_gmail_rfc_ids(db: Session, emails: list[RecruiterEmail]) -> No
         db.commit()
 
 
+def _build_run_response(status: str, detail: str, email: RecruiterEmail | None = None) -> AutomationRunResponse:
+    if not email:
+        return AutomationRunResponse(status=status, detail=detail)
+    return AutomationRunResponse(
+        status=status,
+        detail=detail,
+        email_id=email.id,
+        gmail_message_url=email.gmail_message_url,
+        decision_reason=email.decision_reason,
+        skip_reason=email.skip_reason,
+        routing_reason=email.routing_reason,
+    )
+
+
 def _repair_unknown_role_drafts(db: Session, emails: list[RecruiterEmail]) -> None:
     changed = False
     for email in emails:
@@ -595,7 +609,7 @@ def automation_run_once(payload: AutomationRunRequest | None = None, db: Session
         .first()
     )
     if existing and existing.state == "approved_sent":
-        return AutomationRunResponse(status="skipped", detail="Email already processed and sent", email_id=existing.id)
+        return _build_run_response("skipped", "Email already processed and sent", existing)
 
     parsed = parse_email(item["subject"], item["body"])
     hard_pass, hard_reason = hard_filter_check(parsed, user_settings)
@@ -646,7 +660,7 @@ def automation_run_once(payload: AutomationRunRequest | None = None, db: Session
         db.commit()
         db.refresh(email)
         mark_message_processed(item["external_message_id"])
-        return AutomationRunResponse(status="skipped", detail="Email not qualified; skipped", email_id=email.id)
+        return _build_run_response("skipped", "Email not qualified; skipped", email)
 
     routing = _analyze_email_routing(
         db,
@@ -688,11 +702,7 @@ def automation_run_once(payload: AutomationRunRequest | None = None, db: Session
         db.commit()
         db.refresh(email)
         mark_message_processed(item["external_message_id"])
-        return AutomationRunResponse(
-            status="failed",
-            detail=email.last_error or "Could not resolve recruiter To and employer CC",
-            email_id=email.id,
-        )
+        return _build_run_response("failed", email.last_error or "Could not resolve recruiter To and employer CC", email)
 
     # Manual approval gate: queue only, never auto-send from run-once.
     greeting_line = greeting_from_to_contact(routing.to_email, item["body"])
@@ -781,7 +791,7 @@ def automation_run_once(payload: AutomationRunRequest | None = None, db: Session
     db.commit()
     db.refresh(email)
     mark_message_processed(item["external_message_id"])
-    return AutomationRunResponse(status="queued", detail="Email qualified and queued for approval", email_id=email.id)
+    return _build_run_response("queued", "Email qualified and queued for approval", email)
 
 
 @app.post("/phase0/emails/ingest", response_model=EmailResponse)

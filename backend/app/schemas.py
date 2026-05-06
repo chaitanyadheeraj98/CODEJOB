@@ -1,6 +1,6 @@
 from datetime import datetime
 import json
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -34,6 +34,10 @@ class RoutingEvidenceResponse(BaseModel):
     email: str
     source: str
     detail: str
+
+
+RoutingItemDict = dict[str, object]
+RoutingListInput = list[RoutingItemDict] | list[RoutingEvidenceResponse]
 
 
 class SettingsRequest(BaseModel):
@@ -137,16 +141,21 @@ class EmailResponse(BaseModel):
 
     @field_validator("routing_evidence", "routing_candidates", mode="before")
     @classmethod
-    def parse_routing_json(cls, value: Any) -> Any:
+    def parse_routing_json(cls, value: Any) -> RoutingListInput:
+        empty_list: list[RoutingItemDict] = []
         if value in (None, ""):
-            return []
+            return empty_list
         if isinstance(value, str):
             try:
                 parsed = json.loads(value)
             except json.JSONDecodeError:
-                return []
-            return parsed if isinstance(parsed, list) else []
-        return value
+                return empty_list
+            if isinstance(parsed, list):
+                return cast(list[RoutingItemDict], parsed)
+            return empty_list
+        if isinstance(value, list):
+            return cast(RoutingListInput, value)
+        return empty_list
 
 
 class GmailStatusResponse(BaseModel):
@@ -195,6 +204,10 @@ class AutomationRunResponse(BaseModel):
     status: str
     detail: str
     email_id: int | None = None
+    gmail_message_url: str | None = None
+    decision_reason: str | None = None
+    skip_reason: str | None = None
+    routing_reason: str | None = None
 
 
 class AutomationRunRequest(BaseModel):

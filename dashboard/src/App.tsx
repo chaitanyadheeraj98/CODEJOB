@@ -87,6 +87,10 @@ type AutomationRunResponse = {
   status: string
   detail: string
   email_id: number | null
+  gmail_message_url?: string | null
+  decision_reason?: string | null
+  skip_reason?: string | null
+  routing_reason?: string | null
 }
 
 type OAuthStartResponse = {
@@ -144,6 +148,8 @@ type CandidateListResponse = {
 }
 
 function App() {
+  const QUEUE_LIMIT = 100
+  const RECENT_RUNS_LIMIT = 100
   const apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
   const [status, setStatus] = useState<GmailStatus | null>(null)
   const [aiStatus, setAiStatus] = useState<AiStatus | null>(null)
@@ -183,7 +189,7 @@ function App() {
   const candidatesUrl = (state: 'needs_review' | 'failed') => {
     const params = new URLSearchParams({
       state,
-      limit: '20',
+      limit: String(QUEUE_LIMIT),
       sort: 'newest',
     })
     if (settings.mail_date) params.set('mail_date', settings.mail_date)
@@ -323,7 +329,7 @@ function App() {
         throw new Error(details?.detail ?? 'Automation run failed')
       }
       const data = (await res.json()) as AutomationRunResponse
-      setLogs((prev) => [data, ...prev].slice(0, 20))
+      setLogs((prev) => [data, ...prev].slice(0, RECENT_RUNS_LIMIT))
       if (data.status === 'oauth_required' || data.status === 'oauth_in_progress') {
         setError(data.detail)
       }
@@ -360,7 +366,7 @@ function App() {
         throw new Error(details?.detail ?? 'Failed to start Gmail OAuth')
       }
       const data = (await res.json()) as OAuthStartResponse
-      setLogs((prev) => [{ status: data.status, detail: data.detail, email_id: null }, ...prev].slice(0, 20))
+      setLogs((prev) => [{ status: data.status, detail: data.detail, email_id: null }, ...prev].slice(0, RECENT_RUNS_LIMIT))
       if (data.status !== 'ready') {
         setError(data.detail)
       }
@@ -816,6 +822,26 @@ function App() {
               <p><strong>Status:</strong> {item.status}</p>
               <p><strong>Detail:</strong> {item.detail}</p>
               <p><strong>Email ID:</strong> {item.email_id ?? '-'}</p>
+              {item.gmail_message_url ? (
+                <p>
+                  <strong>Open:</strong>{' '}
+                  <a href={item.gmail_message_url} target="_blank" rel="noreferrer">
+                    Open exact email in Gmail
+                  </a>
+                </p>
+              ) : null}
+              {item.decision_reason || item.skip_reason || item.routing_reason ? (
+                <p className="subtle">
+                  <strong>Why:</strong>{' '}
+                  {[
+                    item.decision_reason ? `Decision: ${item.decision_reason}` : null,
+                    item.skip_reason ? `Skip: ${item.skip_reason}` : null,
+                    item.routing_reason ? `Routing: ${item.routing_reason}` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(' | ')}
+                </p>
+              ) : null}
             </article>
           ))}
           </section>
