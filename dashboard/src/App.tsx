@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import './App.css'
 import Sidebar from './components/Sidebar'
+import { withAiToggle } from './features/ai/state'
+import { getDraftSourceLabel } from './features/ai/ui'
 
 type GmailStatus = {
   configured: boolean
@@ -8,6 +10,20 @@ type GmailStatus = {
   token_path: string
   last_sync_at: string | null
   detail: string
+}
+
+type AiStatus = {
+  configured: boolean
+  connected: boolean
+  running: boolean
+  provider: string
+  model: string
+  detail: string
+  last_error: string | null
+  last_started_at: string | null
+  last_finished_at: string | null
+  last_duration_ms: number | null
+  last_draft_source: string | null
 }
 
 type SettingsPayload = {
@@ -67,6 +83,9 @@ type Candidate = {
   routing_candidates: RoutingEvidence[]
   routing_confirmed: boolean
   draft_reply: string
+  draft_source: string | null
+  draft_model: string | null
+  draft_ai_error: string | null
   resume_file_name: string | null
   state: string
   last_error: string | null
@@ -88,6 +107,7 @@ type CandidateListResponse = {
 function App() {
   const apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
   const [status, setStatus] = useState<GmailStatus | null>(null)
+  const [aiStatus, setAiStatus] = useState<AiStatus | null>(null)
   const [settings, setSettings] = useState<SettingsPayload>({
     enabled: true,
     gmail_query: 'tx',
@@ -135,6 +155,12 @@ function App() {
     const res = await fetch(`${apiBase}/gmail/status`)
     if (!res.ok) throw new Error('Failed to load Gmail status')
     setStatus((await res.json()) as GmailStatus)
+  }
+
+  const loadAiStatus = async () => {
+    const res = await fetch(`${apiBase}/ai/status`)
+    if (!res.ok) throw new Error('Failed to load AI status')
+    setAiStatus((await res.json()) as AiStatus)
   }
 
   const loadSettings = async () => {
@@ -185,6 +211,7 @@ function App() {
     loadStatus().catch((e) => setError((e as Error).message))
     loadSettings().catch((e) => setError((e as Error).message))
     loadActiveResume().catch((e) => setError((e as Error).message))
+    loadAiStatus().catch((e) => setError((e as Error).message))
     loadQueue().catch((e) => setError((e as Error).message))
     loadFailedQueue().catch((e) => setError((e as Error).message))
   }, [])
@@ -193,6 +220,16 @@ function App() {
     loadQueue().catch((e) => setError((e as Error).message))
     loadFailedQueue().catch((e) => setError((e as Error).message))
   }, [settings.mail_date])
+
+  useEffect(() => {
+    if (!running) return
+    const intervalId = window.setInterval(() => {
+      loadAiStatus().catch(() => {
+        // Keep the run UI stable; the main request will surface actionable errors.
+      })
+    }, 1000)
+    return () => window.clearInterval(intervalId)
+  }, [running])
 
   const saveSettings = async (event: React.FormEvent) => {
     event.preventDefault()
@@ -233,7 +270,8 @@ function App() {
     setError('')
     try {
       const controller = new AbortController()
-      const timeoutId = window.setTimeout(() => controller.abort(), 20000)
+      const timeoutMs = settings.feature_ai_enabled ? 90000 : 45000
+      const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs)
       const res = await fetch(`${apiBase}/automation/run-once`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -251,11 +289,18 @@ function App() {
         setError(data.detail)
       }
       await loadStatus()
+      await loadAiStatus()
       await loadQueue()
       await loadFailedQueue()
     } catch (e) {
       if ((e as Error).name === 'AbortError') {
-        setError('Request timed out. OAuth may be waiting in backend logs. Complete Google sign-in, then retry.')
+        if (!status?.authenticated) {
+          setError('Request timed out. Gmail OAuth may be waiting in backend logs. Complete Google sign-in, then retry.')
+        } else if (settings.feature_ai_enabled && aiStatus?.connected) {
+          setError('AI reply generation is taking longer than expected. The backend may still finish; wait a moment, then refresh the queue.')
+        } else {
+          setError('Sync is taking longer than expected. Wait a moment, then retry Sync + Queue.')
+        }
       } else {
         setError((e as Error).message)
       }
@@ -281,6 +326,7 @@ function App() {
         setError(data.detail)
       }
       await loadStatus()
+      await loadAiStatus()
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -386,6 +432,9 @@ function App() {
         year: 'numeric',
       })
     : ''
+  const aiLastDuration = aiStatus?.last_duration_ms
+    ? `${(aiStatus.last_duration_ms / 1000).toFixed(1)}s`
+    : null
 
   const renderRoutingPanel = (item: Candidate) => (
     <div className={`routingPanel ${canTrustRouting(item) ? 'safe' : 'blocked'}`}>
@@ -521,6 +570,20 @@ function App() {
               <p><strong>Last Sync:</strong> {status?.last_sync_at ?? 'Never'}</p>
             </section>
 
+            <section className="card slim">
+              <h2>AI Access</h2>
+              <p><strong>Provider:</strong> {aiStatus?.provider ?? 'deepseek'}</p>
+              <p><strong>Model:</strong> {aiStatus?.model ?? 'deepseek-chat'}</p>
+              <p><strong>Connected:</strong> {aiStatus?.connected ? 'Yes' : 'No'}</p>
+              <p><strong>Active now:</strong> {aiStatus?.running ? 'Yes' : 'No'}</p>
+              <p><strong>Status:</strong> {aiStatus?.detail ?? 'Loading...'}</p>
+              {aiStatus?.last_draft_source ? (
+                <p><strong>Last draft source:</strong> {getDraftSourceLabel(aiStatus.last_draft_source)}</p>
+              ) : null}
+              {aiLastDuration ? <p><strong>Last duration:</strong> {aiLastDuration}</p> : null}
+              {aiStatus?.last_error ? <p className="subtle"><strong>Last Error:</strong> {aiStatus.last_error}</p> : null}
+            </section>
+
             <form className="card slim" onSubmit={saveSettings}>
               <h2>Automation Filters</h2>
               <label className="toggleRow">
@@ -529,7 +592,7 @@ function App() {
                   <input
                     type="checkbox"
                     checked={settings.feature_ai_enabled}
-                    onChange={(e) => setSettings({ ...settings, feature_ai_enabled: e.target.checked })}
+                    onChange={(e) => setSettings(withAiToggle(settings, e.target.checked))}
                   />
                   <span className="toggleTrack" />
                 </span>
@@ -605,6 +668,11 @@ function App() {
                 <p><strong>CC:</strong> {item.cc_email ?? '-'}</p>
                 {renderRoutingPanel(item)}
                 <p><strong>Resume:</strong> {item.resume_file_name ?? '-'}</p>
+                <p>
+                  <strong>Draft source:</strong> {getDraftSourceLabel(item.draft_source)}
+                  {item.draft_model ? ` (${item.draft_model})` : ''}
+                </p>
+                {item.draft_ai_error ? <p className="subtle"><strong>AI fallback:</strong> {item.draft_ai_error}</p> : null}
                 <p><strong>Draft:</strong></p>
                 <textarea
                   value={editedDraft}

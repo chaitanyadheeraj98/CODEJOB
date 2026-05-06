@@ -94,9 +94,10 @@ def _load_credentials() -> Credentials:
     if settings.google_login_hint:
         extra_auth_kwargs["login_hint"] = settings.google_login_hint
 
+    flow_any: Any = flow
     creds = cast(
         Credentials,
-        flow.run_local_server(
+        flow_any.run_local_server(
             host="localhost",
             bind_addr="0.0.0.0",
             port=8080,

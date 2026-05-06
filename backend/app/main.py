@@ -13,6 +13,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.ai.reply_service import generate_reply_with_ai_or_fallback
 from app.db import Base, SessionLocal, engine, ensure_sqlite_phase0_columns
 from app.gmail_client import (
     get_message_rfc_message_id,
@@ -39,6 +40,7 @@ from app.phase0 import (
     should_block_f2f,
 )
 from app.schemas import (
+    AIStatusResponse,
     ApproveSendRequest,
     AutomationRunRequest,
     AutomationRunResponse,
@@ -67,6 +69,12 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
 last_gmail_sync_at: datetime | None = None
+ai_running: bool = False
+ai_last_error: str | None = None
+ai_last_started_at: datetime | None = None
+ai_last_finished_at: datetime | None = None
+ai_last_duration_ms: int | None = None
+ai_last_draft_source: str | None = None
 
 app.add_middleware(
     CORSMiddleware,
@@ -258,6 +266,9 @@ def _repair_unknown_role_drafts(db: Session, emails: list[RecruiterEmail]) -> No
         email.skills_text = str(parsed["skills_text"])
         if "Unknown Role" in email.draft_reply:
             email.draft_reply = _apply_draft_learning(db, draft_reply(email.sender, role, parsed))
+            email.draft_source = "rules_only"
+            email.draft_model = None
+            email.draft_ai_error = None
         changed = True
     if changed:
         db.commit()
@@ -405,6 +416,26 @@ def gmail_status() -> GmailStatusResponse:
     )
 
 
+@app.get("/ai/status", response_model=AIStatusResponse)
+def ai_status() -> AIStatusResponse:
+    connected = bool(settings.deepseek_api_key)
+    configured = connected and bool(settings.deepseek_base_url) and bool(settings.deepseek_model_fast)
+    detail = "Ready" if connected else "DeepSeek API key missing (set Deepseek_API_KEY)."
+    return AIStatusResponse(
+        configured=configured,
+        connected=connected,
+        running=ai_running,
+        provider="deepseek",
+        model=settings.deepseek_model_fast or "deepseek-chat",
+        detail=detail,
+        last_error=ai_last_error,
+        last_started_at=ai_last_started_at,
+        last_finished_at=ai_last_finished_at,
+        last_duration_ms=ai_last_duration_ms,
+        last_draft_source=ai_last_draft_source,
+    )
+
+
 @app.post("/gmail/sync", response_model=GmailSyncResponse)
 def gmail_sync(db: Session = Depends(get_db)) -> GmailSyncResponse:
     global last_gmail_sync_at
@@ -492,6 +523,9 @@ def gmail_sync(db: Session = Depends(get_db)) -> GmailSyncResponse:
                 ai_summary=ai_summary,
                 sync_batch_id=sync_batch_id,
                 draft_reply=draft,
+                draft_source="rules_only" if draft else None,
+                draft_model=settings.deepseek_model_fast if draft else None,
+                draft_ai_error=None,
                 approval_status="pending",
                 sent_status="not_sent",
                 source="gmail",
@@ -539,6 +573,7 @@ def gmail_oauth_start() -> OAuthStartResponse:
 
 @app.post("/automation/run-once", response_model=AutomationRunResponse)
 def automation_run_once(payload: AutomationRunRequest | None = None, db: Session = Depends(get_db)) -> AutomationRunResponse:
+    global ai_running, ai_last_draft_source, ai_last_duration_ms, ai_last_error, ai_last_finished_at, ai_last_started_at
     if not is_gmail_configured():
         raise HTTPException(status_code=400, detail="Gmail OAuth is not configured")
     configured, authenticated, detail = gmail_auth_status()
@@ -620,6 +655,9 @@ def automation_run_once(payload: AutomationRunRequest | None = None, db: Session
             email.decision_reason = "Not qualified for auto-reply"
             email.skip_reason = "not_qualified"
         email.last_error = None
+        email.draft_source = None
+        email.draft_model = None
+        email.draft_ai_error = None
         if not existing:
             db.add(email)
         db.commit()
@@ -674,7 +712,44 @@ def automation_run_once(payload: AutomationRunRequest | None = None, db: Session
         )
 
     # Manual approval gate: queue only, never auto-send from run-once.
-    reply = _apply_draft_learning(db, draft_reply(item["sender"], str(parsed["role"]), parsed))
+    fallback_reply = _apply_draft_learning(db, draft_reply(item["sender"], str(parsed["role"]), parsed))
+    if user_settings.feature_ai_enabled:
+        ai_running = True
+        ai_last_error = None
+        ai_last_started_at = datetime.now(UTC)
+        ai_last_finished_at = None
+        ai_last_duration_ms = None
+        ai_last_draft_source = None
+        try:
+            ai_reply = generate_reply_with_ai_or_fallback(
+                sender=item["sender"],
+                subject=item["subject"],
+                body=item["body"],
+                role=str(parsed["role"]),
+                location=str(parsed["location"]),
+                salary_text=str(parsed["salary_text"]),
+                skills_text=str(parsed["skills_text"]),
+                resume_path=resume.file_path,
+                resume_file_name=resume.file_name,
+                fallback_draft=fallback_reply,
+                model_name=settings.deepseek_model_fast,
+            )
+        finally:
+            ai_last_finished_at = datetime.now(UTC)
+            ai_last_duration_ms = int((ai_last_finished_at - ai_last_started_at).total_seconds() * 1000)
+            ai_running = False
+        reply = ai_reply.draft_text
+        draft_source = ai_reply.source
+        draft_model = ai_reply.ai_model
+        draft_ai_error = ai_reply.ai_error
+        ai_last_error = ai_reply.ai_error
+        ai_last_draft_source = ai_reply.source
+    else:
+        reply = fallback_reply
+        draft_source = "rules_only"
+        draft_model = None
+        draft_ai_error = None
+        ai_last_draft_source = "rules_only"
     email = existing or RecruiterEmail(
         owner_id=settings.owner_id,
         sender=item["sender"],
@@ -699,6 +774,9 @@ def automation_run_once(payload: AutomationRunRequest | None = None, db: Session
     email.ai_summary = ai_summary
     email.hard_filter_result = hard_reason
     email.draft_reply = reply
+    email.draft_source = draft_source
+    email.draft_model = draft_model
+    email.draft_ai_error = draft_ai_error
     email.last_error = None
     email.state = "needs_review"
     email.decision = "Qualified"
@@ -751,6 +829,9 @@ def ingest_email(payload: IngestEmailRequest, db: Session = Depends(get_db)) -> 
         draft_reply=_apply_draft_learning(db, draft_reply(payload.sender, str(parsed["role"]), parsed))
         if state == "needs_review"
         else "",
+        draft_source="rules_only" if state == "needs_review" else None,
+        draft_model=None,
+        draft_ai_error=None,
         approval_status="pending",
         sent_status="not_sent",
         source="manual",

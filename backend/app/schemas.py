@@ -106,6 +106,9 @@ class EmailResponse(BaseModel):
     skip_reason: str | None
     sync_batch_id: str | None
     draft_reply: str
+    draft_source: str | None = None
+    draft_model: str | None = None
+    draft_ai_error: str | None = None
     approval_status: str
     sent_status: str
     source: str
@@ -152,6 +155,20 @@ class GmailStatusResponse(BaseModel):
     token_path: str
     last_sync_at: datetime | None
     detail: str
+
+
+class AIStatusResponse(BaseModel):
+    configured: bool
+    connected: bool
+    running: bool
+    provider: str
+    model: str
+    detail: str
+    last_error: str | None = None
+    last_started_at: datetime | None = None
+    last_finished_at: datetime | None = None
+    last_duration_ms: int | None = None
+    last_draft_source: str | None = None
 
 
 class GmailSyncResponse(BaseModel):
