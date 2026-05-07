@@ -263,6 +263,7 @@ function App() {
   const [dynamicPolicyBeta, setDynamicPolicyBeta] = useState(false)
   const [selectedProfileToApply, setSelectedProfileToApply] = useState<PolicyProfileName>('Balanced')
   const [lastAppliedProfile, setLastAppliedProfile] = useState<PolicyProfileName | null>(null)
+  const [skillDraft, setSkillDraft] = useState('')
   const datePickerRef = useRef<HTMLInputElement | null>(null)
 
   const currentPolicy: DynamicPolicy = settings.policy ?? defaultPolicy
@@ -565,8 +566,6 @@ function App() {
     }
   }
 
-  const gmailConnected = Boolean(status?.configured && status?.authenticated)
-  const totalActionItems = queue.length + failedQueue.length
   const canTrustRouting = (candidate: Candidate) =>
     candidate.routing_confirmed ||
     (['safe', 'confirmed'].includes(candidate.routing_status) && candidate.routing_confidence >= 0.8)
@@ -636,6 +635,25 @@ function App() {
     )
   }
 
+  const addMustHaveSkill = (raw: string) => {
+    const skill = raw.trim()
+    if (!skill) return
+    const exists = settings.must_have_skills.some((s) => s.toLowerCase() === skill.toLowerCase())
+    if (exists) {
+      setSkillDraft('')
+      return
+    }
+    setSettings({ ...settings, must_have_skills: [...settings.must_have_skills, skill] })
+    setSkillDraft('')
+  }
+
+  const removeMustHaveSkill = (skillToRemove: string) => {
+    setSettings({
+      ...settings,
+      must_have_skills: settings.must_have_skills.filter((s) => s.toLowerCase() !== skillToRemove.toLowerCase()),
+    })
+  }
+
   return (
     <main className="gmailShell">
       <Sidebar
@@ -649,45 +667,25 @@ function App() {
       />
 
       <section className="mainPane">
-        <header className="pageHeader">
-          <div>
-            <p className="eyebrow">Email Automation Dashboard</p>
-            <h1>Review, route, and ship candidate replies</h1>
-            <p className="subtle">
-              Keep the pipeline moving with one clear place for sync, approvals, and failed mapping recovery.
-            </p>
+        <header className="topHeader">
+          <div className="topSearch">
+            <input
+              className="search"
+              value={settings.gmail_query}
+              onChange={(e) => setSettings({ ...settings, gmail_query: e.target.value })}
+              placeholder="Search Dashboard..."
+            />
           </div>
-          <div className="statusPills">
-            <span className={`pill ${gmailConnected ? 'ok' : 'warn'}`}>
-              Gmail {gmailConnected ? 'Connected' : 'Needs attention'}
-            </span>
-            <span className="pill neutral">Open items {totalActionItems}</span>
-          </div>
-        </header>
-
-        <section className="statsGrid">
-          <article className="statCard">
-            <p>Needs Review</p>
-            <strong>{queue.length}</strong>
-          </article>
-          <article className="statCard">
-            <p>Failed Mapping</p>
-            <strong>{failedQueue.length}</strong>
-          </article>
-          <article className="statCard">
-            <p>Recent Runs</p>
-            <strong>{logs.length}</strong>
-          </article>
-        </section>
-
-        <header className="topBar">
-          <input
-            className="search"
-            value={settings.gmail_query}
-            onChange={(e) => setSettings({ ...settings, gmail_query: e.target.value })}
-            placeholder="Search/filter query"
-          />
-          <div className="topBarRight">
+          <div className="topActions">
+            <button type="button" className="btnMuted">Batch Queue</button>
+            <button
+              type="button"
+              className="btnPrimary"
+              onClick={status?.authenticated ? runAutomation : connectGmail}
+              disabled={running}
+            >
+              {running ? 'Running...' : status?.authenticated ? 'Sync Now' : 'Connect Gmail'}
+            </button>
             <span className="dateTrigger">
               <button type="button" className="iconBtn" onClick={openDatePicker} title="Filter by date">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -713,88 +711,147 @@ function App() {
                 {formattedMailDate} x
               </button>
             ) : null}
+          </div>
+        </header>
+
+        <div className="pageBody">
+          <div className="titleBlock">
+            <h1>Run Queue Dashboard</h1>
+            <p>Manage and monitor your automated recruitment email operations.</p>
+          </div>
+
+          <section className="statsGrid">
+            <article className="statCard">
+              <p>Needs Review</p>
+              <strong>{queue.length}</strong>
+            </article>
+            <article className="statCard error">
+              <p>Failed Mapping</p>
+              <strong>{failedQueue.length}</strong>
+            </article>
+            <article className="statCard">
+              <p>Recent Runs</p>
+              <strong>{logs.length}</strong>
+            </article>
+          </section>
+
+          <section className="actionBar">
+            <input
+              value={settings.gmail_query}
+              onChange={(e) => setSettings({ ...settings, gmail_query: e.target.value })}
+              placeholder="tx is:unread"
+            />
             <button
               type="button"
-              className="topBarAction"
+              className="syncBtn topBarAction"
               onClick={status?.authenticated ? runAutomation : connectGmail}
               disabled={running}
             >
               {running ? 'Running...' : status?.authenticated ? 'Sync + Queue' : 'Connect Gmail'}
             </button>
-          </div>
-        </header>
+          </section>
 
-        {activePage === 'run_queue' ? (
-          <>
-            <section className="card slim">
-              <h2>Gmail Access</h2>
-              <p><strong>Configured:</strong> {status?.configured ? 'Yes' : 'No'}</p>
-              <p><strong>Authenticated:</strong> {status?.authenticated ? 'Yes' : 'No'}</p>
-              <p><strong>Status:</strong> {status?.detail ?? 'Loading...'}</p>
-              <p><strong>Last Sync:</strong> {status?.last_sync_at ?? 'Never'}</p>
-            </section>
+          {activePage === 'run_queue' ? (
+            <form className="configGrid" onSubmit={saveSettings}>
+              <section className="card">
+                <h2>Gmail Access</h2>
+                <div className="stack">
+                  <div className="row"><span className="label">Status</span><span className="tag">{status?.authenticated ? 'Authenticated' : 'Not authenticated'}</span></div>
+                  <div className="row"><span className="label">Configured</span><span>{status?.configured ? 'Yes' : 'No'}</span></div>
+                  <div className="row"><span className="label">Account</span><span>{status?.token_path ?? '-'}</span></div>
+                  <div className="row"><span className="label">Last Sync</span><span>{status?.last_sync_at ?? 'Never'}</span></div>
+                </div>
+              </section>
 
-            <section className="card slim">
-              <h2>AI Access</h2>
-              <p><strong>Provider:</strong> {aiStatus?.provider ?? 'deepseek'}</p>
-              <p><strong>Model:</strong> {aiStatus?.model ?? 'deepseek-chat'}</p>
-              <p><strong>Connected:</strong> {aiStatus?.connected ? 'Yes' : 'No'}</p>
-              <p><strong>Active now:</strong> {aiStatus?.running ? 'Yes' : 'No'}</p>
-              <p><strong>Status:</strong> {aiStatus?.detail ?? 'Loading...'}</p>
-              {aiStatus?.last_draft_source ? (
-                <p><strong>Last draft source:</strong> {getDraftSourceLabel(aiStatus.last_draft_source)}</p>
-              ) : null}
-              {aiLastDuration ? <p><strong>Last duration:</strong> {aiLastDuration}</p> : null}
-              {aiStatus?.last_error ? <p className="subtle"><strong>Last Error:</strong> {aiStatus.last_error}</p> : null}
-            </section>
+              <section className="card">
+                <h2>AI Access</h2>
+                <div className="stack">
+                  <div className="row"><span className="label">Provider</span><span>{aiStatus?.provider ?? 'DeepSeek'}</span></div>
+                  <div className="row"><span className="label">Model</span><span className="tag">{aiStatus?.model ?? 'deepseek-chat'}</span></div>
+                  <div className="row"><span className="label">Connection</span><span className="dotOk">{aiStatus?.connected ? 'Healthy' : 'Disconnected'}</span></div>
+                  {aiStatus?.last_draft_source ? <div className="row"><span className="label">Draft Source</span><span>{getDraftSourceLabel(aiStatus.last_draft_source)}</span></div> : null}
+                  {aiLastDuration ? <div className="row"><span className="label">Last Duration</span><span>{aiLastDuration}</span></div> : null}
+                </div>
+              </section>
 
-            <form className="card slim" onSubmit={saveSettings}>
-              <h2>Automation Filters</h2>
-              <label className="toggleRow">
-                <span>Enable AI Features (beta)</span>
-                <span className="toggleSwitch">
-                  <input
-                    type="checkbox"
-                    checked={settings.feature_ai_enabled}
-                    onChange={(e) => setSettings(withAiToggle(settings, e.target.checked))}
-                  />
-                  <span className="toggleTrack" />
-                </span>
-              </label>
-              <label>
-                Qualification Threshold
-                <input
-                  type="number"
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  value={settings.qualification_threshold}
-                  onChange={(e) => setSettings({ ...settings, qualification_threshold: Number(e.target.value) })}
-                />
-              </label>
-              <label>
-                Must-have Skills (comma-separated)
-                <input
-                  value={settings.must_have_skills.join(',')}
-                  onChange={(e) => setSettings({ ...settings, must_have_skills: e.target.value.split(',').map((v) => v.trim()).filter(Boolean) })}
-                />
-              </label>
-              <label className="toggleRow">
-                <span>Dynamic Policy (beta)</span>
-                <span className="toggleSwitch">
-                  <input
-                    type="checkbox"
-                    checked={dynamicPolicyBeta}
-                    onChange={(e) => setDynamicPolicyBeta(e.target.checked)}
-                  />
-                  <span className="toggleTrack" />
-                </span>
-              </label>
-              {dynamicPolicyBeta ? (
-                <>
-                  <p className="subtle">Phase 2 active: query and run controls now enforce behavior.</p>
+              <section className="card">
+                <h2>Automation Filters</h2>
+                <div className="stack">
+                  <label className="toggleRow">
+                    <span>Enable AI Features</span>
+                    <span className="toggleSwitch">
+                      <input
+                        type="checkbox"
+                        checked={settings.feature_ai_enabled}
+                        onChange={(e) => setSettings(withAiToggle(settings, e.target.checked))}
+                      />
+                      <span className="toggleTrack" />
+                    </span>
+                  </label>
                   <label>
-                    Policy profile
+                    Qualification Threshold
+                    <input
+                      type="number"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      value={settings.qualification_threshold}
+                      onChange={(e) => setSettings({ ...settings, qualification_threshold: Number(e.target.value) })}
+                    />
+                  </label>
+                  <label>
+                    Must-have Skills (comma-separated)
+                    <div className="skillBox">
+                      {settings.must_have_skills.map((skill) => (
+                        <span key={skill} className="skillChip">
+                          {skill}
+                          <button
+                            type="button"
+                            className="chipRemove"
+                            onClick={() => removeMustHaveSkill(skill)}
+                            aria-label={`Remove ${skill}`}
+                            title={`Remove ${skill}`}
+                          >
+                            x
+                          </button>
+                        </span>
+                      ))}
+                      <input
+                        value={skillDraft}
+                        className="skillInput"
+                        onChange={(e) => setSkillDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ',') {
+                            e.preventDefault()
+                            addMustHaveSkill(skillDraft)
+                          } else if (e.key === 'Backspace' && !skillDraft && settings.must_have_skills.length > 0) {
+                            removeMustHaveSkill(settings.must_have_skills[settings.must_have_skills.length - 1])
+                          }
+                        }}
+                        onBlur={() => addMustHaveSkill(skillDraft)}
+                        placeholder="Add skill..."
+                      />
+                    </div>
+                  </label>
+                </div>
+              </section>
+
+              <section className="card">
+                <h2>Dynamic Policy</h2>
+                <div className="stack">
+                  <label className="toggleRow">
+                    <span>Use Dynamic Policy</span>
+                    <span className="toggleSwitch">
+                      <input
+                        type="checkbox"
+                        checked={dynamicPolicyBeta}
+                        onChange={(e) => setDynamicPolicyBeta(e.target.checked)}
+                      />
+                      <span className="toggleTrack" />
+                    </span>
+                  </label>
+                  <label>
+                    Policy Profile
                     <select
                       value={selectedProfileToApply}
                       onChange={(e) => setSelectedProfileToApply(e.target.value as PolicyProfileName)}
@@ -804,31 +861,94 @@ function App() {
                       ))}
                     </select>
                   </label>
-                  <div className="rowBtns">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const profilePolicy = policyProfiles[selectedProfileToApply]
-                        setSettings({ ...settings, policy: profilePolicy })
-                        setLastAppliedProfile(selectedProfileToApply)
-                      }}
-                    >
-                      Apply Profile
-                    </button>
-                  </div>
-                  <p className="subtle"><strong>Selected profile:</strong> {profileStatusLabel}</p>
-                  <label className="toggleRow">
-                    <span>Force unread in query</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const profilePolicy = policyProfiles[selectedProfileToApply]
+                      setSettings({ ...settings, policy: profilePolicy })
+                      setLastAppliedProfile(selectedProfileToApply)
+                    }}
+                  >
+                    Apply Profile
+                  </button>
+                  <p className="subtle">Selected profile: {profileStatusLabel}</p>
+                  {dynamicPolicyBeta ? (
+                    <>
+                      <label className="toggleRow">
+                        <span>Force unread in query</span>
+                        <span className="toggleSwitch">
+                          <input
+                            type="checkbox"
+                            checked={currentPolicy.query.force_unread}
+                            onChange={(e) =>
+                              setSettings({
+                                ...settings,
+                                policy: {
+                                  ...currentPolicy,
+                                  query: { ...currentPolicy.query, force_unread: e.target.checked },
+                                },
+                              })
+                            }
+                          />
+                          <span className="toggleTrack" />
+                        </span>
+                      </label>
+                      <label>
+                        Include labels
+                        <input
+                          value={currentPolicy.query.include_labels.join(',')}
+                          onChange={(e) =>
+                            setSettings({
+                              ...settings,
+                              policy: {
+                                ...currentPolicy,
+                                query: {
+                                  ...currentPolicy.query,
+                                  include_labels: e.target.value.split(',').map((v) => v.trim()).filter(Boolean),
+                                },
+                              },
+                            })
+                          }
+                        />
+                      </label>
+                      <label>
+                        Exclude labels
+                        <input
+                          value={currentPolicy.query.exclude_labels.join(',')}
+                          onChange={(e) =>
+                            setSettings({
+                              ...settings,
+                              policy: {
+                                ...currentPolicy,
+                                query: {
+                                  ...currentPolicy.query,
+                                  exclude_labels: e.target.value.split(',').map((v) => v.trim()).filter(Boolean),
+                                },
+                              },
+                            })
+                          }
+                        />
+                      </label>
+                    </>
+                  ) : null}
+                </div>
+              </section>
+
+              <section className="card">
+                <h2>Execution Control</h2>
+                <div className="stack">
+                  <label className="toggleRow pillRow">
+                    <span>Dry Run Mode</span>
                     <span className="toggleSwitch">
                       <input
                         type="checkbox"
-                        checked={currentPolicy.query.force_unread}
+                        checked={currentPolicy.run.dry_run}
                         onChange={(e) =>
                           setSettings({
                             ...settings,
                             policy: {
                               ...currentPolicy,
-                              query: { ...currentPolicy.query, force_unread: e.target.checked },
+                              run: { ...currentPolicy.run, dry_run: e.target.checked },
                             },
                           })
                         }
@@ -837,36 +957,18 @@ function App() {
                     </span>
                   </label>
                   <label>
-                    Include labels (comma-separated)
+                    Batch Limit
                     <input
-                      value={currentPolicy.query.include_labels.join(',')}
+                      type="number"
+                      min={1}
+                      max={200}
+                      value={currentPolicy.run.batch_limit}
                       onChange={(e) =>
                         setSettings({
                           ...settings,
                           policy: {
                             ...currentPolicy,
-                            query: {
-                              ...currentPolicy.query,
-                              include_labels: e.target.value.split(',').map((v) => v.trim()).filter(Boolean),
-                            },
-                          },
-                        })
-                      }
-                    />
-                  </label>
-                  <label>
-                    Exclude labels (comma-separated)
-                    <input
-                      value={currentPolicy.query.exclude_labels.join(',')}
-                      onChange={(e) =>
-                        setSettings({
-                          ...settings,
-                          policy: {
-                            ...currentPolicy,
-                            query: {
-                              ...currentPolicy.query,
-                              exclude_labels: e.target.value.split(',').map((v) => v.trim()).filter(Boolean),
-                            },
+                            run: { ...currentPolicy.run, batch_limit: Number(e.target.value) },
                           },
                         })
                       }
@@ -890,137 +992,23 @@ function App() {
                       <option value="any">Ignore selected date</option>
                     </select>
                   </label>
-                  <label>
-                    Batch limit
-                    <input
-                      type="number"
-                      min={1}
-                      max={200}
-                      value={currentPolicy.run.batch_limit}
-                      onChange={(e) =>
-                        setSettings({
-                          ...settings,
-                          policy: {
-                            ...currentPolicy,
-                            run: { ...currentPolicy.run, batch_limit: Number(e.target.value) },
-                          },
-                        })
-                      }
-                    />
-                  </label>
-                  <label className="toggleRow">
-                    <span>Dry run (beta storage only)</span>
-                    <span className="toggleSwitch">
-                      <input
-                        type="checkbox"
-                        checked={currentPolicy.run.dry_run}
-                        onChange={(e) =>
-                          setSettings({
-                            ...settings,
-                            policy: {
-                              ...currentPolicy,
-                              run: { ...currentPolicy.run, dry_run: e.target.checked },
-                            },
-                          })
-                        }
-                      />
-                      <span className="toggleTrack" />
-                    </span>
-                  </label>
-                  <label>
-                    Location strictness
-                    <select
-                      value={currentPolicy.qualification.location_strictness}
-                      onChange={(e) =>
-                        setSettings({
-                          ...settings,
-                          policy: {
-                            ...currentPolicy,
-                            qualification: {
-                              ...currentPolicy.qualification,
-                              location_strictness: e.target.value as 'lenient' | 'balanced' | 'strict',
-                            },
-                          },
-                        })
-                      }
-                    >
-                      <option value="lenient">Lenient</option>
-                      <option value="balanced">Balanced</option>
-                      <option value="strict">Strict</option>
-                    </select>
-                  </label>
-                  <label className="toggleRow">
-                    <span>Override score threshold</span>
-                    <span className="toggleSwitch">
-                      <input
-                        type="checkbox"
-                        checked={currentPolicy.qualification.score_threshold_override_enabled}
-                        onChange={(e) =>
-                          setSettings({
-                            ...settings,
-                            policy: {
-                              ...currentPolicy,
-                              qualification: {
-                                ...currentPolicy.qualification,
-                                score_threshold_override_enabled: e.target.checked,
-                              },
-                            },
-                          })
-                        }
-                      />
-                      <span className="toggleTrack" />
-                    </span>
-                  </label>
-                  <label>
-                    Override threshold value
-                    <input
-                      type="number"
-                      min={0}
-                      max={1}
-                      step={0.01}
-                      value={currentPolicy.qualification.score_threshold_override_value}
-                      onChange={(e) =>
-                        setSettings({
-                          ...settings,
-                          policy: {
-                            ...currentPolicy,
-                            qualification: {
-                              ...currentPolicy.qualification,
-                              score_threshold_override_value: Number(e.target.value),
-                            },
-                          },
-                        })
-                      }
-                    />
-                  </label>
-                </>
-              ) : null}
-              <div className="rowBtns">
-                <button type="submit" disabled={saving}>{saving ? 'Saving...' : 'Save Filters'}</button>
-              </div>
+                  <button type="submit" disabled={saving}>{saving ? 'Saving...' : 'Save Filters'}</button>
+                  <p className="subtle">
+                    {activeResume ? `Active resume: ${activeResume.file_name} (v${activeResume.version})` : 'No active resume uploaded yet.'}
+                  </p>
+                  <input type="file" accept=".pdf,.doc,.docx" onChange={(e) => setResumeFile(e.target.files?.[0] ?? null)} />
+                  <button type="button" onClick={uploadResume} disabled={!resumeFile}>
+                    {activeResume ? 'Replace Resume' : 'Upload Resume'}
+                  </button>
+                </div>
+              </section>
             </form>
+          ) : null}
 
-            <section className="card slim">
-              <h2>Resume</h2>
-              {activeResume ? (
-                <p className="subtle">
-                  Active resume: <strong>{activeResume.file_name}</strong> (v{activeResume.version})
-                </p>
-              ) : (
-                <p className="subtle">No active resume uploaded yet.</p>
-              )}
-              <input type="file" accept=".pdf,.doc,.docx" onChange={(e) => setResumeFile(e.target.files?.[0] ?? null)} />
-              <button type="button" onClick={uploadResume} disabled={!resumeFile}>
-                {activeResume ? 'Replace Resume' : 'Upload Resume'}
-              </button>
-            </section>
-          </>
-        ) : null}
+          {error ? <p className="errorMessage">{error}</p> : null}
 
-        {error ? <p className="error">{error}</p> : null}
-
-        {activePage === 'needs_review' ? (
-          <section className="card">
+          {activePage === 'needs_review' ? (
+            <section className="card pageSection">
           <h2>Needs Review (Manual Approval Required)</h2>
           {queue.length === 0 ? <p className="subtle">No queued emails.</p> : null}
           {queue.map((item) => {
@@ -1067,7 +1055,7 @@ function App() {
                     dangerouslySetInnerHTML={{ __html: draftToPreviewHtml(editedDraft) }}
                   />
                 </div>
-                {item.last_error ? <p className="error"><strong>Last Error:</strong> {item.last_error}</p> : null}
+                {item.last_error ? <p className="errorMessage"><strong>Last Error:</strong> {item.last_error}</p> : null}
                 <div className="rowBtns">
                   <button
                     type="button"
@@ -1088,11 +1076,11 @@ function App() {
               </article>
             )
           })}
-          </section>
-        ) : null}
+            </section>
+          ) : null}
 
-        {activePage === 'failed_mapping' ? (
-          <section className="card">
+          {activePage === 'failed_mapping' ? (
+            <section className="card pageSection">
           <h2>Failed Recipient Mapping (Teach the model)</h2>
           {failedQueue.length === 0 ? <p className="subtle">No failed emails.</p> : null}
           {failedQueue.map((item) => {
@@ -1145,11 +1133,11 @@ function App() {
               </article>
             )
           })}
-          </section>
-        ) : null}
+            </section>
+          ) : null}
 
-        {activePage === 'recent_runs' ? (
-          <section className="card">
+          {activePage === 'recent_runs' ? (
+            <section className="card pageSection">
           <h2>Recent Runs</h2>
           {logs.length === 0 ? <p className="subtle">No runs yet.</p> : null}
           {logs.map((item, index) => (
@@ -1193,11 +1181,11 @@ function App() {
               ) : null}
             </article>
           ))}
-          </section>
-        ) : null}
+            </section>
+          ) : null}
 
-        {activePage === 'sent_items' ? (
-          <section className="card">
+          {activePage === 'sent_items' ? (
+            <section className="card pageSection">
           <h2>Sent Items</h2>
           {sentQueue.length === 0 ? <p className="subtle">No approved and sent emails yet.</p> : null}
           {sentQueue.map((item) => (
@@ -1216,8 +1204,9 @@ function App() {
               ) : null}
             </article>
           ))}
-          </section>
-        ) : null}
+            </section>
+          ) : null}
+        </div>
       </section>
     </main>
   )

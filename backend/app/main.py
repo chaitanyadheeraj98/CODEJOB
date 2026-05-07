@@ -1442,6 +1442,54 @@ def resolve_recipients(
     email.skip_reason = None
     email.decision_reason = "Recipient routing corrected by user"
 
+    parsed = parse_email(email.subject, email.body)
+    role = str(parsed["role"])
+    greeting_line = greeting_from_to_contact(to_email, email.body)
+    fallback_reply = _apply_draft_learning(db, draft_reply(email.sender, role, parsed, greeting_line))
+    reply = fallback_reply
+    draft_source = "rules_only"
+    draft_model = None
+    draft_ai_error = None
+
+    user_settings = _get_settings(db)
+    resume = _active_resume(db)
+    if resume:
+        email.resume_asset_id = resume.id
+        email.resume_file_name = resume.file_name
+
+    if user_settings.feature_ai_enabled:
+        if resume:
+            ai_reply = generate_reply_with_ai_or_fallback(
+                sender=email.sender,
+                recruiter_to_email=to_email,
+                greeting_line=greeting_line,
+                subject=email.subject,
+                body=email.body,
+                role=role,
+                location=str(parsed["location"]),
+                salary_text=str(parsed["salary_text"]),
+                skills_text=str(parsed["skills_text"]),
+                resume_path=resume.file_path,
+                resume_file_name=resume.file_name,
+                fallback_draft=fallback_reply,
+                model_name=settings.deepseek_model_fast,
+            )
+            reply = ai_reply.draft_text
+            draft_source = ai_reply.source
+            draft_model = ai_reply.ai_model
+            draft_ai_error = ai_reply.ai_error
+        else:
+            draft_ai_error = "AI enabled but no active resume uploaded; generated rules-only fallback draft."
+
+    email.role = role
+    email.location = str(parsed["location"])
+    email.salary_text = str(parsed["salary_text"])
+    email.skills_text = str(parsed["skills_text"])
+    email.draft_reply = reply
+    email.draft_source = draft_source
+    email.draft_model = draft_model
+    email.draft_ai_error = draft_ai_error
+
     sender_domain = _email_domain(email.sender)
     body_lower = (email.body or "").lower()
     if sender_domain:
