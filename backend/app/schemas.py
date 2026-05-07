@@ -38,6 +38,7 @@ class RoutingEvidenceResponse(BaseModel):
 
 RoutingItemDict = dict[str, object]
 RoutingListInput = list[RoutingItemDict] | list[RoutingEvidenceResponse]
+PolicyDict = dict[str, Any]
 
 
 class SettingsRequest(BaseModel):
@@ -56,6 +57,7 @@ class SettingsRequest(BaseModel):
     feature_auto_send: bool = False
     feature_retry_queue: bool = False
     feature_ai_enabled: bool = False
+    policy: PolicyDict | None = None
 
     @field_validator("mail_date")
     @classmethod
@@ -67,6 +69,8 @@ class SettingsRequest(BaseModel):
 
 
 class SettingsResponse(SettingsRequest):
+    policy_profile_options: list[str] | None = None
+    policy_profile_selected: str | None = None
     owner_id: str
     created_at: datetime
     updated_at: datetime

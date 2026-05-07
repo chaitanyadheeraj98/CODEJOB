@@ -81,7 +81,32 @@ type SettingsPayload = {
   feature_auto_send: boolean
   feature_retry_queue: boolean
   feature_ai_enabled: boolean
+  policy?: DynamicPolicy | null
+  policy_profile_options?: string[] | null
+  policy_profile_selected?: string | null
 }
+
+type DynamicPolicy = {
+  version: number
+  query: {
+    force_unread: boolean
+    include_labels: string[]
+    exclude_labels: string[]
+    date_mode: 'custom' | 'any'
+  }
+  run: {
+    run_mode: 'all'
+    batch_limit: number
+    dry_run: boolean
+  }
+  qualification: {
+    location_strictness: 'lenient' | 'balanced' | 'strict'
+    score_threshold_override_enabled: boolean
+    score_threshold_override_value: number
+  }
+}
+
+type PolicyProfileName = 'Aggressive' | 'Balanced' | 'Strict'
 
 type AutomationRunResponse = {
   status: string
@@ -157,6 +182,49 @@ function App() {
   const QUEUE_LIMIT = 100
   const RECENT_RUNS_LIMIT = 100
   const apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+  const defaultPolicy: DynamicPolicy = {
+    version: 1,
+    query: {
+      force_unread: true,
+      include_labels: [],
+      exclude_labels: [],
+      date_mode: 'custom',
+    },
+    run: {
+      run_mode: 'all',
+      batch_limit: 20,
+      dry_run: false,
+    },
+    qualification: {
+      location_strictness: 'balanced',
+      score_threshold_override_enabled: false,
+      score_threshold_override_value: 0.6,
+    },
+  }
+  const policyProfiles: Record<PolicyProfileName, DynamicPolicy> = {
+    Aggressive: {
+      version: 1,
+      query: { force_unread: true, include_labels: [], exclude_labels: [], date_mode: 'any' },
+      run: { run_mode: 'all', batch_limit: 100, dry_run: false },
+      qualification: {
+        location_strictness: 'lenient',
+        score_threshold_override_enabled: true,
+        score_threshold_override_value: 0.5,
+      },
+    },
+    Balanced: defaultPolicy,
+    Strict: {
+      version: 1,
+      query: { force_unread: true, include_labels: [], exclude_labels: [], date_mode: 'custom' },
+      run: { run_mode: 'all', batch_limit: 10, dry_run: false },
+      qualification: {
+        location_strictness: 'strict',
+        score_threshold_override_enabled: true,
+        score_threshold_override_value: 0.75,
+      },
+    },
+  }
+  const profileNames: PolicyProfileName[] = ['Aggressive', 'Balanced', 'Strict']
   const [status, setStatus] = useState<GmailStatus | null>(null)
   const [aiStatus, setAiStatus] = useState<AiStatus | null>(null)
   const [settings, setSettings] = useState<SettingsPayload>({
@@ -175,6 +243,7 @@ function App() {
     feature_auto_send: false,
     feature_retry_queue: false,
     feature_ai_enabled: false,
+    policy: defaultPolicy,
   })
   const [resumeFile, setResumeFile] = useState<File | null>(null)
   const [activeResume, setActiveResume] = useState<ResumeAsset | null>(null)
@@ -191,7 +260,24 @@ function App() {
   const [routingFixes, setRoutingFixes] = useState<Record<number, { to: string; cc: string }>>({})
   const [fixingId, setFixingId] = useState<number | null>(null)
   const [activePage, setActivePage] = useState<'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items'>('run_queue')
+  const [dynamicPolicyBeta, setDynamicPolicyBeta] = useState(false)
+  const [selectedProfileToApply, setSelectedProfileToApply] = useState<PolicyProfileName>('Balanced')
+  const [lastAppliedProfile, setLastAppliedProfile] = useState<PolicyProfileName | null>(null)
   const datePickerRef = useRef<HTMLInputElement | null>(null)
+
+  const currentPolicy: DynamicPolicy = settings.policy ?? defaultPolicy
+  const detectProfileFromPolicy = (policy: DynamicPolicy): PolicyProfileName | null => {
+    for (const profileName of profileNames) {
+      if (JSON.stringify(policyProfiles[profileName]) === JSON.stringify(policy)) return profileName
+    }
+    return null
+  }
+  const exactSelectedProfile = detectProfileFromPolicy(currentPolicy)
+  const profileStatusLabel = exactSelectedProfile
+    ? exactSelectedProfile
+    : lastAppliedProfile
+      ? `Custom (from ${lastAppliedProfile})`
+      : 'Custom'
 
   const candidatesUrl = (state: 'needs_review' | 'failed' | 'approved_sent') => {
     const params = new URLSearchParams({
@@ -218,7 +304,19 @@ function App() {
   const loadSettings = async () => {
     const res = await fetch(`${apiBase}/settings`)
     if (!res.ok) throw new Error('Failed to load settings')
-    setSettings((await res.json()) as SettingsPayload)
+    const payload = (await res.json()) as SettingsPayload
+    const normalized = { ...payload, policy: payload.policy ?? defaultPolicy }
+    setSettings(normalized)
+    if (payload.policy_profile_selected && profileNames.includes(payload.policy_profile_selected as PolicyProfileName)) {
+      setSelectedProfileToApply(payload.policy_profile_selected as PolicyProfileName)
+      setLastAppliedProfile(payload.policy_profile_selected as PolicyProfileName)
+      return
+    }
+    const detected = detectProfileFromPolicy(normalized.policy ?? defaultPolicy)
+    if (detected) {
+      setSelectedProfileToApply(detected)
+      setLastAppliedProfile(detected)
+    }
   }
 
   const loadQueue = async () => {
@@ -681,6 +779,222 @@ function App() {
                   onChange={(e) => setSettings({ ...settings, must_have_skills: e.target.value.split(',').map((v) => v.trim()).filter(Boolean) })}
                 />
               </label>
+              <label className="toggleRow">
+                <span>Dynamic Policy (beta)</span>
+                <span className="toggleSwitch">
+                  <input
+                    type="checkbox"
+                    checked={dynamicPolicyBeta}
+                    onChange={(e) => setDynamicPolicyBeta(e.target.checked)}
+                  />
+                  <span className="toggleTrack" />
+                </span>
+              </label>
+              {dynamicPolicyBeta ? (
+                <>
+                  <p className="subtle">Phase 2 active: query and run controls now enforce behavior.</p>
+                  <label>
+                    Policy profile
+                    <select
+                      value={selectedProfileToApply}
+                      onChange={(e) => setSelectedProfileToApply(e.target.value as PolicyProfileName)}
+                    >
+                      {profileNames.map((profileName) => (
+                        <option key={profileName} value={profileName}>{profileName}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <div className="rowBtns">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const profilePolicy = policyProfiles[selectedProfileToApply]
+                        setSettings({ ...settings, policy: profilePolicy })
+                        setLastAppliedProfile(selectedProfileToApply)
+                      }}
+                    >
+                      Apply Profile
+                    </button>
+                  </div>
+                  <p className="subtle"><strong>Selected profile:</strong> {profileStatusLabel}</p>
+                  <label className="toggleRow">
+                    <span>Force unread in query</span>
+                    <span className="toggleSwitch">
+                      <input
+                        type="checkbox"
+                        checked={currentPolicy.query.force_unread}
+                        onChange={(e) =>
+                          setSettings({
+                            ...settings,
+                            policy: {
+                              ...currentPolicy,
+                              query: { ...currentPolicy.query, force_unread: e.target.checked },
+                            },
+                          })
+                        }
+                      />
+                      <span className="toggleTrack" />
+                    </span>
+                  </label>
+                  <label>
+                    Include labels (comma-separated)
+                    <input
+                      value={currentPolicy.query.include_labels.join(',')}
+                      onChange={(e) =>
+                        setSettings({
+                          ...settings,
+                          policy: {
+                            ...currentPolicy,
+                            query: {
+                              ...currentPolicy.query,
+                              include_labels: e.target.value.split(',').map((v) => v.trim()).filter(Boolean),
+                            },
+                          },
+                        })
+                      }
+                    />
+                  </label>
+                  <label>
+                    Exclude labels (comma-separated)
+                    <input
+                      value={currentPolicy.query.exclude_labels.join(',')}
+                      onChange={(e) =>
+                        setSettings({
+                          ...settings,
+                          policy: {
+                            ...currentPolicy,
+                            query: {
+                              ...currentPolicy.query,
+                              exclude_labels: e.target.value.split(',').map((v) => v.trim()).filter(Boolean),
+                            },
+                          },
+                        })
+                      }
+                    />
+                  </label>
+                  <label>
+                    Date mode
+                    <select
+                      value={currentPolicy.query.date_mode}
+                      onChange={(e) =>
+                        setSettings({
+                          ...settings,
+                          policy: {
+                            ...currentPolicy,
+                            query: { ...currentPolicy.query, date_mode: e.target.value as 'custom' | 'any' },
+                          },
+                        })
+                      }
+                    >
+                      <option value="custom">Use selected date</option>
+                      <option value="any">Ignore selected date</option>
+                    </select>
+                  </label>
+                  <label>
+                    Batch limit
+                    <input
+                      type="number"
+                      min={1}
+                      max={200}
+                      value={currentPolicy.run.batch_limit}
+                      onChange={(e) =>
+                        setSettings({
+                          ...settings,
+                          policy: {
+                            ...currentPolicy,
+                            run: { ...currentPolicy.run, batch_limit: Number(e.target.value) },
+                          },
+                        })
+                      }
+                    />
+                  </label>
+                  <label className="toggleRow">
+                    <span>Dry run (beta storage only)</span>
+                    <span className="toggleSwitch">
+                      <input
+                        type="checkbox"
+                        checked={currentPolicy.run.dry_run}
+                        onChange={(e) =>
+                          setSettings({
+                            ...settings,
+                            policy: {
+                              ...currentPolicy,
+                              run: { ...currentPolicy.run, dry_run: e.target.checked },
+                            },
+                          })
+                        }
+                      />
+                      <span className="toggleTrack" />
+                    </span>
+                  </label>
+                  <label>
+                    Location strictness
+                    <select
+                      value={currentPolicy.qualification.location_strictness}
+                      onChange={(e) =>
+                        setSettings({
+                          ...settings,
+                          policy: {
+                            ...currentPolicy,
+                            qualification: {
+                              ...currentPolicy.qualification,
+                              location_strictness: e.target.value as 'lenient' | 'balanced' | 'strict',
+                            },
+                          },
+                        })
+                      }
+                    >
+                      <option value="lenient">Lenient</option>
+                      <option value="balanced">Balanced</option>
+                      <option value="strict">Strict</option>
+                    </select>
+                  </label>
+                  <label className="toggleRow">
+                    <span>Override score threshold</span>
+                    <span className="toggleSwitch">
+                      <input
+                        type="checkbox"
+                        checked={currentPolicy.qualification.score_threshold_override_enabled}
+                        onChange={(e) =>
+                          setSettings({
+                            ...settings,
+                            policy: {
+                              ...currentPolicy,
+                              qualification: {
+                                ...currentPolicy.qualification,
+                                score_threshold_override_enabled: e.target.checked,
+                              },
+                            },
+                          })
+                        }
+                      />
+                      <span className="toggleTrack" />
+                    </span>
+                  </label>
+                  <label>
+                    Override threshold value
+                    <input
+                      type="number"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      value={currentPolicy.qualification.score_threshold_override_value}
+                      onChange={(e) =>
+                        setSettings({
+                          ...settings,
+                          policy: {
+                            ...currentPolicy,
+                            qualification: {
+                              ...currentPolicy.qualification,
+                              score_threshold_override_value: Number(e.target.value),
+                            },
+                          },
+                        })
+                      }
+                    />
+                  </label>
+                </>
+              ) : null}
               <div className="rowBtns">
                 <button type="submit" disabled={saving}>{saving ? 'Saving...' : 'Save Filters'}</button>
               </div>

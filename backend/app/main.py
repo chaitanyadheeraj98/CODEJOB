@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import Mapping, TypedDict, cast
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -78,6 +79,32 @@ ai_last_error: str | None = None
 ai_last_started_at: datetime | None = None
 ai_last_finished_at: datetime | None = None
 ai_last_duration_ms: int | None = None
+
+
+class PolicyQuery(TypedDict):
+    force_unread: bool
+    include_labels: list[str]
+    exclude_labels: list[str]
+    date_mode: str
+
+
+class PolicyRun(TypedDict):
+    run_mode: str
+    batch_limit: int
+    dry_run: bool
+
+
+class PolicyQualification(TypedDict):
+    location_strictness: str
+    score_threshold_override_enabled: bool
+    score_threshold_override_value: float
+
+
+class PolicyConfig(TypedDict):
+    version: int
+    query: PolicyQuery
+    run: PolicyRun
+    qualification: PolicyQualification
 ai_last_draft_source: str | None = None
 
 app.add_middleware(
@@ -102,6 +129,9 @@ def _ensure_default_settings() -> None:
     try:
         existing = db.query(UserSettings).filter(UserSettings.owner_id == settings.owner_id).first()
         if existing:
+            if not existing.policy_json:
+                existing.policy_json = json.dumps(_default_policy(), separators=(",", ":"))
+                db.commit()
             return
         default_settings = UserSettings(
             owner_id=settings.owner_id,
@@ -113,6 +143,7 @@ def _ensure_default_settings() -> None:
             feature_auto_send=settings.feature_auto_send,
             feature_retry_queue=settings.feature_retry_queue,
             feature_ai_enabled=False,
+            policy_json=json.dumps(_default_policy()),
         )
         db.add(default_settings)
         db.commit()
@@ -131,9 +162,236 @@ def _to_csv(values: list[str]) -> str:
     return ",".join(v.strip() for v in values if v.strip())
 
 
-def _compose_gmail_query(base_query: str, mail_date: str | None = None) -> str:
-    parts = [base_query.strip(), "is:unread"]
-    if mail_date:
+def _default_policy() -> PolicyConfig:
+    return {
+        "version": 1,
+        "query": {
+            "force_unread": True,
+            "include_labels": [],
+            "exclude_labels": [],
+            "date_mode": "custom",
+        },
+        "run": {
+            "run_mode": "all",
+            "batch_limit": 20,
+            "dry_run": False,
+        },
+        "qualification": {
+            "location_strictness": "balanced",
+            "score_threshold_override_enabled": False,
+            "score_threshold_override_value": 0.6,
+        },
+    }
+
+
+def _policy_profiles() -> dict[str, PolicyConfig]:
+    return {
+        "Aggressive": _normalize_policy(
+            {
+                "version": 1,
+                "query": {
+                    "force_unread": True,
+                    "include_labels": [],
+                    "exclude_labels": [],
+                    "date_mode": "any",
+                },
+                "run": {
+                    "run_mode": "all",
+                    "batch_limit": 100,
+                    "dry_run": False,
+                },
+                "qualification": {
+                    "location_strictness": "lenient",
+                    "score_threshold_override_enabled": True,
+                    "score_threshold_override_value": 0.50,
+                },
+            }
+        ),
+        "Balanced": _normalize_policy(_default_policy()),
+        "Strict": _normalize_policy(
+            {
+                "version": 1,
+                "query": {
+                    "force_unread": True,
+                    "include_labels": [],
+                    "exclude_labels": [],
+                    "date_mode": "custom",
+                },
+                "run": {
+                    "run_mode": "all",
+                    "batch_limit": 10,
+                    "dry_run": False,
+                },
+                "qualification": {
+                    "location_strictness": "strict",
+                    "score_threshold_override_enabled": True,
+                    "score_threshold_override_value": 0.75,
+                },
+            }
+        ),
+    }
+
+
+def _selected_policy_profile(policy: PolicyConfig) -> str | None:
+    normalized = _normalize_policy(policy)
+    for profile_name, profile_policy in _policy_profiles().items():
+        if normalized == profile_policy:
+            return profile_name
+    return None
+
+
+def _as_mapping(value: object) -> Mapping[str, object]:
+    if isinstance(value, dict):
+        return cast(Mapping[str, object], value)
+    return {}
+
+
+def _as_str(value: object, default: str) -> str:
+    return str(value).strip() if value is not None else default
+
+
+def _as_int(value: object, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_float(value: object, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(v).strip() for v in value if str(v).strip()]
+
+
+def _normalize_policy(raw_policy: object) -> PolicyConfig:
+    default_policy = _default_policy()
+    if not isinstance(raw_policy, Mapping):
+        return default_policy
+
+    raw_policy_map = _as_mapping(raw_policy)
+    query_raw = raw_policy_map.get("query")
+    run_raw = raw_policy_map.get("run")
+    qualification_raw = raw_policy_map.get("qualification")
+
+    query = _as_mapping(query_raw)
+    run = _as_mapping(run_raw)
+    qualification = _as_mapping(qualification_raw)
+
+    date_mode_raw = query.get("date_mode")
+    date_mode = _as_str(date_mode_raw, "custom")
+    if date_mode not in {"custom", "any"}:
+        date_mode = "custom"
+
+    run_mode_raw = run.get("run_mode")
+    run_mode = _as_str(run_mode_raw, "all")
+    if run_mode not in {"all"}:
+        run_mode = "all"
+
+    batch_limit = _as_int(run.get("batch_limit"), 20)
+    batch_limit = max(1, min(batch_limit, 200))
+
+    score_override = _as_float(qualification.get("score_threshold_override_value"), 0.6)
+    score_override = max(0.0, min(score_override, 1.0))
+
+    location_raw = qualification.get("location_strictness")
+    location_strictness = _as_str(location_raw, "balanced")
+    if location_strictness not in {"lenient", "balanced", "strict"}:
+        location_strictness = "balanced"
+
+    return {
+        "version": 1,
+        "query": {
+            "force_unread": bool(query.get("force_unread", True)),
+            "include_labels": _as_string_list(query.get("include_labels", [])),
+            "exclude_labels": _as_string_list(query.get("exclude_labels", [])),
+            "date_mode": date_mode,
+        },
+        "run": {
+            "run_mode": run_mode,
+            "batch_limit": batch_limit,
+            "dry_run": bool(run.get("dry_run", False)),
+        },
+        "qualification": {
+            "location_strictness": location_strictness,
+            "score_threshold_override_enabled": bool(qualification.get("score_threshold_override_enabled", False)),
+            "score_threshold_override_value": score_override,
+        },
+    }
+
+
+def _read_policy_from_settings(user_settings: UserSettings) -> PolicyConfig:
+    if not user_settings.policy_json:
+        return _default_policy()
+    try:
+        parsed = json.loads(user_settings.policy_json)
+    except json.JSONDecodeError:
+        return _default_policy()
+    return _normalize_policy(parsed)
+
+
+def _policy_threshold(user_settings: UserSettings, policy: PolicyConfig) -> float:
+    normalized = _normalize_policy(policy)
+    qualification = normalized["qualification"]
+    if bool(qualification.get("score_threshold_override_enabled", False)):
+        value = _as_float(
+            qualification.get("score_threshold_override_value", user_settings.qualification_threshold),
+            user_settings.qualification_threshold,
+        )
+        return max(0.0, min(value, 1.0))
+    return user_settings.qualification_threshold
+
+
+def _policy_f2f_block(parsed: dict[str, str | int | bool], policy: PolicyConfig) -> tuple[bool, str]:
+    normalized = _normalize_policy(policy)
+    qualification = normalized["qualification"]
+    strictness = _as_str(qualification.get("location_strictness", "balanced"), "balanced")
+    if strictness == "lenient":
+        return False, ""
+    blocked, reason = should_block_f2f(parsed)
+    if blocked:
+        return True, reason
+    if strictness == "strict":
+        location_text = str(parsed.get("job_location_text", "")).strip().lower()
+        if not location_text or location_text == "unknown":
+            return True, "Location is unclear under strict location policy"
+    return False, ""
+
+
+def _policy_batch_limit(policy: PolicyConfig, default_value: int = 20) -> int:
+    normalized = _normalize_policy(policy)
+    run_policy = normalized["run"]
+    value = _as_int(run_policy.get("batch_limit", default_value), default_value)
+    return max(1, min(value, 200))
+
+
+def _policy_dry_run(policy: PolicyConfig) -> bool:
+    normalized = _normalize_policy(policy)
+    run_policy = normalized["run"]
+    return bool(run_policy.get("dry_run", False))
+
+
+def _compose_gmail_query(base_query: str, mail_date: str | None = None, policy: PolicyConfig | None = None) -> str:
+    policy_obj = _normalize_policy(policy)
+    query_section = policy_obj["query"]
+
+    parts = [base_query.strip()]
+    if bool(query_section.get("force_unread", True)):
+        parts.append("is:unread")
+
+    for label in _as_string_list(query_section.get("include_labels", [])):
+        parts.append(f"label:{label}")
+    for label in _as_string_list(query_section.get("exclude_labels", [])):
+        parts.append(f"-label:{label}")
+
+    date_mode = _as_str(query_section.get("date_mode", "custom"), "custom")
+    if mail_date and date_mode == "custom":
         selected = date.fromisoformat(mail_date)
         next_day = selected + timedelta(days=1)
         parts.append(f"after:{selected.strftime('%Y/%m/%d')}")
@@ -266,6 +524,33 @@ def _build_run_response(
     )
 
 
+def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
+    policy = _read_policy_from_settings(s)
+    return SettingsResponse(
+        enabled=s.enabled,
+        gmail_query=s.gmail_query,
+        mail_date=s.mail_date,
+        min_salary=s.min_salary,
+        accepted_locations=[v for v in s.accepted_locations.split(",") if v],
+        visa_required_allowed=s.visa_required_allowed,
+        remote_preference=s.remote_preference,
+        role_keywords=[v for v in s.role_keywords.split(",") if v],
+        must_have_skills=[v for v in s.must_have_skills.split(",") if v],
+        free_text_guidance=s.free_text_guidance,
+        qualification_threshold=s.qualification_threshold,
+        feature_auto_polling=s.feature_auto_polling,
+        feature_auto_send=s.feature_auto_send,
+        feature_retry_queue=s.feature_retry_queue,
+        feature_ai_enabled=s.feature_ai_enabled,
+        policy=policy,
+        policy_profile_options=list(_policy_profiles().keys()),
+        policy_profile_selected=_selected_policy_profile(policy),
+        owner_id=s.owner_id,
+        created_at=s.created_at,
+        updated_at=s.updated_at,
+    )
+
+
 def _repair_unknown_role_drafts(db: Session, emails: list[RecruiterEmail]) -> None:
     changed = False
     for email in emails:
@@ -323,26 +608,7 @@ def health() -> dict[str, str]:
 @app.get("/settings", response_model=SettingsResponse)
 def get_settings(db: Session = Depends(get_db)) -> SettingsResponse:
     s = _get_settings(db)
-    return SettingsResponse(
-        enabled=s.enabled,
-        gmail_query=s.gmail_query,
-        mail_date=s.mail_date,
-        min_salary=s.min_salary,
-        accepted_locations=[v for v in s.accepted_locations.split(",") if v],
-        visa_required_allowed=s.visa_required_allowed,
-        remote_preference=s.remote_preference,
-        role_keywords=[v for v in s.role_keywords.split(",") if v],
-        must_have_skills=[v for v in s.must_have_skills.split(",") if v],
-        free_text_guidance=s.free_text_guidance,
-        qualification_threshold=s.qualification_threshold,
-        feature_auto_polling=s.feature_auto_polling,
-        feature_auto_send=s.feature_auto_send,
-        feature_retry_queue=s.feature_retry_queue,
-        feature_ai_enabled=s.feature_ai_enabled,
-        owner_id=s.owner_id,
-        created_at=s.created_at,
-        updated_at=s.updated_at,
-    )
+    return _settings_response_from_model(s)
 
 
 @app.put("/settings", response_model=SettingsResponse)
@@ -363,9 +629,11 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
     s.feature_auto_send = payload.feature_auto_send
     s.feature_retry_queue = payload.feature_retry_queue
     s.feature_ai_enabled = payload.feature_ai_enabled
+    normalized_policy = _normalize_policy(payload.policy if payload.policy is not None else _read_policy_from_settings(s))
+    s.policy_json = json.dumps(normalized_policy, separators=(",", ":"))
     db.commit()
     db.refresh(s)
-    return get_settings(db)
+    return _settings_response_from_model(s)
 
 
 @app.post("/settings/resume", response_model=ResumeResponse)
@@ -473,7 +741,9 @@ def gmail_sync(db: Session = Depends(get_db)) -> GmailSyncResponse:
     skipped_count = 0
     error_count = 0
     try:
-        candidates = list_unread_candidates_by_query(user_settings.gmail_query)
+        policy = _read_policy_from_settings(user_settings)
+        effective_query = _compose_gmail_query(user_settings.gmail_query, user_settings.mail_date, policy)
+        candidates = list_unread_candidates_by_query(effective_query)
         for item in candidates:
             existing = (
                 db.query(RecruiterEmail)
@@ -622,8 +892,12 @@ def automation_run_once(payload: AutomationRunRequest | None = None, db: Session
         raise HTTPException(status_code=400, detail="No active resume uploaded")
 
     requested_mail_date = payload.mail_date if payload else None
-    effective_query = _compose_gmail_query(user_settings.gmail_query, requested_mail_date or user_settings.mail_date)
-    items = list_unread_candidates_by_query(effective_query, max_results_per_page=20)
+    policy = _read_policy_from_settings(user_settings)
+    threshold = _policy_threshold(user_settings, policy)
+    batch_limit = _policy_batch_limit(policy, default_value=20)
+    dry_run = _policy_dry_run(policy)
+    effective_query = _compose_gmail_query(user_settings.gmail_query, requested_mail_date or user_settings.mail_date, policy)
+    items = list_unread_candidates_by_query(effective_query, max_results_per_page=batch_limit)[:batch_limit]
     if not items:
         return _build_run_response(
             "idle",
@@ -651,16 +925,19 @@ def automation_run_once(payload: AutomationRunRequest | None = None, db: Session
         if existing and existing.state == "approved_sent":
             skipped_count += 1
             last_email = existing
-            mark_message_processed(item["external_message_id"])
+            if not dry_run:
+                mark_message_processed(item["external_message_id"])
             continue
 
         parsed = parse_email(item["subject"], item["body"])
         hard_pass, hard_reason = hard_filter_check(parsed, user_settings)
         ai_score, ai_summary = ai_assist_score(parsed, user_settings)
-        threshold = user_settings.qualification_threshold
 
-        blocked, block_reason = should_block_f2f(parsed)
+        blocked, block_reason = _policy_f2f_block(parsed, policy)
         if not hard_pass or ai_score < threshold or blocked:
+            if dry_run:
+                skipped_count += 1
+                continue
             email = existing or RecruiterEmail(
                 owner_id=settings.owner_id,
                 sender=item["sender"],
@@ -715,6 +992,9 @@ def automation_run_once(payload: AutomationRunRequest | None = None, db: Session
             item.get("snippet", ""),
         )
         if not routing.to_email or not routing.cc_email:
+            if dry_run:
+                failed_count += 1
+                continue
             email = existing or RecruiterEmail(
                 owner_id=settings.owner_id,
                 sender=item["sender"],
@@ -752,6 +1032,9 @@ def automation_run_once(payload: AutomationRunRequest | None = None, db: Session
             continue
 
         # Manual approval gate: queue only, never auto-send from run-once.
+        if dry_run:
+            queued_count += 1
+            continue
         greeting_line = greeting_from_to_contact(routing.to_email, item["body"])
         fallback_reply = _apply_draft_learning(db, draft_reply(item["sender"], str(parsed["role"]), parsed, greeting_line))
         if user_settings.feature_ai_enabled:
@@ -850,6 +1133,8 @@ def automation_run_once(payload: AutomationRunRequest | None = None, db: Session
     else:
         status = "skipped"
         detail = f"Processed {matched_count} unread matching emails: queued=0, skipped={skipped_count}, failed=0."
+    if dry_run:
+        detail = f"[Dry run] {detail} No database or Gmail label changes were made. (batch_limit={batch_limit}, threshold={threshold:.2f})"
 
     return _build_run_response(
         status,
