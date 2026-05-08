@@ -31,6 +31,10 @@ from app.gmail_client import (
 from app.models import DraftEditFeedback, RecruiterEmail, ResumeAsset, SyncRun, UserSettings
 from app.models import RecipientRoutingFeedback
 from app.phase0 import (
+    DEFAULT_FALLBACK_DRAFT_TEMPLATE,
+    DEFAULT_SIGNATURE_EMAIL,
+    DEFAULT_SIGNATURE_NAME,
+    DEFAULT_SIGNATURE_PHONE,
     RoutingEvidence,
     RoutingResult,
     analyze_recipient_routing,
@@ -41,6 +45,9 @@ from app.phase0 import (
     hard_filter_check,
     is_recruiter_like,
     parse_email,
+    render_fallback_draft_template,
+    requested_details_block,
+    skills_from_text,
     should_block_f2f,
 )
 from app.schemas import (
@@ -131,6 +138,21 @@ def _ensure_default_settings() -> None:
         if existing:
             if not existing.policy_json:
                 existing.policy_json = json.dumps(_default_policy(), separators=(",", ":"))
+            if not existing.fallback_draft_template:
+                existing.fallback_draft_template = DEFAULT_FALLBACK_DRAFT_TEMPLATE
+            if not existing.signature_name:
+                existing.signature_name = DEFAULT_SIGNATURE_NAME
+            if not existing.signature_phone:
+                existing.signature_phone = DEFAULT_SIGNATURE_PHONE
+            if not existing.signature_email:
+                existing.signature_email = DEFAULT_SIGNATURE_EMAIL
+            if (
+                not existing.policy_json
+                or not existing.fallback_draft_template
+                or not existing.signature_name
+                or not existing.signature_phone
+                or not existing.signature_email
+            ):
                 db.commit()
             return
         default_settings = UserSettings(
@@ -143,6 +165,10 @@ def _ensure_default_settings() -> None:
             feature_auto_send=settings.feature_auto_send,
             feature_retry_queue=settings.feature_retry_queue,
             feature_ai_enabled=False,
+            fallback_draft_template=DEFAULT_FALLBACK_DRAFT_TEMPLATE,
+            signature_name=DEFAULT_SIGNATURE_NAME,
+            signature_phone=DEFAULT_SIGNATURE_PHONE,
+            signature_email=DEFAULT_SIGNATURE_EMAIL,
             policy_json=json.dumps(_default_policy()),
         )
         db.add(default_settings)
@@ -468,6 +494,41 @@ def _apply_draft_learning(db: Session, draft: str) -> str:
     return draft
 
 
+def _build_user_fallback_draft(
+    db: Session,
+    user_settings: UserSettings,
+    *,
+    sender: str,
+    role: str,
+    parsed: dict[str, str | int | bool],
+    greeting_line: str,
+    resume_file_name: str | None,
+) -> str:
+    template = (user_settings.fallback_draft_template or DEFAULT_FALLBACK_DRAFT_TEMPLATE).strip()
+    signature_name = (user_settings.signature_name or "").strip() or DEFAULT_SIGNATURE_NAME
+    signature_phone = (user_settings.signature_phone or "").strip() or DEFAULT_SIGNATURE_PHONE
+    signature_email = (user_settings.signature_email or "").strip() or DEFAULT_SIGNATURE_EMAIL
+    context = {
+        "greeting": greeting_line,
+        "role": role,
+        "sender": sender,
+        "location": str(parsed.get("location", "")),
+        "salary_text": str(parsed.get("salary_text", "")),
+        "skills_list": "\n".join(f"- {skill}" for skill in skills_from_text(str(parsed.get("skills_text", "")))),
+        "skills_inline": ", ".join(skills_from_text(str(parsed.get("skills_text", "")))),
+        "resume_file_name": resume_file_name or "",
+        "signature_name": signature_name,
+        "signature_phone": signature_phone,
+        "signature_email": signature_email,
+        "requested_details_block": requested_details_block(bool(parsed.get("asks_contact_fields", False))),
+    }
+    rendered = render_fallback_draft_template(template, context)
+    if rendered.strip():
+        return _apply_draft_learning(db, rendered)
+    # Last resort resilience: keep old static generator if template is invalid/empty.
+    return _apply_draft_learning(db, draft_reply(sender, role, parsed, greeting_line))
+
+
 def _fill_missing_gmail_rfc_ids(db: Session, emails: list[RecruiterEmail]) -> None:
     if not is_gmail_configured() or not Path(settings.google_token_path).exists():
         return
@@ -542,6 +603,10 @@ def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
         feature_auto_send=s.feature_auto_send,
         feature_retry_queue=s.feature_retry_queue,
         feature_ai_enabled=s.feature_ai_enabled,
+        fallback_draft_template=s.fallback_draft_template or DEFAULT_FALLBACK_DRAFT_TEMPLATE,
+        signature_name=(s.signature_name or "").strip() or DEFAULT_SIGNATURE_NAME,
+        signature_phone=(s.signature_phone or "").strip() or DEFAULT_SIGNATURE_PHONE,
+        signature_email=(s.signature_email or "").strip() or DEFAULT_SIGNATURE_EMAIL,
         policy=policy,
         policy_profile_options=list(_policy_profiles().keys()),
         policy_profile_selected=_selected_policy_profile(policy),
@@ -553,6 +618,7 @@ def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
 
 def _repair_unknown_role_drafts(db: Session, emails: list[RecruiterEmail]) -> None:
     changed = False
+    user_settings = _get_settings(db)
     for email in emails:
         if email.state != "needs_review":
             continue
@@ -568,7 +634,15 @@ def _repair_unknown_role_drafts(db: Session, emails: list[RecruiterEmail]) -> No
         email.skills_text = str(parsed["skills_text"])
         if "Unknown Role" in email.draft_reply:
             greeting_line = greeting_from_to_contact(email.recipient_email, email.body)
-            email.draft_reply = _apply_draft_learning(db, draft_reply(email.sender, role, parsed, greeting_line))
+            email.draft_reply = _build_user_fallback_draft(
+                db,
+                user_settings,
+                sender=email.sender,
+                role=role,
+                parsed=parsed,
+                greeting_line=greeting_line,
+                resume_file_name=email.resume_file_name,
+            )
             email.draft_source = "rules_only"
             email.draft_model = None
             email.draft_ai_error = None
@@ -629,6 +703,10 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
     s.feature_auto_send = payload.feature_auto_send
     s.feature_retry_queue = payload.feature_retry_queue
     s.feature_ai_enabled = payload.feature_ai_enabled
+    s.fallback_draft_template = payload.fallback_draft_template.strip() if payload.fallback_draft_template.strip() else DEFAULT_FALLBACK_DRAFT_TEMPLATE
+    s.signature_name = payload.signature_name.strip() if payload.signature_name.strip() else DEFAULT_SIGNATURE_NAME
+    s.signature_phone = payload.signature_phone.strip() if payload.signature_phone.strip() else DEFAULT_SIGNATURE_PHONE
+    s.signature_email = payload.signature_email.strip() if payload.signature_email.strip() else DEFAULT_SIGNATURE_EMAIL
     normalized_policy = _normalize_policy(payload.policy if payload.policy is not None else _read_policy_from_settings(s))
     s.policy_json = json.dumps(normalized_policy, separators=(",", ":"))
     db.commit()
@@ -791,9 +869,14 @@ def gmail_sync(db: Session = Depends(get_db)) -> GmailSyncResponse:
                 else:
                     routed = _analyze_email_routing(db, item["sender"], item["subject"], item["body"], item.get("snippet", ""))
                     greeting_line = greeting_from_to_contact(routed.to_email, item["body"])
-                    draft = _apply_draft_learning(
+                    draft = _build_user_fallback_draft(
                         db,
-                        draft_reply(item["sender"], str(parsed["role"]), parsed, greeting_line),
+                        user_settings,
+                        sender=item["sender"],
+                        role=str(parsed["role"]),
+                        parsed=parsed,
+                        greeting_line=greeting_line,
+                        resume_file_name=None,
                     )
 
             email = RecruiterEmail(
@@ -1036,7 +1119,15 @@ def automation_run_once(payload: AutomationRunRequest | None = None, db: Session
             queued_count += 1
             continue
         greeting_line = greeting_from_to_contact(routing.to_email, item["body"])
-        fallback_reply = _apply_draft_learning(db, draft_reply(item["sender"], str(parsed["role"]), parsed, greeting_line))
+        fallback_reply = _build_user_fallback_draft(
+            db,
+            user_settings,
+            sender=item["sender"],
+            role=str(parsed["role"]),
+            parsed=parsed,
+            greeting_line=greeting_line,
+            resume_file_name=resume.file_name,
+        )
         if user_settings.feature_ai_enabled:
             ai_running = True
             ai_last_error = None
@@ -1157,6 +1248,16 @@ def ingest_email(payload: IngestEmailRequest, db: Session = Depends(get_db)) -> 
     threshold = user_settings.qualification_threshold
     state = "needs_review" if hard_pass and ai_score >= threshold else "auto_rejected"
     decision = "Qualified" if state == "needs_review" else "Reject"
+    active_resume = _active_resume(db)
+    fallback_draft = _build_user_fallback_draft(
+        db,
+        user_settings,
+        sender=payload.sender,
+        role=str(parsed["role"]),
+        parsed=parsed,
+        greeting_line=greeting_from_to_contact(None, payload.body),
+        resume_file_name=active_resume.file_name if active_resume else None,
+    )
 
     email = RecruiterEmail(
         owner_id=settings.owner_id,
@@ -1176,10 +1277,7 @@ def ingest_email(payload: IngestEmailRequest, db: Session = Depends(get_db)) -> 
         ai_score=ai_score,
         ai_score_source="v1_rules_plus_ai",
         ai_summary=ai_summary,
-        draft_reply=_apply_draft_learning(
-            db,
-            draft_reply(payload.sender, str(parsed["role"]), parsed, greeting_from_to_contact(None, payload.body)),
-        )
+        draft_reply=fallback_draft
         if state == "needs_review"
         else "",
         draft_source="rules_only" if state == "needs_review" else None,
@@ -1445,14 +1543,21 @@ def resolve_recipients(
     parsed = parse_email(email.subject, email.body)
     role = str(parsed["role"])
     greeting_line = greeting_from_to_contact(to_email, email.body)
-    fallback_reply = _apply_draft_learning(db, draft_reply(email.sender, role, parsed, greeting_line))
+    user_settings = _get_settings(db)
+    resume = _active_resume(db)
+    fallback_reply = _build_user_fallback_draft(
+        db,
+        user_settings,
+        sender=email.sender,
+        role=role,
+        parsed=parsed,
+        greeting_line=greeting_line,
+        resume_file_name=resume.file_name if resume else email.resume_file_name,
+    )
     reply = fallback_reply
     draft_source = "rules_only"
     draft_model = None
     draft_ai_error = None
-
-    user_settings = _get_settings(db)
-    resume = _active_resume(db)
     if resume:
         email.resume_asset_id = resume.id
         email.resume_file_name = resume.file_name

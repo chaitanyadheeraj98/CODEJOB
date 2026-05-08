@@ -379,10 +379,50 @@ GENERIC_TO_LOCAL_PARTS = {
     "no-reply",
 }
 
+DEFAULT_SIGNATURE_NAME = "Chaithanya Dheeraj N"
+DEFAULT_SIGNATURE_PHONE = "+1 940-629-6920"
+DEFAULT_SIGNATURE_EMAIL = "chaithanyadheeraj1026@gmail.com"
+
+DEFAULT_FALLBACK_DRAFT_TEMPLATE = """Subject: Application for {{role}} - 7+ Years Full Stack Experience
+
+{{greeting}}
+
+Thank you for sharing the {{role}} opportunity. I am very interested in this role and excited about the chance to contribute.
+I am currently working as a Full Stack Developer at Centier Bank in the banking domain, and I bring 7+ years of experience delivering enterprise applications across backend services and modern web interfaces.
+Based on your requirements, my technical alignment includes:
+{{skills_list}}
+
+I have attached my resume for your review and would be glad to discuss how my experience can support your team.
+{{requested_details_block}}
+
+Best regards,
+{{signature_name}}
+📞 {{signature_phone}}
+✉️ {{signature_email}}"""
+
 
 def _format_skill(skill: str) -> str:
     normalized = skill.strip().lower()
     return SKILL_DISPLAY_NAMES.get(normalized, normalized.title())
+
+
+def skills_from_text(skills_text: str) -> list[str]:
+    skills = [s.strip() for s in str(skills_text).split(",") if s.strip() and s.strip() != "none_detected"]
+    return [_format_skill(s) for s in skills[:6]] if skills else ["Full-stack development", "Java", "APIs"]
+
+
+def requested_details_block(asks_contact_fields: bool) -> str:
+    if not asks_contact_fields:
+        return ""
+    return "Requested details:\n- Visa: H1B\n- Current Location: Dallas, TX"
+
+
+def render_fallback_draft_template(template: str, context: dict[str, str]) -> str:
+    rendered = template or ""
+    for key, value in context.items():
+        rendered = rendered.replace(f"{{{{{key}}}}}", value)
+    rendered = re.sub(r"\n{3,}", "\n\n", rendered).strip()
+    return rendered
 
 
 def _normalize_person_name(candidate: str) -> str | None:
@@ -442,9 +482,7 @@ def draft_reply(
     greeting_line: str = "Hi,",
 ) -> str:
     include_contact_fields = bool(parsed.get("asks_contact_fields", False))
-    matched_skills = str(parsed.get("skills_text", "none_detected"))
-    skills = [s.strip() for s in matched_skills.split(",") if s.strip() and s.strip() != "none_detected"]
-    skill_summary = [_format_skill(s) for s in skills[:6]] if skills else ["Full-stack development", "Java", "APIs"]
+    skill_summary = skills_from_text(str(parsed.get("skills_text", "none_detected")))
     subject_line = f"Subject: Application for {role} - 7+ Years Full Stack Experience"
 
     body_lines = [
@@ -471,9 +509,7 @@ def draft_reply(
         body_lines.extend(
             [
                 "",
-                "Requested details:",
-                "- Visa: H1B",
-                "- Current Location: Dallas, TX",
+                *requested_details_block(True).split("\n"),
             ]
         )
 

@@ -81,6 +81,10 @@ type SettingsPayload = {
   feature_auto_send: boolean
   feature_retry_queue: boolean
   feature_ai_enabled: boolean
+  fallback_draft_template: string
+  signature_name: string
+  signature_phone: string
+  signature_email: string
   policy?: DynamicPolicy | null
   policy_profile_options?: string[] | null
   policy_profile_selected?: string | null
@@ -243,6 +247,10 @@ function App() {
     feature_auto_send: false,
     feature_retry_queue: false,
     feature_ai_enabled: false,
+    fallback_draft_template: '',
+    signature_name: '',
+    signature_phone: '',
+    signature_email: '',
     policy: defaultPolicy,
   })
   const [resumeFile, setResumeFile] = useState<File | null>(null)
@@ -935,6 +943,36 @@ function App() {
               </section>
 
               <section className="card">
+                <h2>Profile Settings</h2>
+                <div className="stack">
+                  <label>
+                    Signature Name
+                    <input
+                      value={settings.signature_name}
+                      onChange={(e) => setSettings({ ...settings, signature_name: e.target.value })}
+                      placeholder="Your full name"
+                    />
+                  </label>
+                  <label>
+                    Signature Phone
+                    <input
+                      value={settings.signature_phone}
+                      onChange={(e) => setSettings({ ...settings, signature_phone: e.target.value })}
+                      placeholder="+1 555-555-5555"
+                    />
+                  </label>
+                  <label>
+                    Signature Email
+                    <input
+                      value={settings.signature_email}
+                      onChange={(e) => setSettings({ ...settings, signature_email: e.target.value })}
+                      placeholder="you@example.com"
+                    />
+                  </label>
+                </div>
+              </section>
+
+              <section className="card">
                 <h2>Execution Control</h2>
                 <div className="stack">
                   <label className="toggleRow pillRow">
@@ -992,6 +1030,18 @@ function App() {
                       <option value="any">Ignore selected date</option>
                     </select>
                   </label>
+                  <label>
+                    Fallback Draft Template
+                    <textarea
+                      rows={10}
+                      value={settings.fallback_draft_template}
+                      onChange={(e) => setSettings({ ...settings, fallback_draft_template: e.target.value })}
+                      placeholder={"Use tokens like {{greeting}}, {{role}}, {{skills_list}}, {{requested_details_block}}, {{signature_name}}"}
+                    />
+                  </label>
+                  <p className="subtle">
+                    Available tokens: {'{{greeting}}'}, {'{{role}}'}, {'{{sender}}'}, {'{{location}}'}, {'{{salary_text}}'}, {'{{skills_list}}'}, {'{{skills_inline}}'}, {'{{resume_file_name}}'}, {'{{signature_name}}'}, {'{{signature_phone}}'}, {'{{signature_email}}'}, {'{{requested_details_block}}'}.
+                  </p>
                   <button type="submit" disabled={saving}>{saving ? 'Saving...' : 'Save Filters'}</button>
                   <p className="subtle">
                     {activeResume ? `Active resume: ${activeResume.file_name} (v${activeResume.version})` : 'No active resume uploaded yet.'}

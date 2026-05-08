@@ -76,6 +76,10 @@ def ensure_sqlite_phase0_columns() -> None:
         settings_alter_statements = [
             ("mail_date", "ALTER TABLE user_settings ADD COLUMN mail_date VARCHAR(10)"),
             ("feature_ai_enabled", "ALTER TABLE user_settings ADD COLUMN feature_ai_enabled BOOLEAN DEFAULT 0"),
+            ("fallback_draft_template", "ALTER TABLE user_settings ADD COLUMN fallback_draft_template TEXT DEFAULT ''"),
+            ("signature_name", "ALTER TABLE user_settings ADD COLUMN signature_name VARCHAR(255) DEFAULT ''"),
+            ("signature_phone", "ALTER TABLE user_settings ADD COLUMN signature_phone VARCHAR(80) DEFAULT ''"),
+            ("signature_email", "ALTER TABLE user_settings ADD COLUMN signature_email VARCHAR(255) DEFAULT ''"),
             ("policy_json", "ALTER TABLE user_settings ADD COLUMN policy_json TEXT DEFAULT ''"),
         ]
         for column_name, statement in settings_alter_statements:
