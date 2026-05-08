@@ -95,6 +95,7 @@ ai_last_finished_at: datetime | None = None
 ai_last_duration_ms: int | None = None
 telegram_service: TelegramBotService | None = None
 telegram_action_lock = threading.Lock()
+telegram_auth_sessions: dict[int, datetime] = {}
 
 
 class PolicyQuery(TypedDict):
@@ -178,6 +179,19 @@ def _build_telegram_digest(prefix: str, result: AutomationRunResponse) -> str:
     )
 
 
+def _format_query_preflight(user_settings: UserSettings, policy: PolicyConfig) -> str:
+    date_mode = policy["query"]["date_mode"]
+    effective_date = user_settings.mail_date if date_mode == "custom" else None
+    effective_query = _compose_gmail_query(user_settings.gmail_query, effective_date, policy)
+    return (
+        "Run preflight:\n"
+        f"Saved query: {user_settings.gmail_query}\n"
+        f"Date mode: {date_mode}\n"
+        f"Saved date: {user_settings.mail_date or 'any'}\n"
+        f"Effective query: {effective_query}"
+    )
+
+
 def _extract_pin(parts: list[str]) -> tuple[list[str], str | None]:
     clean: list[str] = []
     pin: str | None = None
@@ -189,11 +203,49 @@ def _extract_pin(parts: list[str]) -> tuple[list[str], str | None]:
     return clean, pin
 
 
+def _is_valid_iso_date(value: str) -> bool:
+    try:
+        date.fromisoformat(value)
+        return True
+    except ValueError:
+        return False
+
+
 def _telegram_action_authorized(pin: str | None) -> bool:
     configured_pin = (settings.telegram_action_pin or "").strip()
     if not configured_pin:
         return True
     return bool(pin and pin == configured_pin)
+
+
+def _telegram_ttl_minutes() -> int:
+    return max(1, int(settings.telegram_auth_ttl_minutes or 30))
+
+
+def _telegram_session_expires_at(chat_id: int) -> datetime | None:
+    expires_at = telegram_auth_sessions.get(chat_id)
+    if not expires_at:
+        return None
+    if expires_at <= datetime.now(UTC):
+        telegram_auth_sessions.pop(chat_id, None)
+        return None
+    return expires_at
+
+
+def _telegram_session_is_active(chat_id: int) -> bool:
+    return _telegram_session_expires_at(chat_id) is not None
+
+
+def _telegram_session_remaining(chat_id: int) -> str:
+    expires_at = _telegram_session_expires_at(chat_id)
+    if not expires_at:
+        return "0m 0s"
+    total = int((expires_at - datetime.now(UTC)).total_seconds())
+    if total < 0:
+        total = 0
+    minutes = total // 60
+    seconds = total % 60
+    return f"{minutes}m {seconds}s"
 
 
 def _handle_telegram_command(chat_id: int, user_id: str, username: str, text: str) -> str:
@@ -208,35 +260,97 @@ def _handle_telegram_command(chat_id: int, user_id: str, username: str, text: st
     args, pin = _extract_pin(parts[1:])
     logger.info("Telegram command received chat_id=%s user=%s cmd=%s", chat_id, username, cmd)
 
-    def require_pin() -> str | None:
+    def require_action_auth() -> str | None:
+        if _telegram_session_is_active(chat_id):
+            return None
         if _telegram_action_authorized(pin):
             return None
-        return "Action blocked: invalid or missing PIN. Use pin=<your-pin>."
+        logger.info("Telegram auth denied chat_id=%s cmd=%s reason=missing_or_invalid_auth", chat_id, cmd)
+        return "Action blocked. Run /auth <PIN> or provide pin=<PIN>."
 
     if cmd == "/start":
         return (
             "MailOps Telegram bot is active.\n"
             "Read-only: /status, /needs_review, /failed_mapping, /recent_runs\n"
-            "Actions: /sync pin=<PIN>, /run pin=<PIN>, /approve <id> pin=<PIN>, /reject <id> [reason...] pin=<PIN>"
+            "Config: /setquery <gmail query>, /setdate YYYY-MM-DD, /setdate any\n"
+            "Auth: /auth <PIN> (session unlock), /logout\n"
+            "Actions: /sync, /run, /approve <id>, /reject <id> [reason...]\n"
+            "Primary action: /run = Sync + Queue (same as dashboard button)\n"
+            "Advanced: /sync = Gmail import-only."
         )
 
     db = SessionLocal()
     try:
+        if cmd == "/auth":
+            if not args:
+                return "Usage: /auth <PIN>"
+            configured_pin = (settings.telegram_action_pin or "").strip()
+            if not configured_pin:
+                telegram_auth_sessions[chat_id] = datetime.now(UTC) + timedelta(minutes=_telegram_ttl_minutes())
+                logger.info("Telegram auth success chat_id=%s cmd=%s mode=no_configured_pin", chat_id, cmd)
+                return f"Authenticated. Session expires in {_telegram_session_remaining(chat_id)}."
+            supplied_pin = args[0].strip()
+            if supplied_pin != configured_pin:
+                logger.info("Telegram auth failed chat_id=%s cmd=%s reason=wrong_pin", chat_id, cmd)
+                return "Authentication failed: incorrect PIN."
+            telegram_auth_sessions[chat_id] = datetime.now(UTC) + timedelta(minutes=_telegram_ttl_minutes())
+            logger.info("Telegram auth success chat_id=%s cmd=%s", chat_id, cmd)
+            return f"Authenticated. Session expires in {_telegram_session_remaining(chat_id)}."
+
+        if cmd == "/logout":
+            telegram_auth_sessions.pop(chat_id, None)
+            logger.info("Telegram logout chat_id=%s cmd=%s", chat_id, cmd)
+            return "Logged out. Action commands now require /auth <PIN> or pin=<PIN>."
+
         if cmd == "/status":
             gmail_configured, gmail_authenticated, gmail_detail = gmail_auth_status()
             ai_info = ai_status()
             user_settings = _get_settings(db)
             policy = _read_policy_from_settings(user_settings)
             dry_run = _policy_dry_run(policy)
+            is_authenticated = _telegram_session_is_active(chat_id)
+            auth_line = f"Authenticated: {'yes' if is_authenticated else 'no'}"
+            if is_authenticated:
+                auth_line += f" (expires in {_telegram_session_remaining(chat_id)})"
             return (
                 f"Gmail: {'Authenticated' if gmail_authenticated else 'Not authenticated'} "
                 f"(configured={gmail_configured})\n"
                 f"AI: {'Healthy' if ai_info.connected else 'Disconnected'} ({ai_info.model})\n"
+                f"{auth_line}\n"
                 f"Dry run: {dry_run}\n"
+                "Source: /run uses saved backend settings below.\n"
                 f"Query: {user_settings.gmail_query}\n"
                 f"Date: {user_settings.mail_date or 'any'}\n"
-                f"Detail: {gmail_detail}"
+                f"Detail: {gmail_detail}\n"
+                "Hint: Use /setquery and /setdate to change what /run searches."
             )
+
+        if cmd == "/setquery":
+            query_text = " ".join(args).strip()
+            if not query_text:
+                return "Usage: /setquery <gmail query>"
+            user_settings = _get_settings(db)
+            user_settings.gmail_query = query_text
+            db.commit()
+            logger.info("Telegram config update chat_id=%s field=gmail_query", chat_id)
+            return f"Query updated to: {user_settings.gmail_query}"
+
+        if cmd == "/setdate":
+            if not args:
+                return "Usage: /setdate YYYY-MM-DD or /setdate any"
+            raw_value = args[0].strip().lower()
+            user_settings = _get_settings(db)
+            if raw_value in {"any", "clear", "none"}:
+                user_settings.mail_date = None
+                db.commit()
+                logger.info("Telegram config update chat_id=%s field=mail_date value=any", chat_id)
+                return "Mail date filter cleared. Runs will use any date."
+            if not _is_valid_iso_date(raw_value):
+                return "Invalid date. Use YYYY-MM-DD (example: /setdate 2026-05-08) or /setdate any."
+            user_settings.mail_date = raw_value
+            db.commit()
+            logger.info("Telegram config update chat_id=%s field=mail_date value=%s", chat_id, raw_value)
+            return f"Mail date set to: {raw_value}"
 
         if cmd == "/needs_review":
             rows = (
@@ -285,49 +399,60 @@ def _handle_telegram_command(chat_id: int, user_id: str, username: str, text: st
             return "Recent runs:\n" + "\n".join(lines)
 
         if cmd == "/sync":
-            pin_error = require_pin()
-            if pin_error:
-                return pin_error
+            auth_error = require_action_auth()
+            if auth_error:
+                return auth_error
             with telegram_action_lock:
                 result = gmail_sync(db)
             return (
-                "Sync finished.\n"
+                "Advanced sync finished (import-only, no queue/send).\n"
                 f"Batch: {result.sync_batch_id}\n"
                 f"Imported: {result.imported_count} | Skipped: {result.skipped_count} | Errors: {result.error_count}"
             )
 
         if cmd == "/run":
-            pin_error = require_pin()
-            if pin_error:
-                return pin_error
+            auth_error = require_action_auth()
+            if auth_error:
+                return auth_error
+            user_settings = _get_settings(db)
+            policy = _read_policy_from_settings(user_settings)
+            preflight = _format_query_preflight(user_settings, policy)
             with telegram_action_lock:
                 run_result = automation_run_once(None, db)
-            return _build_telegram_digest("Run finished.", run_result)
+            if run_result.status == "idle":
+                return (
+                    f"{preflight}\n\n"
+                    f"{_build_telegram_digest('Run finished.', run_result)}\n\n"
+                    "Guidance: No matches for saved query/date.\n"
+                    "Try: /setquery <gmail query>\n"
+                    "Try: /setdate YYYY-MM-DD or /setdate any"
+                )
+            return f"{preflight}\n\n{_build_telegram_digest('Run finished.', run_result)}"
 
         if cmd == "/approve":
-            pin_error = require_pin()
-            if pin_error:
-                return pin_error
+            auth_error = require_action_auth()
+            if auth_error:
+                return auth_error
             if not args:
-                return "Usage: /approve <email_id> pin=<PIN>"
+                return "Usage: /approve <email_id>"
             try:
                 email_id = int(args[0])
             except ValueError:
-                return "Invalid email_id. Usage: /approve <email_id> pin=<PIN>"
+                return "Invalid email_id. Usage: /approve <email_id>"
             with telegram_action_lock:
                 email = approve_and_send(email_id, ApproveSendRequest(edited_reply=None), db)
             return f"Approved and sent: #{email.id} | {email.subject}"
 
         if cmd == "/reject":
-            pin_error = require_pin()
-            if pin_error:
-                return pin_error
+            auth_error = require_action_auth()
+            if auth_error:
+                return auth_error
             if not args:
-                return "Usage: /reject <email_id> [reason...] pin=<PIN>"
+                return "Usage: /reject <email_id> [reason...]"
             try:
                 email_id = int(args[0])
             except ValueError:
-                return "Invalid email_id. Usage: /reject <email_id> [reason...] pin=<PIN>"
+                return "Invalid email_id. Usage: /reject <email_id> [reason...]"
             reason = " ".join(args[1:]).strip() or "Rejected from Telegram"
             with telegram_action_lock:
                 email = reject_candidate(email_id, RejectRequest(reason=reason), db)

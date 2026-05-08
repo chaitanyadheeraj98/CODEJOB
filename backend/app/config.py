@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     telegram_allowed_chat_ids: str = ""
     telegram_action_pin: str = ""
     telegram_alerts_enabled: bool = True
+    telegram_auth_ttl_minutes: int = 30
 
     model_config = SettingsConfigDict(
         env_file=".env",
