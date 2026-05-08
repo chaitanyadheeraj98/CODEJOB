@@ -303,6 +303,14 @@
   height: 44px;
 }
 
+.fallbackTemplateTextarea {
+  min-height: 240px;
+  max-height: 240px;
+  height: 240px;
+  resize: none;
+  overflow-y: auto;
+}
+
 .datePickerNative {
   position: absolute;
   inset: 0;

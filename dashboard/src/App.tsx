@@ -1033,6 +1033,7 @@ function App() {
                   <label>
                     Fallback Draft Template
                     <textarea
+                      className="fallbackTemplateTextarea"
                       rows={10}
                       value={settings.fallback_draft_template}
                       onChange={(e) => setSettings({ ...settings, fallback_draft_template: e.target.value })}
