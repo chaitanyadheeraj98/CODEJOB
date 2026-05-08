@@ -233,3 +233,11 @@ class AutomationRunRequest(BaseModel):
             return None
         datetime.strptime(value, "%Y-%m-%d")
         return value
+
+
+class TelegramStatusResponse(BaseModel):
+    enabled: bool
+    polling: bool
+    alerts_enabled: bool
+    authorized_chats: int
+    detail: str

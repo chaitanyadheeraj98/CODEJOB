@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     feature_auto_polling: bool = False
     feature_auto_send: bool = False
     feature_retry_queue: bool = False
+    telegram_bot_token: str = ""
+    telegram_allowed_chat_ids: str = ""
+    telegram_action_pin: str = ""
+    telegram_alerts_enabled: bool = True
 
     model_config = SettingsConfigDict(
         env_file=".env",

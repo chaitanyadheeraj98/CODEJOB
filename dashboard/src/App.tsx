@@ -65,6 +65,14 @@ type AiStatus = {
   last_draft_source: string | null
 }
 
+type TelegramStatus = {
+  enabled: boolean
+  polling: boolean
+  alerts_enabled: boolean
+  authorized_chats: number
+  detail: string
+}
+
 type SettingsPayload = {
   enabled: boolean
   gmail_query: string
@@ -231,6 +239,7 @@ function App() {
   const profileNames: PolicyProfileName[] = ['Aggressive', 'Balanced', 'Strict']
   const [status, setStatus] = useState<GmailStatus | null>(null)
   const [aiStatus, setAiStatus] = useState<AiStatus | null>(null)
+  const [telegramStatus, setTelegramStatus] = useState<TelegramStatus | null>(null)
   const [settings, setSettings] = useState<SettingsPayload>({
     enabled: true,
     gmail_query: 'is:unread',
@@ -310,6 +319,12 @@ function App() {
     setAiStatus((await res.json()) as AiStatus)
   }
 
+  const loadTelegramStatus = async () => {
+    const res = await fetch(`${apiBase}/telegram/status`)
+    if (!res.ok) throw new Error('Failed to load Telegram status')
+    setTelegramStatus((await res.json()) as TelegramStatus)
+  }
+
   const loadSettings = async () => {
     const res = await fetch(`${apiBase}/settings`)
     if (!res.ok) throw new Error('Failed to load settings')
@@ -378,6 +393,7 @@ function App() {
     loadSettings().catch((e) => setError((e as Error).message))
     loadActiveResume().catch((e) => setError((e as Error).message))
     loadAiStatus().catch((e) => setError((e as Error).message))
+    loadTelegramStatus().catch((e) => setError((e as Error).message))
     loadQueue().catch((e) => setError((e as Error).message))
     loadFailedQueue().catch((e) => setError((e as Error).message))
     loadSentQueue().catch((e) => setError((e as Error).message))
@@ -458,6 +474,7 @@ function App() {
       }
       await loadStatus()
       await loadAiStatus()
+      await loadTelegramStatus()
       await loadQueue()
       await loadFailedQueue()
       await loadSentQueue()
@@ -496,6 +513,7 @@ function App() {
       }
       await loadStatus()
       await loadAiStatus()
+      await loadTelegramStatus()
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -768,6 +786,8 @@ function App() {
                   <div className="row"><span className="label">Configured</span><span>{status?.configured ? 'Yes' : 'No'}</span></div>
                   <div className="row"><span className="label">Account</span><span>{status?.token_path ?? '-'}</span></div>
                   <div className="row"><span className="label">Last Sync</span><span>{status?.last_sync_at ?? 'Never'}</span></div>
+                  <div className="row"><span className="label">Telegram</span><span>{telegramStatus?.polling ? 'Connected' : telegramStatus?.enabled ? 'Starting' : 'Disabled'}</span></div>
+                  <div className="row"><span className="label">Authorized Chats</span><span>{telegramStatus?.authorized_chats ?? 0}</span></div>
                 </div>
               </section>
 

@@ -8,6 +8,7 @@ from dataclasses import asdict
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Mapping, TypedDict, cast
+import threading
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -30,6 +31,7 @@ from app.gmail_client import (
 )
 from app.models import DraftEditFeedback, RecruiterEmail, ResumeAsset, SyncRun, UserSettings
 from app.models import RecipientRoutingFeedback
+from app.telegram_bot import TelegramBotService
 from app.phase0 import (
     DEFAULT_FALLBACK_DRAFT_TEMPLATE,
     DEFAULT_SIGNATURE_EMAIL,
@@ -67,15 +69,20 @@ from app.schemas import (
     ResumeResponse,
     SettingsRequest,
     SettingsResponse,
+    TelegramStatusResponse,
 )
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    global telegram_service
     Base.metadata.create_all(bind=engine)
     ensure_sqlite_phase0_columns()
     _ensure_default_settings()
+    telegram_service = _init_telegram_service()
     yield
+    if telegram_service:
+        telegram_service.stop()
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
@@ -86,6 +93,8 @@ ai_last_error: str | None = None
 ai_last_started_at: datetime | None = None
 ai_last_finished_at: datetime | None = None
 ai_last_duration_ms: int | None = None
+telegram_service: TelegramBotService | None = None
+telegram_action_lock = threading.Lock()
 
 
 class PolicyQuery(TypedDict):
@@ -129,6 +138,232 @@ def get_db() -> Generator[Session, None, None]:
         yield db
     finally:
         db.close()
+
+
+def _parse_allowed_chat_ids(raw: str) -> set[int]:
+    allowed: set[int] = set()
+    for part in (raw or "").split(","):
+        token = part.strip()
+        if not token:
+            continue
+        try:
+            allowed.add(int(token))
+        except ValueError:
+            logger.warning("Ignoring invalid TELEGRAM_ALLOWED_CHAT_IDS token: %s", token)
+    return allowed
+
+
+def _format_candidate_lines(rows: list[RecruiterEmail], max_items: int = 5) -> str:
+    if not rows:
+        return "None"
+    lines: list[str] = []
+    for row in rows[:max_items]:
+        subject = (row.subject or "").strip().replace("\n", " ")
+        if len(subject) > 90:
+            subject = subject[:87] + "..."
+        lines.append(f"#{row.id} - {subject}")
+    return "\n".join(lines)
+
+
+def _build_telegram_digest(prefix: str, result: AutomationRunResponse) -> str:
+    return (
+        f"{prefix}\n"
+        f"Status: {result.status}\n"
+        f"Detail: {result.detail}\n"
+        f"Query: {result.effective_query or '-'}\n"
+        f"Matched: {result.matched_count if result.matched_count is not None else '-'} | "
+        f"Queued: {result.queued_count if result.queued_count is not None else '-'} | "
+        f"Skipped: {result.skipped_count if result.skipped_count is not None else '-'} | "
+        f"Failed: {result.failed_count if result.failed_count is not None else '-'}"
+    )
+
+
+def _extract_pin(parts: list[str]) -> tuple[list[str], str | None]:
+    clean: list[str] = []
+    pin: str | None = None
+    for part in parts:
+        if part.lower().startswith("pin="):
+            pin = part.split("=", 1)[1].strip()
+            continue
+        clean.append(part)
+    return clean, pin
+
+
+def _telegram_action_authorized(pin: str | None) -> bool:
+    configured_pin = (settings.telegram_action_pin or "").strip()
+    if not configured_pin:
+        return True
+    return bool(pin and pin == configured_pin)
+
+
+def _handle_telegram_command(chat_id: int, user_id: str, username: str, text: str) -> str:
+    _ = chat_id
+    _ = user_id
+    _ = username
+    command_line = text.strip()
+    if not command_line:
+        return "Empty command."
+    parts = command_line.split()
+    cmd = parts[0].lower()
+    args, pin = _extract_pin(parts[1:])
+    logger.info("Telegram command received chat_id=%s user=%s cmd=%s", chat_id, username, cmd)
+
+    def require_pin() -> str | None:
+        if _telegram_action_authorized(pin):
+            return None
+        return "Action blocked: invalid or missing PIN. Use pin=<your-pin>."
+
+    if cmd == "/start":
+        return (
+            "MailOps Telegram bot is active.\n"
+            "Read-only: /status, /needs_review, /failed_mapping, /recent_runs\n"
+            "Actions: /sync pin=<PIN>, /run pin=<PIN>, /approve <id> pin=<PIN>, /reject <id> [reason...] pin=<PIN>"
+        )
+
+    db = SessionLocal()
+    try:
+        if cmd == "/status":
+            gmail_configured, gmail_authenticated, gmail_detail = gmail_auth_status()
+            ai_info = ai_status()
+            user_settings = _get_settings(db)
+            policy = _read_policy_from_settings(user_settings)
+            dry_run = _policy_dry_run(policy)
+            return (
+                f"Gmail: {'Authenticated' if gmail_authenticated else 'Not authenticated'} "
+                f"(configured={gmail_configured})\n"
+                f"AI: {'Healthy' if ai_info.connected else 'Disconnected'} ({ai_info.model})\n"
+                f"Dry run: {dry_run}\n"
+                f"Query: {user_settings.gmail_query}\n"
+                f"Date: {user_settings.mail_date or 'any'}\n"
+                f"Detail: {gmail_detail}"
+            )
+
+        if cmd == "/needs_review":
+            rows = (
+                db.query(RecruiterEmail)
+                .filter(RecruiterEmail.owner_id == settings.owner_id, RecruiterEmail.state == "needs_review")
+                .order_by(RecruiterEmail.created_at.desc())
+                .limit(5)
+                .all()
+            )
+            count = (
+                db.query(RecruiterEmail)
+                .filter(RecruiterEmail.owner_id == settings.owner_id, RecruiterEmail.state == "needs_review")
+                .count()
+            )
+            return f"Needs Review: {count}\nTop items:\n{_format_candidate_lines(rows)}"
+
+        if cmd == "/failed_mapping":
+            rows = (
+                db.query(RecruiterEmail)
+                .filter(RecruiterEmail.owner_id == settings.owner_id, RecruiterEmail.state == "failed")
+                .order_by(RecruiterEmail.created_at.desc())
+                .limit(5)
+                .all()
+            )
+            count = (
+                db.query(RecruiterEmail)
+                .filter(RecruiterEmail.owner_id == settings.owner_id, RecruiterEmail.state == "failed")
+                .count()
+            )
+            return f"Failed Mapping: {count}\nTop items:\n{_format_candidate_lines(rows)}"
+
+        if cmd == "/recent_runs":
+            runs = (
+                db.query(SyncRun)
+                .filter(SyncRun.owner_id == settings.owner_id)
+                .order_by(SyncRun.created_at.desc())
+                .limit(5)
+                .all()
+            )
+            if not runs:
+                return "No recent runs."
+            lines = [
+                f"{run.created_at.isoformat()} | imported={run.imported_count} skipped={run.skipped_count} errors={run.error_count}"
+                for run in runs
+            ]
+            return "Recent runs:\n" + "\n".join(lines)
+
+        if cmd == "/sync":
+            pin_error = require_pin()
+            if pin_error:
+                return pin_error
+            with telegram_action_lock:
+                result = gmail_sync(db)
+            return (
+                "Sync finished.\n"
+                f"Batch: {result.sync_batch_id}\n"
+                f"Imported: {result.imported_count} | Skipped: {result.skipped_count} | Errors: {result.error_count}"
+            )
+
+        if cmd == "/run":
+            pin_error = require_pin()
+            if pin_error:
+                return pin_error
+            with telegram_action_lock:
+                run_result = automation_run_once(None, db)
+            return _build_telegram_digest("Run finished.", run_result)
+
+        if cmd == "/approve":
+            pin_error = require_pin()
+            if pin_error:
+                return pin_error
+            if not args:
+                return "Usage: /approve <email_id> pin=<PIN>"
+            try:
+                email_id = int(args[0])
+            except ValueError:
+                return "Invalid email_id. Usage: /approve <email_id> pin=<PIN>"
+            with telegram_action_lock:
+                email = approve_and_send(email_id, ApproveSendRequest(edited_reply=None), db)
+            return f"Approved and sent: #{email.id} | {email.subject}"
+
+        if cmd == "/reject":
+            pin_error = require_pin()
+            if pin_error:
+                return pin_error
+            if not args:
+                return "Usage: /reject <email_id> [reason...] pin=<PIN>"
+            try:
+                email_id = int(args[0])
+            except ValueError:
+                return "Invalid email_id. Usage: /reject <email_id> [reason...] pin=<PIN>"
+            reason = " ".join(args[1:]).strip() or "Rejected from Telegram"
+            with telegram_action_lock:
+                email = reject_candidate(email_id, RejectRequest(reason=reason), db)
+            return f"Rejected: #{email.id} | reason={email.decision_reason or reason}"
+
+        reply = "Unknown command. Send /start for available commands."
+        logger.info("Telegram command result chat_id=%s cmd=%s result=unknown_command", chat_id, cmd)
+        return reply
+    except HTTPException as exc:
+        logger.info("Telegram command result chat_id=%s cmd=%s result=http_error_%s", chat_id, cmd, exc.status_code)
+        return f"Command failed ({exc.status_code}): {exc.detail}"
+    except Exception as exc:
+        logger.exception("Telegram command error")
+        logger.info("Telegram command result chat_id=%s cmd=%s result=exception", chat_id, cmd)
+        return f"Command failed: {exc}"
+    finally:
+        db.close()
+
+
+def _init_telegram_service() -> TelegramBotService | None:
+    token = (settings.telegram_bot_token or "").strip()
+    if not token:
+        return None
+    allowed_chat_ids = _parse_allowed_chat_ids(settings.telegram_allowed_chat_ids)
+    if not allowed_chat_ids:
+        logger.warning("Telegram bot token exists but TELEGRAM_ALLOWED_CHAT_IDS is empty. Bot will not start.")
+        return None
+    service = TelegramBotService(
+        token=token,
+        allowed_chat_ids=allowed_chat_ids,
+        alerts_enabled=settings.telegram_alerts_enabled,
+        command_handler=_handle_telegram_command,
+    )
+    service.start()
+    logger.info("Telegram bot started with %s authorized chat(s)", len(allowed_chat_ids))
+    return service
 
 
 def _ensure_default_settings() -> None:
@@ -800,6 +1035,33 @@ def ai_status() -> AIStatusResponse:
     )
 
 
+@app.get("/telegram/status", response_model=TelegramStatusResponse)
+def telegram_status() -> TelegramStatusResponse:
+    if not telegram_service:
+        configured_ids = _parse_allowed_chat_ids(settings.telegram_allowed_chat_ids)
+        enabled = bool((settings.telegram_bot_token or "").strip())
+        detail = "Telegram bot disabled"
+        if enabled and not configured_ids:
+            detail = "TELEGRAM_ALLOWED_CHAT_IDS is empty"
+        elif enabled:
+            detail = "Telegram bot not initialized"
+        return TelegramStatusResponse(
+            enabled=enabled,
+            polling=False,
+            alerts_enabled=settings.telegram_alerts_enabled,
+            authorized_chats=len(configured_ids),
+            detail=detail,
+        )
+    status = telegram_service.status()
+    return TelegramStatusResponse(
+        enabled=status.enabled,
+        polling=status.polling,
+        alerts_enabled=status.alerts_enabled,
+        authorized_chats=status.authorized_chats,
+        detail=status.detail,
+    )
+
+
 @app.post("/gmail/sync", response_model=GmailSyncResponse)
 def gmail_sync(db: Session = Depends(get_db)) -> GmailSyncResponse:
     global last_gmail_sync_at
@@ -927,12 +1189,19 @@ def gmail_sync(db: Session = Depends(get_db)) -> GmailSyncResponse:
         raise
 
     last_gmail_sync_at = datetime.now(UTC)
-    return GmailSyncResponse(
+    response = GmailSyncResponse(
         sync_batch_id=sync_batch_id,
         imported_count=imported_count,
         skipped_count=skipped_count,
         error_count=error_count,
     )
+    if telegram_service:
+        telegram_service.notify(
+            "Sync Digest\n"
+            f"Batch: {response.sync_batch_id}\n"
+            f"Imported: {response.imported_count} | Skipped: {response.skipped_count} | Errors: {response.error_count}"
+        )
+    return response
 
 
 @app.post("/gmail/oauth/start", response_model=OAuthStartResponse)
@@ -956,19 +1225,28 @@ def automation_run_once(payload: AutomationRunRequest | None = None, db: Session
     if configured and not authenticated:
         in_progress, last_error = oauth_bootstrap_status()
         if in_progress:
-            return AutomationRunResponse(
+            response = AutomationRunResponse(
                 status="oauth_in_progress",
                 detail="OAuth is in progress. Complete sign-in from backend logs, then retry Sync + Queue.",
             )
+            if telegram_service:
+                telegram_service.notify(_build_telegram_digest("Run Digest", response))
+            return response
         if last_error:
-            return AutomationRunResponse(
+            response = AutomationRunResponse(
                 status="oauth_required",
                 detail=f"OAuth required. Trigger Connect Gmail and complete sign-in. Last OAuth error: {last_error}",
             )
-        return AutomationRunResponse(
+            if telegram_service:
+                telegram_service.notify(_build_telegram_digest("Run Digest", response))
+            return response
+        response = AutomationRunResponse(
             status="oauth_required",
             detail=f"{detail} Click Connect Gmail, open the auth URL from backend logs, complete sign-in, then retry.",
         )
+        if telegram_service:
+            telegram_service.notify(_build_telegram_digest("Run Digest", response))
+        return response
     user_settings = _get_settings(db)
     resume = _active_resume(db)
     if not resume:
@@ -982,7 +1260,7 @@ def automation_run_once(payload: AutomationRunRequest | None = None, db: Session
     effective_query = _compose_gmail_query(user_settings.gmail_query, requested_mail_date or user_settings.mail_date, policy)
     items = list_unread_candidates_by_query(effective_query, max_results_per_page=batch_limit)[:batch_limit]
     if not items:
-        return _build_run_response(
+        response = _build_run_response(
             "idle",
             f"No unread matching emails found for query: {effective_query}",
             effective_query=effective_query,
@@ -991,6 +1269,9 @@ def automation_run_once(payload: AutomationRunRequest | None = None, db: Session
             skipped_count=0,
             failed_count=0,
         )
+        if telegram_service:
+            telegram_service.notify(_build_telegram_digest("Run Digest", response))
+        return response
 
     matched_count = len(items)
     queued_count = 0
@@ -1227,7 +1508,7 @@ def automation_run_once(payload: AutomationRunRequest | None = None, db: Session
     if dry_run:
         detail = f"[Dry run] {detail} No database or Gmail label changes were made. (batch_limit={batch_limit}, threshold={threshold:.2f})"
 
-    return _build_run_response(
+    response = _build_run_response(
         status,
         detail,
         last_email,
@@ -1237,6 +1518,9 @@ def automation_run_once(payload: AutomationRunRequest | None = None, db: Session
         skipped_count=skipped_count,
         failed_count=failed_count,
     )
+    if telegram_service:
+        telegram_service.notify(_build_telegram_digest("Run Digest", response))
+    return response
 
 
 @app.post("/phase0/emails/ingest", response_model=EmailResponse)
