@@ -76,7 +76,9 @@ type TelegramStatus = {
 type SettingsPayload = {
   enabled: boolean
   gmail_query: string
+  default_gmail_query: string
   mail_date: string | null
+  default_date_mode: 'today' | 'off'
   min_salary: number | null
   accepted_locations: string[]
   visa_required_allowed: boolean
@@ -86,6 +88,7 @@ type SettingsPayload = {
   free_text_guidance: string
   qualification_threshold: number
   feature_auto_polling: boolean
+  feature_auto_poll_interval_minutes: number
   feature_auto_send: boolean
   feature_retry_queue: boolean
   feature_ai_enabled: boolean
@@ -243,7 +246,9 @@ function App() {
   const [settings, setSettings] = useState<SettingsPayload>({
     enabled: true,
     gmail_query: 'is:unread',
+    default_gmail_query: 'is:unread',
     mail_date: null,
+    default_date_mode: 'today',
     min_salary: null,
     accepted_locations: [],
     visa_required_allowed: false,
@@ -253,6 +258,7 @@ function App() {
     free_text_guidance: '',
     qualification_threshold: 0.6,
     feature_auto_polling: false,
+    feature_auto_poll_interval_minutes: 10,
     feature_auto_send: false,
     feature_retry_queue: false,
     feature_ai_enabled: false,
@@ -329,7 +335,13 @@ function App() {
     const res = await fetch(`${apiBase}/settings`)
     if (!res.ok) throw new Error('Failed to load settings')
     const payload = (await res.json()) as SettingsPayload
-    const normalized = { ...payload, policy: payload.policy ?? defaultPolicy }
+    const normalized = {
+      ...payload,
+      default_gmail_query: payload.default_gmail_query || payload.gmail_query || 'is:unread',
+      default_date_mode: payload.default_date_mode === 'off' ? 'off' : 'today',
+      feature_auto_poll_interval_minutes: Math.max(1, Math.min(payload.feature_auto_poll_interval_minutes || 10, 1440)),
+      policy: payload.policy ?? defaultPolicy,
+    }
     setSettings(normalized)
     if (payload.policy_profile_selected && profileNames.includes(payload.policy_profile_selected as PolicyProfileName)) {
       setSelectedProfileToApply(payload.policy_profile_selected as PolicyProfileName)
@@ -966,6 +978,50 @@ function App() {
                 <h2>Profile Settings</h2>
                 <div className="stack">
                   <label>
+                    Default Query
+                    <input
+                      value={settings.default_gmail_query}
+                      onChange={(e) => setSettings({ ...settings, default_gmail_query: e.target.value })}
+                      placeholder="is:unread in:inbox recruiter"
+                    />
+                  </label>
+                  <label>
+                    Default Date
+                    <select
+                      value={settings.default_date_mode}
+                      onChange={(e) => setSettings({ ...settings, default_date_mode: e.target.value as 'today' | 'off' })}
+                    >
+                      <option value="today">Today (auto)</option>
+                      <option value="off">Off</option>
+                    </select>
+                  </label>
+                  <label className="toggleRow">
+                    <span>Auto Run Every N Minutes</span>
+                    <span className="toggleSwitch">
+                      <input
+                        type="checkbox"
+                        checked={settings.feature_auto_polling}
+                        onChange={(e) => setSettings({ ...settings, feature_auto_polling: e.target.checked })}
+                      />
+                      <span className="toggleTrack" />
+                    </span>
+                  </label>
+                  <label>
+                    Auto Run Interval (minutes)
+                    <input
+                      type="number"
+                      min={1}
+                      max={1440}
+                      value={settings.feature_auto_poll_interval_minutes}
+                      onChange={(e) =>
+                        setSettings({
+                          ...settings,
+                          feature_auto_poll_interval_minutes: Math.max(1, Math.min(Number(e.target.value) || 10, 1440)),
+                        })
+                      }
+                    />
+                  </label>
+                  <label>
                     Signature Name
                     <input
                       value={settings.signature_name}
@@ -989,6 +1045,7 @@ function App() {
                       placeholder="you@example.com"
                     />
                   </label>
+                  <p className="subtle">These defaults are shared with Telegram and used by <code>/run</code>. Auto-run settings are also synced to Telegram.</p>
                 </div>
               </section>
 

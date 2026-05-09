@@ -75,12 +75,18 @@ from app.schemas import (
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    global telegram_service
+    global auto_runner_thread, telegram_service
     Base.metadata.create_all(bind=engine)
     ensure_sqlite_phase0_columns()
     _ensure_default_settings()
     telegram_service = _init_telegram_service()
+    auto_runner_stop_event.clear()
+    auto_runner_thread = threading.Thread(target=_auto_runner_loop, name="mailops-auto-runner", daemon=True)
+    auto_runner_thread.start()
     yield
+    auto_runner_stop_event.set()
+    if auto_runner_thread and auto_runner_thread.is_alive():
+        auto_runner_thread.join(timeout=5.0)
     if telegram_service:
         telegram_service.stop()
 
@@ -96,6 +102,8 @@ ai_last_duration_ms: int | None = None
 telegram_service: TelegramBotService | None = None
 telegram_action_lock = threading.Lock()
 telegram_auth_sessions: dict[int, datetime] = {}
+auto_runner_thread: threading.Thread | None = None
+auto_runner_stop_event = threading.Event()
 
 
 class PolicyQuery(TypedDict):
@@ -180,12 +188,14 @@ def _build_telegram_digest(prefix: str, result: AutomationRunResponse) -> str:
 
 
 def _format_query_preflight(user_settings: UserSettings, policy: PolicyConfig) -> str:
-    date_mode = policy["query"]["date_mode"]
-    effective_date = user_settings.mail_date if date_mode == "custom" else None
-    effective_query = _compose_gmail_query(user_settings.gmail_query, effective_date, policy)
+    resolved = _resolve_effective_run_inputs(user_settings, policy)
+    date_mode = resolved["policy"]["query"]["date_mode"]
+    effective_query = resolved["effective_query"]
     return (
         "Run preflight:\n"
         f"Saved query: {user_settings.gmail_query}\n"
+        f"Default query: {user_settings.default_gmail_query or user_settings.gmail_query}\n"
+        f"Default date mode: {user_settings.default_date_mode or 'today'}\n"
         f"Date mode: {date_mode}\n"
         f"Saved date: {user_settings.mail_date or 'any'}\n"
         f"Effective query: {effective_query}"
@@ -248,6 +258,77 @@ def _telegram_session_remaining(chat_id: int) -> str:
     return f"{minutes}m {seconds}s"
 
 
+def _normalize_default_date_mode(value: str | None) -> str:
+    normalized = (value or "").strip().lower()
+    if normalized not in {"today", "off"}:
+        return "today"
+    return normalized
+
+
+def _resolve_effective_run_inputs(
+    user_settings: UserSettings,
+    policy: PolicyConfig,
+    requested_mail_date: str | None = None,
+) -> dict[str, object]:
+    active_query = (user_settings.gmail_query or "").strip()
+    default_query = (user_settings.default_gmail_query or "").strip()
+    final_query = active_query or default_query or "is:unread in:inbox recruiter"
+
+    explicit_mail_date = requested_mail_date or user_settings.mail_date
+    default_date_mode = _normalize_default_date_mode(user_settings.default_date_mode)
+    effective_mail_date = explicit_mail_date
+    effective_policy = _normalize_policy(policy)
+    if not effective_mail_date and default_date_mode == "today":
+        effective_mail_date = datetime.now().date().isoformat()
+        effective_policy["query"]["date_mode"] = "custom"
+
+    effective_query = _compose_gmail_query(final_query, effective_mail_date, effective_policy)
+    return {
+        "query": final_query,
+        "mail_date": effective_mail_date,
+        "policy": effective_policy,
+        "effective_query": effective_query,
+    }
+
+
+def _poll_interval_minutes(user_settings: UserSettings) -> int:
+    return max(1, min(int(user_settings.feature_auto_poll_interval_minutes or 10), 1440))
+
+
+def _auto_runner_loop() -> None:
+    next_run_at = datetime.now(UTC)
+    while not auto_runner_stop_event.wait(5):
+        db = SessionLocal()
+        try:
+            user_settings = _get_settings(db)
+            if not user_settings.enabled or not user_settings.feature_auto_polling:
+                next_run_at = datetime.now(UTC)
+                continue
+            interval_minutes = _poll_interval_minutes(user_settings)
+            now_utc = datetime.now(UTC)
+            if now_utc < next_run_at:
+                continue
+            with telegram_action_lock:
+                try:
+                    result = automation_run_once(None, db)
+                    logger.info(
+                        "Auto runner completed: status=%s matched=%s queued=%s failed=%s",
+                        result.status,
+                        result.matched_count,
+                        result.queued_count,
+                        result.failed_count,
+                    )
+                except HTTPException as exc:
+                    logger.warning("Auto runner skipped/failed: status=%s detail=%s", exc.status_code, exc.detail)
+                except Exception:
+                    logger.exception("Auto runner crashed during run-once")
+            next_run_at = datetime.now(UTC) + timedelta(minutes=interval_minutes)
+        except Exception:
+            logger.exception("Auto runner loop error")
+        finally:
+            db.close()
+
+
 def _handle_telegram_command(chat_id: int, user_id: str, username: str, text: str) -> str:
     _ = chat_id
     _ = user_id
@@ -273,6 +354,8 @@ def _handle_telegram_command(chat_id: int, user_id: str, username: str, text: st
             "MailOps Telegram bot is active.\n"
             "Read-only: /status, /needs_review, /failed_mapping, /recent_runs\n"
             "Config: /setquery <gmail query>, /setdate YYYY-MM-DD, /setdate any\n"
+            "Profile defaults: /profile, /setdefaultquery <gmail query>, /setdefaultdate today|off\n"
+            "Automation: /setautorun on|off, /setautointerval <minutes>\n"
             "Auth: /auth <PIN> (session unlock), /logout\n"
             "Actions: /sync, /run, /approve <id>, /reject <id> [reason...]\n"
             "Primary action: /run = Sync + Queue (same as dashboard button)\n"
@@ -318,11 +401,25 @@ def _handle_telegram_command(chat_id: int, user_id: str, username: str, text: st
                 f"AI: {'Healthy' if ai_info.connected else 'Disconnected'} ({ai_info.model})\n"
                 f"{auth_line}\n"
                 f"Dry run: {dry_run}\n"
+                f"Auto run: {'on' if user_settings.feature_auto_polling else 'off'} ({_poll_interval_minutes(user_settings)} min)\n"
                 "Source: /run uses saved backend settings below.\n"
                 f"Query: {user_settings.gmail_query}\n"
+                f"Default query: {user_settings.default_gmail_query or user_settings.gmail_query}\n"
                 f"Date: {user_settings.mail_date or 'any'}\n"
+                f"Default date mode: {_normalize_default_date_mode(user_settings.default_date_mode)}\n"
                 f"Detail: {gmail_detail}\n"
                 "Hint: Use /setquery and /setdate to change what /run searches."
+            )
+
+        if cmd == "/profile":
+            user_settings = _get_settings(db)
+            return (
+                "Profile defaults:\n"
+                f"Default query: {user_settings.default_gmail_query or user_settings.gmail_query}\n"
+                f"Default date mode: {_normalize_default_date_mode(user_settings.default_date_mode)}\n"
+                f"Auto run: {'on' if user_settings.feature_auto_polling else 'off'} ({_poll_interval_minutes(user_settings)} min)\n"
+                f"Active query: {user_settings.gmail_query}\n"
+                f"Active date: {user_settings.mail_date or 'any'}"
             )
 
         if cmd == "/setquery":
@@ -334,6 +431,16 @@ def _handle_telegram_command(chat_id: int, user_id: str, username: str, text: st
             db.commit()
             logger.info("Telegram config update chat_id=%s field=gmail_query", chat_id)
             return f"Query updated to: {user_settings.gmail_query}"
+
+        if cmd == "/setdefaultquery":
+            query_text = " ".join(args).strip()
+            if not query_text:
+                return "Usage: /setdefaultquery <gmail query>"
+            user_settings = _get_settings(db)
+            user_settings.default_gmail_query = query_text
+            db.commit()
+            logger.info("Telegram config update chat_id=%s field=default_gmail_query", chat_id)
+            return f"Default query updated to: {user_settings.default_gmail_query}"
 
         if cmd == "/setdate":
             if not args:
@@ -351,6 +458,44 @@ def _handle_telegram_command(chat_id: int, user_id: str, username: str, text: st
             db.commit()
             logger.info("Telegram config update chat_id=%s field=mail_date value=%s", chat_id, raw_value)
             return f"Mail date set to: {raw_value}"
+
+        if cmd == "/setdefaultdate":
+            if not args:
+                return "Usage: /setdefaultdate today|off"
+            mode = (args[0] or "").strip().lower()
+            if mode not in {"today", "off"}:
+                return "Invalid mode. Use /setdefaultdate today or /setdefaultdate off."
+            user_settings = _get_settings(db)
+            user_settings.default_date_mode = mode
+            db.commit()
+            logger.info("Telegram config update chat_id=%s field=default_date_mode value=%s", chat_id, mode)
+            return f"Default date mode set to: {mode}"
+
+        if cmd == "/setautorun":
+            if not args:
+                return "Usage: /setautorun on|off"
+            mode = (args[0] or "").strip().lower()
+            if mode not in {"on", "off"}:
+                return "Invalid mode. Use /setautorun on or /setautorun off."
+            user_settings = _get_settings(db)
+            user_settings.feature_auto_polling = mode == "on"
+            db.commit()
+            logger.info("Telegram config update chat_id=%s field=feature_auto_polling value=%s", chat_id, mode)
+            return f"Auto run set to: {mode} (interval={_poll_interval_minutes(user_settings)} min)"
+
+        if cmd == "/setautointerval":
+            if not args:
+                return "Usage: /setautointerval <minutes>"
+            try:
+                minutes = int(args[0])
+            except ValueError:
+                return "Invalid interval. Use /setautointerval <minutes>."
+            minutes = max(1, min(minutes, 1440))
+            user_settings = _get_settings(db)
+            user_settings.feature_auto_poll_interval_minutes = minutes
+            db.commit()
+            logger.info("Telegram config update chat_id=%s field=feature_auto_poll_interval_minutes value=%s", chat_id, minutes)
+            return f"Auto run interval set to: {minutes} minute(s)."
 
         if cmd == "/needs_review":
             rows = (
@@ -506,12 +651,17 @@ def _ensure_default_settings() -> None:
                 existing.signature_phone = DEFAULT_SIGNATURE_PHONE
             if not existing.signature_email:
                 existing.signature_email = DEFAULT_SIGNATURE_EMAIL
+            if not (existing.default_gmail_query or "").strip():
+                existing.default_gmail_query = (existing.gmail_query or "").strip() or "is:unread in:inbox recruiter"
+            existing.default_date_mode = _normalize_default_date_mode(existing.default_date_mode)
+            existing.feature_auto_poll_interval_minutes = _poll_interval_minutes(existing)
             if (
                 not existing.policy_json
                 or not existing.fallback_draft_template
                 or not existing.signature_name
                 or not existing.signature_phone
                 or not existing.signature_email
+                or not (existing.default_gmail_query or "").strip()
             ):
                 db.commit()
             return
@@ -519,9 +669,12 @@ def _ensure_default_settings() -> None:
             owner_id=settings.owner_id,
             enabled=True,
             gmail_query="is:unread in:inbox recruiter",
+            default_gmail_query="is:unread in:inbox recruiter",
             mail_date=None,
+            default_date_mode="today",
             qualification_threshold=settings.qualification_threshold,
             feature_auto_polling=settings.feature_auto_polling,
+            feature_auto_poll_interval_minutes=max(1, int(settings.feature_auto_poll_interval_minutes or 10)),
             feature_auto_send=settings.feature_auto_send,
             feature_retry_queue=settings.feature_retry_queue,
             feature_ai_enabled=False,
@@ -950,7 +1103,9 @@ def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
     return SettingsResponse(
         enabled=s.enabled,
         gmail_query=s.gmail_query,
+        default_gmail_query=(s.default_gmail_query or "").strip() or (s.gmail_query or "").strip() or "is:unread in:inbox recruiter",
         mail_date=s.mail_date,
+        default_date_mode=_normalize_default_date_mode(s.default_date_mode),
         min_salary=s.min_salary,
         accepted_locations=[v for v in s.accepted_locations.split(",") if v],
         visa_required_allowed=s.visa_required_allowed,
@@ -960,6 +1115,7 @@ def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
         free_text_guidance=s.free_text_guidance,
         qualification_threshold=s.qualification_threshold,
         feature_auto_polling=s.feature_auto_polling,
+        feature_auto_poll_interval_minutes=_poll_interval_minutes(s),
         feature_auto_send=s.feature_auto_send,
         feature_retry_queue=s.feature_retry_queue,
         feature_ai_enabled=s.feature_ai_enabled,
@@ -1050,7 +1206,9 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
     s = _get_settings(db)
     s.enabled = payload.enabled
     s.gmail_query = payload.gmail_query
+    s.default_gmail_query = payload.default_gmail_query.strip() if payload.default_gmail_query.strip() else (payload.gmail_query.strip() or "is:unread in:inbox recruiter")
     s.mail_date = payload.mail_date
+    s.default_date_mode = _normalize_default_date_mode(payload.default_date_mode)
     s.min_salary = payload.min_salary
     s.accepted_locations = _to_csv(payload.accepted_locations)
     s.visa_required_allowed = payload.visa_required_allowed
@@ -1060,6 +1218,7 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
     s.free_text_guidance = payload.free_text_guidance
     s.qualification_threshold = payload.qualification_threshold
     s.feature_auto_polling = payload.feature_auto_polling
+    s.feature_auto_poll_interval_minutes = max(1, min(int(payload.feature_auto_poll_interval_minutes), 1440))
     s.feature_auto_send = payload.feature_auto_send
     s.feature_retry_queue = payload.feature_retry_queue
     s.feature_ai_enabled = payload.feature_ai_enabled
@@ -1207,7 +1366,8 @@ def gmail_sync(db: Session = Depends(get_db)) -> GmailSyncResponse:
     error_count = 0
     try:
         policy = _read_policy_from_settings(user_settings)
-        effective_query = _compose_gmail_query(user_settings.gmail_query, user_settings.mail_date, policy)
+        resolved = _resolve_effective_run_inputs(user_settings, policy, None)
+        effective_query = str(resolved["effective_query"])
         candidates = list_unread_candidates_by_query(effective_query)
         for item in candidates:
             existing = (
@@ -1379,10 +1539,12 @@ def automation_run_once(payload: AutomationRunRequest | None = None, db: Session
 
     requested_mail_date = payload.mail_date if payload else None
     policy = _read_policy_from_settings(user_settings)
+    resolved = _resolve_effective_run_inputs(user_settings, policy, requested_mail_date)
+    effective_policy = cast(PolicyConfig, resolved["policy"])
+    effective_query = str(resolved["effective_query"])
     threshold = _policy_threshold(user_settings, policy)
-    batch_limit = _policy_batch_limit(policy, default_value=20)
-    dry_run = _policy_dry_run(policy)
-    effective_query = _compose_gmail_query(user_settings.gmail_query, requested_mail_date or user_settings.mail_date, policy)
+    batch_limit = _policy_batch_limit(effective_policy, default_value=20)
+    dry_run = _policy_dry_run(effective_policy)
     items = list_unread_candidates_by_query(effective_query, max_results_per_page=batch_limit)[:batch_limit]
     if not items:
         response = _build_run_response(
@@ -1422,7 +1584,7 @@ def automation_run_once(payload: AutomationRunRequest | None = None, db: Session
         hard_pass, hard_reason = hard_filter_check(parsed, user_settings)
         ai_score, ai_summary = ai_assist_score(parsed, user_settings)
 
-        blocked, block_reason = _policy_f2f_block(parsed, policy)
+        blocked, block_reason = _policy_f2f_block(parsed, effective_policy)
         if not hard_pass or ai_score < threshold or blocked:
             if dry_run:
                 skipped_count += 1

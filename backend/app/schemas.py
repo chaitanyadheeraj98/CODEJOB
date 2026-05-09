@@ -44,7 +44,9 @@ PolicyDict = dict[str, Any]
 class SettingsRequest(BaseModel):
     enabled: bool = True
     gmail_query: str = "is:unread in:inbox recruiter"
+    default_gmail_query: str = "is:unread in:inbox recruiter"
     mail_date: str | None = None
+    default_date_mode: str = "today"
     min_salary: int | None = None
     accepted_locations: list[str] = Field(default_factory=list)
     visa_required_allowed: bool = False
@@ -54,6 +56,7 @@ class SettingsRequest(BaseModel):
     free_text_guidance: str = ""
     qualification_threshold: float = 0.6
     feature_auto_polling: bool = False
+    feature_auto_poll_interval_minutes: int = 10
     feature_auto_send: bool = False
     feature_retry_queue: bool = False
     feature_ai_enabled: bool = False
@@ -70,6 +73,19 @@ class SettingsRequest(BaseModel):
             return None
         datetime.strptime(value, "%Y-%m-%d")
         return value
+
+    @field_validator("default_date_mode")
+    @classmethod
+    def validate_default_date_mode(cls, value: str) -> str:
+        normalized = (value or "").strip().lower()
+        if normalized not in {"today", "off"}:
+            raise ValueError("default_date_mode must be 'today' or 'off'")
+        return normalized
+
+    @field_validator("feature_auto_poll_interval_minutes")
+    @classmethod
+    def validate_poll_interval(cls, value: int) -> int:
+        return max(1, min(int(value), 1440))
 
 
 class SettingsResponse(SettingsRequest):
