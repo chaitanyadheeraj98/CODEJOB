@@ -43,7 +43,15 @@ Defined in `backend/app/schemas.py`.
 ### `phase0.py`
 - `RoutingEvidence` dataclass
 - `RoutingResult` dataclass
-- Parsed-email object (`dict[str, str | int | bool]`) containing role/location/salary/skills/F2F/contact flags
+- Parsed-email object with fixed keys from `parse_email()`:
+  - `role: str`
+  - `location: str`
+  - `job_location_text: str`
+  - `salary_text: str`
+  - `skills_text: str`
+  - `f2f_mentioned: bool`
+  - `asks_contact_fields: bool`
+  - `is_texas_role: bool`
 - Rule constant collections: skill keywords, recruiter hints, employer domains
 
 ### `app/ai/*`
