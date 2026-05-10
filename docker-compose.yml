@@ -3,6 +3,8 @@ services:
     build:
       context: ./backend
     container_name: codejob-backend
+    env_file:
+      - ./backend/.env
     environment:
       DATABASE_URL: sqlite:///./data/codejob.db
       REDIS_URL: redis://redis:6379/0
@@ -19,6 +21,8 @@ services:
     build:
       context: ./dashboard
     container_name: codejob-dashboard
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000
     ports:
       - "5173:5173"
     depends_on:

@@ -1,0 +1,8 @@
+{
+  "PreToolUse": [
+    {
+      "name": "graphify_context_reminder",
+      "run": "powershell -NoProfile -ExecutionPolicy Bypass -File .codex/hooks/pre_tool_use_graphify.ps1"
+    }
+  ]
+}

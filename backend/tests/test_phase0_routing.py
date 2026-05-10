@@ -1,6 +1,14 @@
 import unittest
 
-from app.phase0 import analyze_recipient_routing, draft_reply, email_domain, resolve_to_cc
+from app.phase0 import (
+    DEFAULT_FALLBACK_DRAFT_TEMPLATE,
+    analyze_recipient_routing,
+    draft_reply,
+    email_domain,
+    greeting_from_to_contact,
+    render_fallback_draft_template,
+    resolve_to_cc,
+)
 
 
 EMAIL_30_BODY = """
@@ -61,8 +69,54 @@ class RecipientRoutingTests(unittest.TestCase):
             },
         )
 
-        self.assertNotIn("**", draft)
-        self.assertIn("- Java, Spring, Spring Boot, Microservices, Kafka, AWS", draft)
+        self.assertIn("- **Java**", draft)
+        self.assertIn("Best regards,", draft)
+        self.assertIn("📞 +1 940-629-6920", draft)
+
+    def test_greeting_uses_name_from_to_contact_evidence(self) -> None:
+        body = """
+Thanks,
+Sudarsan
+Email: sudarsan@cystemslogic.com
+"""
+        greeting = greeting_from_to_contact("sudarsan@cystemslogic.com", body)
+        self.assertEqual(greeting, "Hi Sudarsan,")
+
+    def test_greeting_falls_back_to_generic_for_role_mailbox(self) -> None:
+        body = "Please send your resume to jobs@yvstech.com"
+        greeting = greeting_from_to_contact("jobs@yvstech.com", body)
+        self.assertEqual(greeting, "Hi,")
+
+    def test_render_fallback_template_replaces_supported_tokens(self) -> None:
+        rendered = render_fallback_draft_template(
+            DEFAULT_FALLBACK_DRAFT_TEMPLATE,
+            {
+                "greeting": "Hi Sudarsan,",
+                "role": "Java Developer",
+                "sender": "Recruiter <recruiter@example.com>",
+                "location": "TX",
+                "salary_text": "$80/hr",
+                "skills_list": "- Java\n- AWS",
+                "skills_inline": "Java, AWS",
+                "resume_file_name": "resume.pdf",
+                "signature_name": "Jane Doe",
+                "signature_phone": "+1 555-555-5555",
+                "signature_email": "jane@example.com",
+                "requested_details_block": "Requested details:\n- Visa: H1B",
+            },
+        )
+
+        self.assertIn("Hi Sudarsan,", rendered)
+        self.assertIn("Application for Java Developer", rendered)
+        self.assertIn("- Java", rendered)
+        self.assertIn("Jane Doe", rendered)
+
+    def test_render_fallback_template_leaves_unknown_tokens(self) -> None:
+        rendered = render_fallback_draft_template(
+            "Hello {{role}} {{unknown_token}}",
+            {"role": "Developer"},
+        )
+        self.assertEqual(rendered, "Hello Developer {{unknown_token}}")
 
 
 if __name__ == "__main__":

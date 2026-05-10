@@ -1,6 +1,6 @@
 from datetime import datetime
 import json
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -36,10 +36,17 @@ class RoutingEvidenceResponse(BaseModel):
     detail: str
 
 
+RoutingItemDict = dict[str, object]
+RoutingListInput = list[RoutingItemDict] | list[RoutingEvidenceResponse]
+PolicyDict = dict[str, Any]
+
+
 class SettingsRequest(BaseModel):
     enabled: bool = True
     gmail_query: str = "is:unread in:inbox recruiter"
+    default_gmail_query: str = "is:unread in:inbox recruiter"
     mail_date: str | None = None
+    default_date_mode: str = "today"
     min_salary: int | None = None
     accepted_locations: list[str] = Field(default_factory=list)
     visa_required_allowed: bool = False
@@ -49,8 +56,15 @@ class SettingsRequest(BaseModel):
     free_text_guidance: str = ""
     qualification_threshold: float = 0.6
     feature_auto_polling: bool = False
+    feature_auto_poll_interval_minutes: int = 10
     feature_auto_send: bool = False
     feature_retry_queue: bool = False
+    feature_ai_enabled: bool = False
+    fallback_draft_template: str = ""
+    signature_name: str = ""
+    signature_phone: str = ""
+    signature_email: str = ""
+    policy: PolicyDict | None = None
 
     @field_validator("mail_date")
     @classmethod
@@ -60,8 +74,23 @@ class SettingsRequest(BaseModel):
         datetime.strptime(value, "%Y-%m-%d")
         return value
 
+    @field_validator("default_date_mode")
+    @classmethod
+    def validate_default_date_mode(cls, value: str) -> str:
+        normalized = (value or "").strip().lower()
+        if normalized not in {"today", "off"}:
+            raise ValueError("default_date_mode must be 'today' or 'off'")
+        return normalized
+
+    @field_validator("feature_auto_poll_interval_minutes")
+    @classmethod
+    def validate_poll_interval(cls, value: int) -> int:
+        return max(1, min(int(value), 1440))
+
 
 class SettingsResponse(SettingsRequest):
+    policy_profile_options: list[str] | None = None
+    policy_profile_selected: str | None = None
     owner_id: str
     created_at: datetime
     updated_at: datetime
@@ -105,6 +134,9 @@ class EmailResponse(BaseModel):
     skip_reason: str | None
     sync_batch_id: str | None
     draft_reply: str
+    draft_source: str | None = None
+    draft_model: str | None = None
+    draft_ai_error: str | None = None
     approval_status: str
     sent_status: str
     source: str
@@ -133,16 +165,21 @@ class EmailResponse(BaseModel):
 
     @field_validator("routing_evidence", "routing_candidates", mode="before")
     @classmethod
-    def parse_routing_json(cls, value: Any) -> Any:
+    def parse_routing_json(cls, value: Any) -> RoutingListInput:
+        empty_list: list[RoutingItemDict] = []
         if value in (None, ""):
-            return []
+            return empty_list
         if isinstance(value, str):
             try:
                 parsed = json.loads(value)
             except json.JSONDecodeError:
-                return []
-            return parsed if isinstance(parsed, list) else []
-        return value
+                return empty_list
+            if isinstance(parsed, list):
+                return cast(list[RoutingItemDict], parsed)
+            return empty_list
+        if isinstance(value, list):
+            return cast(RoutingListInput, value)
+        return empty_list
 
 
 class GmailStatusResponse(BaseModel):
@@ -153,11 +190,32 @@ class GmailStatusResponse(BaseModel):
     detail: str
 
 
+class AIStatusResponse(BaseModel):
+    configured: bool
+    connected: bool
+    running: bool
+    provider: str
+    model: str
+    detail: str
+    last_error: str | None = None
+    last_started_at: datetime | None = None
+    last_finished_at: datetime | None = None
+    last_duration_ms: int | None = None
+    last_draft_source: str | None = None
+
+
 class GmailSyncResponse(BaseModel):
     sync_batch_id: str
     imported_count: int
     skipped_count: int
     error_count: int
+
+
+class OAuthStartResponse(BaseModel):
+    status: str
+    detail: str
+    configured: bool
+    authenticated: bool
 
 
 class CandidateListResponse(BaseModel):
@@ -170,6 +228,15 @@ class AutomationRunResponse(BaseModel):
     status: str
     detail: str
     email_id: int | None = None
+    gmail_message_url: str | None = None
+    decision_reason: str | None = None
+    skip_reason: str | None = None
+    routing_reason: str | None = None
+    effective_query: str | None = None
+    matched_count: int | None = None
+    queued_count: int | None = None
+    skipped_count: int | None = None
+    failed_count: int | None = None
 
 
 class AutomationRunRequest(BaseModel):
@@ -182,3 +249,11 @@ class AutomationRunRequest(BaseModel):
             return None
         datetime.strptime(value, "%Y-%m-%d")
         return value
+
+
+class TelegramStatusResponse(BaseModel):
+    enabled: bool
+    polling: bool
+    alerts_enabled: bool
+    authorized_chats: int
+    detail: str

@@ -3,8 +3,9 @@ type SidebarProps = {
   queueCount: number
   failedCount: number
   runCount: number
-  activePage: 'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs'
-  onNavigate: (section: 'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs') => void
+  sentCount: number
+  activePage: 'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items'
+  onNavigate: (section: 'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items') => void
 }
 
 export default function Sidebar({
@@ -12,47 +13,53 @@ export default function Sidebar({
   queueCount,
   failedCount,
   runCount,
+  sentCount,
   activePage,
   onNavigate,
 }: SidebarProps) {
   const queueLabel = running ? 'Running now' : 'Ready'
 
+  const navItems: Array<{
+    key: SidebarProps['activePage']
+    label: string
+    count?: number
+  }> = [
+    { key: 'run_queue', label: 'Run Queue' },
+    { key: 'needs_review', label: 'Needs Review', count: queueCount },
+    { key: 'failed_mapping', label: 'Failed Mapping', count: failedCount },
+    { key: 'sent_items', label: 'Sent Items', count: sentCount },
+    { key: 'recent_runs', label: 'Recent Runs', count: runCount },
+  ]
+
   return (
     <aside className="leftRail">
-      <div className="brandBlock">
-        <p className="brandKicker">Control Center</p>
-        <div className="brand">CodeJob MailOps</div>
+      <div className="brandWrap">
+        <div className="brandIcon" aria-hidden="true">CJ</div>
+        <div className="brandBlock">
+          <div className="brand">CodeJob MailOps</div>
+          <p className="brandSub">Recruitment Ops</p>
+        </div>
       </div>
-      <button
-        className={`composeBtn ${activePage === 'run_queue' ? 'active' : ''}`}
-        type="button"
-        onClick={() => onNavigate('run_queue')}
-      >
-        <span>Run Queue</span>
-        <small>{queueLabel}</small>
+      <button className="composeBtn" type="button">
+        New Campaign
       </button>
+      <p className="queueStatus">{queueLabel}</p>
       <nav className="navList">
-        <button
-          className={`navItem ${activePage === 'needs_review' ? 'active' : ''}`}
-          type="button"
-          onClick={() => onNavigate('needs_review')}
-        >
-          <span>Needs Review</span> <span>{queueCount}</span>
-        </button>
-        <button
-          className={`navItem ${activePage === 'failed_mapping' ? 'active' : ''}`}
-          type="button"
-          onClick={() => onNavigate('failed_mapping')}
-        >
-          <span>Failed Mapping</span> <span>{failedCount}</span>
-        </button>
-        <button
-          className={`navItem ${activePage === 'recent_runs' ? 'active' : ''}`}
-          type="button"
-          onClick={() => onNavigate('recent_runs')}
-        >
-          <span>Recent Runs</span> <span>{runCount}</span>
-        </button>
+        {navItems.map((item) => (
+          <button
+            key={item.key}
+            className={`navItem ${activePage === item.key ? 'active' : ''}`}
+            type="button"
+            onClick={() => onNavigate(item.key)}
+          >
+            <span>{item.label}</span>
+            {item.count != null ? <span className="navCount">{item.count}</span> : null}
+          </button>
+        ))}
+      </nav>
+      <nav className="footerNav">
+        <button className="navItem" type="button">Settings</button>
+        <button className="navItem" type="button">Help Center</button>
       </nav>
     </aside>
   )

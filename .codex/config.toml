@@ -1,0 +1,6 @@
+# Repo-local Codex configuration.
+# If your Codex client supports hooks via config.toml, keep this file.
+# hooks.json is also included for clients that load JSON hook config directly.
+
+[hooks]
+config_path = ".codex/hooks.json"

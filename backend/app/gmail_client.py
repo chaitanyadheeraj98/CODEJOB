@@ -1,20 +1,54 @@
+# pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false, reportUnknownVariableType=false
+
 import base64
 import json
 import mimetypes
 import re
+import threading
 from datetime import UTC, datetime
 from email.message import EmailMessage
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict, cast
 
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
+from app.ai.draft_formatting import draft_text_to_html
 from app.config import settings
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.modify", "https://www.googleapis.com/auth/gmail.send"]
+SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
+if SHEETS_SCOPE not in SCOPES:
+    SCOPES.append(SHEETS_SCOPE)
+_oauth_lock = threading.Lock()
+_oauth_thread: threading.Thread | None = None
+_oauth_last_error: str | None = None
+
+
+class GmailMessageCandidate(TypedDict):
+    external_message_id: str
+    external_thread_id: str
+    external_rfc_message_id: str
+    sender: str
+    recipient_email: str
+    subject: str
+    body: str
+    snippet: str
+    gmail_received_at: datetime | None
+
+
+def _as_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return cast(dict[str, Any], value)
+    return {}
+
+
+def _as_list_of_dicts(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [cast(dict[str, Any], item) for item in value if isinstance(item, dict)]
 
 
 def is_gmail_configured() -> bool:
@@ -64,22 +98,68 @@ def _load_credentials() -> Credentials:
     if settings.google_login_hint:
         extra_auth_kwargs["login_hint"] = settings.google_login_hint
 
-    creds = flow.run_local_server(
-        host="localhost",
-        bind_addr="0.0.0.0",
-        port=8080,
-        open_browser=False,
-        authorization_prompt_message="Please visit this URL to authorize this application: {url}",
-        **extra_auth_kwargs,
+    flow_any: Any = flow
+    creds = cast(
+        Credentials,
+        flow_any.run_local_server(
+            host="localhost",
+            bind_addr="0.0.0.0",
+            port=8080,
+            open_browser=False,
+            authorization_prompt_message="Please visit this URL to authorize this application: {url}",
+            **extra_auth_kwargs,
+        ),
     )
     _ensure_token_parent()
     token_path.write_text(creds.to_json(), encoding="utf-8")
     return creds
 
 
-def _gmail_service():
+def _gmail_service() -> Any:
     creds = _load_credentials()
     return build("gmail", "v1", credentials=creds)
+
+
+def _sheets_service() -> Any:
+    creds = _load_credentials()
+    return build("sheets", "v4", credentials=creds)
+
+
+def _oauth_worker() -> None:
+    global _oauth_last_error
+    try:
+        _load_credentials()
+        _oauth_last_error = None
+    except Exception as exc:
+        _oauth_last_error = str(exc)
+
+
+def oauth_bootstrap_status() -> tuple[bool, str | None]:
+    global _oauth_thread
+    with _oauth_lock:
+        in_progress = bool(_oauth_thread and _oauth_thread.is_alive())
+        return in_progress, _oauth_last_error
+
+
+def start_oauth_bootstrap() -> tuple[str, str]:
+    global _oauth_thread, _oauth_last_error
+    if not is_gmail_configured():
+        return "oauth_not_configured", "Gmail OAuth is not configured."
+
+    configured, authenticated, _ = gmail_auth_status()
+    if configured and authenticated:
+        return "ready", "Gmail already authenticated."
+
+    with _oauth_lock:
+        if _oauth_thread and _oauth_thread.is_alive():
+            return "oauth_in_progress", "OAuth is already in progress. Check backend logs for the auth URL."
+        _oauth_last_error = None
+        _oauth_thread = threading.Thread(target=_oauth_worker, daemon=True, name="gmail-oauth-bootstrap")
+        _oauth_thread.start()
+    return (
+        "oauth_in_progress",
+        "OAuth started. Open the authorization URL from backend logs, complete sign-in, then retry Sync + Queue.",
+    )
 
 
 def _decode_chunk(data: str | None) -> str:
@@ -102,7 +182,7 @@ def _extract_from_parts(parts: list[dict[str, Any]]) -> tuple[str, str]:
         elif mime == "text/html" and body_data and not text_html:
             text_html = body_data
 
-        nested_parts = part.get("parts") or []
+        nested_parts = _as_list_of_dicts(part.get("parts"))
         if nested_parts:
             nested_plain, nested_html = _extract_from_parts(nested_parts)
             if nested_plain and not text_plain:
@@ -124,7 +204,7 @@ def _decode_body(payload: dict[str, Any]) -> str:
     if direct:
         return direct
 
-    plain, html = _extract_from_parts(payload.get("parts", []) or [])
+    plain, html = _extract_from_parts(_as_list_of_dicts(payload.get("parts")))
     if plain:
         return plain
     if html:
@@ -146,10 +226,10 @@ def _extract_email_address(from_header: str) -> str:
     return from_header.strip()
 
 
-def list_unread_candidates_by_query(query: str, max_results_per_page: int = 100) -> list[dict[str, Any]]:
+def list_unread_candidates_by_query(query: str, max_results_per_page: int = 100) -> list[GmailMessageCandidate]:
     service = _gmail_service()
     page_token: str | None = None
-    results: list[dict[str, str]] = []
+    results: list[GmailMessageCandidate] = []
 
     while True:
         req = service.users().messages().list(
@@ -158,15 +238,22 @@ def list_unread_candidates_by_query(query: str, max_results_per_page: int = 100)
             maxResults=max_results_per_page,
             pageToken=page_token,
         )
-        response = req.execute()
-        messages = response.get("messages", [])
+        response = _as_dict(req.execute())
+        messages = _as_list_of_dicts(response.get("messages"))
         for message in messages:
             message_id = message.get("id")
-            if not message_id:
+            if not isinstance(message_id, str) or not message_id:
                 continue
-            details = service.users().messages().get(userId="me", id=message_id, format="full").execute()
-            payload = details.get("payload", {})
-            headers = payload.get("headers", [])
+            details = _as_dict(service.users().messages().get(userId="me", id=message_id, format="full").execute())
+            payload = _as_dict(details.get("payload"))
+            header_items = _as_list_of_dicts(payload.get("headers"))
+            headers: list[dict[str, str]] = [
+                {
+                    "name": str(item.get("name", "")),
+                    "value": str(item.get("value", "")),
+                }
+                for item in header_items
+            ]
             from_header = _get_header(headers, "From")
             subject = _get_header(headers, "Subject") or "(No Subject)"
             rfc_message_id = _get_header(headers, "Message-ID")
@@ -184,7 +271,7 @@ def list_unread_candidates_by_query(query: str, max_results_per_page: int = 100)
             results.append(
                 {
                     "external_message_id": message_id,
-                    "external_thread_id": details.get("threadId", ""),
+                    "external_thread_id": str(details.get("threadId", "")),
                     "external_rfc_message_id": rfc_message_id,
                     "sender": from_header,
                     "recipient_email": _extract_email_address(from_header),
@@ -195,7 +282,8 @@ def list_unread_candidates_by_query(query: str, max_results_per_page: int = 100)
                 }
             )
 
-        next_token = response.get("nextPageToken")
+        next_token_raw = response.get("nextPageToken")
+        next_token = next_token_raw if isinstance(next_token_raw, str) and next_token_raw else None
         if not next_token:
             break
         page_token = next_token
@@ -204,7 +292,7 @@ def list_unread_candidates_by_query(query: str, max_results_per_page: int = 100)
 
 def get_message_rfc_message_id(message_id: str) -> str:
     service = _gmail_service()
-    details = (
+    details_raw = (
         service.users()
         .messages()
         .get(
@@ -215,7 +303,16 @@ def get_message_rfc_message_id(message_id: str) -> str:
         )
         .execute()
     )
-    headers = details.get("payload", {}).get("headers", [])
+    details = _as_dict(details_raw)
+    payload = _as_dict(details.get("payload"))
+    header_items = _as_list_of_dicts(payload.get("headers"))
+    headers: list[dict[str, str]] = [
+        {
+            "name": str(item.get("name", "")),
+            "value": str(item.get("value", "")),
+        }
+        for item in header_items
+    ]
     return _get_header(headers, "Message-ID")
 
 
@@ -233,7 +330,14 @@ def send_reply_with_attachment(
     if cc:
         message["Cc"] = cc
     message["Subject"] = f"Re: {subject}" if not subject.lower().startswith("re:") else subject
-    message.set_content(body)
+    plain_body = body or ""
+    message.set_content(plain_body)
+    try:
+        html_body = draft_text_to_html(plain_body)
+        message.add_alternative(html_body, subtype="html")
+    except Exception:
+        # Fallback to plain text if HTML rendering fails.
+        pass
 
     if attachment_path:
         file_path = Path(attachment_path)
@@ -245,8 +349,9 @@ def send_reply_with_attachment(
 
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
     payload = {"raw": raw, "threadId": thread_id}
-    response = service.users().messages().send(userId="me", body=payload).execute()
-    return response.get("id", "")
+    response = _as_dict(service.users().messages().send(userId="me", body=payload).execute())
+    message_id = response.get("id")
+    return message_id if isinstance(message_id, str) else ""
 
 
 def mark_message_processed(message_id: str) -> None:
@@ -271,3 +376,111 @@ def gmail_auth_status() -> tuple[bool, bool, str]:
         return True, False, "Token exists but is not valid yet"
     except (ValueError, OSError, HttpError) as exc:
         return True, False, f"Token read error: {exc}"
+
+
+def _extract_phone(text: str) -> str:
+    if not text:
+        return ""
+    match = re.search(r"(?:\+?\d[\d\-\s()]{7,}\d)", text)
+    if not match:
+        return ""
+    return re.sub(r"\s+", " ", match.group(0)).strip()
+
+
+def _extract_name_from_sender(sender: str) -> str:
+    if "<" in sender:
+        return sender.split("<", 1)[0].strip().strip('"')
+    return ""
+
+
+def _extract_company_from_email(address: str) -> str:
+    if "@" not in address:
+        return ""
+    domain = address.split("@", 1)[1].lower()
+    for suffix in (".com", ".net", ".org", ".io", ".co", ".ai"):
+        if domain.endswith(suffix):
+            domain = domain[: -len(suffix)]
+            break
+    company = domain.split(".")[0].strip()
+    return company.upper() if company else ""
+
+
+def _infer_client_name(body: str) -> str:
+    patterns = [
+        r"\bclient\s*[:\-]\s*([A-Za-z0-9&., \-/]{2,80})",
+        r"\bimplementation client\s*[:\-]\s*([A-Za-z0-9&., \-/]{2,80})",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, body, flags=re.IGNORECASE)
+        if match:
+            return match.group(1).strip(" .,-")
+    return ""
+
+
+def build_tracking_sheet_row(
+    *,
+    role: str,
+    sender: str,
+    subject: str,
+    body: str,
+    to_email: str | None,
+    cc_email: str | None,
+) -> list[str]:
+    recruiter_email = (to_email or "").strip()
+    recruiter_name = _extract_name_from_sender(sender)
+    recruiter_contact = _extract_phone(body)
+    vendor = _extract_company_from_email(recruiter_email) if recruiter_email else ""
+    prime_client = _extract_company_from_email(cc_email or "") if cc_email else ""
+    client = _infer_client_name(body)
+
+    position = role.strip() if role.strip() and role.strip() != "Unknown Role" else subject.strip()
+
+    # Sheet columns:
+    # A S.No, B Position, C Vendor, D Name, E Email, F Contact,
+    # G Prime Vendor/Implementation Client, H Contact, I Email, J Client
+    return [
+        "",
+        position,
+        vendor,
+        recruiter_name,
+        recruiter_email,
+        recruiter_contact,
+        prime_client,
+        "",
+        (cc_email or "").strip(),
+        client,
+    ]
+
+
+def append_tracking_sheet_row(
+    *,
+    role: str,
+    sender: str,
+    subject: str,
+    body: str,
+    to_email: str | None,
+    cc_email: str | None,
+) -> None:
+    if not settings.google_sheets_tracking_enabled:
+        return
+    if not settings.google_sheets_tracking_spreadsheet_id:
+        raise RuntimeError("Google Sheets tracking is enabled but spreadsheet id is missing")
+
+    service = _sheets_service()
+    tab_name = settings.google_sheets_tracking_tab_name or "Sheet1"
+    row = build_tracking_sheet_row(
+        role=role,
+        sender=sender,
+        subject=subject,
+        body=body,
+        to_email=to_email,
+        cc_email=cc_email,
+    )
+    payload = {"values": [row]}
+    service.spreadsheets().values().append(
+        spreadsheetId=settings.google_sheets_tracking_spreadsheet_id,
+        range=f"{tab_name}!A:J",
+        valueInputOption="RAW",
+        insertDataOption="INSERT_ROWS",
+        body=payload,
+    ).execute()
