@@ -11,7 +11,7 @@ This audit focuses on runtime source files in `backend/app`, `dashboard/src`, co
 
 | File | Line(s) | Hardcoded value | Purpose / Usage | Recommendation |
 |---|---:|---|---|---|
-| `backend/app/config.py` | 6 | `CodeJob Email Automation API` | FastAPI app title default | Move to env/config |
+| `backend/app/config.py` | 6 | `CODEJOB Email Automation API` (code literal currently uses `CodeJob`) | FastAPI app title default | Move to env/config |
 | `backend/app/config.py` | 7 | `dev` | default environment mode | Move to env/config |
 | `backend/app/config.py` | 10 | `sqlite:///./data/codejob.db` | default DB connection | Keep for local dev; override in env for prod |
 | `backend/app/config.py` | 11 | `redis://localhost:6379/0` | default Redis URL | Move to env for deployment |
@@ -63,7 +63,7 @@ This audit focuses on runtime source files in `backend/app`, `dashboard/src`, co
 | `dashboard/src/App.tsx` | 985 | `is:unread in:inbox recruiter` placeholder | user hint for query | Keep as static helper text |
 | `dashboard/src/App.tsx` | 1117-1122 | fallback template token strings | helper text for token usage | Keep hardcoded docs text |
 | `dashboard/src/features/ai/ui.ts` | 5-7 | `DeepSeek`, `Rules fallback`, `Unknown` | draft source display mapping | Keep in UI constants |
-| `dashboard/src/components/Sidebar.tsx` | 39-45 | `CodeJob MailOps`, `Recruitment Ops`, `New Campaign` | branding and CTA copy | Keep hardcoded unless white-labeling needed |
+| `dashboard/src/components/Sidebar.tsx` | 39-45 | `CODEJOB MailOps` (code literal currently uses `CodeJob`), `Recruitment Ops`, `New Campaign` | branding and CTA copy | Keep hardcoded unless white-labeling needed |
 
 ## 3. Styling/UI token hardcodes
 
