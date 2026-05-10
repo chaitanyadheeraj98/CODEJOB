@@ -80,7 +80,7 @@ This document lists hardcoded values identified across backend, frontend, infra,
 
 ## 6) Potentially sensitive values found
 
-The following are personal/profile-style values embedded in business logic and prompts:
+The following placeholders represent literal personal/profile values currently hardcoded in source and prompt text (intentionally redacted here):
 
 - `[USER_NAME]`
 - `[USER_PHONE]`
