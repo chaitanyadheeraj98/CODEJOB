@@ -29,7 +29,7 @@ from app.gmail_client import (
     send_reply_with_attachment,
     start_oauth_bootstrap,
 )
-from app.models import DraftEditFeedback, RecruiterEmail, ResumeAsset, SyncRun, UserSettings
+from app.models import DraftEditFeedback, ProductivityEvent, RecruiterEmail, ResumeAsset, SyncRun, UserSettings
 from app.models import RecipientRoutingFeedback
 from app.telegram_bot import TelegramBotService
 from app.phase0 import (
@@ -69,6 +69,10 @@ from app.schemas import (
     ResumeResponse,
     SettingsRequest,
     SettingsResponse,
+    ProductivityEventCreateRequest,
+    ProductivityEventResponse,
+    ProductivityBarPoint,
+    ProductivityTrendResponse,
     TelegramStatusResponse,
 )
 
@@ -140,6 +144,29 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+EVENT_WEIGHTS: dict[str, float] = {
+    "approved_sent": 4.0,
+    "needs_review_marked": 2.0,
+    "recent_run_recorded": 1.0,
+    "failed_mapping_marked": -3.0,
+    "view_needs_review": 0.2,
+    "view_failed_mapping": 0.1,
+    "view_recent_runs": 0.2,
+    "view_sent_items": 0.2,
+    "view_run_queue": 0.1,
+}
+
+ALLOWED_VIEW_EVENTS = {
+    "view_needs_review",
+    "view_failed_mapping",
+    "view_recent_runs",
+    "view_sent_items",
+    "view_run_queue",
+}
+
+RANGE_OPTIONS = {"last_1h", "current_day", "current_month", "current_year", "last_5y"}
+BUCKET_OPTIONS = {"five_min", "hour", "day", "month", "quarter"}
+
 
 def get_db() -> Generator[Session, None, None]:
     db = SessionLocal()
@@ -147,6 +174,120 @@ def get_db() -> Generator[Session, None, None]:
         yield db
     finally:
         db.close()
+
+
+def _record_productivity_event(
+    db: Session,
+    *,
+    event_type: str,
+    event_source: str,
+    entity_id: int | None = None,
+    metadata: Mapping[str, object] | None = None,
+    occurred_at: datetime | None = None,
+) -> ProductivityEvent:
+    event = ProductivityEvent(
+        owner_id=settings.owner_id,
+        event_type=event_type,
+        event_source=event_source,
+        entity_id=entity_id,
+        weight=EVENT_WEIGHTS.get(event_type, 0.0),
+        metadata_json=json.dumps(dict(metadata or {})),
+        occurred_at=occurred_at or datetime.now(UTC),
+    )
+    db.add(event)
+    db.commit()
+    db.refresh(event)
+    return event
+
+
+def _event_response(event: ProductivityEvent) -> ProductivityEventResponse:
+    parsed_metadata: dict[str, object] = {}
+    try:
+        payload = json.loads(event.metadata_json or "{}")
+        if isinstance(payload, dict):
+            parsed_metadata = cast(dict[str, object], payload)
+    except json.JSONDecodeError:
+        parsed_metadata = {}
+    return ProductivityEventResponse(
+        id=event.id,
+        owner_id=event.owner_id,
+        event_type=event.event_type,
+        event_source=event.event_source,
+        entity_id=event.entity_id,
+        weight=event.weight,
+        metadata=parsed_metadata,
+        occurred_at=event.occurred_at,
+        created_at=event.created_at,
+    )
+
+
+def _range_bounds(range_key: str) -> tuple[datetime, datetime]:
+    now = datetime.now(UTC)
+    if range_key == "last_1h":
+        return now - timedelta(hours=1), now
+    if range_key == "current_day":
+        start = datetime(now.year, now.month, now.day, tzinfo=UTC)
+        return start, now
+    if range_key == "current_month":
+        start = datetime(now.year, now.month, 1, tzinfo=UTC)
+        return start, now
+    if range_key == "current_year":
+        start = datetime(now.year, 1, 1, tzinfo=UTC)
+        return start, now
+    start = now - timedelta(days=365 * 5)
+    return start, now
+
+
+def _ensure_utc(ts: datetime) -> datetime:
+    if ts.tzinfo is None:
+        return ts.replace(tzinfo=UTC)
+    return ts.astimezone(UTC)
+
+
+def _default_bucket_for_range(range_key: str) -> str:
+    if range_key == "last_1h":
+        return "five_min"
+    if range_key == "current_day":
+        return "hour"
+    if range_key == "current_month":
+        return "day"
+    if range_key == "current_year":
+        return "month"
+    return "quarter"
+
+
+def _bucket_start(ts: datetime, bucket: str) -> datetime:
+    if bucket == "five_min":
+        minute = (ts.minute // 5) * 5
+        return ts.replace(minute=minute, second=0, microsecond=0)
+    if bucket == "hour":
+        return ts.replace(minute=0, second=0, microsecond=0)
+    if bucket == "day":
+        return ts.replace(hour=0, minute=0, second=0, microsecond=0)
+    if bucket == "month":
+        return ts.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    month = ts.month
+    quarter_month = ((month - 1) // 3) * 3 + 1
+    return ts.replace(month=quarter_month, day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+def _add_months(ts: datetime, months: int) -> datetime:
+    month_index = (ts.month - 1) + months
+    year = ts.year + month_index // 12
+    month = month_index % 12 + 1
+    return datetime(year, month, 1, tzinfo=UTC)
+
+
+def _next_bucket(ts: datetime, bucket: str) -> datetime:
+    if bucket == "five_min":
+        return ts + timedelta(minutes=5)
+    if bucket == "hour":
+        return ts + timedelta(hours=1)
+    if bucket == "day":
+        return ts + timedelta(days=1)
+    if bucket == "month":
+        return _add_months(ts, 1)
+    return _add_months(ts, 3)
 
 
 def _parse_allowed_chat_ids(raw: str) -> set[int]:
@@ -1346,6 +1487,153 @@ def telegram_status() -> TelegramStatusResponse:
     )
 
 
+@app.post("/analytics/events/view", response_model=ProductivityEventResponse)
+def create_view_event(payload: ProductivityEventCreateRequest, db: Session = Depends(get_db)) -> ProductivityEventResponse:
+    if payload.event_type not in ALLOWED_VIEW_EVENTS:
+        raise HTTPException(status_code=400, detail="Unsupported view event_type")
+    event = _record_productivity_event(
+        db,
+        event_type=payload.event_type,
+        event_source=payload.event_source or "ui",
+        entity_id=payload.entity_id,
+        metadata=payload.metadata,
+    )
+    return _event_response(event)
+
+
+@app.get("/analytics/events", response_model=list[ProductivityEventResponse])
+def list_productivity_events(
+    range: str = Query("current_day"),
+    limit: int = Query(80, ge=1, le=500),
+    db: Session = Depends(get_db),
+) -> list[ProductivityEventResponse]:
+    if range not in RANGE_OPTIONS:
+        raise HTTPException(status_code=400, detail="Invalid range")
+    start, end = _range_bounds(range)
+    rows = (
+        db.query(ProductivityEvent)
+        .filter(ProductivityEvent.owner_id == settings.owner_id)
+        .filter(ProductivityEvent.occurred_at >= start, ProductivityEvent.occurred_at <= end)
+        .order_by(ProductivityEvent.occurred_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return [_event_response(row) for row in rows]
+
+
+@app.get("/analytics/trend", response_model=ProductivityTrendResponse)
+def productivity_trend(
+    range: str = Query("current_day"),
+    bucket: str | None = Query(None),
+    db: Session = Depends(get_db),
+) -> ProductivityTrendResponse:
+    if range not in RANGE_OPTIONS:
+        raise HTTPException(status_code=400, detail="Invalid range")
+    resolved_bucket = bucket or _default_bucket_for_range(range)
+    if resolved_bucket not in BUCKET_OPTIONS:
+        raise HTTPException(status_code=400, detail="Invalid bucket")
+
+    start, end = _range_bounds(range)
+    start = _ensure_utc(start)
+    end = _ensure_utc(end)
+    rows = (
+        db.query(ProductivityEvent)
+        .filter(ProductivityEvent.owner_id == settings.owner_id)
+        .filter(ProductivityEvent.occurred_at >= start, ProductivityEvent.occurred_at <= end)
+        .order_by(ProductivityEvent.occurred_at.asc())
+        .all()
+    )
+
+    grouped: dict[datetime, dict[str, int]] = {}
+    for row in rows:
+        ts = _bucket_start(_ensure_utc(row.occurred_at), resolved_bucket)
+        if ts not in grouped:
+            grouped[ts] = {
+                "sent_count": 0,
+                "failed_count": 0,
+                "needs_review_count": 0,
+                "recent_run_count": 0,
+            }
+        if row.event_type == "approved_sent":
+            grouped[ts]["sent_count"] += 1
+        elif row.event_type == "failed_mapping_marked":
+            grouped[ts]["failed_count"] += 1
+        elif row.event_type == "needs_review_marked":
+            grouped[ts]["needs_review_count"] += 1
+        elif row.event_type == "recent_run_recorded":
+            grouped[ts]["recent_run_count"] += 1
+
+    bars: list[ProductivityBarPoint] = []
+    cursor = _bucket_start(start, resolved_bucket)
+    end_bucket = _bucket_start(end, resolved_bucket)
+    while cursor <= end_bucket:
+        payload = grouped.get(
+            cursor,
+            {
+                "sent_count": 0,
+                "failed_count": 0,
+                "needs_review_count": 0,
+                "recent_run_count": 0,
+            },
+        )
+        bars.append(
+            ProductivityBarPoint(
+                ts=cursor,
+                sent_count=payload["sent_count"],
+                failed_count=payload["failed_count"],
+                needs_review_count=payload["needs_review_count"],
+                recent_run_count=payload["recent_run_count"],
+            )
+        )
+        cursor = _next_bucket(cursor, resolved_bucket)
+
+    current_total_sent = sum(point.sent_count for point in bars)
+
+    if current_total_sent == 0 and all(
+        point.failed_count == 0 and point.needs_review_count == 0 and point.recent_run_count == 0
+        for point in bars
+    ):
+        return ProductivityTrendResponse(
+            range=range,
+            bucket=resolved_bucket,
+            trend_direction="flat",
+            trend_delta_pct=0.0,
+            kpi_total_sent=0,
+            previous_period_total_sent=0,
+            bars=bars,
+        )
+
+    duration = end - start
+    prev_start = start - duration
+    prev_end = start
+    prev_rows = (
+        db.query(ProductivityEvent)
+        .filter(ProductivityEvent.owner_id == settings.owner_id)
+        .filter(ProductivityEvent.event_type == "approved_sent")
+        .filter(ProductivityEvent.occurred_at >= prev_start, ProductivityEvent.occurred_at < prev_end)
+        .all()
+    )
+    previous_total_sent = len(prev_rows)
+    delta = current_total_sent - previous_total_sent
+    direction = "flat"
+    if delta > 0:
+        direction = "up"
+    elif delta < 0:
+        direction = "down"
+    base = float(max(previous_total_sent, 1))
+    delta_pct = round((delta / base) * 100, 2)
+
+    return ProductivityTrendResponse(
+        range=range,
+        bucket=resolved_bucket,
+        trend_direction=direction,
+        trend_delta_pct=delta_pct,
+        kpi_total_sent=current_total_sent,
+        previous_period_total_sent=previous_total_sent,
+        bars=bars,
+    )
+
+
 @app.post("/gmail/sync", response_model=GmailSyncResponse)
 def gmail_sync(db: Session = Depends(get_db)) -> GmailSyncResponse:
     global last_gmail_sync_at
@@ -1514,6 +1802,12 @@ def automation_run_once(payload: AutomationRunRequest | None = None, db: Session
                 status="oauth_in_progress",
                 detail="OAuth is in progress. Complete sign-in from backend logs, then retry Sync + Queue.",
             )
+            _record_productivity_event(
+                db,
+                event_type="recent_run_recorded",
+                event_source="run_once",
+                metadata={"status": response.status},
+            )
             if telegram_service:
                 telegram_service.notify(_build_telegram_digest("Run Digest", response))
             return response
@@ -1522,12 +1816,24 @@ def automation_run_once(payload: AutomationRunRequest | None = None, db: Session
                 status="oauth_required",
                 detail=f"OAuth required. Trigger Connect Gmail and complete sign-in. Last OAuth error: {last_error}",
             )
+            _record_productivity_event(
+                db,
+                event_type="recent_run_recorded",
+                event_source="run_once",
+                metadata={"status": response.status},
+            )
             if telegram_service:
                 telegram_service.notify(_build_telegram_digest("Run Digest", response))
             return response
         response = AutomationRunResponse(
             status="oauth_required",
             detail=f"{detail} Click Connect Gmail, open the auth URL from backend logs, complete sign-in, then retry.",
+        )
+        _record_productivity_event(
+            db,
+            event_type="recent_run_recorded",
+            event_source="run_once",
+            metadata={"status": response.status},
         )
         if telegram_service:
             telegram_service.notify(_build_telegram_digest("Run Digest", response))
@@ -1555,6 +1861,18 @@ def automation_run_once(payload: AutomationRunRequest | None = None, db: Session
             queued_count=0,
             skipped_count=0,
             failed_count=0,
+        )
+        _record_productivity_event(
+            db,
+            event_type="recent_run_recorded",
+            event_source="run_once",
+            metadata={
+                "status": response.status,
+                "matched_count": response.matched_count or 0,
+                "queued_count": response.queued_count or 0,
+                "skipped_count": response.skipped_count or 0,
+                "failed_count": response.failed_count or 0,
+            },
         )
         if telegram_service:
             telegram_service.notify(_build_telegram_digest("Run Digest", response))
@@ -1677,6 +1995,13 @@ def automation_run_once(payload: AutomationRunRequest | None = None, db: Session
                 db.add(email)
             db.commit()
             db.refresh(email)
+            _record_productivity_event(
+                db,
+                event_type="failed_mapping_marked",
+                event_source="state",
+                entity_id=email.id,
+                metadata={"reason": email.skip_reason or "missing_to_or_cc"},
+            )
             mark_message_processed(item["external_message_id"])
             failed_count += 1
             last_email = email
@@ -1779,6 +2104,13 @@ def automation_run_once(payload: AutomationRunRequest | None = None, db: Session
             db.add(email)
         db.commit()
         db.refresh(email)
+        _record_productivity_event(
+            db,
+            event_type="needs_review_marked",
+            event_source="state",
+            entity_id=email.id,
+            metadata={"source": "automation_run"},
+        )
         mark_message_processed(item["external_message_id"])
         queued_count += 1
         last_email = email
@@ -1804,6 +2136,19 @@ def automation_run_once(payload: AutomationRunRequest | None = None, db: Session
         queued_count=queued_count,
         skipped_count=skipped_count,
         failed_count=failed_count,
+    )
+    _record_productivity_event(
+        db,
+        event_type="recent_run_recorded",
+        event_source="run_once",
+        entity_id=response.email_id,
+        metadata={
+            "status": response.status,
+            "matched_count": response.matched_count or 0,
+            "queued_count": response.queued_count or 0,
+            "skipped_count": response.skipped_count or 0,
+            "failed_count": response.failed_count or 0,
+        },
     )
     if telegram_service:
         telegram_service.notify(_build_telegram_digest("Run Digest", response))
@@ -1861,6 +2206,14 @@ def ingest_email(payload: IngestEmailRequest, db: Session = Depends(get_db)) -> 
     db.add(email)
     db.commit()
     db.refresh(email)
+    if state == "needs_review":
+        _record_productivity_event(
+            db,
+            event_type="needs_review_marked",
+            event_source="state",
+            entity_id=email.id,
+            metadata={"source": "manual_ingest"},
+        )
     return email
 
 
@@ -1993,6 +2346,13 @@ def approve_and_send(
         )
     db.commit()
     db.refresh(email)
+    _record_productivity_event(
+        db,
+        event_type="approved_sent",
+        event_source="action",
+        entity_id=email.id,
+        metadata={"state": email.state, "sent_status": email.sent_status},
+    )
 
     try:
         logger.info("Appending Google Sheets tracking row for approved email_id=%s", email.id)
@@ -2184,4 +2544,11 @@ def resolve_recipients(
 
     db.commit()
     db.refresh(email)
+    _record_productivity_event(
+        db,
+        event_type="needs_review_marked",
+        event_source="state",
+        entity_id=email.id,
+        metadata={"source": "resolve_recipients"},
+    )
     return email

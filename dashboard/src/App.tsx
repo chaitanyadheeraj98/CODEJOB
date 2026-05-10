@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import Sidebar from './components/Sidebar'
 import { withAiToggle } from './features/ai/state'
@@ -193,6 +193,38 @@ type CandidateListResponse = {
   has_next: boolean
 }
 
+type TimeRangeKey = 'last_1h' | 'current_day' | 'current_month' | 'current_year' | 'last_5y'
+
+type ProductivityEvent = {
+  id: number
+  owner_id: string
+  event_type: string
+  event_source: string
+  entity_id: number | null
+  weight: number
+  metadata: Record<string, unknown>
+  occurred_at: string
+  created_at: string
+}
+
+type ProductivityBarPoint = {
+  ts: string
+  sent_count: number
+  failed_count: number
+  needs_review_count: number
+  recent_run_count: number
+}
+
+type ProductivityTrendResponse = {
+  range: TimeRangeKey
+  bucket: string
+  trend_direction: 'up' | 'down' | 'flat'
+  trend_delta_pct: number
+  kpi_total_sent: number
+  previous_period_total_sent: number
+  bars: ProductivityBarPoint[]
+}
+
 function App() {
   const QUEUE_LIMIT = 100
   const RECENT_RUNS_LIMIT = 100
@@ -287,7 +319,11 @@ function App() {
   const [selectedProfileToApply, setSelectedProfileToApply] = useState<PolicyProfileName>('Balanced')
   const [lastAppliedProfile, setLastAppliedProfile] = useState<PolicyProfileName | null>(null)
   const [skillDraft, setSkillDraft] = useState('')
+  const [timeRange, setTimeRange] = useState<TimeRangeKey>('current_day')
+  const [productivityEvents, setProductivityEvents] = useState<ProductivityEvent[]>([])
+  const [productivityTrend, setProductivityTrend] = useState<ProductivityTrendResponse | null>(null)
   const datePickerRef = useRef<HTMLInputElement | null>(null)
+  const lastTrackedViewRef = useRef<string | null>(null)
 
   const currentPolicy: DynamicPolicy = settings.policy ?? defaultPolicy
   const detectProfileFromPolicy = (policy: DynamicPolicy): PolicyProfileName | null => {
@@ -335,7 +371,7 @@ function App() {
     const res = await fetch(`${apiBase}/settings`)
     if (!res.ok) throw new Error('Failed to load settings')
     const payload = (await res.json()) as SettingsPayload
-    const normalized = {
+    const normalized: SettingsPayload = {
       ...payload,
       default_gmail_query: payload.default_gmail_query || payload.gmail_query || 'is:unread',
       default_date_mode: payload.default_date_mode === 'off' ? 'off' : 'today',
@@ -400,6 +436,41 @@ function App() {
     setSentQueue(data.items)
   }
 
+  const loadProductivityAnalytics = async (range: TimeRangeKey = timeRange) => {
+    const [eventsRes, trendRes] = await Promise.all([
+      fetch(`${apiBase}/analytics/events?range=${range}`),
+      fetch(`${apiBase}/analytics/trend?range=${range}`),
+    ])
+    if (!eventsRes.ok) throw new Error('Failed to load productivity events')
+    if (!trendRes.ok) throw new Error('Failed to load productivity trend')
+    setProductivityEvents((await eventsRes.json()) as ProductivityEvent[])
+    setProductivityTrend((await trendRes.json()) as ProductivityTrendResponse)
+  }
+
+  const trackViewEvent = async (page: typeof activePage) => {
+    const eventMap: Record<typeof activePage, string> = {
+      run_queue: 'view_run_queue',
+      needs_review: 'view_needs_review',
+      failed_mapping: 'view_failed_mapping',
+      recent_runs: 'view_recent_runs',
+      sent_items: 'view_sent_items',
+    }
+    const eventType = eventMap[page]
+    if (lastTrackedViewRef.current === `${page}-${timeRange}`) return
+    await fetch(`${apiBase}/analytics/events/view`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        event_type: eventType,
+        event_source: 'ui',
+        metadata: { page, range: timeRange },
+      }),
+    }).catch(() => {
+      // Keep UI responsive even if analytics logging fails.
+    })
+    lastTrackedViewRef.current = `${page}-${timeRange}`
+  }
+
   useEffect(() => {
     loadStatus().catch((e) => setError((e as Error).message))
     loadSettings().catch((e) => setError((e as Error).message))
@@ -409,6 +480,7 @@ function App() {
     loadQueue().catch((e) => setError((e as Error).message))
     loadFailedQueue().catch((e) => setError((e as Error).message))
     loadSentQueue().catch((e) => setError((e as Error).message))
+    loadProductivityAnalytics().catch((e) => setError((e as Error).message))
   }, [])
 
   useEffect(() => {
@@ -416,6 +488,16 @@ function App() {
     loadFailedQueue().catch((e) => setError((e as Error).message))
     loadSentQueue().catch((e) => setError((e as Error).message))
   }, [settings.mail_date])
+
+  useEffect(() => {
+    loadProductivityAnalytics(timeRange).catch((e) => setError((e as Error).message))
+  }, [timeRange])
+
+  useEffect(() => {
+    trackViewEvent(activePage)
+      .then(() => loadProductivityAnalytics(timeRange))
+      .catch((e) => setError((e as Error).message))
+  }, [activePage, timeRange])
 
   useEffect(() => {
     if (!running) return
@@ -490,6 +572,7 @@ function App() {
       await loadQueue()
       await loadFailedQueue()
       await loadSentQueue()
+      await loadProductivityAnalytics(timeRange)
     } catch (e) {
       if ((e as Error).name === 'AbortError') {
         if (!status?.authenticated) {
@@ -549,6 +632,7 @@ function App() {
       await loadQueue()
       await loadFailedQueue()
       await loadSentQueue()
+      await loadProductivityAnalytics(timeRange)
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -572,6 +656,7 @@ function App() {
       await loadQueue()
       await loadFailedQueue()
       await loadSentQueue()
+      await loadProductivityAnalytics(timeRange)
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -635,6 +720,30 @@ function App() {
   const aiLastDuration = aiStatus?.last_duration_ms
     ? `${(aiStatus.last_duration_ms / 1000).toFixed(1)}s`
     : null
+  const trendBars = useMemo<ProductivityBarPoint[]>(
+    () => (productivityTrend?.bars ?? []),
+    [productivityTrend?.bars],
+  )
+  const latestScore = productivityTrend?.kpi_total_sent ?? trendBars.reduce((sum, bar) => sum + bar.sent_count, 0)
+  const trendDelta = productivityTrend?.trend_delta_pct ?? 0
+  const liveDirection = productivityTrend?.trend_direction === 'down' ? 'down' : (productivityTrend?.trend_direction ?? 'flat')
+  const realtimeSignals = productivityEvents.slice(0, 8).map((event) => {
+    const when = new Date(event.occurred_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    return `${when} ${event.event_type.replaceAll('_', ' ')}`
+  })
+  const visibleBars = [...trendBars].reverse()
+  const maxSentInBars = Math.max(1, ...visibleBars.map((bar) => bar.sent_count))
+
+  const formatBucketLabel = (timestamp: string, range: TimeRangeKey) => {
+    const dt = new Date(timestamp)
+    if (range === 'last_1h' || range === 'current_day') {
+      return dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    }
+    if (range === 'current_month') {
+      return dt.toLocaleDateString([], { month: 'short', day: 'numeric' })
+    }
+    return dt.toLocaleDateString([], { month: 'short', year: '2-digit' })
+  }
 
   const renderRoutingPanel = (item: Candidate) => (
     <div className={`routingPanel ${canTrustRouting(item) ? 'safe' : 'blocked'}`}>
@@ -788,6 +897,78 @@ function App() {
               {running ? 'Running...' : status?.authenticated ? 'Sync + Queue' : 'Connect Gmail'}
             </button>
           </section>
+
+          {activePage === 'run_queue' ? (
+            <section className="liveMonitorCard">
+              <div className="liveMonitorHeader">
+                <div>
+                  <h2>Live Automation Monitor</h2>
+                  <p>Real-time productivity trend from recorded events and workflow actions.</p>
+                </div>
+                <label className="monitorRange">
+                  Range
+                  <select value={timeRange} onChange={(e) => setTimeRange(e.target.value as TimeRangeKey)}>
+                    <option value="last_1h">Last 1 hour</option>
+                    <option value="current_day">Current day</option>
+                    <option value="current_month">Current month</option>
+                    <option value="current_year">Current year</option>
+                    <option value="last_5y">Last 5 years</option>
+                  </select>
+                </label>
+                <div className={`liveTicker ${liveDirection}`}>
+                  <strong>{latestScore.toFixed(1)}</strong>
+                  <span>{trendDelta >= 0 ? '+' : ''}{trendDelta.toFixed(1)}%</span>
+                </div>
+              </div>
+              <div className="liveChartWrap">
+                <div className="chartAxisLabel yAxisLabel">Approved Sent Count</div>
+                <div className="hBarChart" aria-label="Productivity horizontal bar chart">
+                  {visibleBars.map((bar) => {
+                    const width = Math.max(0, Math.round((bar.sent_count / maxSentInBars) * 100))
+                    return (
+                      <div key={bar.ts} className="hBarRow" title={`${bar.sent_count} approved sent`}>
+                        <div className="hBarLabel">{formatBucketLabel(bar.ts, timeRange)}</div>
+                        <div className="hBarTrack">
+                          <div className="hBarFill" style={{ width: `${width}%` }} />
+                        </div>
+                        <div className="hBarValue">{bar.sent_count}</div>
+                      </div>
+                    )
+                  })}
+                </div>
+                <div className="chartAxisLabel xAxisLabel">Time Buckets</div>
+                {visibleBars.length === 0 || visibleBars.every((bar) => bar.sent_count === 0) ? (
+                  <p className="chartEmptyState">No approved sends in this period yet.</p>
+                ) : null}
+              </div>
+              <div className="signalTape">
+                {realtimeSignals.length === 0 ? <span>No events in selected range</span> : null}
+                {realtimeSignals.map((signal, index) => (
+                  // Event type + time helps users audit what drives the trend line.
+                  // eslint-disable-next-line react/no-array-index-key
+                  <span key={`${signal}-${index}`}>
+                    {signal}
+                  </span>
+                ))}
+              </div>
+              <div className="monitorMeta">
+                <span>Total approved & sent: {productivityTrend?.kpi_total_sent ?? 0}</span>
+                <span>Previous period sent: {productivityTrend?.previous_period_total_sent ?? 0}</span>
+                <span>Trend: {productivityTrend?.trend_direction ?? 'flat'} ({trendDelta >= 0 ? '+' : ''}{trendDelta.toFixed(1)}%)</span>
+              </div>
+              <h3 className="monitorSectionTitle">Activity Log</h3>
+              <div className="monitorHistory">
+                {productivityEvents.slice(0, 12).map((event) => (
+                  <span key={event.id}>
+                    {new Date(event.occurred_at).toLocaleString()} - {event.event_type}
+                  </span>
+                ))}
+                {productivityEvents.length === 0 ? (
+                  <span>No recorded history yet</span>
+                ) : null}
+              </div>
+            </section>
+          ) : null}
 
           {activePage === 'run_queue' ? (
             <form className="configGrid" onSubmit={saveSettings}>

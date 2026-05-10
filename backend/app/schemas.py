@@ -257,3 +257,40 @@ class TelegramStatusResponse(BaseModel):
     alerts_enabled: bool
     authorized_chats: int
     detail: str
+
+
+class ProductivityEventCreateRequest(BaseModel):
+    event_type: str
+    event_source: str = "ui"
+    entity_id: int | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ProductivityEventResponse(BaseModel):
+    id: int
+    owner_id: str
+    event_type: str
+    event_source: str
+    entity_id: int | None
+    weight: float
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    occurred_at: datetime
+    created_at: datetime
+
+
+class ProductivityBarPoint(BaseModel):
+    ts: datetime
+    sent_count: int
+    failed_count: int = 0
+    needs_review_count: int = 0
+    recent_run_count: int = 0
+
+
+class ProductivityTrendResponse(BaseModel):
+    range: str
+    bucket: str
+    trend_direction: str
+    trend_delta_pct: float
+    kpi_total_sent: int = 0
+    previous_period_total_sent: int = 0
+    bars: list[ProductivityBarPoint] = Field(default_factory=list)

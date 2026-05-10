@@ -161,3 +161,17 @@ class RecipientRoutingFeedback(Base):
     evidence_cc_present: Mapped[bool] = mapped_column(Boolean, default=False)
     sample_body: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+
+class ProductivityEvent(Base):
+    __tablename__ = "productivity_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    event_type: Mapped[str] = mapped_column(String(80), index=True)
+    event_source: Mapped[str] = mapped_column(String(40), default="system")
+    entity_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    weight: Mapped[float] = mapped_column(Float, default=0.0)
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    occurred_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)

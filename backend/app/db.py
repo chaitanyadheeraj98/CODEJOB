@@ -88,4 +88,29 @@ def ensure_sqlite_phase0_columns() -> None:
         for column_name, statement in settings_alter_statements:
             if column_name not in existing_settings:
                 conn.exec_driver_sql(statement)
+
+        conn.exec_driver_sql(
+            """
+            CREATE TABLE IF NOT EXISTS productivity_events (
+                id INTEGER PRIMARY KEY,
+                owner_id VARCHAR(100),
+                event_type VARCHAR(80),
+                event_source VARCHAR(40) DEFAULT 'system',
+                entity_id INTEGER,
+                weight FLOAT DEFAULT 0.0,
+                metadata_json TEXT DEFAULT '{}',
+                occurred_at DATETIME,
+                created_at DATETIME
+            )
+            """
+        )
+        conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_productivity_events_owner_id ON productivity_events (owner_id)"
+        )
+        conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_productivity_events_event_type ON productivity_events (event_type)"
+        )
+        conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_productivity_events_occurred_at ON productivity_events (occurred_at)"
+        )
         conn.commit()
