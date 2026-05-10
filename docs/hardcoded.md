@@ -19,16 +19,16 @@ This audit focuses on runtime source files in `backend/app`, `dashboard/src`, co
 | `backend/app/config.py` | 15 | `deepseek-chat` | default AI model | Move to env/model config |
 | `backend/app/config.py` | 20 | `http://localhost:8080/` | Google OAuth redirect URI | Move to environment |
 | `backend/app/config.py` | 21 | `./data/google_token.json` | token file path | Move to env/config |
-| `backend/app/config.py` | 25 | `1F73Iax75j2rGGb53GGqTmAkEK0o19nmg` | Google Sheet ID default | Sensitive-ish; move to env/secret store |
+| `backend/app/config.py` | 25 | `<sheet-id-redacted>` | Google Sheet ID default | Sensitive; keep out of docs/output and load from env/secret store |
 | `backend/app/config.py` | 26 | `Sheet1` | Sheets tab name default | Keep as configurable default |
 | `backend/app/config.py` | 27 | `default-owner` | owner partition key default | Move to env/tenant config |
 | `backend/app/config.py` | 29 | `0.6` | qualification threshold default | Keep in config/constants |
 | `backend/app/phase0.py` | 6-21 | skill keyword list | rule-based skill extraction/scoring | Keep in central constants module |
 | `backend/app/phase0.py` | 23-30 | recruiter hint list | recruiter-like mail detection | Keep in central constants module |
 | `backend/app/phase0.py` | 35 | employer domains set | routing logic for CC classification | Move to configurable allowlist |
-| `backend/app/phase0.py` | 382-384 | `Chaithanya Dheeraj N`, `+1 940-629-6920`, `chaithanyadheeraj1026@gmail.com` | default signature identity | **Sensitive**; move to user settings/env only |
+| `backend/app/phase0.py` | 382-384 | `<name-redacted>`, `<phone-redacted>`, `<email-redacted>` | default signature identity | **Sensitive**; move to user settings/env only |
 | `backend/app/phase0.py` | 386-401 | multi-line fallback template content | default outbound email template | Keep template externalized in config/template file |
-| `backend/app/phase0.py` | 417 | `Visa: H1B`, `Dallas, TX` | injected requested details block | Move to per-user profile/config |
+| `backend/app/phase0.py` | 417 | `Visa: <redacted>`, `<location-redacted>` | injected requested details block | Sensitive personal profile data; move to per-user profile/config |
 | `backend/app/phase0.py` | 520-522 | fixed sign-off identity lines | fallback draft body | **Sensitive**; remove from code defaults |
 | `backend/app/main.py` | 137-140 | CORS `*` for origins/methods/headers | permissive cross-origin policy | Tighten via environment-based allowlist |
 | `backend/app/main.py` | 275 | `is:unread in:inbox recruiter` | default Gmail query fallback | Keep in constants/config |
