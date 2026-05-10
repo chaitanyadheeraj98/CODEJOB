@@ -28,7 +28,7 @@ This audit focuses on runtime source files in `backend/app`, `dashboard/src`, co
 | `backend/app/phase0.py` | 35 | employer domains set | routing logic for CC classification | Move to configurable allowlist |
 | `backend/app/phase0.py` | 382-384 | `<name-redacted>`, `<phone-redacted>`, `<email-redacted>` | default signature identity | **Sensitive**; move to user settings/env only |
 | `backend/app/phase0.py` | 386-401 | multi-line fallback template content | default outbound email template | Keep template externalized in config/template file |
-| `backend/app/phase0.py` | 417 | `Visa: <redacted>`, `<location-redacted>` | injected requested details block | Sensitive personal profile data; move to per-user profile/config |
+| `backend/app/phase0.py` | 417 | `Visa: <redacted>`, `<location-redacted>` | injected requested details block | **Sensitive** personal profile data; move to per-user profile/config |
 | `backend/app/phase0.py` | 520-522 | fixed sign-off identity lines | fallback draft body | **Sensitive**; remove from code defaults |
 | `backend/app/main.py` | 137-140 | CORS `*` for origins/methods/headers | permissive cross-origin policy | Tighten via environment-based allowlist |
 | `backend/app/main.py` | 275 | `is:unread in:inbox recruiter` | default Gmail query fallback | Keep in constants/config |

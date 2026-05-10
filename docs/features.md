@@ -59,5 +59,5 @@
 
 - Manual review remains mandatory before sending (run-once does not auto-send).
 - Gmail connection and resume upload are hard prerequisites for effective queue-to-send flow.
-- Some ESLint/TypeScript issues and failing backend tests currently exist in baseline (pre-existing).
+- Some ESLint/TypeScript issues and failing backend tests currently exist in baseline (pre-existing); this documentation does not add or track remediation tickets for those issues.
 - Telegram actions can be blocked when PIN auth/session is required.
