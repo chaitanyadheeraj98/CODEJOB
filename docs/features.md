@@ -59,5 +59,5 @@
 
 - Manual review remains mandatory before sending (run-once does not auto-send).
 - Gmail connection and resume upload are hard prerequisites for effective queue-to-send flow.
-- Some ESLint/TypeScript issues and failing backend tests currently exist in baseline (pre-existing); this documentation does not add or track remediation tickets for those issues.
+- Some baseline issues are pre-existing: dashboard lint fails on React hook `set-state-in-effect` and missing dependency warnings, dashboard build fails on `default_date_mode` type mismatch in `App.tsx`, and backend tests fail in `test_phase0_routing` (`greeting_from_to_contact`) and `test_schemas` (`gmail_received_at` required). This documentation does not add or track remediation tickets for those issues.
 - Telegram actions can be blocked when PIN auth/session is required.

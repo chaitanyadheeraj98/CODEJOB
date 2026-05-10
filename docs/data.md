@@ -1,4 +1,4 @@
-# Data Structures and Data Flow
+# Data Structure and Flow
 
 ## 1. Core Backend Data Models (SQLAlchemy)
 
