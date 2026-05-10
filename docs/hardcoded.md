@@ -82,10 +82,10 @@ This document lists hardcoded values identified across backend, frontend, infra,
 
 The following are personal/profile-style values embedded in business logic and prompts:
 
-- `Chaithanya Dheeraj N`
-- `+1 940-629-6920`
-- `chaithanyadheeraj1026@gmail.com`
-- `Visa: H1B`
-- `Current Location: Dallas, TX`
+- `[USER_NAME]`
+- `[USER_PHONE]`
+- `[USER_EMAIL]`
+- `[USER_VISA_STATUS]`
+- `[USER_LOCATION]`
 
 **Recommendation:** Move to user/profile configuration persisted in DB or injected via environment and never hardcode personal identity details in source.

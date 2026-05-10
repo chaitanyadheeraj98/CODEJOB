@@ -17,7 +17,7 @@
 | Candidate listing filters | `/candidates` | Verify state/date/sort filtering | Query with various state/mail_date/sort values | Correct subset and ordering | Invalid date format returns 422 | High | Automatable |
 | Analytics event tracking | `/analytics/events/view` | Ensure view event recording | Trigger page views | Event appears with metadata | Unsupported event_type returns 400 | Medium | Automatable |
 | Productivity trend rendering | `/analytics/trend` + UI chart | Verify trend KPI and chart behavior | Generate events and open monitor | KPI/bars/delta reflect data | Empty-history state displays fallback text | Medium | Automatable + Manual |
-| Telegram command handling | telegram_bot service + handler | Validate remote control and auth | Send `/status`, `/run`, `/auth` flows | Correct response + permission checks | Duplicate commands are deduped | Medium | Mostly manual/integration |
+| Telegram command handling | telegram_bot service + handler | Validate remote control and auth | Send `/status`, `/run`, `/auth` flows | Correct response + permission checks | Duplicate commands are deduplicated | Medium | Mostly manual/integration |
 | Google Sheets append on send | `append_tracking_sheet_row` | Verify optional tracking write | Enable tracking and approve send | Row appended; warning stored on failure | Missing spreadsheet ID should fail gracefully | Medium | Automatable (mocked) |
 
 ## 2) Error handling test cases
