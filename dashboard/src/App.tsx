@@ -3,6 +3,7 @@ import './App.css'
 import Sidebar from './components/Sidebar'
 import { withAiToggle } from './features/ai/state'
 import { getDraftSourceLabel } from './features/ai/ui'
+import { refreshCandidateBuckets } from './candidateBuckets'
 
 function escapeHtml(text: string): string {
   return text
@@ -187,12 +188,6 @@ type RoutingEvidence = {
   detail: string
 }
 
-type CandidateListResponse = {
-  items: Candidate[]
-  next_cursor: number | null
-  has_next: boolean
-}
-
 type TimeRangeKey = 'last_1h' | 'current_day' | 'current_month' | 'current_year' | 'last_5y'
 
 type ProductivityEvent = {
@@ -322,8 +317,12 @@ function App() {
   const [timeRange, setTimeRange] = useState<TimeRangeKey>('current_day')
   const [productivityEvents, setProductivityEvents] = useState<ProductivityEvent[]>([])
   const [productivityTrend, setProductivityTrend] = useState<ProductivityTrendResponse | null>(null)
+  const [isCandidateRefreshing, setIsCandidateRefreshing] = useState(false)
+  const [candidateRefreshError, setCandidateRefreshError] = useState('')
   const datePickerRef = useRef<HTMLInputElement | null>(null)
   const lastTrackedViewRef = useRef<string | null>(null)
+  const hasBootstrappedCandidatesRef = useRef(false)
+  const candidateRefreshTrackerRef = useRef(0)
 
   const currentPolicy: DynamicPolicy = settings.policy ?? defaultPolicy
   const detectProfileFromPolicy = (policy: DynamicPolicy): PolicyProfileName | null => {
@@ -338,16 +337,6 @@ function App() {
     : lastAppliedProfile
       ? `Custom (from ${lastAppliedProfile})`
       : 'Custom'
-
-  const candidatesUrl = (state: 'needs_review' | 'failed' | 'approved_sent') => {
-    const params = new URLSearchParams({
-      state,
-      limit: String(QUEUE_LIMIT),
-      sort: 'newest',
-    })
-    if (settings.mail_date) params.set('mail_date', settings.mail_date)
-    return `${apiBase}/candidates?${params.toString()}`
-  }
 
   const loadStatus = async () => {
     const res = await fetch(`${apiBase}/gmail/status`)
@@ -367,7 +356,7 @@ function App() {
     setTelegramStatus((await res.json()) as TelegramStatus)
   }
 
-  const loadSettings = async () => {
+  const loadSettings = async (): Promise<SettingsPayload> => {
     const res = await fetch(`${apiBase}/settings`)
     if (!res.ok) throw new Error('Failed to load settings')
     const payload = (await res.json()) as SettingsPayload
@@ -382,27 +371,14 @@ function App() {
     if (payload.policy_profile_selected && profileNames.includes(payload.policy_profile_selected as PolicyProfileName)) {
       setSelectedProfileToApply(payload.policy_profile_selected as PolicyProfileName)
       setLastAppliedProfile(payload.policy_profile_selected as PolicyProfileName)
-      return
+      return normalized
     }
     const detected = detectProfileFromPolicy(normalized.policy ?? defaultPolicy)
     if (detected) {
       setSelectedProfileToApply(detected)
       setLastAppliedProfile(detected)
     }
-  }
-
-  const loadQueue = async () => {
-    const res = await fetch(candidatesUrl('needs_review'))
-    if (!res.ok) throw new Error('Failed to load review queue')
-    const data = (await res.json()) as CandidateListResponse
-    setQueue(data.items)
-    setDraftEdits((prev) => {
-      const next = { ...prev }
-      for (const c of data.items) {
-        if (!(c.id in next)) next[c.id] = c.draft_reply ?? ''
-      }
-      return next
-    })
+    return normalized
   }
 
   const loadActiveResume = async () => {
@@ -413,27 +389,44 @@ function App() {
     setActiveResume(current)
   }
 
-  const loadFailedQueue = async () => {
-    const res = await fetch(candidatesUrl('failed'))
-    if (!res.ok) throw new Error('Failed to load failed queue')
-    const data = (await res.json()) as CandidateListResponse
-    setFailedQueue(data.items)
-    setRoutingFixes((prev) => {
-      const next = { ...prev }
-      for (const c of data.items) {
-        if (!(c.id in next)) {
-          next[c.id] = { to: c.recipient_email ?? '', cc: c.cc_email ?? '' }
-        }
-      }
-      return next
+  const refreshCandidates = async (mailDate: string | null) => {
+    await refreshCandidateBuckets({
+      apiBase,
+      limit: QUEUE_LIMIT,
+      mailDate,
+      tracker: candidateRefreshTrackerRef,
+      onStart: () => {
+        setIsCandidateRefreshing(true)
+        setCandidateRefreshError('')
+      },
+      onSuccess: ({ queue: nextQueue, failed: nextFailed, sent: nextSent }) => {
+        setQueue(nextQueue as Candidate[])
+        setFailedQueue(nextFailed as Candidate[])
+        setSentQueue(nextSent as Candidate[])
+        setDraftEdits((prev) => {
+          const next = { ...prev }
+          for (const c of nextQueue as Candidate[]) {
+            if (!(c.id in next)) next[c.id] = c.draft_reply ?? ''
+          }
+          return next
+        })
+        setRoutingFixes((prev) => {
+          const next = { ...prev }
+          for (const c of nextFailed as Candidate[]) {
+            if (!(c.id in next)) {
+              next[c.id] = { to: c.recipient_email ?? '', cc: c.cc_email ?? '' }
+            }
+          }
+          return next
+        })
+      },
+      onError: (err) => {
+        setCandidateRefreshError(err.message)
+      },
+      onFinally: () => {
+        setIsCandidateRefreshing(false)
+      },
     })
-  }
-
-  const loadSentQueue = async () => {
-    const res = await fetch(candidatesUrl('approved_sent'))
-    if (!res.ok) throw new Error('Failed to load sent items')
-    const data = (await res.json()) as CandidateListResponse
-    setSentQueue(data.items)
   }
 
   const loadProductivityAnalytics = async (range: TimeRangeKey = timeRange) => {
@@ -472,21 +465,28 @@ function App() {
   }
 
   useEffect(() => {
-    loadStatus().catch((e) => setError((e as Error).message))
-    loadSettings().catch((e) => setError((e as Error).message))
-    loadActiveResume().catch((e) => setError((e as Error).message))
-    loadAiStatus().catch((e) => setError((e as Error).message))
-    loadTelegramStatus().catch((e) => setError((e as Error).message))
-    loadQueue().catch((e) => setError((e as Error).message))
-    loadFailedQueue().catch((e) => setError((e as Error).message))
-    loadSentQueue().catch((e) => setError((e as Error).message))
-    loadProductivityAnalytics().catch((e) => setError((e as Error).message))
+    const bootstrap = async () => {
+      try {
+        await Promise.all([
+          loadStatus(),
+          loadActiveResume(),
+          loadAiStatus(),
+          loadTelegramStatus(),
+          loadProductivityAnalytics(),
+        ])
+        const normalizedSettings = await loadSettings()
+        await refreshCandidates(normalizedSettings.mail_date ?? null)
+        hasBootstrappedCandidatesRef.current = true
+      } catch (e) {
+        setError((e as Error).message)
+      }
+    }
+    bootstrap().catch((e) => setError((e as Error).message))
   }, [])
 
   useEffect(() => {
-    loadQueue().catch((e) => setError((e as Error).message))
-    loadFailedQueue().catch((e) => setError((e as Error).message))
-    loadSentQueue().catch((e) => setError((e as Error).message))
+    if (!hasBootstrappedCandidatesRef.current) return
+    refreshCandidates(settings.mail_date ?? null).catch((e) => setError((e as Error).message))
   }, [settings.mail_date])
 
   useEffect(() => {
@@ -569,9 +569,7 @@ function App() {
       await loadStatus()
       await loadAiStatus()
       await loadTelegramStatus()
-      await loadQueue()
-      await loadFailedQueue()
-      await loadSentQueue()
+      await refreshCandidates(settings.mail_date ?? null)
       await loadProductivityAnalytics(timeRange)
     } catch (e) {
       if ((e as Error).name === 'AbortError') {
@@ -629,9 +627,7 @@ function App() {
         const details = await res.json().catch(() => null)
         throw new Error(details?.detail ?? 'Approve & send failed')
       }
-      await loadQueue()
-      await loadFailedQueue()
-      await loadSentQueue()
+      await refreshCandidates(settings.mail_date ?? null)
       await loadProductivityAnalytics(timeRange)
     } catch (e) {
       setError((e as Error).message)
@@ -653,9 +649,7 @@ function App() {
         const details = await res.json().catch(() => null)
         throw new Error(details?.detail ?? 'Reject failed')
       }
-      await loadQueue()
-      await loadFailedQueue()
-      await loadSentQueue()
+      await refreshCandidates(settings.mail_date ?? null)
       await loadProductivityAnalytics(timeRange)
     } catch (e) {
       setError((e as Error).message)
@@ -679,9 +673,7 @@ function App() {
         const details = await res.json().catch(() => null)
         throw new Error(details?.detail ?? 'Failed to save recipient mapping')
       }
-      await loadQueue()
-      await loadFailedQueue()
-      await loadSentQueue()
+      await refreshCandidates(settings.mail_date ?? null)
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -881,6 +873,8 @@ function App() {
               <strong>{logs.length}</strong>
             </article>
           </section>
+          {isCandidateRefreshing ? <p className="subtle">Refreshing filtered counts...</p> : null}
+          {candidateRefreshError ? <p className="subtle">Counts refresh issue: {candidateRefreshError}</p> : null}
 
           <section className="actionBar">
             <input
