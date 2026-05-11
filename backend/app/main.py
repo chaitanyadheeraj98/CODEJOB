@@ -6,6 +6,7 @@ from collections.abc import Generator
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import UTC, date, datetime, timedelta
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, TypedDict, cast
 import threading
@@ -31,7 +32,7 @@ from app.gmail_client import (
 )
 from app.models import DraftEditFeedback, ProductivityEvent, RecruiterEmail, ResumeAsset, SyncRun, UserSettings
 from app.models import RecipientRoutingFeedback
-from app.telegram_bot import TelegramBotService
+from app.telegram_bot import TelegramBotService, TelegramReply
 from app.phase0 import (
     DEFAULT_FALLBACK_DRAFT_TEMPLATE,
     DEFAULT_SIGNATURE_EMAIL,
@@ -106,8 +107,11 @@ ai_last_duration_ms: int | None = None
 telegram_service: TelegramBotService | None = None
 telegram_action_lock = threading.Lock()
 telegram_auth_sessions: dict[int, datetime] = {}
+telegram_pending_inputs: dict[int, str] = {}
 auto_runner_thread: threading.Thread | None = None
 auto_runner_stop_event = threading.Event()
+
+TELEGRAM_MENU_PAGE_SIZE = 6
 
 
 class PolicyQuery(TypedDict):
@@ -399,6 +403,130 @@ def _telegram_session_remaining(chat_id: int) -> str:
     return f"{minutes}m {seconds}s"
 
 
+def _tg_btn(text: str, data: str) -> dict[str, str]:
+    return {"text": text, "callback_data": data}
+
+
+def _telegram_parse_callback_data(data: str) -> tuple[str, int]:
+    parts = data.split(":", 2)
+    action = parts[1] if len(parts) >= 2 else ""
+    page = 0
+    if len(parts) >= 3:
+        try:
+            page = max(0, int(parts[2]))
+        except ValueError:
+            page = 0
+    return action, page
+
+
+def _telegram_paginate_buttons(
+    buttons: list[dict[str, str]],
+    page: int,
+    *,
+    menu_action: str,
+    include_home: bool = True,
+    include_back: bool = False,
+) -> list[list[dict[str, str]]]:
+    total = len(buttons)
+    start = page * TELEGRAM_MENU_PAGE_SIZE
+    if start >= total:
+        start = max(0, ((total - 1) // TELEGRAM_MENU_PAGE_SIZE) * TELEGRAM_MENU_PAGE_SIZE) if total else 0
+    end = min(total, start + TELEGRAM_MENU_PAGE_SIZE)
+    page_buttons = buttons[start:end]
+    rows: list[list[dict[str, str]]] = [[button] for button in page_buttons]
+
+    nav_row: list[dict[str, str]] = []
+    if start > 0:
+        nav_row.append(_tg_btn("Back", f"menu:{menu_action}:{(start // TELEGRAM_MENU_PAGE_SIZE) - 1}"))
+    if end < total:
+        nav_row.append(_tg_btn("More", f"menu:{menu_action}:{(start // TELEGRAM_MENU_PAGE_SIZE) + 1}"))
+    if nav_row:
+        rows.append(nav_row)
+
+    foot_row: list[dict[str, str]] = []
+    if include_back:
+        foot_row.append(_tg_btn("Sections", "menu:main:0"))
+    if include_home:
+        foot_row.append(_tg_btn("Home", "menu:main:0"))
+    if foot_row:
+        rows.append(foot_row)
+    return rows
+
+
+def _telegram_main_menu_reply() -> TelegramReply:
+    buttons = [
+        _tg_btn("Read-only", "menu:readonly:0"),
+        _tg_btn("Config", "menu:config:0"),
+        _tg_btn("Actions", "menu:actions:0"),
+        _tg_btn("Profile/Auth", "menu:profile:0"),
+    ]
+    return TelegramReply(
+        text="MailOps bot is active. Choose a section:",
+        inline_keyboard=[[button] for button in buttons],
+    )
+
+
+def _telegram_menu_reply(action: str, page: int = 0) -> TelegramReply:
+    title = "Menu"
+    buttons: list[dict[str, str]] = []
+    if action == "readonly":
+        title = "Read-only"
+        buttons = [
+            _tg_btn("Status", "cmd:/status"),
+            _tg_btn("Needs Review", "cmd:/needs_review"),
+            _tg_btn("Failed Mapping", "cmd:/failed_mapping"),
+            _tg_btn("Recent Runs", "cmd:/recent_runs"),
+        ]
+    elif action == "config":
+        title = "Config"
+        buttons = [
+            _tg_btn("Set Query", "flow:await_setquery"),
+            _tg_btn("Set Date", "flow:await_setdate"),
+            _tg_btn("Set Default Query", "flow:await_setdefaultquery"),
+            _tg_btn("Set Default Date", "flow:await_setdefaultdate"),
+            _tg_btn("Auto Run ON", "cmd:/setautorun on"),
+            _tg_btn("Auto Run OFF", "cmd:/setautorun off"),
+            _tg_btn("Set Auto Interval", "flow:await_setautointerval"),
+        ]
+    elif action == "actions":
+        title = "Actions"
+        buttons = [
+            _tg_btn("Run", "cmd:/run"),
+            _tg_btn("Sync", "cmd:/sync"),
+            _tg_btn("Approve by ID", "flow:await_approve_id"),
+            _tg_btn("Reject by ID", "flow:await_reject_id"),
+        ]
+    elif action == "profile":
+        title = "Profile/Auth"
+        buttons = [
+            _tg_btn("Profile", "cmd:/profile"),
+            _tg_btn("Authenticate", "flow:await_auth_pin"),
+            _tg_btn("Logout", "cmd:/logout"),
+            _tg_btn("Main Menu", "menu:main:0"),
+        ]
+    else:
+        return _telegram_main_menu_reply()
+
+    return TelegramReply(
+        text=f"{title} menu:",
+        inline_keyboard=_telegram_paginate_buttons(buttons, page, menu_action=action, include_back=True),
+    )
+
+
+def _telegram_pending_prompt(mode: str) -> str:
+    prompts: dict[str, str] = {
+        "await_setquery": "Send the new Gmail query text (or tap Cancel).",
+        "await_setdate": "Send a date in YYYY-MM-DD or send `any` (or tap Cancel).",
+        "await_setdefaultquery": "Send the new default Gmail query (or tap Cancel).",
+        "await_setdefaultdate": "Send `today` or `off` (or tap Cancel).",
+        "await_setautointerval": "Send the auto-run interval in minutes (1-1440).",
+        "await_approve_id": "Send the email ID to approve (number only).",
+        "await_reject_id": "Send the email ID to reject (number only).",
+        "await_auth_pin": "Send your PIN to authenticate this chat session.",
+    }
+    return prompts.get(mode, "Send the required value.")
+
+
 def _normalize_default_date_mode(value: str | None) -> str:
     normalized = (value or "").strip().lower()
     if normalized not in {"today", "off"}:
@@ -470,13 +598,36 @@ def _auto_runner_loop() -> None:
             db.close()
 
 
-def _handle_telegram_command(chat_id: int, user_id: str, username: str, text: str) -> str:
+def _handle_telegram_command(chat_id: int, user_id: str, username: str, text: str) -> str | TelegramReply:
     _ = chat_id
     _ = user_id
     _ = username
     command_line = text.strip()
     if not command_line:
         return "Empty command."
+    if command_line.lower() == "/menu":
+        return _telegram_main_menu_reply()
+
+    pending_mode = telegram_pending_inputs.get(chat_id)
+    if pending_mode and not command_line.startswith("/"):
+        telegram_pending_inputs.pop(chat_id, None)
+        if pending_mode == "await_setquery":
+            return _handle_telegram_command(chat_id, user_id, username, f"/setquery {command_line}")
+        if pending_mode == "await_setdate":
+            return _handle_telegram_command(chat_id, user_id, username, f"/setdate {command_line}")
+        if pending_mode == "await_setdefaultquery":
+            return _handle_telegram_command(chat_id, user_id, username, f"/setdefaultquery {command_line}")
+        if pending_mode == "await_setdefaultdate":
+            return _handle_telegram_command(chat_id, user_id, username, f"/setdefaultdate {command_line}")
+        if pending_mode == "await_setautointerval":
+            return _handle_telegram_command(chat_id, user_id, username, f"/setautointerval {command_line}")
+        if pending_mode == "await_approve_id":
+            return _handle_telegram_command(chat_id, user_id, username, f"/approve {command_line}")
+        if pending_mode == "await_reject_id":
+            return _handle_telegram_command(chat_id, user_id, username, f"/reject {command_line} Rejected from Telegram")
+        if pending_mode == "await_auth_pin":
+            return _handle_telegram_command(chat_id, user_id, username, f"/auth {command_line}")
+
     parts = command_line.split()
     cmd = parts[0].lower()
     args, pin = _extract_pin(parts[1:])
@@ -491,17 +642,7 @@ def _handle_telegram_command(chat_id: int, user_id: str, username: str, text: st
         return "Action blocked. Run /auth <PIN> or provide pin=<PIN>."
 
     if cmd == "/start":
-        return (
-            "MailOps Telegram bot is active.\n"
-            "Read-only: /status, /needs_review, /failed_mapping, /recent_runs\n"
-            "Config: /setquery <gmail query>, /setdate YYYY-MM-DD, /setdate any\n"
-            "Profile defaults: /profile, /setdefaultquery <gmail query>, /setdefaultdate today|off\n"
-            "Automation: /setautorun on|off, /setautointerval <minutes>\n"
-            "Auth: /auth <PIN> (session unlock), /logout\n"
-            "Actions: /sync, /run, /approve <id>, /reject <id> [reason...]\n"
-            "Primary action: /run = Sync + Queue (same as dashboard button)\n"
-            "Advanced: /sync = Gmail import-only."
-        )
+        return _telegram_main_menu_reply()
 
     db = SessionLocal()
     try:
@@ -744,7 +885,10 @@ def _handle_telegram_command(chat_id: int, user_id: str, username: str, text: st
                 email = reject_candidate(email_id, RejectRequest(reason=reason), db)
             return f"Rejected: #{email.id} | reason={email.decision_reason or reason}"
 
-        reply = "Unknown command. Send /start for available commands."
+        reply = TelegramReply(
+            text="Unknown command. Use Menu below (typed /commands still work).",
+            inline_keyboard=[[_tg_btn("Open Menu", "menu:main:0")]],
+        )
         logger.info("Telegram command result chat_id=%s cmd=%s result=unknown_command", chat_id, cmd)
         return reply
     except HTTPException as exc:
@@ -756,6 +900,64 @@ def _handle_telegram_command(chat_id: int, user_id: str, username: str, text: st
         return f"Command failed: {exc}"
     finally:
         db.close()
+
+
+def _handle_telegram_callback(
+    chat_id: int,
+    user_id: str,
+    username: str,
+    callback_data: str,
+    message_id: int,
+) -> str | TelegramReply:
+    _ = user_id
+    _ = username
+    action, page = _telegram_parse_callback_data(callback_data)
+
+    if callback_data.startswith("menu:"):
+        reply = _telegram_menu_reply(action, page)
+        reply.edit_message_id = message_id
+        reply.callback_notice = "Updated."
+        return reply
+
+    if callback_data == "cancel:pending":
+        telegram_pending_inputs.pop(chat_id, None)
+        reply = _telegram_main_menu_reply()
+        reply.edit_message_id = message_id
+        reply.callback_notice = "Canceled."
+        return reply
+
+    if callback_data.startswith("flow:"):
+        mode = callback_data.split(":", 1)[1].strip()
+        telegram_pending_inputs[chat_id] = mode
+        return TelegramReply(
+            text=_telegram_pending_prompt(mode),
+            inline_keyboard=[[_tg_btn("Cancel", "cancel:pending")], [_tg_btn("Home", "menu:main:0")]],
+            edit_message_id=message_id,
+            callback_notice="Awaiting input.",
+        )
+
+    if callback_data.startswith("cmd:"):
+        command_text = callback_data.split(":", 1)[1].strip()
+        result = _handle_telegram_command(chat_id, user_id, username, command_text)
+        if isinstance(result, TelegramReply):
+            if result.edit_message_id is None:
+                result.edit_message_id = message_id
+            if result.callback_notice is None:
+                result.callback_notice = "Done."
+            return result
+        return TelegramReply(
+            text=result,
+            inline_keyboard=[[_tg_btn("Back", "menu:main:0")]],
+            edit_message_id=message_id,
+            callback_notice="Done.",
+        )
+
+    return TelegramReply(
+        text="Unknown action. Opening main menu.",
+        inline_keyboard=_telegram_main_menu_reply().inline_keyboard,
+        edit_message_id=message_id,
+        callback_notice="Unknown action.",
+    )
 
 
 def _init_telegram_service() -> TelegramBotService | None:
@@ -771,6 +973,7 @@ def _init_telegram_service() -> TelegramBotService | None:
         allowed_chat_ids=allowed_chat_ids,
         alerts_enabled=settings.telegram_alerts_enabled,
         command_handler=_handle_telegram_command,
+        callback_handler=_handle_telegram_callback,
     )
     service.start()
     logger.info("Telegram bot started with %s authorized chat(s)", len(allowed_chat_ids))

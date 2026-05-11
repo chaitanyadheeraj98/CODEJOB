@@ -3,13 +3,22 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
-from typing import Callable
+from typing import Any, Callable
 from urllib import error, parse, request
 
 logger = logging.getLogger(__name__)
 
 
-CommandHandler = Callable[[int, str, str, str], str]
+@dataclass
+class TelegramReply:
+    text: str
+    inline_keyboard: list[list[dict[str, str]]] | None = None
+    edit_message_id: int | None = None
+    callback_notice: str | None = None
+
+
+CommandHandler = Callable[[int, str, str, str], str | TelegramReply]
+CallbackHandler = Callable[[int, str, str, str, int], str | TelegramReply]
 
 
 @dataclass
@@ -29,11 +38,13 @@ class TelegramBotService:
         allowed_chat_ids: set[int],
         alerts_enabled: bool,
         command_handler: CommandHandler,
+        callback_handler: CallbackHandler,
     ) -> None:
         self._token = token.strip()
         self._allowed_chat_ids = set(allowed_chat_ids)
         self._alerts_enabled = alerts_enabled
         self._command_handler = command_handler
+        self._callback_handler = callback_handler
         self._offset = 0
         self._running = False
         self._thread: threading.Thread | None = None
@@ -105,23 +116,67 @@ class TelegramBotService:
             raise RuntimeError(f"Telegram API error: {parsed!r}")
         return parsed
 
-    def _send_message(self, chat_id: int, text: str) -> None:
+    def _send_message(
+        self,
+        chat_id: int,
+        text: str,
+        *,
+        inline_keyboard: list[list[dict[str, str]]] | None = None,
+    ) -> None:
         try:
+            payload: dict[str, Any] = {
+                "chat_id": chat_id,
+                "text": text[:3900],
+                "disable_web_page_preview": True,
+            }
+            if inline_keyboard:
+                payload["reply_markup"] = {"inline_keyboard": inline_keyboard}
             self._post_json(
                 "sendMessage",
-                {
-                    "chat_id": chat_id,
-                    "text": text[:3900],
-                    "disable_web_page_preview": True,
-                },
+                payload,
             )
         except Exception as exc:
             logger.warning("Failed to send Telegram message to chat_id=%s: %s", chat_id, exc)
 
+    def _edit_message(
+        self,
+        chat_id: int,
+        message_id: int,
+        text: str,
+        *,
+        inline_keyboard: list[list[dict[str, str]]] | None = None,
+    ) -> None:
+        try:
+            payload: dict[str, Any] = {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "text": text[:3900],
+                "disable_web_page_preview": True,
+            }
+            if inline_keyboard:
+                payload["reply_markup"] = {"inline_keyboard": inline_keyboard}
+            self._post_json("editMessageText", payload)
+        except Exception as exc:
+            logger.warning(
+                "Failed to edit Telegram message chat_id=%s message_id=%s: %s",
+                chat_id,
+                message_id,
+                exc,
+            )
+
+    def _answer_callback_query(self, callback_query_id: str, text: str | None = None) -> None:
+        try:
+            payload: dict[str, Any] = {"callback_query_id": callback_query_id}
+            if text:
+                payload["text"] = text[:180]
+            self._post_json("answerCallbackQuery", payload)
+        except Exception as exc:
+            logger.warning("Failed to answer callback query id=%s: %s", callback_query_id, exc)
+
     def _poll_updates(self) -> list[dict]:
         payload = {
             "timeout": 30,
-            "allowed_updates": ["message"],
+            "allowed_updates": ["message", "callback_query"],
         }
         if self._offset > 0:
             payload["offset"] = self._offset
@@ -167,6 +222,11 @@ class TelegramBotService:
             self._polling = False
 
     def _handle_update(self, update: dict) -> None:
+        callback_query = update.get("callback_query")
+        if isinstance(callback_query, dict):
+            self._handle_callback_query(callback_query)
+            return
+
         message = update.get("message")
         if not isinstance(message, dict):
             return
@@ -193,4 +253,56 @@ class TelegramBotService:
         except Exception as exc:
             logger.exception("Telegram command handler failure")
             reply = f"Command failed: {exc}"
+        self._send_reply(chat_id, reply)
+
+    def _handle_callback_query(self, callback_query: dict) -> None:
+        callback_query_id = str(callback_query.get("id", "")).strip()
+        data = str(callback_query.get("data", "")).strip()
+        if not callback_query_id or not data:
+            return
+
+        message = callback_query.get("message", {})
+        if not isinstance(message, dict):
+            return
+        chat = message.get("chat", {})
+        from_user = callback_query.get("from", {})
+        chat_id = int(chat.get("id", 0))
+        message_id = int(message.get("message_id", 0))
+        user_id = str(from_user.get("id", "unknown"))
+        username = str(from_user.get("username", "")).strip() or user_id
+
+        if chat_id not in self._allowed_chat_ids:
+            self._answer_callback_query(callback_query_id, "Unauthorized")
+            self._send_message(chat_id, "Unauthorized chat. Access denied.")
+            return
+
+        action_key = f"{chat_id}:cb:{data.lower()}"
+        if self._is_duplicate_action(action_key):
+            self._answer_callback_query(callback_query_id, "Duplicate tap ignored.")
+            return
+
+        try:
+            reply = self._callback_handler(chat_id, user_id, username, data, message_id)
+        except Exception as exc:
+            logger.exception("Telegram callback handler failure")
+            reply = f"Command failed: {exc}"
+
+        notice: str | None = None
+        if isinstance(reply, TelegramReply):
+            notice = reply.callback_notice
+        self._answer_callback_query(callback_query_id, notice)
+        self._send_reply(chat_id, reply)
+
+    def _send_reply(self, chat_id: int, reply: str | TelegramReply) -> None:
+        if isinstance(reply, TelegramReply):
+            if reply.edit_message_id:
+                self._edit_message(
+                    chat_id,
+                    reply.edit_message_id,
+                    reply.text,
+                    inline_keyboard=reply.inline_keyboard,
+                )
+            else:
+                self._send_message(chat_id, reply.text, inline_keyboard=reply.inline_keyboard)
+            return
         self._send_message(chat_id, reply)
