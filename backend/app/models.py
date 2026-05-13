@@ -38,6 +38,7 @@ class RecruiterEmail(Base):
     draft_source: Mapped[str | None] = mapped_column(String(50), nullable=True)
     draft_model: Mapped[str | None] = mapped_column(String(120), nullable=True)
     draft_ai_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    semantic_embedding: Mapped[str | None] = mapped_column(Text, nullable=True)
     approval_status: Mapped[str] = mapped_column(String(50), default="pending")
     sent_status: Mapped[str] = mapped_column(String(50), default="not_sent")
     source: Mapped[str] = mapped_column(String(20), default="manual")
@@ -98,6 +99,7 @@ class UserSettings(Base):
     feature_auto_send: Mapped[bool] = mapped_column(default=False)
     feature_retry_queue: Mapped[bool] = mapped_column(default=False)
     feature_ai_enabled: Mapped[bool] = mapped_column(default=False)
+    feature_semantic_enabled: Mapped[bool] = mapped_column(default=False)
     fallback_draft_template: Mapped[str] = mapped_column(Text, default="")
     signature_name: Mapped[str] = mapped_column(String(255), default="")
     signature_phone: Mapped[str] = mapped_column(String(80), default="")
@@ -118,6 +120,7 @@ class ResumeAsset(Base):
     sha256: Mapped[str] = mapped_column(String(64), index=True)
     version: Mapped[int] = mapped_column(Integer, default=1)
     is_current: Mapped[bool] = mapped_column(default=True)
+    semantic_embedding: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 

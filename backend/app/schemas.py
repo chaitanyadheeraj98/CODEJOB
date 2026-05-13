@@ -60,6 +60,7 @@ class SettingsRequest(BaseModel):
     feature_auto_send: bool = False
     feature_retry_queue: bool = False
     feature_ai_enabled: bool = False
+    feature_semantic_enabled: bool = False
     fallback_draft_template: str = ""
     signature_name: str = ""
     signature_phone: str = ""

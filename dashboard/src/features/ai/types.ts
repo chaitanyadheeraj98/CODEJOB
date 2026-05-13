@@ -2,6 +2,7 @@ export type DraftSource = 'deepseek' | 'rules_only' | string
 
 export type AiSettingsSlice = {
   feature_ai_enabled: boolean
+  feature_semantic_enabled?: boolean
 }
 
 export type CandidateAiMeta = {

@@ -1,6 +1,7 @@
 import hashlib
 import json
 import logging
+import math
 import uuid
 from collections.abc import Generator
 from contextlib import asynccontextmanager
@@ -18,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.ai.reply_service import generate_reply_with_ai_or_fallback
+from app.ai.resume_context import extract_resume_context
 from app.db import Base, SessionLocal, engine, ensure_sqlite_phase0_columns
 from app.gmail_client import (
     get_message_rfc_message_id,
@@ -76,6 +78,14 @@ from app.schemas import (
     ProductivityTrendResponse,
     TelegramStatusResponse,
 )
+from app.semantic.embeddings_service import (
+    begin_embedding_latency_capture,
+    embedding_from_json,
+    embedding_to_json,
+    end_embedding_latency_capture,
+    generate_embedding,
+)
+from app.semantic.ranking import blend_scores, semantic_similarity
 
 
 @asynccontextmanager
@@ -1022,6 +1032,7 @@ def _ensure_default_settings() -> None:
             feature_auto_send=settings.feature_auto_send,
             feature_retry_queue=settings.feature_retry_queue,
             feature_ai_enabled=False,
+            feature_semantic_enabled=False,
             fallback_draft_template=DEFAULT_FALLBACK_DRAFT_TEMPLATE,
             signature_name=DEFAULT_SIGNATURE_NAME,
             signature_phone=DEFAULT_SIGNATURE_PHONE,
@@ -1291,6 +1302,84 @@ def _active_resume(db: Session) -> ResumeAsset | None:
     )
 
 
+def _semantic_text_for_email(subject: str, body: str, role: str, skills_text: str) -> str:
+    return "\n".join(
+        [
+            f"Subject: {subject or ''}",
+            f"Role: {role or ''}",
+            f"Skills: {skills_text or ''}",
+            f"Body: {body or ''}",
+        ]
+    )
+
+
+def _semantic_text_for_resume(resume: ResumeAsset | None) -> str:
+    if not resume:
+        return ""
+    return extract_resume_context(resume.file_path, resume.file_name)
+
+
+def _ensure_embedding_cached(current_payload: str | None, text: str) -> tuple[list[float], str | None, str]:
+    cached = embedding_from_json(current_payload)
+    if cached:
+        return cached, current_payload, "cache"
+    vector, provider = generate_embedding(text)
+    return vector, embedding_to_json(vector), provider
+
+
+def _compute_blended_ai_score(
+    *,
+    subject: str,
+    body: str,
+    parsed: dict[str, str | int],
+    user_settings: UserSettings,
+    email_row: RecruiterEmail | None,
+    resume: ResumeAsset | None,
+) -> tuple[float, str, str, str | None, str | None]:
+    keyword_score, keyword_summary = ai_assist_score(parsed, user_settings)
+    if not user_settings.feature_semantic_enabled:
+        return keyword_score, keyword_summary, "v1_rules_plus_ai", None, None
+
+    try:
+        email_text = _semantic_text_for_email(
+            subject,
+            body,
+            str(parsed.get("role", "")),
+            str(parsed.get("skills_text", "")),
+        )
+        resume_text = _semantic_text_for_resume(resume)
+        if not resume_text.strip():
+            return keyword_score, f"{keyword_summary}; semantic skipped (resume text unavailable)", "v2_rules_plus_semantic", None, None
+
+        email_embedding, email_embedding_json, _ = _ensure_embedding_cached(
+            email_row.semantic_embedding if email_row else None,
+            email_text,
+        )
+        resume_embedding, resume_embedding_json, _ = _ensure_embedding_cached(
+            resume.semantic_embedding if resume else None,
+            resume_text,
+        )
+        similarity = semantic_similarity(email_embedding, resume_embedding)
+        blended = blend_scores(
+            keyword_score=keyword_score,
+            semantic_similarity=similarity,
+            semantic_enabled=True,
+        )
+        summary = f"{keyword_summary}; {blended.detail}"
+        return blended.final_score, summary, blended.source, email_embedding_json, resume_embedding_json
+    except Exception as exc:
+        return keyword_score, f"{keyword_summary}; semantic fallback ({exc})", "v2_rules_plus_semantic_fallback", None, None
+
+
+def _percentile_ms(values: list[float], percentile: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    rank = max(1, math.ceil((percentile / 100.0) * len(ordered)))
+    index = min(len(ordered) - 1, rank - 1)
+    return ordered[index]
+
+
 def _is_terminal_state(email: RecruiterEmail) -> bool:
     return email.state in {"approved_sent", "rejected", "auto_rejected"}
 
@@ -1463,6 +1552,7 @@ def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
         feature_auto_send=s.feature_auto_send,
         feature_retry_queue=s.feature_retry_queue,
         feature_ai_enabled=s.feature_ai_enabled,
+        feature_semantic_enabled=s.feature_semantic_enabled,
         fallback_draft_template=s.fallback_draft_template or DEFAULT_FALLBACK_DRAFT_TEMPLATE,
         signature_name=(s.signature_name or "").strip() or DEFAULT_SIGNATURE_NAME,
         signature_phone=(s.signature_phone or "").strip() or DEFAULT_SIGNATURE_PHONE,
@@ -1566,6 +1656,7 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
     s.feature_auto_send = payload.feature_auto_send
     s.feature_retry_queue = payload.feature_retry_queue
     s.feature_ai_enabled = payload.feature_ai_enabled
+    s.feature_semantic_enabled = payload.feature_semantic_enabled
     s.fallback_draft_template = payload.fallback_draft_template.strip() if payload.fallback_draft_template.strip() else DEFAULT_FALLBACK_DRAFT_TEMPLATE
     s.signature_name = payload.signature_name.strip() if payload.signature_name.strip() else DEFAULT_SIGNATURE_NAME
     s.signature_phone = payload.signature_phone.strip() if payload.signature_phone.strip() else DEFAULT_SIGNATURE_PHONE
@@ -1615,6 +1706,13 @@ def upload_resume(file: UploadFile = File(...), db: Session = Depends(get_db)) -
         version=next_version,
         is_current=True,
     )
+    try:
+        resume_text = _semantic_text_for_resume(resume)
+        if resume_text.strip():
+            resume_vector, _provider = generate_embedding(resume_text)
+            resume.semantic_embedding = embedding_to_json(resume_vector)
+    except Exception as exc:
+        logger.warning("Resume semantic embedding skipped: %s", exc)
     db.add(resume)
     db.commit()
     db.refresh(resume)
@@ -1877,7 +1975,15 @@ def gmail_sync(db: Session = Depends(get_db)) -> GmailSyncResponse:
 
             parsed = parse_email(item["subject"], item["body"])
             hard_pass, hard_reason = hard_filter_check(parsed, user_settings)
-            ai_score, ai_summary = ai_assist_score(parsed, user_settings)
+            active_resume = _active_resume(db)
+            ai_score, ai_summary, ai_score_source, email_embedding_json, resume_embedding_json = _compute_blended_ai_score(
+                subject=item["subject"],
+                body=item["body"],
+                parsed=parsed,
+                user_settings=user_settings,
+                email_row=None,
+                resume=active_resume,
+            )
             threshold = user_settings.qualification_threshold
 
             state = "needs_review"
@@ -1933,8 +2039,9 @@ def gmail_sync(db: Session = Depends(get_db)) -> GmailSyncResponse:
                 hard_filter_result=hard_reason,
                 auto_reject_reason=auto_reject_reason,
                 ai_score=ai_score,
-                ai_score_source="v1_rules_plus_ai",
+                ai_score_source=ai_score_source,
                 ai_summary=ai_summary,
+                semantic_embedding=email_embedding_json,
                 sync_batch_id=sync_batch_id,
                 draft_reply=draft,
                 draft_source="rules_only" if draft else None,
@@ -1949,6 +2056,8 @@ def gmail_sync(db: Session = Depends(get_db)) -> GmailSyncResponse:
                 gmail_received_at=item.get("gmail_received_at"),
                 recipient_email=item["recipient_email"],
             )
+            if active_resume and resume_embedding_json and active_resume.semantic_embedding != resume_embedding_json:
+                active_resume.semantic_embedding = resume_embedding_json
             db.add(email)
             imported_count += 1
 
@@ -2087,29 +2196,199 @@ def automation_run_once(payload: AutomationRunRequest | None = None, db: Session
     failed_count = 0
     last_email: RecruiterEmail | None = None
 
-    for item in items:
-        existing = (
-            db.query(RecruiterEmail)
-            .filter(RecruiterEmail.owner_id == settings.owner_id)
-            .filter(RecruiterEmail.external_message_id == item["external_message_id"])
-            .first()
-        )
-        if existing and existing.state == "approved_sent":
-            skipped_count += 1
-            last_email = existing
-            if not dry_run:
-                mark_message_processed(item["external_message_id"])
-            continue
+    capture_started = False
+    if settings.semantic_embedding_latency_log_enabled:
+        begin_embedding_latency_capture()
+        capture_started = True
 
-        parsed = parse_email(item["subject"], item["body"])
-        hard_pass, hard_reason = hard_filter_check(parsed, user_settings)
-        ai_score, ai_summary = ai_assist_score(parsed, user_settings)
-
-        blocked, block_reason = _policy_f2f_block(parsed, effective_policy)
-        if not hard_pass or ai_score < threshold or blocked:
-            if dry_run:
+    try:
+        active_resume = _active_resume(db)
+        for item in items:
+            existing = (
+                db.query(RecruiterEmail)
+                .filter(RecruiterEmail.owner_id == settings.owner_id)
+                .filter(RecruiterEmail.external_message_id == item["external_message_id"])
+                .first()
+            )
+            if existing and existing.state == "approved_sent":
                 skipped_count += 1
+                last_email = existing
+                if not dry_run:
+                    mark_message_processed(item["external_message_id"])
                 continue
+
+            parsed = parse_email(item["subject"], item["body"])
+            hard_pass, hard_reason = hard_filter_check(parsed, user_settings)
+            ai_score, ai_summary, ai_score_source, email_embedding_json, resume_embedding_json = _compute_blended_ai_score(
+                subject=item["subject"],
+                body=item["body"],
+                parsed=parsed,
+                user_settings=user_settings,
+                email_row=existing,
+                resume=active_resume,
+            )
+            if active_resume and resume_embedding_json and active_resume.semantic_embedding != resume_embedding_json:
+                active_resume.semantic_embedding = resume_embedding_json
+
+            blocked, block_reason = _policy_f2f_block(parsed, effective_policy)
+            if not hard_pass or ai_score < threshold or blocked:
+                if dry_run:
+                    skipped_count += 1
+                    continue
+                email = existing or RecruiterEmail(
+                    owner_id=settings.owner_id,
+                    sender=item["sender"],
+                    subject=item["subject"],
+                    body=item["body"],
+                    role=str(parsed["role"]),
+                    location=str(parsed["location"]),
+                    salary_text=str(parsed["salary_text"]),
+                    skills_text=str(parsed["skills_text"]),
+                    source="gmail",
+                    external_message_id=item["external_message_id"],
+                    external_thread_id=item["external_thread_id"],
+                    external_rfc_message_id=item.get("external_rfc_message_id"),
+                    gmail_received_at=item.get("gmail_received_at"),
+                    recipient_email=item["recipient_email"],
+                )
+                email.external_rfc_message_id = email.external_rfc_message_id or item.get("external_rfc_message_id")
+                email.gmail_received_at = email.gmail_received_at or item.get("gmail_received_at")
+                email.score = int(ai_score * 100)
+                email.ai_score = ai_score
+                email.ai_score_source = ai_score_source
+                email.ai_summary = ai_summary
+                email.semantic_embedding = email_embedding_json or email.semantic_embedding
+                email.hard_filter_result = hard_reason
+                email.state = "processed_skipped"
+                email.decision = "Reject"
+                if blocked:
+                    email.auto_reject_reason = "f2f_non_texas"
+                    email.decision_reason = block_reason
+                    email.skip_reason = "f2f_non_texas_blocked"
+                else:
+                    email.auto_reject_reason = hard_reason if not hard_pass else "ai_score_too_low"
+                    email.decision_reason = "Not qualified for auto-reply"
+                    email.skip_reason = "not_qualified"
+                email.last_error = None
+                email.draft_source = None
+                email.draft_model = None
+                email.draft_ai_error = None
+                if not existing:
+                    db.add(email)
+                db.commit()
+                db.refresh(email)
+                mark_message_processed(item["external_message_id"])
+                skipped_count += 1
+                last_email = email
+                continue
+
+            routing = _analyze_email_routing(
+                db,
+                item["sender"],
+                item["subject"],
+                item["body"],
+                item.get("snippet", ""),
+            )
+            if not routing.to_email or not routing.cc_email:
+                if dry_run:
+                    failed_count += 1
+                    continue
+                email = existing or RecruiterEmail(
+                    owner_id=settings.owner_id,
+                    sender=item["sender"],
+                    subject=item["subject"],
+                    body=item["body"],
+                    role=str(parsed["role"]),
+                    location=str(parsed["location"]),
+                    salary_text=str(parsed["salary_text"]),
+                    skills_text=str(parsed["skills_text"]),
+                    source="gmail",
+                    external_message_id=item["external_message_id"],
+                    external_thread_id=item["external_thread_id"],
+                    external_rfc_message_id=item.get("external_rfc_message_id"),
+                    gmail_received_at=item.get("gmail_received_at"),
+                    recipient_email=item["recipient_email"],
+                )
+                email.external_rfc_message_id = email.external_rfc_message_id or item.get("external_rfc_message_id")
+                email.gmail_received_at = email.gmail_received_at or item.get("gmail_received_at")
+                email.state = "failed"
+                email.decision = "Reject"
+                email.last_error = "Could not resolve recruiter To and employer CC"
+                email.skip_reason = "missing_to_or_cc"
+                email.decision_reason = "Recipient routing unresolved"
+                _apply_routing_result(email, routing)
+                email.routing_confirmed = False
+                email.resume_asset_id = resume.id
+                email.resume_file_name = resume.file_name
+                if not existing:
+                    db.add(email)
+                db.commit()
+                db.refresh(email)
+                _record_productivity_event(
+                    db,
+                    event_type="failed_mapping_marked",
+                    event_source="state",
+                    entity_id=email.id,
+                    metadata={"reason": email.skip_reason or "missing_to_or_cc"},
+                )
+                mark_message_processed(item["external_message_id"])
+                failed_count += 1
+                last_email = email
+                continue
+
+            # Manual approval gate: queue only, never auto-send from run-once.
+            if dry_run:
+                queued_count += 1
+                continue
+            greeting_line = greeting_from_to_contact(routing.to_email, item["body"])
+            fallback_reply = _build_user_fallback_draft(
+                db,
+                user_settings,
+                sender=item["sender"],
+                role=str(parsed["role"]),
+                parsed=parsed,
+                greeting_line=greeting_line,
+                resume_file_name=resume.file_name,
+            )
+            if user_settings.feature_ai_enabled:
+                ai_running = True
+                ai_last_error = None
+                ai_last_started_at = datetime.now(UTC)
+                ai_last_finished_at = None
+                ai_last_duration_ms = None
+                ai_last_draft_source = None
+                try:
+                    ai_reply = generate_reply_with_ai_or_fallback(
+                        sender=item["sender"],
+                        recruiter_to_email=routing.to_email,
+                        greeting_line=greeting_line,
+                        subject=item["subject"],
+                        body=item["body"],
+                        role=str(parsed["role"]),
+                        location=str(parsed["location"]),
+                        salary_text=str(parsed["salary_text"]),
+                        skills_text=str(parsed["skills_text"]),
+                        resume_path=resume.file_path,
+                        resume_file_name=resume.file_name,
+                        fallback_draft=fallback_reply,
+                        model_name=settings.deepseek_model_fast,
+                    )
+                finally:
+                    ai_last_finished_at = datetime.now(UTC)
+                    ai_last_duration_ms = int((ai_last_finished_at - ai_last_started_at).total_seconds() * 1000)
+                    ai_running = False
+                reply = ai_reply.draft_text
+                draft_source = ai_reply.source
+                draft_model = ai_reply.ai_model
+                draft_ai_error = ai_reply.ai_error
+                ai_last_error = ai_reply.ai_error
+                ai_last_draft_source = ai_reply.source
+            else:
+                reply = fallback_reply
+                draft_source = "rules_only"
+                draft_model = None
+                draft_ai_error = None
+                ai_last_draft_source = "rules_only"
             email = existing or RecruiterEmail(
                 owner_id=settings.owner_id,
                 sender=item["sender"],
@@ -2130,232 +2409,98 @@ def automation_run_once(payload: AutomationRunRequest | None = None, db: Session
             email.gmail_received_at = email.gmail_received_at or item.get("gmail_received_at")
             email.score = int(ai_score * 100)
             email.ai_score = ai_score
-            email.ai_score_source = "v1_rules_plus_ai"
+            email.ai_score_source = ai_score_source
             email.ai_summary = ai_summary
+            email.semantic_embedding = email_embedding_json or email.semantic_embedding
             email.hard_filter_result = hard_reason
-            email.state = "processed_skipped"
-            email.decision = "Reject"
-            if blocked:
-                email.auto_reject_reason = "f2f_non_texas"
-                email.decision_reason = block_reason
-                email.skip_reason = "f2f_non_texas_blocked"
-            else:
-                email.auto_reject_reason = hard_reason if not hard_pass else "ai_score_too_low"
-                email.decision_reason = "Not qualified for auto-reply"
-                email.skip_reason = "not_qualified"
+            email.draft_reply = reply
+            email.draft_source = draft_source
+            email.draft_model = draft_model
+            email.draft_ai_error = draft_ai_error
             email.last_error = None
-            email.draft_source = None
-            email.draft_model = None
-            email.draft_ai_error = None
-            if not existing:
-                db.add(email)
-            db.commit()
-            db.refresh(email)
-            mark_message_processed(item["external_message_id"])
-            skipped_count += 1
-            last_email = email
-            continue
-
-        routing = _analyze_email_routing(
-            db,
-            item["sender"],
-            item["subject"],
-            item["body"],
-            item.get("snippet", ""),
-        )
-        if not routing.to_email or not routing.cc_email:
-            if dry_run:
-                failed_count += 1
-                continue
-            email = existing or RecruiterEmail(
-                owner_id=settings.owner_id,
-                sender=item["sender"],
-                subject=item["subject"],
-                body=item["body"],
-                role=str(parsed["role"]),
-                location=str(parsed["location"]),
-                salary_text=str(parsed["salary_text"]),
-                skills_text=str(parsed["skills_text"]),
-                source="gmail",
-                external_message_id=item["external_message_id"],
-                external_thread_id=item["external_thread_id"],
-                external_rfc_message_id=item.get("external_rfc_message_id"),
-                gmail_received_at=item.get("gmail_received_at"),
-                recipient_email=item["recipient_email"],
-            )
-            email.external_rfc_message_id = email.external_rfc_message_id or item.get("external_rfc_message_id")
-            email.gmail_received_at = email.gmail_received_at or item.get("gmail_received_at")
-            email.state = "failed"
-            email.decision = "Reject"
-            email.last_error = "Could not resolve recruiter To and employer CC"
-            email.skip_reason = "missing_to_or_cc"
-            email.decision_reason = "Recipient routing unresolved"
+            email.state = "needs_review"
+            email.decision = "Qualified"
+            email.decision_reason = "Qualified and queued for manual approval"
+            email.approval_status = "pending"
+            email.sent_status = "not_sent"
+            email.sent_at = None
+            email.gmail_sent_id = None
             _apply_routing_result(email, routing)
             email.routing_confirmed = False
             email.resume_asset_id = resume.id
             email.resume_file_name = resume.file_name
+            email.skip_reason = None
             if not existing:
                 db.add(email)
             db.commit()
             db.refresh(email)
             _record_productivity_event(
                 db,
-                event_type="failed_mapping_marked",
+                event_type="needs_review_marked",
                 event_source="state",
                 entity_id=email.id,
-                metadata={"reason": email.skip_reason or "missing_to_or_cc"},
+                metadata={"source": "automation_run"},
             )
             mark_message_processed(item["external_message_id"])
-            failed_count += 1
-            last_email = email
-            continue
-
-        # Manual approval gate: queue only, never auto-send from run-once.
-        if dry_run:
             queued_count += 1
-            continue
-        greeting_line = greeting_from_to_contact(routing.to_email, item["body"])
-        fallback_reply = _build_user_fallback_draft(
-            db,
-            user_settings,
-            sender=item["sender"],
-            role=str(parsed["role"]),
-            parsed=parsed,
-            greeting_line=greeting_line,
-            resume_file_name=resume.file_name,
-        )
-        if user_settings.feature_ai_enabled:
-            ai_running = True
-            ai_last_error = None
-            ai_last_started_at = datetime.now(UTC)
-            ai_last_finished_at = None
-            ai_last_duration_ms = None
-            ai_last_draft_source = None
-            try:
-                ai_reply = generate_reply_with_ai_or_fallback(
-                    sender=item["sender"],
-                    recruiter_to_email=routing.to_email,
-                    greeting_line=greeting_line,
-                    subject=item["subject"],
-                    body=item["body"],
-                    role=str(parsed["role"]),
-                    location=str(parsed["location"]),
-                    salary_text=str(parsed["salary_text"]),
-                    skills_text=str(parsed["skills_text"]),
-                    resume_path=resume.file_path,
-                    resume_file_name=resume.file_name,
-                    fallback_draft=fallback_reply,
-                    model_name=settings.deepseek_model_fast,
-                )
-            finally:
-                ai_last_finished_at = datetime.now(UTC)
-                ai_last_duration_ms = int((ai_last_finished_at - ai_last_started_at).total_seconds() * 1000)
-                ai_running = False
-            reply = ai_reply.draft_text
-            draft_source = ai_reply.source
-            draft_model = ai_reply.ai_model
-            draft_ai_error = ai_reply.ai_error
-            ai_last_error = ai_reply.ai_error
-            ai_last_draft_source = ai_reply.source
+            last_email = email
+
+        if queued_count > 0:
+            status = "ready"
+            detail = f"Processed {matched_count} unread matching emails: queued={queued_count}, skipped={skipped_count}, failed={failed_count}."
+        elif failed_count > 0:
+            status = "failed"
+            detail = f"Processed {matched_count} unread matching emails: queued=0, skipped={skipped_count}, failed={failed_count}."
         else:
-            reply = fallback_reply
-            draft_source = "rules_only"
-            draft_model = None
-            draft_ai_error = None
-            ai_last_draft_source = "rules_only"
-        email = existing or RecruiterEmail(
-            owner_id=settings.owner_id,
-            sender=item["sender"],
-            subject=item["subject"],
-            body=item["body"],
-            role=str(parsed["role"]),
-            location=str(parsed["location"]),
-            salary_text=str(parsed["salary_text"]),
-            skills_text=str(parsed["skills_text"]),
-            source="gmail",
-            external_message_id=item["external_message_id"],
-            external_thread_id=item["external_thread_id"],
-            external_rfc_message_id=item.get("external_rfc_message_id"),
-            gmail_received_at=item.get("gmail_received_at"),
-            recipient_email=item["recipient_email"],
+            status = "skipped"
+            detail = f"Processed {matched_count} unread matching emails: queued=0, skipped={skipped_count}, failed=0."
+        if dry_run:
+            detail = f"[Dry run] {detail} No database or Gmail label changes were made. (batch_limit={batch_limit}, threshold={threshold:.2f})"
+
+        response = _build_run_response(
+            status,
+            detail,
+            last_email,
+            effective_query=effective_query,
+            matched_count=matched_count,
+            queued_count=queued_count,
+            skipped_count=skipped_count,
+            failed_count=failed_count,
         )
-        email.external_rfc_message_id = email.external_rfc_message_id or item.get("external_rfc_message_id")
-        email.gmail_received_at = email.gmail_received_at or item.get("gmail_received_at")
-        email.score = int(ai_score * 100)
-        email.ai_score = ai_score
-        email.ai_score_source = "v1_rules_plus_ai"
-        email.ai_summary = ai_summary
-        email.hard_filter_result = hard_reason
-        email.draft_reply = reply
-        email.draft_source = draft_source
-        email.draft_model = draft_model
-        email.draft_ai_error = draft_ai_error
-        email.last_error = None
-        email.state = "needs_review"
-        email.decision = "Qualified"
-        email.decision_reason = "Qualified and queued for manual approval"
-        email.approval_status = "pending"
-        email.sent_status = "not_sent"
-        email.sent_at = None
-        email.gmail_sent_id = None
-        _apply_routing_result(email, routing)
-        email.routing_confirmed = False
-        email.resume_asset_id = resume.id
-        email.resume_file_name = resume.file_name
-        email.skip_reason = None
-        if not existing:
-            db.add(email)
-        db.commit()
-        db.refresh(email)
         _record_productivity_event(
             db,
-            event_type="needs_review_marked",
-            event_source="state",
-            entity_id=email.id,
-            metadata={"source": "automation_run"},
+            event_type="recent_run_recorded",
+            event_source="run_once",
+            entity_id=response.email_id,
+            metadata={
+                "status": response.status,
+                "matched_count": response.matched_count or 0,
+                "queued_count": response.queued_count or 0,
+                "skipped_count": response.skipped_count or 0,
+                "failed_count": response.failed_count or 0,
+            },
         )
-        mark_message_processed(item["external_message_id"])
-        queued_count += 1
-        last_email = email
-
-    if queued_count > 0:
-        status = "ready"
-        detail = f"Processed {matched_count} unread matching emails: queued={queued_count}, skipped={skipped_count}, failed={failed_count}."
-    elif failed_count > 0:
-        status = "failed"
-        detail = f"Processed {matched_count} unread matching emails: queued=0, skipped={skipped_count}, failed={failed_count}."
-    else:
-        status = "skipped"
-        detail = f"Processed {matched_count} unread matching emails: queued=0, skipped={skipped_count}, failed=0."
-    if dry_run:
-        detail = f"[Dry run] {detail} No database or Gmail label changes were made. (batch_limit={batch_limit}, threshold={threshold:.2f})"
-
-    response = _build_run_response(
-        status,
-        detail,
-        last_email,
-        effective_query=effective_query,
-        matched_count=matched_count,
-        queued_count=queued_count,
-        skipped_count=skipped_count,
-        failed_count=failed_count,
-    )
-    _record_productivity_event(
-        db,
-        event_type="recent_run_recorded",
-        event_source="run_once",
-        entity_id=response.email_id,
-        metadata={
-            "status": response.status,
-            "matched_count": response.matched_count or 0,
-            "queued_count": response.queued_count or 0,
-            "skipped_count": response.skipped_count or 0,
-            "failed_count": response.failed_count or 0,
-        },
-    )
-    if telegram_service:
-        telegram_service.notify(_build_telegram_digest("Run Digest", response))
-    return response
+        if telegram_service:
+            telegram_service.notify(_build_telegram_digest("Run Digest", response))
+        return response
+    finally:
+        if capture_started:
+            latency_samples = end_embedding_latency_capture()
+            if latency_samples:
+                p50_ms = _percentile_ms(latency_samples, 50.0)
+                p95_ms = _percentile_ms(latency_samples, 95.0)
+                max_ms = max(latency_samples)
+                provider = (settings.semantic_embedding_provider or "hash").strip().lower()
+                model = settings.semantic_embedding_model or "text-embedding-3-small"
+                logger.warning(
+                    "embedding_latency_summary count=%s p50_ms=%.2f p95_ms=%.2f max_ms=%.2f provider=%s model=%s",
+                    len(latency_samples),
+                    p50_ms,
+                    p95_ms,
+                    max_ms,
+                    provider,
+                    model,
+                )
 
 
 @app.post("/phase0/emails/ingest", response_model=EmailResponse)
@@ -2363,11 +2508,18 @@ def ingest_email(payload: IngestEmailRequest, db: Session = Depends(get_db)) -> 
     user_settings = _get_settings(db)
     parsed = parse_email(payload.subject, payload.body)
     hard_pass, hard_reason = hard_filter_check(parsed, user_settings)
-    ai_score, ai_summary = ai_assist_score(parsed, user_settings)
+    active_resume = _active_resume(db)
+    ai_score, ai_summary, ai_score_source, email_embedding_json, resume_embedding_json = _compute_blended_ai_score(
+        subject=payload.subject,
+        body=payload.body,
+        parsed=parsed,
+        user_settings=user_settings,
+        email_row=None,
+        resume=active_resume,
+    )
     threshold = user_settings.qualification_threshold
     state = "needs_review" if hard_pass and ai_score >= threshold else "auto_rejected"
     decision = "Qualified" if state == "needs_review" else "Reject"
-    active_resume = _active_resume(db)
     fallback_draft = _build_user_fallback_draft(
         db,
         user_settings,
@@ -2394,8 +2546,9 @@ def ingest_email(payload: IngestEmailRequest, db: Session = Depends(get_db)) -> 
         hard_filter_result=hard_reason,
         auto_reject_reason=None if state == "needs_review" else "manual_ingest_not_qualified",
         ai_score=ai_score,
-        ai_score_source="v1_rules_plus_ai",
+        ai_score_source=ai_score_source,
         ai_summary=ai_summary,
+        semantic_embedding=email_embedding_json,
         draft_reply=fallback_draft
         if state == "needs_review"
         else "",
@@ -2407,6 +2560,8 @@ def ingest_email(payload: IngestEmailRequest, db: Session = Depends(get_db)) -> 
         source="manual",
     )
     db.add(email)
+    if active_resume and resume_embedding_json and active_resume.semantic_embedding != resume_embedding_json:
+        active_resume.semantic_embedding = resume_embedding_json
     db.commit()
     db.refresh(email)
     if state == "needs_review":

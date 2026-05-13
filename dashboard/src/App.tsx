@@ -93,6 +93,7 @@ type SettingsPayload = {
   feature_auto_send: boolean
   feature_retry_queue: boolean
   feature_ai_enabled: boolean
+  feature_semantic_enabled: boolean
   fallback_draft_template: string
   signature_name: string
   signature_phone: string
@@ -289,6 +290,7 @@ function App() {
     feature_auto_send: false,
     feature_retry_queue: false,
     feature_ai_enabled: false,
+    feature_semantic_enabled: false,
     fallback_draft_template: '',
     signature_name: '',
     signature_phone: '',
@@ -362,6 +364,7 @@ function App() {
     const payload = (await res.json()) as SettingsPayload
     const normalized: SettingsPayload = {
       ...payload,
+      feature_semantic_enabled: Boolean(payload.feature_semantic_enabled),
       default_gmail_query: payload.default_gmail_query || payload.gmail_query || 'is:unread',
       default_date_mode: payload.default_date_mode === 'off' ? 'off' : 'today',
       feature_auto_poll_interval_minutes: Math.max(1, Math.min(payload.feature_auto_poll_interval_minutes || 10, 1440)),
@@ -999,6 +1002,17 @@ function App() {
                         type="checkbox"
                         checked={settings.feature_ai_enabled}
                         onChange={(e) => setSettings(withAiToggle(settings, e.target.checked))}
+                      />
+                      <span className="toggleTrack" />
+                    </span>
+                  </label>
+                  <label className="toggleRow">
+                    <span>Enable Semantic Matching</span>
+                    <span className="toggleSwitch">
+                      <input
+                        type="checkbox"
+                        checked={settings.feature_semantic_enabled}
+                        onChange={(e) => setSettings({ ...settings, feature_semantic_enabled: e.target.checked })}
                       />
                       <span className="toggleTrack" />
                     </span>

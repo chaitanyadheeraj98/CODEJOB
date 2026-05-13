@@ -51,6 +51,7 @@ def ensure_sqlite_phase0_columns() -> None:
             ("draft_source", "ALTER TABLE recruiter_emails ADD COLUMN draft_source VARCHAR(50)"),
             ("draft_model", "ALTER TABLE recruiter_emails ADD COLUMN draft_model VARCHAR(120)"),
             ("draft_ai_error", "ALTER TABLE recruiter_emails ADD COLUMN draft_ai_error TEXT"),
+            ("semantic_embedding", "ALTER TABLE recruiter_emails ADD COLUMN semantic_embedding TEXT"),
         ]
 
         for column_name, statement in alter_statements:
@@ -78,6 +79,7 @@ def ensure_sqlite_phase0_columns() -> None:
             ("default_gmail_query", "ALTER TABLE user_settings ADD COLUMN default_gmail_query TEXT DEFAULT 'is:unread in:inbox recruiter'"),
             ("default_date_mode", "ALTER TABLE user_settings ADD COLUMN default_date_mode VARCHAR(20) DEFAULT 'today'"),
             ("feature_ai_enabled", "ALTER TABLE user_settings ADD COLUMN feature_ai_enabled BOOLEAN DEFAULT 0"),
+            ("feature_semantic_enabled", "ALTER TABLE user_settings ADD COLUMN feature_semantic_enabled BOOLEAN DEFAULT 0"),
             ("feature_auto_poll_interval_minutes", "ALTER TABLE user_settings ADD COLUMN feature_auto_poll_interval_minutes INTEGER DEFAULT 10"),
             ("fallback_draft_template", "ALTER TABLE user_settings ADD COLUMN fallback_draft_template TEXT DEFAULT ''"),
             ("signature_name", "ALTER TABLE user_settings ADD COLUMN signature_name VARCHAR(255) DEFAULT ''"),
@@ -87,6 +89,14 @@ def ensure_sqlite_phase0_columns() -> None:
         ]
         for column_name, statement in settings_alter_statements:
             if column_name not in existing_settings:
+                conn.exec_driver_sql(statement)
+
+        existing_resume_assets = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(resume_assets)")}
+        resume_assets_alter_statements = [
+            ("semantic_embedding", "ALTER TABLE resume_assets ADD COLUMN semantic_embedding TEXT"),
+        ]
+        for column_name, statement in resume_assets_alter_statements:
+            if column_name not in existing_resume_assets:
                 conn.exec_driver_sql(statement)
 
         conn.exec_driver_sql(
