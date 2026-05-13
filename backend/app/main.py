@@ -115,6 +115,10 @@ ai_last_error: str | None = None
 ai_last_started_at: datetime | None = None
 ai_last_finished_at: datetime | None = None
 ai_last_duration_ms: int | None = None
+embedding_last_error: str | None = None
+embedding_last_attempted_at: datetime | None = None
+embedding_last_success_at: datetime | None = None
+embedding_last_duration_ms: int | None = None
 telegram_service: TelegramBotService | None = None
 telegram_action_lock = threading.Lock()
 telegram_auth_sessions: dict[int, datetime] = {}
@@ -179,7 +183,7 @@ ALLOWED_VIEW_EVENTS = {
     "view_run_queue",
 }
 
-RANGE_OPTIONS = {"last_1h", "current_day", "current_month", "current_year", "last_5y"}
+RANGE_OPTIONS = {"last_1h", "current_day", "current_week", "current_month", "current_year", "last_5y"}
 BUSINESS_TZ = ZoneInfo("America/Chicago")
 BUCKET_OPTIONS = {"five_min", "hour", "day", "month", "quarter"}
 
@@ -244,6 +248,15 @@ def _range_bounds(range_key: str) -> tuple[datetime, datetime]:
     if range_key == "current_day":
         start = datetime(now.year, now.month, now.day, tzinfo=UTC)
         return start, now
+    if range_key == "current_week":
+        now_local = datetime.now(BUSINESS_TZ)
+        week_start_local = datetime(
+            now_local.year,
+            now_local.month,
+            now_local.day,
+            tzinfo=BUSINESS_TZ,
+        ) - timedelta(days=now_local.weekday())
+        return week_start_local.astimezone(UTC), now_local.astimezone(UTC)
     if range_key == "current_month":
         start = datetime(now.year, now.month, 1, tzinfo=UTC)
         return start, now
@@ -260,11 +273,31 @@ def _ensure_utc(ts: datetime) -> datetime:
     return ts.astimezone(UTC)
 
 
+def _generate_embedding_with_health(text: str) -> tuple[list[float], str]:
+    global embedding_last_error, embedding_last_attempted_at, embedding_last_success_at, embedding_last_duration_ms
+    embedding_last_attempted_at = datetime.now(UTC)
+    started_at = embedding_last_attempted_at
+    try:
+        vector, provider = generate_embedding(text)
+    except Exception as exc:
+        finished_at = datetime.now(UTC)
+        embedding_last_duration_ms = int((finished_at - started_at).total_seconds() * 1000)
+        embedding_last_error = str(exc)
+        raise
+    finished_at = datetime.now(UTC)
+    embedding_last_duration_ms = int((finished_at - started_at).total_seconds() * 1000)
+    embedding_last_success_at = finished_at
+    embedding_last_error = None
+    return vector, provider
+
+
 def _default_bucket_for_range(range_key: str) -> str:
     if range_key == "last_1h":
         return "five_min"
     if range_key == "current_day":
         return "hour"
+    if range_key == "current_week":
+        return "day"
     if range_key == "current_month":
         return "day"
     if range_key == "current_year":
@@ -1338,7 +1371,7 @@ def _ensure_embedding_cached(current_payload: str | None, text: str) -> tuple[li
     cached = embedding_from_json(current_payload)
     if cached:
         return cached, current_payload, "cache"
-    vector, provider = generate_embedding(text)
+    vector, provider = _generate_embedding_with_health(text)
     return vector, embedding_to_json(vector), provider
 
 
@@ -1724,7 +1757,7 @@ def upload_resume(file: UploadFile = File(...), db: Session = Depends(get_db)) -
     try:
         resume_text = _semantic_text_for_resume(resume)
         if resume_text.strip():
-            resume_vector, _provider = generate_embedding(resume_text)
+            resume_vector, _provider = _generate_embedding_with_health(resume_text)
             resume.semantic_embedding = embedding_to_json(resume_vector)
     except Exception as exc:
         logger.warning("Resume semantic embedding skipped: %s", exc)
@@ -1761,6 +1794,61 @@ def ai_status() -> AIStatusResponse:
     connected = bool(settings.deepseek_api_key)
     configured = connected and bool(settings.deepseek_base_url) and bool(settings.deepseek_model_fast)
     detail = "Ready" if connected else "DeepSeek API key missing (set Deepseek_API_KEY)."
+    embedding_provider = (settings.semantic_embedding_provider or "hash").strip().lower()
+    embedding_model = settings.semantic_embedding_model or "text-embedding-3-small"
+    embedding_configured = False
+    embedding_connected = False
+    embedding_runtime_healthy: bool | None = None
+    embedding_detail = "Embedding provider not configured."
+    if embedding_provider == "hash":
+        embedding_configured = True
+        embedding_connected = True
+        embedding_detail = "Ready (local hash embeddings)."
+    elif embedding_provider == "openai":
+        embedding_configured = bool(settings.openai_api_key)
+        embedding_connected = embedding_configured
+        embedding_detail = (
+            "Ready"
+            if embedding_configured
+            else "OPENAI_API_KEY is missing for semantic embedding provider=openai."
+        )
+    elif embedding_provider == "openrouter":
+        embedding_configured = bool(settings.openrouter_api_key) and bool(settings.openrouter_base_url)
+        embedding_connected = embedding_configured
+        embedding_detail = (
+            "Ready"
+            if embedding_configured
+            else "OPENROUTER_API_KEY or OPENROUTER_BASE_URL is missing for semantic embedding provider=openrouter."
+        )
+    else:
+        embedding_configured = False
+        embedding_connected = False
+        embedding_detail = f"Unsupported embedding provider: {embedding_provider}"
+
+    if embedding_last_success_at and (
+        embedding_last_attempted_at is None or embedding_last_success_at >= embedding_last_attempted_at
+    ):
+        embedding_runtime_healthy = True
+    elif embedding_last_error:
+        embedding_runtime_healthy = False
+    else:
+        embedding_runtime_healthy = None
+
+    # Runtime health is primary; config readiness is exposed separately for diagnosis.
+    if embedding_runtime_healthy is True:
+        embedding_connected = True
+        embedding_detail = "Runtime healthy (last embedding succeeded)."
+    elif embedding_runtime_healthy is False:
+        embedding_connected = False
+        embedding_detail = embedding_last_error or "Runtime unhealthy (last embedding failed)."
+    elif not embedding_configured:
+        embedding_connected = False
+        # Keep config-oriented detail when runtime has no signal.
+        embedding_detail = embedding_detail
+    else:
+        embedding_connected = False
+        embedding_detail = "No runtime signal yet (no embedding attempts in this process)."
+
     return AIStatusResponse(
         configured=configured,
         connected=connected,
@@ -1768,6 +1856,16 @@ def ai_status() -> AIStatusResponse:
         provider="deepseek",
         model=settings.deepseek_model_fast or "deepseek-chat",
         detail=detail,
+        embedding_provider=embedding_provider,
+        embedding_model=embedding_model,
+        embedding_connected=embedding_connected,
+        embedding_detail=embedding_detail,
+        embedding_configured=embedding_configured,
+        embedding_runtime_healthy=embedding_runtime_healthy,
+        embedding_last_error=embedding_last_error,
+        embedding_last_attempted_at=embedding_last_attempted_at,
+        embedding_last_success_at=embedding_last_success_at,
+        embedding_last_duration_ms=embedding_last_duration_ms,
         last_error=ai_last_error,
         last_started_at=ai_last_started_at,
         last_finished_at=ai_last_finished_at,

@@ -198,6 +198,16 @@ class AIStatusResponse(BaseModel):
     provider: str
     model: str
     detail: str
+    embedding_provider: str
+    embedding_model: str
+    embedding_connected: bool
+    embedding_detail: str
+    embedding_configured: bool | None = None
+    embedding_runtime_healthy: bool | None = None
+    embedding_last_error: str | None = None
+    embedding_last_attempted_at: datetime | None = None
+    embedding_last_success_at: datetime | None = None
+    embedding_last_duration_ms: int | None = None
     last_error: str | None = None
     last_started_at: datetime | None = None
     last_finished_at: datetime | None = None

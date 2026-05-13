@@ -59,6 +59,16 @@ type AiStatus = {
   provider: string
   model: string
   detail: string
+  embedding_provider?: string
+  embedding_model?: string
+  embedding_connected?: boolean
+  embedding_detail?: string
+  embedding_configured?: boolean | null
+  embedding_runtime_healthy?: boolean | null
+  embedding_last_error?: string | null
+  embedding_last_attempted_at?: string | null
+  embedding_last_success_at?: string | null
+  embedding_last_duration_ms?: number | null
   last_error: string | null
   last_started_at: string | null
   last_finished_at: string | null
@@ -189,7 +199,7 @@ type RoutingEvidence = {
   detail: string
 }
 
-type TimeRangeKey = 'last_1h' | 'current_day' | 'current_month' | 'current_year' | 'last_5y'
+type TimeRangeKey = 'last_1h' | 'current_day' | 'current_week' | 'current_month' | 'current_year' | 'last_5y'
 
 type ProductivityEvent = {
   id: number
@@ -715,6 +725,9 @@ function App() {
   const aiLastDuration = aiStatus?.last_duration_ms
     ? `${(aiStatus.last_duration_ms / 1000).toFixed(1)}s`
     : null
+  const embeddingLastDuration = aiStatus?.embedding_last_duration_ms
+    ? `${(aiStatus.embedding_last_duration_ms / 1000).toFixed(1)}s`
+    : null
   const trendBars = useMemo<ProductivityBarPoint[]>(
     () => (productivityTrend?.bars ?? []),
     [productivityTrend?.bars],
@@ -733,6 +746,9 @@ function App() {
     const dt = new Date(timestamp)
     if (range === 'last_1h' || range === 'current_day') {
       return dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    }
+    if (range === 'current_week') {
+      return dt.toLocaleDateString([], { weekday: 'short', day: 'numeric' })
     }
     if (range === 'current_month') {
       return dt.toLocaleDateString([], { month: 'short', day: 'numeric' })
@@ -907,6 +923,7 @@ function App() {
                   <select value={timeRange} onChange={(e) => setTimeRange(e.target.value as TimeRangeKey)}>
                     <option value="last_1h">Last 1 hour</option>
                     <option value="current_day">Current day</option>
+                    <option value="current_week">Current week</option>
                     <option value="current_month">Current month</option>
                     <option value="current_year">Current year</option>
                     <option value="last_5y">Last 5 years</option>
@@ -987,6 +1004,11 @@ function App() {
                   <div className="row"><span className="label">Provider</span><span>{aiStatus?.provider ?? 'DeepSeek'}</span></div>
                   <div className="row"><span className="label">Model</span><span className="tag">{aiStatus?.model ?? 'deepseek-chat'}</span></div>
                   <div className="row"><span className="label">Connection</span><span className="dotOk">{aiStatus?.connected ? 'Healthy' : 'Disconnected'}</span></div>
+                  <div className="row"><span className="label">Embedding</span><span className="dotOk">{typeof aiStatus?.embedding_runtime_healthy === 'boolean' ? (aiStatus.embedding_runtime_healthy ? 'Healthy' : 'Disconnected') : typeof aiStatus?.embedding_connected === 'boolean' ? (aiStatus.embedding_connected ? 'Healthy' : 'Unknown') : 'Unknown'}{aiStatus?.embedding_provider ? ` (${aiStatus.embedding_provider}${aiStatus.embedding_model ? ` / ${aiStatus.embedding_model}` : ''})` : ''}</span></div>
+                  <div className="row"><span className="label">Embedding Config</span><span>{typeof aiStatus?.embedding_configured === 'boolean' ? (aiStatus.embedding_configured ? 'Configured' : 'Missing setup') : 'Unknown'}</span></div>
+                  {aiStatus?.embedding_last_error ? <div className="row"><span className="label">Embedding Error</span><span>{aiStatus.embedding_last_error}</span></div> : null}
+                  {aiStatus?.embedding_last_success_at ? <div className="row"><span className="label">Embedding Last Success</span><span>{aiStatus.embedding_last_success_at}</span></div> : null}
+                  {embeddingLastDuration ? <div className="row"><span className="label">Embedding Duration</span><span>{embeddingLastDuration}</span></div> : null}
                   {aiStatus?.last_draft_source ? <div className="row"><span className="label">Draft Source</span><span>{getDraftSourceLabel(aiStatus.last_draft_source)}</span></div> : null}
                   {aiLastDuration ? <div className="row"><span className="label">Last Duration</span><span>{aiLastDuration}</span></div> : null}
                 </div>
