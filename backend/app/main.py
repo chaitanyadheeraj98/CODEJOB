@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, TypedDict, cast
 import threading
+from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -179,6 +180,7 @@ ALLOWED_VIEW_EVENTS = {
 }
 
 RANGE_OPTIONS = {"last_1h", "current_day", "current_month", "current_year", "last_5y"}
+BUSINESS_TZ = ZoneInfo("America/Chicago")
 BUCKET_OPTIONS = {"five_min", "hour", "day", "month", "quarter"}
 
 
@@ -302,6 +304,19 @@ def _next_bucket(ts: datetime, bucket: str) -> datetime:
     if bucket == "month":
         return _add_months(ts, 1)
     return _add_months(ts, 3)
+
+
+def _mail_date_utc_window(selected: date) -> tuple[datetime, datetime]:
+    start_local = datetime(selected.year, selected.month, selected.day, tzinfo=BUSINESS_TZ)
+    end_local = start_local + timedelta(days=1)
+    return start_local.astimezone(UTC), end_local.astimezone(UTC)
+
+
+def _mail_date_filter_field(states: list[str]) -> str:
+    normalized = {s.strip().lower() for s in states if s.strip()}
+    if normalized == {"approved_sent"}:
+        return "sent_at"
+    return "gmail_received_at"
 
 
 def _parse_allowed_chat_ids(raw: str) -> set[int]:
@@ -2594,11 +2609,15 @@ def list_candidates(
             selected = date.fromisoformat(mail_date)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail="mail_date must be a valid YYYY-MM-DD date") from exc
-        start = datetime(selected.year, selected.month, selected.day, tzinfo=UTC)
-        end = start + timedelta(days=1)
+        start, end = _mail_date_utc_window(selected)
+        field_name = _mail_date_filter_field(states)
         query = query.filter(RecruiterEmail.source == "gmail")
-        query = query.filter(RecruiterEmail.gmail_received_at.is_not(None))
-        query = query.filter(RecruiterEmail.gmail_received_at >= start, RecruiterEmail.gmail_received_at < end)
+        if field_name == "sent_at":
+            query = query.filter(RecruiterEmail.sent_at.is_not(None))
+            query = query.filter(RecruiterEmail.sent_at >= start, RecruiterEmail.sent_at < end)
+        else:
+            query = query.filter(RecruiterEmail.gmail_received_at.is_not(None))
+            query = query.filter(RecruiterEmail.gmail_received_at >= start, RecruiterEmail.gmail_received_at < end)
 
     if sort == "highest_score":
         query = query.order_by(RecruiterEmail.score.desc(), RecruiterEmail.created_at.desc())
