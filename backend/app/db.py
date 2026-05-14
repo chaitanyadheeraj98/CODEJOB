@@ -51,6 +51,7 @@ def ensure_sqlite_phase0_columns() -> None:
             ("draft_source", "ALTER TABLE recruiter_emails ADD COLUMN draft_source VARCHAR(50)"),
             ("draft_model", "ALTER TABLE recruiter_emails ADD COLUMN draft_model VARCHAR(120)"),
             ("draft_ai_error", "ALTER TABLE recruiter_emails ADD COLUMN draft_ai_error TEXT"),
+            ("draft_resume_context_status", "ALTER TABLE recruiter_emails ADD COLUMN draft_resume_context_status VARCHAR(40)"),
             ("semantic_embedding", "ALTER TABLE recruiter_emails ADD COLUMN semantic_embedding TEXT"),
         ]
 

@@ -2,6 +2,7 @@
 
 import base64
 import json
+import logging
 import mimetypes
 import re
 import threading
@@ -18,6 +19,8 @@ from googleapiclient.errors import HttpError
 from app.ai.draft_formatting import draft_text_to_html
 from app.config import settings
 
+logger = logging.getLogger(__name__)
+
 SCOPES = ["https://www.googleapis.com/auth/gmail.modify", "https://www.googleapis.com/auth/gmail.send"]
 SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
 if SHEETS_SCOPE not in SCOPES:
@@ -25,6 +28,10 @@ if SHEETS_SCOPE not in SCOPES:
 _oauth_lock = threading.Lock()
 _oauth_thread: threading.Thread | None = None
 _oauth_last_error: str | None = None
+_oauth_last_authorization_url: str | None = None
+_oauth_prepared_flow: InstalledAppFlow | None = None
+_oauth_prepared_state: str | None = None
+_oauth_prepared_kwargs: dict[str, str] | None = None
 
 
 class GmailMessageCandidate(TypedDict):
@@ -92,11 +99,17 @@ def _load_credentials() -> Credentials:
         token_path.write_text(creds.to_json(), encoding="utf-8")
         return creds
 
+    global _oauth_last_authorization_url
     flow = InstalledAppFlow.from_client_config(_credentials_payload(), SCOPES)
+    flow.redirect_uri = settings.google_redirect_uri
     # In Docker, there is no local browser in-container; user opens the printed URL manually.
     extra_auth_kwargs: dict[str, str] = {"prompt": "select_account"}
     if settings.google_login_hint:
         extra_auth_kwargs["login_hint"] = settings.google_login_hint
+
+    auth_url, auth_state = flow.authorization_url(**extra_auth_kwargs)
+    _oauth_last_authorization_url = auth_url
+    logger.info("Gmail OAuth authorization URL: %s", auth_url)
 
     flow_any: Any = flow
     creds = cast(
@@ -107,10 +120,41 @@ def _load_credentials() -> Credentials:
             port=8080,
             open_browser=False,
             authorization_prompt_message="Please visit this URL to authorize this application: {url}",
+            state=auth_state,
             **extra_auth_kwargs,
         ),
     )
     _ensure_token_parent()
+    token_path.write_text(creds.to_json(), encoding="utf-8")
+    return creds
+
+
+def _prepare_oauth_flow() -> tuple[InstalledAppFlow, str, str, dict[str, str]]:
+    flow = InstalledAppFlow.from_client_config(_credentials_payload(), SCOPES)
+    flow.redirect_uri = settings.google_redirect_uri
+    extra_auth_kwargs: dict[str, str] = {"prompt": "select_account"}
+    if settings.google_login_hint:
+        extra_auth_kwargs["login_hint"] = settings.google_login_hint
+    auth_url, auth_state = flow.authorization_url(**extra_auth_kwargs)
+    return flow, auth_url, auth_state, extra_auth_kwargs
+
+
+def _run_prepared_oauth_flow(flow: InstalledAppFlow, auth_state: str, extra_auth_kwargs: dict[str, str]) -> Credentials:
+    flow_any: Any = flow
+    creds = cast(
+        Credentials,
+        flow_any.run_local_server(
+            host="localhost",
+            bind_addr="0.0.0.0",
+            port=8080,
+            open_browser=False,
+            authorization_prompt_message="Please visit this URL to authorize this application: {url}",
+            state=auth_state,
+            **extra_auth_kwargs,
+        ),
+    )
+    _ensure_token_parent()
+    token_path = Path(settings.google_token_path)
     token_path.write_text(creds.to_json(), encoding="utf-8")
     return creds
 
@@ -126,12 +170,27 @@ def _sheets_service() -> Any:
 
 
 def _oauth_worker() -> None:
-    global _oauth_last_error
+    global _oauth_last_error, _oauth_prepared_flow, _oauth_prepared_state, _oauth_prepared_kwargs
     try:
-        _load_credentials()
+        prepared_flow: InstalledAppFlow | None = None
+        prepared_state: str | None = None
+        prepared_kwargs: dict[str, str] | None = None
+        with _oauth_lock:
+            prepared_flow = _oauth_prepared_flow
+            prepared_state = _oauth_prepared_state
+            prepared_kwargs = _oauth_prepared_kwargs
+        if prepared_flow and prepared_state and prepared_kwargs:
+            _run_prepared_oauth_flow(prepared_flow, prepared_state, prepared_kwargs)
+        else:
+            _load_credentials()
         _oauth_last_error = None
     except Exception as exc:
         _oauth_last_error = str(exc)
+    finally:
+        with _oauth_lock:
+            _oauth_prepared_flow = None
+            _oauth_prepared_state = None
+            _oauth_prepared_kwargs = None
 
 
 def oauth_bootstrap_status() -> tuple[bool, str | None]:
@@ -141,24 +200,52 @@ def oauth_bootstrap_status() -> tuple[bool, str | None]:
         return in_progress, _oauth_last_error
 
 
-def start_oauth_bootstrap() -> tuple[str, str]:
-    global _oauth_thread, _oauth_last_error
+def oauth_authorization_url() -> str | None:
+    with _oauth_lock:
+        return _oauth_last_authorization_url
+
+
+def start_oauth_bootstrap() -> tuple[str, str, str | None]:
+    global _oauth_thread, _oauth_last_error, _oauth_last_authorization_url, _oauth_prepared_flow, _oauth_prepared_state, _oauth_prepared_kwargs
     if not is_gmail_configured():
-        return "oauth_not_configured", "Gmail OAuth is not configured."
+        return "oauth_not_configured", "Gmail OAuth is not configured.", None
 
     configured, authenticated, _ = gmail_auth_status()
     if configured and authenticated:
-        return "ready", "Gmail already authenticated."
+        return "ready", "Gmail already authenticated.", None
 
     with _oauth_lock:
         if _oauth_thread and _oauth_thread.is_alive():
-            return "oauth_in_progress", "OAuth is already in progress. Check backend logs for the auth URL."
+            return (
+                "oauth_in_progress",
+                "OAuth is already in progress. Open the authorization URL below.",
+                _oauth_last_authorization_url,
+            )
         _oauth_last_error = None
+        try:
+            flow, auth_url, auth_state, extra_auth_kwargs = _prepare_oauth_flow()
+            _oauth_last_authorization_url = auth_url
+            _oauth_prepared_flow = flow
+            _oauth_prepared_state = auth_state
+            _oauth_prepared_kwargs = extra_auth_kwargs
+            logger.info("Gmail OAuth authorization URL: %s", auth_url)
+        except Exception as exc:
+            _oauth_last_authorization_url = None
+            _oauth_prepared_flow = None
+            _oauth_prepared_state = None
+            _oauth_prepared_kwargs = None
+            _oauth_last_error = str(exc)
+            return (
+                "oauth_required",
+                f"OAuth setup failed: {exc}",
+                None,
+            )
         _oauth_thread = threading.Thread(target=_oauth_worker, daemon=True, name="gmail-oauth-bootstrap")
         _oauth_thread.start()
     return (
         "oauth_in_progress",
-        "OAuth started. Open the authorization URL from backend logs, complete sign-in, then retry Sync + Queue.",
+        "OAuth started. Open the authorization URL below, complete sign-in, then retry Sync + Queue.",
+        oauth_authorization_url(),
     )
 
 
@@ -484,3 +571,5 @@ def append_tracking_sheet_row(
         insertDataOption="INSERT_ROWS",
         body=payload,
     ).execute()
+
+

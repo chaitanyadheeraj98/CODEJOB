@@ -138,6 +138,7 @@ class EmailResponse(BaseModel):
     draft_source: str | None = None
     draft_model: str | None = None
     draft_ai_error: str | None = None
+    draft_resume_context_status: str | None = None
     approval_status: str
     sent_status: str
     source: str
@@ -227,6 +228,11 @@ class OAuthStartResponse(BaseModel):
     detail: str
     configured: bool
     authenticated: bool
+    authorization_url: str | None = None
+
+
+class OAuthUrlResponse(BaseModel):
+    authorization_url: str | None = None
 
 
 class CandidateListResponse(BaseModel):

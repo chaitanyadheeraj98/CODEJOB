@@ -5,6 +5,10 @@ import { withAiToggle } from './features/ai/state'
 import { getDraftSourceLabel } from './features/ai/ui'
 import { refreshCandidateBuckets } from './candidateBuckets'
 
+const GMAIL_OAUTH_POLL_INTERVAL_MS = 2000
+const GMAIL_OAUTH_POLL_TIMEOUT_MS = 180000
+let hasBootstrappedAppOnce = false
+
 function escapeHtml(text: string): string {
   return text
     .replaceAll('&', '&amp;')
@@ -155,6 +159,11 @@ type OAuthStartResponse = {
   detail: string
   configured: boolean
   authenticated: boolean
+  authorization_url?: string | null
+}
+
+type OAuthUrlResponse = {
+  authorization_url?: string | null
 }
 
 type ResumeAsset = {
@@ -187,6 +196,7 @@ type Candidate = {
   draft_source: string | null
   draft_model: string | null
   draft_ai_error: string | null
+  draft_resume_context_status: string | null
   resume_file_name: string | null
   state: string
   last_error: string | null
@@ -310,6 +320,8 @@ function App() {
   const [resumeFile, setResumeFile] = useState<File | null>(null)
   const [activeResume, setActiveResume] = useState<ResumeAsset | null>(null)
   const [running, setRunning] = useState(false)
+  const [oauthInProgress, setOauthInProgress] = useState(false)
+  const [oauthAuthorizationUrl, setOauthAuthorizationUrl] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [logs, setLogs] = useState<AutomationRunResponse[]>([])
@@ -335,6 +347,7 @@ function App() {
   const lastTrackedViewRef = useRef<string | null>(null)
   const hasBootstrappedCandidatesRef = useRef(false)
   const candidateRefreshTrackerRef = useRef(0)
+  const oauthPollingStartedAtRef = useRef<number | null>(null)
 
   const currentPolicy: DynamicPolicy = settings.policy ?? defaultPolicy
   const detectProfileFromPolicy = (policy: DynamicPolicy): PolicyProfileName | null => {
@@ -350,10 +363,12 @@ function App() {
       ? `Custom (from ${lastAppliedProfile})`
       : 'Custom'
 
-  const loadStatus = async () => {
+  const loadStatus = async (): Promise<GmailStatus> => {
     const res = await fetch(`${apiBase}/gmail/status`)
     if (!res.ok) throw new Error('Failed to load Gmail status')
-    setStatus((await res.json()) as GmailStatus)
+    const payload = (await res.json()) as GmailStatus
+    setStatus(payload)
+    return payload
   }
 
   const loadAiStatus = async () => {
@@ -366,6 +381,23 @@ function App() {
     const res = await fetch(`${apiBase}/telegram/status`)
     if (!res.ok) throw new Error('Failed to load Telegram status')
     setTelegramStatus((await res.json()) as TelegramStatus)
+  }
+
+  const loadOauthAuthorizationUrl = async () => {
+    const res = await fetch(`${apiBase}/gmail/oauth/url`)
+    if (!res.ok) return null
+    const payload = (await res.json()) as OAuthUrlResponse
+    return payload.authorization_url ?? null
+  }
+
+  const fetchAndOpenOauthUrl = async () => {
+    const url = await loadOauthAuthorizationUrl()
+    if (!url) {
+      setError('OAuth URL is not ready yet. Wait 1-2 seconds and click Get OAuth URL again.')
+      return
+    }
+    setOauthAuthorizationUrl(url)
+    window.open(url, '_blank', 'noopener,noreferrer')
   }
 
   const loadSettings = async (): Promise<SettingsPayload> => {
@@ -478,6 +510,9 @@ function App() {
   }
 
   useEffect(() => {
+    if (hasBootstrappedAppOnce) return
+    hasBootstrappedAppOnce = true
+
     const bootstrap = async () => {
       try {
         await Promise.all([
@@ -508,7 +543,6 @@ function App() {
 
   useEffect(() => {
     trackViewEvent(activePage)
-      .then(() => loadProductivityAnalytics(timeRange))
       .catch((e) => setError((e as Error).message))
   }, [activePage, timeRange])
 
@@ -521,6 +555,52 @@ function App() {
     }, 1000)
     return () => window.clearInterval(intervalId)
   }, [running])
+
+  useEffect(() => {
+    if (!oauthInProgress) return
+    if (oauthPollingStartedAtRef.current === null) {
+      oauthPollingStartedAtRef.current = Date.now()
+    }
+    const intervalId = window.setInterval(() => {
+      const pollStartedAt = oauthPollingStartedAtRef.current ?? Date.now()
+      if (Date.now() - pollStartedAt >= GMAIL_OAUTH_POLL_TIMEOUT_MS) {
+        setOauthInProgress(false)
+        oauthPollingStartedAtRef.current = null
+        setOauthAuthorizationUrl(null)
+        setError('OAuth timed out. Complete Google sign-in and click Connect Gmail again.')
+        return
+      }
+      loadStatus()
+        .then((latestStatus) => {
+          // Stop polling once Gmail reports authenticated.
+          if (latestStatus.authenticated) {
+            setOauthInProgress(false)
+            oauthPollingStartedAtRef.current = null
+            setOauthAuthorizationUrl(null)
+            return
+          }
+          if (!oauthAuthorizationUrl) {
+            loadOauthAuthorizationUrl()
+              .then((url) => {
+                if (url) setOauthAuthorizationUrl(url)
+              })
+              .catch(() => {
+                // Keep polling; URL may not be ready yet.
+              })
+          }
+        })
+        .catch(() => {
+          // Keep trying quietly while OAuth is in progress.
+        })
+    }, GMAIL_OAUTH_POLL_INTERVAL_MS)
+    return () => window.clearInterval(intervalId)
+  }, [oauthAuthorizationUrl, oauthInProgress])
+
+  useEffect(() => {
+    if (!oauthInProgress) {
+      oauthPollingStartedAtRef.current = null
+    }
+  }, [oauthInProgress])
 
   const saveSettings = async (event: React.FormEvent) => {
     event.preventDefault()
@@ -602,8 +682,10 @@ function App() {
   }
 
   const connectGmail = async () => {
+    if (oauthInProgress || running) return
     setRunning(true)
     setError('')
+    setOauthAuthorizationUrl(null)
     try {
       const res = await fetch(`${apiBase}/gmail/oauth/start`, {
         method: 'POST',
@@ -614,12 +696,29 @@ function App() {
       }
       const data = (await res.json()) as OAuthStartResponse
       setLogs((prev) => [{ status: data.status, detail: data.detail, email_id: null }, ...prev].slice(0, RECENT_RUNS_LIMIT))
+      if (data.status === 'oauth_in_progress') {
+        oauthPollingStartedAtRef.current = Date.now()
+        setOauthInProgress(true)
+        const initialUrl = data.authorization_url ?? null
+        setOauthAuthorizationUrl(initialUrl)
+        if (!initialUrl) {
+          loadOauthAuthorizationUrl()
+            .then((url) => {
+              if (url) setOauthAuthorizationUrl(url)
+            })
+            .catch(() => {
+              // Polling flow will retry URL lookup.
+            })
+        }
+      } else if (data.status === 'ready') {
+        oauthPollingStartedAtRef.current = null
+        setOauthInProgress(false)
+        setOauthAuthorizationUrl(null)
+      }
       if (data.status !== 'ready') {
         setError(data.detail)
       }
-      await loadStatus()
-      await loadAiStatus()
-      await loadTelegramStatus()
+      await Promise.all([loadStatus(), loadAiStatus(), loadTelegramStatus()])
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -840,10 +939,35 @@ function App() {
               type="button"
               className="btnPrimary"
               onClick={status?.authenticated ? runAutomation : connectGmail}
-              disabled={running}
+              disabled={running || oauthInProgress}
             >
-              {running ? 'Running...' : status?.authenticated ? 'Sync Now' : 'Connect Gmail'}
+              {running ? 'Running...' : status?.authenticated ? 'Sync Now' : oauthInProgress ? 'OAuth In Progress...' : 'Connect Gmail'}
             </button>
+            {oauthInProgress && oauthAuthorizationUrl ? (
+              <a href={oauthAuthorizationUrl} target="_blank" rel="noreferrer" className="btnMuted">
+                Open OAuth URL
+              </a>
+            ) : null}
+            {oauthInProgress ? (
+              <button type="button" className="btnMuted" onClick={() => fetchAndOpenOauthUrl().catch(() => {
+                setError('Could not fetch OAuth URL. Please try again.')
+              })}>
+                {oauthAuthorizationUrl ? 'Refresh OAuth URL' : 'Get OAuth URL'}
+              </button>
+            ) : null}
+            {oauthInProgress && oauthAuthorizationUrl ? (
+              <button
+                type="button"
+                className="btnMuted"
+                onClick={() => {
+                  navigator.clipboard.writeText(oauthAuthorizationUrl).catch(() => {
+                    setError('Could not copy OAuth URL. Please open it directly.')
+                  })
+                }}
+              >
+                Copy OAuth URL
+              </button>
+            ) : null}
             <span className="dateTrigger">
               <button type="button" className="iconBtn" onClick={openDatePicker} title="Filter by date">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -905,9 +1029,9 @@ function App() {
               type="button"
               className="syncBtn topBarAction"
               onClick={status?.authenticated ? runAutomation : connectGmail}
-              disabled={running}
+              disabled={running || oauthInProgress}
             >
-              {running ? 'Running...' : status?.authenticated ? 'Sync + Queue' : 'Connect Gmail'}
+              {running ? 'Running...' : status?.authenticated ? 'Sync + Queue' : oauthInProgress ? 'OAuth In Progress...' : 'Connect Gmail'}
             </button>
           </section>
 
@@ -1379,6 +1503,7 @@ function App() {
                   <strong>Draft source:</strong> {getDraftSourceLabel(item.draft_source)}
                   {item.draft_model ? ` (${item.draft_model})` : ''}
                 </p>
+                <p><strong>Resume Context:</strong> {getResumeContextLabel(item.draft_resume_context_status)}</p>
                 {item.draft_ai_error ? <p className="subtle"><strong>AI fallback:</strong> {item.draft_ai_error}</p> : null}
                 <p><strong>Draft:</strong></p>
                 <div className="draftUnified">
@@ -1552,3 +1677,11 @@ function App() {
 }
 
 export default App
+  const getResumeContextLabel = (value: string | null | undefined): string => {
+    if (value === 'injected') return 'Injected'
+    if (value === 'limited') return 'Limited'
+    if (value === 'missing_resume') return 'Missing Resume'
+    if (value === 'extract_failed') return 'Extract Failed'
+    if (value === 'rules_only') return 'Rules Only'
+    return 'Unknown'
+  }

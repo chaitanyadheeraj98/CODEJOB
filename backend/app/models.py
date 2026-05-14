@@ -38,6 +38,7 @@ class RecruiterEmail(Base):
     draft_source: Mapped[str | None] = mapped_column(String(50), nullable=True)
     draft_model: Mapped[str | None] = mapped_column(String(120), nullable=True)
     draft_ai_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    draft_resume_context_status: Mapped[str | None] = mapped_column(String(40), nullable=True)
     semantic_embedding: Mapped[str | None] = mapped_column(Text, nullable=True)
     approval_status: Mapped[str] = mapped_column(String(50), default="pending")
     sent_status: Mapped[str] = mapped_column(String(50), default="not_sent")
