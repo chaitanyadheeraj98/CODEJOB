@@ -116,4 +116,29 @@ describe('overall verdict scoring', () => {
       ).label,
     ).toBe('Strong')
   })
+
+  it('prefers backend draft_quality contract when present', () => {
+    const verdict = getOverallVerdict(
+      {
+        ...baseCandidate,
+        ai_score: 0,
+        routing_confidence: 0,
+        draft_quality: {
+          content_valid: true,
+          greeting_compliance: 'compliant',
+          resume_context_status: 'injected',
+          confidence: 0.91,
+          score: 93,
+          label: 'Strong',
+          issues: [],
+        },
+      },
+      '',
+      false,
+    )
+
+    expect(verdict.score).toBe(93)
+    expect(verdict.label).toBe('Strong')
+    expect(verdict.tone).toBe('strong')
+  })
 })

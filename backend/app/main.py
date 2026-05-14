@@ -25,6 +25,11 @@ from app.ai.resume_context_attribution import (
     RESUME_CONTEXT_RULES_ONLY,
 )
 from app.ai.resume_context import extract_resume_context
+from app.automation import (
+    RunOrchestrator,
+    RunOrchestratorDependencies,
+    RunOrchestratorRequest,
+)
 from app.db import Base, SessionLocal, engine, ensure_sqlite_phase0_columns
 from app.gmail_client import (
     get_message_rfc_message_id,
@@ -61,6 +66,7 @@ from app.phase0 import (
     skills_from_text,
     should_block_f2f,
 )
+from app.routing import HeuristicRoutingAdapter, LearnedRoutingAdapter, RoutingDecision, RoutingPolicyInput, RoutingPolicyService
 from app.schemas import (
     AIStatusResponse,
     ApproveSendRequest,
@@ -1473,10 +1479,35 @@ def _apply_routing_result(email: RecruiterEmail, routing: RoutingResult) -> None
     email.routing_candidates = _routing_payload_json(routing.candidates)
 
 
+def _apply_routing_decision(email: RecruiterEmail, routing: RoutingDecision) -> None:
+    email.recipient_email = routing.to_email
+    email.cc_email = routing.cc_email
+    email.routing_status = routing.status
+    email.routing_confidence = routing.confidence
+    email.routing_reason = routing.reason
+    email.routing_evidence = _routing_payload_json(routing.evidence)
+    email.routing_candidates = _routing_payload_json(routing.candidates)
+
+
 def _routing_is_sendable(email: RecruiterEmail) -> bool:
-    if email.routing_confirmed:
-        return True
-    return email.routing_status in {"safe", "confirmed"} and email.routing_confidence >= 0.8
+    decision = _evaluate_routing_policy(
+        None,
+        email.sender,
+        email.subject,
+        email.body,
+        "",
+        email.routing_confirmed,
+        precomputed=RoutingResult(
+            to_email=email.recipient_email,
+            cc_email=email.cc_email,
+            status=email.routing_status,
+            confidence=float(email.routing_confidence or 0.0),
+            reason=email.routing_reason,
+            evidence=[],
+            candidates=[],
+        ),
+    )
+    return decision.is_sendable_candidate
 
 
 def _analyze_email_routing(db: Session, sender: str, subject: str, body: str, snippet: str = "") -> RoutingResult:
@@ -1486,6 +1517,52 @@ def _analyze_email_routing(db: Session, sender: str, subject: str, body: str, sn
         body,
         snippet,
         learned_pairs=_learned_recipient_pairs(db, sender),
+    )
+
+
+def _evaluate_routing_policy(
+    db: Session | None,
+    sender: str,
+    subject: str,
+    body: str,
+    snippet: str = "",
+    routing_confirmed: bool = False,
+    *,
+    precomputed: RoutingResult | None = None,
+) -> RoutingDecision:
+    if precomputed is not None:
+        class _PrecomputedAdapter:
+            def __init__(self, result: RoutingResult) -> None:
+                self._result = result
+
+            def evaluate(self, payload: RoutingPolicyInput) -> RoutingResult:
+                _ = payload
+                return self._result
+
+        service = RoutingPolicyService(adapter=_PrecomputedAdapter(precomputed))
+        return service.evaluate(
+            RoutingPolicyInput(
+                sender=sender,
+                subject=subject,
+                body=body,
+                snippet=snippet,
+                learned_pairs=[],
+                routing_confirmed=routing_confirmed,
+            )
+        )
+
+    learned_pairs = _learned_recipient_pairs(db, sender) if db else []
+    adapter = LearnedRoutingAdapter(fallback=HeuristicRoutingAdapter())
+    service = RoutingPolicyService(adapter=adapter)
+    return service.evaluate(
+        RoutingPolicyInput(
+            sender=sender,
+            subject=subject,
+            body=body,
+            snippet=snippet,
+            learned_pairs=learned_pairs,
+            routing_confirmed=routing_confirmed,
+        )
     )
 
 
@@ -1661,7 +1738,14 @@ def _refresh_unconfirmed_routing(db: Session, emails: list[RecruiterEmail]) -> N
     for email in emails:
         if email.source != "gmail" or email.routing_confirmed:
             continue
-        routing = _analyze_email_routing(db, email.sender, email.subject, email.body)
+        routing = _evaluate_routing_policy(
+            db,
+            email.sender,
+            email.subject,
+            email.body,
+            "",
+            email.routing_confirmed,
+        )
         if (
             email.recipient_email == routing.to_email
             and email.cc_email == routing.cc_email
@@ -1669,11 +1753,11 @@ def _refresh_unconfirmed_routing(db: Session, emails: list[RecruiterEmail]) -> N
             and float(email.routing_confidence or 0.0) == routing.confidence
         ):
             continue
-        _apply_routing_result(email, routing)
-        if routing.status == "missing":
-            email.state = "failed"
+        _apply_routing_decision(email, routing)
+        if routing.should_mark_failed:
+            email.state = routing.recommended_state
             email.last_error = "Could not resolve recruiter To and employer CC"
-            email.skip_reason = "missing_to_or_cc"
+            email.skip_reason = routing.recommended_skip_reason
         changed = True
     if changed:
         db.commit()
@@ -2321,12 +2405,6 @@ def automation_run_once(payload: AutomationRunRequest | None = None, db: Session
             telegram_service.notify(_build_telegram_digest("Run Digest", response))
         return response
 
-    matched_count = len(items)
-    queued_count = 0
-    skipped_count = 0
-    failed_count = 0
-    last_email: RecruiterEmail | None = None
-
     capture_started = False
     if settings.semantic_embedding_latency_log_enabled:
         begin_embedding_latency_capture()
@@ -2334,273 +2412,78 @@ def automation_run_once(payload: AutomationRunRequest | None = None, db: Session
 
     try:
         active_resume = _active_resume(db)
-        for item in items:
-            existing = (
-                db.query(RecruiterEmail)
-                .filter(RecruiterEmail.owner_id == settings.owner_id)
-                .filter(RecruiterEmail.external_message_id == item["external_message_id"])
-                .first()
-            )
-            if existing and existing.state == "approved_sent":
-                skipped_count += 1
-                last_email = existing
-                if not dry_run:
-                    mark_message_processed(item["external_message_id"])
-                continue
-
-            parsed = parse_email(item["subject"], item["body"])
-            hard_pass, hard_reason = hard_filter_check(parsed, user_settings)
-            ai_score, ai_summary, ai_score_source, email_embedding_json, resume_embedding_json = _compute_blended_ai_score(
-                subject=item["subject"],
-                body=item["body"],
-                parsed=parsed,
-                user_settings=user_settings,
-                email_row=existing,
-                resume=active_resume,
-            )
-            if active_resume and resume_embedding_json and active_resume.semantic_embedding != resume_embedding_json:
-                active_resume.semantic_embedding = resume_embedding_json
-
-            blocked, block_reason = _policy_f2f_block(parsed, effective_policy)
-            if not hard_pass or ai_score < threshold or blocked:
-                if dry_run:
-                    skipped_count += 1
-                    continue
-                email = existing or RecruiterEmail(
-                    owner_id=settings.owner_id,
-                    sender=item["sender"],
-                    subject=item["subject"],
-                    body=item["body"],
-                    role=str(parsed["role"]),
-                    location=str(parsed["location"]),
-                    salary_text=str(parsed["salary_text"]),
-                    skills_text=str(parsed["skills_text"]),
-                    source="gmail",
-                    external_message_id=item["external_message_id"],
-                    external_thread_id=item["external_thread_id"],
-                    external_rfc_message_id=item.get("external_rfc_message_id"),
-                    gmail_received_at=item.get("gmail_received_at"),
-                    recipient_email=item["recipient_email"],
-                )
-                email.external_rfc_message_id = email.external_rfc_message_id or item.get("external_rfc_message_id")
-                email.gmail_received_at = email.gmail_received_at or item.get("gmail_received_at")
-                email.score = int(ai_score * 100)
-                email.ai_score = ai_score
-                email.ai_score_source = ai_score_source
-                email.ai_summary = ai_summary
-                email.semantic_embedding = email_embedding_json or email.semantic_embedding
-                email.hard_filter_result = hard_reason
-                email.state = "processed_skipped"
-                email.decision = "Reject"
-                if blocked:
-                    email.auto_reject_reason = "f2f_non_texas"
-                    email.decision_reason = block_reason
-                    email.skip_reason = "f2f_non_texas_blocked"
-                else:
-                    email.auto_reject_reason = hard_reason if not hard_pass else "ai_score_too_low"
-                    email.decision_reason = "Not qualified for auto-reply"
-                    email.skip_reason = "not_qualified"
-                email.last_error = None
-                email.draft_source = None
-                email.draft_model = None
-                email.draft_ai_error = None
-                email.draft_resume_context_status = None
-                if not existing:
-                    db.add(email)
-                db.commit()
-                db.refresh(email)
-                mark_message_processed(item["external_message_id"])
-                skipped_count += 1
-                last_email = email
-                continue
-
-            routing = _analyze_email_routing(
-                db,
-                item["sender"],
-                item["subject"],
-                item["body"],
-                item.get("snippet", ""),
-            )
-            if not routing.to_email or not routing.cc_email:
-                if dry_run:
-                    failed_count += 1
-                    continue
-                email = existing or RecruiterEmail(
-                    owner_id=settings.owner_id,
-                    sender=item["sender"],
-                    subject=item["subject"],
-                    body=item["body"],
-                    role=str(parsed["role"]),
-                    location=str(parsed["location"]),
-                    salary_text=str(parsed["salary_text"]),
-                    skills_text=str(parsed["skills_text"]),
-                    source="gmail",
-                    external_message_id=item["external_message_id"],
-                    external_thread_id=item["external_thread_id"],
-                    external_rfc_message_id=item.get("external_rfc_message_id"),
-                    gmail_received_at=item.get("gmail_received_at"),
-                    recipient_email=item["recipient_email"],
-                )
-                email.external_rfc_message_id = email.external_rfc_message_id or item.get("external_rfc_message_id")
-                email.gmail_received_at = email.gmail_received_at or item.get("gmail_received_at")
-                email.state = "failed"
-                email.decision = "Reject"
-                email.last_error = "Could not resolve recruiter To and employer CC"
-                email.skip_reason = "missing_to_or_cc"
-                email.decision_reason = "Recipient routing unresolved"
-                _apply_routing_result(email, routing)
-                email.routing_confirmed = False
-                email.resume_asset_id = resume.id
-                email.resume_file_name = resume.file_name
-                if not existing:
-                    db.add(email)
-                db.commit()
-                db.refresh(email)
-                _record_productivity_event(
-                    db,
-                    event_type="failed_mapping_marked",
-                    event_source="state",
-                    entity_id=email.id,
-                    metadata={"reason": email.skip_reason or "missing_to_or_cc"},
-                )
-                mark_message_processed(item["external_message_id"])
-                failed_count += 1
-                last_email = email
-                continue
-
-            # Manual approval gate: queue only, never auto-send from run-once.
-            if dry_run:
-                queued_count += 1
-                continue
-            greeting_line = greeting_from_to_contact(routing.to_email, item["body"])
-            fallback_reply = _build_user_fallback_draft(
-                db,
-                user_settings,
-                sender=item["sender"],
-                role=str(parsed["role"]),
-                parsed=parsed,
-                greeting_line=greeting_line,
-                resume_file_name=resume.file_name,
-            )
-            if user_settings.feature_ai_enabled:
-                ai_running = True
-                ai_last_error = None
-                ai_last_started_at = datetime.now(UTC)
-                ai_last_finished_at = None
-                ai_last_duration_ms = None
-                ai_last_draft_source = None
-                try:
-                    ai_reply = generate_reply_with_ai_or_fallback(
-                        sender=item["sender"],
-                        recruiter_to_email=routing.to_email,
-                        greeting_line=greeting_line,
-                        subject=item["subject"],
-                        body=item["body"],
-                        role=str(parsed["role"]),
-                        location=str(parsed["location"]),
-                        salary_text=str(parsed["salary_text"]),
-                        skills_text=str(parsed["skills_text"]),
-                        resume_path=resume.file_path,
-                        resume_file_name=resume.file_name,
-                        fallback_draft=fallback_reply,
-                        model_name=settings.deepseek_model_fast,
-                    )
-                finally:
-                    ai_last_finished_at = datetime.now(UTC)
-                    ai_last_duration_ms = int((ai_last_finished_at - ai_last_started_at).total_seconds() * 1000)
-                    ai_running = False
-                reply = ai_reply.draft_text
-                draft_source = ai_reply.source
-                draft_model = ai_reply.ai_model
-                draft_ai_error = ai_reply.ai_error
-                draft_resume_context_status = ai_reply.resume_context_status
-                ai_last_error = ai_reply.ai_error
-                ai_last_draft_source = ai_reply.source
-            else:
-                reply = fallback_reply
-                draft_source = "rules_only"
-                draft_model = None
-                draft_ai_error = None
-                draft_resume_context_status = RESUME_CONTEXT_RULES_ONLY
-                ai_last_draft_source = "rules_only"
-            email = existing or RecruiterEmail(
+        ai_running = user_settings.feature_ai_enabled
+        run_orchestrator = RunOrchestrator()
+        result = run_orchestrator.execute(
+            RunOrchestratorRequest(
+                db=db,
                 owner_id=settings.owner_id,
-                sender=item["sender"],
-                subject=item["subject"],
-                body=item["body"],
-                role=str(parsed["role"]),
-                location=str(parsed["location"]),
-                salary_text=str(parsed["salary_text"]),
-                skills_text=str(parsed["skills_text"]),
-                source="gmail",
-                external_message_id=item["external_message_id"],
-                external_thread_id=item["external_thread_id"],
-                external_rfc_message_id=item.get("external_rfc_message_id"),
-                gmail_received_at=item.get("gmail_received_at"),
-                recipient_email=item["recipient_email"],
+                items=items,
+                user_settings=user_settings,
+                resume=resume,
+                active_resume=active_resume,
+                effective_policy=effective_policy,
+                threshold=threshold,
+                dry_run=dry_run,
+                model_name=settings.deepseek_model_fast,
+                deps=RunOrchestratorDependencies(
+                    parse_email=parse_email,
+                    hard_filter_check=hard_filter_check,
+                    compute_blended_ai_score=lambda subject, body, parsed, user_settings, email_row, resume: _compute_blended_ai_score(
+                        subject=subject,
+                        body=body,
+                        parsed=parsed,
+                        user_settings=user_settings,
+                        email_row=email_row,
+                        resume=resume,
+                    ),
+                    policy_f2f_block=_policy_f2f_block,
+                    evaluate_routing_policy=_evaluate_routing_policy,
+                    greeting_from_to_contact=greeting_from_to_contact,
+                    build_user_fallback_draft=lambda db, user_settings, sender, role, parsed, greeting_line, resume_file_name: _build_user_fallback_draft(
+                        db,
+                        user_settings,
+                        sender=sender,
+                        role=role,
+                        parsed=parsed,
+                        greeting_line=greeting_line,
+                        resume_file_name=resume_file_name,
+                    ),
+                    generate_reply_with_ai_or_fallback=generate_reply_with_ai_or_fallback,
+                    apply_routing_decision=_apply_routing_decision,
+                    record_productivity_event=_record_productivity_event,
+                    mark_message_processed=mark_message_processed,
+                ),
             )
-            email.external_rfc_message_id = email.external_rfc_message_id or item.get("external_rfc_message_id")
-            email.gmail_received_at = email.gmail_received_at or item.get("gmail_received_at")
-            email.score = int(ai_score * 100)
-            email.ai_score = ai_score
-            email.ai_score_source = ai_score_source
-            email.ai_summary = ai_summary
-            email.semantic_embedding = email_embedding_json or email.semantic_embedding
-            email.hard_filter_result = hard_reason
-            email.draft_reply = reply
-            email.draft_source = draft_source
-            email.draft_model = draft_model
-            email.draft_ai_error = draft_ai_error
-            email.draft_resume_context_status = draft_resume_context_status
-            email.last_error = None
-            email.state = "needs_review"
-            email.decision = "Qualified"
-            email.decision_reason = "Qualified and queued for manual approval"
-            email.approval_status = "pending"
-            email.sent_status = "not_sent"
-            email.sent_at = None
-            email.gmail_sent_id = None
-            _apply_routing_result(email, routing)
-            email.routing_confirmed = False
-            email.resume_asset_id = resume.id
-            email.resume_file_name = resume.file_name
-            email.skip_reason = None
-            if not existing:
-                db.add(email)
-            db.commit()
-            db.refresh(email)
-            _record_productivity_event(
-                db,
-                event_type="needs_review_marked",
-                event_source="state",
-                entity_id=email.id,
-                metadata={"source": "automation_run"},
-            )
-            mark_message_processed(item["external_message_id"])
-            queued_count += 1
-            last_email = email
+        )
+        ai_last_error = result.ai_last_error
+        ai_last_draft_source = result.ai_last_draft_source
+        ai_last_started_at = result.ai_last_started_at
+        ai_last_finished_at = result.ai_last_finished_at
+        ai_last_duration_ms = result.ai_last_duration_ms
+        ai_running = False
 
-        if queued_count > 0:
+        if result.queued_count > 0:
             status = "ready"
-            detail = f"Processed {matched_count} unread matching emails: queued={queued_count}, skipped={skipped_count}, failed={failed_count}."
-        elif failed_count > 0:
+            detail = f"Processed {result.matched_count} unread matching emails: queued={result.queued_count}, skipped={result.skipped_count}, failed={result.failed_count}."
+        elif result.failed_count > 0:
             status = "failed"
-            detail = f"Processed {matched_count} unread matching emails: queued=0, skipped={skipped_count}, failed={failed_count}."
+            detail = f"Processed {result.matched_count} unread matching emails: queued=0, skipped={result.skipped_count}, failed={result.failed_count}."
         else:
             status = "skipped"
-            detail = f"Processed {matched_count} unread matching emails: queued=0, skipped={skipped_count}, failed=0."
+            detail = f"Processed {result.matched_count} unread matching emails: queued=0, skipped={result.skipped_count}, failed=0."
         if dry_run:
             detail = f"[Dry run] {detail} No database or Gmail label changes were made. (batch_limit={batch_limit}, threshold={threshold:.2f})"
 
         response = _build_run_response(
             status,
             detail,
-            last_email,
+            result.last_email,
             effective_query=effective_query,
-            matched_count=matched_count,
-            queued_count=queued_count,
-            skipped_count=skipped_count,
-            failed_count=failed_count,
+            matched_count=result.matched_count,
+            queued_count=result.queued_count,
+            skipped_count=result.skipped_count,
+            failed_count=result.failed_count,
         )
         _record_productivity_event(
             db,

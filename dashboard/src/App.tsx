@@ -3,7 +3,7 @@ import './App.css'
 import Sidebar from './components/Sidebar'
 import { withAiToggle } from './features/ai/state'
 import { getDraftSourceLabel } from './features/ai/ui'
-import { fetchCandidatesPageByState, type CandidateState } from './candidateBuckets'
+import { type CandidateState, useCandidateBuckets } from './candidateBuckets'
 
 const GMAIL_OAUTH_POLL_INTERVAL_MS = 2000
 const GMAIL_OAUTH_POLL_TIMEOUT_MS = 180000
@@ -198,6 +198,7 @@ type Candidate = {
   draft_model: string | null
   draft_ai_error: string | null
   draft_resume_context_status: string | null
+  draft_quality?: DraftQuality | null
   resume_file_name: string | null
   state: string
   last_error: string | null
@@ -208,6 +209,16 @@ type RoutingEvidence = {
   email: string
   source: string
   detail: string
+}
+
+type DraftQuality = {
+  content_valid: boolean
+  greeting_compliance: 'compliant' | 'missing' | 'multiple' | string
+  resume_context_status: string
+  confidence: number
+  score: number
+  label: VerdictLabel
+  issues: string[]
 }
 
 type TimeRangeKey = 'last_1h' | 'current_day' | 'current_week' | 'current_month' | 'current_year' | 'last_5y'
@@ -253,6 +264,7 @@ type VerdictCandidateInput = Pick<
   | 'recipient_email'
   | 'cc_email'
   | 'draft_ai_error'
+  | 'draft_quality'
 >
 
 export function clamp01(value: number | null | undefined): number {
@@ -270,6 +282,19 @@ export function getOverallVerdict(
   effectiveDraft: string,
   routingTrusted: boolean,
 ): { score: number; label: VerdictLabel; tone: VerdictTone } {
+  if (candidate.draft_quality) {
+    const score = clamp100(candidate.draft_quality.score)
+    const label = candidate.draft_quality.label
+    const toneMap: Record<VerdictLabel, VerdictTone> = {
+      Excellent: 'excellent',
+      Strong: 'strong',
+      Good: 'good',
+      Review: 'review',
+      Risky: 'risky',
+    }
+    return { score, label, tone: toneMap[label] }
+  }
+
   let total = 50
   total += clamp01(candidate.ai_score) * 30
   total += clamp01(candidate.routing_confidence) * 20
@@ -378,12 +403,9 @@ function App() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [logs, setLogs] = useState<AutomationRunResponse[]>([])
-  const [queue, setQueue] = useState<Candidate[]>([])
   const [sendingId, setSendingId] = useState<number | null>(null)
   const [rejectingId, setRejectingId] = useState<number | null>(null)
   const [draftEdits, setDraftEdits] = useState<Record<number, string>>({})
-  const [failedQueue, setFailedQueue] = useState<Candidate[]>([])
-  const [sentQueue, setSentQueue] = useState<Candidate[]>([])
   const [routingFixes, setRoutingFixes] = useState<Record<number, { to: string; cc: string }>>({})
   const [fixingId, setFixingId] = useState<number | null>(null)
   const [activePage, setActivePage] = useState<'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items'>('run_queue')
@@ -394,20 +416,48 @@ function App() {
   const [timeRange, setTimeRange] = useState<TimeRangeKey>('current_day')
   const [productivityEvents, setProductivityEvents] = useState<ProductivityEvent[]>([])
   const [productivityTrend, setProductivityTrend] = useState<ProductivityTrendResponse | null>(null)
-  const [isCandidateRefreshing, setIsCandidateRefreshing] = useState(false)
-  const [candidateRefreshError, setCandidateRefreshError] = useState('')
-  const [loadingMoreKey, setLoadingMoreKey] = useState<CandidateState | null>(null)
-  const [bucketMeta, setBucketMeta] = useState<Record<CandidateState, { nextCursor: number | null; hasNext: boolean; loaded: boolean }>>({
-    needs_review: { nextCursor: null, hasNext: false, loaded: false },
-    failed: { nextCursor: null, hasNext: false, loaded: false },
-    approved_sent: { nextCursor: null, hasNext: false, loaded: false },
-  })
   const datePickerRef = useRef<HTMLInputElement | null>(null)
   const lastTrackedViewRef = useRef<string | null>(null)
   const hasBootstrappedCandidatesRef = useRef(false)
-  const candidateRefreshTrackerRef = useRef(0)
   const oauthPollingStartedAtRef = useRef<number | null>(null)
   const refreshTimerRef = useRef<number | null>(null)
+
+  const {
+    queue,
+    failedQueue,
+    sentQueue,
+    isCandidateRefreshing,
+    candidateRefreshError,
+    loadingMoreKey,
+    bucketMeta,
+    refreshCandidates,
+    loadCandidateBucket,
+    loadMoreCandidates,
+  } = useCandidateBuckets<Candidate>({
+    apiBase,
+    pageBucketLimit: PAGE_BUCKET_LIMIT,
+    initialBucketLimit: INITIAL_BUCKET_LIMIT,
+    onNeedsReviewItems: (items) => {
+      setDraftEdits((prev) => {
+        const next = { ...prev }
+        for (const c of items) {
+          if (!(c.id in next)) next[c.id] = c.draft_reply ?? ''
+        }
+        return next
+      })
+    },
+    onFailedItems: (items) => {
+      setRoutingFixes((prev) => {
+        const next = { ...prev }
+        for (const c of items) {
+          if (!(c.id in next)) {
+            next[c.id] = { to: c.recipient_email ?? '', cc: c.cc_email ?? '' }
+          }
+        }
+        return next
+      })
+    },
+  })
 
   const currentPolicy: DynamicPolicy = settings.policy ?? defaultPolicy
   const detectProfileFromPolicy = (policy: DynamicPolicy): PolicyProfileName | null => {
@@ -501,109 +551,12 @@ function App() {
     return null
   }
 
-  const applyQueueForBucket = (state: CandidateState, items: Candidate[], append: boolean) => {
-    if (state === 'needs_review') {
-      setQueue((prev) => (append ? [...prev, ...items] : items))
-      setDraftEdits((prev) => {
-        const next = { ...prev }
-        for (const c of items) {
-          if (!(c.id in next)) next[c.id] = c.draft_reply ?? ''
-        }
-        return next
-      })
-      return
-    }
-    if (state === 'failed') {
-      setFailedQueue((prev) => (append ? [...prev, ...items] : items))
-      setRoutingFixes((prev) => {
-        const next = { ...prev }
-        for (const c of items) {
-          if (!(c.id in next)) {
-            next[c.id] = { to: c.recipient_email ?? '', cc: c.cc_email ?? '' }
-          }
-        }
-        return next
-      })
-      return
-    }
-    setSentQueue((prev) => (append ? [...prev, ...items] : items))
-  }
-
-  const loadCandidateBucket = async (
-    state: CandidateState,
-    mailDate: string | null,
-    options?: { append?: boolean; cursor?: number | null; limit?: number; markRefreshing?: boolean },
-  ) => {
-    const append = Boolean(options?.append)
-    const cursor = options?.cursor ?? null
-    const limit = options?.limit ?? PAGE_BUCKET_LIMIT
-    const shouldTrackRefreshing = options?.markRefreshing ?? false
-    const requestId = candidateRefreshTrackerRef.current + 1
-    candidateRefreshTrackerRef.current = requestId
-    if (shouldTrackRefreshing) {
-      setIsCandidateRefreshing(true)
-      setCandidateRefreshError('')
-    }
-    try {
-      const page = await fetchCandidatesPageByState(apiBase, state, limit, mailDate, fetch, cursor)
-      if (requestId !== candidateRefreshTrackerRef.current) return
-      applyQueueForBucket(state, page.items as Candidate[], append)
-      setBucketMeta((prev) => ({
-        ...prev,
-        [state]: { nextCursor: page.nextCursor, hasNext: page.hasNext, loaded: true },
-      }))
-    } catch (error) {
-      if (requestId === candidateRefreshTrackerRef.current) {
-        setCandidateRefreshError((error as Error).message)
-      }
-    } finally {
-      if (shouldTrackRefreshing && requestId === candidateRefreshTrackerRef.current) {
-        setIsCandidateRefreshing(false)
-      }
-    }
-  }
-
-  const refreshCandidates = async (
+  const refreshVisibleCandidates = async (
     mailDate: string | null,
     options?: { activeOnly?: boolean; includeLoaded?: boolean; initialLoad?: boolean },
   ) => {
     const activeBucket = bucketForPage(activePage) ?? 'needs_review'
-    const targets: CandidateState[] = []
-    if (options?.activeOnly !== false) {
-      targets.push(activeBucket)
-    }
-    if (options?.includeLoaded) {
-      for (const key of (['needs_review', 'failed', 'approved_sent'] as CandidateState[])) {
-        if (!targets.includes(key) && bucketMeta[key].loaded) targets.push(key)
-      }
-    } else if (options?.activeOnly === false) {
-      targets.push('needs_review', 'failed', 'approved_sent')
-    }
-
-    for (let i = 0; i < targets.length; i += 1) {
-      const key = targets[i]
-      await loadCandidateBucket(key, mailDate, {
-        append: false,
-        cursor: null,
-        limit: options?.initialLoad ? INITIAL_BUCKET_LIMIT : PAGE_BUCKET_LIMIT,
-        markRefreshing: i === 0,
-      })
-    }
-  }
-
-  const loadMoreCandidates = async (state: CandidateState) => {
-    const meta = bucketMeta[state]
-    if (!meta.hasNext || meta.nextCursor === null || loadingMoreKey) return
-    setLoadingMoreKey(state)
-    try {
-      await loadCandidateBucket(state, settings.mail_date ?? null, {
-        append: true,
-        cursor: meta.nextCursor,
-        limit: PAGE_BUCKET_LIMIT,
-      })
-    } finally {
-      setLoadingMoreKey(null)
-    }
+    await refreshCandidates(mailDate, activeBucket, options)
   }
 
   const loadProductivityAnalytics = async (range: TimeRangeKey = timeRange) => {
@@ -646,7 +599,7 @@ function App() {
       window.clearTimeout(refreshTimerRef.current)
     }
     refreshTimerRef.current = window.setTimeout(() => {
-      refreshCandidates(settings.mail_date ?? null, { activeOnly: true, includeLoaded: true }).catch(() => {
+      refreshVisibleCandidates(settings.mail_date ?? null, { activeOnly: true, includeLoaded: true }).catch(() => {
         // Keep UI responsive if one refresh call fails; error surfaces on next action.
       })
       loadProductivityAnalytics(timeRange).catch(() => {
@@ -668,7 +621,7 @@ function App() {
           loadTelegramStatus(),
         ])
         const normalizedSettings = await loadSettings()
-        await refreshCandidates(normalizedSettings.mail_date ?? null, { activeOnly: true, initialLoad: true })
+        await refreshVisibleCandidates(normalizedSettings.mail_date ?? null, { activeOnly: true, initialLoad: true })
         hasBootstrappedCandidatesRef.current = true
       } catch (e) {
         setError((e as Error).message)
@@ -679,7 +632,7 @@ function App() {
 
   useEffect(() => {
     if (!hasBootstrappedCandidatesRef.current) return
-    refreshCandidates(settings.mail_date ?? null, { activeOnly: true, includeLoaded: true }).catch((e) => setError((e as Error).message))
+    refreshVisibleCandidates(settings.mail_date ?? null, { activeOnly: true, includeLoaded: true }).catch((e) => setError((e as Error).message))
   }, [settings.mail_date])
 
   useEffect(() => {
@@ -842,7 +795,7 @@ function App() {
       await loadStatus()
       await loadAiStatus()
       await loadTelegramStatus()
-      await refreshCandidates(settings.mail_date ?? null, { activeOnly: false })
+      await refreshVisibleCandidates(settings.mail_date ?? null, { activeOnly: false })
       await loadProductivityAnalytics(timeRange)
     } catch (e) {
       if ((e as Error).name === 'AbortError') {
@@ -1730,7 +1683,7 @@ function App() {
           {bucketMeta.needs_review.hasNext ? (
             <button
               type="button"
-              onClick={() => loadMoreCandidates('needs_review')}
+              onClick={() => loadMoreCandidates('needs_review', settings.mail_date ?? null)}
               disabled={loadingMoreKey === 'needs_review'}
             >
               {loadingMoreKey === 'needs_review' ? 'Loading...' : 'Load More'}
@@ -1796,7 +1749,7 @@ function App() {
           {bucketMeta.failed.hasNext ? (
             <button
               type="button"
-              onClick={() => loadMoreCandidates('failed')}
+              onClick={() => loadMoreCandidates('failed', settings.mail_date ?? null)}
               disabled={loadingMoreKey === 'failed'}
             >
               {loadingMoreKey === 'failed' ? 'Loading...' : 'Load More'}
@@ -1876,7 +1829,7 @@ function App() {
           {bucketMeta.approved_sent.hasNext ? (
             <button
               type="button"
-              onClick={() => loadMoreCandidates('approved_sent')}
+              onClick={() => loadMoreCandidates('approved_sent', settings.mail_date ?? null)}
               disabled={loadingMoreKey === 'approved_sent'}
             >
               {loadingMoreKey === 'approved_sent' ? 'Loading...' : 'Load More'}

@@ -4,6 +4,7 @@ from urllib.parse import quote
 from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.ai.draft_quality import assess_draft_quality
 from app.db import Base
 
 
@@ -75,6 +76,18 @@ class RecruiterEmail(Base):
         if not token:
             return None
         return f"https://mail.google.com/mail/u/0/#all/{token}"
+
+    @property
+    def draft_quality(self) -> dict[str, object]:
+        return assess_draft_quality(
+            draft_text=self.draft_reply or "",
+            ai_score=self.ai_score,
+            routing_confidence=self.routing_confidence,
+            resume_context_status=self.draft_resume_context_status,
+            recipient_email=self.recipient_email,
+            cc_email=self.cc_email,
+            draft_ai_error=self.draft_ai_error,
+        ).to_payload()
 
 
 class UserSettings(Base):

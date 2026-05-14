@@ -113,6 +113,16 @@ class ResumeResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class DraftQualityResponse(BaseModel):
+    content_valid: bool
+    greeting_compliance: str
+    resume_context_status: str
+    confidence: float
+    score: int
+    label: str
+    issues: list[str] = Field(default_factory=list)
+
+
 class EmailResponse(BaseModel):
     id: int
     owner_id: str
@@ -139,6 +149,7 @@ class EmailResponse(BaseModel):
     draft_model: str | None = None
     draft_ai_error: str | None = None
     draft_resume_context_status: str | None = None
+    draft_quality: DraftQualityResponse | None = None
     approval_status: str
     sent_status: str
     source: str
