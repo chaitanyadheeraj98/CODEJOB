@@ -26,14 +26,43 @@ export function buildCandidatesUrl(
   state: CandidateState,
   limit: number,
   mailDate: string | null,
+  cursor?: number | null,
 ): string {
   const params = new URLSearchParams({
     state,
     limit: String(limit),
     sort: 'newest',
   })
+  if (typeof cursor === 'number') params.set('cursor', String(cursor))
   if (mailDate) params.set('mail_date', mailDate)
   return `${apiBase}/candidates?${params.toString()}`
+}
+
+export type CandidatePage = {
+  items: Candidate[]
+  nextCursor: number | null
+  hasNext: boolean
+}
+
+export async function fetchCandidatesPageByState(
+  apiBase: string,
+  state: CandidateState,
+  limit: number,
+  mailDate: string | null,
+  fetchImpl: typeof fetch,
+  cursor?: number | null,
+  signal?: AbortSignal,
+): Promise<CandidatePage> {
+  const res = await fetchImpl(buildCandidatesUrl(apiBase, state, limit, mailDate, cursor), { signal })
+  if (!res.ok) {
+    throw new Error(`Failed to load ${state} queue`)
+  }
+  const data = (await res.json()) as CandidateListResponse
+  return {
+    items: data.items,
+    nextCursor: data.next_cursor,
+    hasNext: data.has_next,
+  }
 }
 
 export async function fetchCandidatesByState(
@@ -44,12 +73,8 @@ export async function fetchCandidatesByState(
   fetchImpl: typeof fetch,
   signal?: AbortSignal,
 ): Promise<Candidate[]> {
-  const res = await fetchImpl(buildCandidatesUrl(apiBase, state, limit, mailDate), { signal })
-  if (!res.ok) {
-    throw new Error(`Failed to load ${state} queue`)
-  }
-  const data = (await res.json()) as CandidateListResponse
-  return data.items
+  const page = await fetchCandidatesPageByState(apiBase, state, limit, mailDate, fetchImpl, undefined, signal)
+  return page.items
 }
 
 export async function refreshCandidateBuckets(args: {

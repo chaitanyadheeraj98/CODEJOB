@@ -3,7 +3,7 @@ import './App.css'
 import Sidebar from './components/Sidebar'
 import { withAiToggle } from './features/ai/state'
 import { getDraftSourceLabel } from './features/ai/ui'
-import { refreshCandidateBuckets } from './candidateBuckets'
+import { fetchCandidatesPageByState, type CandidateState } from './candidateBuckets'
 
 const GMAIL_OAUTH_POLL_INTERVAL_MS = 2000
 const GMAIL_OAUTH_POLL_TIMEOUT_MS = 180000
@@ -242,7 +242,8 @@ type ProductivityTrendResponse = {
 }
 
 function App() {
-  const QUEUE_LIMIT = 100
+  const INITIAL_BUCKET_LIMIT = 25
+  const PAGE_BUCKET_LIMIT = 25
   const RECENT_RUNS_LIMIT = 100
   const apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
   const defaultPolicy: DynamicPolicy = {
@@ -343,11 +344,18 @@ function App() {
   const [productivityTrend, setProductivityTrend] = useState<ProductivityTrendResponse | null>(null)
   const [isCandidateRefreshing, setIsCandidateRefreshing] = useState(false)
   const [candidateRefreshError, setCandidateRefreshError] = useState('')
+  const [loadingMoreKey, setLoadingMoreKey] = useState<CandidateState | null>(null)
+  const [bucketMeta, setBucketMeta] = useState<Record<CandidateState, { nextCursor: number | null; hasNext: boolean; loaded: boolean }>>({
+    needs_review: { nextCursor: null, hasNext: false, loaded: false },
+    failed: { nextCursor: null, hasNext: false, loaded: false },
+    approved_sent: { nextCursor: null, hasNext: false, loaded: false },
+  })
   const datePickerRef = useRef<HTMLInputElement | null>(null)
   const lastTrackedViewRef = useRef<string | null>(null)
   const hasBootstrappedCandidatesRef = useRef(false)
   const candidateRefreshTrackerRef = useRef(0)
   const oauthPollingStartedAtRef = useRef<number | null>(null)
+  const refreshTimerRef = useRef<number | null>(null)
 
   const currentPolicy: DynamicPolicy = settings.policy ?? defaultPolicy
   const detectProfileFromPolicy = (policy: DynamicPolicy): PolicyProfileName | null => {
@@ -434,44 +442,116 @@ function App() {
     setActiveResume(current)
   }
 
-  const refreshCandidates = async (mailDate: string | null) => {
-    await refreshCandidateBuckets({
-      apiBase,
-      limit: QUEUE_LIMIT,
-      mailDate,
-      tracker: candidateRefreshTrackerRef,
-      onStart: () => {
-        setIsCandidateRefreshing(true)
-        setCandidateRefreshError('')
-      },
-      onSuccess: ({ queue: nextQueue, failed: nextFailed, sent: nextSent }) => {
-        setQueue(nextQueue as Candidate[])
-        setFailedQueue(nextFailed as Candidate[])
-        setSentQueue(nextSent as Candidate[])
-        setDraftEdits((prev) => {
-          const next = { ...prev }
-          for (const c of nextQueue as Candidate[]) {
-            if (!(c.id in next)) next[c.id] = c.draft_reply ?? ''
+  const bucketForPage = (page: typeof activePage): CandidateState | null => {
+    if (page === 'run_queue' || page === 'needs_review') return 'needs_review'
+    if (page === 'failed_mapping') return 'failed'
+    if (page === 'sent_items') return 'approved_sent'
+    return null
+  }
+
+  const applyQueueForBucket = (state: CandidateState, items: Candidate[], append: boolean) => {
+    if (state === 'needs_review') {
+      setQueue((prev) => (append ? [...prev, ...items] : items))
+      setDraftEdits((prev) => {
+        const next = { ...prev }
+        for (const c of items) {
+          if (!(c.id in next)) next[c.id] = c.draft_reply ?? ''
+        }
+        return next
+      })
+      return
+    }
+    if (state === 'failed') {
+      setFailedQueue((prev) => (append ? [...prev, ...items] : items))
+      setRoutingFixes((prev) => {
+        const next = { ...prev }
+        for (const c of items) {
+          if (!(c.id in next)) {
+            next[c.id] = { to: c.recipient_email ?? '', cc: c.cc_email ?? '' }
           }
-          return next
-        })
-        setRoutingFixes((prev) => {
-          const next = { ...prev }
-          for (const c of nextFailed as Candidate[]) {
-            if (!(c.id in next)) {
-              next[c.id] = { to: c.recipient_email ?? '', cc: c.cc_email ?? '' }
-            }
-          }
-          return next
-        })
-      },
-      onError: (err) => {
-        setCandidateRefreshError(err.message)
-      },
-      onFinally: () => {
+        }
+        return next
+      })
+      return
+    }
+    setSentQueue((prev) => (append ? [...prev, ...items] : items))
+  }
+
+  const loadCandidateBucket = async (
+    state: CandidateState,
+    mailDate: string | null,
+    options?: { append?: boolean; cursor?: number | null; limit?: number; markRefreshing?: boolean },
+  ) => {
+    const append = Boolean(options?.append)
+    const cursor = options?.cursor ?? null
+    const limit = options?.limit ?? PAGE_BUCKET_LIMIT
+    const shouldTrackRefreshing = options?.markRefreshing ?? false
+    const requestId = candidateRefreshTrackerRef.current + 1
+    candidateRefreshTrackerRef.current = requestId
+    if (shouldTrackRefreshing) {
+      setIsCandidateRefreshing(true)
+      setCandidateRefreshError('')
+    }
+    try {
+      const page = await fetchCandidatesPageByState(apiBase, state, limit, mailDate, fetch, cursor)
+      if (requestId !== candidateRefreshTrackerRef.current) return
+      applyQueueForBucket(state, page.items as Candidate[], append)
+      setBucketMeta((prev) => ({
+        ...prev,
+        [state]: { nextCursor: page.nextCursor, hasNext: page.hasNext, loaded: true },
+      }))
+    } catch (error) {
+      if (requestId === candidateRefreshTrackerRef.current) {
+        setCandidateRefreshError((error as Error).message)
+      }
+    } finally {
+      if (shouldTrackRefreshing && requestId === candidateRefreshTrackerRef.current) {
         setIsCandidateRefreshing(false)
-      },
-    })
+      }
+    }
+  }
+
+  const refreshCandidates = async (
+    mailDate: string | null,
+    options?: { activeOnly?: boolean; includeLoaded?: boolean; initialLoad?: boolean },
+  ) => {
+    const activeBucket = bucketForPage(activePage) ?? 'needs_review'
+    const targets: CandidateState[] = []
+    if (options?.activeOnly !== false) {
+      targets.push(activeBucket)
+    }
+    if (options?.includeLoaded) {
+      for (const key of (['needs_review', 'failed', 'approved_sent'] as CandidateState[])) {
+        if (!targets.includes(key) && bucketMeta[key].loaded) targets.push(key)
+      }
+    } else if (options?.activeOnly === false) {
+      targets.push('needs_review', 'failed', 'approved_sent')
+    }
+
+    for (let i = 0; i < targets.length; i += 1) {
+      const key = targets[i]
+      await loadCandidateBucket(key, mailDate, {
+        append: false,
+        cursor: null,
+        limit: options?.initialLoad ? INITIAL_BUCKET_LIMIT : PAGE_BUCKET_LIMIT,
+        markRefreshing: i === 0,
+      })
+    }
+  }
+
+  const loadMoreCandidates = async (state: CandidateState) => {
+    const meta = bucketMeta[state]
+    if (!meta.hasNext || meta.nextCursor === null || loadingMoreKey) return
+    setLoadingMoreKey(state)
+    try {
+      await loadCandidateBucket(state, settings.mail_date ?? null, {
+        append: true,
+        cursor: meta.nextCursor,
+        limit: PAGE_BUCKET_LIMIT,
+      })
+    } finally {
+      setLoadingMoreKey(null)
+    }
   }
 
   const loadProductivityAnalytics = async (range: TimeRangeKey = timeRange) => {
@@ -494,7 +574,7 @@ function App() {
       sent_items: 'view_sent_items',
     }
     const eventType = eventMap[page]
-    if (lastTrackedViewRef.current === `${page}-${timeRange}`) return
+    if (lastTrackedViewRef.current === page) return
     await fetch(`${apiBase}/analytics/events/view`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -506,7 +586,21 @@ function App() {
     }).catch(() => {
       // Keep UI responsive even if analytics logging fails.
     })
-    lastTrackedViewRef.current = `${page}-${timeRange}`
+    lastTrackedViewRef.current = page
+  }
+
+  const schedulePostMutationRefresh = () => {
+    if (refreshTimerRef.current !== null) {
+      window.clearTimeout(refreshTimerRef.current)
+    }
+    refreshTimerRef.current = window.setTimeout(() => {
+      refreshCandidates(settings.mail_date ?? null, { activeOnly: true, includeLoaded: true }).catch(() => {
+        // Keep UI responsive if one refresh call fails; error surfaces on next action.
+      })
+      loadProductivityAnalytics(timeRange).catch(() => {
+        // Keep UI responsive if analytics refresh fails transiently.
+      })
+    }, 200)
   }
 
   useEffect(() => {
@@ -520,10 +614,9 @@ function App() {
           loadActiveResume(),
           loadAiStatus(),
           loadTelegramStatus(),
-          loadProductivityAnalytics(),
         ])
         const normalizedSettings = await loadSettings()
-        await refreshCandidates(normalizedSettings.mail_date ?? null)
+        await refreshCandidates(normalizedSettings.mail_date ?? null, { activeOnly: true, initialLoad: true })
         hasBootstrappedCandidatesRef.current = true
       } catch (e) {
         setError((e as Error).message)
@@ -534,8 +627,21 @@ function App() {
 
   useEffect(() => {
     if (!hasBootstrappedCandidatesRef.current) return
-    refreshCandidates(settings.mail_date ?? null).catch((e) => setError((e as Error).message))
+    refreshCandidates(settings.mail_date ?? null, { activeOnly: true, includeLoaded: true }).catch((e) => setError((e as Error).message))
   }, [settings.mail_date])
+
+  useEffect(() => {
+    if (!hasBootstrappedCandidatesRef.current) return
+    const key = bucketForPage(activePage)
+    if (!key) return
+    if (bucketMeta[key].loaded) return
+    loadCandidateBucket(key, settings.mail_date ?? null, {
+      append: false,
+      cursor: null,
+      limit: INITIAL_BUCKET_LIMIT,
+      markRefreshing: true,
+    }).catch((e) => setError((e as Error).message))
+  }, [activePage, settings.mail_date, bucketMeta.failed.loaded, bucketMeta.needs_review.loaded, bucketMeta.approved_sent.loaded])
 
   useEffect(() => {
     loadProductivityAnalytics(timeRange).catch((e) => setError((e as Error).message))
@@ -544,17 +650,39 @@ function App() {
   useEffect(() => {
     trackViewEvent(activePage)
       .catch((e) => setError((e as Error).message))
-  }, [activePage, timeRange])
+  }, [activePage])
 
   useEffect(() => {
     if (!running) return
-    const intervalId = window.setInterval(() => {
-      loadAiStatus().catch(() => {
-        // Keep the run UI stable; the main request will surface actionable errors.
-      })
-    }, 1000)
-    return () => window.clearInterval(intervalId)
+    let timerId: number | null = null
+    const startTime = Date.now()
+
+    const poll = () => {
+      if (document.visibilityState === 'visible') {
+        loadAiStatus().catch(() => {
+          // Keep the run UI stable; the main request will surface actionable errors.
+        })
+      }
+      const elapsedMs = Date.now() - startTime
+      const delayMs = elapsedMs <= 10000 ? 1000 : 2500
+      timerId = window.setTimeout(poll, delayMs)
+    }
+
+    timerId = window.setTimeout(poll, 1000)
+    return () => {
+      if (timerId !== null) {
+        window.clearTimeout(timerId)
+      }
+    }
   }, [running])
+
+  useEffect(() => {
+    return () => {
+      if (refreshTimerRef.current !== null) {
+        window.clearTimeout(refreshTimerRef.current)
+      }
+    }
+  }, [])
 
   useEffect(() => {
     if (!oauthInProgress) return
@@ -662,7 +790,7 @@ function App() {
       await loadStatus()
       await loadAiStatus()
       await loadTelegramStatus()
-      await refreshCandidates(settings.mail_date ?? null)
+      await refreshCandidates(settings.mail_date ?? null, { activeOnly: false })
       await loadProductivityAnalytics(timeRange)
     } catch (e) {
       if ((e as Error).name === 'AbortError') {
@@ -739,8 +867,7 @@ function App() {
         const details = await res.json().catch(() => null)
         throw new Error(details?.detail ?? 'Approve & send failed')
       }
-      await refreshCandidates(settings.mail_date ?? null)
-      await loadProductivityAnalytics(timeRange)
+      schedulePostMutationRefresh()
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -761,8 +888,7 @@ function App() {
         const details = await res.json().catch(() => null)
         throw new Error(details?.detail ?? 'Reject failed')
       }
-      await refreshCandidates(settings.mail_date ?? null)
-      await loadProductivityAnalytics(timeRange)
+      schedulePostMutationRefresh()
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -785,7 +911,7 @@ function App() {
         const details = await res.json().catch(() => null)
         throw new Error(details?.detail ?? 'Failed to save recipient mapping')
       }
-      await refreshCandidates(settings.mail_date ?? null)
+      schedulePostMutationRefresh()
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -834,12 +960,16 @@ function App() {
   const latestScore = productivityTrend?.kpi_total_sent ?? trendBars.reduce((sum, bar) => sum + bar.sent_count, 0)
   const trendDelta = productivityTrend?.trend_delta_pct ?? 0
   const liveDirection = productivityTrend?.trend_direction === 'down' ? 'down' : (productivityTrend?.trend_direction ?? 'flat')
-  const realtimeSignals = productivityEvents.slice(0, 8).map((event) => {
-    const when = new Date(event.occurred_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    return `${when} ${event.event_type.replaceAll('_', ' ')}`
-  })
-  const visibleBars = [...trendBars].reverse()
-  const maxSentInBars = Math.max(1, ...visibleBars.map((bar) => bar.sent_count))
+  const realtimeSignals = useMemo(
+    () =>
+      productivityEvents.slice(0, 8).map((event) => {
+        const when = new Date(event.occurred_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        return `${when} ${event.event_type.replaceAll('_', ' ')}`
+      }),
+    [productivityEvents],
+  )
+  const visibleBars = useMemo(() => [...trendBars].reverse(), [trendBars])
+  const maxSentInBars = useMemo(() => Math.max(1, ...visibleBars.map((bar) => bar.sent_count)), [visibleBars])
 
   const formatBucketLabel = (timestamp: string, range: TimeRangeKey) => {
     const dt = new Date(timestamp)
@@ -1540,6 +1670,15 @@ function App() {
               </article>
             )
           })}
+          {bucketMeta.needs_review.hasNext ? (
+            <button
+              type="button"
+              onClick={() => loadMoreCandidates('needs_review')}
+              disabled={loadingMoreKey === 'needs_review'}
+            >
+              {loadingMoreKey === 'needs_review' ? 'Loading...' : 'Load More'}
+            </button>
+          ) : null}
             </section>
           ) : null}
 
@@ -1597,6 +1736,15 @@ function App() {
               </article>
             )
           })}
+          {bucketMeta.failed.hasNext ? (
+            <button
+              type="button"
+              onClick={() => loadMoreCandidates('failed')}
+              disabled={loadingMoreKey === 'failed'}
+            >
+              {loadingMoreKey === 'failed' ? 'Loading...' : 'Load More'}
+            </button>
+          ) : null}
             </section>
           ) : null}
 
@@ -1668,6 +1816,15 @@ function App() {
               ) : null}
             </article>
           ))}
+          {bucketMeta.approved_sent.hasNext ? (
+            <button
+              type="button"
+              onClick={() => loadMoreCandidates('approved_sent')}
+              disabled={loadingMoreKey === 'approved_sent'}
+            >
+              {loadingMoreKey === 'approved_sent' ? 'Loading...' : 'Load More'}
+            </button>
+          ) : null}
             </section>
           ) : null}
         </div>
