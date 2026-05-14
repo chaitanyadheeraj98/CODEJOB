@@ -410,6 +410,7 @@ def send_reply_with_attachment(
     subject: str,
     body: str,
     attachment_path: str | None = None,
+    attachment_display_name: str | None = None,
 ) -> str:
     service = _gmail_service()
     message = EmailMessage()
@@ -432,7 +433,8 @@ def send_reply_with_attachment(
             content = file_path.read_bytes()
             mime_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
             main_type, sub_type = mime_type.split("/", 1)
-            message.add_attachment(content, maintype=main_type, subtype=sub_type, filename=file_path.name)
+            safe_name = (attachment_display_name or "").strip() or file_path.name
+            message.add_attachment(content, maintype=main_type, subtype=sub_type, filename=safe_name)
 
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
     payload = {"raw": raw, "threadId": thread_id}

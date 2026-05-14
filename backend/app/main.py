@@ -2818,6 +2818,7 @@ def approve_and_send(
                 email.subject,
                 email.draft_reply,
                 resume.file_path,
+                resume.file_name,
             )
             if email.external_message_id:
                 mark_message_processed(email.external_message_id)
