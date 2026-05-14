@@ -192,6 +192,7 @@ type Candidate = {
   routing_evidence: RoutingEvidence[]
   routing_candidates: RoutingEvidence[]
   routing_confirmed: boolean
+  ai_score?: number | null
   draft_reply: string
   draft_source: string | null
   draft_model: string | null
@@ -239,6 +240,57 @@ type ProductivityTrendResponse = {
   kpi_total_sent: number
   previous_period_total_sent: number
   bars: ProductivityBarPoint[]
+}
+
+type VerdictLabel = 'Excellent' | 'Strong' | 'Good' | 'Review' | 'Risky'
+type VerdictTone = 'excellent' | 'strong' | 'good' | 'review' | 'risky'
+
+type VerdictCandidateInput = Pick<
+  Candidate,
+  | 'ai_score'
+  | 'routing_confidence'
+  | 'draft_resume_context_status'
+  | 'recipient_email'
+  | 'cc_email'
+  | 'draft_ai_error'
+>
+
+export function clamp01(value: number | null | undefined): number {
+  if (typeof value !== 'number' || Number.isNaN(value)) return 0
+  return Math.max(0, Math.min(value, 1))
+}
+
+export function clamp100(value: number): number {
+  if (Number.isNaN(value)) return 0
+  return Math.max(0, Math.min(Math.round(value), 100))
+}
+
+export function getOverallVerdict(
+  candidate: VerdictCandidateInput,
+  effectiveDraft: string,
+  routingTrusted: boolean,
+): { score: number; label: VerdictLabel; tone: VerdictTone } {
+  let total = 50
+  total += clamp01(candidate.ai_score) * 30
+  total += clamp01(candidate.routing_confidence) * 20
+
+  const contextStatus = candidate.draft_resume_context_status ?? 'unknown'
+  if (contextStatus === 'injected') total += 8
+  else if (contextStatus === 'limited') total += 2
+  else if (contextStatus === 'missing_resume' || contextStatus === 'extract_failed') total -= 12
+  else total -= 4
+
+  total += routingTrusted ? 6 : -10
+  if (!candidate.recipient_email || !candidate.cc_email) total -= 6
+  if (!effectiveDraft.trim()) total -= 10
+  if (candidate.draft_ai_error) total -= 6
+
+  const score = clamp100(total)
+  if (score >= 95) return { score, label: 'Excellent', tone: 'excellent' }
+  if (score >= 90) return { score, label: 'Strong', tone: 'strong' }
+  if (score >= 80) return { score, label: 'Good', tone: 'good' }
+  if (score >= 70) return { score, label: 'Review', tone: 'review' }
+  return { score, label: 'Risky', tone: 'risky' }
 }
 
 function App() {
@@ -1605,13 +1657,15 @@ function App() {
           <h2>Needs Review (Manual Approval Required)</h2>
           {queue.length === 0 ? <p className="subtle">No queued emails.</p> : null}
           {queue.map((item) => {
-            const editedDraft = draftEdits[item.id] ?? item.draft_reply
+            const effectiveDraft = draftEdits[item.id] ?? item.draft_reply
+            const routingTrusted = canTrustRouting(item)
+            const verdict = getOverallVerdict(item, effectiveDraft, routingTrusted)
             const canApprove =
               Boolean(item.recipient_email) &&
               Boolean(item.cc_email) &&
-              Boolean(editedDraft?.trim()) &&
+              Boolean(effectiveDraft?.trim()) &&
               Boolean(item.resume_file_name) &&
-              canTrustRouting(item)
+              routingTrusted
             return (
               <article key={item.id} className="emailItem">
                 <p><strong>Email ID:</strong> {item.id}</p>
@@ -1639,14 +1693,14 @@ function App() {
                 <div className="draftUnified">
                   <label className="draftPaneLabel">Editable Draft</label>
                   <textarea
-                    value={editedDraft}
+                    value={effectiveDraft}
                     rows={10}
                     onChange={(e) => setDraftEdits((prev) => ({ ...prev, [item.id]: e.target.value }))}
                   />
                   <label className="draftPaneLabel">Live Preview</label>
                   <div
                     className="draftPreview"
-                    dangerouslySetInnerHTML={{ __html: draftToPreviewHtml(editedDraft) }}
+                    dangerouslySetInnerHTML={{ __html: draftToPreviewHtml(effectiveDraft) }}
                   />
                 </div>
                 {item.last_error ? <p className="errorMessage"><strong>Last Error:</strong> {item.last_error}</p> : null}
@@ -1666,6 +1720,9 @@ function App() {
                   >
                     {rejectingId === item.id ? 'Rejecting...' : 'Reject'}
                   </button>
+                  <span className={`verdictBadge verdict-${verdict.tone}`} title="Overall Verdict">
+                    {verdict.label} • {verdict.score}
+                  </span>
                 </div>
               </article>
             )

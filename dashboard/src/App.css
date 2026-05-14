@@ -704,6 +704,7 @@
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
+  align-items: center;
 }
 
 .rowBtns button,
@@ -723,6 +724,38 @@
   border-color: var(--primary);
   background: var(--primary);
   color: #fff;
+}
+
+.verdictBadge {
+  display: inline-flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.verdict-excellent,
+.verdict-strong {
+  color: #14623a;
+  background: #e8f7ee;
+  border-color: #7dc59a;
+}
+
+.verdict-good,
+.verdict-review {
+  color: #7a4a00;
+  background: #fff4dd;
+  border-color: #e3b968;
+}
+
+.verdict-risky {
+  color: #8f1421;
+  background: #fde8ea;
+  border-color: #e7a1a9;
 }
 
 .errorMessage {
