@@ -21,6 +21,22 @@ Located in `backend/tests/`:
 4. Number review manual classification (`mark-recruiter`, `mark-employer`) and duplicate suppression
 5. Opportunity update API status validation (`PATCH /recruiter-opportunities/{id}`)
 
+```mermaid
+flowchart TD
+    A[Code or behavior change proposed] --> B[Run high-priority regression scenarios]
+    B --> C{automation/run-once queue checks pass?}
+    C -->|No| Z[Block release and fix]
+    C -->|Yes| D{approve-send safety gate passes?}
+    D -->|No| Z
+    D -->|Yes| E{resolve-recipients failed->review passes?}
+    E -->|No| Z
+    E -->|Yes| F{number review classification + dedupe passes?}
+    F -->|No| Z
+    F -->|Yes| G{opportunity status update validation passes?}
+    G -->|No| Z
+    G -->|Yes| H[Proceed to full suite / release checks]
+```
+
 ## 3) Known branch mismatch in tests
 
 - `backend/tests/test_phone_attribution.py` imports `app.phone_attribution`, but that module is not present in current branch.

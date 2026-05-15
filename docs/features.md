@@ -20,6 +20,20 @@
 | Failed Mapping correction | Lets user fix To/CC and requeue candidate | Human-in-loop routing recovery | `dashboard/src/App.tsx`, `backend/app/main.py` |
 | Routing evidence panel | Shows confidence and evidence/candidates | Supports explainable decisions | `dashboard/src/App.tsx`, `backend/app/phase0.py` |
 
+```mermaid
+flowchart TD
+    A[Run pipeline output] --> B{Candidate state}
+    B -->|needs_review| C[Needs Review queue]
+    B -->|failed| D[Failed Mapping queue]
+    C --> E{Approve gate checks pass?}
+    E -->|Yes| F[Approve & Send]
+    E -->|No| G[Keep blocked for correction]
+    D --> H[User fixes To/CC]
+    H --> I[Save Mapping & Move to Review]
+    I --> C
+    C --> J[Reject path]
+```
+
 ## Premium number intelligence and classification
 
 | Feature | What it does | Why it matters | Key files |
@@ -30,6 +44,21 @@
 | Recruiter bucket | Stores recruiter numbers and aggregates opportunity counts | Non-duplicate recruiter identity store | `RecruiterNumber`, `/recruiter-numbers` |
 | Employer bucket | Stores employer numbers separately | Prevents recruiter/employer mixing | `EmployerNumber`, `/employer-numbers` |
 | Recruiter opportunities | Creates one opportunity card per recruiter-number + source Gmail message | Tracks repeated recruiter opportunities without duplicating recruiter records | `RecruiterOpportunity`, `/recruiter-opportunities` |
+
+```mermaid
+flowchart TD
+    A[Extract phone from recruiter email] --> B[Normalize + dedupe]
+    B --> C{Classifiable automatically?}
+    C -->|Recruiter| D[Upsert RecruiterNumber]
+    C -->|Employer| E[Upsert EmployerNumber]
+    C -->|Unknown| F[Create NumberReviewQueue card]
+    D --> G{New gmail_message_id?}
+    G -->|Yes| H[Create RecruiterOpportunity]
+    G -->|No| I[Skip opportunity create]
+    F --> J[Manual Mark as Recruiter/Employer]
+    J --> D
+    J --> E
+```
 
 ## Monitoring and ops
 

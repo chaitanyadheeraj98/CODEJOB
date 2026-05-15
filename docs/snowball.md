@@ -119,3 +119,17 @@ If only a few issues can be addressed immediately, prioritize in this order:
 3. Medium-risk frontend decomposition and refresh stabilization (MR-1, MR-2)
 
 Ignoring these first-order risks is most likely to snowball into systemic instability.
+
+```mermaid
+flowchart TD
+    A[Open risk item] --> B{Risk bucket}
+    B -->|High| C[Immediate remediation sprint]
+    B -->|Medium| D[Planned stabilization cycle]
+    B -->|Low| E[Backlog with periodic review]
+    C --> F[Add focused tests + owner + deadline]
+    D --> G[Define refactor scope + dependency mapping]
+    E --> H[Track drift indicators]
+    F --> I[Reduce chance of systemic failure]
+    G --> I
+    H --> I
+```

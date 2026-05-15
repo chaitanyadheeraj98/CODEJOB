@@ -65,6 +65,25 @@ CODEJOB is a **single FastAPI backend + single React dashboard** system.
    - recruiter opportunity creation (deduped per recruiter number + Gmail message)
 7. User manually approves/rejects/re-routes from UI
 
+```mermaid
+flowchart TD
+    A[UI: settings update / run trigger] --> B[POST /automation/run-once]
+    B --> C[Fetch unread Gmail candidates]
+    C --> D[RunOrchestrator: parse/filter/score/route/draft]
+    D --> E{State outcome}
+    E -->|needs_review| F[Needs Review queue]
+    E -->|failed| G[Failed Mapping queue]
+    E -->|processed_skipped| H[Skipped record only]
+    D --> I[Premium number extraction + intelligence]
+    I --> J{Classification result}
+    J -->|recruiter| K[RecruiterNumber + RecruiterOpportunity]
+    J -->|employer| L[EmployerNumber]
+    J -->|unknown| M[NumberReviewQueue pending]
+    F --> N[Approve & Send]
+    G --> O[Resolve recipients then move to review]
+    N --> P[Send email + analytics tracking]
+```
+
 ## 4) Safety and control architecture
 
 - Manual approval is required before sending (`approve-send` endpoint enforces routing safety + resume + draft + metadata)

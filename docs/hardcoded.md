@@ -32,3 +32,14 @@
 4. `backend/app/premium_numbers/extraction.py` relevance scoring thresholds and term lists
 
 These should stay synchronized with tests and docs whenever changed.
+
+```mermaid
+flowchart TD
+    A[Constant identified in code] --> B{Behavior or security impact?}
+    B -->|High| C[Move to config/settings immediately]
+    B -->|Medium| D[Centralize and document owner]
+    B -->|Low/expected| E[Keep local constant]
+    C --> F[Add validation + regression checks]
+    D --> G[Track in docs and refactor backlog]
+    E --> H[No immediate action]
+```

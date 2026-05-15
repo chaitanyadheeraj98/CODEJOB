@@ -60,6 +60,20 @@ The following areas are **high-risk to modify without end-to-end verification**.
 **Untangle direction**
 - Shift to versioned migrations (Alembic) while keeping backward compatibility checks.
 
+```mermaid
+flowchart TD
+    A[Change requested in critical workflow area] --> B{Which zone?}
+    B -->|main.py orchestration| C[Risk: cross-flow regressions]
+    B -->|routing/sendability| D[Risk: unsafe send or false block]
+    B -->|premium classification writes| E[Risk: duplicate or orphaned records]
+    B -->|sqlite migration helper| F[Risk: schema drift/startup failure]
+    C --> G[Require full regression + focused tests]
+    D --> G
+    E --> G
+    F --> G
+    G --> H[Only then merge]
+```
+
 ---
 
 ## 3) Tangled frontend code zones

@@ -78,6 +78,23 @@ These constraints are fundamental to duplicate prevention.
 7. Needs-review candidates can be approved and sent (Gmail + optional Sheets)
 8. Productivity events are recorded for trend views
 
+```mermaid
+flowchart TD
+    A[automation/run-once] --> B[RecruiterEmail upsert]
+    B --> C[PremiumNumberLead write/update]
+    C --> D{Classification}
+    D -->|Unknown| E[NumberReviewQueue pending]
+    D -->|Recruiter| F[RecruiterNumber upsert]
+    D -->|Employer| G[EmployerNumber upsert]
+    F --> H{New gmail_message_id for recruiter?}
+    H -->|Yes| I[Create RecruiterOpportunity]
+    H -->|No| J[No new opportunity]
+    B --> K{State == needs_review?}
+    K -->|Yes| L[Approve-send path]
+    L --> M[Send Gmail + optional Sheets row]
+    M --> N[Record ProductivityEvent]
+```
+
 ## 5) API schema anchors
 
 Primary schema module: `backend/app/schemas.py`

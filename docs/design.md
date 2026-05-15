@@ -34,6 +34,18 @@ Approve button stays disabled unless:
 - non-empty draft exists
 - resume is attached
 
+```mermaid
+flowchart TD
+    A[Needs Review card visible] --> B[User edits draft / inspects routing evidence]
+    B --> C{Sendability checks}
+    C -->|Routing safe + To + CC + draft + resume present| D[Enable Approve & Send]
+    C -->|Any check missing| E[Keep Approve disabled]
+    D --> F[Approve & Send request]
+    E --> G[User fixes missing condition]
+    G --> C
+    F --> H[Candidate moves to sent state]
+```
+
 ## 4) Failed mapping UX
 
 Failed mapping cards must retain:
@@ -42,6 +54,15 @@ Failed mapping cards must retain:
 - `Save Mapping & Move to Review` action
 
 This is the core human recovery path for unresolved routing.
+
+```mermaid
+flowchart TD
+    A[Candidate in Failed Mapping] --> B[Open source email viewer]
+    B --> C[Enter Correct To / Correct CC]
+    C --> D[Save Mapping & Move to Review]
+    D --> E[Backend validates and stores corrected recipients]
+    E --> F[Candidate re-enters Needs Review]
+```
 
 ## 5) Premium numbers UX
 

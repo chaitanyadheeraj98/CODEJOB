@@ -96,6 +96,29 @@ Pain points solved:
 8. On approve-send, backend validates strict send gates and sends Gmail reply with resume attachment.
 9. System updates sent metadata and emits productivity events.
 
+```mermaid
+flowchart TD
+    A[User starts Connect Gmail / Sync + Queue] --> B[Backend resolves query/policy/date mode]
+    B --> C[Fetch unread Gmail candidates]
+    C --> D[Parse + filter + score each email]
+    D --> E[Resolve routing To/CC with confidence]
+    E --> F{Queue state}
+    F -->|Qualified| G[needs_review]
+    F -->|Routing unresolved| H[failed]
+    F -->|Not qualified| I[processed_skipped]
+    G --> J[Run phone intelligence extraction]
+    H --> J
+    I --> J
+    J --> K{Unknown number?}
+    K -->|Yes| L[Create NumberReviewQueue card]
+    K -->|No| M[Update recruiter/employer buckets and opportunities]
+    G --> N[Manual approve/reject in UI]
+    N --> O{Approve-send gates pass?}
+    O -->|Yes| P[Send Gmail reply + resume]
+    O -->|No| Q[Keep blocked for correction]
+    P --> R[Update sent metadata + productivity events]
+```
+
 ## 6. Business Rules
 
 These rules must not be broken.
@@ -193,6 +216,23 @@ When system should do nothing:
 - Number already exists in employer bucket and current action is employer classification path.
 - Review card is already non-pending.
 - Existing opportunity key already present.
+
+```mermaid
+flowchart TD
+    A[Incoming phone intelligence write] --> B{Entity type}
+    B -->|RecruiterNumber| C{owner+phone exists?}
+    C -->|Yes| D[Skip create]
+    C -->|No| E[Insert recruiter number]
+    B -->|EmployerNumber| F{owner+phone exists?}
+    F -->|Yes| G[Skip create]
+    F -->|No| H[Insert employer number]
+    B -->|RecruiterOpportunity| I{owner+recruiter+gmail_message exists?}
+    I -->|Yes| J[Skip create]
+    I -->|No| K[Insert opportunity]
+    B -->|NumberReviewQueue| L{owner+phone+source_email exists?}
+    L -->|Yes| M[Skip create]
+    L -->|No| N[Insert pending review card]
+```
 
 ## 10. AI Agent Instructions
 
