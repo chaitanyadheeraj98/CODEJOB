@@ -1,107 +1,106 @@
-# CODEJOB Data Structures and Data Flow
+# CODEJOB Data Models and Data Flow (Current Branch)
 
-## 1) Main data models (backend ORM)
+## 1) Core data entities
 
-Defined in `backend/app/models.py`.
+### RecruiterEmail
+- Purpose: canonical candidate/workflow record
+- Key fields: sender, subject, body, parsed role/location/skills, score, state, routing fields, draft fields, send metadata, external Gmail IDs
+- Used by: run pipeline, review queues, approve/reject, analytics hooks, phone intelligence capture
 
-| Model | Key fields | Purpose | Storage |
-|---|---|---|---|
-| `RecruiterEmail` | sender, subject, body, role, score, state, routing fields, draft fields, send metadata | Primary candidate/work-item record through queue lifecycle | SQLite table `recruiter_emails` |
-| `UserSettings` | query/date defaults, thresholds, feature toggles, signature/template, policy_json | Per-owner operational configuration | SQLite table `user_settings` |
-| `ResumeAsset` | file_path, file_name, sha256, version, is_current | Resume file version tracking for attachments/context | SQLite table `resume_assets`; file on disk (`resume_storage_dir`) |
-| `SyncRun` | sync_batch_id, imported/skipped/error counts, timestamps | Captures each sync run outcome | SQLite table `sync_runs` |
-| `DraftEditFeedback` | original_draft, edited_draft, recruiter_email_id | Captures manual draft edits for learning/traceability | SQLite table `draft_edit_feedback` |
-| `RecipientRoutingFeedback` | sender_domain, corrected_to, corrected_cc, evidence flags | Stores manual recipient corrections for routing improvement | SQLite table `recipient_routing_feedback` |
-| `ProductivityEvent` | event_type, source, weight, metadata_json, occurred_at | Event log for dashboard analytics/trend | SQLite table `productivity_events` |
+### UserSettings
+- Purpose: persisted runtime behavior and defaults
+- Key fields: gmail query/date defaults, threshold, employer domains, AI/semantic toggles, auto-run, signatures, fallback template, policy JSON
+- Used by: run orchestration, routing domain behavior, UI settings
 
-## 2) API schemas and types
+### ResumeAsset
+- Purpose: versioned resume metadata + disk file reference
+- Key fields: file_path, file_name, version, is_current, sha256, semantic embedding cache
+- Used by: draft generation, approve-send attachment gate
 
-### Backend request models (`backend/app/schemas.py`)
-- `SettingsRequest`
-- `IngestEmailRequest`
-- `ApproveSendRequest`
-- `RejectRequest`
-- `BulkRejectRequest`
-- `ResolveRecipientsRequest`
-- `AutomationRunRequest`
-- `ProductivityEventCreateRequest`
+### SyncRun
+- Purpose: historical sync run record for import/skipped/error counts
+- Used by: run reporting, telegram recent run summaries
 
-### Backend response models
-- `SettingsResponse`
-- `EmailResponse`
-- `CandidateListResponse`
-- `GmailStatusResponse`
-- `AIStatusResponse`
-- `GmailSyncResponse`
-- `OAuthStartResponse`
-- `AutomationRunResponse`
-- `ResumeResponse`
-- `ProductivityEventResponse`
-- `ProductivityTrendResponse`
+### DraftEditFeedback
+- Purpose: stores operator-edited draft deltas
+- Used by: draft quality/learning trace
 
-### Frontend TypeScript structures (`dashboard/src/App.tsx`)
-- `GmailStatus`, `AiStatus`, `TelegramStatus`
-- `SettingsPayload`, `DynamicPolicy`
-- `Candidate`, `RoutingEvidence`, `CandidateListResponse`
-- `AutomationRunResponse`, `OAuthStartResponse`
-- `ProductivityEvent`, `ProductivityTrendResponse`, `ProductivityBarPoint`
+### RecipientRoutingFeedback
+- Purpose: stores manual recipient corrections by sender domain
+- Used by: learned routing pair hints
 
-## 3) Other important in-memory/state structures
+### ProductivityEvent
+- Purpose: event log for trend and activity monitor
+- Event types include: `approved_sent`, `needs_review_marked`, `failed_mapping_marked`, view events, `recent_run_recorded`
 
-- Frontend local state via React `useState` for settings, queues, logs, routing fixes, productivity data.
-- Backend process-level state in `main.py`:
-  - OAuth/AI status timestamps and errors
-  - Telegram auth sessions
-  - Auto-run thread controls
+## 2) Phone intelligence entities
 
-## 4) Data storage and management locations
+### PremiumNumberLead
+- Extracted per recruiter email and normalized phone number
+- Stores owner/company/designation/purpose/confidence/relevance details and source evidence
 
-| Data category | Where defined | Where stored/managed |
-|---|---|---|
-| Operational settings | `UserSettings`, `SettingsRequest` | SQLite `user_settings` + frontend state while editing |
-| Candidate emails and workflow state | `RecruiterEmail`, `EmailResponse` | SQLite `recruiter_emails` |
-| Resume binary/context | `ResumeAsset` + file upload endpoint | Disk (`./data/resumes`) + SQLite metadata |
-| Sync execution history | `SyncRun` | SQLite `sync_runs` |
-| Routing corrections | `RecipientRoutingFeedback` | SQLite `recipient_routing_feedback` |
-| Productivity analytics | `ProductivityEvent` | SQLite `productivity_events` |
-| Telegram authorization session | `telegram_auth_sessions` dict | In-memory backend runtime only |
-| Frontend queue/review state | TS types in `App.tsx` | In-memory React state |
-| Gmail inbox/send data | Gmail API payloads | External Gmail service |
-| Optional tracking row data | Sheet row arrays | External Google Sheets |
+### NumberReviewQueue
+- Unknown numbers needing manual classification cards
+- State starts at `pending`, transitions to classified states
 
-## 5) API request/response structure patterns
+### RecruiterNumber
+- Recruiter bucket keyed by owner + normalized phone number
+- Includes recruiter identity metadata and first source email id
 
-Common patterns:
-- JSON requests for settings/actions.
-- Typed JSON responses for status/queues.
-- Pagination-like fields in candidates response: `items`, `next_cursor`, `has_next`.
-- Event/trend endpoints provide time-windowed analytics with bucketed bars.
+### EmployerNumber
+- Employer bucket keyed by owner + normalized phone number
+- Separate from recruiter bucket by design
 
-## 6) End-to-end data flow
+### RecruiterOpportunity
+- Opportunity card linked to recruiter number and source email/message
+- Unique by owner + recruiter_number_id + gmail_message_id
 
-### A) Input to queue
-1. User triggers run from dashboard.
-2. Backend resolves effective query and policy.
-3. Gmail client fetches candidate messages.
-4. Parser + qualification + routing logic compute structured fields.
-5. Record persisted into `RecruiterEmail` with resulting state.
-6. Frontend refreshes queue lists and displays normalized candidate objects.
+## 3) Important storage/uniqueness rules
 
-### B) Queue to send
-1. User edits draft and approves in needs_review.
-2. Backend validates required fields (routing safety, resume, body).
-3. Gmail send API called with To/CC/thread + attachment.
-4. Email record updated (`approved_sent`, timestamps, gmail_sent_id).
-5. Productivity event logged; optional Google Sheets row appended.
-6. Sent item appears in dashboard sent queue/history.
+- `recruiter_emails.external_message_id` unique index
+- `ux_recruiter_numbers_owner_phone`
+- `ux_employer_numbers_owner_phone`
+- `ux_recruiter_opportunities_owner_recruiter_msg`
+- `ux_number_review_queue_owner_phone_email`
 
-### C) Failure correction loop
-1. Failed routing item appears in failed_mapping.
-2. User supplies corrected To/CC.
-3. Backend stores correction feedback and regenerates draft.
-4. Item moves back to needs_review.
+These constraints are fundamental to duplicate prevention.
 
-### D) Analytics flow
-1. Backend emits `ProductivityEvent` on key actions/state changes.
-2. Frontend calls `/analytics/events` and `/analytics/trend`.
-3. UI renders trend bars, deltas, and activity log in live monitor.
+## 4) End-to-end data flow
+
+1. Run endpoint fetches Gmail candidates
+2. Candidate parsed/scored/routed and saved/updated as `RecruiterEmail`
+3. Number extraction paths run:
+   - premium leads write/update
+   - recruiter/employer/unknown intelligence decisions
+4. Unknown numbers go to review queue (`NumberReviewQueue`)
+5. Manual classification moves numbers into recruiter/employer buckets
+6. Recruiter classification can create a linked `RecruiterOpportunity`
+7. Needs-review candidates can be approved and sent (Gmail + optional Sheets)
+8. Productivity events are recorded for trend views
+
+```mermaid
+flowchart TD
+    A[automation/run-once] --> B[RecruiterEmail upsert]
+    B --> C[PremiumNumberLead write/update]
+    C --> D{Classification}
+    D -->|Unknown| E[NumberReviewQueue pending]
+    D -->|Recruiter| F[RecruiterNumber upsert]
+    D -->|Employer| G[EmployerNumber upsert]
+    F --> H{New gmail_message_id for recruiter?}
+    H -->|Yes| I[Create RecruiterOpportunity]
+    H -->|No| J[No new opportunity]
+    B --> K{State == needs_review?}
+    K -->|Yes| L[Approve-send path]
+    L --> M[Send Gmail + optional Sheets row]
+    M --> N[Record ProductivityEvent]
+```
+
+## 5) API schema anchors
+
+Primary schema module: `backend/app/schemas.py`
+
+Key request schemas:
+- `SettingsRequest`, `AutomationRunRequest`, `ApproveSendRequest`, `RejectRequest`, `ResolveRecipientsRequest`
+
+Key response schemas:
+- `EmailResponse`, `CandidateListResponse`, `AutomationRunResponse`, `PremiumNumber*`, `RecruiterNumberResponse`, `EmployerNumberResponse`, `RecruiterOpportunityResponse`, `Productivity*`
