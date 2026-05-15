@@ -25,6 +25,7 @@ function setupHarness(args?: {
   onFailedItems?: (items: Candidate[]) => void
 }) {
   let latest: HookApi | null = null
+  let currentArgs = args
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root: Root = createRoot(container)
@@ -34,9 +35,9 @@ function setupHarness(args?: {
       apiBase: 'http://localhost:8000',
       pageBucketLimit: 25,
       initialBucketLimit: 10,
-      fetchImpl: args?.fetchImpl,
-      onNeedsReviewItems: args?.onNeedsReviewItems,
-      onFailedItems: args?.onFailedItems,
+      fetchImpl: currentArgs?.fetchImpl,
+      onNeedsReviewItems: currentArgs?.onNeedsReviewItems,
+      onFailedItems: currentArgs?.onFailedItems,
     })
     return null
   }
@@ -50,6 +51,13 @@ function setupHarness(args?: {
     return latest
   }
 
+  const rerender = (nextArgs?: typeof args) => {
+    currentArgs = nextArgs
+    act(() => {
+      root.render(<Harness />)
+    })
+  }
+
   const cleanup = () => {
     act(() => {
       root.unmount()
@@ -57,7 +65,7 @@ function setupHarness(args?: {
     container.remove()
   }
 
-  return { getHook, cleanup }
+  return { getHook, rerender, cleanup }
 }
 
 function makeResponse(
@@ -303,5 +311,42 @@ describe('useCandidateBuckets', () => {
     expect(onNeedsReviewItems.mock.calls[0][0][0].id).toBe(11)
     expect(onFailedItems).toHaveBeenCalledTimes(1)
     expect(onFailedItems.mock.calls[0][0][0].id).toBe(22)
+  })
+
+  it('keeps refresh callbacks stable when option callbacks are recreated', async () => {
+    const { fetchImpl, calls } = setupQueuedFetch()
+    const firstNeedsReview = vi.fn()
+    const secondNeedsReview = vi.fn()
+    const { getHook, rerender, cleanup } = setupHarness({
+      fetchImpl,
+      onNeedsReviewItems: firstNeedsReview,
+      onFailedItems: vi.fn(),
+    })
+    cleanups.push(cleanup)
+
+    const firstRefreshCandidates = getHook().refreshCandidates
+    const firstLoadCandidateBucket = getHook().loadCandidateBucket
+
+    rerender({
+      fetchImpl,
+      onNeedsReviewItems: secondNeedsReview,
+      onFailedItems: vi.fn(),
+    })
+
+    expect(getHook().refreshCandidates).toBe(firstRefreshCandidates)
+    expect(getHook().loadCandidateBucket).toBe(firstLoadCandidateBucket)
+    expect(calls.length).toBe(0)
+
+    await act(async () => {
+      const promise = getHook().refreshCandidates(null, 'needs_review', { activeOnly: true })
+      expect(calls.length).toBe(1)
+      calls[0].resolve(makeResponse([{ id: 1, recipient_email: null, cc_email: null, draft_reply: '' }]))
+      await promise
+      await flushMicrotasks()
+    })
+
+    expect(firstNeedsReview).not.toHaveBeenCalled()
+    expect(secondNeedsReview).toHaveBeenCalledTimes(1)
+    expect(calls.length).toBe(1)
   })
 })

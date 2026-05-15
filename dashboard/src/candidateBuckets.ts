@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 export type CandidateState = 'needs_review' | 'failed' | 'approved_sent'
 
@@ -139,6 +139,14 @@ type CandidateBucketsHookOptions<TCandidate extends Candidate> = {
 export function useCandidateBuckets<TCandidate extends Candidate>(
   options: CandidateBucketsHookOptions<TCandidate>,
 ) {
+  const {
+    apiBase,
+    pageBucketLimit,
+    initialBucketLimit,
+    fetchImpl,
+    onNeedsReviewItems,
+    onFailedItems,
+  } = options
   const [queue, setQueue] = useState<TCandidate[]>([])
   const [failedQueue, setFailedQueue] = useState<TCandidate[]>([])
   const [sentQueue, setSentQueue] = useState<TCandidate[]>([])
@@ -147,23 +155,30 @@ export function useCandidateBuckets<TCandidate extends Candidate>(
   const [loadingMoreKey, setLoadingMoreKey] = useState<CandidateState | null>(null)
   const [bucketMeta, setBucketMeta] = useState<BucketMetaMap>(defaultBucketMeta())
   const candidateRefreshTrackerRef = useRef<RequestTracker>({ current: 0 })
-  const fetchFn = options.fetchImpl ?? fetch
+  const onNeedsReviewItemsRef = useRef<typeof onNeedsReviewItems>(onNeedsReviewItems)
+  const onFailedItemsRef = useRef<typeof onFailedItems>(onFailedItems)
+  const fetchFn = fetchImpl ?? fetch
+
+  useEffect(() => {
+    onNeedsReviewItemsRef.current = onNeedsReviewItems
+    onFailedItemsRef.current = onFailedItems
+  }, [onFailedItems, onNeedsReviewItems])
 
   const applyQueueForBucket = useCallback(
     (state: CandidateState, items: TCandidate[], append: boolean) => {
       if (state === 'needs_review') {
         setQueue((prev) => (append ? [...prev, ...items] : items))
-        options.onNeedsReviewItems?.(items)
+        onNeedsReviewItemsRef.current?.(items)
         return
       }
       if (state === 'failed') {
         setFailedQueue((prev) => (append ? [...prev, ...items] : items))
-        options.onFailedItems?.(items)
+        onFailedItemsRef.current?.(items)
         return
       }
       setSentQueue((prev) => (append ? [...prev, ...items] : items))
     },
-    [options],
+    [],
   )
 
   const loadCandidateBucket = useCallback(
@@ -174,7 +189,7 @@ export function useCandidateBuckets<TCandidate extends Candidate>(
     ) => {
       const append = Boolean(opts?.append)
       const cursor = opts?.cursor ?? null
-      const limit = opts?.limit ?? options.pageBucketLimit
+      const limit = opts?.limit ?? pageBucketLimit
       const shouldTrackRefreshing = opts?.markRefreshing ?? false
       const requestId = candidateRefreshTrackerRef.current.current + 1
       candidateRefreshTrackerRef.current.current = requestId
@@ -183,7 +198,7 @@ export function useCandidateBuckets<TCandidate extends Candidate>(
         setCandidateRefreshError('')
       }
       try {
-        const page = await fetchCandidatesPageByState(options.apiBase, state, limit, mailDate, fetchFn, cursor)
+        const page = await fetchCandidatesPageByState(apiBase, state, limit, mailDate, fetchFn, cursor)
         if (requestId !== candidateRefreshTrackerRef.current.current) return
         applyQueueForBucket(state, page.items as TCandidate[], append)
         setBucketMeta((prev) => ({
@@ -200,7 +215,7 @@ export function useCandidateBuckets<TCandidate extends Candidate>(
         }
       }
     },
-    [applyQueueForBucket, fetchFn, options.apiBase, options.pageBucketLimit],
+    [apiBase, applyQueueForBucket, fetchFn, pageBucketLimit],
   )
 
   const refreshCandidates = useCallback(
@@ -226,12 +241,12 @@ export function useCandidateBuckets<TCandidate extends Candidate>(
         await loadCandidateBucket(key, mailDate, {
           append: false,
           cursor: null,
-          limit: opts?.initialLoad ? options.initialBucketLimit : options.pageBucketLimit,
+          limit: opts?.initialLoad ? initialBucketLimit : pageBucketLimit,
           markRefreshing: i === 0,
         })
       }
     },
-    [bucketMeta, loadCandidateBucket, options.initialBucketLimit, options.pageBucketLimit],
+    [bucketMeta, initialBucketLimit, loadCandidateBucket, pageBucketLimit],
   )
 
   const loadMoreCandidates = useCallback(
@@ -243,13 +258,13 @@ export function useCandidateBuckets<TCandidate extends Candidate>(
         await loadCandidateBucket(state, mailDate, {
           append: true,
           cursor: meta.nextCursor,
-          limit: options.pageBucketLimit,
+          limit: pageBucketLimit,
         })
       } finally {
         setLoadingMoreKey(null)
       }
     },
-    [bucketMeta, loadCandidateBucket, loadingMoreKey, options.pageBucketLimit],
+    [bucketMeta, loadCandidateBucket, loadingMoreKey, pageBucketLimit],
   )
 
   return {

@@ -439,22 +439,26 @@ function App() {
     initialBucketLimit: INITIAL_BUCKET_LIMIT,
     onNeedsReviewItems: (items) => {
       setDraftEdits((prev) => {
-        const next = { ...prev }
+        let next: typeof prev | null = null
         for (const c of items) {
-          if (!(c.id in next)) next[c.id] = c.draft_reply ?? ''
+          if (!(c.id in prev)) {
+            next ??= { ...prev }
+            next[c.id] = c.draft_reply ?? ''
+          }
         }
-        return next
+        return next ?? prev
       })
     },
     onFailedItems: (items) => {
       setRoutingFixes((prev) => {
-        const next = { ...prev }
+        let next: typeof prev | null = null
         for (const c of items) {
-          if (!(c.id in next)) {
+          if (!(c.id in prev)) {
+            next ??= { ...prev }
             next[c.id] = { to: c.recipient_email ?? '', cc: c.cc_email ?? '' }
           }
         }
-        return next
+        return next ?? prev
       })
     },
   })
