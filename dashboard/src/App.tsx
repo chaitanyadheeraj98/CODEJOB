@@ -740,6 +740,19 @@ function App() {
     }
   }
 
+  const deleteReviewCard = async (reviewId: number) => {
+    setClassifyingReviewId(reviewId)
+    try {
+      const res = await fetch(`${apiBase}/number-review/${reviewId}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error('Failed to delete review card')
+      await loadPremiumNumbers({ append: false, cursor: 0 })
+    } catch (e) {
+      setPremiumError((e as Error).message)
+    } finally {
+      setClassifyingReviewId(null)
+    }
+  }
+
   const updateOpportunity = async (id: number, patch: Partial<Pick<RecruiterOpportunityCard, 'status' | 'notes'>>) => {
     setUpdatingOpportunityId(id)
     try {
@@ -2183,6 +2196,13 @@ function App() {
                           disabled={classifyingReviewId === item.id}
                         >
                           Mark as Employer
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => deleteReviewCard(item.id)}
+                          disabled={classifyingReviewId === item.id}
+                        >
+                          Delete
                         </button>
                       </div>
                     </article>

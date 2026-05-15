@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from app.phase0 import RoutingEvidence, RoutingResult, analyze_recipient_routing
+from app.phase0 import RoutingEvidence, RoutingResult, analyze_recipient_routing, extract_email_address
 
 
 @dataclass(frozen=True)
@@ -83,6 +83,14 @@ class RoutingPolicyService:
         cc_email = routing.cc_email
         status = (routing.status or "").strip().lower()
         confidence = float(routing.confidence or 0.0)
+        reason = routing.reason
+        normalized_to = _normalize_routing_email(to_email)
+        normalized_cc = _normalize_routing_email(cc_email)
+        has_duplicate_recipients = bool(normalized_to and normalized_cc and normalized_to == normalized_cc)
+        if has_duplicate_recipients:
+            status = "ambiguous"
+            confidence = 0.45
+            reason = "Recruiter To and employer CC resolved to the same address."
         has_pair = bool(to_email and cc_email)
         is_sendable = payload.routing_confirmed or (status in {"safe", "confirmed"} and confidence >= 0.8)
         should_mark_failed = not has_pair
@@ -92,9 +100,9 @@ class RoutingPolicyService:
         return RoutingDecision(
             to_email=to_email,
             cc_email=cc_email,
-            status=routing.status,
-            confidence=routing.confidence,
-            reason=routing.reason,
+            status=status,
+            confidence=confidence,
+            reason=reason,
             evidence=routing.evidence,
             candidates=routing.candidates,
             recommended_state=recommended_state,
@@ -103,3 +111,10 @@ class RoutingPolicyService:
             is_sendable_candidate=is_sendable,
             needs_manual_confirmation=needs_manual,
         )
+
+
+def _normalize_routing_email(value: str | None) -> str:
+    text = (value or "").strip()
+    if not text:
+        return ""
+    return extract_email_address(text).strip().lower()

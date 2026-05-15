@@ -2905,6 +2905,22 @@ def mark_number_as_employer(review_id: int, db: Session = Depends(get_db)) -> di
     return {"review_id": card.id, "status": card.state}
 
 
+@app.delete("/number-review/{review_id}", response_model=dict[str, int | str])
+def delete_number_review_card(review_id: int, db: Session = Depends(get_db)) -> dict[str, int | str]:
+    card = (
+        db.query(NumberReviewQueue)
+        .filter(NumberReviewQueue.owner_id == settings.owner_id, NumberReviewQueue.id == review_id)
+        .first()
+    )
+    if not card:
+        raise HTTPException(status_code=404, detail="Review card not found")
+    if card.state != "pending":
+        return {"review_id": card.id, "status": card.state}
+    card.state = "dismissed"
+    db.commit()
+    return {"review_id": card.id, "status": card.state}
+
+
 @app.get("/recruiter-numbers", response_model=list[RecruiterNumberResponse])
 def list_recruiter_numbers(db: Session = Depends(get_db)) -> list[RecruiterNumberResponse]:
     rows = (

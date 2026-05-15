@@ -77,6 +77,61 @@ class RoutingPolicyTests(unittest.TestCase):
         )
         self.assertTrue(decision.is_sendable_candidate)
 
+    def test_identical_to_cc_is_downgraded_to_ambiguous_and_not_sendable(self) -> None:
+        class DuplicatePairAdapter:
+            def evaluate(self, payload: RoutingPolicyInput) -> RoutingResult:
+                _ = payload
+                return RoutingResult(
+                    to_email="hr@horizonsoftech.net",
+                    cc_email="hr@horizonsoftech.net",
+                    status="safe",
+                    confidence=0.9,
+                    reason="Found distinct recruiter and employer contacts in the current email.",
+                    evidence=[],
+                    candidates=[],
+                )
+
+        service = RoutingPolicyService(adapter=DuplicatePairAdapter())
+        decision = service.evaluate(
+            RoutingPolicyInput(
+                sender="Recruiter <r@example.com>",
+                subject="Role",
+                body="Body",
+            )
+        )
+        self.assertEqual(decision.status, "ambiguous")
+        self.assertFalse(decision.is_sendable_candidate)
+        self.assertTrue(decision.needs_manual_confirmation)
+        self.assertFalse(decision.should_mark_failed)
+        self.assertEqual(decision.recommended_state, "needs_review")
+        self.assertEqual(decision.reason, "Recruiter To and employer CC resolved to the same address.")
+
+    def test_identical_to_cc_normalization_handles_case_and_whitespace(self) -> None:
+        class DuplicatePairFormattingAdapter:
+            def evaluate(self, payload: RoutingPolicyInput) -> RoutingResult:
+                _ = payload
+                return RoutingResult(
+                    to_email=" HR@HorizonSoftech.net ",
+                    cc_email="hr@horizonsoftech.net",
+                    status="confirmed",
+                    confidence=0.92,
+                    reason="Matched a prior correction and both addresses appear in this email.",
+                    evidence=[],
+                    candidates=[],
+                )
+
+        service = RoutingPolicyService(adapter=DuplicatePairFormattingAdapter())
+        decision = service.evaluate(
+            RoutingPolicyInput(
+                sender="Recruiter <r@example.com>",
+                subject="Role",
+                body="Body",
+            )
+        )
+        self.assertEqual(decision.status, "ambiguous")
+        self.assertFalse(decision.is_sendable_candidate)
+        self.assertTrue(decision.needs_manual_confirmation)
+
     def test_heuristic_adapter_parity_with_phase0(self) -> None:
         payload = RoutingPolicyInput(
             sender="Prashanth Kinnera <kprashanth@horizonsoftech.net>",
