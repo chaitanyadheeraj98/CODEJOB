@@ -253,6 +253,32 @@ class CandidateListResponse(BaseModel):
     has_next: bool
 
 
+class PremiumNumberResponse(BaseModel):
+    id: int
+    recruiter_email_id: int
+    phone_number_display: str
+    phone_number_normalized: str
+    owner_name: str
+    company: str
+    designation: str
+    purpose: str
+    confidence: str
+    source_fragment: str
+    source_email_sender: str
+    source_email_subject: str
+    source_email_message_id: str | None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class PremiumNumberListResponse(BaseModel):
+    items: list[PremiumNumberResponse]
+    next_cursor: int | None
+    has_next: bool
+
+
 class AutomationRunResponse(BaseModel):
     status: str
     detail: str

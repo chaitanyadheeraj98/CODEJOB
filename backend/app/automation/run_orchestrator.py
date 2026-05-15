@@ -31,6 +31,7 @@ class RunOrchestratorDependencies:
     ]
     generate_reply_with_ai_or_fallback: Callable[..., Any]
     apply_routing_decision: Callable[[RecruiterEmail, RoutingDecision], None]
+    capture_premium_numbers: Callable[[Session, RecruiterEmail], None]
     record_productivity_event: Callable[..., Any]
     mark_message_processed: Callable[[str], None]
 
@@ -86,6 +87,8 @@ class RunOrchestrator:
                 .first()
             )
             if existing and existing.state == "approved_sent":
+                if not request.dry_run:
+                    request.deps.capture_premium_numbers(request.db, existing)
                 skipped_count += 1
                 last_email = existing
                 if not request.dry_run:
@@ -146,6 +149,7 @@ class RunOrchestrator:
                     request.db.add(email)
                 request.db.commit()
                 request.db.refresh(email)
+                request.deps.capture_premium_numbers(request.db, email)
                 request.deps.mark_message_processed(external_message_id)
                 skipped_count += 1
                 last_email = email
@@ -179,6 +183,7 @@ class RunOrchestrator:
                     request.db.add(email)
                 request.db.commit()
                 request.db.refresh(email)
+                request.deps.capture_premium_numbers(request.db, email)
                 request.deps.record_productivity_event(
                     request.db,
                     event_type="failed_mapping_marked",
@@ -274,6 +279,7 @@ class RunOrchestrator:
                 request.db.add(email)
             request.db.commit()
             request.db.refresh(email)
+            request.deps.capture_premium_numbers(request.db, email)
             request.deps.record_productivity_event(
                 request.db,
                 event_type="needs_review_marked",

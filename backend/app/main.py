@@ -43,7 +43,7 @@ from app.gmail_client import (
     send_reply_with_attachment,
     start_oauth_bootstrap,
 )
-from app.models import DraftEditFeedback, ProductivityEvent, RecruiterEmail, ResumeAsset, SyncRun, UserSettings
+from app.models import DraftEditFeedback, PremiumNumberLead, ProductivityEvent, RecruiterEmail, ResumeAsset, SyncRun, UserSettings
 from app.models import RecipientRoutingFeedback
 from app.telegram_bot import TelegramBotService, TelegramReply
 from app.phase0 import (
@@ -68,6 +68,7 @@ from app.phase0 import (
     should_block_f2f,
 )
 from app.routing import HeuristicRoutingAdapter, LearnedRoutingAdapter, RoutingDecision, RoutingPolicyInput, RoutingPolicyService
+from app.premium_numbers import extract_and_store_premium_numbers
 from app.schemas import (
     AIStatusResponse,
     ApproveSendRequest,
@@ -81,6 +82,8 @@ from app.schemas import (
     IngestEmailRequest,
     OAuthStartResponse,
     OAuthUrlResponse,
+    PremiumNumberListResponse,
+    PremiumNumberResponse,
     RejectRequest,
     ResolveRecipientsRequest,
     ResumeResponse,
@@ -1494,6 +1497,15 @@ def _apply_routing_decision(email: RecruiterEmail, routing: RoutingDecision) -> 
     email.routing_candidates = _routing_payload_json(routing.candidates)
 
 
+def _capture_premium_numbers(db: Session, email: RecruiterEmail) -> None:
+    try:
+        extract_and_store_premium_numbers(db, email)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.warning("Premium numbers extraction skipped for email_id=%s: %s", email.id, exc)
+
+
 def _routing_is_sendable(email: RecruiterEmail) -> bool:
     decision = _evaluate_routing_policy(
         None,
@@ -2465,6 +2477,7 @@ def automation_run_once(payload: AutomationRunRequest | None = None, db: Session
                     ),
                     generate_reply_with_ai_or_fallback=generate_reply_with_ai_or_fallback,
                     apply_routing_decision=_apply_routing_decision,
+                    capture_premium_numbers=_capture_premium_numbers,
                     record_productivity_event=_record_productivity_event,
                     mark_message_processed=mark_message_processed,
                 ),
@@ -2654,6 +2667,84 @@ def list_candidates(
         next_cursor=next_cursor,
         has_next=has_next,
     )
+
+
+@app.get("/premium-numbers", response_model=PremiumNumberListResponse)
+def list_premium_numbers(
+    cursor: int = Query(0, ge=0),
+    limit: int = Query(25, ge=1, le=100),
+    confidence: str | None = Query(default=None),
+    q: str | None = Query(default=None),
+    mail_date: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    db: Session = Depends(get_db),
+) -> PremiumNumberListResponse:
+    query = db.query(PremiumNumberLead).filter(PremiumNumberLead.owner_id == settings.owner_id)
+
+    if confidence:
+        normalized_confidence = confidence.strip().lower()
+        if normalized_confidence in {"high", "medium", "low"}:
+            query = query.filter(PremiumNumberLead.confidence == normalized_confidence)
+
+    if q:
+        like = f"%{q.strip()}%"
+        query = query.filter(
+            or_(
+                PremiumNumberLead.phone_number_display.ilike(like),
+                PremiumNumberLead.owner_name.ilike(like),
+                PremiumNumberLead.company.ilike(like),
+                PremiumNumberLead.designation.ilike(like),
+                PremiumNumberLead.purpose.ilike(like),
+                PremiumNumberLead.source_email_sender.ilike(like),
+                PremiumNumberLead.source_email_subject.ilike(like),
+            )
+        )
+
+    if mail_date:
+        try:
+            selected = date.fromisoformat(mail_date)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="mail_date must be a valid YYYY-MM-DD date") from exc
+        start, end = _mail_date_utc_window(selected)
+        query = query.join(RecruiterEmail, RecruiterEmail.id == PremiumNumberLead.recruiter_email_id)
+        query = query.filter(RecruiterEmail.gmail_received_at.is_not(None))
+        query = query.filter(RecruiterEmail.gmail_received_at >= start, RecruiterEmail.gmail_received_at < end)
+
+    query = query.order_by(PremiumNumberLead.created_at.desc())
+    items = query.offset(cursor).limit(limit + 1).all()
+    has_next = len(items) > limit
+    visible = items[:limit]
+    next_cursor = cursor + limit if has_next else None
+    return PremiumNumberListResponse(
+        items=[PremiumNumberResponse.model_validate(item) for item in visible],
+        next_cursor=next_cursor,
+        has_next=has_next,
+    )
+
+
+@app.get("/premium-numbers/{lead_id}", response_model=PremiumNumberResponse)
+def get_premium_number(lead_id: int, db: Session = Depends(get_db)) -> PremiumNumberLead:
+    lead = (
+        db.query(PremiumNumberLead)
+        .filter(PremiumNumberLead.owner_id == settings.owner_id, PremiumNumberLead.id == lead_id)
+        .first()
+    )
+    if not lead:
+        raise HTTPException(status_code=404, detail="Premium number lead not found")
+    return lead
+
+
+@app.post("/premium-numbers/reextract/{recruiter_email_id}", response_model=dict[str, int])
+def reextract_premium_numbers(recruiter_email_id: int, db: Session = Depends(get_db)) -> dict[str, int]:
+    email = (
+        db.query(RecruiterEmail)
+        .filter(RecruiterEmail.owner_id == settings.owner_id, RecruiterEmail.id == recruiter_email_id)
+        .first()
+    )
+    if not email:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+    count = extract_and_store_premium_numbers(db, email)
+    db.commit()
+    return {"stored_count": count}
 
 
 @app.get("/candidates/{email_id}", response_model=EmailResponse)

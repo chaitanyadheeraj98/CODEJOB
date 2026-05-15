@@ -206,6 +206,32 @@ type Candidate = {
   last_error: string | null
 }
 
+type PremiumNumberConfidence = 'high' | 'medium' | 'low'
+
+type PremiumNumberCard = {
+  id: number
+  recruiter_email_id: number
+  phone_number_display: string
+  phone_number_normalized: string
+  owner_name: string
+  company: string
+  designation: string
+  purpose: string
+  confidence: PremiumNumberConfidence
+  source_fragment: string
+  source_email_sender: string
+  source_email_subject: string
+  source_email_message_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+type PremiumNumberListResponse = {
+  items: PremiumNumberCard[]
+  next_cursor: number | null
+  has_next: boolean
+}
+
 type RoutingEvidence = {
   role: string
   email: string
@@ -411,13 +437,20 @@ function App() {
   const [draftEdits, setDraftEdits] = useState<Record<number, string>>({})
   const [routingFixes, setRoutingFixes] = useState<Record<number, { to: string; cc: string }>>({})
   const [fixingId, setFixingId] = useState<number | null>(null)
-  const [activePage, setActivePage] = useState<'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items'>('run_queue')
+  const [activePage, setActivePage] = useState<'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'premium_numbers'>('run_queue')
   const [dynamicPolicyBeta, setDynamicPolicyBeta] = useState(false)
   const [selectedProfileToApply, setSelectedProfileToApply] = useState<PolicyProfileName>('Balanced')
   const [lastAppliedProfile, setLastAppliedProfile] = useState<PolicyProfileName | null>(null)
   const [skillDraft, setSkillDraft] = useState('')
   const [employerDomainDraft, setEmployerDomainDraft] = useState('')
   const [employerDomainError, setEmployerDomainError] = useState('')
+  const [premiumNumbers, setPremiumNumbers] = useState<PremiumNumberCard[]>([])
+  const [premiumNextCursor, setPremiumNextCursor] = useState<number | null>(null)
+  const [premiumHasNext, setPremiumHasNext] = useState(false)
+  const [premiumLoading, setPremiumLoading] = useState(false)
+  const [premiumError, setPremiumError] = useState('')
+  const [premiumConfidenceFilter, setPremiumConfidenceFilter] = useState<'all' | PremiumNumberConfidence>('all')
+  const [premiumSearch, setPremiumSearch] = useState('')
   const [timeRange, setTimeRange] = useState<TimeRangeKey>('current_day')
   const [productivityEvents, setProductivityEvents] = useState<ProductivityEvent[]>([])
   const [productivityTrend, setProductivityTrend] = useState<ProductivityTrendResponse | null>(null)
@@ -554,6 +587,32 @@ function App() {
     setActiveResume(current)
   }
 
+  const loadPremiumNumbers = async (opts?: { append?: boolean; cursor?: number | null }) => {
+    const append = Boolean(opts?.append)
+    const cursor = opts?.cursor ?? 0
+    setPremiumLoading(true)
+    setPremiumError('')
+    try {
+      const params = new URLSearchParams({
+        cursor: String(cursor),
+        limit: '25',
+      })
+      if (premiumConfidenceFilter !== 'all') params.set('confidence', premiumConfidenceFilter)
+      if (premiumSearch.trim()) params.set('q', premiumSearch.trim())
+      if (settings.mail_date) params.set('mail_date', settings.mail_date)
+      const res = await fetch(`${apiBase}/premium-numbers?${params.toString()}`)
+      if (!res.ok) throw new Error('Failed to load premium numbers')
+      const payload = (await res.json()) as PremiumNumberListResponse
+      setPremiumNumbers((prev) => (append ? [...prev, ...payload.items] : payload.items))
+      setPremiumNextCursor(payload.next_cursor)
+      setPremiumHasNext(payload.has_next)
+    } catch (e) {
+      setPremiumError((e as Error).message)
+    } finally {
+      setPremiumLoading(false)
+    }
+  }
+
   const bucketForPage = (page: typeof activePage): CandidateState | null => {
     if (page === 'run_queue' || page === 'needs_review') return 'needs_review'
     if (page === 'failed_mapping') return 'failed'
@@ -587,6 +646,7 @@ function App() {
       failed_mapping: 'view_failed_mapping',
       recent_runs: 'view_recent_runs',
       sent_items: 'view_sent_items',
+      premium_numbers: 'view_premium_numbers',
     }
     const eventType = eventMap[page]
     if (lastTrackedViewRef.current === page) return
@@ -615,6 +675,9 @@ function App() {
       loadProductivityAnalytics(timeRange).catch(() => {
         // Keep UI responsive if analytics refresh fails transiently.
       })
+      loadPremiumNumbers({ append: false, cursor: 0 }).catch(() => {
+        // Keep UI responsive if premium numbers refresh fails transiently.
+      })
     }, 200)
   }
 
@@ -632,6 +695,7 @@ function App() {
         ])
         const normalizedSettings = await loadSettings()
         await refreshVisibleCandidates(normalizedSettings.mail_date ?? null, { activeOnly: true, initialLoad: true })
+        await loadPremiumNumbers({ append: false, cursor: 0 })
         hasBootstrappedCandidatesRef.current = true
       } catch (e) {
         setError((e as Error).message)
@@ -657,6 +721,12 @@ function App() {
       markRefreshing: true,
     }).catch((e) => setError((e as Error).message))
   }, [activePage, settings.mail_date, bucketMeta.failed.loaded, bucketMeta.needs_review.loaded, bucketMeta.approved_sent.loaded])
+
+  useEffect(() => {
+    if (!hasBootstrappedCandidatesRef.current) return
+    if (activePage !== 'premium_numbers') return
+    loadPremiumNumbers({ append: false, cursor: 0 }).catch((e) => setPremiumError((e as Error).message))
+  }, [activePage, premiumConfidenceFilter, premiumSearch, settings.mail_date])
 
   useEffect(() => {
     loadProductivityAnalytics(timeRange).catch((e) => setError((e as Error).message))
@@ -1083,6 +1153,7 @@ function App() {
         failedCount={failedQueue.length}
         runCount={logs.length}
         sentCount={sentQueue.length}
+        premiumCount={premiumNumbers.length}
         activePage={activePage}
         onNavigate={setActivePage}
       />
@@ -1876,6 +1947,70 @@ function App() {
               ) : null}
             </article>
           ))}
+            </section>
+          ) : null}
+
+          {activePage === 'premium_numbers' ? (
+            <section className="card pageSection">
+              <h2>Premium Numbers</h2>
+              <div className="actionBar">
+                <select
+                  value={premiumConfidenceFilter}
+                  onChange={(e) => setPremiumConfidenceFilter(e.target.value as 'all' | PremiumNumberConfidence)}
+                >
+                  <option value="all">All confidence</option>
+                  <option value="high">High</option>
+                  <option value="medium">Medium</option>
+                  <option value="low">Low</option>
+                </select>
+                <input
+                  value={premiumSearch}
+                  onChange={(e) => setPremiumSearch(e.target.value)}
+                  placeholder="Search number, owner, company..."
+                />
+              </div>
+              {premiumLoading ? <p className="subtle">Loading premium numbers...</p> : null}
+              {premiumError ? <p className="subtle">Premium numbers error: {premiumError}</p> : null}
+              {!premiumLoading && premiumNumbers.length === 0 ? <p className="subtle">No premium numbers found.</p> : null}
+              {premiumNumbers.map((item) => (
+                <article key={`premium-${item.id}`} className="emailItem">
+                  <p><strong>Phone:</strong> {item.phone_number_display}</p>
+                  <p><strong>Owner:</strong> {item.owner_name}</p>
+                  <p><strong>Company:</strong> {item.company}</p>
+                  <p><strong>Designation:</strong> {item.designation}</p>
+                  <p><strong>Purpose:</strong> {item.purpose}</p>
+                  <p><strong>Confidence:</strong> {item.confidence.toUpperCase()}</p>
+                  <p><strong>Email Sender:</strong> {item.source_email_sender}</p>
+                  <p><strong>Email Subject:</strong> {item.source_email_subject}</p>
+                  {item.source_email_message_id ? (
+                    <p>
+                      <strong>Open:</strong>{' '}
+                      <a
+                        href={`https://mail.google.com/mail/u/0/#all/${item.source_email_message_id}`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Open exact email in Gmail
+                      </a>
+                    </p>
+                  ) : null}
+                  {item.source_fragment ? <p className="subtle"><strong>Evidence:</strong> {item.source_fragment}</p> : null}
+                </article>
+              ))}
+              {premiumHasNext ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (premiumNextCursor == null) return
+                    loadPremiumNumbers({ append: true, cursor: premiumNextCursor }).catch((e) =>
+                      setPremiumError((e as Error).message),
+                    )
+                  }}
+                  disabled={premiumLoading || premiumNextCursor == null}
+                >
+                  {premiumLoading ? 'Loading...' : 'Load More'}
+                </button>
+              ) : null}
             </section>
           ) : null}
 

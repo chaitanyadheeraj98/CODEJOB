@@ -4,8 +4,9 @@ type SidebarProps = {
   failedCount: number
   runCount: number
   sentCount: number
-  activePage: 'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items'
-  onNavigate: (section: 'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items') => void
+  premiumCount: number
+  activePage: 'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'premium_numbers'
+  onNavigate: (section: 'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'premium_numbers') => void
 }
 
 export default function Sidebar({
@@ -14,6 +15,7 @@ export default function Sidebar({
   failedCount,
   runCount,
   sentCount,
+  premiumCount,
   activePage,
   onNavigate,
 }: SidebarProps) {
@@ -27,6 +29,7 @@ export default function Sidebar({
     { key: 'run_queue', label: 'Run Queue' },
     { key: 'needs_review', label: 'Needs Review', count: queueCount },
     { key: 'failed_mapping', label: 'Failed Mapping', count: failedCount },
+    { key: 'premium_numbers', label: 'Premium Numbers', count: premiumCount },
     { key: 'sent_items', label: 'Sent Items', count: sentCount },
     { key: 'recent_runs', label: 'Recent Runs', count: runCount },
   ]

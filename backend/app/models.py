@@ -181,6 +181,27 @@ class RecipientRoutingFeedback(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
 
+class PremiumNumberLead(Base):
+    __tablename__ = "premium_number_leads"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    recruiter_email_id: Mapped[int] = mapped_column(Integer, index=True)
+    phone_number_normalized: Mapped[str] = mapped_column(String(40), index=True)
+    phone_number_display: Mapped[str] = mapped_column(String(80))
+    owner_name: Mapped[str] = mapped_column(String(255), default="Unknown")
+    company: Mapped[str] = mapped_column(String(255), default="Unknown")
+    designation: Mapped[str] = mapped_column(String(255), default="Unknown")
+    purpose: Mapped[str] = mapped_column(String(255), default="Recruiter contact")
+    confidence: Mapped[str] = mapped_column(String(10), default="low")
+    source_fragment: Mapped[str] = mapped_column(Text, default="")
+    source_email_sender: Mapped[str] = mapped_column(String(255), default="")
+    source_email_subject: Mapped[str] = mapped_column(String(500), default="")
+    source_email_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+
 class ProductivityEvent(Base):
     __tablename__ = "productivity_events"
 

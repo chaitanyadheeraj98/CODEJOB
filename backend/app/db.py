@@ -125,4 +125,35 @@ def ensure_sqlite_phase0_columns() -> None:
         conn.exec_driver_sql(
             "CREATE INDEX IF NOT EXISTS ix_productivity_events_occurred_at ON productivity_events (occurred_at)"
         )
+        conn.exec_driver_sql(
+            """
+            CREATE TABLE IF NOT EXISTS premium_number_leads (
+                id INTEGER PRIMARY KEY,
+                owner_id VARCHAR(100),
+                recruiter_email_id INTEGER,
+                phone_number_normalized VARCHAR(40),
+                phone_number_display VARCHAR(80),
+                owner_name VARCHAR(255) DEFAULT 'Unknown',
+                company VARCHAR(255) DEFAULT 'Unknown',
+                designation VARCHAR(255) DEFAULT 'Unknown',
+                purpose VARCHAR(255) DEFAULT 'Recruiter contact',
+                confidence VARCHAR(10) DEFAULT 'low',
+                source_fragment TEXT DEFAULT '',
+                source_email_sender VARCHAR(255) DEFAULT '',
+                source_email_subject VARCHAR(500) DEFAULT '',
+                source_email_message_id VARCHAR(255),
+                created_at DATETIME,
+                updated_at DATETIME
+            )
+            """
+        )
+        conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_premium_number_leads_owner_id ON premium_number_leads (owner_id)"
+        )
+        conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_premium_number_leads_recruiter_email_id ON premium_number_leads (recruiter_email_id)"
+        )
+        conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_premium_number_leads_phone_number_normalized ON premium_number_leads (phone_number_normalized)"
+        )
         conn.commit()
