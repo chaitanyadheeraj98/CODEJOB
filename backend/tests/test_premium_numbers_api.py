@@ -11,7 +11,7 @@ from sqlalchemy.pool import StaticPool
 
 from app import main
 from app.db import Base
-from app.models import PremiumNumberLead, RecruiterEmail
+from app.models import PremiumNumberLead, RecruiterEmail, UserSettings
 
 
 class PremiumNumbersApiTests(unittest.TestCase):
@@ -120,6 +120,61 @@ class PremiumNumbersApiTests(unittest.TestCase):
         self.assertEqual(show_all.status_code, 200, show_all.text)
         show_all_payload = show_all.json()
         self.assertEqual(len(show_all_payload["items"]), 2)
+
+    def test_reextract_skips_non_employer_sender_domain(self) -> None:
+        now = datetime.now(UTC)
+        with Session(self.engine) as db:
+            db.add(
+                UserSettings(
+                    owner_id=main.settings.owner_id,
+                    enabled=True,
+                    gmail_query="is:unread",
+                    default_gmail_query="is:unread",
+                    default_date_mode="today",
+                    accepted_locations="",
+                    role_keywords="",
+                    must_have_skills="",
+                    employer_domains="horizonsoftech.net,rpatechnologyinc.com",
+                    free_text_guidance="",
+                    remote_preference="any",
+                )
+            )
+            email = RecruiterEmail(
+                owner_id=main.settings.owner_id,
+                sender="LinkedIn <jobs-listings@linkedin.com>",
+                subject="Twine is hiring",
+                body="Call 4292809173",
+                role="Developer",
+                location="Remote",
+                salary_text="",
+                skills_text="Python",
+                score=80,
+                decision="Qualified",
+                state="needs_review",
+                draft_reply="Thanks",
+                source="gmail",
+                external_message_id="m-premium-non-employer",
+                external_thread_id="t-premium-non-employer",
+                gmail_received_at=now,
+                recipient_email="to@example.com",
+                cc_email="cc@example.com",
+            )
+            db.add(email)
+            db.commit()
+            db.refresh(email)
+            email_id = email.id
+
+        response = self.client.post(f"/premium-numbers/reextract/{email_id}")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["stored_count"], 0)
+
+        with Session(self.engine) as db:
+            count = (
+                db.query(PremiumNumberLead)
+                .filter(PremiumNumberLead.owner_id == main.settings.owner_id, PremiumNumberLead.recruiter_email_id == email_id)
+                .count()
+            )
+            self.assertEqual(count, 0)
 
 
 if __name__ == "__main__":

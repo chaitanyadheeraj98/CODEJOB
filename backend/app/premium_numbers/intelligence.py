@@ -2,14 +2,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+import logging
 import re
 
 from sqlalchemy.orm import Session
 
-from app.models import EmployerNumber, NumberReviewQueue, RecruiterEmail, RecruiterNumber, RecruiterOpportunity, UserSettings
+from app.models import EmployerNumber, NumberReviewQueue, RecruiterEmail, RecruiterNumber, RecruiterOpportunity
+from app.premium_numbers.domain_guard import should_capture_premium_numbers
 from app.premium_numbers.extraction import ExtractedPhoneLead, extract_phone_leads
 
 OPPORTUNITY_STATUS_VALUES = {"New", "Called", "Applied", "Follow Up", "Closed", "Not Interested"}
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -28,13 +31,6 @@ class OpportunitySnapshot:
     visa_restrictions: str
     extracted_skills: str
     evidence: str
-
-
-def _employer_domains_for_owner(db: Session, owner_id: str) -> set[str]:
-    settings_row = db.query(UserSettings).filter(UserSettings.owner_id == owner_id).first()
-    if not settings_row or not settings_row.employer_domains:
-        return set()
-    return {part.strip().lower() for part in settings_row.employer_domains.split(",") if part.strip()}
 
 
 def _extract_job_metadata(subject: str, body: str) -> tuple[str, str, str, str, str, str]:
@@ -113,7 +109,16 @@ def _create_opportunity_if_new(db: Session, owner_id: str, snapshot: Opportunity
 
 
 def process_email_number_intelligence(db: Session, email: RecruiterEmail) -> None:
-    employer_domains = _employer_domains_for_owner(db, email.owner_id)
+    allowed, sender_domain, configured_domains = should_capture_premium_numbers(db, email)
+    if not allowed:
+        logger.debug(
+            "Skipping premium intelligence for email_id=%s sender_domain=%s allowed_domains=%s",
+            email.id,
+            sender_domain or "<none>",
+            configured_domains,
+        )
+        return
+    employer_domains = {part.strip() for part in configured_domains.split(",") if part.strip()}
     leads = extract_phone_leads(email.sender or "", email.subject or "", email.body or "", employer_domains=employer_domains)
     for lead in leads:
         recruiter_number = (

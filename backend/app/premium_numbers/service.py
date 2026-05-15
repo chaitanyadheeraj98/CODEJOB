@@ -1,18 +1,28 @@
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy.orm import Session
 
-from app.models import PremiumNumberLead, RecruiterEmail, UserSettings
+from app.models import PremiumNumberLead, RecruiterEmail
+from app.premium_numbers.domain_guard import should_capture_premium_numbers
 from app.premium_numbers.extraction import extract_phone_leads
+
+logger = logging.getLogger(__name__)
 
 
 def extract_and_store_premium_numbers(db: Session, email: RecruiterEmail) -> int:
-    user_settings = db.query(UserSettings).filter(UserSettings.owner_id == email.owner_id).first()
-    employer_domains = {
-        part.strip().lower()
-        for part in (user_settings.employer_domains.split(",") if user_settings and user_settings.employer_domains else [])
-        if part.strip()
-    }
+    allowed, sender_domain, configured_domains = should_capture_premium_numbers(db, email)
+    if not allowed:
+        logger.debug(
+            "Skipping premium extraction for email_id=%s sender_domain=%s allowed_domains=%s",
+            email.id,
+            sender_domain or "<none>",
+            configured_domains,
+        )
+        return 0
+
+    employer_domains = {part.strip() for part in configured_domains.split(",") if part.strip()}
     leads = extract_phone_leads(
         email.sender or "",
         email.subject or "",

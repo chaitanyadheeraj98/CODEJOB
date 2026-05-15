@@ -1,0 +1,8 @@
+{
+  "markdownlint.ignore": [
+    "docs/**"
+  ],
+  "cSpell.ignorePaths": [
+    "docs/**"
+  ]
+}
