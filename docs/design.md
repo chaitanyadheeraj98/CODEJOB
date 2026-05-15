@@ -1,99 +1,63 @@
-# CODEJOB Design Documentation
+# CODEJOB UI/UX Design Notes (Current Branch)
 
-## 1) UI/UX structure
+## 1) Current UI structure
 
-The frontend is a single-page operations dashboard with a two-panel shell:
+The dashboard is a single-page React app with sidebar navigation and section-based content panes.
 
-- **Left rail (navigation + brand + quick actions)**
-- **Main pane (header + context page content)**
+Primary sections:
+- Run Queue
+- Needs Review
+- Failed Mapping
+- Premium Numbers
+- Sent Items
+- Recent Runs
 
-The workflow is task-oriented: configure → run → review failures/queue → approve/reject → monitor trends.
+## 2) Critical interaction contracts
 
-## 2) Layout patterns
+- Top action must always expose:
+  - `Connect Gmail` when unauthenticated
+  - `Sync Now` / `Sync + Queue` when authenticated
+- Date chip and date picker must allow filter + clear
+- Settings form must keep `Save Filters` and resume upload/replace actions
 
-- **Grid shell**: `grid-template-columns: 326px minmax(0, 1fr)`
-- **Sticky sidebar** and **sticky top header** for persistent controls
-- **Card-based sections** for grouped configuration and operational data
-- **State views by page mode** (`run_queue`, `needs_review`, `failed_mapping`, `recent_runs`, `sent_items`)
+## 3) Review safety UX
 
-## 3) Color usage
+Needs Review cards must retain:
+- Routing evidence panel
+- To/CC visibility
+- Editable draft + live preview
+- `Approve & Send` and `Reject` buttons
 
-Color system is tokenized with CSS custom properties in `App.css`:
+Approve button stays disabled unless:
+- routing is sendable
+- To and CC exist
+- non-empty draft exists
+- resume is attached
 
-- Primary: `--primary` / `--primary-strong` (blue action accents)
-- Surface/background: `--bg`, `--surface`, `--surface-soft`
-- Borders: `--line`, `--line-strong`
-- Semantic: `--danger`, `--danger-soft`, `--ok`
+## 4) Failed mapping UX
 
-Visual semantics:
-- Blue = primary actions and active nav
-- Red/pink = error/blocked/failure states
-- Green-ish = safe routing or positive trend states
-- Dark gradient card = live monitor emphasis
+Failed mapping cards must retain:
+- full source email content viewer
+- editable `Correct To` and `Correct CC`
+- `Save Mapping & Move to Review` action
 
-## 4) Typography
+This is the core human recovery path for unresolved routing.
 
-- Global font imported from Google Fonts: **Geist** (fallback: Segoe UI, sans-serif).
-- Heavy emphasis on large numeric/stat typography for operations visibility.
-- Hierarchy via large H1 title, card H2 headers, and compact metadata labels.
+## 5) Premium numbers UX
 
-## 5) Component design
+“All” view (number review queue) must retain both manual actions:
+- `Mark as Recruiter`
+- `Mark as Employer`
 
-Key reusable component patterns:
+These manual buttons are required business controls and must not be removed.
 
-- **Sidebar navigation component** (`components/Sidebar.tsx`) with active state and counters.
-- **Card components** (`.card`, `.statCard`, `.emailItem`) for consistent grouping.
-- **Toggle switch pattern** (`.toggleSwitch` + `.toggleTrack`) used across settings.
-- **Routing evidence panel** with safe/blocked variants.
-- **Draft compose pattern**: editable textarea + live HTML preview.
+Premium module also includes:
+- Recruiter Numbers view
+- Employer Numbers view
+- Recruiter Opportunities view (status + notes updates)
 
-## 6) Navigation flow
+## 6) Known design debt
 
-- Sidebar drives primary section changes.
-- Each section maps to a focused workflow:
-  - `run_queue`: controls + live analytics
-  - `needs_review`: decision and send workflow
-  - `failed_mapping`: routing correction workflow
-  - `recent_runs`: operational auditing
-  - `sent_items`: output verification history
-
-## 7) Visual hierarchy
-
-- Primary CTAs (**Sync + Queue**, **Connect Gmail**, **Approve & Send**) are high contrast.
-- Metrics and counts are prominently surfaced in stat cards and live monitor ticker.
-- Decision-critical warnings (routing not safe, errors) are highlighted with strong color + weight.
-- Contextual metadata appears in subtle text to reduce visual noise.
-
-## 8) Responsive behavior
-
-Implemented breakpoints:
-
-- **≤1200px**:
-  - Shell collapses to single column
-  - Sidebar becomes non-sticky
-  - Config grid moves to 2 columns
-- **≤900px**:
-  - Header wraps
-  - Typography scales down
-  - Stats/config/action layout becomes single-column
-  - Monitor header stacks vertically
-
-## 9) Reusable design patterns
-
-- Tokenized theming with CSS variables
-- Unified form control styling (`input`, `textarea`, `select`)
-- Reusable row/button/toggle/chip patterns
-- Consistent border radius + border style language
-- Status chips/tags for connection and model states
-
-## 10) UX strengths and caveats
-
-### Strengths
-- Strong operations-first information density
-- Clear queue state segmentation
-- Manual safety gates before outbound communication
-- Inline correction and retry flow for routing failures
-
-### Caveats
-- Single-page file (`App.tsx`) is large; future UX iteration would benefit from component decomposition.
-- Some UI controls (e.g., placeholder actions) are present without full backend workflow coupling.
+- `dashboard/src/App.tsx` is very large and tightly coupled across sections/states
+- Several section refresh paths are manually coordinated (`schedulePostMutationRefresh`, multiple effect chains)
+- Sidebar footer buttons (`Settings`, `Help Center`) are currently placeholders without full routing behavior

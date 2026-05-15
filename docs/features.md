@@ -1,49 +1,47 @@
-# CODEJOB Features
+# CODEJOB Features (Current Implementation)
 
-## Feature summary
+## Core inbox automation
 
-CODEJOB is a recruiter-email operations system that automates inbox intake, qualification, queueing, and assisted response drafting, while keeping manual approval before sends.
+| Feature | What it does | Why it matters | Key files |
+|---|---|---|---|
+| Gmail OAuth bootstrap | Starts/monitors Gmail auth flow | Enables inbox fetch and send | `backend/app/gmail_client.py`, `backend/app/main.py` |
+| Run once pipeline | Fetches unread candidates and routes each through scoring/routing/draft logic | Main automation entry point | `backend/app/main.py`, `backend/app/automation/run_orchestrator.py` |
+| Policy-driven query/run behavior | Applies profile/policy controls for date mode, batch limit, dry run, threshold override | Lets users tune aggressiveness and risk | `backend/app/main.py`, `dashboard/src/App.tsx` |
+| AI-assisted draft generation | Uses DeepSeek when enabled; falls back to rules-based draft | Better draft quality with safe fallback | `backend/app/ai/*`, `backend/app/phase0.py` |
+| Semantic scoring (optional) | Blends rules score + embedding similarity | Improves relevance scoring when enabled | `backend/app/semantic/*`, `backend/app/main.py` |
 
-## Complete feature list
+## Manual safety workflow
 
-| Feature | Purpose | User interaction | Expected outcome | Key dependencies/limitations |
-|---|---|---|---|---|
-| Gmail connection status | Check OAuth readiness | View Gmail card in dashboard | Shows configured/authenticated state and last sync | Requires Google OAuth config/token |
-| Gmail OAuth bootstrap | Start auth flow | Click **Connect Gmail** | OAuth process starts and status is logged | Backend logs must be accessible to complete sign-in |
-| Sync + Queue run | Import and evaluate unread emails | Click **Sync + Queue** / **Sync Now** | Emails are categorized into queue/failed/skipped with run summary | Requires authenticated Gmail and active resume |
-| Effective query/date filters | Control what inbox messages are processed | Search/query fields + date picker + settings | Runs only evaluate matching inbox messages | Query quality directly impacts matching |
-| Settings management | Persist pipeline behavior | Edit and **Save Filters** | Backend settings updated and reused by run + Telegram commands | Invalid/incomplete values can reduce qualification quality |
-| Dynamic policy profile | Choose Aggressive/Balanced/Strict behavior | Select profile + apply; optional beta switches | Batch/date/filter strictness changes for runs | Some advanced policy controls are behind toggle |
-| AI toggle and AI status | Enable AI draft generation and monitor health | Toggle **Enable AI Features**, view AI card | Drafts come from DeepSeek when available, fallback otherwise | Needs API key/config; may fall back on errors |
-| Resume upload/versioning | Attach resume context to outbound replies | Upload/replace file in settings | Latest resume stored and marked active | Approval/send requires active resume |
-| Needs Review queue | Manual review before send | Open **Needs Review** section | Review candidates with editable draft + preview | Approval blocked until routing is safe and required fields exist |
-| Draft editor + live preview | Improve final email quality | Edit textarea and inspect preview panel | Final sent content matches reviewed draft | Preview is formatting approximation |
-| Approve & Send | Send qualified response | Click **Approve & Send** | Reply sent via Gmail with attachment; state moves to approved_sent | Requires safe routing, To/CC, draft body, active resume |
-| Reject (single) | Remove unsuitable candidate from active queue | Click **Reject** | Candidate marked rejected | Only allowed from needs_review state |
-| Failed Mapping queue | Fix recipient routing failures | Open **Failed Mapping**, edit To/CC, save mapping | Candidate is re-queued for manual review with updated routing | Requires valid manual mapping inputs |
-| Routing evidence panel | Explain recipient resolution confidence | Inspect routing panel/evidence cards | User sees why send is blocked/allowed | Confidence/rules depend on parsed body evidence |
-| Sent Items history | Track successful sends | Open **Sent Items** | View subject/sender/sent timestamp and Gmail link | Depends on successful send metadata |
-| Recent Runs log | Review run outcomes | Open **Recent Runs** | Status/detail/counters and reasons visible | In-memory UI list depth is capped |
-| Productivity analytics | Observe operational trends | Open run_queue monitor and select range | Bar chart + trend delta + activity history | Accuracy depends on event emission and retained data |
-| Telegram bot operations | Remote monitor/control actions | Use commands (`/status`, `/run`, `/approve`, etc.) | Read/write operational control from Telegram | Requires token + allowed chat IDs + optional PIN auth |
-| Google Sheets tracking (optional) | External logging of approved sends | Enabled via settings/env | Appends structured row after approval/send | Requires Sheets config/credentials |
-| Auto-run polling | Scheduled periodic run-once execution | Enable auto-run + interval | Backend runs automatically at interval | Uses thread loop; still depends on OAuth/resume/config |
-| Dry-run mode | Simulate processing without side effects | Toggle Dry Run in policy | Returns run insights without DB/Gmail mutation | Intended for validation/testing workflows |
+| Feature | What it does | Why it matters | Key files |
+|---|---|---|---|
+| Needs Review queue | Holds qualified items for human decision | Prevents uncontrolled outbound sends | `dashboard/src/App.tsx`, `backend/app/main.py` |
+| Approve & Send gate | Validates routing safety, To/CC, resume, draft before Gmail send | Critical safety invariant | `backend/app/main.py` |
+| Reject actions | Marks candidate rejected (single and bulk) | Fast queue hygiene | `backend/app/main.py` |
+| Failed Mapping correction | Lets user fix To/CC and requeue candidate | Human-in-loop routing recovery | `dashboard/src/App.tsx`, `backend/app/main.py` |
+| Routing evidence panel | Shows confidence and evidence/candidates | Supports explainable decisions | `dashboard/src/App.tsx`, `backend/app/phase0.py` |
 
-## Screen and workflow highlights
+## Premium number intelligence and classification
 
-- **Sidebar**: Run Queue, Needs Review, Failed Mapping, Sent Items, Recent Runs.
-- **Top bar**: Query field, action buttons, date filter.
-- **Run Queue page**: Config cards + live monitor + settings form.
-- **Needs Review page**: Candidate review, routing inspection, draft edit/preview, approve/reject.
-- **Failed Mapping page**: Full-email context and correction form.
-- **Recent Runs page**: Execution outcome log.
-- **Sent Items page**: Delivered history.
+| Feature | What it does | Why it matters | Key files |
+|---|---|---|---|
+| Phone extraction + dedupe | Extracts phone numbers from email context and dedupes by normalized number | Creates stable phone intelligence base | `backend/app/premium_numbers/extraction.py`, `service.py` |
+| Premium lead listing/filtering | Lists extracted leads with confidence/search/filter controls | Operator triage visibility | `GET /premium-numbers`, `dashboard/src/App.tsx` |
+| Unknown number review queue | Queues unclassified numbers and supports manual classification buttons | Preserves manual classification mechanism | `GET /number-review`, `mark-recruiter`, `mark-employer` |
+| Recruiter bucket | Stores recruiter numbers and aggregates opportunity counts | Non-duplicate recruiter identity store | `RecruiterNumber`, `/recruiter-numbers` |
+| Employer bucket | Stores employer numbers separately | Prevents recruiter/employer mixing | `EmployerNumber`, `/employer-numbers` |
+| Recruiter opportunities | Creates one opportunity card per recruiter-number + source Gmail message | Tracks repeated recruiter opportunities without duplicating recruiter records | `RecruiterOpportunity`, `/recruiter-opportunities` |
 
-## Notable user-facing limitations
+## Monitoring and ops
 
-- No auto-send in run-once path; manual approval is intentional.
-- OAuth completion requires access to backend log output.
-- AI generation can fail or timeout and fallback to rules-only draft.
-- Routing confidence may block approval until user correction.
-- Local/SQLite default setup is single-node and not multi-tenant hardened.
+| Feature | What it does | Why it matters | Key files |
+|---|---|---|---|
+| Productivity analytics | Records and displays activity trend/events | Operational feedback loop | `ProductivityEvent`, `/analytics/*`, `dashboard/src/App.tsx` |
+| Recent run digest | Shows status/details/counters for recent runs | Fast run verification | `dashboard/src/App.tsx` |
+| Telegram command/control | Supports remote status/run/approve/reject/config flows | Lightweight remote ops | `backend/app/telegram_bot.py`, telegram handlers in `main.py` |
+| Optional Google Sheets tracking | Appends approved-send rows externally | Simple audit export | `append_tracking_sheet_row` path in `gmail_client.py`, `main.py` |
+
+## Current notable gaps
+
+- No production-ready auth/multi-tenant UI login flow (owner-scoped backend setting only)
+- Dashboard remains monolithic (`App.tsx`) and tightly coupled
+- `backend/tests/test_phone_attribution.py` references `app.phone_attribution`, which is not present in current branch
