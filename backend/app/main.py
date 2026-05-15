@@ -60,6 +60,7 @@ from app.phase0 import (
     greeting_from_to_contact,
     hard_filter_check,
     is_recruiter_like,
+    normalize_employer_domains,
     parse_email,
     render_fallback_draft_template,
     requested_details_block,
@@ -1116,6 +1117,10 @@ def _to_csv(values: list[str]) -> str:
     return ",".join(v.strip() for v in values if v.strip())
 
 
+def _csv_to_list(value: str | None) -> list[str]:
+    return [part.strip() for part in (value or "").split(",") if part.strip()]
+
+
 def _default_policy() -> PolicyConfig:
     return {
         "version": 1,
@@ -1511,12 +1516,14 @@ def _routing_is_sendable(email: RecruiterEmail) -> bool:
 
 
 def _analyze_email_routing(db: Session, sender: str, subject: str, body: str, snippet: str = "") -> RoutingResult:
+    user_settings = _get_settings(db)
     return analyze_recipient_routing(
         sender,
         subject,
         body,
         snippet,
         learned_pairs=_learned_recipient_pairs(db, sender),
+        employer_domains=_csv_to_list(user_settings.employer_domains),
     )
 
 
@@ -1552,6 +1559,10 @@ def _evaluate_routing_policy(
         )
 
     learned_pairs = _learned_recipient_pairs(db, sender) if db else []
+    employer_domains: list[str] | None = None
+    if db is not None:
+        user_settings = _get_settings(db)
+        employer_domains = _csv_to_list(user_settings.employer_domains)
     adapter = LearnedRoutingAdapter(fallback=HeuristicRoutingAdapter())
     service = RoutingPolicyService(adapter=adapter)
     return service.evaluate(
@@ -1561,6 +1572,7 @@ def _evaluate_routing_policy(
             body=body,
             snippet=snippet,
             learned_pairs=learned_pairs,
+            employer_domains=employer_domains,
             routing_confirmed=routing_confirmed,
         )
     )
@@ -1676,6 +1688,7 @@ def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
         remote_preference=s.remote_preference,
         role_keywords=[v for v in s.role_keywords.split(",") if v],
         must_have_skills=[v for v in s.must_have_skills.split(",") if v],
+        employer_domains=sorted(normalize_employer_domains(_csv_to_list(s.employer_domains))),
         free_text_guidance=s.free_text_guidance,
         qualification_threshold=s.qualification_threshold,
         feature_auto_polling=s.feature_auto_polling,
@@ -1788,6 +1801,7 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
     s.remote_preference = payload.remote_preference
     s.role_keywords = _to_csv(payload.role_keywords)
     s.must_have_skills = _to_csv(payload.must_have_skills)
+    s.employer_domains = _to_csv(sorted(normalize_employer_domains(payload.employer_domains)))
     s.free_text_guidance = payload.free_text_guidance
     s.qualification_threshold = payload.qualification_threshold
     s.feature_auto_polling = payload.feature_auto_polling

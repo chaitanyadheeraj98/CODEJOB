@@ -3,7 +3,7 @@ import unittest
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
-from app.schemas import EmailResponse
+from app.schemas import EmailResponse, SettingsRequest
 
 
 class EmailResponseRoutingTests(unittest.TestCase):
@@ -61,6 +61,10 @@ class EmailResponseRoutingTests(unittest.TestCase):
 
         self.assertEqual(response.routing_evidence[0].email, "recruiter@example.com")
         self.assertEqual(response.routing_candidates, [])
+
+    def test_settings_request_accepts_employer_domains(self) -> None:
+        payload = SettingsRequest.model_validate({"employer_domains": ["horizonsofttech.net"]})
+        self.assertEqual(payload.employer_domains, ["horizonsofttech.net"])
 
 
 if __name__ == "__main__":

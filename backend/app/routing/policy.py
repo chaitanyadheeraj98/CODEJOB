@@ -13,6 +13,7 @@ class RoutingPolicyInput:
     body: str
     snippet: str = ""
     learned_pairs: list[tuple[str, str]] | None = None
+    employer_domains: list[str] | None = None
     routing_confirmed: bool = False
 
 
@@ -55,6 +56,7 @@ class HeuristicRoutingAdapter:
             payload.body,
             payload.snippet,
             learned_pairs=payload.learned_pairs or [],
+            employer_domains=payload.employer_domains,
         )
 
 

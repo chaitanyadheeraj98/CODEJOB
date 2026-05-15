@@ -53,6 +53,7 @@ class SettingsRequest(BaseModel):
     remote_preference: str = "any"
     role_keywords: list[str] = Field(default_factory=list)
     must_have_skills: list[str] = Field(default_factory=list)
+    employer_domains: list[str] = Field(default_factory=list)
     free_text_guidance: str = ""
     qualification_threshold: float = 0.6
     feature_auto_polling: bool = False

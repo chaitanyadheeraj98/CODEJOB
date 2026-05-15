@@ -87,6 +87,7 @@ def ensure_sqlite_phase0_columns() -> None:
             ("signature_phone", "ALTER TABLE user_settings ADD COLUMN signature_phone VARCHAR(80) DEFAULT ''"),
             ("signature_email", "ALTER TABLE user_settings ADD COLUMN signature_email VARCHAR(255) DEFAULT ''"),
             ("policy_json", "ALTER TABLE user_settings ADD COLUMN policy_json TEXT DEFAULT ''"),
+            ("employer_domains", "ALTER TABLE user_settings ADD COLUMN employer_domains TEXT DEFAULT ''"),
         ]
         for column_name, statement in settings_alter_statements:
             if column_name not in existing_settings:

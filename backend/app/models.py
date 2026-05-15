@@ -106,6 +106,7 @@ class UserSettings(Base):
     remote_preference: Mapped[str] = mapped_column(String(50), default="any")
     role_keywords: Mapped[str] = mapped_column(Text, default="")
     must_have_skills: Mapped[str] = mapped_column(Text, default="")
+    employer_domains: Mapped[str] = mapped_column(Text, default="")
     free_text_guidance: Mapped[str] = mapped_column(Text, default="")
     qualification_threshold: Mapped[float] = mapped_column(Float, default=0.6)
     feature_auto_polling: Mapped[bool] = mapped_column(default=False)

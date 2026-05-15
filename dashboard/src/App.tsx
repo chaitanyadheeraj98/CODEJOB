@@ -4,6 +4,7 @@ import Sidebar from './components/Sidebar'
 import { withAiToggle } from './features/ai/state'
 import { getDraftSourceLabel } from './features/ai/ui'
 import { type CandidateState, useCandidateBuckets } from './candidateBuckets'
+import { addEmployerDomain, removeEmployerDomain } from './employerDomains'
 
 const GMAIL_OAUTH_POLL_INTERVAL_MS = 2000
 const GMAIL_OAUTH_POLL_TIMEOUT_MS = 180000
@@ -100,6 +101,7 @@ type SettingsPayload = {
   remote_preference: string
   role_keywords: string[]
   must_have_skills: string[]
+  employer_domains: string[]
   free_text_guidance: string
   qualification_threshold: number
   feature_auto_polling: boolean
@@ -381,6 +383,7 @@ function App() {
     remote_preference: 'any',
     role_keywords: [],
     must_have_skills: [],
+    employer_domains: [],
     free_text_guidance: '',
     qualification_threshold: 0.6,
     feature_auto_polling: false,
@@ -413,6 +416,8 @@ function App() {
   const [selectedProfileToApply, setSelectedProfileToApply] = useState<PolicyProfileName>('Balanced')
   const [lastAppliedProfile, setLastAppliedProfile] = useState<PolicyProfileName | null>(null)
   const [skillDraft, setSkillDraft] = useState('')
+  const [employerDomainDraft, setEmployerDomainDraft] = useState('')
+  const [employerDomainError, setEmployerDomainError] = useState('')
   const [timeRange, setTimeRange] = useState<TimeRangeKey>('current_day')
   const [productivityEvents, setProductivityEvents] = useState<ProductivityEvent[]>([])
   const [productivityTrend, setProductivityTrend] = useState<ProductivityTrendResponse | null>(null)
@@ -524,6 +529,7 @@ function App() {
       default_gmail_query: payload.default_gmail_query || payload.gmail_query || 'is:unread',
       default_date_mode: payload.default_date_mode === 'off' ? 'off' : 'today',
       feature_auto_poll_interval_minutes: Math.max(1, Math.min(payload.feature_auto_poll_interval_minutes || 10, 1440)),
+      employer_domains: payload.employer_domains ?? [],
       policy: payload.policy ?? defaultPolicy,
     }
     setSettings(normalized)
@@ -1050,6 +1056,25 @@ function App() {
     })
   }
 
+  const addEmployerDomainChip = (raw: string) => {
+    const result = addEmployerDomain(settings.employer_domains, raw)
+    if (result.error) {
+      setEmployerDomainError(result.error)
+      return
+    }
+    setEmployerDomainError('')
+    setSettings({ ...settings, employer_domains: result.next })
+    setEmployerDomainDraft('')
+  }
+
+  const removeEmployerDomainChip = (domainToRemove: string) => {
+    setEmployerDomainError('')
+    setSettings({
+      ...settings,
+      employer_domains: removeEmployerDomain(settings.employer_domains, domainToRemove),
+    })
+  }
+
   return (
     <main className="gmailShell">
       <Sidebar
@@ -1347,6 +1372,50 @@ function App() {
                       />
                     </div>
                   </label>
+                </div>
+              </section>
+
+              <section className="card">
+                <h2>Employer Domains</h2>
+                <div className="stack">
+                  <label>
+                    Employer Domains (exact domain match)
+                    <div className="skillBox">
+                      {settings.employer_domains.map((domain) => (
+                        <span key={domain} className="skillChip">
+                          {domain}
+                          <button
+                            type="button"
+                            className="chipRemove"
+                            onClick={() => removeEmployerDomainChip(domain)}
+                            aria-label={`Remove ${domain}`}
+                            title={`Remove ${domain}`}
+                          >
+                            x
+                          </button>
+                        </span>
+                      ))}
+                      <input
+                        value={employerDomainDraft}
+                        className="skillInput"
+                        onChange={(e) => {
+                          setEmployerDomainDraft(e.target.value)
+                          if (employerDomainError) setEmployerDomainError('')
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ',') {
+                            e.preventDefault()
+                            addEmployerDomainChip(employerDomainDraft)
+                          } else if (e.key === 'Backspace' && !employerDomainDraft && settings.employer_domains.length > 0) {
+                            removeEmployerDomainChip(settings.employer_domains[settings.employer_domains.length - 1])
+                          }
+                        }}
+                        onBlur={() => addEmployerDomainChip(employerDomainDraft)}
+                        placeholder="Add domain..."
+                      />
+                    </div>
+                  </label>
+                  {employerDomainError ? <p className="subtle">{employerDomainError}</p> : null}
                 </div>
               </section>
 
