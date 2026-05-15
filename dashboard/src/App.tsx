@@ -294,6 +294,8 @@ type RecruiterOpportunityCard = {
   evidence: string
   status: OpportunityStatus
   notes: string
+  cold_call_script: string | null
+  cold_call_script_updated_at: string | null
 }
 
 type RoutingEvidence = {
@@ -531,6 +533,7 @@ function App() {
   const [opportunityStatusFilter, setOpportunityStatusFilter] = useState<'all' | OpportunityStatus>('all')
   const [premiumSearch, setPremiumSearch] = useState('')
   const [updatingOpportunityId, setUpdatingOpportunityId] = useState<number | null>(null)
+  const [generatingColdCallId, setGeneratingColdCallId] = useState<number | null>(null)
   const [classifyingReviewId, setClassifyingReviewId] = useState<number | null>(null)
   const [timeRange, setTimeRange] = useState<TimeRangeKey>('current_day')
   const [productivityEvents, setProductivityEvents] = useState<ProductivityEvent[]>([])
@@ -768,6 +771,22 @@ function App() {
       setPremiumError((e as Error).message)
     } finally {
       setUpdatingOpportunityId(null)
+    }
+  }
+
+  const generateColdCallScript = async (id: number) => {
+    setGeneratingColdCallId(id)
+    try {
+      const res = await fetch(`${apiBase}/recruiter-opportunities/${id}/generate-cold-call-script`, {
+        method: 'POST',
+      })
+      if (!res.ok) throw new Error('Failed to generate cold call script')
+      const updated = (await res.json()) as RecruiterOpportunityCard
+      setOpportunityCards((prev) => prev.map((item) => (item.id === id ? updated : item)))
+    } catch (e) {
+      setPremiumError((e as Error).message)
+    } finally {
+      setGeneratingColdCallId(null)
     }
   }
 
@@ -2304,6 +2323,37 @@ function App() {
                           disabled={updatingOpportunityId === item.id}
                         />
                       </label>
+                      <div className="rowBtns">
+                        <button
+                          type="button"
+                          onClick={() => generateColdCallScript(item.id)}
+                          disabled={generatingColdCallId === item.id}
+                        >
+                          {generatingColdCallId === item.id ? 'Generating...' : 'Generate Cold Call Script'}
+                        </button>
+                        {item.cold_call_script ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(item.cold_call_script || '').catch(() => {
+                                setPremiumError('Failed to copy cold call script')
+                              })
+                            }}
+                          >
+                            Copy Script
+                          </button>
+                        ) : null}
+                      </div>
+                      {item.cold_call_script ? (
+                        <label>
+                          Cold Call Script
+                          <textarea
+                            value={item.cold_call_script}
+                            rows={4}
+                            readOnly
+                          />
+                        </label>
+                      ) : null}
                     </article>
                   ))
                 : null}

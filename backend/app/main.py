@@ -25,6 +25,7 @@ from app.ai.resume_context_attribution import (
     RESUME_CONTEXT_RULES_ONLY,
 )
 from app.ai.resume_context import extract_resume_context
+from app.cold_call import ColdCallContext, generate_cold_call_script
 from app.automation import (
     RunOrchestrator,
     RunOrchestratorDependencies,
@@ -3106,6 +3107,45 @@ def patch_recruiter_opportunity(
         row.status = payload.status
     if payload.notes is not None:
         row.notes = payload.notes
+    db.commit()
+    db.refresh(row)
+    return RecruiterOpportunityResponse.model_validate(row)
+
+
+@app.post("/recruiter-opportunities/{opportunity_id}/generate-cold-call-script", response_model=RecruiterOpportunityResponse)
+def generate_recruiter_opportunity_cold_call_script(
+    opportunity_id: int,
+    db: Session = Depends(get_db),
+) -> RecruiterOpportunityResponse:
+    row = (
+        db.query(RecruiterOpportunity)
+        .filter(RecruiterOpportunity.owner_id == settings.owner_id, RecruiterOpportunity.id == opportunity_id)
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Opportunity not found")
+
+    resume = _active_resume(db)
+    resume_text = ""
+    if resume:
+        try:
+            resume_text = extract_resume_context(resume.file_path, resume.file_name)
+        except Exception:
+            resume_text = ""
+
+    context = ColdCallContext(
+        recruiter_email=row.email_sender or "",
+        job_title=row.job_title or row.email_subject or "this role",
+        location=row.location or "unknown",
+        skills=row.extracted_skills or "",
+        evidence=row.evidence or "",
+    )
+    row.cold_call_script = generate_cold_call_script(
+        context=context,
+        resume_text=resume_text,
+        model_name=settings.deepseek_model_fast,
+    )
+    row.cold_call_script_updated_at = datetime.now(UTC)
     db.commit()
     db.refresh(row)
     return RecruiterOpportunityResponse.model_validate(row)

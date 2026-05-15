@@ -257,6 +257,8 @@ class RecruiterOpportunity(Base):
     evidence: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(40), default="New")
     notes: Mapped[str] = mapped_column(Text, default="")
+    cold_call_script: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cold_call_script_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 

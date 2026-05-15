@@ -479,6 +479,14 @@ def ensure_sqlite_phase0_columns() -> None:
         conn.exec_driver_sql(
             "CREATE UNIQUE INDEX IF NOT EXISTS ux_recruiter_opportunities_owner_recruiter_msg ON recruiter_opportunities (owner_id, recruiter_number_id, gmail_message_id)"
         )
+        existing_opportunities = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(recruiter_opportunities)")}
+        opportunity_alter_statements = [
+            ("cold_call_script", "ALTER TABLE recruiter_opportunities ADD COLUMN cold_call_script TEXT"),
+            ("cold_call_script_updated_at", "ALTER TABLE recruiter_opportunities ADD COLUMN cold_call_script_updated_at DATETIME"),
+        ]
+        for column_name, statement in opportunity_alter_statements:
+            if column_name not in existing_opportunities:
+                conn.exec_driver_sql(statement)
         conn.exec_driver_sql(
             """
             CREATE TABLE IF NOT EXISTS number_review_queue (

@@ -350,6 +350,8 @@ class RecruiterOpportunityResponse(BaseModel):
     evidence: str
     status: str
     notes: str
+    cold_call_script: str | None = None
+    cold_call_script_updated_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
