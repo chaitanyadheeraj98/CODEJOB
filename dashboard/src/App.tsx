@@ -758,6 +758,23 @@ function App() {
     }
   }
 
+  const swapNumberBucket = async (id: number, from: 'recruiter' | 'employer') => {
+    setClassifyingReviewId(id)
+    try {
+      const endpoint =
+        from === 'recruiter'
+          ? `${apiBase}/recruiter-numbers/${id}/swap-to-employer`
+          : `${apiBase}/employer-numbers/${id}/swap-to-recruiter`
+      const res = await fetch(endpoint, { method: 'POST' })
+      if (!res.ok) throw new Error('Failed to swap number bucket')
+      await loadPremiumNumbers({ append: false, cursor: 0 })
+    } catch (e) {
+      setPremiumError((e as Error).message)
+    } finally {
+      setClassifyingReviewId(null)
+    }
+  }
+
   const bucketForPage = (page: typeof activePage): CandidateState | null => {
     if (page === 'run_queue' || page === 'needs_review') return 'needs_review'
     if (page === 'failed_mapping') return 'failed'
@@ -2185,6 +2202,15 @@ function App() {
                       <p><strong>Recruiter Email:</strong> {item.recruiter_email || '-'}</p>
                       <p><strong>Total Opportunities:</strong> {item.total_opportunity_count}</p>
                       <p><strong>Last Email:</strong> {item.last_email_received_at ? new Date(item.last_email_received_at).toLocaleString() : '-'}</p>
+                      <div className="rowBtns">
+                        <button
+                          type="button"
+                          onClick={() => swapNumberBucket(item.id, 'recruiter')}
+                          disabled={classifyingReviewId === item.id}
+                        >
+                          Swap to Employer
+                        </button>
+                      </div>
                     </article>
                   ))
                 : null}
@@ -2199,6 +2225,15 @@ function App() {
                       <p><strong>Owner:</strong> {item.owner_name}</p>
                       <p><strong>Company:</strong> {item.company}</p>
                       <p><strong>Source Email ID:</strong> {item.source_email_id ?? '-'}</p>
+                      <div className="rowBtns">
+                        <button
+                          type="button"
+                          onClick={() => swapNumberBucket(item.id, 'employer')}
+                          disabled={classifyingReviewId === item.id}
+                        >
+                          Swap to Recruiter
+                        </button>
+                      </div>
                     </article>
                   ))
                 : null}

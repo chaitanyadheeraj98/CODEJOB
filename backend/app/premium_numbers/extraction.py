@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from openai import OpenAI
 
 from app.config import settings
+from app.premium_numbers.phone_normalization import canonicalize_phone
 from app.premium_numbers.prompting import build_premium_numbers_prompts
 
 PHONE_RE = re.compile(r"(?:\+?\d[\d\-\s().]{7,}\d)")
@@ -34,12 +35,7 @@ class ExtractedPhoneLead:
 
 
 def _normalize_phone(raw: str) -> str:
-    cleaned = raw.strip()
-    has_plus = cleaned.startswith("+")
-    digits = re.sub(r"\D", "", cleaned)
-    if len(digits) < 10:
-        return ""
-    return f"+{digits}" if has_plus else digits
+    return canonicalize_phone(raw)
 
 
 def _display_phone(raw: str) -> str:

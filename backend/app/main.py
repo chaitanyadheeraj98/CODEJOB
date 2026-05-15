@@ -82,6 +82,7 @@ from app.phase0 import (
 from app.routing import HeuristicRoutingAdapter, LearnedRoutingAdapter, RoutingDecision, RoutingPolicyInput, RoutingPolicyService
 from app.premium_numbers import extract_and_store_premium_numbers
 from app.premium_numbers.intelligence import OPPORTUNITY_STATUS_VALUES, process_email_number_intelligence
+from app.premium_numbers.phone_normalization import canonicalize_phone
 from app.schemas import (
     AIStatusResponse,
     ApproveSendRequest,
@@ -2796,19 +2797,22 @@ def mark_number_as_recruiter(review_id: int, db: Session = Depends(get_db)) -> d
         raise HTTPException(status_code=404, detail="Review card not found")
     if card.state != "pending":
         return {"review_id": card.id, "status": card.state}
+    canonical_phone = canonicalize_phone(card.normalized_phone_number or card.display_phone_number)
+    if not canonical_phone:
+        raise HTTPException(status_code=422, detail="Invalid phone number on review card")
 
     recruiter = (
         db.query(RecruiterNumber)
         .filter(
             RecruiterNumber.owner_id == settings.owner_id,
-            RecruiterNumber.normalized_phone_number == card.normalized_phone_number,
+            RecruiterNumber.normalized_phone_number == canonical_phone,
         )
         .first()
     )
     if not recruiter:
         recruiter = RecruiterNumber(
             owner_id=settings.owner_id,
-            normalized_phone_number=card.normalized_phone_number,
+            normalized_phone_number=canonical_phone,
             display_phone_number=card.display_phone_number,
             recruiter_name=card.owner_name or "Unknown",
             company=card.company or "Unknown",
@@ -2873,12 +2877,15 @@ def mark_number_as_employer(review_id: int, db: Session = Depends(get_db)) -> di
         raise HTTPException(status_code=404, detail="Review card not found")
     if card.state != "pending":
         return {"review_id": card.id, "status": card.state}
+    canonical_phone = canonicalize_phone(card.normalized_phone_number or card.display_phone_number)
+    if not canonical_phone:
+        raise HTTPException(status_code=422, detail="Invalid phone number on review card")
 
     existing = (
         db.query(EmployerNumber)
         .filter(
             EmployerNumber.owner_id == settings.owner_id,
-            EmployerNumber.normalized_phone_number == card.normalized_phone_number,
+            EmployerNumber.normalized_phone_number == canonical_phone,
         )
         .first()
     )
@@ -2886,7 +2893,7 @@ def mark_number_as_employer(review_id: int, db: Session = Depends(get_db)) -> di
         db.add(
             EmployerNumber(
                 owner_id=settings.owner_id,
-                normalized_phone_number=card.normalized_phone_number,
+                normalized_phone_number=canonical_phone,
                 display_phone_number=card.display_phone_number,
                 owner_name=card.owner_name,
                 company=card.company,
@@ -2944,6 +2951,44 @@ def list_recruiter_numbers(db: Session = Depends(get_db)) -> list[RecruiterNumbe
     return results
 
 
+@app.post("/recruiter-numbers/{recruiter_number_id}/swap-to-employer", response_model=dict[str, int | str])
+def swap_recruiter_number_to_employer(recruiter_number_id: int, db: Session = Depends(get_db)) -> dict[str, int | str]:
+    recruiter = (
+        db.query(RecruiterNumber)
+        .filter(RecruiterNumber.owner_id == settings.owner_id, RecruiterNumber.id == recruiter_number_id)
+        .first()
+    )
+    if not recruiter:
+        raise HTTPException(status_code=404, detail="Recruiter number not found")
+    canonical_phone = canonicalize_phone(recruiter.normalized_phone_number or recruiter.display_phone_number)
+    if not canonical_phone:
+        raise HTTPException(status_code=422, detail="Invalid recruiter phone number")
+
+    employer = (
+        db.query(EmployerNumber)
+        .filter(
+            EmployerNumber.owner_id == settings.owner_id,
+            EmployerNumber.normalized_phone_number == canonical_phone,
+        )
+        .first()
+    )
+    if not employer:
+        db.add(
+            EmployerNumber(
+                owner_id=settings.owner_id,
+                normalized_phone_number=canonical_phone,
+                display_phone_number=recruiter.display_phone_number,
+                owner_name=recruiter.recruiter_name or "Unknown",
+                company=recruiter.company or "Unknown",
+                source_email_id=recruiter.first_detected_email_id,
+            )
+        )
+
+    db.delete(recruiter)
+    db.commit()
+    return {"id": recruiter_number_id, "swapped_to": "employer"}
+
+
 @app.get("/employer-numbers", response_model=list[EmployerNumberResponse])
 def list_employer_numbers(db: Session = Depends(get_db)) -> list[EmployerNumberResponse]:
     rows = (
@@ -2953,6 +2998,46 @@ def list_employer_numbers(db: Session = Depends(get_db)) -> list[EmployerNumberR
         .all()
     )
     return [EmployerNumberResponse.model_validate(row) for row in rows]
+
+
+@app.post("/employer-numbers/{employer_number_id}/swap-to-recruiter", response_model=dict[str, int | str])
+def swap_employer_number_to_recruiter(employer_number_id: int, db: Session = Depends(get_db)) -> dict[str, int | str]:
+    employer = (
+        db.query(EmployerNumber)
+        .filter(EmployerNumber.owner_id == settings.owner_id, EmployerNumber.id == employer_number_id)
+        .first()
+    )
+    if not employer:
+        raise HTTPException(status_code=404, detail="Employer number not found")
+    canonical_phone = canonicalize_phone(employer.normalized_phone_number or employer.display_phone_number)
+    if not canonical_phone:
+        raise HTTPException(status_code=422, detail="Invalid employer phone number")
+
+    recruiter = (
+        db.query(RecruiterNumber)
+        .filter(
+            RecruiterNumber.owner_id == settings.owner_id,
+            RecruiterNumber.normalized_phone_number == canonical_phone,
+        )
+        .first()
+    )
+    if not recruiter:
+        db.add(
+            RecruiterNumber(
+                owner_id=settings.owner_id,
+                normalized_phone_number=canonical_phone,
+                display_phone_number=employer.display_phone_number,
+                recruiter_name=employer.owner_name or "Unknown",
+                company=employer.company or "Unknown",
+                designation="Unknown",
+                recruiter_email="",
+                first_detected_email_id=employer.source_email_id,
+            )
+        )
+
+    db.delete(employer)
+    db.commit()
+    return {"id": employer_number_id, "swapped_to": "recruiter"}
 
 
 @app.get("/recruiter-opportunities", response_model=list[RecruiterOpportunityResponse])
