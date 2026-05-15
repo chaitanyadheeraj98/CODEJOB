@@ -263,6 +263,10 @@ class PremiumNumberResponse(BaseModel):
     designation: str
     purpose: str
     confidence: str
+    contact_type: str
+    recruiter_relevance_score: int
+    is_recruiter_relevant: bool
+    relevance_reason: str
     source_fragment: str
     source_email_sender: str
     source_email_subject: str
@@ -277,6 +281,84 @@ class PremiumNumberListResponse(BaseModel):
     items: list[PremiumNumberResponse]
     next_cursor: int | None
     has_next: bool
+
+
+class UnknownNumberReviewCardResponse(BaseModel):
+    id: int
+    source_email_id: int
+    normalized_phone_number: str
+    display_phone_number: str
+    owner_name: str
+    company: str
+    designation: str
+    confidence: str
+    purpose: str
+    evidence_snippet: str
+    email_subject: str
+    email_sender: str
+    gmail_open_url: str
+    state: str
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class RecruiterNumberResponse(BaseModel):
+    id: int
+    normalized_phone_number: str
+    display_phone_number: str
+    recruiter_name: str
+    company: str
+    designation: str
+    recruiter_email: str
+    first_detected_email_id: int | None
+    total_opportunity_count: int = 0
+    last_email_received_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class EmployerNumberResponse(BaseModel):
+    id: int
+    normalized_phone_number: str
+    display_phone_number: str
+    owner_name: str
+    company: str
+    source_email_id: int | None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class RecruiterOpportunityResponse(BaseModel):
+    id: int
+    recruiter_number_id: int
+    source_email_id: int | None
+    gmail_message_id: str
+    email_subject: str
+    email_sender: str
+    gmail_open_url: str
+    received_at: datetime | None
+    job_title: str
+    client: str
+    location: str
+    work_mode: str
+    visa_restrictions: str
+    extracted_skills: str
+    evidence: str
+    status: str
+    notes: str
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class RecruiterOpportunityPatchRequest(BaseModel):
+    status: str | None = None
+    notes: str | None = None
 
 
 class AutomationRunResponse(BaseModel):

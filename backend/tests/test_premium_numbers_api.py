@@ -76,8 +76,33 @@ class PremiumNumbersApiTests(unittest.TestCase):
                     designation="Recruiter",
                     purpose="Recruiter direct number",
                     confidence="high",
+                    contact_type="recruiter_direct",
+                    recruiter_relevance_score=90,
+                    is_recruiter_relevant=True,
+                    relevance_reason="external_domain,purpose_positive",
                     source_fragment="call me",
                     source_email_sender=email.sender,
+                    source_email_subject=email.subject,
+                    source_email_message_id=email.external_message_id,
+                )
+            )
+            db.add(
+                PremiumNumberLead(
+                    owner_id=main.settings.owner_id,
+                    recruiter_email_id=email.id,
+                    phone_number_normalized="+12482476165",
+                    phone_number_display="+1 248 247 6165",
+                    owner_name="Internal Recruiter",
+                    company="Horizon Softech Inc",
+                    designation="Bench Sales Recruiter",
+                    purpose="Office contact number",
+                    confidence="high",
+                    contact_type="employer_internal",
+                    recruiter_relevance_score=15,
+                    is_recruiter_relevant=False,
+                    relevance_reason="employer_domain,purpose_negative",
+                    source_fragment="office",
+                    source_email_sender="internal@horizonsoftech.net",
                     source_email_subject=email.subject,
                     source_email_message_id=email.external_message_id,
                 )
@@ -89,6 +114,12 @@ class PremiumNumbersApiTests(unittest.TestCase):
         payload = response.json()
         self.assertEqual(len(payload["items"]), 1)
         self.assertEqual(payload["items"][0]["owner_name"], "Uma")
+        self.assertTrue(payload["items"][0]["is_recruiter_relevant"])
+
+        show_all = self.client.get("/premium-numbers", params={"confidence": "high", "recruiter_only": "false"})
+        self.assertEqual(show_all.status_code, 200, show_all.text)
+        show_all_payload = show_all.json()
+        self.assertEqual(len(show_all_payload["items"]), 2)
 
 
 if __name__ == "__main__":

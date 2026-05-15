@@ -1,4 +1,7 @@
 import unittest
+import os
+
+os.environ["DEBUG"] = "false"
 
 from app.premium_numbers import extraction
 
@@ -22,6 +25,10 @@ class PremiumNumbersExtractionTests(unittest.TestCase):
             designation="Unknown",
             purpose="Unknown",
             confidence="low",
+            contact_type="unknown",
+            recruiter_relevance_score=10,
+            is_recruiter_relevant=False,
+            relevance_reason="none",
             source_fragment="x",
         )
         high = extraction.ExtractedPhoneLead(
@@ -32,6 +39,10 @@ class PremiumNumbersExtractionTests(unittest.TestCase):
             designation="Recruiter",
             purpose="Recruiter direct number",
             confidence="high",
+            contact_type="recruiter_direct",
+            recruiter_relevance_score=90,
+            is_recruiter_relevant=True,
+            relevance_reason="positive",
             source_fragment="y",
         )
         deduped = extraction.dedupe_phone_leads([low, high])
@@ -51,6 +62,17 @@ class PremiumNumbersExtractionTests(unittest.TestCase):
             self.assertEqual(leads[0].phone_number_normalized, "4703136209")
         finally:
             extraction._llm_extract = original_llm
+
+    def test_employer_domain_marks_internal_number(self) -> None:
+        leads = extraction.extract_phone_leads(
+            "Sheshwika <sheshwika@horizonsoftech.net>",
+            "Role",
+            "Please call me at +1 248 247 6165. Regards, Bench Sales Recruiter",
+            employer_domains={"horizonsoftech.net"},
+        )
+        self.assertTrue(leads)
+        self.assertFalse(leads[0].is_recruiter_relevant)
+        self.assertEqual(leads[0].contact_type, "employer_internal")
 
 
 if __name__ == "__main__":

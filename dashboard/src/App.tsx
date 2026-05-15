@@ -218,6 +218,10 @@ type PremiumNumberCard = {
   designation: string
   purpose: string
   confidence: PremiumNumberConfidence
+  contact_type: 'recruiter_direct' | 'submission_contact' | 'employer_internal' | 'unknown'
+  recruiter_relevance_score: number
+  is_recruiter_relevant: boolean
+  relevance_reason: string
   source_fragment: string
   source_email_sender: string
   source_email_subject: string
@@ -230,6 +234,66 @@ type PremiumNumberListResponse = {
   items: PremiumNumberCard[]
   next_cursor: number | null
   has_next: boolean
+}
+
+type NumberReviewCard = {
+  id: number
+  source_email_id: number
+  normalized_phone_number: string
+  display_phone_number: string
+  owner_name: string
+  company: string
+  designation: string
+  confidence: PremiumNumberConfidence
+  purpose: string
+  evidence_snippet: string
+  email_subject: string
+  email_sender: string
+  gmail_open_url: string
+  state: string
+}
+
+type RecruiterNumberCard = {
+  id: number
+  normalized_phone_number: string
+  display_phone_number: string
+  recruiter_name: string
+  company: string
+  designation: string
+  recruiter_email: string
+  total_opportunity_count: number
+  last_email_received_at: string | null
+}
+
+type EmployerNumberCard = {
+  id: number
+  normalized_phone_number: string
+  display_phone_number: string
+  owner_name: string
+  company: string
+  source_email_id: number | null
+}
+
+type OpportunityStatus = 'New' | 'Called' | 'Applied' | 'Follow Up' | 'Closed' | 'Not Interested'
+
+type RecruiterOpportunityCard = {
+  id: number
+  recruiter_number_id: number
+  source_email_id: number | null
+  gmail_message_id: string
+  email_subject: string
+  email_sender: string
+  gmail_open_url: string
+  received_at: string | null
+  job_title: string
+  client: string
+  location: string
+  work_mode: string
+  visa_restrictions: string
+  extracted_skills: string
+  evidence: string
+  status: OpportunityStatus
+  notes: string
 }
 
 type RoutingEvidence = {
@@ -346,6 +410,15 @@ export function getOverallVerdict(
   return { score, label: 'Risky', tone: 'risky' }
 }
 
+function getResumeContextLabel(value: string | null | undefined): string {
+  if (value === 'injected') return 'Injected'
+  if (value === 'limited') return 'Limited'
+  if (value === 'missing_resume') return 'Missing Resume'
+  if (value === 'extract_failed') return 'Extract Failed'
+  if (value === 'rules_only') return 'Rules Only'
+  return 'Unknown'
+}
+
 function App() {
   const INITIAL_BUCKET_LIMIT = 25
   const PAGE_BUCKET_LIMIT = 25
@@ -445,12 +518,20 @@ function App() {
   const [employerDomainDraft, setEmployerDomainDraft] = useState('')
   const [employerDomainError, setEmployerDomainError] = useState('')
   const [premiumNumbers, setPremiumNumbers] = useState<PremiumNumberCard[]>([])
+  const [numberReviewCards, setNumberReviewCards] = useState<NumberReviewCard[]>([])
+  const [recruiterNumberCards, setRecruiterNumberCards] = useState<RecruiterNumberCard[]>([])
+  const [employerNumberCards, setEmployerNumberCards] = useState<EmployerNumberCard[]>([])
+  const [opportunityCards, setOpportunityCards] = useState<RecruiterOpportunityCard[]>([])
   const [premiumNextCursor, setPremiumNextCursor] = useState<number | null>(null)
   const [premiumHasNext, setPremiumHasNext] = useState(false)
   const [premiumLoading, setPremiumLoading] = useState(false)
   const [premiumError, setPremiumError] = useState('')
   const [premiumConfidenceFilter, setPremiumConfidenceFilter] = useState<'all' | PremiumNumberConfidence>('all')
+  const [premiumScopeFilter, setPremiumScopeFilter] = useState<'all_review' | 'recruiter_numbers' | 'employer_numbers' | 'recruiter_opportunities'>('all_review')
+  const [opportunityStatusFilter, setOpportunityStatusFilter] = useState<'all' | OpportunityStatus>('all')
   const [premiumSearch, setPremiumSearch] = useState('')
+  const [updatingOpportunityId, setUpdatingOpportunityId] = useState<number | null>(null)
+  const [classifyingReviewId, setClassifyingReviewId] = useState<number | null>(null)
   const [timeRange, setTimeRange] = useState<TimeRangeKey>('current_day')
   const [productivityEvents, setProductivityEvents] = useState<ProductivityEvent[]>([])
   const [productivityTrend, setProductivityTrend] = useState<ProductivityTrendResponse | null>(null)
@@ -593,23 +674,87 @@ function App() {
     setPremiumLoading(true)
     setPremiumError('')
     try {
-      const params = new URLSearchParams({
-        cursor: String(cursor),
-        limit: '25',
-      })
-      if (premiumConfidenceFilter !== 'all') params.set('confidence', premiumConfidenceFilter)
-      if (premiumSearch.trim()) params.set('q', premiumSearch.trim())
-      if (settings.mail_date) params.set('mail_date', settings.mail_date)
-      const res = await fetch(`${apiBase}/premium-numbers?${params.toString()}`)
-      if (!res.ok) throw new Error('Failed to load premium numbers')
-      const payload = (await res.json()) as PremiumNumberListResponse
-      setPremiumNumbers((prev) => (append ? [...prev, ...payload.items] : payload.items))
-      setPremiumNextCursor(payload.next_cursor)
-      setPremiumHasNext(payload.has_next)
+      if (premiumScopeFilter === 'all_review') {
+        const res = await fetch(`${apiBase}/number-review`)
+        if (!res.ok) throw new Error('Failed to load number review queue')
+        setNumberReviewCards((await res.json()) as NumberReviewCard[])
+        setPremiumHasNext(false)
+        setPremiumNextCursor(null)
+      } else if (premiumScopeFilter === 'recruiter_numbers') {
+        const res = await fetch(`${apiBase}/recruiter-numbers`)
+        if (!res.ok) throw new Error('Failed to load recruiter numbers')
+        setRecruiterNumberCards((await res.json()) as RecruiterNumberCard[])
+        setPremiumHasNext(false)
+        setPremiumNextCursor(null)
+      } else if (premiumScopeFilter === 'employer_numbers') {
+        const res = await fetch(`${apiBase}/employer-numbers`)
+        if (!res.ok) throw new Error('Failed to load employer numbers')
+        setEmployerNumberCards((await res.json()) as EmployerNumberCard[])
+        setPremiumHasNext(false)
+        setPremiumNextCursor(null)
+      } else if (premiumScopeFilter === 'recruiter_opportunities') {
+        const params = new URLSearchParams()
+        if (opportunityStatusFilter !== 'all') params.set('status', opportunityStatusFilter)
+        if (premiumSearch.trim()) params.set('q', premiumSearch.trim())
+        if (settings.mail_date) params.set('mail_date', settings.mail_date)
+        const res = await fetch(`${apiBase}/recruiter-opportunities?${params.toString()}`)
+        if (!res.ok) throw new Error('Failed to load recruiter opportunities')
+        setOpportunityCards((await res.json()) as RecruiterOpportunityCard[])
+        setPremiumHasNext(false)
+        setPremiumNextCursor(null)
+      } else {
+        const params = new URLSearchParams({
+          cursor: String(cursor),
+          limit: '25',
+        })
+        if (premiumConfidenceFilter !== 'all') params.set('confidence', premiumConfidenceFilter)
+        if (premiumSearch.trim()) params.set('q', premiumSearch.trim())
+        if (settings.mail_date) params.set('mail_date', settings.mail_date)
+        const res = await fetch(`${apiBase}/premium-numbers?${params.toString()}`)
+        if (!res.ok) throw new Error('Failed to load premium numbers')
+        const payload = (await res.json()) as PremiumNumberListResponse
+        setPremiumNumbers((prev) => (append ? [...prev, ...payload.items] : payload.items))
+        setPremiumNextCursor(payload.next_cursor)
+        setPremiumHasNext(payload.has_next)
+      }
     } catch (e) {
       setPremiumError((e as Error).message)
     } finally {
       setPremiumLoading(false)
+    }
+  }
+
+  const markReviewCard = async (reviewId: number, mode: 'recruiter' | 'employer') => {
+    setClassifyingReviewId(reviewId)
+    try {
+      const res = await fetch(
+        `${apiBase}/number-review/${reviewId}/${mode === 'recruiter' ? 'mark-recruiter' : 'mark-employer'}`,
+        { method: 'POST' },
+      )
+      if (!res.ok) throw new Error(`Failed to mark as ${mode}`)
+      await loadPremiumNumbers({ append: false, cursor: 0 })
+    } catch (e) {
+      setPremiumError((e as Error).message)
+    } finally {
+      setClassifyingReviewId(null)
+    }
+  }
+
+  const updateOpportunity = async (id: number, patch: Partial<Pick<RecruiterOpportunityCard, 'status' | 'notes'>>) => {
+    setUpdatingOpportunityId(id)
+    try {
+      const res = await fetch(`${apiBase}/recruiter-opportunities/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      })
+      if (!res.ok) throw new Error('Failed to update opportunity')
+      const updated = (await res.json()) as RecruiterOpportunityCard
+      setOpportunityCards((prev) => prev.map((item) => (item.id === id ? updated : item)))
+    } catch (e) {
+      setPremiumError((e as Error).message)
+    } finally {
+      setUpdatingOpportunityId(null)
     }
   }
 
@@ -726,7 +871,7 @@ function App() {
     if (!hasBootstrappedCandidatesRef.current) return
     if (activePage !== 'premium_numbers') return
     loadPremiumNumbers({ append: false, cursor: 0 }).catch((e) => setPremiumError((e as Error).message))
-  }, [activePage, premiumConfidenceFilter, premiumSearch, settings.mail_date])
+  }, [activePage, premiumConfidenceFilter, premiumScopeFilter, premiumSearch, settings.mail_date, opportunityStatusFilter])
 
   useEffect(() => {
     loadProductivityAnalytics(timeRange).catch((e) => setError((e as Error).message))
@@ -1153,7 +1298,7 @@ function App() {
         failedCount={failedQueue.length}
         runCount={logs.length}
         sentCount={sentQueue.length}
-        premiumCount={premiumNumbers.length}
+        premiumCount={numberReviewCards.length}
         activePage={activePage}
         onNavigate={setActivePage}
       />
@@ -1955,14 +2100,32 @@ function App() {
               <h2>Premium Numbers</h2>
               <div className="actionBar">
                 <select
-                  value={premiumConfidenceFilter}
-                  onChange={(e) => setPremiumConfidenceFilter(e.target.value as 'all' | PremiumNumberConfidence)}
+                  value={premiumScopeFilter}
+                  onChange={(e) =>
+                    setPremiumScopeFilter(
+                      e.target.value as 'all_review' | 'recruiter_numbers' | 'employer_numbers' | 'recruiter_opportunities',
+                    )
+                  }
                 >
-                  <option value="all">All confidence</option>
-                  <option value="high">High</option>
-                  <option value="medium">Medium</option>
-                  <option value="low">Low</option>
+                  <option value="all_review">All</option>
+                  <option value="recruiter_numbers">Recruiter Numbers</option>
+                  <option value="employer_numbers">Employer Numbers</option>
+                  <option value="recruiter_opportunities">Recruiter Opportunities</option>
                 </select>
+                {premiumScopeFilter === 'recruiter_opportunities' ? (
+                  <select
+                    value={opportunityStatusFilter}
+                    onChange={(e) => setOpportunityStatusFilter(e.target.value as 'all' | OpportunityStatus)}
+                  >
+                    <option value="all">All statuses</option>
+                    <option value="New">New</option>
+                    <option value="Called">Called</option>
+                    <option value="Applied">Applied</option>
+                    <option value="Follow Up">Follow Up</option>
+                    <option value="Closed">Closed</option>
+                    <option value="Not Interested">Not Interested</option>
+                  </select>
+                ) : null}
                 <input
                   value={premiumSearch}
                   onChange={(e) => setPremiumSearch(e.target.value)}
@@ -1971,32 +2134,124 @@ function App() {
               </div>
               {premiumLoading ? <p className="subtle">Loading premium numbers...</p> : null}
               {premiumError ? <p className="subtle">Premium numbers error: {premiumError}</p> : null}
-              {!premiumLoading && premiumNumbers.length === 0 ? <p className="subtle">No premium numbers found.</p> : null}
-              {premiumNumbers.map((item) => (
-                <article key={`premium-${item.id}`} className="emailItem">
-                  <p><strong>Phone:</strong> {item.phone_number_display}</p>
-                  <p><strong>Owner:</strong> {item.owner_name}</p>
-                  <p><strong>Company:</strong> {item.company}</p>
-                  <p><strong>Designation:</strong> {item.designation}</p>
-                  <p><strong>Purpose:</strong> {item.purpose}</p>
-                  <p><strong>Confidence:</strong> {item.confidence.toUpperCase()}</p>
-                  <p><strong>Email Sender:</strong> {item.source_email_sender}</p>
-                  <p><strong>Email Subject:</strong> {item.source_email_subject}</p>
-                  {item.source_email_message_id ? (
-                    <p>
-                      <strong>Open:</strong>{' '}
-                      <a
-                        href={`https://mail.google.com/mail/u/0/#all/${item.source_email_message_id}`}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Open exact email in Gmail
-                      </a>
-                    </p>
-                  ) : null}
-                  {item.source_fragment ? <p className="subtle"><strong>Evidence:</strong> {item.source_fragment}</p> : null}
-                </article>
-              ))}
+              {premiumScopeFilter === 'all_review' && !premiumLoading && numberReviewCards.length === 0 ? (
+                <p className="subtle">No unknown numbers pending review.</p>
+              ) : null}
+              {premiumScopeFilter === 'all_review'
+                ? numberReviewCards.map((item) => (
+                    <article key={`review-${item.id}`} className="emailItem">
+                      <p><strong>Phone:</strong> {item.display_phone_number}</p>
+                      <p><strong>Owner:</strong> {item.owner_name}</p>
+                      <p><strong>Company:</strong> {item.company}</p>
+                      <p><strong>Designation:</strong> {item.designation}</p>
+                      <p><strong>Confidence:</strong> {item.confidence.toUpperCase()}</p>
+                      <p><strong>Purpose:</strong> {item.purpose}</p>
+                      <p><strong>Email Sender:</strong> {item.email_sender}</p>
+                      <p><strong>Email Subject:</strong> {item.email_subject}</p>
+                      {item.gmail_open_url ? (
+                        <p><strong>Open:</strong> <a href={item.gmail_open_url} target="_blank" rel="noreferrer">Open exact email in Gmail</a></p>
+                      ) : null}
+                      <p className="subtle"><strong>Evidence:</strong> {item.evidence_snippet}</p>
+                      <div className="rowBtns">
+                        <button
+                          type="button"
+                          onClick={() => markReviewCard(item.id, 'recruiter')}
+                          disabled={classifyingReviewId === item.id}
+                        >
+                          Mark as Recruiter
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => markReviewCard(item.id, 'employer')}
+                          disabled={classifyingReviewId === item.id}
+                        >
+                          Mark as Employer
+                        </button>
+                      </div>
+                    </article>
+                  ))
+                : null}
+
+              {premiumScopeFilter === 'recruiter_numbers' && !premiumLoading && recruiterNumberCards.length === 0 ? (
+                <p className="subtle">No recruiter numbers found.</p>
+              ) : null}
+              {premiumScopeFilter === 'recruiter_numbers'
+                ? recruiterNumberCards.map((item) => (
+                    <article key={`recruiter-number-${item.id}`} className="emailItem">
+                      <p><strong>Recruiter:</strong> {item.recruiter_name}</p>
+                      <p><strong>Phone:</strong> {item.display_phone_number}</p>
+                      <p><strong>Company:</strong> {item.company}</p>
+                      <p><strong>Designation:</strong> {item.designation}</p>
+                      <p><strong>Recruiter Email:</strong> {item.recruiter_email || '-'}</p>
+                      <p><strong>Total Opportunities:</strong> {item.total_opportunity_count}</p>
+                      <p><strong>Last Email:</strong> {item.last_email_received_at ? new Date(item.last_email_received_at).toLocaleString() : '-'}</p>
+                    </article>
+                  ))
+                : null}
+
+              {premiumScopeFilter === 'employer_numbers' && !premiumLoading && employerNumberCards.length === 0 ? (
+                <p className="subtle">No employer numbers found.</p>
+              ) : null}
+              {premiumScopeFilter === 'employer_numbers'
+                ? employerNumberCards.map((item) => (
+                    <article key={`employer-number-${item.id}`} className="emailItem">
+                      <p><strong>Phone:</strong> {item.display_phone_number}</p>
+                      <p><strong>Owner:</strong> {item.owner_name}</p>
+                      <p><strong>Company:</strong> {item.company}</p>
+                      <p><strong>Source Email ID:</strong> {item.source_email_id ?? '-'}</p>
+                    </article>
+                  ))
+                : null}
+
+              {premiumScopeFilter === 'recruiter_opportunities' && !premiumLoading && opportunityCards.length === 0 ? (
+                <p className="subtle">No recruiter opportunities found.</p>
+              ) : null}
+              {premiumScopeFilter === 'recruiter_opportunities'
+                ? opportunityCards.map((item) => (
+                    <article key={`opportunity-${item.id}`} className="emailItem">
+                      <p><strong>Subject:</strong> {item.email_subject}</p>
+                      <p><strong>Recruiter Email:</strong> {item.email_sender}</p>
+                      <p><strong>Job Title:</strong> {item.job_title || '-'}</p>
+                      <p><strong>Client:</strong> {item.client || '-'}</p>
+                      <p><strong>Location:</strong> {item.location || '-'}</p>
+                      <p><strong>Work Mode:</strong> {item.work_mode || '-'}</p>
+                      <p><strong>Visa:</strong> {item.visa_restrictions || '-'}</p>
+                      <p><strong>Skills:</strong> {item.extracted_skills || '-'}</p>
+                      {item.gmail_open_url ? (
+                        <p><strong>Open:</strong> <a href={item.gmail_open_url} target="_blank" rel="noreferrer">Open exact email in Gmail</a></p>
+                      ) : null}
+                      <label>
+                        Status
+                        <select
+                          value={item.status}
+                          onChange={(e) => updateOpportunity(item.id, { status: e.target.value as OpportunityStatus })}
+                          disabled={updatingOpportunityId === item.id}
+                        >
+                          <option value="New">New</option>
+                          <option value="Called">Called</option>
+                          <option value="Applied">Applied</option>
+                          <option value="Follow Up">Follow Up</option>
+                          <option value="Closed">Closed</option>
+                          <option value="Not Interested">Not Interested</option>
+                        </select>
+                      </label>
+                      <label>
+                        Notes
+                        <textarea
+                          value={item.notes || ''}
+                          rows={3}
+                          onChange={(e) =>
+                            setOpportunityCards((prev) =>
+                              prev.map((entry) => (entry.id === item.id ? { ...entry, notes: e.target.value } : entry)),
+                            )
+                          }
+                          onBlur={(e) => updateOpportunity(item.id, { notes: e.target.value })}
+                          disabled={updatingOpportunityId === item.id}
+                        />
+                      </label>
+                    </article>
+                  ))
+                : null}
               {premiumHasNext ? (
                 <button
                   type="button"
@@ -2052,11 +2307,3 @@ function App() {
 }
 
 export default App
-  const getResumeContextLabel = (value: string | null | undefined): string => {
-    if (value === 'injected') return 'Injected'
-    if (value === 'limited') return 'Limited'
-    if (value === 'missing_resume') return 'Missing Resume'
-    if (value === 'extract_failed') return 'Extract Failed'
-    if (value === 'rules_only') return 'Rules Only'
-    return 'Unknown'
-  }

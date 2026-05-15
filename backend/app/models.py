@@ -194,10 +194,91 @@ class PremiumNumberLead(Base):
     designation: Mapped[str] = mapped_column(String(255), default="Unknown")
     purpose: Mapped[str] = mapped_column(String(255), default="Recruiter contact")
     confidence: Mapped[str] = mapped_column(String(10), default="low")
+    contact_type: Mapped[str] = mapped_column(String(40), default="unknown")
+    recruiter_relevance_score: Mapped[int] = mapped_column(Integer, default=0)
+    is_recruiter_relevant: Mapped[bool] = mapped_column(Boolean, default=False)
+    relevance_reason: Mapped[str] = mapped_column(String(255), default="")
     source_fragment: Mapped[str] = mapped_column(Text, default="")
     source_email_sender: Mapped[str] = mapped_column(String(255), default="")
     source_email_subject: Mapped[str] = mapped_column(String(500), default="")
     source_email_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+
+class RecruiterNumber(Base):
+    __tablename__ = "recruiter_numbers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    normalized_phone_number: Mapped[str] = mapped_column(String(40), index=True)
+    display_phone_number: Mapped[str] = mapped_column(String(80))
+    recruiter_name: Mapped[str] = mapped_column(String(255), default="Unknown")
+    company: Mapped[str] = mapped_column(String(255), default="Unknown")
+    designation: Mapped[str] = mapped_column(String(255), default="Unknown")
+    recruiter_email: Mapped[str] = mapped_column(String(255), default="")
+    first_detected_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+
+class EmployerNumber(Base):
+    __tablename__ = "employer_numbers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    normalized_phone_number: Mapped[str] = mapped_column(String(40), index=True)
+    display_phone_number: Mapped[str] = mapped_column(String(80))
+    owner_name: Mapped[str] = mapped_column(String(255), default="Unknown")
+    company: Mapped[str] = mapped_column(String(255), default="Unknown")
+    source_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+
+class RecruiterOpportunity(Base):
+    __tablename__ = "recruiter_opportunities"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    recruiter_number_id: Mapped[int] = mapped_column(Integer, index=True)
+    source_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    gmail_message_id: Mapped[str] = mapped_column(String(255), index=True)
+    email_subject: Mapped[str] = mapped_column(String(500), default="")
+    email_sender: Mapped[str] = mapped_column(String(255), default="")
+    gmail_open_url: Mapped[str] = mapped_column(String(1000), default="")
+    received_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    job_title: Mapped[str] = mapped_column(String(255), default="")
+    client: Mapped[str] = mapped_column(String(255), default="")
+    location: Mapped[str] = mapped_column(String(255), default="")
+    work_mode: Mapped[str] = mapped_column(String(80), default="")
+    visa_restrictions: Mapped[str] = mapped_column(String(255), default="")
+    extracted_skills: Mapped[str] = mapped_column(Text, default="")
+    evidence: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(40), default="New")
+    notes: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+
+class NumberReviewQueue(Base):
+    __tablename__ = "number_review_queue"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    source_email_id: Mapped[int] = mapped_column(Integer, index=True)
+    normalized_phone_number: Mapped[str] = mapped_column(String(40), index=True)
+    display_phone_number: Mapped[str] = mapped_column(String(80))
+    owner_name: Mapped[str] = mapped_column(String(255), default="Unknown")
+    company: Mapped[str] = mapped_column(String(255), default="Unknown")
+    designation: Mapped[str] = mapped_column(String(255), default="Unknown")
+    confidence: Mapped[str] = mapped_column(String(10), default="low")
+    purpose: Mapped[str] = mapped_column(String(255), default="")
+    evidence_snippet: Mapped[str] = mapped_column(Text, default="")
+    email_subject: Mapped[str] = mapped_column(String(500), default="")
+    email_sender: Mapped[str] = mapped_column(String(255), default="")
+    gmail_open_url: Mapped[str] = mapped_column(String(1000), default="")
+    state: Mapped[str] = mapped_column(String(40), default="pending")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
