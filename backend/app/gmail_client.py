@@ -44,6 +44,7 @@ class GmailMessageCandidate(TypedDict):
     body: str
     snippet: str
     gmail_received_at: datetime | None
+    label_ids: list[str]
 
 
 def _as_dict(value: Any) -> dict[str, Any]:
@@ -366,6 +367,7 @@ def list_unread_candidates_by_query(query: str, max_results_per_page: int = 100)
                     "body": body,
                     "snippet": snippet,
                     "gmail_received_at": gmail_received_at,
+                    "label_ids": [str(label) for label in details.get("labelIds", []) if isinstance(label, str)],
                 }
             )
 
@@ -449,6 +451,65 @@ def mark_message_processed(message_id: str) -> None:
     if settings.gmail_label_filter:
         body["addLabelIds"] = [settings.gmail_label_filter]
     service.users().messages().modify(userId="me", id=message_id, body=body).execute()
+
+
+def list_gmail_labels() -> list[dict[str, str]]:
+    service = _gmail_service()
+    response = _as_dict(service.users().labels().list(userId="me").execute())
+    labels = _as_list_of_dicts(response.get("labels"))
+    results: list[dict[str, str]] = []
+    for item in labels:
+        label_id = item.get("id")
+        name = item.get("name")
+        if isinstance(label_id, str) and isinstance(name, str):
+            results.append({"id": label_id, "name": name})
+    return results
+
+
+def ensure_gmail_labels(label_names: list[str]) -> dict[str, str]:
+    service = _gmail_service()
+    existing = list_gmail_labels()
+    by_normalized: dict[str, dict[str, str]] = {row["name"].strip().lower(): row for row in existing}
+    result: dict[str, str] = {}
+    for display_name in label_names:
+        normalized = display_name.strip().lower()
+        if not normalized:
+            continue
+        existing_label = by_normalized.get(normalized)
+        if existing_label:
+            result[display_name] = existing_label["id"]
+            continue
+        created = _as_dict(
+            service.users()
+            .labels()
+            .create(
+                userId="me",
+                body={
+                    "name": display_name,
+                    "labelListVisibility": "labelShow",
+                    "messageListVisibility": "show",
+                },
+            )
+            .execute()
+        )
+        created_id = created.get("id")
+        if isinstance(created_id, str) and created_id:
+            by_normalized[normalized] = {"id": created_id, "name": display_name}
+            result[display_name] = created_id
+    return result
+
+
+def apply_gmail_label(
+    message_id: str,
+    label_id: str,
+    *,
+    existing_label_ids: list[str] | None = None,
+) -> bool:
+    if existing_label_ids and label_id in existing_label_ids:
+        return False
+    service = _gmail_service()
+    service.users().messages().modify(userId="me", id=message_id, body={"addLabelIds": [label_id]}).execute()
+    return True
 
 
 def gmail_auth_status() -> tuple[bool, bool, str]:

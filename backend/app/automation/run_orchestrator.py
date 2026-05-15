@@ -33,6 +33,7 @@ class RunOrchestratorDependencies:
     apply_routing_decision: Callable[[RecruiterEmail, RoutingDecision], None]
     capture_premium_numbers: Callable[[Session, RecruiterEmail], None]
     record_productivity_event: Callable[..., Any]
+    apply_gmail_label: Callable[[Session, RecruiterEmail, CandidateItem], None]
     mark_message_processed: Callable[[str], None]
 
 
@@ -92,6 +93,9 @@ class RunOrchestrator:
                 skipped_count += 1
                 last_email = existing
                 if not request.dry_run:
+                    request.deps.apply_gmail_label(request.db, existing, item)
+                    request.db.commit()
+                    request.db.refresh(existing)
                     request.deps.mark_message_processed(external_message_id)
                 continue
 
@@ -150,6 +154,9 @@ class RunOrchestrator:
                 request.db.commit()
                 request.db.refresh(email)
                 request.deps.capture_premium_numbers(request.db, email)
+                request.deps.apply_gmail_label(request.db, email, item)
+                request.db.commit()
+                request.db.refresh(email)
                 request.deps.mark_message_processed(external_message_id)
                 skipped_count += 1
                 last_email = email
@@ -191,6 +198,9 @@ class RunOrchestrator:
                     entity_id=email.id,
                     metadata={"reason": email.skip_reason or "missing_to_or_cc"},
                 )
+                request.deps.apply_gmail_label(request.db, email, item)
+                request.db.commit()
+                request.db.refresh(email)
                 request.deps.mark_message_processed(external_message_id)
                 failed_count += 1
                 last_email = email
@@ -287,6 +297,9 @@ class RunOrchestrator:
                 entity_id=email.id,
                 metadata={"source": "automation_run"},
             )
+            request.deps.apply_gmail_label(request.db, email, item)
+            request.db.commit()
+            request.db.refresh(email)
             request.deps.mark_message_processed(external_message_id)
             queued_count += 1
             last_email = email

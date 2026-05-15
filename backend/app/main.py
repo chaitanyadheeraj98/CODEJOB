@@ -33,6 +33,7 @@ from app.automation import (
 )
 from app.db import Base, SessionLocal, engine, ensure_sqlite_phase0_columns
 from app.gmail_client import (
+    GmailMessageCandidate,
     get_message_rfc_message_id,
     gmail_auth_status,
     is_gmail_configured,
@@ -44,6 +45,7 @@ from app.gmail_client import (
     send_reply_with_attachment,
     start_oauth_bootstrap,
 )
+from app.gmail_labeling import GmailLabelingService, LabelRuleInput
 from app.models import (
     DraftEditFeedback,
     EmployerNumber,
@@ -94,6 +96,8 @@ from app.schemas import (
     EmailResponse,
     GmailStatusResponse,
     GmailSyncResponse,
+    GmailLabelingPreviewRequest,
+    GmailLabelingPreviewResponse,
     IngestEmailRequest,
     OAuthStartResponse,
     OAuthUrlResponse,
@@ -127,10 +131,16 @@ from app.semantic.ranking import blend_scores, semantic_similarity
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    global auto_runner_thread, telegram_service
+    global auto_runner_thread, telegram_service, gmail_labeling_service
     Base.metadata.create_all(bind=engine)
     ensure_sqlite_phase0_columns()
     _ensure_default_settings()
+    gmail_labeling_service = GmailLabelingService()
+    if is_gmail_configured():
+        try:
+            gmail_labeling_service.ensure_target_labels()
+        except Exception as exc:
+            logger.warning("gmail_labeling startup_sync_failed error=%s", exc)
     telegram_service = _init_telegram_service()
     auto_runner_stop_event.clear()
     auto_runner_thread = threading.Thread(target=_auto_runner_loop, name="mailops-auto-runner", daemon=True)
@@ -161,6 +171,7 @@ telegram_auth_sessions: dict[int, datetime] = {}
 telegram_pending_inputs: dict[int, str] = {}
 auto_runner_thread: threading.Thread | None = None
 auto_runner_stop_event = threading.Event()
+gmail_labeling_service: GmailLabelingService | None = None
 
 TELEGRAM_MENU_PAGE_SIZE = 6
 
@@ -1699,6 +1710,8 @@ def _build_run_response(
         decision_reason=email.decision_reason,
         skip_reason=email.skip_reason,
         routing_reason=email.routing_reason,
+        applied_gmail_label=email.applied_gmail_label,
+        applied_gmail_label_id=email.applied_gmail_label_id,
         effective_query=effective_query,
         matched_count=matched_count,
         queued_count=queued_count,
@@ -2217,6 +2230,7 @@ def gmail_sync(db: Session = Depends(get_db)) -> GmailSyncResponse:
                 .first()
             )
             if existing:
+                _apply_gmail_label_for_email(email=existing, candidate_item=item)
                 skipped_count += 1
                 continue
 
@@ -2312,6 +2326,7 @@ def gmail_sync(db: Session = Depends(get_db)) -> GmailSyncResponse:
             if routed:
                 _apply_routing_result(email, routed)
                 email.routing_confirmed = False
+            _apply_gmail_label_for_email(email=email, candidate_item=item)
             if active_resume and resume_embedding_json and active_resume.semantic_embedding != resume_embedding_json:
                 active_resume.semantic_embedding = resume_embedding_json
             db.add(email)
@@ -2330,6 +2345,7 @@ def gmail_sync(db: Session = Depends(get_db)) -> GmailSyncResponse:
         raise
 
     last_gmail_sync_at = datetime.now(UTC)
+    _log_gmail_labeling_stats()
     response = GmailSyncResponse(
         sync_batch_id=sync_batch_id,
         imported_count=imported_count,
@@ -2361,6 +2377,25 @@ def gmail_oauth_start() -> OAuthStartResponse:
 @app.get("/gmail/oauth/url", response_model=OAuthUrlResponse)
 def gmail_oauth_url() -> OAuthUrlResponse:
     return OAuthUrlResponse(authorization_url=oauth_authorization_url())
+
+
+@app.post("/gmail/labeling/preview", response_model=GmailLabelingPreviewResponse)
+def gmail_labeling_preview(payload: GmailLabelingPreviewRequest) -> GmailLabelingPreviewResponse:
+    service = _ensure_gmail_labeling_service()
+    decision = service.decide_label(
+        LabelRuleInput(
+            sender=payload.sender,
+            subject=payload.subject,
+            body=payload.body,
+            state=payload.state,
+            decision=payload.decision,
+            routing_status=payload.routing_status,
+            routing_confidence=float(payload.routing_confidence or 0.0),
+            skip_reason=payload.skip_reason,
+            draft_reply=payload.draft_reply,
+        )
+    )
+    return GmailLabelingPreviewResponse(label=decision.label, reason_path=decision.reason_path)
 
 
 @app.post("/automation/run-once", response_model=AutomationRunResponse)
@@ -2411,6 +2446,7 @@ def automation_run_once(payload: AutomationRunRequest | None = None, db: Session
         )
         if telegram_service:
             telegram_service.notify(_build_telegram_digest("Run Digest", response))
+        _log_gmail_labeling_stats()
         return response
     user_settings = _get_settings(db)
     resume = _active_resume(db)
@@ -2450,6 +2486,7 @@ def automation_run_once(payload: AutomationRunRequest | None = None, db: Session
         )
         if telegram_service:
             telegram_service.notify(_build_telegram_digest("Run Digest", response))
+        _log_gmail_labeling_stats()
         return response
 
     capture_started = False
@@ -2500,6 +2537,7 @@ def automation_run_once(payload: AutomationRunRequest | None = None, db: Session
                     apply_routing_decision=_apply_routing_decision,
                     capture_premium_numbers=_capture_premium_numbers,
                     record_productivity_event=_record_productivity_event,
+                    apply_gmail_label=lambda _db, email, item: _apply_gmail_label_for_email(email=email, candidate_item=item),
                     mark_message_processed=mark_message_processed,
                 ),
             )
@@ -2687,6 +2725,72 @@ def list_candidates(
         items=[EmailResponse.model_validate(item) for item in visible],
         next_cursor=next_cursor,
         has_next=has_next,
+    )
+
+
+def _ensure_gmail_labeling_service() -> GmailLabelingService:
+    global gmail_labeling_service
+    if gmail_labeling_service is None:
+        gmail_labeling_service = GmailLabelingService()
+    return gmail_labeling_service
+
+
+def _build_label_rule_input_from_email(email: RecruiterEmail) -> LabelRuleInput:
+    return LabelRuleInput(
+        sender=email.sender or "",
+        subject=email.subject or "",
+        body=email.body or "",
+        state=email.state or "",
+        decision=email.decision or "",
+        routing_status=email.routing_status or "",
+        routing_confidence=float(email.routing_confidence or 0.0),
+        skip_reason=email.skip_reason,
+        draft_reply=email.draft_reply or "",
+    )
+
+
+def _apply_gmail_label_for_email(
+    *,
+    email: RecruiterEmail,
+    candidate_item: GmailMessageCandidate | dict[str, object],
+) -> None:
+    if email.source != "gmail" or not email.external_message_id:
+        return
+    service = _ensure_gmail_labeling_service()
+    decision = service.decide_label(_build_label_rule_input_from_email(email))
+    try:
+        changed, label_id = service.apply_to_message(
+            message_id=email.external_message_id,
+            label_name=decision.label,
+            existing_label_ids=cast(list[str], candidate_item.get("label_ids", [])),
+        )
+        email.applied_gmail_label = decision.label
+        email.applied_gmail_label_id = label_id
+        if changed:
+            email.applied_gmail_label_at = datetime.now(UTC)
+        logger.info(
+            "gmail_labeling decision=%s path=%s changed=%s message_id=%s",
+            decision.label,
+            decision.reason_path,
+            changed,
+            email.external_message_id,
+        )
+    except Exception as exc:
+        logger.warning("gmail_labeling apply_failed message_id=%s error=%s", email.external_message_id, exc)
+
+
+def _log_gmail_labeling_stats() -> None:
+    service = gmail_labeling_service
+    if not service:
+        return
+    stats = service.stats
+    logger.info(
+        "gmail_labeling stats rules_hit=%s ai_fallback=%s apply_success=%s apply_failure=%s idempotent_skip=%s",
+        stats.rules_hit,
+        stats.ai_fallback,
+        stats.apply_success,
+        stats.apply_failure,
+        stats.idempotent_skip,
     )
 
 

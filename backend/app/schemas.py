@@ -158,6 +158,9 @@ class EmailResponse(BaseModel):
     external_thread_id: str | None
     external_rfc_message_id: str | None
     gmail_received_at: datetime | None
+    applied_gmail_label: str | None = None
+    applied_gmail_label_id: str | None = None
+    applied_gmail_label_at: datetime | None = None
     gmail_message_url: str | None = None
     recipient_email: str | None
     cc_email: str | None
@@ -371,6 +374,8 @@ class AutomationRunResponse(BaseModel):
     decision_reason: str | None = None
     skip_reason: str | None = None
     routing_reason: str | None = None
+    applied_gmail_label: str | None = None
+    applied_gmail_label_id: str | None = None
     effective_query: str | None = None
     matched_count: int | None = None
     queued_count: int | None = None
@@ -388,6 +393,23 @@ class AutomationRunRequest(BaseModel):
             return None
         datetime.strptime(value, "%Y-%m-%d")
         return value
+
+
+class GmailLabelingPreviewRequest(BaseModel):
+    sender: str
+    subject: str
+    body: str
+    state: str = "needs_review"
+    decision: str = "Qualified"
+    routing_status: str = "unverified"
+    routing_confidence: float = 0.0
+    skip_reason: str | None = None
+    draft_reply: str = ""
+
+
+class GmailLabelingPreviewResponse(BaseModel):
+    label: str
+    reason_path: str
 
 
 class TelegramStatusResponse(BaseModel):
