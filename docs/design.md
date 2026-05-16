@@ -79,6 +79,6 @@ Premium module also includes:
 
 ## 6) Known design debt
 
-- `dashboard/src/App.tsx` is very large and tightly coupled across sections/states
+- `dashboard/src/App.tsx` remains large and tightly coupled across sections/states, though some logic has been extracted to `dashboard/src/features/ai/*` and `dashboard/src/features/query_bucket/*`
 - Several section refresh paths are manually coordinated (`schedulePostMutationRefresh`, multiple effect chains)
 - Sidebar footer buttons (`Settings`, `Help Center`) are currently placeholders without full routing behavior

@@ -1,7 +1,6 @@
 # Problem Fix Log (Current Branch Review)
 
-Date: 2026-05-15  
-Branch: `copilot/update-docs-except-agent-context`
+Date: current branch snapshot
 
 ## 1) Summary of critical tangled zones
 
@@ -81,7 +80,8 @@ flowchart TD
 ### A) `dashboard/src/App.tsx` monolith
 
 **Why tangled**
-- Contains all page rendering, API calls, business-state transitions, analytics polling, OAuth polling, and premium-number actions.
+- Still contains most page rendering, API calls, business-state transitions, analytics polling, OAuth polling, and premium-number actions.
+- Some concerns are now extracted (`dashboard/src/features/query_bucket/*`, `dashboard/src/features/ai/*`), but core flow coordination remains centralized.
 
 **Break risk**
 - UI state regressions across unrelated sections when modifying shared hooks/effects.

@@ -1,7 +1,6 @@
 # CODEJOB Architecture (Current Branch)
 
-Branch snapshot: `copilot/update-docs-except-agent-context`  
-Last milestone tag on branch: `milestone/recruiter-intelligence-v1-2026-05-15`
+Audit snapshot: current working branch and codebase state
 
 ## 1) System shape
 
@@ -21,6 +20,8 @@ CODEJOB is a **single FastAPI backend + single React dashboard** system.
   - Policy handling, queue orchestration, approval/rejection flows
   - Productivity analytics APIs
   - Number intelligence APIs (review queue, recruiter/employer buckets, opportunities)
+  - Gmail labeling preview/apply flows
+  - Recruiter-opportunity cold-call script generation endpoint
 - `backend/app/automation/run_orchestrator.py`
   - Main run loop logic for `POST /automation/run-once`
   - Handles duplicate message checks, scoring, routing decisions, queue transitions
@@ -48,6 +49,10 @@ CODEJOB is a **single FastAPI backend + single React dashboard** system.
   - State-specific candidate pagination and refresh behavior
 - `dashboard/src/employerDomains.ts`
   - Employer domain normalization and validation
+- `dashboard/src/features/query_bucket/*`
+  - Saved Gmail query bucket UI/state helpers
+- `dashboard/src/features/ai/*`
+  - AI-related UI state and display helpers
 
 ## 3) Primary execution paths
 
@@ -108,6 +113,6 @@ SQLite schema bootstrapping and additive migration logic are handled in `backend
 ## 6) Notable architectural constraints
 
 - Backend orchestration is intentionally concentrated in `main.py`; many endpoint behaviors share helper state
-- Frontend is intentionally centralized in `App.tsx`; state interactions are tightly coupled
+- Frontend is still primarily centralized in `App.tsx`, with partial feature extraction under `dashboard/src/features/*`
 - Telegram command flows call the same core run/approve/reject paths as UI
 - The app currently assumes one logical owner (`settings.owner_id`) with owner-scoped queries
