@@ -1,60 +1,42 @@
 # CODEJOB Test and Validation Matrix (Current Branch)
 
-## 1) Existing backend test modules
+## 1) Backend test modules present
 
-Located in `backend/tests/`:
+`backend/tests/` currently includes coverage for:
 
-- Routing and parsing: `test_phase0_routing.py`, `test_routing_policy.py`, `test_candidate_date_filtering.py`
-- Run orchestration: `test_run_orchestrator.py`, `test_run_once_hotfix.py`
-- Premium number intelligence: `test_premium_numbers_extraction.py`, `test_premium_numbers_api.py`
-- Draft/prompt/quality: `test_prompting.py`, `test_draft_formatting.py`, `test_draft_quality.py`
-- Resume/semantic: `test_resume_context_attribution.py`, `test_semantic_ranking.py`
-- Productivity/analytics: `test_productivity_trend.py`
-- Telegram interaction: `test_telegram_interactive.py`
-- API behavior regressions: `test_approve_cc_regression.py`, `test_sheets_tracking.py`, `test_schemas.py`
+- routing/parsing: `test_phase0_routing.py`, `test_routing_policy.py`, `test_candidate_date_filtering.py`
+- run orchestration: `test_run_orchestrator.py`, `test_run_once_hotfix.py`
+- premium-number intelligence: `test_premium_numbers_extraction.py`, `test_premium_numbers_api.py`
+- gmail labeling: `test_gmail_labeling_rules.py`, `test_gmail_labeling_service.py`, `test_gmail_labeling_api.py`
+- cold-call workflows: `test_cold_call_service.py`, `test_cold_call_api.py`
+- query bucket behavior: `test_query_bucket_service.py`
+- draft/prompt quality: `test_prompting.py`, `test_draft_formatting.py`, `test_draft_quality.py`
+- resume/semantic: `test_resume_context_attribution.py`, `test_semantic_ranking.py`
+- analytics/telegram: `test_productivity_trend.py`, `test_telegram_interactive.py`
+- API regressions/schemas: `test_approve_cc_regression.py`, `test_sheets_tracking.py`, `test_schemas.py`
 
-## 2) High-priority regression scenarios
-
-1. `POST /automation/run-once` queue/skip/fail accounting
-2. `POST /candidates/{id}/approve-send` safety gate (routing + draft + resume + metadata)
-3. `POST /candidates/{id}/resolve-recipients` moves failed -> needs_review with confirmed routing
-4. Number review manual classification (`mark-recruiter`, `mark-employer`) and duplicate suppression
-5. Opportunity update API status validation (`PATCH /recruiter-opportunities/{id}`)
-
-```mermaid
-flowchart TD
-    A[Code or behavior change proposed] --> B[Run high-priority regression scenarios]
-    B --> C{automation/run-once queue checks pass?}
-    C -->|No| Z[Block release and fix]
-    C -->|Yes| D{approve-send safety gate passes?}
-    D -->|No| Z
-    D -->|Yes| E{resolve-recipients failed->review passes?}
-    E -->|No| Z
-    E -->|Yes| F{number review classification + dedupe passes?}
-    F -->|No| Z
-    F -->|Yes| G{opportunity status update validation passes?}
-    G -->|No| Z
-    G -->|Yes| H[Proceed to full suite / release checks]
-```
-
-## 3) Known branch mismatch in tests
-
-- `backend/tests/test_phone_attribution.py` imports `app.phone_attribution`, but that module is not present in current branch.
-- `backend/tests/test_run_orchestrator.py` appears to reference older dependency field names compared with current `RunOrchestratorDependencies`.
-
-These indicate stale tests relative to current runtime code and should be reconciled before treating full test suite as green.
-
-## 4) Frontend checks
+## 2) Frontend checks
 
 From `dashboard/package.json`:
 - `npm run lint`
 - `npm run build`
 - `npm run test`
 
-## 5) Validation status in current environment (this session)
+## 3) Backend command
 
-- Backend tests command failed because `pytest` is not installed in shell environment.
-- Frontend lint failed because `eslint` is not installed in shell environment.
-- Frontend build failed because node type definitions/packages are not installed (`vite/client`, `node` types missing).
+From repo setup and tests:
+- `python -m pytest` (run from `backend` directory)
 
-Environment dependency setup is required before meaningful green/red interpretation.
+## 4) High-priority regression scenarios
+
+1. run-once queue accounting (`matched/queued/skipped/failed`)
+2. approve-send safety gate (routing + recipients + draft + resume)
+3. failed mapping resolution path (`resolve-recipients`)
+4. number-review manual classification and dedupe behavior
+5. bucket swap endpoints
+6. recruiter opportunity updates and cold-call script generation
+7. Gmail labeling preview and apply behavior
+
+## 5) Known branch mismatch
+
+- `backend/tests/test_phone_attribution.py` imports `app.phone_attribution`, which is not present under `backend/app` in this branch.

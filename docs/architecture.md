@@ -1,113 +1,89 @@
 # CODEJOB Architecture (Current Branch)
 
-Branch snapshot: `copilot/update-docs-except-agent-context`  
-Last milestone tag on branch: `milestone/recruiter-intelligence-v1-2026-05-15`
+Branch snapshot: `copilot/update-docs-files-except-agent-context`  
+Recent milestone tags:
+- `milestone-querybucket-remap-hooks-2026-05-15`
+- `milestone-recruiter-opportunity-phone-2026-05-15`
 
 ## 1) System shape
 
-CODEJOB is a **single FastAPI backend + single React dashboard** system.
+CODEJOB is a **FastAPI backend + React (Vite) dashboard** system with SQLite persistence.
 
-- Backend: `backend/app/main.py` + domain modules
-- Frontend: `dashboard/src/App.tsx` + helper modules
-- Storage: SQLite (`recruiter_emails`, `user_settings`, `resume_assets`, productivity and phone-intelligence tables)
-- Integrations: Gmail API, optional Google Sheets, DeepSeek/OpenAI-compatible API, Telegram Bot API
+- Backend: `backend/app/main.py` and domain packages (`automation`, `routing`, `premium_numbers`, `gmail_labeling`, `cold_call`, `query_bucket`)
+- Frontend: `dashboard/src/App.tsx` with feature helpers
+- Storage: SQLite via SQLAlchemy models in `backend/app/models.py`
+- Integrations: Gmail API, Gmail OAuth, optional Google Sheets tracking, Telegram bot operations, DeepSeek/OpenAI-compatible APIs
 
 ## 2) Runtime architecture
 
-### Backend
+### Backend runtime modules
 
 - `backend/app/main.py`
-  - Application lifecycle and endpoint surface
-  - Policy handling, queue orchestration, approval/rejection flows
-  - Productivity analytics APIs
-  - Number intelligence APIs (review queue, recruiter/employer buckets, opportunities)
+  - App lifecycle, endpoint surface, orchestration helpers, analytics, Telegram handlers
 - `backend/app/automation/run_orchestrator.py`
-  - Main run loop logic for `POST /automation/run-once`
-  - Handles duplicate message checks, scoring, routing decisions, queue transitions
-- `backend/app/phase0.py`
-  - Parsing, recruiter heuristics, routing evidence extraction, hard filters, fallback draft rendering
+  - Queue-state pipeline for `POST /automation/run-once`
+- `backend/app/routing/*`
+  - Routing policy and routing decision adapters
 - `backend/app/premium_numbers/*`
-  - Phone extraction, dedupe, relevance scoring
-  - Unknown-number queue handling and recruiter opportunity snapshots
-- `backend/app/routing/policy.py`
-  - Routing policy and sendability decision object
+  - Extraction, normalization, intelligence classification, dedupe-aware writes
+- `backend/app/gmail_labeling/*`
+  - Label rule engine + AI fallback + Gmail label apply/sync
+- `backend/app/cold_call/*`
+  - Recruiter-opportunity cold-call script generation + truthfulness sanitization
+- `backend/app/query_bucket/*`
+  - Saved-query sanitization and dedupe
 
-### Frontend
+### Frontend runtime modules
 
 - `dashboard/src/App.tsx`
-  - Single-page dashboard with all sections:
-    - Run Queue
-    - Needs Review
-    - Failed Mapping
-    - Premium Numbers
-    - Sent Items
-    - Recent Runs
+  - Primary UI state machine and API wiring
 - `dashboard/src/components/Sidebar.tsx`
   - Navigation and counters
 - `dashboard/src/candidateBuckets.ts`
-  - State-specific candidate pagination and refresh behavior
+  - Candidate paging/refresh behavior
 - `dashboard/src/employerDomains.ts`
-  - Employer domain normalization and validation
+  - Employer-domain list normalization helpers
+- `dashboard/src/features/query_bucket/*`
+  - Saved-query bucket UI/API integration
+- `dashboard/src/features/ai/*`
+  - AI state/UI helpers
 
 ## 3) Primary execution paths
 
-1. User updates settings/profile in UI (`PUT /settings`)
-2. User runs sync (`POST /automation/run-once`) or OAuth bootstrap (`POST /gmail/oauth/start`)
-3. Backend fetches unread Gmail candidates by effective query/policy
-4. For each email, backend performs parse/filter/score/routing/draft
-5. Candidate becomes:
-   - `needs_review` (qualified)
-   - `failed` (routing unresolved)
-   - `processed_skipped` (not qualified)
-6. Number intelligence is captured per processed email:
-   - premium lead store
-   - recruiter/employer/unknown classification path
-   - recruiter opportunity creation (deduped per recruiter number + Gmail message)
-7. User manually approves/rejects/re-routes from UI
-
-```mermaid
-flowchart TD
-    A[UI: settings update / run trigger] --> B[POST /automation/run-once]
-    B --> C[Fetch unread Gmail candidates]
-    C --> D[RunOrchestrator: parse/filter/score/route/draft]
-    D --> E{State outcome}
-    E -->|needs_review| F[Needs Review queue]
-    E -->|failed| G[Failed Mapping queue]
-    E -->|processed_skipped| H[Skipped record only]
-    D --> I[Premium number extraction + intelligence]
-    I --> J{Classification result}
-    J -->|recruiter| K[RecruiterNumber + RecruiterOpportunity]
-    J -->|employer| L[EmployerNumber]
-    J -->|unknown| M[NumberReviewQueue pending]
-    F --> N[Approve & Send]
-    G --> O[Resolve recipients then move to review]
-    N --> P[Send email + analytics tracking]
-```
+1. User updates filters/settings (`PUT /settings`) and optionally saved queries.
+2. User starts Gmail OAuth (`POST /gmail/oauth/start`) or triggers run (`POST /automation/run-once`).
+3. Backend fetches unread Gmail candidates using effective query + policy.
+4. Run orchestrator parses/filter/scores/routes each candidate.
+5. Candidate transitions to `needs_review`, `failed`, or `processed_skipped`.
+6. Premium-number intelligence runs for processed candidates.
+7. Gmail labeling rules/AI decide and apply labels to processed messages.
+8. User resolves failed mappings, classifies unknown numbers, approves/rejects queued items.
+9. Approved items send via Gmail and optionally append a Sheets tracking row.
+10. Recruiter opportunities can generate/update cold-call scripts.
 
 ## 4) Safety and control architecture
 
-- Manual approval is required before sending (`approve-send` endpoint enforces routing safety + resume + draft + metadata)
-- Routing sendability logic is centralized (`_evaluate_routing_policy`, `_routing_is_sendable`)
-- Duplicate suppression exists at DB/index and logic levels:
-  - unique external message IDs
-  - unique recruiter/employer number indexes per owner
-  - unique recruiter opportunity per owner+recruiter number+message
-  - unique number-review card per owner+phone+source email
+- Approve-send gate validates routing sendability, To/CC, non-empty draft, and active resume
+- Routing decision safety is centralized through routing policy decision helpers
+- Duplicate prevention is enforced by both write-path checks and DB unique indexes
+- Manual controls are preserved for:
+  - failed mapping correction
+  - unknown-number classification (`mark-recruiter`, `mark-employer`)
 
 ## 5) Persistence architecture
 
-Main entities:
+Main entity groups:
 
-- Core workflow: `RecruiterEmail`, `UserSettings`, `ResumeAsset`, `SyncRun`
-- Learning/feedback: `DraftEditFeedback`, `RecipientRoutingFeedback`
+- Workflow: `RecruiterEmail`, `SyncRun`, `UserSettings`, `ResumeAsset`
+- Feedback: `DraftEditFeedback`, `RecipientRoutingFeedback`
 - Analytics: `ProductivityEvent`
-- Phone intelligence: `PremiumNumberLead`, `NumberReviewQueue`, `RecruiterNumber`, `EmployerNumber`, `RecruiterOpportunity`
+- Number intelligence: `PremiumNumberLead`, `NumberReviewQueue`, `RecruiterNumber`, `EmployerNumber`, `RecruiterOpportunity`
 
-SQLite schema bootstrapping and additive migration logic are handled in `backend/app/db.py::ensure_sqlite_phase0_columns`.
+SQLite schema initialization/migration guardrails are in `backend/app/db.py`.
 
-## 6) Notable architectural constraints
+## 6) Architectural constraints
 
-- Backend orchestration is intentionally concentrated in `main.py`; many endpoint behaviors share helper state
-- Frontend is intentionally centralized in `App.tsx`; state interactions are tightly coupled
-- Telegram command flows call the same core run/approve/reject paths as UI
-- The app currently assumes one logical owner (`settings.owner_id`) with owner-scoped queries
+- Backend orchestration is concentrated in `main.py` and shared helper functions
+- Frontend state is concentrated in `App.tsx`
+- Several workflows are cross-coupled (run queue, routing, premium numbers, Gmail labeling, analytics)
+- Single-owner scoped operation is still the default behavior (`owner_id`-scoped data)

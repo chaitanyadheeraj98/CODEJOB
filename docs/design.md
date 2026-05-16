@@ -1,10 +1,10 @@
 # CODEJOB UI/UX Design Notes (Current Branch)
 
-## 1) Current UI structure
+## 1) UI structure
 
-The dashboard is a single-page React app with sidebar navigation and section-based content panes.
+The dashboard remains a single-page React app (`dashboard/src/App.tsx`) with a sidebar and section panes.
 
-Primary sections:
+Sidebar sections:
 - Run Queue
 - Needs Review
 - Failed Mapping
@@ -12,73 +12,45 @@ Primary sections:
 - Sent Items
 - Recent Runs
 
-## 2) Critical interaction contracts
+## 2) Interaction contracts
 
-- Top action must always expose:
-  - `Connect Gmail` when unauthenticated
-  - `Sync Now` / `Sync + Queue` when authenticated
-- Date chip and date picker must allow filter + clear
-- Settings form must keep `Save Filters` and resume upload/replace actions
+Top controls must preserve:
+- Gmail connect/auth entry point
+- Sync run trigger
+- Save Filters/settings behavior
+- Resume upload/replace flow
 
-## 3) Review safety UX
+## 3) Needs Review safety UX
 
-Needs Review cards must retain:
-- Routing evidence panel
-- To/CC visibility
-- Editable draft + live preview
-- `Approve & Send` and `Reject` buttons
+Each review card should preserve:
+- routing evidence/candidate context
+- visible To/CC recipients
+- editable draft and live preview
+- `Approve & Send` and `Reject`
 
-Approve button stays disabled unless:
-- routing is sendable
-- To and CC exist
-- non-empty draft exists
-- resume is attached
+Approve must remain disabled until send gate prerequisites are met.
 
-```mermaid
-flowchart TD
-    A[Needs Review card visible] --> B[User edits draft / inspects routing evidence]
-    B --> C{Sendability checks}
-    C -->|Routing safe + To + CC + draft + resume present| D[Enable Approve & Send]
-    C -->|Any check missing| E[Keep Approve disabled]
-    D --> F[Approve & Send request]
-    E --> G[User fixes missing condition]
-    G --> C
-    F --> H[Candidate moves to sent state]
-```
+## 4) Failed Mapping UX
 
-## 4) Failed mapping UX
+Failed Mapping cards must preserve:
+- source context visibility
+- editable recipient correction fields
+- `Save Mapping & Move to Review` recovery action
 
-Failed mapping cards must retain:
-- full source email content viewer
-- editable `Correct To` and `Correct CC`
-- `Save Mapping & Move to Review` action
+## 5) Premium Numbers UX
 
-This is the core human recovery path for unresolved routing.
-
-```mermaid
-flowchart TD
-    A[Candidate in Failed Mapping] --> B[Open source email viewer]
-    B --> C[Enter Correct To / Correct CC]
-    C --> D[Save Mapping & Move to Review]
-    D --> E[Backend validates and stores corrected recipients]
-    E --> F[Candidate re-enters Needs Review]
-```
-
-## 5) Premium numbers UX
-
-“All” view (number review queue) must retain both manual actions:
+Manual controls that must remain:
 - `Mark as Recruiter`
 - `Mark as Employer`
 
-These manual buttons are required business controls and must not be removed.
-
-Premium module also includes:
-- Recruiter Numbers view
-- Employer Numbers view
-- Recruiter Opportunities view (status + notes updates)
+Additional operations currently available:
+- Recruiter/Employer bucket listing
+- Swap bucket actions
+- Recruiter opportunity status/notes updates
+- Generate cold-call script action
 
 ## 6) Known design debt
 
-- `dashboard/src/App.tsx` is very large and tightly coupled across sections/states
-- Several section refresh paths are manually coordinated (`schedulePostMutationRefresh`, multiple effect chains)
-- Sidebar footer buttons (`Settings`, `Help Center`) are currently placeholders without full routing behavior
+- `App.tsx` is still monolithic and state-coupled.
+- Post-mutation refresh sequencing is spread across multiple paths.
+- Sidebar footer buttons (`Settings`, `Help Center`) are placeholder-only.
