@@ -295,6 +295,8 @@ type RecruiterOpportunityCard = {
   visa_restrictions: string
   extracted_skills: string
   evidence: string
+  recruiter_phone_display: string
+  recruiter_phone_normalized: string
   status: OpportunityStatus
   notes: string
   cold_call_script: string | null
@@ -2335,6 +2337,7 @@ function App() {
                     <article key={`opportunity-${item.id}`} className="emailItem">
                       <p><strong>Subject:</strong> {item.email_subject}</p>
                       <p><strong>Recruiter Email:</strong> {item.email_sender}</p>
+                      <p><strong>Recruiter Phone:</strong> {item.recruiter_phone_display || '-'}</p>
                       <p><strong>Job Title:</strong> {item.job_title || '-'}</p>
                       <p><strong>Client:</strong> {item.client || '-'}</p>
                       <p><strong>Location:</strong> {item.location || '-'}</p>

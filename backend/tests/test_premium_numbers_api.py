@@ -11,7 +11,7 @@ from sqlalchemy.pool import StaticPool
 
 from app import main
 from app.db import Base
-from app.models import PremiumNumberLead, RecruiterEmail, UserSettings
+from app.models import NumberReviewQueue, PremiumNumberLead, RecruiterEmail, UserSettings
 
 
 class PremiumNumbersApiTests(unittest.TestCase):
@@ -175,6 +175,65 @@ class PremiumNumbersApiTests(unittest.TestCase):
                 .count()
             )
             self.assertEqual(count, 0)
+
+    def test_recruiter_opportunity_includes_recruiter_phone_fields(self) -> None:
+        now = datetime.now(UTC)
+        with Session(self.engine) as db:
+            email = RecruiterEmail(
+                owner_id=main.settings.owner_id,
+                sender="Vaishnavi <vaishnavi@horizonsoftech.net>",
+                subject="FW: Looking for Full Stack Developer",
+                body="Call +1 214 393 8746",
+                role="Full Stack Developer",
+                location="onsite",
+                salary_text="",
+                skills_text="python,sql,react,java",
+                score=80,
+                decision="Qualified",
+                state="needs_review",
+                draft_reply="Thanks",
+                source="gmail",
+                external_message_id="m-opportunity-phone",
+                external_thread_id="t-opportunity-phone",
+                gmail_received_at=now,
+                recipient_email="to@example.com",
+                cc_email="cc@example.com",
+            )
+            db.add(email)
+            db.commit()
+            db.refresh(email)
+            db.add(
+                NumberReviewQueue(
+                    owner_id=main.settings.owner_id,
+                    source_email_id=email.id,
+                    normalized_phone_number="+12143938746",
+                    display_phone_number="+1 214 393 8746",
+                    owner_name="Mohd Saif",
+                    company="Teamware Solutions",
+                    designation="Talent Acquisition Specialist",
+                    confidence="high",
+                    purpose="Recruiter contact number",
+                    evidence_snippet="Extracted by AI from email context",
+                    email_subject=email.subject,
+                    email_sender=email.sender,
+                    gmail_open_url=email.gmail_message_url or "",
+                    state="pending",
+                )
+            )
+            db.commit()
+            card = db.query(NumberReviewQueue).filter(NumberReviewQueue.owner_id == main.settings.owner_id).first()
+            assert card is not None
+            review_id = card.id
+
+        mark_res = self.client.post(f"/number-review/{review_id}/mark-recruiter")
+        self.assertEqual(mark_res.status_code, 200, mark_res.text)
+
+        list_res = self.client.get("/recruiter-opportunities")
+        self.assertEqual(list_res.status_code, 200, list_res.text)
+        payload = list_res.json()
+        self.assertGreaterEqual(len(payload), 1)
+        self.assertIn("recruiter_phone_display", payload[0])
+        self.assertEqual(payload[0]["recruiter_phone_display"], "+1 214 393 8746")
 
 
 if __name__ == "__main__":

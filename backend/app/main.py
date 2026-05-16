@@ -2414,6 +2414,34 @@ def gmail_labeling_preview(payload: GmailLabelingPreviewRequest) -> GmailLabelin
             draft_reply=payload.draft_reply,
         )
     )
+
+
+def _recruiter_opportunity_response(row: RecruiterOpportunity, recruiter: RecruiterNumber | None) -> RecruiterOpportunityResponse:
+    return RecruiterOpportunityResponse(
+        id=row.id,
+        recruiter_number_id=row.recruiter_number_id,
+        source_email_id=row.source_email_id,
+        gmail_message_id=row.gmail_message_id,
+        email_subject=row.email_subject,
+        email_sender=row.email_sender,
+        gmail_open_url=row.gmail_open_url,
+        received_at=row.received_at,
+        job_title=row.job_title,
+        client=row.client,
+        location=row.location,
+        work_mode=row.work_mode,
+        visa_restrictions=row.visa_restrictions,
+        extracted_skills=row.extracted_skills,
+        evidence=row.evidence,
+        recruiter_phone_display=(recruiter.display_phone_number if recruiter else ""),
+        recruiter_phone_normalized=(recruiter.normalized_phone_number if recruiter else ""),
+        status=row.status,
+        notes=row.notes,
+        cold_call_script=row.cold_call_script,
+        cold_call_script_updated_at=row.cold_call_script_updated_at,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
     return GmailLabelingPreviewResponse(label=decision.label, reason_path=decision.reason_path)
 
 
@@ -3208,7 +3236,16 @@ def list_recruiter_opportunities(
         query = query.filter(RecruiterOpportunity.received_at.is_not(None))
         query = query.filter(RecruiterOpportunity.received_at >= start, RecruiterOpportunity.received_at < end)
     rows = query.order_by(RecruiterOpportunity.received_at.desc(), RecruiterOpportunity.created_at.desc()).all()
-    return [RecruiterOpportunityResponse.model_validate(row) for row in rows]
+    recruiter_ids = sorted({row.recruiter_number_id for row in rows})
+    recruiter_rows = (
+        db.query(RecruiterNumber)
+        .filter(RecruiterNumber.owner_id == settings.owner_id, RecruiterNumber.id.in_(recruiter_ids))
+        .all()
+        if recruiter_ids
+        else []
+    )
+    recruiter_map = {row.id: row for row in recruiter_rows}
+    return [_recruiter_opportunity_response(row, recruiter_map.get(row.recruiter_number_id)) for row in rows]
 
 
 @app.patch("/recruiter-opportunities/{opportunity_id}", response_model=RecruiterOpportunityResponse)
@@ -3232,7 +3269,12 @@ def patch_recruiter_opportunity(
         row.notes = payload.notes
     db.commit()
     db.refresh(row)
-    return RecruiterOpportunityResponse.model_validate(row)
+    recruiter = (
+        db.query(RecruiterNumber)
+        .filter(RecruiterNumber.owner_id == settings.owner_id, RecruiterNumber.id == row.recruiter_number_id)
+        .first()
+    )
+    return _recruiter_opportunity_response(row, recruiter)
 
 
 @app.post("/recruiter-opportunities/{opportunity_id}/generate-cold-call-script", response_model=RecruiterOpportunityResponse)
@@ -3271,7 +3313,12 @@ def generate_recruiter_opportunity_cold_call_script(
     row.cold_call_script_updated_at = datetime.now(UTC)
     db.commit()
     db.refresh(row)
-    return RecruiterOpportunityResponse.model_validate(row)
+    recruiter = (
+        db.query(RecruiterNumber)
+        .filter(RecruiterNumber.owner_id == settings.owner_id, RecruiterNumber.id == row.recruiter_number_id)
+        .first()
+    )
+    return _recruiter_opportunity_response(row, recruiter)
 
 
 @app.get("/candidates/{email_id}", response_model=EmailResponse)
