@@ -3,6 +3,8 @@ import './App.css'
 import Sidebar from './components/Sidebar'
 import { withAiToggle } from './features/ai/state'
 import { getDraftSourceLabel } from './features/ai/ui'
+import { withSavedQueries } from './features/query_bucket/api'
+import QueryBucket from './features/query_bucket/QueryBucket'
 import { type CandidateState, useCandidateBuckets } from './candidateBuckets'
 import { addEmployerDomain, removeEmployerDomain } from './employerDomains'
 
@@ -93,6 +95,7 @@ type SettingsPayload = {
   enabled: boolean
   gmail_query: string
   default_gmail_query: string
+  saved_gmail_queries: string[]
   mail_date: string | null
   default_date_mode: 'today' | 'off'
   min_salary: number | null
@@ -476,6 +479,7 @@ function App() {
     enabled: true,
     gmail_query: 'is:unread',
     default_gmail_query: 'is:unread',
+    saved_gmail_queries: [],
     mail_date: null,
     default_date_mode: 'today',
     min_salary: null,
@@ -509,6 +513,7 @@ function App() {
   const [logs, setLogs] = useState<AutomationRunResponse[]>([])
   const [sendingId, setSendingId] = useState<number | null>(null)
   const [rejectingId, setRejectingId] = useState<number | null>(null)
+  const [movingToFailedId, setMovingToFailedId] = useState<number | null>(null)
   const [draftEdits, setDraftEdits] = useState<Record<number, string>>({})
   const [routingFixes, setRoutingFixes] = useState<Record<number, { to: string; cc: string }>>({})
   const [fixingId, setFixingId] = useState<number | null>(null)
@@ -644,6 +649,7 @@ function App() {
       ...payload,
       feature_semantic_enabled: Boolean(payload.feature_semantic_enabled),
       default_gmail_query: payload.default_gmail_query || payload.gmail_query || 'is:unread',
+      saved_gmail_queries: payload.saved_gmail_queries ?? [],
       default_date_mode: payload.default_date_mode === 'off' ? 'off' : 'today',
       feature_auto_poll_interval_minutes: Math.max(1, Math.min(payload.feature_auto_poll_interval_minutes || 10, 1440)),
       employer_domains: payload.employer_domains ?? [],
@@ -1320,6 +1326,40 @@ function App() {
     })
   }
 
+  const moveToFailedMapping = async (candidateId: number) => {
+    setMovingToFailedId(candidateId)
+    setError('')
+    try {
+      const res = await fetch(`${apiBase}/candidates/${candidateId}/send-to-failed-mapping`, {
+        method: 'POST',
+      })
+      if (!res.ok) {
+        const details = await res.json().catch(() => null)
+        throw new Error(details?.detail ?? 'Failed to move candidate to failed mapping')
+      }
+      schedulePostMutationRefresh()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setMovingToFailedId(null)
+    }
+  }
+
+  const updateSavedQueries = async (nextSavedQueries: string[]) => {
+    const nextSettings = withSavedQueries(settings, nextSavedQueries)
+    setSettings(nextSettings)
+    const res = await fetch(`${apiBase}/settings`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(nextSettings),
+    })
+    if (!res.ok) {
+      setError('Failed to save query bucket')
+      return
+    }
+    await loadSettings()
+  }
+
   const addEmployerDomainChip = (raw: string) => {
     const result = addEmployerDomain(settings.employer_domains, raw)
     if (result.error) {
@@ -1449,10 +1489,12 @@ function App() {
           {candidateRefreshError ? <p className="subtle">Counts refresh issue: {candidateRefreshError}</p> : null}
 
           <section className="actionBar">
-            <input
-              value={settings.gmail_query}
-              onChange={(e) => setSettings({ ...settings, gmail_query: e.target.value })}
-              placeholder="tx is:unread"
+            <QueryBucket
+              queryValue={settings.gmail_query}
+              savedQueries={settings.saved_gmail_queries}
+              onQueryChange={(value) => setSettings({ ...settings, gmail_query: value })}
+              onQuerySelect={(value) => setSettings({ ...settings, gmail_query: value })}
+              onSavedQueriesChange={updateSavedQueries}
             />
             <button
               type="button"
@@ -2010,6 +2052,14 @@ function App() {
                     disabled={rejectingId === item.id}
                   >
                     {rejectingId === item.id ? 'Rejecting...' : 'Reject'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => moveToFailedMapping(item.id)}
+                    disabled={movingToFailedId === item.id}
+                    title="Move to Failed Mapping so recipients can be remapped"
+                  >
+                    {movingToFailedId === item.id ? 'Moving...' : 'Send to Failed Mapping'}
                   </button>
                   <span className={`verdictBadge verdict-${verdict.tone}`} title="Overall Verdict">
                     {verdict.label} • {verdict.score}

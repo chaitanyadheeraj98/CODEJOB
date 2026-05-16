@@ -45,6 +45,7 @@ class SettingsRequest(BaseModel):
     enabled: bool = True
     gmail_query: str = "is:unread in:inbox recruiter"
     default_gmail_query: str = "is:unread in:inbox recruiter"
+    saved_gmail_queries: list[str] = Field(default_factory=list)
     mail_date: str | None = None
     default_date_mode: str = "today"
     min_salary: int | None = None

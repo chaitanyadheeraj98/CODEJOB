@@ -86,6 +86,7 @@ from app.routing import HeuristicRoutingAdapter, LearnedRoutingAdapter, RoutingD
 from app.premium_numbers import extract_and_store_premium_numbers
 from app.premium_numbers.intelligence import OPPORTUNITY_STATUS_VALUES, process_email_number_intelligence
 from app.premium_numbers.phone_normalization import canonicalize_phone
+from app.query_bucket import sanitize_saved_queries
 from app.schemas import (
     AIStatusResponse,
     ApproveSendRequest,
@@ -201,6 +202,16 @@ class PolicyConfig(TypedDict):
     run: PolicyRun
     qualification: PolicyQualification
 ai_last_draft_source: str | None = None
+
+
+def _read_saved_gmail_queries(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    return sanitize_saved_queries(parsed)
 
 app.add_middleware(
     CORSMiddleware,
@@ -1090,6 +1101,11 @@ def _ensure_default_settings() -> None:
     try:
         existing = db.query(UserSettings).filter(UserSettings.owner_id == settings.owner_id).first()
         if existing:
+            normalized_saved_queries_json = json.dumps(
+                _read_saved_gmail_queries(existing.saved_gmail_queries_json), separators=(",", ":")
+            )
+            if existing.saved_gmail_queries_json != normalized_saved_queries_json:
+                existing.saved_gmail_queries_json = normalized_saved_queries_json
             if not existing.policy_json:
                 existing.policy_json = json.dumps(_default_policy(), separators=(",", ":"))
             if not existing.fallback_draft_template:
@@ -1111,6 +1127,7 @@ def _ensure_default_settings() -> None:
                 or not existing.signature_phone
                 or not existing.signature_email
                 or not (existing.default_gmail_query or "").strip()
+                or existing.saved_gmail_queries_json != normalized_saved_queries_json
             ):
                 db.commit()
             return
@@ -1726,6 +1743,7 @@ def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
         enabled=s.enabled,
         gmail_query=s.gmail_query,
         default_gmail_query=(s.default_gmail_query or "").strip() or (s.gmail_query or "").strip() or "is:unread in:inbox recruiter",
+        saved_gmail_queries=_read_saved_gmail_queries(s.saved_gmail_queries_json),
         mail_date=s.mail_date,
         default_date_mode=_normalize_default_date_mode(s.default_date_mode),
         min_salary=s.min_salary,
@@ -1839,6 +1857,7 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
     s.enabled = payload.enabled
     s.gmail_query = payload.gmail_query
     s.default_gmail_query = payload.default_gmail_query.strip() if payload.default_gmail_query.strip() else (payload.gmail_query.strip() or "is:unread in:inbox recruiter")
+    s.saved_gmail_queries_json = json.dumps(sanitize_saved_queries(payload.saved_gmail_queries), separators=(",", ":"))
     s.mail_date = payload.mail_date
     s.default_date_mode = _normalize_default_date_mode(payload.default_date_mode)
     s.min_salary = payload.min_salary
@@ -3395,6 +3414,42 @@ def reject_candidate(
     email.sent_status = "not_sent"
     db.commit()
     db.refresh(email)
+    return email
+
+
+@app.post("/candidates/{email_id}/send-to-failed-mapping", response_model=EmailResponse)
+def send_to_failed_mapping(email_id: int, db: Session = Depends(get_db)) -> RecruiterEmail:
+    email = (
+        db.query(RecruiterEmail)
+        .filter(RecruiterEmail.owner_id == settings.owner_id, RecruiterEmail.id == email_id)
+        .first()
+    )
+    if not email:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+    if _is_terminal_state(email):
+        raise HTTPException(status_code=400, detail="Candidate is in terminal state")
+    if email.state != "needs_review":
+        raise HTTPException(status_code=400, detail="Only needs_review candidates can be moved to failed mapping")
+
+    email.state = "failed"
+    email.routing_confirmed = False
+    email.routing_status = "ambiguous"
+    email.routing_confidence = min(float(email.routing_confidence or 0.0), 0.5)
+    email.routing_reason = "Manually moved to failed mapping for recipient remap."
+    email.last_error = "Recipient mapping flagged for manual remap"
+    email.skip_reason = "manual_failed_mapping"
+    email.decision_reason = "Moved to failed mapping by user"
+    email.approval_status = "pending"
+    email.sent_status = "not_sent"
+    db.commit()
+    db.refresh(email)
+    _record_productivity_event(
+        db,
+        event_type="failed_mapping_marked",
+        event_source="action",
+        entity_id=email.id,
+        metadata={"source": "manual_move_to_failed_mapping"},
+    )
     return email
 
 

@@ -305,6 +305,7 @@ def ensure_sqlite_phase0_columns() -> None:
         settings_alter_statements = [
             ("mail_date", "ALTER TABLE user_settings ADD COLUMN mail_date VARCHAR(10)"),
             ("default_gmail_query", "ALTER TABLE user_settings ADD COLUMN default_gmail_query TEXT DEFAULT 'is:unread in:inbox recruiter'"),
+            ("saved_gmail_queries_json", "ALTER TABLE user_settings ADD COLUMN saved_gmail_queries_json TEXT DEFAULT '[]'"),
             ("default_date_mode", "ALTER TABLE user_settings ADD COLUMN default_date_mode VARCHAR(20) DEFAULT 'today'"),
             ("feature_ai_enabled", "ALTER TABLE user_settings ADD COLUMN feature_ai_enabled BOOLEAN DEFAULT 0"),
             ("feature_semantic_enabled", "ALTER TABLE user_settings ADD COLUMN feature_semantic_enabled BOOLEAN DEFAULT 0"),

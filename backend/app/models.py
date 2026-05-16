@@ -101,6 +101,7 @@ class UserSettings(Base):
     enabled: Mapped[bool] = mapped_column(default=True)
     gmail_query: Mapped[str] = mapped_column(Text, default="is:unread in:inbox recruiter")
     default_gmail_query: Mapped[str] = mapped_column(Text, default="is:unread in:inbox recruiter")
+    saved_gmail_queries_json: Mapped[str] = mapped_column(Text, default="[]")
     mail_date: Mapped[str | None] = mapped_column(String(10), nullable=True)
     default_date_mode: Mapped[str] = mapped_column(String(20), default="today")
     min_salary: Mapped[int | None] = mapped_column(Integer, nullable=True)

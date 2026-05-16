@@ -222,6 +222,17 @@ class ApproveCcRegressionTests(unittest.TestCase):
             main.mark_message_processed = original_mark_processed
             main.append_tracking_sheet_row = original_append_tracking
 
+    def test_send_to_failed_mapping_from_needs_review_marks_routing_unconfirmed(self) -> None:
+        with Session(self.engine) as db:
+            email = self._add_needs_review_email(db, cc_email="vaishnavi@horizonsoftech.net")
+
+        response = self.client.post(f"/candidates/{email.id}/send-to-failed-mapping")
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(payload["state"], "failed")
+        self.assertFalse(payload["routing_confirmed"])
+        self.assertEqual(payload["routing_status"], "ambiguous")
+
 
 if __name__ == "__main__":
     unittest.main()
