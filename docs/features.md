@@ -7,8 +7,10 @@
 | Gmail OAuth bootstrap | Starts/monitors Gmail auth flow | Enables inbox fetch and send | `backend/app/gmail_client.py`, `backend/app/main.py` |
 | Run once pipeline | Fetches unread candidates and routes each through scoring/routing/draft logic | Main automation entry point | `backend/app/main.py`, `backend/app/automation/run_orchestrator.py` |
 | Policy-driven query/run behavior | Applies profile/policy controls for date mode, batch limit, dry run, threshold override | Lets users tune aggressiveness and risk | `backend/app/main.py`, `dashboard/src/App.tsx` |
+| Saved query bucket | Saves and reuses normalized Gmail query presets | Reduces repetitive query retyping and drift | `dashboard/src/features/query_bucket/*`, `backend/app/query_bucket/service.py`, `backend/app/main.py` |
 | AI-assisted draft generation | Uses DeepSeek when enabled; falls back to rules-based draft | Better draft quality with safe fallback | `backend/app/ai/*`, `backend/app/phase0.py` |
 | Semantic scoring (optional) | Blends rules score + embedding similarity | Improves relevance scoring when enabled | `backend/app/semantic/*`, `backend/app/main.py` |
+| Gmail labeling | Applies mailbox labels for processed candidates and supports preview | Keeps inbox organization aligned with pipeline outcomes | `backend/app/gmail_labeling/*`, `POST /gmail/labeling/preview`, `backend/app/main.py` |
 
 ## Manual safety workflow
 
@@ -44,6 +46,7 @@ flowchart TD
 | Recruiter bucket | Stores recruiter numbers and aggregates opportunity counts | Non-duplicate recruiter identity store | `RecruiterNumber`, `/recruiter-numbers` |
 | Employer bucket | Stores employer numbers separately | Prevents recruiter/employer mixing | `EmployerNumber`, `/employer-numbers` |
 | Recruiter opportunities | Creates one opportunity card per recruiter-number + source Gmail message | Tracks repeated recruiter opportunities without duplicating recruiter records | `RecruiterOpportunity`, `/recruiter-opportunities` |
+| Cold-call script generation | Generates and stores call scripts for recruiter opportunities | Supports structured recruiter follow-up | `backend/app/cold_call/*`, `POST /recruiter-opportunities/{id}/generate-cold-call-script` |
 
 ```mermaid
 flowchart TD
@@ -72,5 +75,5 @@ flowchart TD
 ## Current notable gaps
 
 - No production-ready auth/multi-tenant UI login flow (owner-scoped backend setting only)
-- Dashboard remains monolithic (`App.tsx`) and tightly coupled
+- Dashboard is still mostly centralized in `App.tsx` despite partial extraction into `dashboard/src/features/*`
 - `backend/tests/test_phone_attribution.py` references `app.phone_attribution`, which is not present in current branch

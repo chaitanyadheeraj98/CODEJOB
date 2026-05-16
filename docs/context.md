@@ -70,6 +70,21 @@ Pain points solved:
 - Why: Operational visibility.
 - Files: `backend/app/main.py`, `dashboard/src/App.tsx`
 
+### Feature: Saved Query Bucket
+- What: Saves/reuses normalized Gmail search queries from the dashboard.
+- Why: Faster repeat runs with consistent query hygiene.
+- Files: `dashboard/src/features/query_bucket/*`, `dashboard/src/App.tsx`, `backend/app/query_bucket/service.py`
+
+### Feature: Gmail Labeling
+- What: Applies or previews mailbox labels on processed Gmail messages.
+- Why: Post-run inbox organization and traceability.
+- Files: `backend/app/gmail_labeling/*`, labeling handlers in `backend/app/main.py`
+
+### Feature: Recruiter Cold-Call Script
+- What: Generates and stores an AI-assisted cold-call script per recruiter opportunity.
+- Why: Speeds up recruiter follow-up from opportunity cards.
+- Files: `backend/app/cold_call/*`, `POST /recruiter-opportunities/{id}/generate-cold-call-script`, `backend/app/main.py`
+
 ### Feature: Telegram Operations
 - What: Remote commands for status/config/run/approve/reject.
 - Why: Lightweight remote control.
@@ -273,6 +288,10 @@ flowchart TD
   Parsing/routing heuristics and fallback draft rendering. **High caution**.
 - `backend/app/premium_numbers/`  
   Extraction/classification/opportunity intelligence. **High caution**.
+- `backend/app/gmail_labeling/`  
+  Gmail labeling rules/service and preview flow.
+- `backend/app/cold_call/`  
+  Cold-call script generation service and prompting.
 - `backend/app/db.py`  
   Startup schema creation/migration and uniqueness indexes. **High caution**.
 - `backend/app/models.py`  
@@ -290,7 +309,7 @@ flowchart TD
 
 - Frontend is monolithic (`App.tsx`), increasing change risk.
 - Backend main orchestration is heavily concentrated in one module.
-- Environment setup is required before validations (pytest/eslint/build tools were missing in this shell session).
+- Validation reliability depends on environment setup (Python/Node dependencies must be installed).
 - Some tests appear stale relative to current branch contracts (for example `test_phone_attribution.py` references missing module).
 - No dedicated production auth/multi-tenant separation in UI layer.
 

@@ -1,7 +1,6 @@
 # Snowball Risk Register
 
-Date: 2026-05-15  
-Branch context: `copilot/update-docs-except-agent-context`
+Date: current branch snapshot
 
 This file captures project risks that can snowball over time if ignored.
 
