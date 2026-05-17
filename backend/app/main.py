@@ -403,9 +403,15 @@ def _build_telegram_digest(prefix: str, result: AutomationRunResponse) -> str:
 
 
 def _format_query_preflight(user_settings: UserSettings, policy: PolicyConfig) -> str:
-    resolved = _resolve_effective_run_inputs(user_settings, policy)
-    date_mode = resolved["policy"]["query"]["date_mode"]
-    effective_query = resolved["effective_query"]
+    resolved = policy_service.effective_run_inputs(
+        gmail_query=user_settings.gmail_query,
+        default_gmail_query=user_settings.default_gmail_query,
+        default_date_mode=user_settings.default_date_mode,
+        policy_json=user_settings.policy_json,
+        saved_mail_date=user_settings.mail_date,
+    )
+    date_mode = resolved.policy["query"]["date_mode"]
+    effective_query = resolved.effective_query
     return (
         "Run preflight:\n"
         f"Saved query: {user_settings.gmail_query}\n"
@@ -415,39 +421,6 @@ def _format_query_preflight(user_settings: UserSettings, policy: PolicyConfig) -
         f"Saved date: {user_settings.mail_date or 'any'}\n"
         f"Effective query: {effective_query}"
     )
-
-
-def _normalize_default_date_mode(value: str | None) -> str:
-    normalized = (value or "").strip().lower()
-    if normalized not in {"today", "off"}:
-        return "today"
-    return normalized
-
-
-def _resolve_effective_run_inputs(
-    user_settings: UserSettings,
-    policy: PolicyConfig,
-    requested_mail_date: str | None = None,
-) -> dict[str, object]:
-    active_query = (user_settings.gmail_query or "").strip()
-    default_query = (user_settings.default_gmail_query or "").strip()
-    final_query = active_query or default_query or "is:unread in:inbox recruiter"
-
-    explicit_mail_date = requested_mail_date or user_settings.mail_date
-    default_date_mode = _normalize_default_date_mode(user_settings.default_date_mode)
-    effective_mail_date = explicit_mail_date
-    effective_policy = _normalize_policy(policy)
-    if not effective_mail_date and default_date_mode == "today":
-        effective_mail_date = datetime.now().date().isoformat()
-        effective_policy["query"]["date_mode"] = "custom"
-
-    effective_query = _compose_gmail_query(final_query, effective_mail_date, effective_policy)
-    return {
-        "query": final_query,
-        "mail_date": effective_mail_date,
-        "policy": effective_policy,
-        "effective_query": effective_query,
-    }
 
 
 def _poll_interval_minutes(user_settings: UserSettings) -> int:
@@ -519,8 +492,8 @@ def _init_telegram_service() -> TelegramBotService | None:
         TelegramRuntimeDeps(
             session_factory=SessionLocal,
             get_settings=_get_settings,
-            read_policy_from_settings=_read_policy_from_settings,
-            policy_dry_run=_policy_dry_run,
+            read_policy_from_settings=lambda user_settings: policy_service.read_policy_from_settings(user_settings.policy_json),
+            policy_dry_run=policy_service.policy_dry_run,
             format_query_preflight=_format_query_preflight,
             poll_interval_minutes=_poll_interval_minutes,
             build_telegram_digest=_build_telegram_digest,
@@ -557,8 +530,14 @@ def _get_orchestration_service() -> OrchestrationService:
                 model_name=settings.deepseek_model_fast,
                 get_settings=_get_settings,
                 active_resume=_active_resume,
-                read_policy_from_settings=_read_policy_from_settings,
-                resolve_effective_run_inputs=_resolve_effective_run_inputs,
+                effective_run_inputs=lambda user_settings, requested_mail_date: policy_service.effective_run_inputs(
+                    gmail_query=user_settings.gmail_query,
+                    default_gmail_query=user_settings.default_gmail_query,
+                    default_date_mode=user_settings.default_date_mode,
+                    policy_json=user_settings.policy_json,
+                    saved_mail_date=user_settings.mail_date,
+                    requested_mail_date=requested_mail_date,
+                ),
                 compute_blended_ai_score=_compute_blended_ai_score,
                 analyze_email_routing=_analyze_email_routing,
                 build_user_fallback_draft=_build_user_fallback_draft,
@@ -567,9 +546,9 @@ def _get_orchestration_service() -> OrchestrationService:
                 log_gmail_labeling_stats=_log_gmail_labeling_stats,
                 build_run_response=_build_run_response,
                 record_productivity_event=_record_productivity_event,
-                policy_threshold=_policy_threshold,
-                policy_batch_limit=_policy_batch_limit,
-                policy_dry_run=_policy_dry_run,
+                policy_threshold=lambda user_settings, policy: policy_service.policy_threshold(user_settings.qualification_threshold, policy),
+                policy_batch_limit=policy_service.policy_batch_limit,
+                policy_dry_run=policy_service.policy_dry_run,
                 policy_f2f_block=_policy_f2f_block,
                 evaluate_routing_policy=_evaluate_routing_policy,
                 apply_routing_decision=_apply_routing_decision,
@@ -603,7 +582,7 @@ def _ensure_default_settings() -> None:
             if existing.saved_gmail_queries_json != normalized_saved_queries_json:
                 existing.saved_gmail_queries_json = normalized_saved_queries_json
             if not existing.policy_json:
-                existing.policy_json = json.dumps(_default_policy(), separators=(",", ":"))
+                existing.policy_json = json.dumps(policy_service.default_policy(), separators=(",", ":"))
             if not existing.fallback_draft_template:
                 existing.fallback_draft_template = DEFAULT_FALLBACK_DRAFT_TEMPLATE
             if not existing.signature_name:
@@ -614,7 +593,7 @@ def _ensure_default_settings() -> None:
                 existing.signature_email = DEFAULT_SIGNATURE_EMAIL
             if not (existing.default_gmail_query or "").strip():
                 existing.default_gmail_query = (existing.gmail_query or "").strip() or "is:unread in:inbox recruiter"
-            existing.default_date_mode = _normalize_default_date_mode(existing.default_date_mode)
+            existing.default_date_mode = policy_service.normalize_default_date_mode(existing.default_date_mode)
             existing.feature_auto_poll_interval_minutes = _poll_interval_minutes(existing)
             if (
                 not existing.policy_json
@@ -645,7 +624,7 @@ def _ensure_default_settings() -> None:
             signature_name=DEFAULT_SIGNATURE_NAME,
             signature_phone=DEFAULT_SIGNATURE_PHONE,
             signature_email=DEFAULT_SIGNATURE_EMAIL,
-            policy_json=json.dumps(_default_policy()),
+            policy_json=json.dumps(policy_service.default_policy()),
         )
         db.add(default_settings)
         db.commit()
@@ -668,54 +647,10 @@ def _csv_to_list(value: str | None) -> list[str]:
     return [part.strip() for part in (value or "").split(",") if part.strip()]
 
 
-def _default_policy() -> PolicyConfig:
-    return cast(PolicyConfig, policy_service.default_policy())
-
-
-def _policy_profiles() -> dict[str, PolicyConfig]:
-    return cast(dict[str, PolicyConfig], policy_service.policy_profiles())
-
-
-def _selected_policy_profile(policy: PolicyConfig) -> str | None:
-    return policy_service.selected_policy_profile(policy)
-
-
-def _as_mapping(value: object) -> Mapping[str, object]:
-    return policy_service.as_mapping(value)
-
-
-def _as_str(value: object, default: str) -> str:
-    return policy_service.as_str(value, default)
-
-
-def _as_int(value: object, default: int) -> int:
-    return policy_service.as_int(value, default)
-
-
-def _as_float(value: object, default: float) -> float:
-    return policy_service.as_float(value, default)
-
-
-def _as_string_list(value: object) -> list[str]:
-    return policy_service.as_string_list(value)
-
-
-def _normalize_policy(raw_policy: object) -> PolicyConfig:
-    return cast(PolicyConfig, policy_service.normalize_policy(raw_policy))
-
-
-def _read_policy_from_settings(user_settings: UserSettings) -> PolicyConfig:
-    return cast(PolicyConfig, policy_service.read_policy_from_settings(user_settings.policy_json))
-
-
-def _policy_threshold(user_settings: UserSettings, policy: PolicyConfig) -> float:
-    return policy_service.policy_threshold(user_settings.qualification_threshold, policy)
-
-
 def _policy_f2f_block(parsed: dict[str, str | int | bool], policy: PolicyConfig) -> tuple[bool, str]:
-    normalized = _normalize_policy(policy)
+    normalized = policy_service.normalize_policy(policy)
     qualification = normalized["qualification"]
-    strictness = _as_str(qualification.get("location_strictness", "balanced"), "balanced")
+    strictness = policy_service.as_str(qualification.get("location_strictness", "balanced"), "balanced")
     if strictness == "lenient":
         return False, ""
     blocked, reason = should_block_f2f(parsed)
@@ -726,19 +661,6 @@ def _policy_f2f_block(parsed: dict[str, str | int | bool], policy: PolicyConfig)
         if not location_text or location_text == "unknown":
             return True, "Location is unclear under strict location policy"
     return False, ""
-
-
-def _policy_batch_limit(policy: PolicyConfig, default_value: int = 20) -> int:
-    return policy_service.policy_batch_limit(policy, default_value)
-
-
-def _policy_dry_run(policy: PolicyConfig) -> bool:
-    return policy_service.policy_dry_run(policy)
-
-
-def _compose_gmail_query(base_query: str, mail_date: str | None = None, policy: PolicyConfig | None = None) -> str:
-    return policy_service.compose_gmail_query(base_query, mail_date=mail_date, policy=policy)
-
 
 def _active_resume(db: Session) -> ResumeAsset | None:
     return (
@@ -1069,14 +991,14 @@ def _build_run_response(
 
 
 def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
-    policy = _read_policy_from_settings(s)
+    policy = policy_service.read_policy_from_settings(s.policy_json)
     return SettingsResponse(
         enabled=s.enabled,
         gmail_query=s.gmail_query,
         default_gmail_query=(s.default_gmail_query or "").strip() or (s.gmail_query or "").strip() or "is:unread in:inbox recruiter",
         saved_gmail_queries=_read_saved_gmail_queries(s.saved_gmail_queries_json),
         mail_date=s.mail_date,
-        default_date_mode=_normalize_default_date_mode(s.default_date_mode),
+        default_date_mode=policy_service.normalize_default_date_mode(s.default_date_mode),
         min_salary=s.min_salary,
         accepted_locations=[v for v in s.accepted_locations.split(",") if v],
         visa_required_allowed=s.visa_required_allowed,
@@ -1097,8 +1019,8 @@ def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
         signature_phone=(s.signature_phone or "").strip() or DEFAULT_SIGNATURE_PHONE,
         signature_email=(s.signature_email or "").strip() or DEFAULT_SIGNATURE_EMAIL,
         policy=policy,
-        policy_profile_options=list(_policy_profiles().keys()),
-        policy_profile_selected=_selected_policy_profile(policy),
+        policy_profile_options=list(policy_service.policy_profiles().keys()),
+        policy_profile_selected=policy_service.selected_policy_profile(policy),
         owner_id=s.owner_id,
         created_at=s.created_at,
         updated_at=s.updated_at,
@@ -1190,7 +1112,7 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
     s.default_gmail_query = payload.default_gmail_query.strip() if payload.default_gmail_query.strip() else (payload.gmail_query.strip() or "is:unread in:inbox recruiter")
     s.saved_gmail_queries_json = json.dumps(sanitize_saved_queries(payload.saved_gmail_queries), separators=(",", ":"))
     s.mail_date = payload.mail_date
-    s.default_date_mode = _normalize_default_date_mode(payload.default_date_mode)
+    s.default_date_mode = policy_service.normalize_default_date_mode(payload.default_date_mode)
     s.min_salary = payload.min_salary
     s.accepted_locations = _to_csv(payload.accepted_locations)
     s.visa_required_allowed = payload.visa_required_allowed
@@ -1210,7 +1132,9 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
     s.signature_name = payload.signature_name.strip() if payload.signature_name.strip() else DEFAULT_SIGNATURE_NAME
     s.signature_phone = payload.signature_phone.strip() if payload.signature_phone.strip() else DEFAULT_SIGNATURE_PHONE
     s.signature_email = payload.signature_email.strip() if payload.signature_email.strip() else DEFAULT_SIGNATURE_EMAIL
-    normalized_policy = _normalize_policy(payload.policy if payload.policy is not None else _read_policy_from_settings(s))
+    normalized_policy = policy_service.normalize_policy(
+        payload.policy if payload.policy is not None else policy_service.read_policy_from_settings(s.policy_json)
+    )
     s.policy_json = json.dumps(normalized_policy, separators=(",", ":"))
     db.commit()
     db.refresh(s)

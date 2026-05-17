@@ -14,6 +14,7 @@ from app.ai.reply_service import generate_reply_with_ai_or_fallback
 from app.ai.resume_context_attribution import RESUME_CONTEXT_MISSING, RESUME_CONTEXT_RULES_ONLY
 from app.automation import RunOrchestrator, RunOrchestratorDependencies, RunOrchestratorRequest
 from app.gmail_client import gmail_auth_status, is_gmail_configured, list_unread_candidates_by_query, mark_message_processed, oauth_bootstrap_status, send_reply_with_attachment, append_tracking_sheet_row
+from app.services.policy_service import EffectiveRunInputs
 from app.models import DraftEditFeedback, RecipientRoutingFeedback, RecruiterEmail, ResumeAsset, SyncRun, UserSettings
 from app.phase0 import RoutingResult, greeting_from_to_contact, hard_filter_check, is_recruiter_like, parse_email, should_block_f2f
 from app.gmail_client import GmailMessageCandidate
@@ -28,8 +29,7 @@ class OrchestrationDeps:
     model_name: str
     get_settings: Callable[[Session], UserSettings]
     active_resume: Callable[[Session], ResumeAsset | None]
-    read_policy_from_settings: Callable[[UserSettings], Any]
-    resolve_effective_run_inputs: Callable[[UserSettings, Any, str | None], dict[str, object]]
+    effective_run_inputs: Callable[[UserSettings, str | None], EffectiveRunInputs]
     compute_blended_ai_score: Callable[..., tuple[float, str, str, str | None, str | None]]
     analyze_email_routing: Callable[[Session, str, str, str, str], RoutingResult]
     build_user_fallback_draft: Callable[..., str]
@@ -81,9 +81,8 @@ class OrchestrationService:
         skipped_count = 0
         error_count = 0
         try:
-            policy = self.deps.read_policy_from_settings(user_settings)
-            resolved = self.deps.resolve_effective_run_inputs(user_settings, policy, None)
-            effective_query = str(resolved["effective_query"])
+            resolved = self.deps.effective_run_inputs(user_settings, None)
+            effective_query = resolved.effective_query
             candidates = list_unread_candidates_by_query(effective_query)
             for item in candidates:
                 existing = (
@@ -249,11 +248,10 @@ class OrchestrationService:
             raise HTTPException(status_code=400, detail="No active resume uploaded")
 
         requested_mail_date = payload.mail_date if payload else None
-        policy = self.deps.read_policy_from_settings(user_settings)
-        resolved = self.deps.resolve_effective_run_inputs(user_settings, policy, requested_mail_date)
-        effective_policy = resolved["policy"]
-        effective_query = str(resolved["effective_query"])
-        threshold = self.deps.policy_threshold(user_settings, policy)
+        resolved = self.deps.effective_run_inputs(user_settings, requested_mail_date)
+        effective_policy = resolved.policy
+        effective_query = resolved.effective_query
+        threshold = self.deps.policy_threshold(user_settings, effective_policy)
         batch_limit = self.deps.policy_batch_limit(effective_policy, default_value=20)
         dry_run = self.deps.policy_dry_run(effective_policy)
         items = list_unread_candidates_by_query(effective_query, max_results_per_page=batch_limit)[:batch_limit]

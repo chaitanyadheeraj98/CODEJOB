@@ -35,9 +35,10 @@ class PolicyConfig(TypedDict):
 
 @dataclass(frozen=True)
 class EffectiveRunInputs:
+    query: str
     effective_query: str
     policy: PolicyConfig
-    requested_mail_date: str | None
+    mail_date: str | None
 
 
 def as_mapping(value: object) -> Mapping[str, object]:
@@ -205,3 +206,45 @@ def compose_gmail_query(base_query: str, mail_date: str | None = None, policy: P
         parts.append(f"after:{selected.strftime('%Y/%m/%d')}")
         parts.append(f"before:{next_day.strftime('%Y/%m/%d')}")
     return " ".join(part for part in parts if part)
+
+
+def normalize_default_date_mode(value: str | None) -> str:
+    normalized = (value or "").strip().lower()
+    if normalized not in {"today", "off"}:
+        return "today"
+    return normalized
+
+
+def effective_run_inputs(
+    *,
+    gmail_query: str | None,
+    default_gmail_query: str | None,
+    default_date_mode: str | None,
+    policy_json: str | None,
+    saved_mail_date: str | None,
+    requested_mail_date: str | None = None,
+    today_iso: str | None = None,
+) -> EffectiveRunInputs:
+    active_query = (gmail_query or "").strip()
+    default_query = (default_gmail_query or "").strip()
+    final_query = active_query or default_query or "is:unread in:inbox recruiter"
+
+    explicit_mail_date = requested_mail_date or saved_mail_date
+    effective_policy = read_policy_from_settings(policy_json)
+    effective_mail_date = explicit_mail_date
+    normalized_date_mode = normalize_default_date_mode(default_date_mode)
+    if not effective_mail_date and normalized_date_mode == "today":
+        effective_mail_date = today_iso or date.today().isoformat()
+        effective_policy = normalize_policy(
+            {
+                **effective_policy,
+                "query": {**effective_policy["query"], "date_mode": "custom"},
+            }
+        )
+
+    return EffectiveRunInputs(
+        query=final_query,
+        mail_date=effective_mail_date,
+        policy=effective_policy,
+        effective_query=compose_gmail_query(final_query, effective_mail_date, effective_policy),
+    )
