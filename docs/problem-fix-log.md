@@ -85,3 +85,7 @@ If future work targets architecture cleanup, the highest-value extractions remai
 ## 5. Merge-readiness note for this docs PR
 
 After this audit, the `docs/` directory reflects the current branch more accurately than before, but the branch still contains known runtime debt. Reviewers should treat the docs as the source-of-truth description of the current implementation, not as evidence that the underlying debt has been removed.
+
+## 6. HR-1 closeout (snowball-md)
+
+HR-1 was closed on `snowball-md` after targeted D.1 validation passed for orchestration/routing/telegram compatibility, with a compatibility shim commit to preserve legacy `app.main` test hooks; `test_run_orchestrator.py` remains tracked stale test-contract debt.

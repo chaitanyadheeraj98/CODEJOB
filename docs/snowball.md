@@ -5,10 +5,12 @@ Branch context: `copilot/audit-and-update-docs`
 
 ## 1. High-risk problems
 
-### HR-1: Over-coupled backend orchestration in `backend/app/main.py`
+### HR-1: Over-coupled backend orchestration in `backend/app/main.py` - Done
 - **Current problem:** one module still owns startup, route handlers, policy helpers, Telegram command flows, Gmail labeling glue, analytics hooks, and approval logic.
 - **Why it snowballs:** local edits can change multiple operational flows at once.
 - **Likely outcome if ignored:** send-safety regressions, queue-state regressions, or silent behavior drift across UI and Telegram.
+- **Closeout evidence (D.1 targeted gate):** `test_approve_cc_regression.py`, `test_run_once_hotfix.py`, `test_routing_policy.py`, `test_telegram_interactive.py`, and `test_candidate_date_filtering.py` passed on `snowball-md`.
+- **Tracked non-blocking debt:** `test_run_orchestrator.py` remains stale against current `RunOrchestratorDependencies` contract and is tracked as follow-up cleanup.
 
 ### HR-2: Routing safety remains a multi-step contract
 - **Current problem:** routing is evaluated during orchestration, stored on the email record, and re-checked at approval time.
