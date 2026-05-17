@@ -90,7 +90,10 @@ from app.premium_numbers.phone_normalization import canonicalize_phone
 from app.query_bucket import sanitize_saved_queries
 from app.runtime_state import runtime_state
 from app.services import analytics_service, policy_service
+from app.services.auto_runner_service import AutoRunnerService
+from app.services.gmail_labeling_runtime_service import GmailLabelingRuntimeService
 from app.services.orchestration_service import OrchestrationDeps, OrchestrationService
+from app.services.settings_bootstrap_service import SettingsBootstrapService
 from app.services.startup_service import StartupService
 from app.services.telegram_runtime_service import TelegramRuntime, TelegramRuntimeDeps
 from app.schemas import (
@@ -141,6 +144,7 @@ async def lifespan(_: FastAPI):
     global auto_runner_thread, telegram_service, gmail_labeling_service
     StartupService(
         ensure_default_settings=_ensure_default_settings,
+        ensure_labeling_service=gmail_labeling_runtime_service.ensure_service,
         init_telegram_service=_init_telegram_service,
         auto_runner_loop=_auto_runner_loop,
     ).startup()
@@ -150,6 +154,7 @@ async def lifespan(_: FastAPI):
     yield
     StartupService(
         ensure_default_settings=_ensure_default_settings,
+        ensure_labeling_service=gmail_labeling_runtime_service.ensure_service,
         init_telegram_service=_init_telegram_service,
         auto_runner_loop=_auto_runner_loop,
     ).shutdown()
@@ -173,6 +178,9 @@ embedding_last_duration_ms: int | None = None
 telegram_service: TelegramBotService | None = runtime_state.telegram_service
 telegram_runtime: TelegramRuntime | None = None
 orchestration_service: OrchestrationService | None = None
+auto_runner_service: AutoRunnerService | None = None
+settings_bootstrap_service = SettingsBootstrapService(session_factory=SessionLocal)
+gmail_labeling_runtime_service = GmailLabelingRuntimeService()
 telegram_action_lock = runtime_state.telegram_action_lock
 auto_runner_thread: threading.Thread | None = runtime_state.auto_runner_thread
 auto_runner_stop_event = runtime_state.auto_runner_stop_event
@@ -427,38 +435,21 @@ def _poll_interval_minutes(user_settings: UserSettings) -> int:
     return max(1, min(int(user_settings.feature_auto_poll_interval_minutes or 10), 1440))
 
 
+def _get_auto_runner_service() -> AutoRunnerService:
+    global auto_runner_service
+    if auto_runner_service is None:
+        auto_runner_service = AutoRunnerService(
+            session_factory=SessionLocal,
+            get_settings=_get_settings,
+            run_once=automation_run_once,
+            action_lock=telegram_action_lock,
+            stop_event=auto_runner_stop_event,
+        )
+    return auto_runner_service
+
+
 def _auto_runner_loop() -> None:
-    next_run_at = datetime.now(UTC)
-    while not auto_runner_stop_event.wait(5):
-        db = SessionLocal()
-        try:
-            user_settings = _get_settings(db)
-            if not user_settings.enabled or not user_settings.feature_auto_polling:
-                next_run_at = datetime.now(UTC)
-                continue
-            interval_minutes = _poll_interval_minutes(user_settings)
-            now_utc = datetime.now(UTC)
-            if now_utc < next_run_at:
-                continue
-            with telegram_action_lock:
-                try:
-                    result = automation_run_once(None, db)
-                    logger.info(
-                        "Auto runner completed: status=%s matched=%s queued=%s failed=%s",
-                        result.status,
-                        result.matched_count,
-                        result.queued_count,
-                        result.failed_count,
-                    )
-                except HTTPException as exc:
-                    logger.warning("Auto runner skipped/failed: status=%s detail=%s", exc.status_code, exc.detail)
-                except Exception:
-                    logger.exception("Auto runner crashed during run-once")
-            next_run_at = datetime.now(UTC) + timedelta(minutes=interval_minutes)
-        except Exception:
-            logger.exception("Auto runner loop error")
-        finally:
-            db.close()
+    _get_auto_runner_service().run_loop()
 
 
 def _handle_telegram_command(chat_id: int, user_id: str, username: str, text: str) -> str | TelegramReply:
@@ -572,71 +563,11 @@ def _get_orchestration_service() -> OrchestrationService:
 
 
 def _ensure_default_settings() -> None:
-    db = SessionLocal()
-    try:
-        existing = db.query(UserSettings).filter(UserSettings.owner_id == settings.owner_id).first()
-        if existing:
-            normalized_saved_queries_json = json.dumps(
-                _read_saved_gmail_queries(existing.saved_gmail_queries_json), separators=(",", ":")
-            )
-            if existing.saved_gmail_queries_json != normalized_saved_queries_json:
-                existing.saved_gmail_queries_json = normalized_saved_queries_json
-            if not existing.policy_json:
-                existing.policy_json = json.dumps(policy_service.default_policy(), separators=(",", ":"))
-            if not existing.fallback_draft_template:
-                existing.fallback_draft_template = DEFAULT_FALLBACK_DRAFT_TEMPLATE
-            if not existing.signature_name:
-                existing.signature_name = DEFAULT_SIGNATURE_NAME
-            if not existing.signature_phone:
-                existing.signature_phone = DEFAULT_SIGNATURE_PHONE
-            if not existing.signature_email:
-                existing.signature_email = DEFAULT_SIGNATURE_EMAIL
-            if not (existing.default_gmail_query or "").strip():
-                existing.default_gmail_query = (existing.gmail_query or "").strip() or "is:unread in:inbox recruiter"
-            existing.default_date_mode = policy_service.normalize_default_date_mode(existing.default_date_mode)
-            existing.feature_auto_poll_interval_minutes = _poll_interval_minutes(existing)
-            if (
-                not existing.policy_json
-                or not existing.fallback_draft_template
-                or not existing.signature_name
-                or not existing.signature_phone
-                or not existing.signature_email
-                or not (existing.default_gmail_query or "").strip()
-                or existing.saved_gmail_queries_json != normalized_saved_queries_json
-            ):
-                db.commit()
-            return
-        default_settings = UserSettings(
-            owner_id=settings.owner_id,
-            enabled=True,
-            gmail_query="is:unread in:inbox recruiter",
-            default_gmail_query="is:unread in:inbox recruiter",
-            mail_date=None,
-            default_date_mode="today",
-            qualification_threshold=settings.qualification_threshold,
-            feature_auto_polling=settings.feature_auto_polling,
-            feature_auto_poll_interval_minutes=max(1, int(settings.feature_auto_poll_interval_minutes or 10)),
-            feature_auto_send=settings.feature_auto_send,
-            feature_retry_queue=settings.feature_retry_queue,
-            feature_ai_enabled=False,
-            feature_semantic_enabled=False,
-            fallback_draft_template=DEFAULT_FALLBACK_DRAFT_TEMPLATE,
-            signature_name=DEFAULT_SIGNATURE_NAME,
-            signature_phone=DEFAULT_SIGNATURE_PHONE,
-            signature_email=DEFAULT_SIGNATURE_EMAIL,
-            policy_json=json.dumps(policy_service.default_policy()),
-        )
-        db.add(default_settings)
-        db.commit()
-    finally:
-        db.close()
+    settings_bootstrap_service.ensure_default_settings()
 
 
 def _get_settings(db: Session) -> UserSettings:
-    user_settings = db.query(UserSettings).filter(UserSettings.owner_id == settings.owner_id).first()
-    if not user_settings:
-        raise HTTPException(status_code=500, detail="Settings not initialized")
-    return user_settings
+    return settings_bootstrap_service.get_settings(db)
 
 
 def _to_csv(values: list[str]) -> str:
@@ -1672,24 +1603,11 @@ def list_candidates(
 
 
 def _ensure_gmail_labeling_service() -> GmailLabelingService:
-    global gmail_labeling_service
-    if gmail_labeling_service is None:
-        gmail_labeling_service = GmailLabelingService()
-    return gmail_labeling_service
+    return gmail_labeling_runtime_service.ensure_service()
 
 
 def _build_label_rule_input_from_email(email: RecruiterEmail) -> LabelRuleInput:
-    return LabelRuleInput(
-        sender=email.sender or "",
-        subject=email.subject or "",
-        body=email.body or "",
-        state=email.state or "",
-        decision=email.decision or "",
-        routing_status=email.routing_status or "",
-        routing_confidence=float(email.routing_confidence or 0.0),
-        skip_reason=email.skip_reason,
-        draft_reply=email.draft_reply or "",
-    )
+    return gmail_labeling_runtime_service.build_label_rule_input(email)
 
 
 def _apply_gmail_label_for_email(
@@ -1697,44 +1615,11 @@ def _apply_gmail_label_for_email(
     email: RecruiterEmail,
     candidate_item: GmailMessageCandidate | dict[str, object],
 ) -> None:
-    if email.source != "gmail" or not email.external_message_id:
-        return
-    service = _ensure_gmail_labeling_service()
-    decision = service.decide_label(_build_label_rule_input_from_email(email))
-    try:
-        changed, label_id = service.apply_to_message(
-            message_id=email.external_message_id,
-            label_name=decision.label,
-            existing_label_ids=cast(list[str], candidate_item.get("label_ids", [])),
-        )
-        email.applied_gmail_label = decision.label
-        email.applied_gmail_label_id = label_id
-        if changed:
-            email.applied_gmail_label_at = datetime.now(UTC)
-        logger.info(
-            "gmail_labeling decision=%s path=%s changed=%s message_id=%s",
-            decision.label,
-            decision.reason_path,
-            changed,
-            email.external_message_id,
-        )
-    except Exception as exc:
-        logger.warning("gmail_labeling apply_failed message_id=%s error=%s", email.external_message_id, exc)
+    gmail_labeling_runtime_service.apply_for_email(email=email, candidate_item=candidate_item)
 
 
 def _log_gmail_labeling_stats() -> None:
-    service = gmail_labeling_service
-    if not service:
-        return
-    stats = service.stats
-    logger.info(
-        "gmail_labeling stats rules_hit=%s ai_fallback=%s apply_success=%s apply_failure=%s idempotent_skip=%s",
-        stats.rules_hit,
-        stats.ai_fallback,
-        stats.apply_success,
-        stats.apply_failure,
-        stats.idempotent_skip,
-    )
+    gmail_labeling_runtime_service.log_stats()
 
 
 @app.get("/premium-numbers", response_model=PremiumNumberListResponse)

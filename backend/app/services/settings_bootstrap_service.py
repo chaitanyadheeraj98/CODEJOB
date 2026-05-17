@@ -1,0 +1,108 @@
+from __future__ import annotations
+
+import json
+from collections.abc import Callable
+
+from fastapi import HTTPException
+from sqlalchemy.orm import Session
+
+from app.config import settings
+from app.models import UserSettings
+from app.phase0 import DEFAULT_FALLBACK_DRAFT_TEMPLATE, DEFAULT_SIGNATURE_EMAIL, DEFAULT_SIGNATURE_NAME, DEFAULT_SIGNATURE_PHONE, normalize_employer_domains
+from app.query_bucket import sanitize_saved_queries
+from app.services import policy_service
+
+
+class SettingsBootstrapService:
+    def __init__(self, *, session_factory: Callable[[], Session]) -> None:
+        self._session_factory = session_factory
+
+    @staticmethod
+    def _poll_interval_minutes(user_settings: UserSettings) -> int:
+        return max(1, min(int(user_settings.feature_auto_poll_interval_minutes or 10), 1440))
+
+    @staticmethod
+    def _read_saved_gmail_queries(raw: str | None) -> list[str]:
+        if not raw:
+            return []
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+        return sanitize_saved_queries(parsed)
+
+    def ensure_default_settings(self) -> None:
+        db = self._session_factory()
+        try:
+            existing = db.query(UserSettings).filter(UserSettings.owner_id == settings.owner_id).first()
+            if existing:
+                normalized_saved_queries_json = json.dumps(
+                    self._read_saved_gmail_queries(existing.saved_gmail_queries_json), separators=(",", ":")
+                )
+                if existing.saved_gmail_queries_json != normalized_saved_queries_json:
+                    existing.saved_gmail_queries_json = normalized_saved_queries_json
+                if not existing.policy_json:
+                    existing.policy_json = json.dumps(policy_service.default_policy(), separators=(",", ":"))
+                if not existing.fallback_draft_template:
+                    existing.fallback_draft_template = DEFAULT_FALLBACK_DRAFT_TEMPLATE
+                if not existing.signature_name:
+                    existing.signature_name = DEFAULT_SIGNATURE_NAME
+                if not existing.signature_phone:
+                    existing.signature_phone = DEFAULT_SIGNATURE_PHONE
+                if not existing.signature_email:
+                    existing.signature_email = DEFAULT_SIGNATURE_EMAIL
+                if not (existing.default_gmail_query or "").strip():
+                    existing.default_gmail_query = (existing.gmail_query or "").strip() or "is:unread in:inbox recruiter"
+                existing.default_date_mode = policy_service.normalize_default_date_mode(existing.default_date_mode)
+                existing.feature_auto_poll_interval_minutes = self._poll_interval_minutes(existing)
+                if (
+                    not existing.policy_json
+                    or not existing.fallback_draft_template
+                    or not existing.signature_name
+                    or not existing.signature_phone
+                    or not existing.signature_email
+                    or not (existing.default_gmail_query or "").strip()
+                    or existing.saved_gmail_queries_json != normalized_saved_queries_json
+                ):
+                    db.commit()
+                return
+
+            default_settings = UserSettings(
+                owner_id=settings.owner_id,
+                enabled=True,
+                gmail_query="is:unread in:inbox recruiter",
+                default_gmail_query="is:unread in:inbox recruiter",
+                saved_gmail_queries_json="[]",
+                mail_date=None,
+                default_date_mode="today",
+                min_salary=0,
+                accepted_locations="",
+                visa_required_allowed=True,
+                remote_preference="any",
+                role_keywords="java,developer,spring,microservices",
+                must_have_skills="java,spring",
+                employer_domains=",".join(sorted(normalize_employer_domains([]))),
+                free_text_guidance="",
+                qualification_threshold=settings.qualification_threshold,
+                feature_auto_polling=settings.feature_auto_polling,
+                feature_auto_poll_interval_minutes=max(1, int(settings.feature_auto_poll_interval_minutes or 10)),
+                feature_auto_send=settings.feature_auto_send,
+                feature_retry_queue=settings.feature_retry_queue,
+                feature_ai_enabled=False,
+                feature_semantic_enabled=False,
+                fallback_draft_template=DEFAULT_FALLBACK_DRAFT_TEMPLATE,
+                signature_name=DEFAULT_SIGNATURE_NAME,
+                signature_phone=DEFAULT_SIGNATURE_PHONE,
+                signature_email=DEFAULT_SIGNATURE_EMAIL,
+                policy_json=json.dumps(policy_service.default_policy()),
+            )
+            db.add(default_settings)
+            db.commit()
+        finally:
+            db.close()
+
+    def get_settings(self, db: Session) -> UserSettings:
+        user_settings = db.query(UserSettings).filter(UserSettings.owner_id == settings.owner_id).first()
+        if not user_settings:
+            raise HTTPException(status_code=500, detail="Settings not initialized")
+        return user_settings

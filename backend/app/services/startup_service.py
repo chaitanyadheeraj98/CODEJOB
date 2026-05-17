@@ -6,7 +6,6 @@ from collections.abc import Callable
 
 from app.db import Base, engine, ensure_sqlite_phase0_columns
 from app.gmail_client import is_gmail_configured
-from app.gmail_labeling import GmailLabelingService
 from app.runtime_state import runtime_state
 
 logger = logging.getLogger(__name__)
@@ -17,10 +16,12 @@ class StartupService:
         self,
         *,
         ensure_default_settings: Callable[[], None],
+        ensure_labeling_service: Callable[[], object],
         init_telegram_service: Callable[[], object | None],
         auto_runner_loop: Callable[[], None],
     ) -> None:
         self._ensure_default_settings = ensure_default_settings
+        self._ensure_labeling_service = ensure_labeling_service
         self._init_telegram_service = init_telegram_service
         self._auto_runner_loop = auto_runner_loop
 
@@ -28,7 +29,7 @@ class StartupService:
         Base.metadata.create_all(bind=engine)
         ensure_sqlite_phase0_columns()
         self._ensure_default_settings()
-        runtime_state.gmail_labeling_service = GmailLabelingService()
+        self._ensure_labeling_service()
         if is_gmail_configured():
             try:
                 runtime_state.gmail_labeling_service.ensure_target_labels()
