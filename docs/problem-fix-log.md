@@ -1,128 +1,87 @@
 # Problem Fix Log (Current Branch Review)
 
-Date: 2026-05-15  
-Branch: `copilot/update-docs-except-agent-context`
+Date: 2026-05-17  
+Branch: `copilot/audit-and-update-docs`
 
-## 1) Summary of critical tangled zones
+## 1. Audit outcome summary
 
-This branch introduces strong coupling across run orchestration, routing safety, premium-number classification, and a monolithic frontend state layer.
+This documentation audit did not change runtime code, but it surfaced the current implementation boundaries that matter most for future work.
 
-The following areas are **high-risk to modify without end-to-end verification**.
+The largest corrections made in docs were:
 
----
+- documenting Gmail labeling as a real runtime subsystem,
+- documenting cold call script generation on recruiter opportunities,
+- documenting query bucket persistence and UI behavior,
+- clarifying that `feature_auto_send` and `feature_retry_queue` are stored flags without fully implemented execution flows,
+- updating architecture docs to include startup threads and in-memory Telegram auth sessions,
+- updating data docs to include routing evidence, draft quality, resume context attribution, and opportunity statuses.
 
-## 2) Tangled backend code zones
+## 2. Current tangled zones that remain true
 
-### A) `backend/app/main.py` orchestration layer (highly coupled)
+### A. `backend/app/main.py` remains the main coupling hotspot
 
-**Why tangled**
-- Hosts API endpoints, business rules, policy parsing, routing gates, Telegram handlers, analytics updates, and helper utilities in one file.
-- Shared helpers are reused by both UI endpoints and Telegram command paths.
+Why it is tangled:
 
-**Break risk**
-- Small helper changes can silently affect multiple flows (`/run`, `/approve`, `/reject`, UI endpoints).
+- API routes, startup lifecycle, routing helpers, policy helpers, Telegram handlers, analytics hooks, and side effects all live together.
+- Multiple workflows reuse the same helper functions and shared process-global state.
 
-**Untangle direction**
-- Incrementally extract domain services (settings/policy, routing gate, approval/send, phone-intelligence classification) behind tested interfaces.
+Risk if modified casually:
 
-### B) Run pipeline + routing gate coupling (`RunOrchestrator.execute` + `_evaluate_routing_policy` + `_routing_is_sendable`)
+- queue logic, send gates, Gmail labeling, and Telegram actions can all regress together.
 
-**Why tangled**
-- Queue transitions and send safety depend on combined status/confidence/manual-confirm flags.
-- Similar routing data is interpreted in multiple places.
+### B. Orchestration and routing still depend on shared contracts
 
-**Break risk**
-- Incorrect refactor can allow unsafe sends or incorrectly block valid sends.
+The run pipeline and approve-send path both depend on the same routing concepts but at different times:
 
-**Untangle direction**
-- Centralize one canonical routing decision contract and use it consistently for queueing + approve-send.
+- orchestration decides `needs_review` vs `failed`,
+- approval re-checks whether the routing is safe enough to send.
 
-### C) Premium numbers + classification + opportunity creation chain
+Any drift here can create false-safe or false-blocked behavior.
 
-**Why tangled**
-- `extract_and_store_premium_numbers`, `process_email_number_intelligence`, and review-classification endpoints interact with overlapping entities.
-- Duplicate prevention depends on both logic checks and DB uniqueness indexes.
+### C. Phone intelligence is still a multi-write workflow
 
-**Break risk**
-- Duplicate recruiter/employer/opportunity records, or lost manual review cards.
+The same email can touch:
 
-**Untangle direction**
-- Move write-path rules into one transaction-aware service with explicit idempotency tests.
+- `PremiumNumberLead`,
+- `NumberReviewQueue`,
+- `RecruiterNumber`,
+- `EmployerNumber`,
+- `RecruiterOpportunity`.
 
-### D) SQLite additive migration helper (`ensure_sqlite_phase0_columns`)
+That makes dedupe and traceability critical.
 
-**Why tangled**
-- Large imperative migration logic creates/patches many tables/indexes at startup.
+### D. Frontend state remains centralized
 
-**Break risk**
-- Schema drift or accidental index/column changes can corrupt compatibility with existing DBs.
+`dashboard/src/App.tsx` still owns the majority of:
 
-**Untangle direction**
-- Shift to versioned migrations (Alembic) while keeping backward compatibility checks.
+- API loading,
+- mutation success handling,
+- polling,
+- queue refresh coordination,
+- premium-number views,
+- settings persistence.
 
-```mermaid
-flowchart TD
-    A[Change requested in critical workflow area] --> B{Which zone?}
-    B -->|main.py orchestration| C[Risk: cross-flow regressions]
-    B -->|routing/sendability| D[Risk: unsafe send or false block]
-    B -->|premium classification writes| E[Risk: duplicate or orphaned records]
-    B -->|sqlite migration helper| F[Risk: schema drift/startup failure]
-    C --> G[Require full regression + focused tests]
-    D --> G
-    E --> G
-    F --> G
-    G --> H[Only then merge]
-```
+## 3. Unresolved inconsistencies discovered during the audit
 
----
+These were documented, not fixed in code:
 
-## 3) Tangled frontend code zones
+1. `feature_auto_send` exists in config/settings but does not produce automatic sends.
+2. `feature_retry_queue` exists in config/settings but does not drive a dedicated retry loop.
+3. Policy profile definitions are duplicated between backend and frontend.
+4. Sidebar footer actions and `New Campaign` remain placeholders.
+5. Some tests are stale relative to live runtime contracts.
+6. Tooling dependencies were missing in this shell session, so repo validation commands could not complete successfully.
 
-### A) `dashboard/src/App.tsx` monolith
+## 4. Documentation-grounded guidance for future fixes
 
-**Why tangled**
-- Contains all page rendering, API calls, business-state transitions, analytics polling, OAuth polling, and premium-number actions.
+If future work targets architecture cleanup, the highest-value extractions remain:
 
-**Break risk**
-- UI state regressions across unrelated sections when modifying shared hooks/effects.
+1. move routing/sendability decisions behind a single canonical service boundary,
+2. isolate premium-number write logic into a more explicit transaction-aware service,
+3. split `App.tsx` into workflow-specific feature containers,
+4. centralize policy profile definitions,
+5. reconcile stale tests before relying on full-suite confidence.
 
-**Untangle direction**
-- Gradual extraction into feature modules (run queue, review queue, failed mapping, premium numbers, settings).
+## 5. Merge-readiness note for this docs PR
 
-### B) Multi-source refresh sequencing (`schedulePostMutationRefresh`, effect chains)
-
-**Why tangled**
-- Multiple async refreshes trigger in timed and effect-driven paths.
-
-**Break risk**
-- stale UI state, duplicate requests, race conditions after approve/reject/resolve/classify actions.
-
-**Untangle direction**
-- Consolidate mutation success handlers and adopt a unified query/cache layer.
-
----
-
-## 4) Do-not-touch-without-full-regression list
-
-These areas should not be modified casually; they enforce safety and identity invariants.
-
-1. `backend/app/main.py::_routing_is_sendable` and routing policy evaluation path
-2. `backend/app/main.py::approve_and_send` validation checks (To/CC/routing/draft/resume requirements)
-3. Number review manual actions:
-   - `POST /number-review/{review_id}/mark-recruiter`
-   - `POST /number-review/{review_id}/mark-employer`
-4. DB uniqueness indexes created in `backend/app/db.py` for recruiter/employer/opportunity/review dedupe
-5. `RunOrchestrator.execute` state transitions (`needs_review`, `failed`, `processed_skipped`)
-6. UI manual classification buttons in Premium Numbers “All” view (`Mark as Recruiter`, `Mark as Employer`)
-7. UI failed-mapping correction action (`Save Mapping & Move to Review`)
-
-If any of these are changed, run full backend + frontend regression and manually validate end-to-end behavior.
-
----
-
-## 5) Additional branch inconsistencies to track
-
-- `backend/tests/test_phone_attribution.py` references a missing module (`app.phone_attribution`), indicating stale test coverage.
-- Some tests appear to target older orchestrator dependency names and may not match current implementation.
-
-Recommendation: align tests with current service contracts before relying on suite-level confidence.
+After this audit, the `docs/` directory reflects the current branch more accurately than before, but the branch still contains known runtime debt. Reviewers should treat the docs as the source-of-truth description of the current implementation, not as evidence that the underlying debt has been removed.

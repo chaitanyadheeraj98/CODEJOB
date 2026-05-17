@@ -1,10 +1,11 @@
-# CODEJOB UI/UX Design Notes (Current Branch)
+# CODEJOB UI and Interaction Design (Current Branch)
 
-## 1) Current UI structure
+## 1. Dashboard structure
 
-The dashboard is a single-page React app with sidebar navigation and section-based content panes.
+The dashboard is a single-page application with a persistent left rail and one active content pane.
 
-Primary sections:
+Primary navigation items:
+
 - Run Queue
 - Needs Review
 - Failed Mapping
@@ -12,73 +13,101 @@ Primary sections:
 - Sent Items
 - Recent Runs
 
-## 2) Critical interaction contracts
+The sidebar also renders `Settings` and `Help Center` footer buttons plus a `New Campaign` button, but those controls are currently visual affordances rather than separate routed features.
 
-- Top action must always expose:
-  - `Connect Gmail` when unauthenticated
-  - `Sync Now` / `Sync + Queue` when authenticated
-- Date chip and date picker must allow filter + clear
-- Settings form must keep `Save Filters` and resume upload/replace actions
+## 2. Run Queue and settings surface
 
-## 3) Review safety UX
+The top of the dashboard combines runtime status and operator controls:
 
-Needs Review cards must retain:
-- Routing evidence panel
-- To/CC visibility
-- Editable draft + live preview
-- `Approve & Send` and `Reject` buttons
+- Gmail auth state
+- AI runtime state
+- Telegram runtime state
+- current Gmail query and date filters
+- query bucket save/remove actions
+- policy profile chooser
+- profile settings and feature toggles
+- resume upload / replace actions
 
-Approve button stays disabled unless:
-- routing is sendable
-- To and CC exist
-- non-empty draft exists
-- resume is attached
+This means the “Run Queue” area is both a command center and a settings page rather than a minimal queue list.
 
-```mermaid
-flowchart TD
-    A[Needs Review card visible] --> B[User edits draft / inspects routing evidence]
-    B --> C{Sendability checks}
-    C -->|Routing safe + To + CC + draft + resume present| D[Enable Approve & Send]
-    C -->|Any check missing| E[Keep Approve disabled]
-    D --> F[Approve & Send request]
-    E --> G[User fixes missing condition]
-    G --> C
-    F --> H[Candidate moves to sent state]
-```
+## 3. Query bucket UX
 
-## 4) Failed mapping UX
+Saved queries are part of the live dashboard experience.
 
-Failed mapping cards must retain:
-- full source email content viewer
-- editable `Correct To` and `Correct CC`
-- `Save Mapping & Move to Review` action
+Current interaction details:
 
-This is the core human recovery path for unresolved routing.
+- inline input drives the active Gmail query,
+- `+` saves the current query,
+- `-` removes the exact current saved query,
+- suggestions open on focus and support keyboard navigation,
+- saved queries are deduplicated case-insensitively and capped at 10,
+- selecting a suggestion updates both the input value and the active query selection state.
+
+## 4. Needs Review UX
+
+Each review card is expected to preserve these behaviors:
+
+- show sender/subject/body-derived context,
+- show routing evidence and candidate recipients,
+- allow draft editing,
+- keep `Approve & Send` and `Reject` actions visible,
+- keep approval disabled until the backend-required send conditions are satisfied.
 
 ```mermaid
 flowchart TD
-    A[Candidate in Failed Mapping] --> B[Open source email viewer]
-    B --> C[Enter Correct To / Correct CC]
-    C --> D[Save Mapping & Move to Review]
-    D --> E[Backend validates and stores corrected recipients]
-    E --> F[Candidate re-enters Needs Review]
+    A[Needs Review card] --> B[Inspect routing evidence and draft quality]
+    B --> C[Edit draft if needed]
+    C --> D{Safe to send?}
+    D -->|No| E[Keep action disabled / blocked]
+    D -->|Yes| F[Approve & Send]
+    F --> G[Card exits queue and appears in Sent Items]
 ```
 
-## 5) Premium numbers UX
+## 5. Failed Mapping UX
 
-“All” view (number review queue) must retain both manual actions:
-- `Mark as Recruiter`
-- `Mark as Employer`
+The failed-mapping section is the human recovery lane for recipient resolution.
 
-These manual buttons are required business controls and must not be removed.
+Required live behavior:
 
-Premium module also includes:
-- Recruiter Numbers view
-- Employer Numbers view
-- Recruiter Opportunities view (status + notes updates)
+- display original email context,
+- allow `Correct To` and `Correct CC` editing,
+- submit `Save Mapping & Move to Review`,
+- return the item to `needs_review` with routing marked as confirmed.
 
-## 6) Known design debt
+## 6. Premium Numbers UX
 
-- `dashboard/src/App.tsx` is very large and tightly coupled across sections/states
-- Several section refresh paths are manually coordinated (`schedulePostMutationRefresh`, multiple effect chains)
-- Sidebar footer buttons (`Settings`, `Help Center`) are currently placeholders without full routing behavior
+The premium numbers screen combines multiple operational views:
+
+- extracted leads,
+- unknown review cards,
+- recruiter numbers,
+- employer numbers,
+- recruiter opportunities.
+
+Current interaction expectations grounded in the UI code:
+
+- unknown review cards must keep `Mark as Recruiter` and `Mark as Employer`,
+- recruiter/employer bucket views expose counts and supporting metadata,
+- opportunity cards support status changes, note editing, and cold call script generation/copying,
+- opportunity filtering includes status-based filtering.
+
+## 7. Sent Items and Recent Runs
+
+- **Sent Items** shows approved and sent candidates with delivery context and historic reply data.
+- **Recent Runs** is the operational digest for run status, counts, and last run outcomes.
+- Analytics trend data is displayed in the dashboard rather than in a separate analytics route.
+
+## 8. Current design debt
+
+The current branch still carries these UI debts:
+
+- `App.tsx` is the dominant state container for almost every feature.
+- Refresh sequencing after mutations is manually coordinated through timers/effects (`schedulePostMutationRefresh`).
+- There is no dedicated router-level separation for settings/help/new campaign actions.
+- Feature folders exist for AI and query bucket, but only query bucket has meaningful isolated UI behavior today.
+
+## 9. Practical UI constraints for future changes
+
+- Do not remove manual review controls from Needs Review, Failed Mapping, or Number Review flows.
+- Do not assume the dashboard is section-isolated; changes in one area can affect global refresh behavior.
+- Treat the settings panel as part of the core operator workflow, not an auxiliary page.
