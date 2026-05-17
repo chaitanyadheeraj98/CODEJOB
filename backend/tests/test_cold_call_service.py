@@ -7,6 +7,7 @@ from app.cold_call.service import ColdCallContext, generate_cold_call_script
 class ColdCallServiceTests(unittest.TestCase):
     def test_caps_years_and_limits_to_five_sentences(self) -> None:
         context = ColdCallContext(
+            recruiter_name="Recruiter",
             recruiter_email="recruiter@example.com",
             job_title="Senior Java Developer",
             location="Austin, TX",
@@ -30,6 +31,7 @@ class ColdCallServiceTests(unittest.TestCase):
 
     def test_softens_aop_claim_if_not_in_resume(self) -> None:
         context = ColdCallContext(
+            recruiter_name="Recruiter",
             recruiter_email="recruiter@example.com",
             job_title="Java Lead",
             location="Irving, TX",
@@ -47,6 +49,7 @@ class ColdCallServiceTests(unittest.TestCase):
 
     def test_fallback_used_if_model_errors(self) -> None:
         context = ColdCallContext(
+            recruiter_name="Recruiter",
             recruiter_email="recruiter@example.com",
             job_title="Java Full Stack Developer",
             location="Plano, TX",
@@ -61,4 +64,3 @@ class ColdCallServiceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

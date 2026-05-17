@@ -9,6 +9,7 @@ from app.cold_call.prompting import build_cold_call_prompts
 
 @dataclass(frozen=True)
 class ColdCallContext:
+    recruiter_name: str
     recruiter_email: str
     job_title: str
     location: str
@@ -67,10 +68,12 @@ def _sanitize_script(text: str, resume_text: str) -> str:
 
 
 def _fallback_script(context: ColdCallContext) -> str:
+    greeting_name = (context.recruiter_name or "").strip()
+    salutation = f"Hi {greeting_name}," if greeting_name else "Hi,"
     title = context.job_title or "this role"
     location = context.location or "your opening"
     return (
-        f"Hi, this is Chaithanya Dheeraj and I am calling about {title} in {location}. "
+        f"{salutation} this is Chaithanya Dheeraj and I am calling about {title} in {location}. "
         "I have 7+ years of full-stack Java experience and currently work at Centier Bank. "
         f"My background aligns with the core stack you mentioned, including {context.skills or 'Java and Spring technologies'}. "
         "I wanted to quickly check if this role is still active and whether my profile is a fit. "
@@ -85,6 +88,7 @@ def generate_cold_call_script(
     model_name: str,
 ) -> str:
     system_prompt, user_prompt = build_cold_call_prompts(
+        recruiter_name=context.recruiter_name,
         recruiter_email=context.recruiter_email,
         job_title=context.job_title,
         location=context.location,
@@ -100,4 +104,3 @@ def generate_cold_call_script(
     except Exception:
         pass
     return _sanitize_script(_fallback_script(context), resume_text)
-

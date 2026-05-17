@@ -3,6 +3,7 @@ from __future__ import annotations
 
 def build_cold_call_prompts(
     *,
+    recruiter_name: str,
     recruiter_email: str,
     job_title: str,
     location: str,
@@ -28,6 +29,7 @@ Strict Rules:
 6) Include a clear close asking for a brief discussion about fit/next steps.
 
 Job Signal:
+- Recruiter Name: {recruiter_name}
 - Recruiter Email: {recruiter_email}
 - Job Title: {job_title}
 - Location: {location}
@@ -41,4 +43,3 @@ Return only the final script text.
 """.strip()
 
     return system_prompt, user_prompt
-

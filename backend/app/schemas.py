@@ -352,6 +352,8 @@ class RecruiterOpportunityResponse(BaseModel):
     visa_restrictions: str
     extracted_skills: str
     evidence: str
+    recruiter_name: str = ""
+    recruiter_email: str = ""
     recruiter_phone_display: str = ""
     recruiter_phone_normalized: str = ""
     status: str

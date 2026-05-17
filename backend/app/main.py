@@ -72,6 +72,7 @@ from app.phase0 import (
     ai_assist_score,
     draft_reply,
     email_domain,
+    extract_email_address,
     greeting_from_to_contact,
     hard_filter_check,
     is_recruiter_like,
@@ -2433,6 +2434,8 @@ def _recruiter_opportunity_response(row: RecruiterOpportunity, recruiter: Recrui
         visa_restrictions=row.visa_restrictions,
         extracted_skills=row.extracted_skills,
         evidence=row.evidence,
+        recruiter_name=(recruiter.recruiter_name if recruiter else ""),
+        recruiter_email=(recruiter.recruiter_email if recruiter else ""),
         recruiter_phone_display=(recruiter.display_phone_number if recruiter else ""),
         recruiter_phone_normalized=(recruiter.normalized_phone_number if recruiter else ""),
         status=row.status,
@@ -2961,6 +2964,7 @@ def mark_number_as_recruiter(review_id: int, db: Session = Depends(get_db)) -> d
         )
         .first()
     )
+    candidate_email = extract_email_address(card.email_sender or "")
     if not recruiter:
         recruiter = RecruiterNumber(
             owner_id=settings.owner_id,
@@ -2969,11 +2973,21 @@ def mark_number_as_recruiter(review_id: int, db: Session = Depends(get_db)) -> d
             recruiter_name=card.owner_name or "Unknown",
             company=card.company or "Unknown",
             designation=card.designation or "Unknown",
-            recruiter_email=card.email_sender or "",
+            recruiter_email=candidate_email,
             first_detected_email_id=card.source_email_id,
         )
         db.add(recruiter)
         db.flush()
+    else:
+        # Preserve higher-quality existing identity; only enrich missing/unknown fields.
+        if (not recruiter.recruiter_name or recruiter.recruiter_name.strip().lower() == "unknown") and card.owner_name:
+            recruiter.recruiter_name = card.owner_name
+        if (not recruiter.company or recruiter.company.strip().lower() == "unknown") and card.company:
+            recruiter.company = card.company
+        if (not recruiter.designation or recruiter.designation.strip().lower() == "unknown") and card.designation:
+            recruiter.designation = card.designation
+        if not recruiter.recruiter_email and candidate_email:
+            recruiter.recruiter_email = candidate_email
 
     email = (
         db.query(RecruiterEmail)
@@ -3297,9 +3311,15 @@ def generate_recruiter_opportunity_cold_call_script(
             resume_text = extract_resume_context(resume.file_path, resume.file_name)
         except Exception:
             resume_text = ""
+    recruiter = (
+        db.query(RecruiterNumber)
+        .filter(RecruiterNumber.owner_id == settings.owner_id, RecruiterNumber.id == row.recruiter_number_id)
+        .first()
+    )
 
     context = ColdCallContext(
-        recruiter_email=row.email_sender or "",
+        recruiter_name=(recruiter.recruiter_name if recruiter else ""),
+        recruiter_email=((recruiter.recruiter_email if recruiter else "") or row.email_sender or ""),
         job_title=row.job_title or row.email_subject or "this role",
         location=row.location or "unknown",
         skills=row.extracted_skills or "",
@@ -3313,11 +3333,6 @@ def generate_recruiter_opportunity_cold_call_script(
     row.cold_call_script_updated_at = datetime.now(UTC)
     db.commit()
     db.refresh(row)
-    recruiter = (
-        db.query(RecruiterNumber)
-        .filter(RecruiterNumber.owner_id == settings.owner_id, RecruiterNumber.id == row.recruiter_number_id)
-        .first()
-    )
     return _recruiter_opportunity_response(row, recruiter)
 
 

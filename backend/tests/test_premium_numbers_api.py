@@ -208,14 +208,14 @@ class PremiumNumbersApiTests(unittest.TestCase):
                     source_email_id=email.id,
                     normalized_phone_number="+12143938746",
                     display_phone_number="+1 214 393 8746",
-                    owner_name="Mohd Saif",
+                    owner_name="Dharma Veer",
                     company="Teamware Solutions",
                     designation="Talent Acquisition Specialist",
                     confidence="high",
                     purpose="Recruiter contact number",
                     evidence_snippet="Extracted by AI from email context",
                     email_subject=email.subject,
-                    email_sender=email.sender,
+                    email_sender="dharma.veer@intellisoft.com",
                     gmail_open_url=email.gmail_message_url or "",
                     state="pending",
                 )
@@ -234,6 +234,8 @@ class PremiumNumbersApiTests(unittest.TestCase):
         self.assertGreaterEqual(len(payload), 1)
         self.assertIn("recruiter_phone_display", payload[0])
         self.assertEqual(payload[0]["recruiter_phone_display"], "+1 214 393 8746")
+        self.assertEqual(payload[0]["recruiter_name"], "Dharma Veer")
+        self.assertEqual(payload[0]["recruiter_email"], "dharma.veer@intellisoft.com")
 
 
 if __name__ == "__main__":

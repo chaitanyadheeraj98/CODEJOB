@@ -4,6 +4,7 @@ import os
 os.environ["DEBUG"] = "false"
 
 from app.premium_numbers import extraction
+from app.premium_numbers.phone_normalization import format_phone
 
 
 class PremiumNumbersExtractionTests(unittest.TestCase):
@@ -21,6 +22,7 @@ class PremiumNumbersExtractionTests(unittest.TestCase):
             phone_number_display="(214) 555-1212",
             phone_number_normalized="2145551212",
             owner_name="Unknown",
+            contact_email="",
             company="Unknown",
             designation="Unknown",
             purpose="Unknown",
@@ -35,6 +37,7 @@ class PremiumNumbersExtractionTests(unittest.TestCase):
             phone_number_display="+1 214 555 1212",
             phone_number_normalized="2145551212",
             owner_name="Uma",
+            contact_email="uma@example.com",
             company="Brightpath",
             designation="Recruiter",
             purpose="Recruiter direct number",
@@ -68,6 +71,7 @@ class PremiumNumbersExtractionTests(unittest.TestCase):
             phone_number_display="+1 248 237 7696",
             phone_number_normalized=extraction._normalize_phone("+1 248 237 7696"),
             owner_name="A",
+            contact_email="a@example.com",
             company="X",
             designation="Unknown",
             purpose="Unknown",
@@ -82,6 +86,7 @@ class PremiumNumbersExtractionTests(unittest.TestCase):
             phone_number_display="(248) 237-7696",
             phone_number_normalized=extraction._normalize_phone("(248) 237-7696"),
             owner_name="B",
+            contact_email="b@example.com",
             company="Y",
             designation="Unknown",
             purpose="Unknown",
@@ -96,6 +101,12 @@ class PremiumNumbersExtractionTests(unittest.TestCase):
         self.assertEqual(lead_b.phone_number_normalized, "12482377696")
         deduped = extraction.dedupe_phone_leads([lead_a, lead_b])
         self.assertEqual(len(deduped), 1)
+
+    def test_phone_formatter_standardizes_display_and_extension(self) -> None:
+        normalized, display, ext = format_phone("Phone: (972) - 756 - 1212 Ext 128")
+        self.assertEqual(normalized, "19727561212")
+        self.assertEqual(display, "(972) 756-1212 ext 128")
+        self.assertEqual(ext, "128")
 
     def test_employer_domain_marks_internal_number(self) -> None:
         leads = extraction.extract_phone_leads(

@@ -7,15 +7,17 @@ from dataclasses import dataclass
 from openai import OpenAI
 
 from app.config import settings
-from app.premium_numbers.phone_normalization import canonicalize_phone
+from app.premium_numbers.phone_normalization import format_phone
 from app.premium_numbers.prompting import build_premium_numbers_prompts
 
 PHONE_RE = re.compile(r"(?:\+?\d[\d\-\s().]{7,}\d)")
 JSON_BLOCK_RE = re.compile(r"\{[\s\S]*\}")
+EMAIL_RE = re.compile(r"\b[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}\b", re.IGNORECASE)
 DESIGNATION_RE = re.compile(
     r"\b(recruiter|bench sales recruiter|talent acquisition|hiring manager|account manager|vendor)\b",
     re.IGNORECASE,
 )
+NAME_LINE_RE = re.compile(r"^\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})\s*$")
 
 
 @dataclass(frozen=True)
@@ -23,6 +25,7 @@ class ExtractedPhoneLead:
     phone_number_display: str
     phone_number_normalized: str
     owner_name: str
+    contact_email: str
     company: str
     designation: str
     purpose: str
@@ -35,11 +38,13 @@ class ExtractedPhoneLead:
 
 
 def _normalize_phone(raw: str) -> str:
-    return canonicalize_phone(raw)
+    normalized, _display, _ext = format_phone(raw)
+    return normalized
 
 
 def _display_phone(raw: str) -> str:
-    return re.sub(r"\s+", " ", raw.strip())
+    _normalized, display, _ext = format_phone(raw)
+    return display or re.sub(r"\s+", " ", raw.strip())
 
 
 def _normalize_confidence(raw: str) -> str:
@@ -108,6 +113,7 @@ def _llm_extract(email_content: str) -> list[ExtractedPhoneLead]:
                 phone_number_display=display,
                 phone_number_normalized=normalized,
                 owner_name=str(item.get("owner_name", "Unknown")).strip() or "Unknown",
+                contact_email=str(item.get("email", "")).strip().lower(),
                 company=str(item.get("company", "Unknown")).strip() or "Unknown",
                 designation=str(item.get("designation", "Unknown")).strip() or "Unknown",
                 purpose=str(item.get("purpose", "Recruiter contact")).strip() or "Recruiter contact",
@@ -136,6 +142,14 @@ def _sender_company(sender: str) -> str:
     return base.title() if base else "Unknown"
 
 
+def _sender_email(sender: str) -> str:
+    text = (sender or "").strip()
+    if "<" in text and ">" in text:
+        text = text.split("<", 1)[1].split(">", 1)[0].strip()
+    match = EMAIL_RE.search(text)
+    return (match.group(0).lower() if match else "")
+
+
 def _domain_from_email(value: str) -> str:
     text = (value or "").strip().lower()
     if "<" in text and ">" in text:
@@ -143,6 +157,28 @@ def _domain_from_email(value: str) -> str:
     if "@" not in text:
         return ""
     return text.split("@", 1)[1].strip()
+
+
+def _extract_contact_email(fragment: str, sender: str) -> str:
+    matches = EMAIL_RE.findall(fragment or "")
+    if matches:
+        return matches[-1].lower()
+    return _sender_email(sender)
+
+
+def _extract_owner_name(fragment: str, sender: str) -> str:
+    lines = [line.strip(" -,\t\r") for line in (fragment or "").splitlines() if line.strip()]
+    for line in lines:
+        if EMAIL_RE.search(line):
+            continue
+        if DESIGNATION_RE.search(line):
+            continue
+        if any(ch.isdigit() for ch in line):
+            continue
+        match = NAME_LINE_RE.match(line)
+        if match:
+            return match.group(1).strip()
+    return _sender_name(sender)
 
 
 def _classify_recruiter_relevance(
@@ -196,6 +232,9 @@ def _classify_recruiter_relevance(
     elif score >= 55 and "submission" in purpose_l:
         contact_type = "submission_contact"
         is_recruiter_relevant = True
+    elif domain and domain in employer_domains and score >= 35:
+        contact_type = "ambiguous_employer_domain"
+        is_recruiter_relevant = False
     elif domain and domain in employer_domains:
         contact_type = "employer_internal"
         is_recruiter_relevant = False
@@ -210,17 +249,19 @@ def _fallback_extract(sender: str, body: str, employer_domains: set[str]) -> lis
     leads: list[ExtractedPhoneLead] = []
     for match in PHONE_RE.finditer(body or ""):
         raw_phone = match.group(0)
-        normalized = _normalize_phone(raw_phone)
+        normalized, display_phone, _ext = format_phone(raw_phone)
         if not normalized:
             continue
-        start = max(0, match.start() - 80)
-        end = min(len(body), match.end() + 80)
-        fragment = body[start:end].replace("\n", " ").strip()
+        start = max(0, match.start() - 160)
+        end = min(len(body), match.end() + 200)
+        raw_fragment = body[start:end]
+        fragment = raw_fragment.replace("\n", " ").strip()
         fragment_l = fragment.lower()
 
         designation_match = DESIGNATION_RE.search(fragment)
         designation = designation_match.group(0).title() if designation_match else "Unknown"
-        owner = _sender_name(sender)
+        owner = _extract_owner_name(raw_fragment, sender)
+        contact_email = _extract_contact_email(raw_fragment, sender)
         company = _sender_company(sender)
         if "interview" in fragment_l:
             purpose = "Interview coordination"
@@ -240,9 +281,10 @@ def _fallback_extract(sender: str, body: str, employer_domains: set[str]) -> lis
         )
         leads.append(
             ExtractedPhoneLead(
-                phone_number_display=_display_phone(raw_phone),
+                phone_number_display=display_phone,
                 phone_number_normalized=normalized,
                 owner_name=owner or "Unknown",
+                contact_email=contact_email,
                 company=company or "Unknown",
                 designation=designation,
                 purpose=purpose,
@@ -297,6 +339,7 @@ def extract_phone_leads(
                 phone_number_display=lead.phone_number_display,
                 phone_number_normalized=lead.phone_number_normalized,
                 owner_name=lead.owner_name,
+                contact_email=lead.contact_email,
                 company=lead.company,
                 designation=lead.designation,
                 purpose=lead.purpose,

@@ -169,7 +169,7 @@ def process_email_number_intelligence(db: Session, email: RecruiterEmail) -> Non
                 purpose=lead.purpose,
                 evidence_snippet=lead.source_fragment,
                 email_subject=email.subject or "",
-                email_sender=email.sender or "",
+                email_sender=lead.contact_email or email.sender or "",
                 gmail_open_url=email.gmail_message_url or "",
                 state="pending",
             )
