@@ -1,90 +1,95 @@
-# Snowball Risk Register
+# Snowball Risk Register (Verified Audit)
 
-Date: 2026-05-17  
-Branch context: `copilot/audit-and-update-docs`
+Audit date: 2026-05-17  
+Branch context: `copilot/update-markdown-docs-audit`
 
-## 1. High-risk problems
+## High-risk tickets
 
-### HR-1: Over-coupled backend orchestration in `backend/app/main.py` - Done
-- **Current problem:** one module still owns startup, route handlers, policy helpers, Telegram command flows, Gmail labeling glue, analytics hooks, and approval logic.
-- **Why it snowballs:** local edits can change multiple operational flows at once.
-- **Likely outcome if ignored:** send-safety regressions, queue-state regressions, or silent behavior drift across UI and Telegram.
-- **Closeout evidence (D.1 targeted gate):** `test_approve_cc_regression.py`, `test_run_once_hotfix.py`, `test_routing_policy.py`, `test_telegram_interactive.py`, and `test_candidate_date_filtering.py` passed on `snowball-md`.
-- **Tracked non-blocking debt:** `test_run_orchestrator.py` remains stale against current `RunOrchestratorDependencies` contract and is tracked as follow-up cleanup.
+### HR-1: Over-coupled backend orchestration in `backend/app/main.py`
+- **Status:** Partially Closed
+- **Remaining issue:** `backend/app/main.py` is still a very large integration hub (~2k lines) that owns API routes, global runtime wiring, and many workflow adapters.
+- **Evidence:** Startup, approval/send, routing, telegram, and orchestration logic were partly moved into `app/services/*` (`startup_service.py`, `orchestration_service.py`, `routing_runtime_service.py`, `telegram_runtime_service.py`), but `main.py` still binds all services and exposes all route handlers. Closeout tests referenced by prior note exist (`test_approve_cc_regression.py`, `test_run_once_hotfix.py`, `test_routing_policy.py`, `test_telegram_interactive.py`, `test_candidate_date_filtering.py`), but this environment could not execute them because `pytest` is unavailable.
+- **Recommended next action:** Keep HR-1 open until route-layer and runtime-wiring responsibilities are further split from `main.py`; then re-run the targeted tests in a fully provisioned backend environment.
 
 ### HR-2: Routing safety remains a multi-step contract
-- **Current problem:** routing is evaluated during orchestration, stored on the email record, and re-checked at approval time.
-- **Why it snowballs:** subtle contract drift can create unsafe sends or permanent false blocks.
-- **Likely outcome if ignored:** wrong recipients or operator frustration from inexplicable blocks.
+- **Status:** Still Open
+- **Remaining issue:** routing is evaluated in orchestration and re-checked at approve-send time, so drift risk remains.
+- **Evidence:** `RunOrchestrator` decides queue state; `OrchestrationService.approve_send()` separately enforces `routing_is_sendable()`.
+- **Recommended next action:** consolidate sendability decisions behind one canonical contract used by both queueing and approval.
 
-### HR-3: Phone-intelligence write path is still dense and side-effect heavy
-- **Current problem:** extraction, review queue creation, recruiter/employer dedupe, and opportunity creation all happen across multiple helpers.
-- **Why it snowballs:** each new rule increases the chance of duplicate or orphaned records.
-- **Likely outcome if ignored:** inflated identity data and broken source traceability.
+### HR-3: Phone-intelligence write path is dense and side-effect heavy
+- **Status:** Still Open
+- **Remaining issue:** extraction, intelligence classification, review queue, recruiter/employer buckets, and opportunity creation still span multiple helpers with multiple writes.
+- **Evidence:** `premium_numbers/service.py` + `premium_numbers/intelligence.py` + candidate runtime capture path.
+- **Recommended next action:** introduce a single transaction-scoped phone-intelligence workflow boundary with explicit idempotency points.
 
-### HR-4: Runtime schema mutation still depends on one large additive helper
-- **Current problem:** startup schema patching in `ensure_sqlite_phase0_columns()` remains the live migration mechanism.
-- **Why it snowballs:** every schema change increases startup complexity and compatibility risk.
-- **Likely outcome if ignored:** startup failures or inconsistent database state across environments.
+### HR-4: Runtime schema mutation depends on one additive helper
+- **Status:** Still Open
+- **Remaining issue:** startup still performs many SQLite `ALTER TABLE`/`CREATE INDEX` migrations at runtime.
+- **Evidence:** `StartupService.startup()` calls `ensure_sqlite_phase0_columns()` in `app/db.py`.
+- **Recommended next action:** replace runtime additive migration behavior with explicit schema migration tooling ownership.
 
 ### HR-5: Persisted feature flags overstate implemented automation
-- **Current problem:** `feature_auto_send` and `feature_retry_queue` look real in settings but do not map to full runtime systems.
-- **Why it snowballs:** operators and future contributors can make incorrect assumptions from UI/config state alone.
-- **Likely outcome if ignored:** accidental product drift between intent, UI copy, docs, and code.
+- **Status:** Still Open
+- **Remaining issue:** `feature_auto_send` and `feature_retry_queue` are persisted but do not activate dedicated execution flows.
+- **Evidence:** flags exist in models/schemas/settings update path; no runtime auto-send or retry worker path uses them.
+- **Recommended next action:** either implement execution semantics or remove/deprecate operator-facing exposure.
 
-## 2. Medium-risk problems
+## Medium-risk tickets
 
 ### MR-1: Frontend monolith and refresh coordination
-- **Current problem:** `App.tsx` still owns nearly every workflow and coordinates refreshes manually.
-- **Snowball effect:** each new dashboard feature increases coupling and stale-state risk.
+- **Status:** Still Open
+- **Remaining issue:** `dashboard/src/App.tsx` still owns most workflows and post-mutation refresh orchestration.
+- **Evidence:** central state/actions and `schedulePostMutationRefresh()` in App.
+- **Recommended next action:** split candidate workflow, settings, premium numbers, and analytics into dedicated containers.
 
 ### MR-2: Policy profile duplication between frontend and backend
-- **Current problem:** named profiles are declared twice.
-- **Snowball effect:** user-facing choices can diverge from backend execution rules.
+- **Status:** Still Open
+- **Remaining issue:** profile definitions are duplicated in two places.
+- **Evidence:** backend `policy_service.policy_profiles()` and frontend `App.tsx` local `policyProfiles`.
+- **Recommended next action:** move profile definitions to one shared source.
 
 ### MR-3: Hardcoded deployment defaults remain in source
-- **Current problem:** permissive CORS, local redirect URI defaults, and project-specific sheet defaults remain embedded in code.
-- **Snowball effect:** environment-specific behavior becomes harder to control safely.
+- **Status:** Still Open
+- **Remaining issue:** permissive and project-specific defaults remain hardcoded.
+- **Evidence:** `allow_origins=["*"]` in `main.py`; redirect URI and sheets defaults in `config.py`.
+- **Recommended next action:** externalize sensitive defaults and tighten production defaults.
 
 ### MR-4: In-memory operational state is not durable
-- **Current problem:** Telegram auth sessions, last AI timings, and label caches reset on process restart.
-- **Snowball effect:** operational support can become inconsistent across restarts or multi-process deployments.
+- **Status:** Still Open
+- **Remaining issue:** runtime sessions/caches reset on process restart.
+- **Evidence:** `runtime_state` stores telegram auth sessions, pending input state, and runtime process state in memory.
+- **Recommended next action:** persist critical operational state where restart continuity is required.
 
 ### MR-5: Validation confidence is weaker than it appears
-- **Current problem:** some tests are stale and environment tooling may be missing when commands are run.
-- **Snowball effect:** reviewers may overestimate automated coverage on critical paths.
+- **Status:** Needs Re-test
+- **Remaining issue:** key suites were not executable in this environment; stale tests are present.
+- **Evidence:** `python -m pytest` failed (`No module named pytest`), dashboard lint/test/build failed due missing `eslint`, `vitest`, and TS type packages; `test_run_orchestrator.py` is stale vs current dependency contract; `test_phone_attribution.py` imports missing module `app.phone_attribution`.
+- **Recommended next action:** provision dependencies and re-run targeted backend/frontend suites after stale tests are fixed.
 
-## 3. Low-risk problems
+## Low-risk tickets
 
 ### LR-1: Documentation drift pressure
-- **Current problem:** docs are numerous and cover overlapping concerns.
-- **Snowball effect:** without disciplined updates, branches can quickly reintroduce contradictions.
+- **Status:** Partially Closed
+- **Remaining issue:** this audit improves consistency, but drift risk remains ongoing.
+- **Evidence:** docs were aligned to current code in this branch, yet architecture remains fast-moving in `main.py`/`App.tsx`.
+- **Recommended next action:** keep docs updates mandatory in behavioral PRs touching orchestration, routing, or queue logic.
 
 ### LR-2: Placeholder navigation affordances
-- **Current problem:** `New Campaign`, `Settings`, and `Help Center` appear in the sidebar without dedicated routed behavior.
-- **Snowball effect:** small UX confusion accumulates even when workflow logic is correct.
+- **Status:** Still Open
+- **Remaining issue:** `New Campaign`, `Settings`, and `Help Center` buttons are presentational.
+- **Evidence:** `Sidebar.tsx` renders buttons without routed feature actions.
+- **Recommended next action:** either wire these actions or clearly mark them as disabled placeholders in UI.
 
 ### LR-3: Partial feature-module extraction
-- **Current problem:** query bucket has a meaningful feature folder, but most dashboard capabilities still live in `App.tsx`; AI UI folder remains mostly a stub.
-- **Snowball effect:** the codebase can look more modular than it really is.
+- **Status:** Still Open
+- **Remaining issue:** query bucket is modularized; most dashboard behavior remains centralized.
+- **Evidence:** `App.tsx` remains primary state container; `features/ai` is still a minimal stub.
+- **Recommended next action:** continue module extraction by workflow domain.
 
-## 4. Priority order
-
-```mermaid
-flowchart TD
-    A[Known risk] --> B{Severity}
-    B -->|High| C[Stabilize workflow correctness first]
-    B -->|Medium| D[Plan targeted refactor or configuration cleanup]
-    B -->|Low| E[Track and revisit during docs or UX maintenance]
-    C --> F[Protect send safety, dedupe, and schema correctness]
-    D --> G[Reduce drift and coupling]
-    E --> H[Prevent gradual confusion]
-```
-
-Recommended order for real remediation work:
-
+## Priority reminder
 1. protect routing/send safety and orchestration correctness,
 2. reduce phone-intelligence write-path complexity,
-3. replace or constrain startup schema mutation,
+3. replace or constrain runtime schema mutation,
 4. reconcile feature-flag intent with actual runtime behavior,
-5. then tackle frontend decomposition and doc-maintenance ergonomics.
+5. then continue frontend decomposition.

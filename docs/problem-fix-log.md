@@ -1,91 +1,78 @@
-# Problem Fix Log (Current Branch Review)
+# Problem Fix Log (Current Branch Verification)
 
-Date: 2026-05-17  
-Branch: `copilot/audit-and-update-docs`
+Audit date: 2026-05-17  
+Branch: `copilot/update-markdown-docs-audit`
 
-## 1. Audit outcome summary
+## 1) Ticket verification summary
 
-This documentation audit did not change runtime code, but it surfaced the current implementation boundaries that matter most for future work.
+| Ticket | Status |
+|---|---|
+| HR-1 | Partially Closed |
+| HR-2 | Still Open |
+| HR-3 | Still Open |
+| HR-4 | Still Open |
+| HR-5 | Still Open |
+| MR-1 | Still Open |
+| MR-2 | Still Open |
+| MR-3 | Still Open |
+| MR-4 | Still Open |
+| MR-5 | Needs Re-test |
+| LR-1 | Partially Closed |
+| LR-2 | Still Open |
+| LR-3 | Still Open |
 
-The largest corrections made in docs were:
+## 2) HR-1 verification details
 
-- documenting Gmail labeling as a real runtime subsystem,
-- documenting cold call script generation on recruiter opportunities,
-- documenting query bucket persistence and UI behavior,
-- clarifying that `feature_auto_send` and `feature_retry_queue` are stored flags without fully implemented execution flows,
-- updating architecture docs to include startup threads and in-memory Telegram auth sessions,
-- updating data docs to include routing evidence, draft quality, resume context attribution, and opportunity statuses.
+**Status:** Partially Closed
 
-## 2. Current tangled zones that remain true
+**Remaining issue:** `backend/app/main.py` is still the central integration module and coupling hotspot despite meaningful extraction to services.
 
-### A. `backend/app/main.py` remains the main coupling hotspot
+**Evidence:**
+- Service extraction is real (`startup_service.py`, `orchestration_service.py`, `routing_runtime_service.py`, `telegram_runtime_service.py`).
+- `main.py` still hosts all route declarations and service wiring glue for orchestration, telegram runtime entry points, analytics wrappers, and startup/lifecycle integration.
+- Prior closeout test files still exist: `test_approve_cc_regression.py`, `test_run_once_hotfix.py`, `test_routing_policy.py`, `test_telegram_interactive.py`, `test_candidate_date_filtering.py`.
+- This environment could not execute backend tests (`python -m pytest` failed: `No module named pytest`), so pass-state claims could not be revalidated here.
+- `test_run_orchestrator.py` remains stale vs current `RunOrchestratorDependencies` shape and is not non-impactful debt only; it weakens confidence in orchestrator regression evidence.
 
-Why it is tangled:
+**Recommended next action:**
+1. Further split route/lifecycle glue from orchestration assembly in `main.py`.
+2. Update stale orchestrator tests to current dependency contract.
+3. Re-run targeted regression suite in a provisioned test environment before marking HR-1 verified closed.
 
-- API routes, startup lifecycle, routing helpers, policy helpers, Telegram handlers, analytics hooks, and side effects all live together.
-- Multiple workflows reuse the same helper functions and shared process-global state.
+## 3) Other unresolved verification outcomes
 
-Risk if modified casually:
+### HR-2
+- **Remaining issue:** routing correctness still depends on multi-step contracts.
+- **Evidence:** queue-time routing + approve-time recheck (`routing_is_sendable`).
+- **Recommended next action:** enforce one canonical sendability contract.
 
-- queue logic, send gates, Gmail labeling, and Telegram actions can all regress together.
+### HR-3
+- **Remaining issue:** phone-intelligence path remains multi-write and side-effect dense.
+- **Evidence:** extraction + intelligence + queue + bucket/opportunity writes span multiple modules.
+- **Recommended next action:** consolidate into a transaction-aware service boundary.
 
-### B. Orchestration and routing still depend on shared contracts
+### HR-4
+- **Remaining issue:** runtime schema patching remains startup migration mechanism.
+- **Evidence:** `ensure_sqlite_phase0_columns()` called at startup.
+- **Recommended next action:** shift schema evolution ownership to explicit migrations.
 
-The run pipeline and approve-send path both depend on the same routing concepts but at different times:
+### HR-5
+- **Remaining issue:** feature flags imply behavior that is not implemented end-to-end.
+- **Evidence:** persisted `feature_auto_send` and `feature_retry_queue` without runtime workers.
+- **Recommended next action:** implement semantics or deprecate flags.
 
-- orchestration decides `needs_review` vs `failed`,
-- approval re-checks whether the routing is safe enough to send.
+### MR-5
+- **Remaining issue:** validation confidence gap remains.
+- **Evidence:** missing env tooling and stale tests (`test_run_orchestrator.py`, missing `app.phone_attribution`).
+- **Recommended next action:** fix stale tests and re-run full suites in provisioned CI/runtime.
 
-Any drift here can create false-safe or false-blocked behavior.
+## 4) Validation command results from this audit session
 
-### C. Phone intelligence is still a multi-write workflow
+- Backend: `cd backend && python -m pytest` → failed (`No module named pytest`).
+- Dashboard lint: `cd dashboard && npm run lint` → failed (`eslint: not found`).
+- Dashboard test: `cd dashboard && npm run test -- --run` → failed (`vitest: not found`).
+- Dashboard build: `cd dashboard && npm run build` → failed (`Cannot find type definition file for 'vite/client'` and `'node'`).
 
-The same email can touch:
+## 5) Current branch conclusion
 
-- `PremiumNumberLead`,
-- `NumberReviewQueue`,
-- `RecruiterNumber`,
-- `EmployerNumber`,
-- `RecruiterOpportunity`.
-
-That makes dedupe and traceability critical.
-
-### D. Frontend state remains centralized
-
-`dashboard/src/App.tsx` still owns the majority of:
-
-- API loading,
-- mutation success handling,
-- polling,
-- queue refresh coordination,
-- premium-number views,
-- settings persistence.
-
-## 3. Unresolved inconsistencies discovered during the audit
-
-These were documented, not fixed in code:
-
-1. `feature_auto_send` exists in config/settings but does not produce automatic sends.
-2. `feature_retry_queue` exists in config/settings but does not drive a dedicated retry loop.
-3. Policy profile definitions are duplicated between backend and frontend.
-4. Sidebar footer actions and `New Campaign` remain placeholders.
-5. Some tests are stale relative to live runtime contracts.
-6. Tooling dependencies were missing in this shell session, so repo validation commands could not complete successfully.
-
-## 4. Documentation-grounded guidance for future fixes
-
-If future work targets architecture cleanup, the highest-value extractions remain:
-
-1. move routing/sendability decisions behind a single canonical service boundary,
-2. isolate premium-number write logic into a more explicit transaction-aware service,
-3. split `App.tsx` into workflow-specific feature containers,
-4. centralize policy profile definitions,
-5. reconcile stale tests before relying on full-suite confidence.
-
-## 5. Merge-readiness note for this docs PR
-
-After this audit, the `docs/` directory reflects the current branch more accurately than before, but the branch still contains known runtime debt. Reviewers should treat the docs as the source-of-truth description of the current implementation, not as evidence that the underlying debt has been removed.
-
-## 6. HR-1 closeout (snowball-md)
-
-HR-1 was closed on `snowball-md` after targeted D.1 validation passed for orchestration/routing/telegram compatibility, with a compatibility shim commit to preserve legacy `app.main` test hooks; `test_run_orchestrator.py` remains tracked stale test-contract debt.
+Documentation now reflects current code behavior more accurately, but high-risk orchestration/routing/validation debt is still active. Treat this branch as **documented current state**, not as proof that all architectural debt is resolved.
