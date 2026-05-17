@@ -21,11 +21,19 @@ The current implementation is optimized for:
 ### Inbox automation
 
 1. Operator connects Gmail or reuses existing auth.
-2. Operator triggers `Sync + Queue` or Telegram `/run`, or enables background auto polling.
+2. Operator triggers dashboard `Sync + Queue`, Telegram `/run`, or enables background auto polling.
 3. Backend resolves effective query, date mode, policy, and threshold.
 4. Each Gmail candidate is parsed, filtered, scored, routed, and drafted.
-5. Candidate is stored as `needs_review`, `failed`, or `processed_skipped`.
+5. Full-run candidates are stored as `needs_review`, `failed`, or `processed_skipped`.
 6. Side effects run: premium-number extraction, recruiter/employer intelligence, Gmail labeling, analytics.
+
+### Import-only sync
+
+1. Operator calls `POST /gmail/sync` or Telegram `/sync`.
+2. Backend creates a `SyncRun` batch row and fetches unread Gmail matches.
+3. Existing or non-recruiter-like messages are skipped.
+4. New records are imported as `needs_review` or `auto_rejected` with labeling applied.
+5. The import path does **not** run the full queue/send digest.
 
 ### Review and send
 
@@ -38,6 +46,7 @@ The current implementation is optimized for:
 ### Manual recovery workflows
 
 - `failed` candidates can be repaired through `resolve-recipients` and moved back to `needs_review`.
+- `needs_review` candidates can be explicitly rejected and become `rejected`.
 - Unknown phone numbers can be manually classified to recruiter or employer buckets.
 - Recruiter/employer records can be swapped when the earlier classification was wrong.
 - Recruiter opportunities support notes, status updates, and cold call script generation.
@@ -46,7 +55,8 @@ The current implementation is optimized for:
 
 | Feature area | Current branch state |
 |---|---|
-| Gmail OAuth + sync | Live |
+| Gmail OAuth + import sync | Live |
+| Full queue-building automation | Live |
 | Manual review / approval queue | Live |
 | Failed mapping recovery | Live |
 | AI draft generation with fallback | Live |
@@ -61,6 +71,7 @@ The current implementation is optimized for:
 | Background auto polling | Live |
 | Automatic send without approval | **Not implemented** despite persisted flag |
 | Dedicated retry queue processor | **Not implemented** despite persisted flag |
+| Redis-backed worker queue | **Not implemented** despite Redis/RQ config |
 
 ## 5. Dashboard behavior
 
@@ -76,10 +87,11 @@ The dashboard is a single-page React app with these primary sections:
 Supporting behavior that is part of the current implementation:
 
 - status cards for Gmail, AI, and Telegram connection state,
+- AI status detail that includes embedding provider health,
 - settings form for thresholds, signatures, saved queries, policy controls, employer domains, feature flags, and resume upload,
 - query bucket inline suggestions with keyboard navigation,
-- premium numbers subviews for all leads, review queue, recruiter numbers, employer numbers, and recruiter opportunities,
-- recent runs and analytics trend views.
+- premium numbers subviews for review cards, leads, recruiter numbers, employer numbers, and recruiter opportunities,
+- recent-runs analytics and trend views driven by productivity events.
 
 ## 6. Backend operational model
 
@@ -91,7 +103,7 @@ The backend runs several parallel concerns inside one process:
 - AI/embedding status tracking in process memory,
 - Gmail labeling label-cache state in process memory.
 
-This means process restarts reset in-memory telemetry such as Telegram auth sessions and AI runtime timestamps.
+This means process restarts reset in-memory telemetry such as Telegram auth sessions, AI runtime timestamps, and label-cache state.
 
 ## 7. Important business rules that are enforced in code
 
@@ -108,20 +120,23 @@ This means process restarts reset in-memory telemetry such as Telegram auth sess
 These are real limitations observed in the codebase, not future guesses:
 
 - `dashboard/src/App.tsx` is still monolithic and tightly coupled.
-- `backend/app/main.py` still mixes API, orchestration, policy, Telegram, and helper logic.
+- `backend/app/main.py` still acts as the main composition root for API, policy, and runtime wiring.
 - Policy profile definitions exist in both frontend and backend.
 - `feature_auto_send` and `feature_retry_queue` are persisted settings without corresponding end-to-end automation behavior.
+- Redis/RQ are present in config and dependencies but are not used by a live queue worker.
 - Sidebar footer actions and `New Campaign` do not wire to a separate route or feature flow.
-- Validation tooling is present in the repo, but this shell session did not have Python/Node dependencies installed, so commands could not run to completion.
+- Some tests are stale relative to live runtime contracts.
 
 ## 9. Developer guidance for this branch
 
 If you are changing behavior on this branch, verify your assumptions against code in:
 
 - `backend/app/main.py`
+- `backend/app/services/orchestration_service.py`
 - `backend/app/automation/run_orchestrator.py`
 - `backend/app/routing/policy.py`
 - `backend/app/premium_numbers/*`
+- `backend/app/services/telegram_runtime_service.py`
 - `dashboard/src/App.tsx`
 
-The highest-risk areas remain routing safety, approval gating, duplicate prevention, and phone classification write paths.
+The highest-risk areas remain routing safety, approval gating, duplicate prevention, phone classification write paths, and backend/frontend policy drift.

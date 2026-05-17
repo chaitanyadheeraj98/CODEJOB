@@ -19,14 +19,15 @@ The sidebar also renders `Settings` and `Help Center` footer buttons plus a `New
 
 The top of the dashboard combines runtime status and operator controls:
 
-- Gmail auth state
-- AI runtime state
-- Telegram runtime state
-- current Gmail query and date filters
-- query bucket save/remove actions
-- policy profile chooser
-- profile settings and feature toggles
-- resume upload / replace actions
+- Gmail auth state and OAuth bootstrap actions,
+- AI runtime state with embedding-provider health,
+- Telegram runtime state,
+- current Gmail query and date filters,
+- query bucket save/remove actions,
+- policy profile chooser,
+- profile settings and feature toggles,
+- resume upload / replace actions,
+- execution controls for one-shot runs.
 
 This means the “Run Queue” area is both a command center and a settings page rather than a minimal queue list.
 
@@ -49,8 +50,9 @@ Each review card is expected to preserve these behaviors:
 
 - show sender/subject/body-derived context,
 - show routing evidence and candidate recipients,
+- show Gmail and draft-quality metadata,
 - allow draft editing,
-- keep `Approve & Send` and `Reject` actions visible,
+- keep `Approve & Send`, `Reject`, and `Send to Failed Mapping` actions visible,
 - keep approval disabled until the backend-required send conditions are satisfied.
 
 ```mermaid
@@ -70,6 +72,7 @@ The failed-mapping section is the human recovery lane for recipient resolution.
 Required live behavior:
 
 - display original email context,
+- show current routing reason and evidence,
 - allow `Correct To` and `Correct CC` editing,
 - submit `Save Mapping & Move to Review`,
 - return the item to `needs_review` with routing marked as confirmed.
@@ -86,7 +89,9 @@ The premium numbers screen combines multiple operational views:
 
 Current interaction expectations grounded in the UI code:
 
-- unknown review cards must keep `Mark as Recruiter` and `Mark as Employer`,
+- scope filters switch between review cards, recruiter numbers, employer numbers, and opportunities,
+- lead lists support confidence filtering, search, and pagination,
+- unknown review cards keep `Mark as Recruiter`, `Mark as Employer`, and delete actions,
 - recruiter/employer bucket views expose counts and supporting metadata,
 - opportunity cards support status changes, note editing, and cold call script generation/copying,
 - opportunity filtering includes status-based filtering.
@@ -94,8 +99,8 @@ Current interaction expectations grounded in the UI code:
 ## 7. Sent Items and Recent Runs
 
 - **Sent Items** shows approved and sent candidates with delivery context and historic reply data.
-- **Recent Runs** is the operational digest for run status, counts, and last run outcomes.
-- Analytics trend data is displayed in the dashboard rather than in a separate analytics route.
+- **Recent Runs** is the dashboard analytics digest: trend bars, KPI totals, and recent productivity events.
+- Telegram `/recent_runs` is a separate surface that shows `SyncRun` import batches rather than the dashboard analytics timeline.
 
 ## 8. Current design debt
 

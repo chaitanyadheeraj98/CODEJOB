@@ -16,18 +16,18 @@ From `dashboard/`:
 - `npm run build`
 - `npm run test`
 
-## 2. Validation status in this session
+## 2. Validation status for this audit
 
-The repository exposes the commands above, but this shell session did not have the required dependencies installed.
+The repository exposes the commands above, but the current shell environment does not have the required Python/Node packages installed.
 
 Observed command results during this documentation audit:
 
-- backend tests failed immediately because `pytest` was not installed in the shell environment,
-- dashboard lint failed because `eslint` was not installed,
-- dashboard test failed because `vitest` was not installed,
-- dashboard build failed because the local environment was missing Node/Vite type packages (`vite/client`, `node` types).
+- backend tests failed immediately with `/usr/bin/python: No module named pytest`,
+- dashboard lint failed with `eslint: not found`,
+- dashboard test failed with `vitest: not found`,
+- dashboard build failed before app compilation because TypeScript could not find `vite/client` and `node` type definitions.
 
-These failures reflect environment setup, not documentation-file regressions.
+These failures are environment setup blockers, not documentation-file regressions.
 
 ## 3. Backend test coverage currently present
 
@@ -84,6 +84,7 @@ Concrete scenarios worth preserving:
 5. `PATCH /recruiter-opportunities/{id}` still enforces allowed statuses.
 6. `POST /recruiter-opportunities/{id}/generate-cold-call-script` still returns sanitized scripts.
 7. Gmail labeling preview and application logic still align with rules/AI fallback expectations.
+8. `POST /gmail/sync` still records `SyncRun` rows without masquerading as the full run-once digest.
 
 ## 6. Known test/code mismatches on the current branch
 
