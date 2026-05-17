@@ -177,6 +177,7 @@ scoring_runtime_service: ScoringRuntimeService | None = None
 settings_bootstrap_service = SettingsBootstrapService(session_factory=SessionLocal)
 gmail_labeling_runtime_service = GmailLabelingRuntimeService()
 telegram_action_lock = runtime_state.telegram_action_lock
+telegram_pending_inputs = runtime_state.telegram_pending_inputs
 auto_runner_thread: threading.Thread | None = runtime_state.auto_runner_thread
 auto_runner_stop_event = runtime_state.auto_runner_stop_event
 gmail_labeling_service: GmailLabelingService | None = runtime_state.gmail_labeling_service
@@ -405,6 +406,33 @@ def _build_telegram_digest(prefix: str, result: AutomationRunResponse) -> str:
     )
 
 
+def _tg_btn(text: str, data: str) -> dict[str, str]:
+    return TelegramRuntime._tg_btn(text, data)
+
+
+def _telegram_paginate_buttons(
+    buttons: list[dict[str, str]],
+    page: int,
+    *,
+    menu_action: str,
+    include_home: bool = True,
+    include_back: bool = False,
+) -> list[list[dict[str, str]]]:
+    return TelegramRuntime._paginate_buttons(
+        buttons,
+        page,
+        menu_action=menu_action,
+        include_home=include_home,
+        include_back=include_back,
+    )
+
+
+def _compose_gmail_query(base_query: str, mail_date: str | None = None, policy: PolicyConfig | None = None) -> str:
+    tokens = [token for token in (base_query or "").split() if token.lower() != "is:unread"]
+    normalized_base = " ".join(tokens).strip()
+    return policy_service.compose_gmail_query(normalized_base, mail_date, policy)
+
+
 def _format_query_preflight(user_settings: UserSettings, policy: PolicyConfig) -> str:
     resolved = policy_service.effective_run_inputs(
         gmail_query=user_settings.gmail_query,
@@ -430,6 +458,20 @@ def _poll_interval_minutes(user_settings: UserSettings) -> int:
     return max(1, min(int(user_settings.feature_auto_poll_interval_minutes or 10), 1440))
 
 
+def _maybe_generate_cold_call_script(email: object, *, resume: ResumeAsset | None, user_settings: UserSettings | object) -> None:
+    _ = user_settings
+    if not bool(getattr(email, "is_premium", False)):
+        setattr(email, "cold_call_script", "")
+        setattr(email, "cold_call_script_source", None)
+        setattr(email, "cold_call_script_error", None)
+        return
+    if not resume:
+        setattr(email, "cold_call_script", "")
+        setattr(email, "cold_call_script_source", None)
+        setattr(email, "cold_call_script_error", "No active resume uploaded for cold call script generation.")
+        return
+
+
 def _get_auto_runner_service() -> AutoRunnerService:
     global auto_runner_service
     if auto_runner_service is None:
@@ -449,6 +491,14 @@ def _auto_runner_loop() -> None:
 
 def _handle_telegram_command(chat_id: int, user_id: str, username: str, text: str) -> str | TelegramReply:
     if not telegram_runtime:
+        if text.strip().lower() == "/start":
+            return TelegramRuntime._main_menu_reply()
+        pending_mode = telegram_pending_inputs.get(chat_id)
+        if pending_mode:
+            if text.strip().lower() in {"/cancel", "cancel"}:
+                telegram_pending_inputs.pop(chat_id, None)
+                return TelegramReply(text="Cancelled pending action.", inline_keyboard=[[TelegramRuntime._tg_btn("Home", "menu:main:0")]])
+            return TelegramReply(text=f"Pending input mode: {pending_mode}")
         return "Telegram runtime unavailable."
     return telegram_runtime.handle_command(chat_id, user_id, username, text)
 
@@ -461,6 +511,23 @@ def _handle_telegram_callback(
     message_id: int,
 ) -> str | TelegramReply:
     if not telegram_runtime:
+        if callback_data.startswith("menu:"):
+            action, page = TelegramRuntime._parse_callback_data(callback_data)
+            reply = TelegramRuntime._menu_reply(action, page)
+            reply.edit_message_id = message_id
+            return reply
+        if callback_data.startswith("flow:"):
+            mode = callback_data.split(":", 1)[1].strip()
+            if mode:
+                telegram_pending_inputs[chat_id] = mode
+            return TelegramReply(
+                text=TelegramRuntime._pending_prompt(mode),
+                edit_message_id=message_id,
+                inline_keyboard=[[TelegramRuntime._tg_btn("Cancel", "cancel:pending")], [TelegramRuntime._tg_btn("Home", "menu:main:0")]],
+            )
+        if callback_data.startswith("cancel:pending"):
+            telegram_pending_inputs.pop(chat_id, None)
+            return TelegramReply(text="Cancelled pending action.", edit_message_id=message_id, inline_keyboard=[[TelegramRuntime._tg_btn("Home", "menu:main:0")]])
         return "Telegram runtime unavailable."
     return telegram_runtime.handle_callback(chat_id, user_id, username, callback_data, message_id)
 
@@ -560,10 +627,18 @@ def _get_orchestration_service() -> OrchestrationService:
                     saved_mail_date=user_settings.mail_date,
                     requested_mail_date=requested_mail_date,
                 ),
-                compute_blended_ai_score=_compute_blended_ai_score,
-                analyze_email_routing=_analyze_email_routing,
-                build_user_fallback_draft=_build_user_fallback_draft,
-                apply_routing_result=_apply_routing_result,
+                compute_blended_ai_score=lambda **kwargs: _compute_blended_ai_score(**kwargs),
+                analyze_email_routing=lambda db, sender, subject, body, snippet: _analyze_email_routing(db, sender, subject, body, snippet),
+                build_user_fallback_draft=lambda db, user_settings, sender, role, parsed, greeting_line, resume_file_name: _build_user_fallback_draft(
+                    db,
+                    user_settings,
+                    sender=sender,
+                    role=role,
+                    parsed=parsed,
+                    greeting_line=greeting_line,
+                    resume_file_name=resume_file_name,
+                ),
+                apply_routing_result=lambda email, routing: _apply_routing_result(email, routing),
                 apply_gmail_label_for_email=_apply_gmail_label_for_email,
                 log_gmail_labeling_stats=_log_gmail_labeling_stats,
                 build_run_response=_build_run_response,
@@ -588,6 +663,19 @@ def _get_orchestration_service() -> OrchestrationService:
                 build_telegram_digest=_build_telegram_digest,
                 set_last_gmail_sync_at=lambda ts: _set_last_gmail_sync_at(ts),
                 set_ai_runtime=lambda vals: _set_ai_runtime(vals),
+                is_gmail_configured=lambda: is_gmail_configured(),
+                gmail_auth_status=lambda: gmail_auth_status(),
+                oauth_bootstrap_status=lambda: oauth_bootstrap_status(),
+                list_unread_candidates_by_query=lambda *args, **kwargs: list_unread_candidates_by_query(*args, **kwargs),
+                is_recruiter_like=lambda sender, subject, body: is_recruiter_like(sender, subject, body),
+                parse_email=lambda subject, body: parse_email(subject, body),
+                hard_filter_check=lambda parsed, user_settings: hard_filter_check(parsed, user_settings),
+                should_block_f2f=lambda parsed: should_block_f2f(parsed),
+                greeting_from_to_contact=lambda to_email, body: greeting_from_to_contact(to_email, body),
+                generate_reply_with_ai_or_fallback=lambda **kwargs: generate_reply_with_ai_or_fallback(**kwargs),
+                send_reply_with_attachment=lambda *args, **kwargs: send_reply_with_attachment(*args, **kwargs),
+                mark_message_processed=lambda message_id: mark_message_processed(message_id),
+                append_tracking_sheet_row=lambda **kwargs: append_tracking_sheet_row(**kwargs),
             )
         )
     return orchestration_service

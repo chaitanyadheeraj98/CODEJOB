@@ -10,13 +10,11 @@ from typing import Any, Callable, cast
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app.ai.reply_service import generate_reply_with_ai_or_fallback
 from app.ai.resume_context_attribution import RESUME_CONTEXT_MISSING, RESUME_CONTEXT_RULES_ONLY
 from app.automation import RunOrchestrator, RunOrchestratorDependencies, RunOrchestratorRequest
-from app.gmail_client import gmail_auth_status, is_gmail_configured, list_unread_candidates_by_query, mark_message_processed, oauth_bootstrap_status, send_reply_with_attachment, append_tracking_sheet_row
 from app.services.policy_service import EffectiveRunInputs
 from app.models import DraftEditFeedback, RecipientRoutingFeedback, RecruiterEmail, ResumeAsset, SyncRun, UserSettings
-from app.phase0 import RoutingResult, greeting_from_to_contact, hard_filter_check, is_recruiter_like, parse_email, should_block_f2f
+from app.phase0 import RoutingResult
 from app.gmail_client import GmailMessageCandidate
 from app.schemas import ApproveSendRequest, AutomationRunRequest, AutomationRunResponse, GmailSyncResponse, RejectRequest, ResolveRecipientsRequest
 
@@ -58,6 +56,19 @@ class OrchestrationDeps:
     build_telegram_digest: Callable[[str, AutomationRunResponse], str]
     set_last_gmail_sync_at: Callable[[datetime], None]
     set_ai_runtime: Callable[[dict[str, Any]], None]
+    is_gmail_configured: Callable[[], bool]
+    gmail_auth_status: Callable[[], tuple[bool, bool, str]]
+    oauth_bootstrap_status: Callable[[], tuple[bool, str | None]]
+    list_unread_candidates_by_query: Callable[..., list[GmailMessageCandidate]]
+    is_recruiter_like: Callable[[str, str, str], bool]
+    parse_email: Callable[[str, str], dict[str, str | int | bool]]
+    hard_filter_check: Callable[[dict[str, str | int | bool], UserSettings], tuple[bool, str]]
+    should_block_f2f: Callable[[dict[str, str | int | bool]], tuple[bool, str | None]]
+    greeting_from_to_contact: Callable[[str | None, str], str]
+    generate_reply_with_ai_or_fallback: Callable[..., Any]
+    send_reply_with_attachment: Callable[..., str]
+    mark_message_processed: Callable[[str], None]
+    append_tracking_sheet_row: Callable[..., None]
 
 
 class OrchestrationService:
@@ -65,7 +76,7 @@ class OrchestrationService:
         self.deps = deps
 
     def sync_gmail(self, db: Session) -> GmailSyncResponse:
-        if not is_gmail_configured():
+        if not self.deps.is_gmail_configured():
             raise HTTPException(status_code=400, detail="Gmail OAuth is not configured")
 
         user_settings = self.deps.get_settings(db)
@@ -83,7 +94,7 @@ class OrchestrationService:
         try:
             resolved = self.deps.effective_run_inputs(user_settings, None)
             effective_query = resolved.effective_query
-            candidates = list_unread_candidates_by_query(effective_query)
+            candidates = self.deps.list_unread_candidates_by_query(effective_query)
             for item in candidates:
                 existing = (
                     db.query(RecruiterEmail)
@@ -96,12 +107,12 @@ class OrchestrationService:
                     skipped_count += 1
                     continue
 
-                if not is_recruiter_like(item["sender"], item["subject"], item["body"]):
+                if not self.deps.is_recruiter_like(item["sender"], item["subject"], item["body"]):
                     skipped_count += 1
                     continue
 
-                parsed = parse_email(item["subject"], item["body"])
-                hard_pass, hard_reason = hard_filter_check(parsed, user_settings)
+                parsed = self.deps.parse_email(item["subject"], item["body"])
+                hard_pass, hard_reason = self.deps.hard_filter_check(parsed, user_settings)
                 active_resume = self.deps.active_resume(db)
                 ai_score, ai_summary, ai_score_source, email_embedding_json, resume_embedding_json = self.deps.compute_blended_ai_score(
                     subject=item["subject"],
@@ -131,7 +142,7 @@ class OrchestrationService:
                     decision_reason = f"AI score below threshold ({threshold:.2f})"
                     auto_reject_reason = "ai_score_too_low"
                 else:
-                    blocked, block_reason = should_block_f2f(parsed)
+                    blocked, block_reason = self.deps.should_block_f2f(parsed)
                     if blocked:
                         state = "auto_rejected"
                         decision = "Reject"
@@ -139,7 +150,7 @@ class OrchestrationService:
                         auto_reject_reason = "f2f_non_texas"
                     else:
                         routed = self.deps.analyze_email_routing(db, item["sender"], item["subject"], item["body"], item.get("snippet", ""))
-                        greeting_line = greeting_from_to_contact(routed.to_email, item["body"])
+                        greeting_line = self.deps.greeting_from_to_contact(routed.to_email, item["body"])
                         draft = self.deps.build_user_fallback_draft(
                             db,
                             user_settings,
@@ -221,11 +232,11 @@ class OrchestrationService:
         return response
 
     def run_once(self, payload: AutomationRunRequest | None, db: Session) -> AutomationRunResponse:
-        if not is_gmail_configured():
+        if not self.deps.is_gmail_configured():
             raise HTTPException(status_code=400, detail="Gmail OAuth is not configured")
-        configured, authenticated, detail = gmail_auth_status()
+        configured, authenticated, detail = self.deps.gmail_auth_status()
         if configured and not authenticated:
-            in_progress, last_error = oauth_bootstrap_status()
+            in_progress, last_error = self.deps.oauth_bootstrap_status()
             if in_progress:
                 response = AutomationRunResponse(status="oauth_in_progress", detail="OAuth is in progress. Complete sign-in from backend logs, then retry Sync + Queue.")
                 self.deps.record_productivity_event(db, event_type="recent_run_recorded", event_source="run_once", metadata={"status": response.status})
@@ -254,7 +265,7 @@ class OrchestrationService:
         threshold = self.deps.policy_threshold(user_settings, effective_policy)
         batch_limit = self.deps.policy_batch_limit(effective_policy, default_value=20)
         dry_run = self.deps.policy_dry_run(effective_policy)
-        items = list_unread_candidates_by_query(effective_query, max_results_per_page=batch_limit)[:batch_limit]
+        items = self.deps.list_unread_candidates_by_query(effective_query, max_results_per_page=batch_limit)[:batch_limit]
         if not items:
             response = self.deps.build_run_response(
                 "idle",
@@ -293,23 +304,23 @@ class OrchestrationService:
                     dry_run=dry_run,
                     model_name=self.deps.model_name,
                     deps=RunOrchestratorDependencies(
-                        parse_email=parse_email,
-                        hard_filter_check=hard_filter_check,
+                        parse_email=self.deps.parse_email,
+                        hard_filter_check=self.deps.hard_filter_check,
                         compute_blended_ai_score=lambda subject, body, parsed, user_settings, email_row, resume: self.deps.compute_blended_ai_score(
                             subject=subject, body=body, parsed=parsed, user_settings=user_settings, email_row=email_row, resume=resume
                         ),
                         policy_f2f_block=self.deps.policy_f2f_block,
                         evaluate_routing_policy=self.deps.evaluate_routing_policy,
-                        greeting_from_to_contact=greeting_from_to_contact,
+                        greeting_from_to_contact=self.deps.greeting_from_to_contact,
                         build_user_fallback_draft=lambda db, user_settings, sender, role, parsed, greeting_line, resume_file_name: self.deps.build_user_fallback_draft(
                             db, user_settings, sender=sender, role=role, parsed=parsed, greeting_line=greeting_line, resume_file_name=resume_file_name
                         ),
-                        generate_reply_with_ai_or_fallback=generate_reply_with_ai_or_fallback,
+                        generate_reply_with_ai_or_fallback=self.deps.generate_reply_with_ai_or_fallback,
                         apply_routing_decision=self.deps.apply_routing_decision,
                         capture_premium_numbers=self.deps.capture_premium_numbers,
                         record_productivity_event=self.deps.record_productivity_event,
                         apply_gmail_label=lambda _db, email, item: self.deps.apply_gmail_label_for_email(email=email, candidate_item=item),
-                        mark_message_processed=mark_message_processed,
+                        mark_message_processed=self.deps.mark_message_processed,
                     ),
                 )
             )
@@ -398,7 +409,7 @@ class OrchestrationService:
             email.resume_asset_id = resume.id
             email.resume_file_name = resume.file_name
             try:
-                sent_message_id = send_reply_with_attachment(
+                sent_message_id = self.deps.send_reply_with_attachment(
                     email.external_thread_id,
                     email.recipient_email,
                     email.cc_email,
@@ -408,7 +419,7 @@ class OrchestrationService:
                     resume.file_name,
                 )
                 if email.external_message_id:
-                    mark_message_processed(email.external_message_id)
+                    self.deps.mark_message_processed(email.external_message_id)
             except Exception as exc:
                 email.last_error = str(exc)
                 db.commit()
@@ -429,7 +440,7 @@ class OrchestrationService:
 
         try:
             logger.info("Appending Google Sheets tracking row for approved email_id=%s", email.id)
-            append_tracking_sheet_row(
+            self.deps.append_tracking_sheet_row(
                 role=email.role,
                 sender=email.sender,
                 subject=email.subject,
@@ -524,9 +535,9 @@ class OrchestrationService:
         email.skip_reason = None
         email.decision_reason = "Recipient routing corrected by user"
 
-        parsed = parse_email(email.subject, email.body)
+        parsed = self.deps.parse_email(email.subject, email.body)
         role = str(parsed["role"])
-        greeting_line = greeting_from_to_contact(to_email, email.body)
+        greeting_line = self.deps.greeting_from_to_contact(to_email, email.body)
         user_settings = self.deps.get_settings(db)
         resume = self.deps.active_resume(db)
         fallback_reply = self.deps.build_user_fallback_draft(
@@ -549,7 +560,7 @@ class OrchestrationService:
 
         if user_settings.feature_ai_enabled:
             if resume:
-                ai_reply = generate_reply_with_ai_or_fallback(
+                ai_reply = self.deps.generate_reply_with_ai_or_fallback(
                     sender=email.sender,
                     recruiter_to_email=to_email,
                     greeting_line=greeting_line,

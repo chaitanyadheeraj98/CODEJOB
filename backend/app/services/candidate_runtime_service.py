@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session
 
 from app.ai.resume_context_attribution import RESUME_CONTEXT_RULES_ONLY
 from app.models import RecruiterEmail, UserSettings
-from app.phase0 import DEFAULT_FALLBACK_DRAFT_TEMPLATE, DEFAULT_SIGNATURE_EMAIL, DEFAULT_SIGNATURE_NAME, DEFAULT_SIGNATURE_PHONE, RoutingDecision, draft_reply, greeting_from_to_contact, parse_email, render_fallback_draft_template, requested_details_block, skills_from_text
+from app.phase0 import DEFAULT_FALLBACK_DRAFT_TEMPLATE, DEFAULT_SIGNATURE_EMAIL, DEFAULT_SIGNATURE_NAME, DEFAULT_SIGNATURE_PHONE, draft_reply, greeting_from_to_contact, parse_email, render_fallback_draft_template, requested_details_block, skills_from_text
+from app.routing import RoutingDecision
 from app.premium_numbers import extract_and_store_premium_numbers
 from app.premium_numbers.intelligence import process_email_number_intelligence
 
