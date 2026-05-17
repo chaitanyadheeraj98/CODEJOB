@@ -88,6 +88,10 @@ from app.premium_numbers import extract_and_store_premium_numbers
 from app.premium_numbers.intelligence import OPPORTUNITY_STATUS_VALUES, process_email_number_intelligence
 from app.premium_numbers.phone_normalization import canonicalize_phone
 from app.query_bucket import sanitize_saved_queries
+from app.runtime_state import runtime_state
+from app.services import analytics_service, policy_service
+from app.services.startup_service import StartupService
+from app.services.telegram_runtime_service import TelegramRuntime, TelegramRuntimeDeps
 from app.schemas import (
     AIStatusResponse,
     ApproveSendRequest,
@@ -134,25 +138,23 @@ from app.semantic.ranking import blend_scores, semantic_similarity
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     global auto_runner_thread, telegram_service, gmail_labeling_service
-    Base.metadata.create_all(bind=engine)
-    ensure_sqlite_phase0_columns()
-    _ensure_default_settings()
-    gmail_labeling_service = GmailLabelingService()
-    if is_gmail_configured():
-        try:
-            gmail_labeling_service.ensure_target_labels()
-        except Exception as exc:
-            logger.warning("gmail_labeling startup_sync_failed error=%s", exc)
-    telegram_service = _init_telegram_service()
-    auto_runner_stop_event.clear()
-    auto_runner_thread = threading.Thread(target=_auto_runner_loop, name="mailops-auto-runner", daemon=True)
-    auto_runner_thread.start()
+    StartupService(
+        ensure_default_settings=_ensure_default_settings,
+        init_telegram_service=_init_telegram_service,
+        auto_runner_loop=_auto_runner_loop,
+    ).startup()
+    auto_runner_thread = runtime_state.auto_runner_thread
+    telegram_service = runtime_state.telegram_service
+    gmail_labeling_service = runtime_state.gmail_labeling_service
     yield
-    auto_runner_stop_event.set()
-    if auto_runner_thread and auto_runner_thread.is_alive():
-        auto_runner_thread.join(timeout=5.0)
-    if telegram_service:
-        telegram_service.stop()
+    StartupService(
+        ensure_default_settings=_ensure_default_settings,
+        init_telegram_service=_init_telegram_service,
+        auto_runner_loop=_auto_runner_loop,
+    ).shutdown()
+    auto_runner_thread = runtime_state.auto_runner_thread
+    telegram_service = runtime_state.telegram_service
+    gmail_labeling_service = runtime_state.gmail_labeling_service
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
@@ -167,15 +169,12 @@ embedding_last_error: str | None = None
 embedding_last_attempted_at: datetime | None = None
 embedding_last_success_at: datetime | None = None
 embedding_last_duration_ms: int | None = None
-telegram_service: TelegramBotService | None = None
-telegram_action_lock = threading.Lock()
-telegram_auth_sessions: dict[int, datetime] = {}
-telegram_pending_inputs: dict[int, str] = {}
-auto_runner_thread: threading.Thread | None = None
-auto_runner_stop_event = threading.Event()
-gmail_labeling_service: GmailLabelingService | None = None
-
-TELEGRAM_MENU_PAGE_SIZE = 6
+telegram_service: TelegramBotService | None = runtime_state.telegram_service
+telegram_runtime: TelegramRuntime | None = None
+telegram_action_lock = runtime_state.telegram_action_lock
+auto_runner_thread: threading.Thread | None = runtime_state.auto_runner_thread
+auto_runner_stop_event = runtime_state.auto_runner_stop_event
+gmail_labeling_service: GmailLabelingService | None = runtime_state.gmail_labeling_service
 
 
 class PolicyQuery(TypedDict):
@@ -264,72 +263,28 @@ def _record_productivity_event(
     metadata: Mapping[str, object] | None = None,
     occurred_at: datetime | None = None,
 ) -> ProductivityEvent:
-    event = ProductivityEvent(
+    return analytics_service.record_productivity_event(
+        db,
         owner_id=settings.owner_id,
+        event_weights=EVENT_WEIGHTS,
         event_type=event_type,
         event_source=event_source,
         entity_id=entity_id,
-        weight=EVENT_WEIGHTS.get(event_type, 0.0),
-        metadata_json=json.dumps(dict(metadata or {})),
-        occurred_at=occurred_at or datetime.now(UTC),
+        metadata=metadata,
+        occurred_at=occurred_at,
     )
-    db.add(event)
-    db.commit()
-    db.refresh(event)
-    return event
 
 
 def _event_response(event: ProductivityEvent) -> ProductivityEventResponse:
-    parsed_metadata: dict[str, object] = {}
-    try:
-        payload = json.loads(event.metadata_json or "{}")
-        if isinstance(payload, dict):
-            parsed_metadata = cast(dict[str, object], payload)
-    except json.JSONDecodeError:
-        parsed_metadata = {}
-    return ProductivityEventResponse(
-        id=event.id,
-        owner_id=event.owner_id,
-        event_type=event.event_type,
-        event_source=event.event_source,
-        entity_id=event.entity_id,
-        weight=event.weight,
-        metadata=parsed_metadata,
-        occurred_at=event.occurred_at,
-        created_at=event.created_at,
-    )
+    return analytics_service.event_response(event)
 
 
 def _range_bounds(range_key: str) -> tuple[datetime, datetime]:
-    now = datetime.now(UTC)
-    if range_key == "last_1h":
-        return now - timedelta(hours=1), now
-    if range_key == "current_day":
-        start = datetime(now.year, now.month, now.day, tzinfo=UTC)
-        return start, now
-    if range_key == "current_week":
-        now_local = datetime.now(BUSINESS_TZ)
-        week_start_local = datetime(
-            now_local.year,
-            now_local.month,
-            now_local.day,
-            tzinfo=BUSINESS_TZ,
-        ) - timedelta(days=now_local.weekday())
-        return week_start_local.astimezone(UTC), now_local.astimezone(UTC)
-    if range_key == "current_month":
-        start = datetime(now.year, now.month, 1, tzinfo=UTC)
-        return start, now
-    if range_key == "current_year":
-        start = datetime(now.year, 1, 1, tzinfo=UTC)
-        return start, now
-    start = now - timedelta(days=365 * 5)
-    return start, now
+    return analytics_service.range_bounds(range_key, BUSINESS_TZ)
 
 
 def _ensure_utc(ts: datetime) -> datetime:
-    if ts.tzinfo is None:
-        return ts.replace(tzinfo=UTC)
-    return ts.astimezone(UTC)
+    return analytics_service.ensure_utc(ts)
 
 
 def _generate_embedding_with_health(text: str) -> tuple[list[float], str]:
@@ -411,31 +366,6 @@ def _mail_date_filter_field(states: list[str]) -> str:
     return "gmail_received_at"
 
 
-def _parse_allowed_chat_ids(raw: str) -> set[int]:
-    allowed: set[int] = set()
-    for part in (raw or "").split(","):
-        token = part.strip()
-        if not token:
-            continue
-        try:
-            allowed.add(int(token))
-        except ValueError:
-            logger.warning("Ignoring invalid TELEGRAM_ALLOWED_CHAT_IDS token: %s", token)
-    return allowed
-
-
-def _format_candidate_lines(rows: list[RecruiterEmail], max_items: int = 5) -> str:
-    if not rows:
-        return "None"
-    lines: list[str] = []
-    for row in rows[:max_items]:
-        subject = (row.subject or "").strip().replace("\n", " ")
-        if len(subject) > 90:
-            subject = subject[:87] + "..."
-        lines.append(f"#{row.id} - {subject}")
-    return "\n".join(lines)
-
-
 def _build_telegram_digest(prefix: str, result: AutomationRunResponse) -> str:
     return (
         f"{prefix}\n"
@@ -462,186 +392,6 @@ def _format_query_preflight(user_settings: UserSettings, policy: PolicyConfig) -
         f"Saved date: {user_settings.mail_date or 'any'}\n"
         f"Effective query: {effective_query}"
     )
-
-
-def _extract_pin(parts: list[str]) -> tuple[list[str], str | None]:
-    clean: list[str] = []
-    pin: str | None = None
-    for part in parts:
-        if part.lower().startswith("pin="):
-            pin = part.split("=", 1)[1].strip()
-            continue
-        clean.append(part)
-    return clean, pin
-
-
-def _is_valid_iso_date(value: str) -> bool:
-    try:
-        date.fromisoformat(value)
-        return True
-    except ValueError:
-        return False
-
-
-def _telegram_action_authorized(pin: str | None) -> bool:
-    configured_pin = (settings.telegram_action_pin or "").strip()
-    if not configured_pin:
-        return True
-    return bool(pin and pin == configured_pin)
-
-
-def _telegram_ttl_minutes() -> int:
-    return max(1, int(settings.telegram_auth_ttl_minutes or 30))
-
-
-def _telegram_session_expires_at(chat_id: int) -> datetime | None:
-    expires_at = telegram_auth_sessions.get(chat_id)
-    if not expires_at:
-        return None
-    if expires_at <= datetime.now(UTC):
-        telegram_auth_sessions.pop(chat_id, None)
-        return None
-    return expires_at
-
-
-def _telegram_session_is_active(chat_id: int) -> bool:
-    return _telegram_session_expires_at(chat_id) is not None
-
-
-def _telegram_session_remaining(chat_id: int) -> str:
-    expires_at = _telegram_session_expires_at(chat_id)
-    if not expires_at:
-        return "0m 0s"
-    total = int((expires_at - datetime.now(UTC)).total_seconds())
-    if total < 0:
-        total = 0
-    minutes = total // 60
-    seconds = total % 60
-    return f"{minutes}m {seconds}s"
-
-
-def _tg_btn(text: str, data: str) -> dict[str, str]:
-    return {"text": text, "callback_data": data}
-
-
-def _telegram_parse_callback_data(data: str) -> tuple[str, int]:
-    parts = data.split(":", 2)
-    action = parts[1] if len(parts) >= 2 else ""
-    page = 0
-    if len(parts) >= 3:
-        try:
-            page = max(0, int(parts[2]))
-        except ValueError:
-            page = 0
-    return action, page
-
-
-def _telegram_paginate_buttons(
-    buttons: list[dict[str, str]],
-    page: int,
-    *,
-    menu_action: str,
-    include_home: bool = True,
-    include_back: bool = False,
-) -> list[list[dict[str, str]]]:
-    total = len(buttons)
-    start = page * TELEGRAM_MENU_PAGE_SIZE
-    if start >= total:
-        start = max(0, ((total - 1) // TELEGRAM_MENU_PAGE_SIZE) * TELEGRAM_MENU_PAGE_SIZE) if total else 0
-    end = min(total, start + TELEGRAM_MENU_PAGE_SIZE)
-    page_buttons = buttons[start:end]
-    rows: list[list[dict[str, str]]] = [[button] for button in page_buttons]
-
-    nav_row: list[dict[str, str]] = []
-    if start > 0:
-        nav_row.append(_tg_btn("Back", f"menu:{menu_action}:{(start // TELEGRAM_MENU_PAGE_SIZE) - 1}"))
-    if end < total:
-        nav_row.append(_tg_btn("More", f"menu:{menu_action}:{(start // TELEGRAM_MENU_PAGE_SIZE) + 1}"))
-    if nav_row:
-        rows.append(nav_row)
-
-    foot_row: list[dict[str, str]] = []
-    if include_back:
-        foot_row.append(_tg_btn("Sections", "menu:main:0"))
-    if include_home:
-        foot_row.append(_tg_btn("Home", "menu:main:0"))
-    if foot_row:
-        rows.append(foot_row)
-    return rows
-
-
-def _telegram_main_menu_reply() -> TelegramReply:
-    buttons = [
-        _tg_btn("Read-only", "menu:readonly:0"),
-        _tg_btn("Config", "menu:config:0"),
-        _tg_btn("Actions", "menu:actions:0"),
-        _tg_btn("Profile/Auth", "menu:profile:0"),
-    ]
-    return TelegramReply(
-        text="MailOps bot is active. Choose a section:",
-        inline_keyboard=[[button] for button in buttons],
-    )
-
-
-def _telegram_menu_reply(action: str, page: int = 0) -> TelegramReply:
-    title = "Menu"
-    buttons: list[dict[str, str]] = []
-    if action == "readonly":
-        title = "Read-only"
-        buttons = [
-            _tg_btn("Status", "cmd:/status"),
-            _tg_btn("Needs Review", "cmd:/needs_review"),
-            _tg_btn("Failed Mapping", "cmd:/failed_mapping"),
-            _tg_btn("Recent Runs", "cmd:/recent_runs"),
-        ]
-    elif action == "config":
-        title = "Config"
-        buttons = [
-            _tg_btn("Set Query", "flow:await_setquery"),
-            _tg_btn("Set Date", "flow:await_setdate"),
-            _tg_btn("Set Default Query", "flow:await_setdefaultquery"),
-            _tg_btn("Set Default Date", "flow:await_setdefaultdate"),
-            _tg_btn("Auto Run ON", "cmd:/setautorun on"),
-            _tg_btn("Auto Run OFF", "cmd:/setautorun off"),
-            _tg_btn("Set Auto Interval", "flow:await_setautointerval"),
-        ]
-    elif action == "actions":
-        title = "Actions"
-        buttons = [
-            _tg_btn("Run", "cmd:/run"),
-            _tg_btn("Sync", "cmd:/sync"),
-            _tg_btn("Approve by ID", "flow:await_approve_id"),
-            _tg_btn("Reject by ID", "flow:await_reject_id"),
-        ]
-    elif action == "profile":
-        title = "Profile/Auth"
-        buttons = [
-            _tg_btn("Profile", "cmd:/profile"),
-            _tg_btn("Authenticate", "flow:await_auth_pin"),
-            _tg_btn("Logout", "cmd:/logout"),
-            _tg_btn("Main Menu", "menu:main:0"),
-        ]
-    else:
-        return _telegram_main_menu_reply()
-
-    return TelegramReply(
-        text=f"{title} menu:",
-        inline_keyboard=_telegram_paginate_buttons(buttons, page, menu_action=action, include_back=True),
-    )
-
-
-def _telegram_pending_prompt(mode: str) -> str:
-    prompts: dict[str, str] = {
-        "await_setquery": "Send the new Gmail query text (or tap Cancel).",
-        "await_setdate": "Send a date in YYYY-MM-DD or send `any` (or tap Cancel).",
-        "await_setdefaultquery": "Send the new default Gmail query (or tap Cancel).",
-        "await_setdefaultdate": "Send `today` or `off` (or tap Cancel).",
-        "await_setautointerval": "Send the auto-run interval in minutes (1-1440).",
-        "await_approve_id": "Send the email ID to approve (number only).",
-        "await_reject_id": "Send the email ID to reject (number only).",
-        "await_auth_pin": "Send your PIN to authenticate this chat session.",
-    }
-    return prompts.get(mode, "Send the required value.")
 
 
 def _normalize_default_date_mode(value: str | None) -> str:
@@ -716,307 +466,9 @@ def _auto_runner_loop() -> None:
 
 
 def _handle_telegram_command(chat_id: int, user_id: str, username: str, text: str) -> str | TelegramReply:
-    _ = chat_id
-    _ = user_id
-    _ = username
-    command_line = text.strip()
-    if not command_line:
-        return "Empty command."
-    if command_line.lower() == "/menu":
-        return _telegram_main_menu_reply()
-
-    pending_mode = telegram_pending_inputs.get(chat_id)
-    if pending_mode and not command_line.startswith("/"):
-        telegram_pending_inputs.pop(chat_id, None)
-        if pending_mode == "await_setquery":
-            return _handle_telegram_command(chat_id, user_id, username, f"/setquery {command_line}")
-        if pending_mode == "await_setdate":
-            return _handle_telegram_command(chat_id, user_id, username, f"/setdate {command_line}")
-        if pending_mode == "await_setdefaultquery":
-            return _handle_telegram_command(chat_id, user_id, username, f"/setdefaultquery {command_line}")
-        if pending_mode == "await_setdefaultdate":
-            return _handle_telegram_command(chat_id, user_id, username, f"/setdefaultdate {command_line}")
-        if pending_mode == "await_setautointerval":
-            return _handle_telegram_command(chat_id, user_id, username, f"/setautointerval {command_line}")
-        if pending_mode == "await_approve_id":
-            return _handle_telegram_command(chat_id, user_id, username, f"/approve {command_line}")
-        if pending_mode == "await_reject_id":
-            return _handle_telegram_command(chat_id, user_id, username, f"/reject {command_line} Rejected from Telegram")
-        if pending_mode == "await_auth_pin":
-            return _handle_telegram_command(chat_id, user_id, username, f"/auth {command_line}")
-
-    parts = command_line.split()
-    cmd = parts[0].lower()
-    args, pin = _extract_pin(parts[1:])
-    logger.info("Telegram command received chat_id=%s user=%s cmd=%s", chat_id, username, cmd)
-
-    def require_action_auth() -> str | None:
-        if _telegram_session_is_active(chat_id):
-            return None
-        if _telegram_action_authorized(pin):
-            return None
-        logger.info("Telegram auth denied chat_id=%s cmd=%s reason=missing_or_invalid_auth", chat_id, cmd)
-        return "Action blocked. Run /auth <PIN> or provide pin=<PIN>."
-
-    if cmd == "/start":
-        return _telegram_main_menu_reply()
-
-    db = SessionLocal()
-    try:
-        if cmd == "/auth":
-            if not args:
-                return "Usage: /auth <PIN>"
-            configured_pin = (settings.telegram_action_pin or "").strip()
-            if not configured_pin:
-                telegram_auth_sessions[chat_id] = datetime.now(UTC) + timedelta(minutes=_telegram_ttl_minutes())
-                logger.info("Telegram auth success chat_id=%s cmd=%s mode=no_configured_pin", chat_id, cmd)
-                return f"Authenticated. Session expires in {_telegram_session_remaining(chat_id)}."
-            supplied_pin = args[0].strip()
-            if supplied_pin != configured_pin:
-                logger.info("Telegram auth failed chat_id=%s cmd=%s reason=wrong_pin", chat_id, cmd)
-                return "Authentication failed: incorrect PIN."
-            telegram_auth_sessions[chat_id] = datetime.now(UTC) + timedelta(minutes=_telegram_ttl_minutes())
-            logger.info("Telegram auth success chat_id=%s cmd=%s", chat_id, cmd)
-            return f"Authenticated. Session expires in {_telegram_session_remaining(chat_id)}."
-
-        if cmd == "/logout":
-            telegram_auth_sessions.pop(chat_id, None)
-            logger.info("Telegram logout chat_id=%s cmd=%s", chat_id, cmd)
-            return "Logged out. Action commands now require /auth <PIN> or pin=<PIN>."
-
-        if cmd == "/status":
-            gmail_configured, gmail_authenticated, gmail_detail = gmail_auth_status()
-            ai_info = ai_status()
-            user_settings = _get_settings(db)
-            policy = _read_policy_from_settings(user_settings)
-            dry_run = _policy_dry_run(policy)
-            is_authenticated = _telegram_session_is_active(chat_id)
-            auth_line = f"Authenticated: {'yes' if is_authenticated else 'no'}"
-            if is_authenticated:
-                auth_line += f" (expires in {_telegram_session_remaining(chat_id)})"
-            return (
-                f"Gmail: {'Authenticated' if gmail_authenticated else 'Not authenticated'} "
-                f"(configured={gmail_configured})\n"
-                f"AI: {'Healthy' if ai_info.connected else 'Disconnected'} ({ai_info.model})\n"
-                f"{auth_line}\n"
-                f"Dry run: {dry_run}\n"
-                f"Auto run: {'on' if user_settings.feature_auto_polling else 'off'} ({_poll_interval_minutes(user_settings)} min)\n"
-                "Source: /run uses saved backend settings below.\n"
-                f"Query: {user_settings.gmail_query}\n"
-                f"Default query: {user_settings.default_gmail_query or user_settings.gmail_query}\n"
-                f"Date: {user_settings.mail_date or 'any'}\n"
-                f"Default date mode: {_normalize_default_date_mode(user_settings.default_date_mode)}\n"
-                f"Detail: {gmail_detail}\n"
-                "Hint: Use /setquery and /setdate to change what /run searches."
-            )
-
-        if cmd == "/profile":
-            user_settings = _get_settings(db)
-            return (
-                "Profile defaults:\n"
-                f"Default query: {user_settings.default_gmail_query or user_settings.gmail_query}\n"
-                f"Default date mode: {_normalize_default_date_mode(user_settings.default_date_mode)}\n"
-                f"Auto run: {'on' if user_settings.feature_auto_polling else 'off'} ({_poll_interval_minutes(user_settings)} min)\n"
-                f"Active query: {user_settings.gmail_query}\n"
-                f"Active date: {user_settings.mail_date or 'any'}"
-            )
-
-        if cmd == "/setquery":
-            query_text = " ".join(args).strip()
-            if not query_text:
-                return "Usage: /setquery <gmail query>"
-            user_settings = _get_settings(db)
-            user_settings.gmail_query = query_text
-            db.commit()
-            logger.info("Telegram config update chat_id=%s field=gmail_query", chat_id)
-            return f"Query updated to: {user_settings.gmail_query}"
-
-        if cmd == "/setdefaultquery":
-            query_text = " ".join(args).strip()
-            if not query_text:
-                return "Usage: /setdefaultquery <gmail query>"
-            user_settings = _get_settings(db)
-            user_settings.default_gmail_query = query_text
-            db.commit()
-            logger.info("Telegram config update chat_id=%s field=default_gmail_query", chat_id)
-            return f"Default query updated to: {user_settings.default_gmail_query}"
-
-        if cmd == "/setdate":
-            if not args:
-                return "Usage: /setdate YYYY-MM-DD or /setdate any"
-            raw_value = args[0].strip().lower()
-            user_settings = _get_settings(db)
-            if raw_value in {"any", "clear", "none"}:
-                user_settings.mail_date = None
-                db.commit()
-                logger.info("Telegram config update chat_id=%s field=mail_date value=any", chat_id)
-                return "Mail date filter cleared. Runs will use any date."
-            if not _is_valid_iso_date(raw_value):
-                return "Invalid date. Use YYYY-MM-DD (example: /setdate 2026-05-08) or /setdate any."
-            user_settings.mail_date = raw_value
-            db.commit()
-            logger.info("Telegram config update chat_id=%s field=mail_date value=%s", chat_id, raw_value)
-            return f"Mail date set to: {raw_value}"
-
-        if cmd == "/setdefaultdate":
-            if not args:
-                return "Usage: /setdefaultdate today|off"
-            mode = (args[0] or "").strip().lower()
-            if mode not in {"today", "off"}:
-                return "Invalid mode. Use /setdefaultdate today or /setdefaultdate off."
-            user_settings = _get_settings(db)
-            user_settings.default_date_mode = mode
-            db.commit()
-            logger.info("Telegram config update chat_id=%s field=default_date_mode value=%s", chat_id, mode)
-            return f"Default date mode set to: {mode}"
-
-        if cmd == "/setautorun":
-            if not args:
-                return "Usage: /setautorun on|off"
-            mode = (args[0] or "").strip().lower()
-            if mode not in {"on", "off"}:
-                return "Invalid mode. Use /setautorun on or /setautorun off."
-            user_settings = _get_settings(db)
-            user_settings.feature_auto_polling = mode == "on"
-            db.commit()
-            logger.info("Telegram config update chat_id=%s field=feature_auto_polling value=%s", chat_id, mode)
-            return f"Auto run set to: {mode} (interval={_poll_interval_minutes(user_settings)} min)"
-
-        if cmd == "/setautointerval":
-            if not args:
-                return "Usage: /setautointerval <minutes>"
-            try:
-                minutes = int(args[0])
-            except ValueError:
-                return "Invalid interval. Use /setautointerval <minutes>."
-            minutes = max(1, min(minutes, 1440))
-            user_settings = _get_settings(db)
-            user_settings.feature_auto_poll_interval_minutes = minutes
-            db.commit()
-            logger.info("Telegram config update chat_id=%s field=feature_auto_poll_interval_minutes value=%s", chat_id, minutes)
-            return f"Auto run interval set to: {minutes} minute(s)."
-
-        if cmd == "/needs_review":
-            rows = (
-                db.query(RecruiterEmail)
-                .filter(RecruiterEmail.owner_id == settings.owner_id, RecruiterEmail.state == "needs_review")
-                .order_by(RecruiterEmail.created_at.desc())
-                .limit(5)
-                .all()
-            )
-            count = (
-                db.query(RecruiterEmail)
-                .filter(RecruiterEmail.owner_id == settings.owner_id, RecruiterEmail.state == "needs_review")
-                .count()
-            )
-            return f"Needs Review: {count}\nTop items:\n{_format_candidate_lines(rows)}"
-
-        if cmd == "/failed_mapping":
-            rows = (
-                db.query(RecruiterEmail)
-                .filter(RecruiterEmail.owner_id == settings.owner_id, RecruiterEmail.state == "failed")
-                .order_by(RecruiterEmail.created_at.desc())
-                .limit(5)
-                .all()
-            )
-            count = (
-                db.query(RecruiterEmail)
-                .filter(RecruiterEmail.owner_id == settings.owner_id, RecruiterEmail.state == "failed")
-                .count()
-            )
-            return f"Failed Mapping: {count}\nTop items:\n{_format_candidate_lines(rows)}"
-
-        if cmd == "/recent_runs":
-            runs = (
-                db.query(SyncRun)
-                .filter(SyncRun.owner_id == settings.owner_id)
-                .order_by(SyncRun.created_at.desc())
-                .limit(5)
-                .all()
-            )
-            if not runs:
-                return "No recent runs."
-            lines = [
-                f"{run.created_at.isoformat()} | imported={run.imported_count} skipped={run.skipped_count} errors={run.error_count}"
-                for run in runs
-            ]
-            return "Recent runs:\n" + "\n".join(lines)
-
-        if cmd == "/sync":
-            auth_error = require_action_auth()
-            if auth_error:
-                return auth_error
-            with telegram_action_lock:
-                result = gmail_sync(db)
-            return (
-                "Advanced sync finished (import-only, no queue/send).\n"
-                f"Batch: {result.sync_batch_id}\n"
-                f"Imported: {result.imported_count} | Skipped: {result.skipped_count} | Errors: {result.error_count}"
-            )
-
-        if cmd == "/run":
-            auth_error = require_action_auth()
-            if auth_error:
-                return auth_error
-            user_settings = _get_settings(db)
-            policy = _read_policy_from_settings(user_settings)
-            preflight = _format_query_preflight(user_settings, policy)
-            with telegram_action_lock:
-                run_result = automation_run_once(None, db)
-            if run_result.status == "idle":
-                return (
-                    f"{preflight}\n\n"
-                    f"{_build_telegram_digest('Run finished.', run_result)}\n\n"
-                    "Guidance: No matches for saved query/date.\n"
-                    "Try: /setquery <gmail query>\n"
-                    "Try: /setdate YYYY-MM-DD or /setdate any"
-                )
-            return f"{preflight}\n\n{_build_telegram_digest('Run finished.', run_result)}"
-
-        if cmd == "/approve":
-            auth_error = require_action_auth()
-            if auth_error:
-                return auth_error
-            if not args:
-                return "Usage: /approve <email_id>"
-            try:
-                email_id = int(args[0])
-            except ValueError:
-                return "Invalid email_id. Usage: /approve <email_id>"
-            with telegram_action_lock:
-                email = approve_and_send(email_id, ApproveSendRequest(edited_reply=None), db)
-            return f"Approved and sent: #{email.id} | {email.subject}"
-
-        if cmd == "/reject":
-            auth_error = require_action_auth()
-            if auth_error:
-                return auth_error
-            if not args:
-                return "Usage: /reject <email_id> [reason...]"
-            try:
-                email_id = int(args[0])
-            except ValueError:
-                return "Invalid email_id. Usage: /reject <email_id> [reason...]"
-            reason = " ".join(args[1:]).strip() or "Rejected from Telegram"
-            with telegram_action_lock:
-                email = reject_candidate(email_id, RejectRequest(reason=reason), db)
-            return f"Rejected: #{email.id} | reason={email.decision_reason or reason}"
-
-        reply = TelegramReply(
-            text="Unknown command. Use Menu below (typed /commands still work).",
-            inline_keyboard=[[_tg_btn("Open Menu", "menu:main:0")]],
-        )
-        logger.info("Telegram command result chat_id=%s cmd=%s result=unknown_command", chat_id, cmd)
-        return reply
-    except HTTPException as exc:
-        logger.info("Telegram command result chat_id=%s cmd=%s result=http_error_%s", chat_id, cmd, exc.status_code)
-        return f"Command failed ({exc.status_code}): {exc.detail}"
-    except Exception as exc:
-        logger.exception("Telegram command error")
-        logger.info("Telegram command result chat_id=%s cmd=%s result=exception", chat_id, cmd)
-        return f"Command failed: {exc}"
-    finally:
-        db.close()
+    if not telegram_runtime:
+        return "Telegram runtime unavailable."
+    return telegram_runtime.handle_command(chat_id, user_id, username, text)
 
 
 def _handle_telegram_callback(
@@ -1026,71 +478,47 @@ def _handle_telegram_callback(
     callback_data: str,
     message_id: int,
 ) -> str | TelegramReply:
-    _ = user_id
-    _ = username
-    action, page = _telegram_parse_callback_data(callback_data)
-
-    if callback_data.startswith("menu:"):
-        reply = _telegram_menu_reply(action, page)
-        reply.edit_message_id = message_id
-        reply.callback_notice = "Updated."
-        return reply
-
-    if callback_data == "cancel:pending":
-        telegram_pending_inputs.pop(chat_id, None)
-        reply = _telegram_main_menu_reply()
-        reply.edit_message_id = message_id
-        reply.callback_notice = "Canceled."
-        return reply
-
-    if callback_data.startswith("flow:"):
-        mode = callback_data.split(":", 1)[1].strip()
-        telegram_pending_inputs[chat_id] = mode
-        return TelegramReply(
-            text=_telegram_pending_prompt(mode),
-            inline_keyboard=[[_tg_btn("Cancel", "cancel:pending")], [_tg_btn("Home", "menu:main:0")]],
-            edit_message_id=message_id,
-            callback_notice="Awaiting input.",
-        )
-
-    if callback_data.startswith("cmd:"):
-        command_text = callback_data.split(":", 1)[1].strip()
-        result = _handle_telegram_command(chat_id, user_id, username, command_text)
-        if isinstance(result, TelegramReply):
-            if result.edit_message_id is None:
-                result.edit_message_id = message_id
-            if result.callback_notice is None:
-                result.callback_notice = "Done."
-            return result
-        return TelegramReply(
-            text=result,
-            inline_keyboard=[[_tg_btn("Back", "menu:main:0")]],
-            edit_message_id=message_id,
-            callback_notice="Done.",
-        )
-
-    return TelegramReply(
-        text="Unknown action. Opening main menu.",
-        inline_keyboard=_telegram_main_menu_reply().inline_keyboard,
-        edit_message_id=message_id,
-        callback_notice="Unknown action.",
-    )
+    if not telegram_runtime:
+        return "Telegram runtime unavailable."
+    return telegram_runtime.handle_callback(chat_id, user_id, username, callback_data, message_id)
 
 
 def _init_telegram_service() -> TelegramBotService | None:
+    global telegram_runtime
     token = (settings.telegram_bot_token or "").strip()
     if not token:
         return None
-    allowed_chat_ids = _parse_allowed_chat_ids(settings.telegram_allowed_chat_ids)
+    allowed_chat_ids = TelegramRuntime.parse_allowed_chat_ids(settings.telegram_allowed_chat_ids)
     if not allowed_chat_ids:
         logger.warning("Telegram bot token exists but TELEGRAM_ALLOWED_CHAT_IDS is empty. Bot will not start.")
         return None
+    telegram_runtime = TelegramRuntime(
+        TelegramRuntimeDeps(
+            session_factory=SessionLocal,
+            get_settings=_get_settings,
+            read_policy_from_settings=_read_policy_from_settings,
+            policy_dry_run=_policy_dry_run,
+            format_query_preflight=_format_query_preflight,
+            poll_interval_minutes=_poll_interval_minutes,
+            build_telegram_digest=_build_telegram_digest,
+            gmail_auth_status=gmail_auth_status,
+            ai_status=ai_status,
+            gmail_sync=gmail_sync,
+            automation_run_once=automation_run_once,
+            approve_and_send=approve_and_send,
+            reject_candidate=reject_candidate,
+            owner_id=settings.owner_id,
+            action_lock=telegram_action_lock,
+            action_pin=lambda: (settings.telegram_action_pin or "").strip(),
+            auth_ttl_minutes=lambda: max(1, int(settings.telegram_auth_ttl_minutes or 30)),
+        )
+    )
     service = TelegramBotService(
         token=token,
         allowed_chat_ids=allowed_chat_ids,
         alerts_enabled=settings.telegram_alerts_enabled,
-        command_handler=_handle_telegram_command,
-        callback_handler=_handle_telegram_callback,
+        command_handler=telegram_runtime.handle_command,
+        callback_handler=telegram_runtime.handle_callback,
     )
     service.start()
     logger.info("Telegram bot started with %s authorized chat(s)", len(allowed_chat_ids))
@@ -1174,189 +602,47 @@ def _csv_to_list(value: str | None) -> list[str]:
 
 
 def _default_policy() -> PolicyConfig:
-    return {
-        "version": 1,
-        "query": {
-            "force_unread": True,
-            "include_labels": [],
-            "exclude_labels": [],
-            "date_mode": "custom",
-        },
-        "run": {
-            "run_mode": "all",
-            "batch_limit": 20,
-            "dry_run": False,
-        },
-        "qualification": {
-            "location_strictness": "balanced",
-            "score_threshold_override_enabled": False,
-            "score_threshold_override_value": 0.6,
-        },
-    }
+    return cast(PolicyConfig, policy_service.default_policy())
 
 
 def _policy_profiles() -> dict[str, PolicyConfig]:
-    return {
-        "Aggressive": _normalize_policy(
-            {
-                "version": 1,
-                "query": {
-                    "force_unread": True,
-                    "include_labels": [],
-                    "exclude_labels": [],
-                    "date_mode": "any",
-                },
-                "run": {
-                    "run_mode": "all",
-                    "batch_limit": 100,
-                    "dry_run": False,
-                },
-                "qualification": {
-                    "location_strictness": "lenient",
-                    "score_threshold_override_enabled": True,
-                    "score_threshold_override_value": 0.50,
-                },
-            }
-        ),
-        "Balanced": _normalize_policy(_default_policy()),
-        "Strict": _normalize_policy(
-            {
-                "version": 1,
-                "query": {
-                    "force_unread": True,
-                    "include_labels": [],
-                    "exclude_labels": [],
-                    "date_mode": "custom",
-                },
-                "run": {
-                    "run_mode": "all",
-                    "batch_limit": 10,
-                    "dry_run": False,
-                },
-                "qualification": {
-                    "location_strictness": "strict",
-                    "score_threshold_override_enabled": True,
-                    "score_threshold_override_value": 0.75,
-                },
-            }
-        ),
-    }
+    return cast(dict[str, PolicyConfig], policy_service.policy_profiles())
 
 
 def _selected_policy_profile(policy: PolicyConfig) -> str | None:
-    normalized = _normalize_policy(policy)
-    for profile_name, profile_policy in _policy_profiles().items():
-        if normalized == profile_policy:
-            return profile_name
-    return None
+    return policy_service.selected_policy_profile(policy)
 
 
 def _as_mapping(value: object) -> Mapping[str, object]:
-    if isinstance(value, dict):
-        return cast(Mapping[str, object], value)
-    return {}
+    return policy_service.as_mapping(value)
 
 
 def _as_str(value: object, default: str) -> str:
-    return str(value).strip() if value is not None else default
+    return policy_service.as_str(value, default)
 
 
 def _as_int(value: object, default: int) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
+    return policy_service.as_int(value, default)
 
 
 def _as_float(value: object, default: float) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
+    return policy_service.as_float(value, default)
 
 
 def _as_string_list(value: object) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    return [str(v).strip() for v in value if str(v).strip()]
+    return policy_service.as_string_list(value)
 
 
 def _normalize_policy(raw_policy: object) -> PolicyConfig:
-    default_policy = _default_policy()
-    if not isinstance(raw_policy, Mapping):
-        return default_policy
-
-    raw_policy_map = _as_mapping(raw_policy)
-    query_raw = raw_policy_map.get("query")
-    run_raw = raw_policy_map.get("run")
-    qualification_raw = raw_policy_map.get("qualification")
-
-    query = _as_mapping(query_raw)
-    run = _as_mapping(run_raw)
-    qualification = _as_mapping(qualification_raw)
-
-    date_mode_raw = query.get("date_mode")
-    date_mode = _as_str(date_mode_raw, "custom")
-    if date_mode not in {"custom", "any"}:
-        date_mode = "custom"
-
-    run_mode_raw = run.get("run_mode")
-    run_mode = _as_str(run_mode_raw, "all")
-    if run_mode not in {"all"}:
-        run_mode = "all"
-
-    batch_limit = _as_int(run.get("batch_limit"), 20)
-    batch_limit = max(1, min(batch_limit, 200))
-
-    score_override = _as_float(qualification.get("score_threshold_override_value"), 0.6)
-    score_override = max(0.0, min(score_override, 1.0))
-
-    location_raw = qualification.get("location_strictness")
-    location_strictness = _as_str(location_raw, "balanced")
-    if location_strictness not in {"lenient", "balanced", "strict"}:
-        location_strictness = "balanced"
-
-    return {
-        "version": 1,
-        "query": {
-            "force_unread": bool(query.get("force_unread", True)),
-            "include_labels": _as_string_list(query.get("include_labels", [])),
-            "exclude_labels": _as_string_list(query.get("exclude_labels", [])),
-            "date_mode": date_mode,
-        },
-        "run": {
-            "run_mode": run_mode,
-            "batch_limit": batch_limit,
-            "dry_run": bool(run.get("dry_run", False)),
-        },
-        "qualification": {
-            "location_strictness": location_strictness,
-            "score_threshold_override_enabled": bool(qualification.get("score_threshold_override_enabled", False)),
-            "score_threshold_override_value": score_override,
-        },
-    }
+    return cast(PolicyConfig, policy_service.normalize_policy(raw_policy))
 
 
 def _read_policy_from_settings(user_settings: UserSettings) -> PolicyConfig:
-    if not user_settings.policy_json:
-        return _default_policy()
-    try:
-        parsed = json.loads(user_settings.policy_json)
-    except json.JSONDecodeError:
-        return _default_policy()
-    return _normalize_policy(parsed)
+    return cast(PolicyConfig, policy_service.read_policy_from_settings(user_settings.policy_json))
 
 
 def _policy_threshold(user_settings: UserSettings, policy: PolicyConfig) -> float:
-    normalized = _normalize_policy(policy)
-    qualification = normalized["qualification"]
-    if bool(qualification.get("score_threshold_override_enabled", False)):
-        value = _as_float(
-            qualification.get("score_threshold_override_value", user_settings.qualification_threshold),
-            user_settings.qualification_threshold,
-        )
-        return max(0.0, min(value, 1.0))
-    return user_settings.qualification_threshold
+    return policy_service.policy_threshold(user_settings.qualification_threshold, policy)
 
 
 def _policy_f2f_block(parsed: dict[str, str | int | bool], policy: PolicyConfig) -> tuple[bool, str]:
@@ -1376,38 +662,15 @@ def _policy_f2f_block(parsed: dict[str, str | int | bool], policy: PolicyConfig)
 
 
 def _policy_batch_limit(policy: PolicyConfig, default_value: int = 20) -> int:
-    normalized = _normalize_policy(policy)
-    run_policy = normalized["run"]
-    value = _as_int(run_policy.get("batch_limit", default_value), default_value)
-    return max(1, min(value, 200))
+    return policy_service.policy_batch_limit(policy, default_value)
 
 
 def _policy_dry_run(policy: PolicyConfig) -> bool:
-    normalized = _normalize_policy(policy)
-    run_policy = normalized["run"]
-    return bool(run_policy.get("dry_run", False))
+    return policy_service.policy_dry_run(policy)
 
 
 def _compose_gmail_query(base_query: str, mail_date: str | None = None, policy: PolicyConfig | None = None) -> str:
-    policy_obj = _normalize_policy(policy)
-    query_section = policy_obj["query"]
-
-    parts = [base_query.strip()]
-    if bool(query_section.get("force_unread", True)):
-        parts.append("is:unread")
-
-    for label in _as_string_list(query_section.get("include_labels", [])):
-        parts.append(f"label:{label}")
-    for label in _as_string_list(query_section.get("exclude_labels", [])):
-        parts.append(f"-label:{label}")
-
-    date_mode = _as_str(query_section.get("date_mode", "custom"), "custom")
-    if mail_date and date_mode == "custom":
-        selected = date.fromisoformat(mail_date)
-        next_day = selected + timedelta(days=1)
-        parts.append(f"after:{selected.strftime('%Y/%m/%d')}")
-        parts.append(f"before:{next_day.strftime('%Y/%m/%d')}")
-    return " ".join(part for part in parts if part)
+    return policy_service.compose_gmail_query(base_query, mail_date=mail_date, policy=policy)
 
 
 def _active_resume(db: Session) -> ResumeAsset | None:
@@ -2048,7 +1311,7 @@ def ai_status() -> AIStatusResponse:
 @app.get("/telegram/status", response_model=TelegramStatusResponse)
 def telegram_status() -> TelegramStatusResponse:
     if not telegram_service:
-        configured_ids = _parse_allowed_chat_ids(settings.telegram_allowed_chat_ids)
+        configured_ids = TelegramRuntime.parse_allowed_chat_ids(settings.telegram_allowed_chat_ids)
         enabled = bool((settings.telegram_bot_token or "").strip())
         detail = "Telegram bot disabled"
         if enabled and not configured_ids:
@@ -2415,6 +1678,7 @@ def gmail_labeling_preview(payload: GmailLabelingPreviewRequest) -> GmailLabelin
             draft_reply=payload.draft_reply,
         )
     )
+    return GmailLabelingPreviewResponse(label=decision.label, reason_path=decision.reason_path)
 
 
 def _recruiter_opportunity_response(row: RecruiterOpportunity, recruiter: RecruiterNumber | None) -> RecruiterOpportunityResponse:
@@ -2445,7 +1709,6 @@ def _recruiter_opportunity_response(row: RecruiterOpportunity, recruiter: Recrui
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
-    return GmailLabelingPreviewResponse(label=decision.label, reason_path=decision.reason_path)
 
 
 @app.post("/automation/run-once", response_model=AutomationRunResponse)
