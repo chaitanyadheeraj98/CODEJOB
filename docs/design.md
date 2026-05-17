@@ -1,11 +1,13 @@
 # CODEJOB UI and Interaction Design (Current Branch)
 
-## 1. Dashboard structure
+Audit date: 2026-05-17  
+Branch: `copilot/update-markdown-docs-audit`
 
-The dashboard is a single-page application with a persistent left rail and one active content pane.
+## 1) Layout and navigation
 
-Primary navigation items:
+The dashboard is a single-page interface with left rail navigation and one active content pane.
 
+Navigation sections:
 - Run Queue
 - Needs Review
 - Failed Mapping
@@ -13,101 +15,77 @@ Primary navigation items:
 - Sent Items
 - Recent Runs
 
-The sidebar also renders `Settings` and `Help Center` footer buttons plus a `New Campaign` button, but those controls are currently visual affordances rather than separate routed features.
+Placeholder-only controls still rendered:
+- `New Campaign`
+- `Settings` (footer)
+- `Help Center` (footer)
 
-## 2. Run Queue and settings surface
+## 2) Run Queue surface
 
-The top of the dashboard combines runtime status and operator controls:
+Run Queue combines controls + status + settings:
+- Gmail/AI/Telegram status cards
+- OAuth controls
+- query/date controls with saved-query suggestions
+- policy and execution controls
+- resume upload/replace
+- productivity live monitor
 
-- Gmail auth state
-- AI runtime state
-- Telegram runtime state
-- current Gmail query and date filters
-- query bucket save/remove actions
-- policy profile chooser
-- profile settings and feature toggles
-- resume upload / replace actions
+## 3) Query bucket UX
 
-This means the “Run Queue” area is both a command center and a settings page rather than a minimal queue list.
+Implemented behavior:
+- inline query input updates active query state
+- `+` saves current query
+- `-` removes exact current saved query
+- keyboard suggestion navigation (`ArrowUp/Down`, `Enter`, `Escape`)
+- case-insensitive dedupe and max 10 saved queries
 
-## 3. Query bucket UX
+## 4) Needs Review UX
 
-Saved queries are part of the live dashboard experience.
+Each card supports:
+- sender/subject/context visibility
+- routing panel and routing evidence
+- editable draft + rendered preview
+- verdict badge
+- actions: `Approve & Send`, `Reject`, `Send to Failed Mapping`
 
-Current interaction details:
+Approval button remains blocked until frontend checks pass:
+- recipient + CC
+- non-empty draft
+- resume filename
+- routing considered trusted
 
-- inline input drives the active Gmail query,
-- `+` saves the current query,
-- `-` removes the exact current saved query,
-- suggestions open on focus and support keyboard navigation,
-- saved queries are deduplicated case-insensitively and capped at 10,
-- selecting a suggestion updates both the input value and the active query selection state.
+## 5) Failed Mapping UX
 
-## 4. Needs Review UX
+Each failed item supports:
+- routing evidence review
+- editable corrected `To`/`CC`
+- `Save Mapping & Move to Review` action
 
-Each review card is expected to preserve these behaviors:
+## 6) Premium Numbers UX
 
-- show sender/subject/body-derived context,
-- show routing evidence and candidate recipients,
-- allow draft editing,
-- keep `Approve & Send` and `Reject` actions visible,
-- keep approval disabled until the backend-required send conditions are satisfied.
+Scope selector supports:
+- unknown review cards
+- recruiter numbers
+- employer numbers
+- recruiter opportunities
 
-```mermaid
-flowchart TD
-    A[Needs Review card] --> B[Inspect routing evidence and draft quality]
-    B --> C[Edit draft if needed]
-    C --> D{Safe to send?}
-    D -->|No| E[Keep action disabled / blocked]
-    D -->|Yes| F[Approve & Send]
-    F --> G[Card exits queue and appears in Sent Items]
-```
+Implemented actions:
+- mark unknown number as recruiter/employer
+- delete review card
+- swap recruiter/employer bucket identity
+- recruiter opportunity status updates
+- recruiter opportunity notes update
+- cold-call script generation + copy
 
-## 5. Failed Mapping UX
+## 7) Sent Items and Recent Runs
 
-The failed-mapping section is the human recovery lane for recipient resolution.
+- Sent Items: approved/sent history list
+- Recent Runs: recent run summaries, counts, effective query details
+- Analytics trend/activity is rendered inside Run Queue (not a separate routed page)
 
-Required live behavior:
+## 8) Design debt still active
 
-- display original email context,
-- allow `Correct To` and `Correct CC` editing,
-- submit `Save Mapping & Move to Review`,
-- return the item to `needs_review` with routing marked as confirmed.
-
-## 6. Premium Numbers UX
-
-The premium numbers screen combines multiple operational views:
-
-- extracted leads,
-- unknown review cards,
-- recruiter numbers,
-- employer numbers,
-- recruiter opportunities.
-
-Current interaction expectations grounded in the UI code:
-
-- unknown review cards must keep `Mark as Recruiter` and `Mark as Employer`,
-- recruiter/employer bucket views expose counts and supporting metadata,
-- opportunity cards support status changes, note editing, and cold call script generation/copying,
-- opportunity filtering includes status-based filtering.
-
-## 7. Sent Items and Recent Runs
-
-- **Sent Items** shows approved and sent candidates with delivery context and historic reply data.
-- **Recent Runs** is the operational digest for run status, counts, and last run outcomes.
-- Analytics trend data is displayed in the dashboard rather than in a separate analytics route.
-
-## 8. Current design debt
-
-The current branch still carries these UI debts:
-
-- `App.tsx` is the dominant state container for almost every feature.
-- Refresh sequencing after mutations is manually coordinated through timers/effects (`schedulePostMutationRefresh`).
-- There is no dedicated router-level separation for settings/help/new campaign actions.
-- Feature folders exist for AI and query bucket, but only query bucket has meaningful isolated UI behavior today.
-
-## 9. Practical UI constraints for future changes
-
-- Do not remove manual review controls from Needs Review, Failed Mapping, or Number Review flows.
-- Do not assume the dashboard is section-isolated; changes in one area can affect global refresh behavior.
-- Treat the settings panel as part of the core operator workflow, not an auxiliary page.
+- `App.tsx` still controls most state and network flows.
+- Refresh coordination still depends on `schedulePostMutationRefresh()` timers.
+- Placeholder sidebar actions are not feature-routed.
+- `features/ai` is not yet a full UI feature module.
