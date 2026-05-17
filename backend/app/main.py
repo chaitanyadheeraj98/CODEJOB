@@ -1,11 +1,9 @@
 import hashlib
 import json
 import logging
-import math
 import uuid
 from collections.abc import Generator
 from contextlib import asynccontextmanager
-from dataclasses import asdict
 from datetime import UTC, date, datetime, timedelta
 from dataclasses import dataclass
 from pathlib import Path
@@ -66,10 +64,7 @@ from app.phase0 import (
     DEFAULT_SIGNATURE_EMAIL,
     DEFAULT_SIGNATURE_NAME,
     DEFAULT_SIGNATURE_PHONE,
-    RoutingEvidence,
     RoutingResult,
-    analyze_recipient_routing,
-    ai_assist_score,
     draft_reply,
     email_domain,
     extract_email_address,
@@ -78,21 +73,20 @@ from app.phase0 import (
     is_recruiter_like,
     normalize_employer_domains,
     parse_email,
-    render_fallback_draft_template,
-    requested_details_block,
-    skills_from_text,
     should_block_f2f,
 )
-from app.routing import HeuristicRoutingAdapter, LearnedRoutingAdapter, RoutingDecision, RoutingPolicyInput, RoutingPolicyService
-from app.premium_numbers import extract_and_store_premium_numbers
-from app.premium_numbers.intelligence import OPPORTUNITY_STATUS_VALUES, process_email_number_intelligence
+from app.routing import RoutingDecision
+from app.premium_numbers.intelligence import OPPORTUNITY_STATUS_VALUES
 from app.premium_numbers.phone_normalization import canonicalize_phone
 from app.query_bucket import sanitize_saved_queries
 from app.runtime_state import runtime_state
 from app.services import analytics_service, policy_service
 from app.services.auto_runner_service import AutoRunnerService
+from app.services.candidate_runtime_service import CandidateRuntimeDeps, CandidateRuntimeService
 from app.services.gmail_labeling_runtime_service import GmailLabelingRuntimeService
 from app.services.orchestration_service import OrchestrationDeps, OrchestrationService
+from app.services.routing_runtime_service import RoutingRuntimeDeps, RoutingRuntimeService
+from app.services.scoring_runtime_service import ScoringRuntimeDeps, ScoringRuntimeService
 from app.services.settings_bootstrap_service import SettingsBootstrapService
 from app.services.startup_service import StartupService
 from app.services.telegram_runtime_service import TelegramRuntime, TelegramRuntimeDeps
@@ -131,12 +125,10 @@ from app.schemas import (
 )
 from app.semantic.embeddings_service import (
     begin_embedding_latency_capture,
-    embedding_from_json,
     embedding_to_json,
     end_embedding_latency_capture,
     generate_embedding,
 )
-from app.semantic.ranking import blend_scores, semantic_similarity
 
 
 @asynccontextmanager
@@ -179,6 +171,9 @@ telegram_service: TelegramBotService | None = runtime_state.telegram_service
 telegram_runtime: TelegramRuntime | None = None
 orchestration_service: OrchestrationService | None = None
 auto_runner_service: AutoRunnerService | None = None
+routing_runtime_service: RoutingRuntimeService | None = None
+candidate_runtime_service: CandidateRuntimeService | None = None
+scoring_runtime_service: ScoringRuntimeService | None = None
 settings_bootstrap_service = SettingsBootstrapService(session_factory=SessionLocal)
 gmail_labeling_runtime_service = GmailLabelingRuntimeService()
 telegram_action_lock = runtime_state.telegram_action_lock
@@ -512,6 +507,42 @@ def _init_telegram_service() -> TelegramBotService | None:
     return service
 
 
+def _get_routing_runtime_service() -> RoutingRuntimeService:
+    global routing_runtime_service
+    if routing_runtime_service is None:
+        routing_runtime_service = RoutingRuntimeService(
+            RoutingRuntimeDeps(
+                owner_id=settings.owner_id,
+                get_employer_domains=lambda db: _csv_to_list(_get_settings(db).employer_domains),
+            )
+        )
+    return routing_runtime_service
+
+
+def _get_candidate_runtime_service() -> CandidateRuntimeService:
+    global candidate_runtime_service
+    if candidate_runtime_service is None:
+        candidate_runtime_service = CandidateRuntimeService(
+            CandidateRuntimeDeps(
+                get_settings=_get_settings,
+                evaluate_routing_policy=lambda db, sender, subject, body, snippet="", routing_confirmed=False, precomputed=None: _get_routing_runtime_service().evaluate_routing_policy(
+                    db, sender, subject, body, snippet, routing_confirmed, precomputed=precomputed
+                ),
+                apply_routing_decision=lambda email, routing: _get_routing_runtime_service().apply_routing_decision(email, routing),
+            )
+        )
+    return candidate_runtime_service
+
+
+def _get_scoring_runtime_service() -> ScoringRuntimeService:
+    global scoring_runtime_service
+    if scoring_runtime_service is None:
+        scoring_runtime_service = ScoringRuntimeService(
+            ScoringRuntimeDeps(generate_embedding_with_health=_generate_embedding_with_health)
+        )
+    return scoring_runtime_service
+
+
 def _get_orchestration_service() -> OrchestrationService:
     global orchestration_service
     if orchestration_service is None:
@@ -603,28 +634,15 @@ def _active_resume(db: Session) -> ResumeAsset | None:
 
 
 def _semantic_text_for_email(subject: str, body: str, role: str, skills_text: str) -> str:
-    return "\n".join(
-        [
-            f"Subject: {subject or ''}",
-            f"Role: {role or ''}",
-            f"Skills: {skills_text or ''}",
-            f"Body: {body or ''}",
-        ]
-    )
+    return _get_scoring_runtime_service().semantic_text_for_email(subject, body, role, skills_text)
 
 
 def _semantic_text_for_resume(resume: ResumeAsset | None) -> str:
-    if not resume:
-        return ""
-    return extract_resume_context(resume.file_path, resume.file_name)
+    return _get_scoring_runtime_service().semantic_text_for_resume(resume)
 
 
 def _ensure_embedding_cached(current_payload: str | None, text: str) -> tuple[list[float], str | None, str]:
-    cached = embedding_from_json(current_payload)
-    if cached:
-        return cached, current_payload, "cache"
-    vector, provider = _generate_embedding_with_health(text)
-    return vector, embedding_to_json(vector), provider
+    return _get_scoring_runtime_service().ensure_embedding_cached(current_payload, text)
 
 
 def _compute_blended_ai_score(
@@ -636,48 +654,18 @@ def _compute_blended_ai_score(
     email_row: RecruiterEmail | None,
     resume: ResumeAsset | None,
 ) -> tuple[float, str, str, str | None, str | None]:
-    keyword_score, keyword_summary = ai_assist_score(parsed, user_settings)
-    if not user_settings.feature_semantic_enabled:
-        return keyword_score, keyword_summary, "v1_rules_plus_ai", None, None
-
-    try:
-        email_text = _semantic_text_for_email(
-            subject,
-            body,
-            str(parsed.get("role", "")),
-            str(parsed.get("skills_text", "")),
-        )
-        resume_text = _semantic_text_for_resume(resume)
-        if not resume_text.strip():
-            return keyword_score, f"{keyword_summary}; semantic skipped (resume text unavailable)", "v2_rules_plus_semantic", None, None
-
-        email_embedding, email_embedding_json, _ = _ensure_embedding_cached(
-            email_row.semantic_embedding if email_row else None,
-            email_text,
-        )
-        resume_embedding, resume_embedding_json, _ = _ensure_embedding_cached(
-            resume.semantic_embedding if resume else None,
-            resume_text,
-        )
-        similarity = semantic_similarity(email_embedding, resume_embedding)
-        blended = blend_scores(
-            keyword_score=keyword_score,
-            semantic_similarity=similarity,
-            semantic_enabled=True,
-        )
-        summary = f"{keyword_summary}; {blended.detail}"
-        return blended.final_score, summary, blended.source, email_embedding_json, resume_embedding_json
-    except Exception as exc:
-        return keyword_score, f"{keyword_summary}; semantic fallback ({exc})", "v2_rules_plus_semantic_fallback", None, None
+    return _get_scoring_runtime_service().compute_blended_ai_score(
+        subject=subject,
+        body=body,
+        parsed=parsed,
+        user_settings=user_settings,
+        email_row=email_row,
+        resume=resume,
+    )
 
 
 def _percentile_ms(values: list[float], percentile: float) -> float:
-    if not values:
-        return 0.0
-    ordered = sorted(values)
-    rank = max(1, math.ceil((percentile / 100.0) * len(ordered)))
-    index = min(len(ordered) - 1, rank - 1)
-    return ordered[index]
+    return _get_scoring_runtime_service().percentile_ms(values, percentile)
 
 
 def _is_terminal_state(email: RecruiterEmail) -> bool:
@@ -689,87 +677,27 @@ def _email_domain(address: str) -> str:
 
 
 def _learned_recipient_pairs(db: Session, sender: str) -> list[tuple[str, str]]:
-    sender_domain = _email_domain(sender)
-    if not sender_domain:
-        return []
-    feedback_rows = (
-        db.query(RecipientRoutingFeedback)
-        .filter(
-            RecipientRoutingFeedback.owner_id == settings.owner_id,
-            RecipientRoutingFeedback.sender_domain == sender_domain,
-        )
-        .order_by(RecipientRoutingFeedback.id.desc())
-        .limit(25)
-        .all()
-    )
-    return [(row.corrected_to, row.corrected_cc) for row in feedback_rows]
-
-
-def _routing_payload_json(items: list[RoutingEvidence]) -> str:
-    return json.dumps([asdict(item) for item in items])
+    return _get_routing_runtime_service().learned_recipient_pairs(db, sender)
 
 
 def _apply_routing_result(email: RecruiterEmail, routing: RoutingResult) -> None:
-    email.recipient_email = routing.to_email
-    email.cc_email = routing.cc_email
-    email.routing_status = routing.status
-    email.routing_confidence = routing.confidence
-    email.routing_reason = routing.reason
-    email.routing_evidence = _routing_payload_json(routing.evidence)
-    email.routing_candidates = _routing_payload_json(routing.candidates)
+    _get_routing_runtime_service().apply_routing_result(email, routing)
 
 
 def _apply_routing_decision(email: RecruiterEmail, routing: RoutingDecision) -> None:
-    email.recipient_email = routing.to_email
-    email.cc_email = routing.cc_email
-    email.routing_status = routing.status
-    email.routing_confidence = routing.confidence
-    email.routing_reason = routing.reason
-    email.routing_evidence = _routing_payload_json(routing.evidence)
-    email.routing_candidates = _routing_payload_json(routing.candidates)
+    _get_routing_runtime_service().apply_routing_decision(email, routing)
 
 
 def _capture_premium_numbers(db: Session, email: RecruiterEmail) -> None:
-    try:
-        extract_and_store_premium_numbers(db, email)
-        process_email_number_intelligence(db, email)
-        db.commit()
-    except Exception as exc:
-        db.rollback()
-        logger.warning("Premium numbers extraction skipped for email_id=%s: %s", email.id, exc)
+    _get_candidate_runtime_service().capture_premium_numbers(db, email)
 
 
 def _routing_is_sendable(email: RecruiterEmail) -> bool:
-    decision = _evaluate_routing_policy(
-        None,
-        email.sender,
-        email.subject,
-        email.body,
-        "",
-        email.routing_confirmed,
-        precomputed=RoutingResult(
-            to_email=email.recipient_email,
-            cc_email=email.cc_email,
-            status=email.routing_status,
-            confidence=float(email.routing_confidence or 0.0),
-            reason=email.routing_reason,
-            evidence=[],
-            candidates=[],
-        ),
-    )
-    return decision.is_sendable_candidate
+    return _get_routing_runtime_service().routing_is_sendable(email)
 
 
 def _analyze_email_routing(db: Session, sender: str, subject: str, body: str, snippet: str = "") -> RoutingResult:
-    user_settings = _get_settings(db)
-    return analyze_recipient_routing(
-        sender,
-        subject,
-        body,
-        snippet,
-        learned_pairs=_learned_recipient_pairs(db, sender),
-        employer_domains=_csv_to_list(user_settings.employer_domains),
-    )
+    return _get_routing_runtime_service().analyze_email_routing(db, sender, subject, body, snippet)
 
 
 def _evaluate_routing_policy(
@@ -782,50 +710,19 @@ def _evaluate_routing_policy(
     *,
     precomputed: RoutingResult | None = None,
 ) -> RoutingDecision:
-    if precomputed is not None:
-        class _PrecomputedAdapter:
-            def __init__(self, result: RoutingResult) -> None:
-                self._result = result
-
-            def evaluate(self, payload: RoutingPolicyInput) -> RoutingResult:
-                _ = payload
-                return self._result
-
-        service = RoutingPolicyService(adapter=_PrecomputedAdapter(precomputed))
-        return service.evaluate(
-            RoutingPolicyInput(
-                sender=sender,
-                subject=subject,
-                body=body,
-                snippet=snippet,
-                learned_pairs=[],
-                routing_confirmed=routing_confirmed,
-            )
-        )
-
-    learned_pairs = _learned_recipient_pairs(db, sender) if db else []
-    employer_domains: list[str] | None = None
-    if db is not None:
-        user_settings = _get_settings(db)
-        employer_domains = _csv_to_list(user_settings.employer_domains)
-    adapter = LearnedRoutingAdapter(fallback=HeuristicRoutingAdapter())
-    service = RoutingPolicyService(adapter=adapter)
-    return service.evaluate(
-        RoutingPolicyInput(
-            sender=sender,
-            subject=subject,
-            body=body,
-            snippet=snippet,
-            learned_pairs=learned_pairs,
-            employer_domains=employer_domains,
-            routing_confirmed=routing_confirmed,
-        )
+    return _get_routing_runtime_service().evaluate_routing_policy(
+        db,
+        sender,
+        subject,
+        body,
+        snippet,
+        routing_confirmed,
+        precomputed=precomputed,
     )
 
 
 def _apply_draft_learning(db: Session, draft: str) -> str:
-    _ = db
-    return draft
+    return _get_candidate_runtime_service().apply_draft_learning(db, draft)
 
 
 def _build_user_fallback_draft(
@@ -838,29 +735,15 @@ def _build_user_fallback_draft(
     greeting_line: str,
     resume_file_name: str | None,
 ) -> str:
-    template = (user_settings.fallback_draft_template or DEFAULT_FALLBACK_DRAFT_TEMPLATE).strip()
-    signature_name = (user_settings.signature_name or "").strip() or DEFAULT_SIGNATURE_NAME
-    signature_phone = (user_settings.signature_phone or "").strip() or DEFAULT_SIGNATURE_PHONE
-    signature_email = (user_settings.signature_email or "").strip() or DEFAULT_SIGNATURE_EMAIL
-    context = {
-        "greeting": greeting_line,
-        "role": role,
-        "sender": sender,
-        "location": str(parsed.get("location", "")),
-        "salary_text": str(parsed.get("salary_text", "")),
-        "skills_list": "\n".join(f"- {skill}" for skill in skills_from_text(str(parsed.get("skills_text", "")))),
-        "skills_inline": ", ".join(skills_from_text(str(parsed.get("skills_text", "")))),
-        "resume_file_name": resume_file_name or "",
-        "signature_name": signature_name,
-        "signature_phone": signature_phone,
-        "signature_email": signature_email,
-        "requested_details_block": requested_details_block(bool(parsed.get("asks_contact_fields", False))),
-    }
-    rendered = render_fallback_draft_template(template, context)
-    if rendered.strip():
-        return _apply_draft_learning(db, rendered)
-    # Last resort resilience: keep old static generator if template is invalid/empty.
-    return _apply_draft_learning(db, draft_reply(sender, role, parsed, greeting_line))
+    return _get_candidate_runtime_service().build_user_fallback_draft(
+        db,
+        user_settings,
+        sender=sender,
+        role=role,
+        parsed=parsed,
+        greeting_line=greeting_line,
+        resume_file_name=resume_file_name,
+    )
 
 
 def _fill_missing_gmail_rfc_ids(db: Session, emails: list[RecruiterEmail]) -> None:
@@ -959,69 +842,11 @@ def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
 
 
 def _repair_unknown_role_drafts(db: Session, emails: list[RecruiterEmail]) -> None:
-    changed = False
-    user_settings = _get_settings(db)
-    for email in emails:
-        if email.state != "needs_review":
-            continue
-        if email.role != "Unknown Role" and "Unknown Role" not in email.draft_reply:
-            continue
-        parsed = parse_email(email.subject, email.body)
-        role = str(parsed["role"])
-        if role == "Unknown Role":
-            continue
-        email.role = role
-        email.location = str(parsed["location"])
-        email.salary_text = str(parsed["salary_text"])
-        email.skills_text = str(parsed["skills_text"])
-        if "Unknown Role" in email.draft_reply:
-            greeting_line = greeting_from_to_contact(email.recipient_email, email.body)
-            email.draft_reply = _build_user_fallback_draft(
-                db,
-                user_settings,
-                sender=email.sender,
-                role=role,
-                parsed=parsed,
-                greeting_line=greeting_line,
-                resume_file_name=email.resume_file_name,
-            )
-            email.draft_source = "rules_only"
-            email.draft_model = None
-            email.draft_ai_error = None
-            email.draft_resume_context_status = RESUME_CONTEXT_RULES_ONLY
-        changed = True
-    if changed:
-        db.commit()
+    _get_candidate_runtime_service().repair_unknown_role_drafts(db, emails)
 
 
 def _refresh_unconfirmed_routing(db: Session, emails: list[RecruiterEmail]) -> None:
-    changed = False
-    for email in emails:
-        if email.source != "gmail" or email.routing_confirmed:
-            continue
-        routing = _evaluate_routing_policy(
-            db,
-            email.sender,
-            email.subject,
-            email.body,
-            "",
-            email.routing_confirmed,
-        )
-        if (
-            email.recipient_email == routing.to_email
-            and email.cc_email == routing.cc_email
-            and email.routing_status == routing.status
-            and float(email.routing_confidence or 0.0) == routing.confidence
-        ):
-            continue
-        _apply_routing_decision(email, routing)
-        if routing.should_mark_failed:
-            email.state = routing.recommended_state
-            email.last_error = "Could not resolve recruiter To and employer CC"
-            email.skip_reason = routing.recommended_skip_reason
-        changed = True
-    if changed:
-        db.commit()
+    _get_candidate_runtime_service().refresh_unconfirmed_routing(db, emails)
 
 
 @app.get("/health")
