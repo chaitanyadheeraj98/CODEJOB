@@ -1,7 +1,7 @@
 # CODEJOB UI and Interaction Design (Current Branch)
 
 Audit date: 2026-05-17  
-Branch: `copilot/update-markdown-docs-audit`
+Branch: `snowball-md`
 
 ## 1) Layout and navigation
 
@@ -89,3 +89,6 @@ Implemented actions:
 - Refresh coordination still depends on `schedulePostMutationRefresh()` timers.
 - Placeholder sidebar actions are not feature-routed.
 - `features/ai` is not yet a full UI feature module.
+
+Evidence basis: both  
+Verification limits: UI tests pass, but lint/build remain red in this local runtime.

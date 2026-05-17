@@ -117,7 +117,11 @@ class RoutingRuntimeService:
         )
 
     def routing_is_sendable(self, email: RecruiterEmail) -> bool:
-        decision = self.evaluate_routing_policy(
+        decision = self.evaluate_routing_for_email(email)
+        return decision.is_sendable_candidate
+
+    def evaluate_routing_for_email(self, email: RecruiterEmail) -> RoutingDecision:
+        return self.evaluate_routing_policy(
             None,
             email.sender,
             email.subject,
@@ -134,4 +138,3 @@ class RoutingRuntimeService:
                 candidates=[],
             ),
         )
-        return decision.is_sendable_candidate

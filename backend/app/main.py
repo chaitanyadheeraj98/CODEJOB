@@ -656,7 +656,7 @@ def _get_orchestration_service() -> OrchestrationService:
                 embedding_latency_log_enabled=lambda: settings.semantic_embedding_latency_log_enabled,
                 embedding_provider=lambda: (settings.semantic_embedding_provider or "hash").strip().lower(),
                 embedding_model=lambda: settings.semantic_embedding_model or "text-embedding-3-small",
-                routing_is_sendable=_routing_is_sendable,
+                evaluate_routing_for_email=_evaluate_routing_for_email,
                 is_terminal_state=_is_terminal_state,
                 email_domain=_email_domain,
                 telegram_notify=lambda msg: telegram_service.notify(msg) if telegram_service else None,
@@ -782,6 +782,10 @@ def _capture_premium_numbers(db: Session, email: RecruiterEmail) -> None:
 
 def _routing_is_sendable(email: RecruiterEmail) -> bool:
     return _get_routing_runtime_service().routing_is_sendable(email)
+
+
+def _evaluate_routing_for_email(email: RecruiterEmail) -> RoutingDecision:
+    return _get_routing_runtime_service().evaluate_routing_for_email(email)
 
 
 def _analyze_email_routing(db: Session, sender: str, subject: str, body: str, snippet: str = "") -> RoutingResult:

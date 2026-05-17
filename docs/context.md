@@ -1,5 +1,8 @@
 # CODEJOB Context
 
+Audit date: 2026-05-17  
+Branch: `snowball-md`
+
 ## 1. Project Overview
 
 CODEJOB is an email/job-opportunity automation platform.
@@ -175,7 +178,7 @@ Behavior rules:
 
 - Needs Review approve button must stay disabled unless all send-safety conditions are met.
 - Failed mapping must allow manual To/CC correction and return item to review.
-- Premium “All” view must always permit manual recruiter/employer classification.
+- Premium "All" view must always permit manual recruiter/employer classification.
 
 ## 8. Data Models and Stored Information
 
@@ -318,7 +321,7 @@ flowchart TD
 
 - Frontend is monolithic (`App.tsx`), increasing change risk.
 - Backend main orchestration is heavily concentrated in one module.
-- Environment setup is required before validations (pytest/eslint/build tools were missing in this shell session).
+- Environment setup and local permissions still impact validation reliability (for example `.tsbuildinfo` writes can fail with `EPERM`).
 - Some tests appear stale relative to current branch contracts (for example `test_phone_attribution.py` references missing module).
 - No dedicated production auth/multi-tenant separation in UI layer.
 
@@ -356,3 +359,6 @@ CODEJOB automates recruiter-email intake, review, and response while enforcing m
 The most important invariants are: routing/send safety, strict duplicate prevention, separate recruiter/employer buckets, and source-email traceability for opportunities.
 
 Future AI agents must preserve these invariants, keep manual classification/review paths intact, and avoid changing core orchestration logic without explicit approval.
+
+Evidence basis: both  
+Verification limits: full backend suite blocked by stale import in `test_phone_attribution.py`; dashboard lint/build currently failing.

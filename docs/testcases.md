@@ -1,58 +1,70 @@
 # CODEJOB Test and Validation Matrix
 
 Audit date: 2026-05-17  
-Branch: `copilot/update-markdown-docs-audit`
+Branch: `snowball-md`
 
 ## 1) Standard repo validation commands
 
 ### Backend (from `backend/`)
 - `python -m pytest`
+- `python -m pytest tests/test_approve_cc_regression.py tests/test_run_once_hotfix.py tests/test_routing_policy.py tests/test_telegram_interactive.py tests/test_candidate_date_filtering.py`
 
 ### Dashboard (from `dashboard/`)
 - `npm run lint`
 - `npm run build`
-- `npm run test`
+- `npm run test -- --run`
 
 ## 2) Command results in this audit session
 
-- `cd backend && python -m pytest`
+- `cd backend; python -m pytest`
+  - **Result:** failed during collection
+  - **Exact failure:** `ModuleNotFoundError: No module named 'app.phone_attribution'` from `tests/test_phone_attribution.py`
+  - **Blocker class:** stale test
+
+- `cd backend; python -m pytest tests/test_approve_cc_regression.py tests/test_run_once_hotfix.py tests/test_routing_policy.py tests/test_telegram_interactive.py tests/test_candidate_date_filtering.py`
+  - **Result:** passed
+  - **Exact output:** `29 passed`
+  - **Blocker class:** none
+
+- `cd dashboard; npm run lint`
   - **Result:** failed
-  - **Error:** `/usr/bin/python: No module named pytest`
+  - **Exact failure:** eslint rule failures in `App.tsx`, `QueryBucket.tsx`, and test files (including missing rule definition and hook/effect violations)
+  - **Blocker class:** stale lint contract / incompatible local rule configuration
 
-- `cd dashboard && npm run lint`
+- `cd dashboard; npm run test -- --run`
+  - **Result:** passed
+  - **Exact output:** `7 passed files`, `27 passed tests`
+  - **Blocker class:** none
+
+- `cd dashboard; npm run build`
   - **Result:** failed
-  - **Error:** `eslint: not found`
+  - **Exact failure:** `EPERM` writing `.tsbuildinfo` under `node_modules/.tmp` plus TS6133 unused-variable errors
+  - **Blocker class:** incompatible local runtime + type/lint debt
 
-- `cd dashboard && npm run test -- --run`
-  - **Result:** failed
-  - **Error:** `vitest: not found`
+- `npx markdownlint-cli docs/architecture.md docs/context.md docs/data.md docs/design.md docs/features.md docs/hardcoded.md docs/problem-fix-log.md docs/snowball.md docs/testcases.md`
+  - **Result:** failed to produce lint report
+  - **Exact failure:** npm cache permission errors (`EPERM` on `npm-cache/_cacache/tmp/*`) and repeated CLI usage-only output in this shell
+  - **Blocker class:** incompatible local runtime/tooling invocation
 
-- `cd dashboard && npm run build`
-  - **Result:** failed
-  - **Error:** missing TS type definitions (`vite/client`, `node`)
+## 3) HR-1 closeout gate mapping
 
-These failures were environment/dependency issues in this shell, not docs changes.
-
-## 3) Key backend test modules present
-
-- Routing/parsing: `test_phase0_routing.py`, `test_routing_policy.py`, `test_candidate_date_filtering.py`
-- Orchestration: `test_run_once_hotfix.py`, `test_run_orchestrator.py`
-- Approval/regression: `test_approve_cc_regression.py`
-- Telegram: `test_telegram_interactive.py`
-- Labeling: `test_gmail_labeling_rules.py`, `test_gmail_labeling_service.py`, `test_gmail_labeling_api.py`
-- Premium/phone: `test_premium_numbers_extraction.py`, `test_premium_numbers_api.py`, `test_phone_attribution.py`
-- Cold-call: `test_cold_call_service.py`, `test_cold_call_api.py`
-- Query bucket: `test_query_bucket_service.py`
-- Schemas/other: `test_schemas.py`, `test_sheets_tracking.py`, `test_productivity_trend.py`, others
+| Behavior gate | Evidence | Outcome |
+| --- | --- | --- |
+| approve-send regression safety | `test_approve_cc_regression.py` | Pass |
+| run-once orchestration behavior | `test_run_once_hotfix.py` | Pass |
+| routing policy behavior | `test_routing_policy.py` | Pass |
+| telegram interactive behavior | `test_telegram_interactive.py` | Pass |
+| candidate date filtering behavior | `test_candidate_date_filtering.py` | Pass |
 
 ## 4) Known stale/mismatched tests
 
-- `test_run_orchestrator.py` is stale against the current `RunOrchestratorDependencies` contract.
 - `test_phone_attribution.py` imports `app.phone_attribution`, which is not present in current backend code.
+- `test_run_orchestrator.py` is stale against the current `RunOrchestratorDependencies` contract.
 
-## 5) Practical validation guidance
+## 5) Reviewer attention
 
-Before relying on "green" confidence for high-risk changes:
-1. provision backend/frontend dependencies,
-2. repair stale tests,
-3. re-run targeted routing/orchestration/approval/telegram/premium regression suites.
+- Full backend pass cannot be claimed until stale test imports/contracts are fixed.
+- Dashboard tests pass, but lint/build are currently red and should be treated as active debt.
+
+Evidence basis: both  
+Verification limits: full backend and full frontend quality gates are not fully green due stale tests and lint/build blockers.

@@ -1,7 +1,7 @@
 # CODEJOB Data Models and Data Flow
 
 Audit date: 2026-05-17  
-Branch: `copilot/update-markdown-docs-audit`
+Branch: `snowball-md`
 
 ## 1) Core entities
 
@@ -83,3 +83,6 @@ Active uniqueness protections include:
 - Routing evidence/candidates are stored as JSON text and parsed in schema validators.
 - SQLite schema evolution is currently additive at startup via `ensure_sqlite_phase0_columns()`.
 - Query bucket persistence is in `UserSettings.saved_gmail_queries_json` (not a standalone table).
+
+Evidence basis: code inspection  
+Verification limits: model/flow mapping reviewed from source; full backend suite currently blocked by stale `test_phone_attribution.py` import.

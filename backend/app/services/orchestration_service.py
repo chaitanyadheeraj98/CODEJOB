@@ -16,6 +16,7 @@ from app.services.policy_service import EffectiveRunInputs
 from app.models import DraftEditFeedback, RecipientRoutingFeedback, RecruiterEmail, ResumeAsset, SyncRun, UserSettings
 from app.phase0 import RoutingResult
 from app.gmail_client import GmailMessageCandidate
+from app.routing import RoutingDecision
 from app.schemas import ApproveSendRequest, AutomationRunRequest, AutomationRunResponse, GmailSyncResponse, RejectRequest, ResolveRecipientsRequest
 
 logger = logging.getLogger(__name__)
@@ -49,7 +50,7 @@ class OrchestrationDeps:
     embedding_latency_log_enabled: Callable[[], bool]
     embedding_provider: Callable[[], str]
     embedding_model: Callable[[], str]
-    routing_is_sendable: Callable[[RecruiterEmail], bool]
+    evaluate_routing_for_email: Callable[[RecruiterEmail], RoutingDecision]
     is_terminal_state: Callable[[RecruiterEmail], bool]
     email_domain: Callable[[str], str]
     telegram_notify: Callable[[str], None]
@@ -398,8 +399,12 @@ class OrchestrationService:
                 raise HTTPException(status_code=400, detail="Missing Gmail metadata")
             if not email.cc_email:
                 raise HTTPException(status_code=400, detail="CC email is required before sending")
-            if not self.deps.routing_is_sendable(email):
-                detail = email.routing_reason or "Recipient routing must be confirmed before sending"
+            routing_decision = self.deps.evaluate_routing_for_email(email)
+            if not routing_decision.is_sendable_candidate:
+                detail = (
+                    f"{routing_decision.reason} "
+                    f"(status={routing_decision.status}, confidence={routing_decision.confidence:.2f})"
+                ).strip()
                 raise HTTPException(status_code=400, detail=f"Recipient routing is not safe to send: {detail}")
             if not email.draft_reply.strip():
                 raise HTTPException(status_code=400, detail="Draft email body is required before sending")

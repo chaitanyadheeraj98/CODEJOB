@@ -19,8 +19,30 @@ You are auditing CODEJOB documentation against the **current checked-out branch 
 ### Scope
 
 - Update only files inside `docs/` (exclude `docs/agent-context.md`).
+- Strictly follow `docs/Rules.md` while writing or updating any `.md` files in `docs/`.
 - Do not claim anything as fixed/closed unless code evidence supports it in this branch.
 - If tests are not executable, explicitly say so and downgrade certainty.
+
+### Protected Files Rule (Do Not Modify)
+
+Do not edit these files during docs audit/update execution:
+1. `D:\My Websites\CodeJob\docs\agent-context.md`
+2. `D:\My Websites\CodeJob\docs\follow-this-prompt-for-updating-md-files.md`
+3. `D:\My Websites\CodeJob\docs\Rules.md`
+
+### Markdown Lint Gate (Mandatory)
+
+1. Treat markdownlint compliance as a hard completion gate for touched docs files.
+2. Before finalizing, run markdownlint on all updated `.md` files and fix violations.
+3. Do not mark docs work complete while markdownlint errors remain.
+4. If lint cannot be executed in the current environment, explicitly report:
+   - exact command attempted
+   - exact failure output
+   - impacted files
+   - blocker class
+5. Enforced-rule extraction is required:
+   - identify active markdownlint rules affecting touched content (for example `MD060` table style)
+   - apply those rules consistently before final output.
 
 ### Required Inputs Before Editing
 
@@ -193,6 +215,8 @@ The goal is to make docs operationally truthful to the current branch state, wit
 - [ ] Branch + commit captured
 - [ ] Mandatory audit order followed (code -> tests -> docs -> updates)
 - [ ] Scope limited to requested docs
+- [ ] markdownlint run on all touched docs files
+- [ ] markdownlint errors fixed (or execution blocker documented with command/output/class)
 - [ ] Claims tied to code/test evidence
 - [ ] Evidence freshness validated (active paths only)
 - [ ] Cross-doc statuses consistent

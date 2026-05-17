@@ -1,12 +1,12 @@
 # Hardcoded Values and Constants Review
 
 Audit date: 2026-05-17  
-Branch: `copilot/update-markdown-docs-audit`
+Branch: `snowball-md`
 
 ## 1) Deployment-sensitive defaults
 
 | Location | Hardcoded default | Impact |
-|---|---|---|
+| --- | --- | --- |
 | `backend/app/main.py` | `allow_origins=["*"]` | overly broad CORS default |
 | `backend/app/config.py` | `google_redirect_uri = "http://localhost:8080/"` | local OAuth default |
 | `backend/app/config.py` | spreadsheet id default value | project-specific target baked in |
@@ -16,7 +16,7 @@ Branch: `copilot/update-markdown-docs-audit`
 ## 2) Workflow-affecting constants
 
 | Location | Constant/rule | Effect |
-|---|---|---|
+| --- | --- | --- |
 | `phase0.py` | fallback template + signature defaults | shapes rules-only draft content |
 | `phase0.py` | heuristic keyword/hint sets | affects parse/scoring/routing |
 | `main.py` / `policy_service.py` | policy defaults and profile values | controls run behavior |
@@ -32,3 +32,6 @@ Branch: `copilot/update-markdown-docs-audit`
 ## 4) Current conclusion
 
 Hardcoded values in this branch are not only cosmetic; several directly influence runtime behavior, deployment posture, and operator expectations. Any behavior change to these constants should be paired with test updates and docs updates.
+
+Evidence basis: code inspection  
+Verification limits: behavior impact inferred from config/runtime usage; no dedicated constant-only regression suite.

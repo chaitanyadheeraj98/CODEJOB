@@ -1,12 +1,12 @@
 # CODEJOB Features (Current Implementation)
 
 Audit date: 2026-05-17  
-Branch: `copilot/update-markdown-docs-audit`
+Branch: `snowball-md`
 
 ## 1) Inbox automation
 
 | Feature | Current behavior | Status |
-|---|---|---|
+| --- | --- | --- |
 | Gmail OAuth bootstrap | starts OAuth worker and exposes URL/status | Live |
 | Run-once automation | processes unread candidates using policy/query/date inputs | Live |
 | Auto polling | background loop calls run-once when enabled | Live |
@@ -17,7 +17,7 @@ Branch: `copilot/update-markdown-docs-audit`
 ## 2) Candidate workflow
 
 | Feature | Current behavior | Status |
-|---|---|---|
+| --- | --- | --- |
 | Needs Review queue | qualified/routed candidates await manual action | Live |
 | Approval gate | checks routing sendability, To/CC, draft, active resume | Live |
 | Reject action | marks candidate rejected from needs_review | Live |
@@ -27,7 +27,7 @@ Branch: `copilot/update-markdown-docs-audit`
 ## 3) Phone intelligence and opportunities
 
 | Feature | Current behavior | Status |
-|---|---|---|
+| --- | --- | --- |
 | Premium lead extraction | upsert phone leads per source email | Live |
 | Domain guard | only captures when sender domain is in configured employer domains | Live |
 | Unknown number review queue | pending queue for unmatched phone identities | Live |
@@ -41,7 +41,7 @@ Allowed opportunity statuses:
 ## 4) Labeling, analytics, Telegram
 
 | Feature | Current behavior | Status |
-|---|---|---|
+| --- | --- | --- |
 | Gmail labeling | rules-first label selection + AI fallback, applies Gmail label | Live |
 | Productivity analytics | event recording + trend APIs | Live |
 | Telegram control plane | polling bot with auth-gated action commands | Live |
@@ -58,7 +58,7 @@ Managed Gmail labels:
 ## 5) Feature-flag reality check
 
 | Setting | Actual runtime behavior |
-|---|---|
+| --- | --- |
 | `feature_auto_polling` | enables periodic run loop |
 | `feature_auto_poll_interval_minutes` | sets polling interval (1..1440 clamp) |
 | `feature_ai_enabled` | enables AI draft generation in orchestrated/manual draft paths |
@@ -71,3 +71,6 @@ Managed Gmail labels:
 - backend/main + frontend/App remain central coupling points
 - duplicated policy profile definitions (frontend/backend)
 - stale tests reduce confidence in full automation regression coverage
+
+Evidence basis: both  
+Verification limits: dashboard lint/build are currently failing; full backend suite blocked by stale test import.
