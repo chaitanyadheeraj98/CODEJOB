@@ -41,7 +41,7 @@ Versioned resume metadata plus on-disk file path and optional semantic embedding
 
 ### `SyncRun`
 
-Persists recent run counters (`imported_count`, `skipped_count`, `error_count`) and batch identity.
+Persists import-sync batch counters (`imported_count`, `skipped_count`, `error_count`) for `POST /gmail/sync` and Telegram `/recent_runs`.
 
 ### `DraftEditFeedback`
 
@@ -53,7 +53,7 @@ Stores manual routing corrections keyed by sender domain to preserve historical 
 
 ### `ProductivityEvent`
 
-Event stream used by `/analytics/events` and `/analytics/trend`.
+Event stream used by `/analytics/events` and `/analytics/trend`, including dashboard view events and run/approval signals.
 
 ## 2. Phone-intelligence entities
 
@@ -84,7 +84,9 @@ Opportunity card associated with one recruiter number and one Gmail message. It 
 - `needs_review`
 - `failed`
 - `processed_skipped`
+- `auto_rejected`
 - `approved_sent`
+- `rejected`
 
 ### Resume context attribution states
 
@@ -141,6 +143,8 @@ These are active code-and-schema invariants:
 
 ## 5. End-to-end data flow
 
+### Full queue-building run
+
 ```mermaid
 flowchart TD
     A[Unread Gmail item] --> B[RecruiterEmail insert/update]
@@ -157,6 +161,10 @@ flowchart TD
     L --> M[Send Gmail reply + attach current resume]
     M --> N[ProductivityEvent append + optional Sheets export]
 ```
+
+### Import-only sync
+
+`POST /gmail/sync` writes a `SyncRun`, inserts or updates `RecruiterEmail` rows, and can mark rows as `auto_rejected` without entering the full queue-processing state machine.
 
 ## 6. API schema anchors
 
@@ -181,5 +189,6 @@ Notable response behavior from current schemas:
 
 - `RecruiterEmail` is the main audit record; downstream phone-intelligence rows depend on it.
 - Saved Gmail queries are stored inside settings JSON, not a dedicated table.
+- `SyncRun` is the source of truth for import-only sync history; dashboard recent-runs analytics come from `ProductivityEvent` instead.
 - Cold call scripts are stored on recruiter opportunities, which makes that table the source of truth for recruiter follow-up notes.
 - Runtime telemetry such as Telegram auth sessions and last AI timing is in memory, not persisted in the database.

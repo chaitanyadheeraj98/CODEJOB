@@ -1,16 +1,14 @@
 # Snowball Risk Register
 
 Date: 2026-05-17  
-Branch context: `copilot/audit-and-update-docs`
+Branch context: `copilot/audit-and-sync-markdown-docs`
 
 ## 1. High-risk problems
 
-### HR-1: Over-coupled backend orchestration in `backend/app/main.py` - Done
-- **Current problem:** one module still owns startup, route handlers, policy helpers, Telegram command flows, Gmail labeling glue, analytics hooks, and approval logic.
-- **Why it snowballs:** local edits can change multiple operational flows at once.
-- **Likely outcome if ignored:** send-safety regressions, queue-state regressions, or silent behavior drift across UI and Telegram.
-- **Closeout evidence (D.1 targeted gate):** `test_approve_cc_regression.py`, `test_run_once_hotfix.py`, `test_routing_policy.py`, `test_telegram_interactive.py`, and `test_candidate_date_filtering.py` passed on `snowball-md`.
-- **Tracked non-blocking debt:** `test_run_orchestrator.py` remains stale against current `RunOrchestratorDependencies` contract and is tracked as follow-up cleanup.
+### HR-1: Over-coupled backend composition and orchestration surface
+- **Current problem:** `backend/app/main.py` still wires startup, route handlers, policy helpers, status shaping, and runtime integrations, while orchestration semantics are split across service modules.
+- **Why it snowballs:** local edits can change API shape, execution flow, and operator-facing status behavior at the same time.
+- **Likely outcome if ignored:** send-safety regressions, queue-state regressions, or silent behavior drift across dashboard and Telegram surfaces.
 
 ### HR-2: Routing safety remains a multi-step contract
 - **Current problem:** routing is evaluated during orchestration, stored on the email record, and re-checked at approval time.
@@ -27,8 +25,8 @@ Branch context: `copilot/audit-and-update-docs`
 - **Why it snowballs:** every schema change increases startup complexity and compatibility risk.
 - **Likely outcome if ignored:** startup failures or inconsistent database state across environments.
 
-### HR-5: Persisted feature flags overstate implemented automation
-- **Current problem:** `feature_auto_send` and `feature_retry_queue` look real in settings but do not map to full runtime systems.
+### HR-5: Persisted feature flags and queue infrastructure overstate implemented automation
+- **Current problem:** `feature_auto_send`, `feature_retry_queue`, and Redis/RQ-related config look real in settings or infra files but do not map to full runtime systems.
 - **Why it snowballs:** operators and future contributors can make incorrect assumptions from UI/config state alone.
 - **Likely outcome if ignored:** accidental product drift between intent, UI copy, docs, and code.
 
@@ -43,7 +41,7 @@ Branch context: `copilot/audit-and-update-docs`
 - **Snowball effect:** user-facing choices can diverge from backend execution rules.
 
 ### MR-3: Hardcoded deployment defaults remain in source
-- **Current problem:** permissive CORS, local redirect URI defaults, and project-specific sheet defaults remain embedded in code.
+- **Current problem:** permissive CORS, local redirect URI defaults, project-specific sheet defaults, and inactive Redis defaults remain embedded in code.
 - **Snowball effect:** environment-specific behavior becomes harder to control safely.
 
 ### MR-4: In-memory operational state is not durable
@@ -51,7 +49,7 @@ Branch context: `copilot/audit-and-update-docs`
 - **Snowball effect:** operational support can become inconsistent across restarts or multi-process deployments.
 
 ### MR-5: Validation confidence is weaker than it appears
-- **Current problem:** some tests are stale and environment tooling may be missing when commands are run.
+- **Current problem:** some tests are stale and the current audit environment lacks installed `pytest`, `eslint`, `vitest`, and TypeScript build packages.
 - **Snowball effect:** reviewers may overestimate automated coverage on critical paths.
 
 ## 3. Low-risk problems
@@ -86,5 +84,5 @@ Recommended order for real remediation work:
 1. protect routing/send safety and orchestration correctness,
 2. reduce phone-intelligence write-path complexity,
 3. replace or constrain startup schema mutation,
-4. reconcile feature-flag intent with actual runtime behavior,
+4. reconcile feature-flag and infra intent with actual runtime behavior,
 5. then tackle frontend decomposition and doc-maintenance ergonomics.

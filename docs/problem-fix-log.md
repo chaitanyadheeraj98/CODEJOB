@@ -1,42 +1,42 @@
 # Problem Fix Log (Current Branch Review)
 
 Date: 2026-05-17  
-Branch: `copilot/audit-and-update-docs`
+Branch: `copilot/audit-and-sync-markdown-docs`
 
 ## 1. Audit outcome summary
 
-This documentation audit did not change runtime code, but it surfaced the current implementation boundaries that matter most for future work.
+This documentation audit did not change runtime code, but it refreshed the docs set to match the current branch's real implementation boundaries.
 
 The largest corrections made in docs were:
 
-- documenting Gmail labeling as a real runtime subsystem,
-- documenting cold call script generation on recruiter opportunities,
-- documenting query bucket persistence and UI behavior,
-- clarifying that `feature_auto_send` and `feature_retry_queue` are stored flags without fully implemented execution flows,
-- updating architecture docs to include startup threads and in-memory Telegram auth sessions,
-- updating data docs to include routing evidence, draft quality, resume context attribution, and opportunity statuses.
+- separating import-only Gmail sync from the full queue-building run pipeline,
+- correcting the role of `SyncRun` versus `ProductivityEvent`,
+- documenting the full candidate state set (`auto_rejected`, `processed_skipped`, `needs_review`, `failed`, `approved_sent`, `rejected`),
+- documenting Telegram `/sync`, `/run`, and `/recent_runs` behavior more precisely,
+- clarifying that `feature_auto_send`, `feature_retry_queue`, and Redis/RQ infrastructure are present in config but not implemented as end-to-end runtime systems.
 
 ## 2. Current tangled zones that remain true
 
-### A. `backend/app/main.py` remains the main coupling hotspot
+### A. `backend/app/main.py` remains the main composition hotspot
 
-Why it is tangled:
+Why it is still risky:
 
-- API routes, startup lifecycle, routing helpers, policy helpers, Telegram handlers, analytics hooks, and side effects all live together.
-- Multiple workflows reuse the same helper functions and shared process-global state.
+- route registration, status shaping, settings normalization, runtime wiring, and shared helpers still converge there,
+- multiple flows depend on the same composition and helper contracts.
 
 Risk if modified casually:
 
-- queue logic, send gates, Gmail labeling, and Telegram actions can all regress together.
+- queue logic, AI status reporting, Gmail labeling, Telegram integration, and analytics shaping can all drift together.
 
-### B. Orchestration and routing still depend on shared contracts
+### B. Orchestration still splits across sync, run-once, and approval paths
 
-The run pipeline and approve-send path both depend on the same routing concepts but at different times:
+The system has three related but distinct flows:
 
-- orchestration decides `needs_review` vs `failed`,
-- approval re-checks whether the routing is safe enough to send.
+- import-only Gmail sync,
+- full run-once queue building,
+- manual approval and send.
 
-Any drift here can create false-safe or false-blocked behavior.
+Any documentation or code drift between them creates misleading operator expectations.
 
 ### C. Phone intelligence is still a multi-write workflow
 
@@ -48,7 +48,7 @@ The same email can touch:
 - `EmployerNumber`,
 - `RecruiterOpportunity`.
 
-That makes dedupe and traceability critical.
+That keeps dedupe and traceability critical.
 
 ### D. Frontend state remains centralized
 
@@ -59,6 +59,7 @@ That makes dedupe and traceability critical.
 - polling,
 - queue refresh coordination,
 - premium-number views,
+- analytics rendering,
 - settings persistence.
 
 ## 3. Unresolved inconsistencies discovered during the audit
@@ -67,25 +68,23 @@ These were documented, not fixed in code:
 
 1. `feature_auto_send` exists in config/settings but does not produce automatic sends.
 2. `feature_retry_queue` exists in config/settings but does not drive a dedicated retry loop.
-3. Policy profile definitions are duplicated between backend and frontend.
-4. Sidebar footer actions and `New Campaign` remain placeholders.
-5. Some tests are stale relative to live runtime contracts.
-6. Tooling dependencies were missing in this shell session, so repo validation commands could not complete successfully.
+3. Redis/RQ are configured in dependencies and `docker-compose.yml` but are not used by active runtime code.
+4. Policy profile definitions are duplicated between backend and frontend.
+5. Sidebar footer actions and `New Campaign` remain placeholders.
+6. Some tests are stale relative to current orchestration/runtime contracts.
+7. Validation commands are present, but the current shell environment lacks required Python/Node packages, so command runs stop before meaningful suite execution.
 
 ## 4. Documentation-grounded guidance for future fixes
 
 If future work targets architecture cleanup, the highest-value extractions remain:
 
 1. move routing/sendability decisions behind a single canonical service boundary,
-2. isolate premium-number write logic into a more explicit transaction-aware service,
-3. split `App.tsx` into workflow-specific feature containers,
-4. centralize policy profile definitions,
-5. reconcile stale tests before relying on full-suite confidence.
+2. isolate import-sync vs run-once behavior behind clearer service contracts,
+3. isolate premium-number write logic into a more explicit transaction-aware service,
+4. split `App.tsx` into workflow-specific feature containers,
+5. centralize policy profile definitions,
+6. reconcile stale tests before relying on full-suite confidence.
 
 ## 5. Merge-readiness note for this docs PR
 
-After this audit, the `docs/` directory reflects the current branch more accurately than before, but the branch still contains known runtime debt. Reviewers should treat the docs as the source-of-truth description of the current implementation, not as evidence that the underlying debt has been removed.
-
-## 6. HR-1 closeout (snowball-md)
-
-HR-1 was closed on `snowball-md` after targeted D.1 validation passed for orchestration/routing/telegram compatibility, with a compatibility shim commit to preserve legacy `app.main` test hooks; `test_run_orchestrator.py` remains tracked stale test-contract debt.
+After this audit, the `docs/` directory tracks the current branch more accurately, but the branch still contains known runtime debt. Reviewers should treat the docs as the source-of-truth description of current implementation, not as evidence that the underlying debt has been removed.
