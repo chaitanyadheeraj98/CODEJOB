@@ -33,6 +33,11 @@ Branch: `snowball-md`
   - **Exact output:** `29 passed`
   - **Blocker class:** none
 
+- `cd backend; DEBUG=false python -m pytest tests/test_hr5_feature_flags.py tests/test_hr5_duplicate_recovery.py tests/test_run_once_hotfix.py -q`
+  - **Result:** passed
+  - **Exact output:** `6 passed`
+  - **Blocker class:** none
+
 - `cd dashboard; npm run lint`
   - **Result:** failed
   - **Exact failure:** eslint rule failures in `App.tsx`, `QueryBucket.tsx`, and test files (including missing rule definition and hook/effect violations)
@@ -88,13 +93,30 @@ Branch: `snowball-md`
 | telegram interactive behavior | `test_telegram_interactive.py` | Pass |
 | candidate date filtering behavior | `test_candidate_date_filtering.py` | Pass |
 
-## 4) Known stale/mismatched tests
+## 4) HR-5 runtime and API evidence
+
+- `POST /automation/run-once` response now includes additive automation fields:
+  - `auto_sent_count`
+  - `auto_send_failed_count`
+  - `retry_promoted_count`
+  - `retry_skipped_count`
+- Dashboard `Recent Runs` renders these fields as explicit automation chips (no detail-string parsing dependency).
+- Runtime smoke matrix evidence (Docker + dashboard):
+  - `auto_send=false, retry_queue=false` -> `200 OK`, no automation chips expected.
+  - `auto_send=true, retry_queue=false` -> `200 OK`, auto-send chips present.
+  - `auto_send=false, retry_queue=true` -> `200 OK`, retry chips present.
+  - `auto_send=true, retry_queue=true` -> `200 OK`, both chip groups present.
+- Regression safety evidence:
+  - No `UNIQUE constraint failed: recruiter_emails.external_message_id` in latest validation windows.
+  - No `500` on run-once endpoints during matrix execution.
+
+## 5) Known stale/mismatched tests
 
 - `test_phone_attribution.py` imports `app.phone_attribution`, which is not present in current backend code.
 - Runtime isolation evidence: no current backend route/service/runtime workflow imports `app.phone_attribution`; this is test-only orphaned logic.
 - `test_run_orchestrator.py` is stale against the current `RunOrchestratorDependencies` contract.
 
-## 5) Reviewer attention
+## 6) Reviewer attention
 
 - Full backend pass cannot be claimed until stale test imports/contracts are fixed.
 - Dashboard tests pass, but lint/build are currently red and should be treated as active debt.

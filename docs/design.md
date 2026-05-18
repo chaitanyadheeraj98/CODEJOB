@@ -1,6 +1,6 @@
 # CODEJOB UI and Interaction Design (Current Branch)
 
-Audit date: 2026-05-17  
+Audit date: 2026-05-18  
 Branch: `snowball-md`
 
 ## 1) Layout and navigation
@@ -29,6 +29,13 @@ Run Queue combines controls + status + settings:
 - policy and execution controls
 - resume upload/replace
 - productivity live monitor
+
+Execution controls currently include:
+- `Dry Run Mode`
+- `Auto Send Current Run Queue` with helper copy:
+  `Auto-send only candidates queued in the current run.`
+- `Retry Failed Queue` with helper copy:
+  `Retry failed candidates and promote sendable ones to Needs Review.`
 
 ## 3) Query bucket UX
 
@@ -81,6 +88,11 @@ Implemented actions:
 
 - Sent Items: approved/sent history list
 - Recent Runs: recent run summaries, counts, effective query details
+- Recent Runs: additive automation badges when counters are present:
+  - `Auto Sent`
+  - `Auto Send Failed`
+  - `Retry Promoted`
+  - `Retry Skipped`
 - Analytics trend/activity is rendered inside Run Queue (not a separate routed page)
 
 ## 8) Design debt still active

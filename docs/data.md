@@ -1,6 +1,6 @@
 # CODEJOB Data Models and Data Flow
 
-Audit date: 2026-05-17  
+Audit date: 2026-05-18  
 Branch: `snowball-md`
 
 ## 1) Core entities
@@ -20,6 +20,10 @@ Owner-scoped settings row including:
 - feature flags
 - fallback draft/signature fields
 - serialized policy JSON
+
+HR-5 settings now actively used at runtime:
+- `feature_auto_send`
+- `feature_retry_queue`
 
 ### `ResumeAsset`
 Versioned resume file metadata + optional semantic embedding cache.
@@ -83,6 +87,11 @@ Active uniqueness protections include:
 - Routing evidence/candidates are stored as JSON text and parsed in schema validators.
 - SQLite schema evolution is currently additive at startup via `ensure_sqlite_phase0_columns()`.
 - Query bucket persistence is in `UserSettings.saved_gmail_queries_json` (not a standalone table).
+- `AutomationRunResponse` includes additive optional counters:
+  - `auto_sent_count`
+  - `auto_send_failed_count`
+  - `retry_promoted_count`
+  - `retry_skipped_count`
 
 Evidence basis: code inspection  
 Verification limits: model/flow mapping reviewed from source; full backend suite currently blocked by stale `test_phone_attribution.py` import.

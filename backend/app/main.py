@@ -869,6 +869,10 @@ def _build_run_response(
     queued_count: int | None = None,
     skipped_count: int | None = None,
     failed_count: int | None = None,
+    auto_sent_count: int | None = None,
+    auto_send_failed_count: int | None = None,
+    retry_promoted_count: int | None = None,
+    retry_skipped_count: int | None = None,
 ) -> AutomationRunResponse:
     if not email:
         return AutomationRunResponse(
@@ -879,6 +883,10 @@ def _build_run_response(
             queued_count=queued_count,
             skipped_count=skipped_count,
             failed_count=failed_count,
+            auto_sent_count=auto_sent_count,
+            auto_send_failed_count=auto_send_failed_count,
+            retry_promoted_count=retry_promoted_count,
+            retry_skipped_count=retry_skipped_count,
         )
     return AutomationRunResponse(
         status=status,
@@ -895,6 +903,10 @@ def _build_run_response(
         queued_count=queued_count,
         skipped_count=skipped_count,
         failed_count=failed_count,
+        auto_sent_count=auto_sent_count,
+        auto_send_failed_count=auto_send_failed_count,
+        retry_promoted_count=retry_promoted_count,
+        retry_skipped_count=retry_skipped_count,
     )
 
 

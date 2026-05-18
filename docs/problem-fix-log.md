@@ -11,7 +11,7 @@ Branch: `snowball-md`
 | HR-2 | Done |
 | HR-3 | Partially Closed |
 | HR-4 | Done |
-| HR-5 | Still Open |
+| HR-5 | Done |
 | MR-1 | Still Open |
 | MR-2 | Still Open |
 | MR-3 | Still Open |
@@ -82,9 +82,18 @@ Branch: `snowball-md`
     and then `Application startup complete`.
 
 ### HR-5
-- **Remaining issue:** feature flags imply behavior that is not implemented end-to-end.
-- **Evidence:** persisted `feature_auto_send` and `feature_retry_queue` without runtime workers.
-- **Recommended next action:** implement semantics or deprecate flags.
+- **Status:** Done
+- **What changed:** runtime semantics are active for both persisted flags:
+  - `feature_auto_send` auto-sends only candidates queued in current run.
+  - `feature_retry_queue` retries failed queue and promotes sendable candidates.
+- **API evidence:** additive `AutomationRunResponse` fields now exposed:
+  - `auto_sent_count`
+  - `auto_send_failed_count`
+  - `retry_promoted_count`
+  - `retry_skipped_count`
+- **UX evidence:** Settings now shows both toggles in Execution Control with helper text, and Recent Runs displays automation chips from structured response fields.
+- **Runtime evidence:** latest Docker run windows show repeated `POST /automation/run-once` returning `200 OK` under all flag combinations, with no `UNIQUE constraint failed` or `500` regressions.
+- **Residual note:** embedding latency spikes remain non-blocking performance noise.
 
 ### MR-5
 - **Remaining issue:** full validation confidence is still incomplete.
@@ -122,6 +131,10 @@ Branch: `snowball-md`
 
 - `cd backend; python -m pytest tests/test_approve_cc_regression.py tests/test_run_once_hotfix.py tests/test_routing_policy.py tests/test_telegram_interactive.py tests/test_candidate_date_filtering.py`
   - **Result:** passed (`29 passed`)
+  - **Blocker class:** none
+
+- `cd backend; DEBUG=false python -m pytest tests/test_hr5_feature_flags.py tests/test_hr5_duplicate_recovery.py tests/test_run_once_hotfix.py`
+  - **Result:** passed (`6 passed`)
   - **Blocker class:** none
 
 - `cd dashboard; npm run lint`

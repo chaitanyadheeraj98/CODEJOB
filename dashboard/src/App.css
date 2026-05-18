@@ -673,6 +673,14 @@
   font-size: 12px;
 }
 
+.automationMetrics {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
 .dotOk {
   color: var(--ok);
   font-weight: 600;

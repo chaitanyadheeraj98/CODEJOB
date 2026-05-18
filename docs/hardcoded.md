@@ -1,6 +1,6 @@
 # Hardcoded Values and Constants Review
 
-Audit date: 2026-05-17  
+Audit date: 2026-05-18  
 Branch: `snowball-md`
 
 ## 1) Deployment-sensitive defaults
@@ -28,6 +28,10 @@ Branch: `snowball-md`
 1. **Policy profile duplication** in backend and frontend.
 2. **Settings bootstrap defaults** persisted into DB on missing values.
 3. **Heuristic-heavy parsing/routing defaults** in phase0.
+4. **Execution-control operator clarity**:
+   `feature_auto_send` and `feature_retry_queue` are no longer persisted-only;
+   they now drive live post-orchestration behavior and should stay aligned with
+   UI helper text and run-response counters.
 
 ## 4) Current conclusion
 

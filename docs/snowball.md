@@ -63,11 +63,15 @@ Branch context: `snowball-md`
 
 ### HR-5: Persisted feature flags overstate implemented automation
 
-- **Status:** Still Open
+- **Status:** Done
 - **Severity:** High
-- **Remaining issue:** `feature_auto_send` and `feature_retry_queue` are persisted but do not activate dedicated execution flows.
-- **Evidence:** flags exist in models/schemas/settings update path; no runtime auto-send or retry worker path uses them.
-- **Recommended next action:** either implement execution semantics or remove/deprecate operator-facing exposure.
+- **Closeout evidence:** persisted flags now activate runtime semantics in run orchestration:
+  - `feature_auto_send` sends only current-run queued candidates.
+  - `feature_retry_queue` retries failed queue and promotes sendable candidates.
+- **Implementation evidence:** backend orchestration now emits structured automation counters in `AutomationRunResponse` (`auto_sent_count`, `auto_send_failed_count`, `retry_promoted_count`, `retry_skipped_count`) and frontend `Recent Runs` renders these as explicit automation chips.
+- **UX evidence:** `Execution Control` now exposes both toggles with operator helper text, and `Recent Runs` shows per-run automation metrics.
+- **Validation evidence:** runtime smoke matrix remained green (`POST /automation/run-once` = `200 OK` across all four flag combinations) with no duplicate-constraint or 500 regressions in latest logs.
+- **Residual note:** embedding latency spikes remain intermittent and non-blocking; functional run outcomes stay successful.
 
 ## Medium-risk tickets
 

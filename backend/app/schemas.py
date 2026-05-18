@@ -386,6 +386,10 @@ class AutomationRunResponse(BaseModel):
     queued_count: int | None = None
     skipped_count: int | None = None
     failed_count: int | None = None
+    auto_sent_count: int | None = None
+    auto_send_failed_count: int | None = None
+    retry_promoted_count: int | None = None
+    retry_skipped_count: int | None = None
 
 
 class AutomationRunRequest(BaseModel):

@@ -2,13 +2,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+import logging
 from typing import Any, Callable, Mapping
 
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from app.ai.resume_context_attribution import RESUME_CONTEXT_RULES_ONLY
 from app.models import RecruiterEmail, ResumeAsset, UserSettings
 from app.routing import RoutingDecision
+
+logger = logging.getLogger(__name__)
 
 
 CandidateItem = Mapping[str, Any]
@@ -58,6 +62,7 @@ class RunOrchestratorResult:
     queued_count: int
     skipped_count: int
     failed_count: int
+    queued_email_ids: list[int]
     last_email: RecruiterEmail | None
     ai_last_error: str | None
     ai_last_draft_source: str | None
@@ -72,6 +77,7 @@ class RunOrchestrator:
         queued_count = 0
         skipped_count = 0
         failed_count = 0
+        queued_email_ids: list[int] = []
         last_email: RecruiterEmail | None = None
         ai_last_error: str | None = None
         ai_last_draft_source: str | None = None
@@ -126,32 +132,40 @@ class RunOrchestrator:
                     skipped_count += 1
                     continue
                 email = self._email_row(existing, request, item, parsed)
-                email.external_rfc_message_id = email.external_rfc_message_id or item.get("external_rfc_message_id")
-                email.gmail_received_at = email.gmail_received_at or item.get("gmail_received_at")
-                email.score = int(ai_score * 100)
-                email.ai_score = ai_score
-                email.ai_score_source = ai_score_source
-                email.ai_summary = ai_summary
-                email.semantic_embedding = email_embedding_json or email.semantic_embedding
-                email.hard_filter_result = hard_reason
-                email.state = "processed_skipped"
-                email.decision = "Reject"
-                if blocked:
-                    email.auto_reject_reason = "f2f_non_texas"
-                    email.decision_reason = block_reason
-                    email.skip_reason = "f2f_non_texas_blocked"
-                else:
-                    email.auto_reject_reason = hard_reason if not hard_pass else "ai_score_too_low"
-                    email.decision_reason = "Not qualified for auto-reply"
-                    email.skip_reason = "not_qualified"
-                email.last_error = None
-                email.draft_source = None
-                email.draft_model = None
-                email.draft_ai_error = None
-                email.draft_resume_context_status = None
-                if not existing:
-                    request.db.add(email)
-                request.db.commit()
+                def apply_skipped_state(target: RecruiterEmail) -> None:
+                    target.external_rfc_message_id = target.external_rfc_message_id or item.get("external_rfc_message_id")
+                    target.gmail_received_at = target.gmail_received_at or item.get("gmail_received_at")
+                    target.score = int(ai_score * 100)
+                    target.ai_score = ai_score
+                    target.ai_score_source = ai_score_source
+                    target.ai_summary = ai_summary
+                    target.semantic_embedding = email_embedding_json or target.semantic_embedding
+                    target.hard_filter_result = hard_reason
+                    target.state = "processed_skipped"
+                    target.decision = "Reject"
+                    if blocked:
+                        target.auto_reject_reason = "f2f_non_texas"
+                        target.decision_reason = block_reason
+                        target.skip_reason = "f2f_non_texas_blocked"
+                    else:
+                        target.auto_reject_reason = hard_reason if not hard_pass else "ai_score_too_low"
+                        target.decision_reason = "Not qualified for auto-reply"
+                        target.skip_reason = "not_qualified"
+                    target.last_error = None
+                    target.draft_source = None
+                    target.draft_model = None
+                    target.draft_ai_error = None
+                    target.draft_resume_context_status = None
+
+                apply_skipped_state(email)
+                email = self._commit_email_phase(
+                    request=request,
+                    email=email,
+                    existing=existing,
+                    external_message_id=external_message_id,
+                    branch_name="processed_skipped",
+                    reapply_state=apply_skipped_state,
+                )
                 request.db.refresh(email)
                 request.deps.capture_premium_numbers(request.db, email)
                 request.deps.apply_gmail_label(request.db, email, item)
@@ -175,20 +189,28 @@ class RunOrchestrator:
                     failed_count += 1
                     continue
                 email = self._email_row(existing, request, item, parsed)
-                email.external_rfc_message_id = email.external_rfc_message_id or item.get("external_rfc_message_id")
-                email.gmail_received_at = email.gmail_received_at or item.get("gmail_received_at")
-                email.state = routing_decision.recommended_state
-                email.decision = "Reject"
-                email.last_error = "Could not resolve recruiter To and employer CC"
-                email.skip_reason = routing_decision.recommended_skip_reason
-                email.decision_reason = "Recipient routing unresolved"
-                request.deps.apply_routing_decision(email, routing_decision)
-                email.routing_confirmed = False
-                email.resume_asset_id = request.resume.id
-                email.resume_file_name = request.resume.file_name
-                if not existing:
-                    request.db.add(email)
-                request.db.commit()
+                def apply_failed_state(target: RecruiterEmail) -> None:
+                    target.external_rfc_message_id = target.external_rfc_message_id or item.get("external_rfc_message_id")
+                    target.gmail_received_at = target.gmail_received_at or item.get("gmail_received_at")
+                    target.state = routing_decision.recommended_state
+                    target.decision = "Reject"
+                    target.last_error = "Could not resolve recruiter To and employer CC"
+                    target.skip_reason = routing_decision.recommended_skip_reason
+                    target.decision_reason = "Recipient routing unresolved"
+                    request.deps.apply_routing_decision(target, routing_decision)
+                    target.routing_confirmed = False
+                    target.resume_asset_id = request.resume.id
+                    target.resume_file_name = request.resume.file_name
+
+                apply_failed_state(email)
+                email = self._commit_email_phase(
+                    request=request,
+                    email=email,
+                    existing=existing,
+                    external_message_id=external_message_id,
+                    branch_name="failed_mapping",
+                    reapply_state=apply_failed_state,
+                )
                 request.db.refresh(email)
                 request.deps.capture_premium_numbers(request.db, email)
                 request.deps.record_productivity_event(
@@ -259,35 +281,43 @@ class RunOrchestrator:
                 draft_resume_context_status = RESUME_CONTEXT_RULES_ONLY
                 ai_last_draft_source = "rules_only"
             email = self._email_row(existing, request, item, parsed)
-            email.external_rfc_message_id = email.external_rfc_message_id or item.get("external_rfc_message_id")
-            email.gmail_received_at = email.gmail_received_at or item.get("gmail_received_at")
-            email.score = int(ai_score * 100)
-            email.ai_score = ai_score
-            email.ai_score_source = ai_score_source
-            email.ai_summary = ai_summary
-            email.semantic_embedding = email_embedding_json or email.semantic_embedding
-            email.hard_filter_result = hard_reason
-            email.draft_reply = reply
-            email.draft_source = draft_source
-            email.draft_model = draft_model
-            email.draft_ai_error = draft_ai_error
-            email.draft_resume_context_status = draft_resume_context_status
-            email.last_error = None
-            email.state = "needs_review"
-            email.decision = "Qualified"
-            email.decision_reason = "Qualified and queued for manual approval"
-            email.approval_status = "pending"
-            email.sent_status = "not_sent"
-            email.sent_at = None
-            email.gmail_sent_id = None
-            request.deps.apply_routing_decision(email, routing_decision)
-            email.routing_confirmed = False
-            email.resume_asset_id = request.resume.id
-            email.resume_file_name = request.resume.file_name
-            email.skip_reason = None
-            if not existing:
-                request.db.add(email)
-            request.db.commit()
+            def apply_queued_state(target: RecruiterEmail) -> None:
+                target.external_rfc_message_id = target.external_rfc_message_id or item.get("external_rfc_message_id")
+                target.gmail_received_at = target.gmail_received_at or item.get("gmail_received_at")
+                target.score = int(ai_score * 100)
+                target.ai_score = ai_score
+                target.ai_score_source = ai_score_source
+                target.ai_summary = ai_summary
+                target.semantic_embedding = email_embedding_json or target.semantic_embedding
+                target.hard_filter_result = hard_reason
+                target.draft_reply = reply
+                target.draft_source = draft_source
+                target.draft_model = draft_model
+                target.draft_ai_error = draft_ai_error
+                target.draft_resume_context_status = draft_resume_context_status
+                target.last_error = None
+                target.state = "needs_review"
+                target.decision = "Qualified"
+                target.decision_reason = "Qualified and queued for manual approval"
+                target.approval_status = "pending"
+                target.sent_status = "not_sent"
+                target.sent_at = None
+                target.gmail_sent_id = None
+                request.deps.apply_routing_decision(target, routing_decision)
+                target.routing_confirmed = False
+                target.resume_asset_id = request.resume.id
+                target.resume_file_name = request.resume.file_name
+                target.skip_reason = None
+
+            apply_queued_state(email)
+            email = self._commit_email_phase(
+                request=request,
+                email=email,
+                existing=existing,
+                external_message_id=external_message_id,
+                branch_name="needs_review",
+                reapply_state=apply_queued_state,
+            )
             request.db.refresh(email)
             request.deps.capture_premium_numbers(request.db, email)
             request.deps.record_productivity_event(
@@ -302,6 +332,7 @@ class RunOrchestrator:
             request.db.refresh(email)
             request.deps.mark_message_processed(external_message_id)
             queued_count += 1
+            queued_email_ids.append(email.id)
             last_email = email
 
         return RunOrchestratorResult(
@@ -309,6 +340,7 @@ class RunOrchestrator:
             queued_count=queued_count,
             skipped_count=skipped_count,
             failed_count=failed_count,
+            queued_email_ids=queued_email_ids,
             last_email=last_email,
             ai_last_error=ai_last_error,
             ai_last_draft_source=ai_last_draft_source,
@@ -342,3 +374,45 @@ class RunOrchestrator:
             gmail_received_at=item.get("gmail_received_at"),
             recipient_email=item.get("recipient_email"),
         )
+
+    def _commit_email_phase(
+        self,
+        *,
+        request: RunOrchestratorRequest,
+        email: RecruiterEmail,
+        existing: RecruiterEmail | None,
+        external_message_id: str,
+        branch_name: str,
+        reapply_state: Callable[[RecruiterEmail], None],
+    ) -> RecruiterEmail:
+        if not existing:
+            request.db.add(email)
+        try:
+            request.db.commit()
+            return email
+        except IntegrityError as exc:
+            if not self._is_external_message_unique_conflict(exc):
+                raise
+            request.db.rollback()
+            recovered = (
+                request.db.query(RecruiterEmail)
+                .filter(RecruiterEmail.owner_id == request.owner_id)
+                .filter(RecruiterEmail.external_message_id == external_message_id)
+                .first()
+            )
+            if not recovered:
+                raise
+            logger.warning(
+                "duplicate_external_message_recovered branch=%s owner_id=%s external_message_id=%s",
+                branch_name,
+                request.owner_id,
+                external_message_id,
+            )
+            reapply_state(recovered)
+            request.db.commit()
+            return recovered
+
+    @staticmethod
+    def _is_external_message_unique_conflict(exc: IntegrityError) -> bool:
+        text = str(exc).lower()
+        return "unique constraint failed" in text and "recruiter_emails.external_message_id" in text

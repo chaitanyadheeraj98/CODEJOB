@@ -1,6 +1,6 @@
 # CODEJOB Features (Current Implementation)
 
-Audit date: 2026-05-17  
+Audit date: 2026-05-18  
 Branch: `snowball-md`
 
 ## 1) Inbox automation
@@ -63,8 +63,14 @@ Managed Gmail labels:
 | `feature_auto_poll_interval_minutes` | sets polling interval (1..1440 clamp) |
 | `feature_ai_enabled` | enables AI draft generation in orchestrated/manual draft paths |
 | `feature_semantic_enabled` | enables semantic blending in score computation |
-| `feature_auto_send` | persisted only; no bypass of manual approval gate |
-| `feature_retry_queue` | persisted only; no dedicated retry worker |
+| `feature_auto_send` | live; auto-sends only candidates queued in the current run |
+| `feature_retry_queue` | live; retries failed candidates and promotes sendable rows to needs_review |
+
+Additive `POST /automation/run-once` response counters now exposed:
+- `auto_sent_count`
+- `auto_send_failed_count`
+- `retry_promoted_count`
+- `retry_skipped_count`
 
 ## 6) Active debt tied to features
 
@@ -73,4 +79,5 @@ Managed Gmail labels:
 - stale tests reduce confidence in full automation regression coverage
 
 Evidence basis: both  
-Verification limits: dashboard lint/build are currently failing; full backend suite blocked by stale test import.
+Verification limits: targeted HR-5 validation is complete; full-suite confidence
+remains limited by known stale tests in this branch.

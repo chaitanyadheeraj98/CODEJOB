@@ -1,6 +1,6 @@
 # CODEJOB Architecture (Current Branch)
 
-Audit date: 2026-05-17  
+Audit date: 2026-05-18  
 Branch snapshot: `snowball-md`
 
 ## 1. System shape
@@ -98,11 +98,38 @@ Also present for manual/legacy transitions:
 - policy profile definitions are duplicated backend/frontend.
 - learned routing adapter is still a parity placeholder.
 - runtime process memory stores telegram auth sessions and runtime health signals (non-durable).
-- `feature_auto_send` and `feature_retry_queue` are persisted settings without full runtime executors.
+- `feature_auto_send` and `feature_retry_queue` are active runtime controls in
+  `OrchestrationService.run_once`.
 - strict startup requires DB revision at Alembic head; Docker backend now pre-runs
   `alembic upgrade head` before `uvicorn`.
 
-## 8. Intended vs Current Runtime
+## 8. HR-5 runtime behavior (current)
+
+`POST /automation/run-once` now executes a deterministic post-orchestration
+automation phase:
+
+```mermaid
+flowchart TD
+    A[Run orchestration completes] --> B{feature_retry_queue?}
+    B -->|Yes| C[Retry failed queue and promote sendable rows]
+    B -->|No| D[Skip retry phase]
+    C --> E{feature_auto_send?}
+    D --> E
+    E -->|Yes| F[Auto-send only IDs queued in current run]
+    E -->|No| G[Skip auto-send phase]
+    F --> H[Build run response]
+    G --> H
+    H --> I[Return additive automation counters]
+```
+
+Structured additive fields returned by
+`POST /automation/run-once` response model:
+- `auto_sent_count`
+- `auto_send_failed_count`
+- `retry_promoted_count`
+- `retry_skipped_count`
+
+## 9. Intended vs Current Runtime
 
 Intended architecture:
 - thinner composition root with smaller route/domain modules and less centralized orchestration coupling.
@@ -112,4 +139,5 @@ Current runtime behavior:
 - `dashboard/src/App.tsx` remains the primary UI state container.
 
 Evidence basis: code inspection  
-Verification limits: runtime ownership validated from source paths; full-suite validation still limited by stale tests and local lint/build blockers.
+Verification limits: runtime ownership validated from source paths; broader
+suite confidence remains limited by known stale tests in this branch.

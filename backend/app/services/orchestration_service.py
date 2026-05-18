@@ -336,6 +336,18 @@ class OrchestrationService:
                 }
             )
 
+            retry_promoted_count = 0
+            retry_skipped_count = 0
+            if user_settings.feature_retry_queue and not dry_run:
+                retry_promoted_count, retry_skipped_count = self._retry_failed_queue(db)
+
+            auto_sent_count = 0
+            auto_send_failed_count = 0
+            if user_settings.feature_auto_send and not dry_run and result.queued_email_ids:
+                auto_sent_count, auto_send_failed_count = self._auto_send_newly_queued(
+                    result.queued_email_ids, db
+                )
+
             if result.queued_count > 0:
                 status = "ready"
                 detail = f"Processed {result.matched_count} unread matching emails: queued={result.queued_count}, skipped={result.skipped_count}, failed={result.failed_count}."
@@ -347,6 +359,18 @@ class OrchestrationService:
                 detail = f"Processed {result.matched_count} unread matching emails: queued=0, skipped={result.skipped_count}, failed=0."
             if dry_run:
                 detail = f"[Dry run] {detail} No database or Gmail label changes were made. (batch_limit={batch_limit}, threshold={threshold:.2f})"
+            else:
+                automation_notes: list[str] = []
+                if user_settings.feature_retry_queue:
+                    automation_notes.append(
+                        f"retry_promoted={retry_promoted_count}, retry_skipped={retry_skipped_count}"
+                    )
+                if user_settings.feature_auto_send:
+                    automation_notes.append(
+                        f"auto_sent={auto_sent_count}, auto_send_failed={auto_send_failed_count}"
+                    )
+                if automation_notes:
+                    detail = f"{detail} Automation: " + "; ".join(automation_notes) + "."
 
             response = self.deps.build_run_response(
                 status,
@@ -357,8 +381,28 @@ class OrchestrationService:
                 queued_count=result.queued_count,
                 skipped_count=result.skipped_count,
                 failed_count=result.failed_count,
+                auto_sent_count=auto_sent_count if user_settings.feature_auto_send else None,
+                auto_send_failed_count=auto_send_failed_count if user_settings.feature_auto_send else None,
+                retry_promoted_count=retry_promoted_count if user_settings.feature_retry_queue else None,
+                retry_skipped_count=retry_skipped_count if user_settings.feature_retry_queue else None,
             )
-            self.deps.record_productivity_event(db, event_type="recent_run_recorded", event_source="run_once", entity_id=response.email_id, metadata={"status": response.status, "matched_count": response.matched_count or 0, "queued_count": response.queued_count or 0, "skipped_count": response.skipped_count or 0, "failed_count": response.failed_count or 0})
+            self.deps.record_productivity_event(
+                db,
+                event_type="recent_run_recorded",
+                event_source="run_once",
+                entity_id=response.email_id,
+                metadata={
+                    "status": response.status,
+                    "matched_count": response.matched_count or 0,
+                    "queued_count": response.queued_count or 0,
+                    "skipped_count": response.skipped_count or 0,
+                    "failed_count": response.failed_count or 0,
+                    "retry_promoted_count": retry_promoted_count,
+                    "retry_skipped_count": retry_skipped_count,
+                    "auto_sent_count": auto_sent_count,
+                    "auto_send_failed_count": auto_send_failed_count,
+                },
+            )
             self.deps.telegram_notify(self.deps.build_telegram_digest("Run Digest", response))
             return response
         finally:
@@ -374,6 +418,83 @@ class OrchestrationService:
                         "embedding_latency_summary count=%s p50_ms=%.2f p95_ms=%.2f max_ms=%.2f provider=%s model=%s",
                         len(latency_samples), p50_ms, p95_ms, max_ms, provider, model
                     )
+
+    def _auto_send_newly_queued(self, queued_email_ids: list[int], db: Session) -> tuple[int, int]:
+        auto_sent_count = 0
+        auto_send_failed_count = 0
+        for email_id in queued_email_ids:
+            try:
+                self.approve_send(email_id, ApproveSendRequest(), db)
+                auto_sent_count += 1
+            except HTTPException as exc:
+                auto_send_failed_count += 1
+                logger.warning(
+                    "auto_send_skipped email_id=%s status=%s detail=%s",
+                    email_id,
+                    exc.status_code,
+                    exc.detail,
+                )
+                self.deps.record_productivity_event(
+                    db,
+                    event_type="auto_send_failed",
+                    event_source="automation",
+                    entity_id=email_id,
+                    metadata={"detail": str(exc.detail)},
+                )
+            except Exception:
+                auto_send_failed_count += 1
+                logger.exception("auto_send_crash email_id=%s", email_id)
+                self.deps.record_productivity_event(
+                    db,
+                    event_type="auto_send_failed",
+                    event_source="automation",
+                    entity_id=email_id,
+                    metadata={"detail": "unexpected_auto_send_error"},
+                )
+        return auto_sent_count, auto_send_failed_count
+
+    def _retry_failed_queue(self, db: Session) -> tuple[int, int]:
+        retry_promoted_count = 0
+        retry_skipped_count = 0
+        failed_items = (
+            db.query(RecruiterEmail)
+            .filter(RecruiterEmail.owner_id == self.deps.owner_id)
+            .filter(RecruiterEmail.source == "gmail")
+            .filter(RecruiterEmail.state == "failed")
+            .filter(RecruiterEmail.routing_confirmed.is_(False))
+            .all()
+        )
+        for email in failed_items:
+            routing_decision = self.deps.evaluate_routing_policy(
+                db,
+                email.sender,
+                email.subject,
+                email.body,
+                "",
+                email.routing_confirmed,
+            )
+            self.deps.apply_routing_decision(email, routing_decision)
+            if routing_decision.is_sendable_candidate and not routing_decision.should_mark_failed:
+                email.state = "needs_review"
+                email.last_error = None
+                email.skip_reason = None
+                email.decision = "Qualified"
+                email.decision_reason = "Recovered by retry queue routing refresh"
+                email.approval_status = "pending"
+                email.sent_status = "not_sent"
+                retry_promoted_count += 1
+                self.deps.record_productivity_event(
+                    db,
+                    event_type="needs_review_marked",
+                    event_source="state",
+                    entity_id=email.id,
+                    metadata={"source": "retry_queue"},
+                )
+            else:
+                retry_skipped_count += 1
+        if failed_items:
+            db.commit()
+        return retry_promoted_count, retry_skipped_count
 
     def approve_send(self, email_id: int, payload: ApproveSendRequest, db: Session) -> RecruiterEmail:
         email = (

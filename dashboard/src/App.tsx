@@ -157,6 +157,10 @@ type AutomationRunResponse = {
   queued_count?: number | null
   skipped_count?: number | null
   failed_count?: number | null
+  auto_sent_count?: number | null
+  auto_send_failed_count?: number | null
+  retry_promoted_count?: number | null
+  retry_skipped_count?: number | null
 }
 
 type OAuthStartResponse = {
@@ -528,7 +532,6 @@ function App() {
   const [skillDraft, setSkillDraft] = useState('')
   const [employerDomainDraft, setEmployerDomainDraft] = useState('')
   const [employerDomainError, setEmployerDomainError] = useState('')
-  const [premiumNumbers, setPremiumNumbers] = useState<PremiumNumberCard[]>([])
   const [numberReviewCards, setNumberReviewCards] = useState<NumberReviewCard[]>([])
   const [recruiterNumberCards, setRecruiterNumberCards] = useState<RecruiterNumberCard[]>([])
   const [employerNumberCards, setEmployerNumberCards] = useState<EmployerNumberCard[]>([])
@@ -537,7 +540,7 @@ function App() {
   const [premiumHasNext, setPremiumHasNext] = useState(false)
   const [premiumLoading, setPremiumLoading] = useState(false)
   const [premiumError, setPremiumError] = useState('')
-  const [premiumConfidenceFilter, setPremiumConfidenceFilter] = useState<'all' | PremiumNumberConfidence>('all')
+  const premiumConfidenceFilter: 'all' | PremiumNumberConfidence = 'all'
   const [premiumScopeFilter, setPremiumScopeFilter] = useState<'all_review' | 'recruiter_numbers' | 'employer_numbers' | 'recruiter_opportunities'>('all_review')
   const [opportunityStatusFilter, setOpportunityStatusFilter] = useState<'all' | OpportunityStatus>('all')
   const [premiumSearch, setPremiumSearch] = useState('')
@@ -682,7 +685,6 @@ function App() {
   }
 
   const loadPremiumNumbers = async (opts?: { append?: boolean; cursor?: number | null }) => {
-    const append = Boolean(opts?.append)
     const cursor = opts?.cursor ?? 0
     setPremiumLoading(true)
     setPremiumError('')
@@ -726,7 +728,6 @@ function App() {
         const res = await fetch(`${apiBase}/premium-numbers?${params.toString()}`)
         if (!res.ok) throw new Error('Failed to load premium numbers')
         const payload = (await res.json()) as PremiumNumberListResponse
-        setPremiumNumbers((prev) => (append ? [...prev, ...payload.items] : payload.items))
         setPremiumNextCursor(payload.next_cursor)
         setPremiumHasNext(payload.has_next)
       }
@@ -1925,6 +1926,30 @@ function App() {
                       <span className="toggleTrack" />
                     </span>
                   </label>
+                  <label className="toggleRow pillRow">
+                    <span>Auto Send Current Run Queue</span>
+                    <span className="toggleSwitch">
+                      <input
+                        type="checkbox"
+                        checked={settings.feature_auto_send}
+                        onChange={(e) => setSettings({ ...settings, feature_auto_send: e.target.checked })}
+                      />
+                      <span className="toggleTrack" />
+                    </span>
+                  </label>
+                  <p className="subtle">Auto-send only candidates queued in the current run.</p>
+                  <label className="toggleRow pillRow">
+                    <span>Retry Failed Queue</span>
+                    <span className="toggleSwitch">
+                      <input
+                        type="checkbox"
+                        checked={settings.feature_retry_queue}
+                        onChange={(e) => setSettings({ ...settings, feature_retry_queue: e.target.checked })}
+                      />
+                      <span className="toggleTrack" />
+                    </span>
+                  </label>
+                  <p className="subtle">Retry failed candidates and promote sendable ones to Needs Review.</p>
                   <label>
                     Batch Limit
                     <input
@@ -2192,6 +2217,15 @@ function App() {
                     .filter(Boolean)
                     .join(' | ')}
                 </p>
+              ) : null}
+              {item.auto_sent_count != null || item.auto_send_failed_count != null || item.retry_promoted_count != null || item.retry_skipped_count != null ? (
+                <div className="automationMetrics">
+                  <strong>Automation:</strong>
+                  {item.auto_sent_count != null ? <span className="tag">Auto Sent: {item.auto_sent_count}</span> : null}
+                  {item.auto_send_failed_count != null ? <span className="tag">Auto Send Failed: {item.auto_send_failed_count}</span> : null}
+                  {item.retry_promoted_count != null ? <span className="tag">Retry Promoted: {item.retry_promoted_count}</span> : null}
+                  {item.retry_skipped_count != null ? <span className="tag">Retry Skipped: {item.retry_skipped_count}</span> : null}
+                </div>
               ) : null}
             </article>
           ))}

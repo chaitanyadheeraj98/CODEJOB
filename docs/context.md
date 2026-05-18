@@ -1,6 +1,6 @@
 # CODEJOB Context
 
-Audit date: 2026-05-17  
+Audit date: 2026-05-18  
 Branch: `snowball-md`
 
 ## 1. Project Overview
@@ -53,6 +53,14 @@ Pain points solved:
 - What: Parse/filter/score/route/draft per message, then set queue states.
 - Why: Core workflow engine.
 - Files: `backend/app/automation/run_orchestrator.py`, `backend/app/main.py`, `backend/app/phase0.py`
+
+### Feature: HR-5 execution controls
+
+- What: post-orchestration automation with `feature_auto_send` and
+  `feature_retry_queue`.
+- Why: safely automate only intended records without broad queue side effects.
+- Files: `backend/app/services/orchestration_service.py`,
+  `backend/app/schemas.py`, `dashboard/src/App.tsx`
 
 ### Feature: Manual Approval Queue
 
@@ -110,6 +118,12 @@ Pain points solved:
    - Premium Numbers (manual recruiter/employer classification)
 8. On approve-send, backend validates strict send gates and sends Gmail reply with resume attachment.
 9. System updates sent metadata and emits productivity events.
+10. If enabled by settings:
+   - Retry queue automation retries failed candidates and promotes sendable rows.
+   - Auto-send automation sends only IDs queued during the same run.
+11. Run response includes additive counters:
+   - `auto_sent_count`, `auto_send_failed_count`
+   - `retry_promoted_count`, `retry_skipped_count`
 
 ```mermaid
 flowchart TD
@@ -132,6 +146,15 @@ flowchart TD
     O -->|Yes| P[Send Gmail reply + resume]
     O -->|No| Q[Keep blocked for correction]
     P --> R[Update sent metadata + productivity events]
+    R --> S{feature_retry_queue?}
+    S -->|Yes| T[Retry failed queue and promote sendable rows]
+    S -->|No| U[Skip retry queue]
+    T --> V{feature_auto_send?}
+    U --> V
+    V -->|Yes| W[Auto-send only current-run queued IDs]
+    V -->|No| X[Skip auto-send]
+    W --> Y[Return response with automation counters]
+    X --> Y
 ```
 
 ## 6. Business Rules
@@ -363,4 +386,5 @@ The most important invariants are: routing/send safety, strict duplicate prevent
 Future AI agents must preserve these invariants, keep manual classification/review paths intact, and avoid changing core orchestration logic without explicit approval.
 
 Evidence basis: both  
-Verification limits: full backend suite blocked by stale import in `test_phone_attribution.py`; dashboard lint/build currently failing.
+Verification limits: targeted HR-5 verification complete; full-suite verification
+still constrained by stale tests in this branch.
