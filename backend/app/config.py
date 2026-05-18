@@ -31,11 +31,21 @@ class Settings(BaseSettings):
     feature_auto_poll_interval_minutes: int = 10
     feature_auto_send: bool = False
     feature_retry_queue: bool = False
+    semantic_embedding_provider: str = "hash"
+    semantic_embedding_model: str = "text-embedding-3-small"
+    semantic_embedding_dimension: int = 256
+    openrouter_api_key: str = ""
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    semantic_embedding_timeout_seconds: float = 20.0
+    semantic_embedding_latency_log_enabled: bool = True
+    semantic_keyword_weight: float = 0.6
+    semantic_similarity_weight: float = 0.4
     telegram_bot_token: str = ""
     telegram_allowed_chat_ids: str = ""
     telegram_action_pin: str = ""
     telegram_alerts_enabled: bool = True
     telegram_auth_ttl_minutes: int = 30
+    allow_runtime_schema_patch: bool = False
 
     model_config = SettingsConfigDict(
         env_file=".env",

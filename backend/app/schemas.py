@@ -45,6 +45,7 @@ class SettingsRequest(BaseModel):
     enabled: bool = True
     gmail_query: str = "is:unread in:inbox recruiter"
     default_gmail_query: str = "is:unread in:inbox recruiter"
+    saved_gmail_queries: list[str] = Field(default_factory=list)
     mail_date: str | None = None
     default_date_mode: str = "today"
     min_salary: int | None = None
@@ -53,6 +54,7 @@ class SettingsRequest(BaseModel):
     remote_preference: str = "any"
     role_keywords: list[str] = Field(default_factory=list)
     must_have_skills: list[str] = Field(default_factory=list)
+    employer_domains: list[str] = Field(default_factory=list)
     free_text_guidance: str = ""
     qualification_threshold: float = 0.6
     feature_auto_polling: bool = False
@@ -60,6 +62,7 @@ class SettingsRequest(BaseModel):
     feature_auto_send: bool = False
     feature_retry_queue: bool = False
     feature_ai_enabled: bool = False
+    feature_semantic_enabled: bool = False
     fallback_draft_template: str = ""
     signature_name: str = ""
     signature_phone: str = ""
@@ -112,6 +115,16 @@ class ResumeResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class DraftQualityResponse(BaseModel):
+    content_valid: bool
+    greeting_compliance: str
+    resume_context_status: str
+    confidence: float
+    score: int
+    label: str
+    issues: list[str] = Field(default_factory=list)
+
+
 class EmailResponse(BaseModel):
     id: int
     owner_id: str
@@ -137,6 +150,8 @@ class EmailResponse(BaseModel):
     draft_source: str | None = None
     draft_model: str | None = None
     draft_ai_error: str | None = None
+    draft_resume_context_status: str | None = None
+    draft_quality: DraftQualityResponse | None = None
     approval_status: str
     sent_status: str
     source: str
@@ -144,6 +159,9 @@ class EmailResponse(BaseModel):
     external_thread_id: str | None
     external_rfc_message_id: str | None
     gmail_received_at: datetime | None
+    applied_gmail_label: str | None = None
+    applied_gmail_label_id: str | None = None
+    applied_gmail_label_at: datetime | None = None
     gmail_message_url: str | None = None
     recipient_email: str | None
     cc_email: str | None
@@ -197,6 +215,16 @@ class AIStatusResponse(BaseModel):
     provider: str
     model: str
     detail: str
+    embedding_provider: str
+    embedding_model: str
+    embedding_connected: bool
+    embedding_detail: str
+    embedding_configured: bool | None = None
+    embedding_runtime_healthy: bool | None = None
+    embedding_last_error: str | None = None
+    embedding_last_attempted_at: datetime | None = None
+    embedding_last_success_at: datetime | None = None
+    embedding_last_duration_ms: int | None = None
     last_error: str | None = None
     last_started_at: datetime | None = None
     last_finished_at: datetime | None = None
@@ -216,12 +244,131 @@ class OAuthStartResponse(BaseModel):
     detail: str
     configured: bool
     authenticated: bool
+    authorization_url: str | None = None
+
+
+class OAuthUrlResponse(BaseModel):
+    authorization_url: str | None = None
 
 
 class CandidateListResponse(BaseModel):
     items: list[EmailResponse]
     next_cursor: int | None
     has_next: bool
+
+
+class PremiumNumberResponse(BaseModel):
+    id: int
+    recruiter_email_id: int
+    phone_number_display: str
+    phone_number_normalized: str
+    owner_name: str
+    company: str
+    designation: str
+    purpose: str
+    confidence: str
+    contact_type: str
+    recruiter_relevance_score: int
+    is_recruiter_relevant: bool
+    relevance_reason: str
+    source_fragment: str
+    source_email_sender: str
+    source_email_subject: str
+    source_email_message_id: str | None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class PremiumNumberListResponse(BaseModel):
+    items: list[PremiumNumberResponse]
+    next_cursor: int | None
+    has_next: bool
+
+
+class UnknownNumberReviewCardResponse(BaseModel):
+    id: int
+    source_email_id: int
+    normalized_phone_number: str
+    display_phone_number: str
+    owner_name: str
+    company: str
+    designation: str
+    confidence: str
+    purpose: str
+    evidence_snippet: str
+    email_subject: str
+    email_sender: str
+    gmail_open_url: str
+    state: str
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class RecruiterNumberResponse(BaseModel):
+    id: int
+    normalized_phone_number: str
+    display_phone_number: str
+    recruiter_name: str
+    company: str
+    designation: str
+    recruiter_email: str
+    first_detected_email_id: int | None
+    total_opportunity_count: int = 0
+    last_email_received_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class EmployerNumberResponse(BaseModel):
+    id: int
+    normalized_phone_number: str
+    display_phone_number: str
+    owner_name: str
+    company: str
+    source_email_id: int | None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class RecruiterOpportunityResponse(BaseModel):
+    id: int
+    recruiter_number_id: int
+    source_email_id: int | None
+    gmail_message_id: str
+    email_subject: str
+    email_sender: str
+    gmail_open_url: str
+    received_at: datetime | None
+    job_title: str
+    client: str
+    location: str
+    work_mode: str
+    visa_restrictions: str
+    extracted_skills: str
+    evidence: str
+    recruiter_name: str = ""
+    recruiter_email: str = ""
+    recruiter_phone_display: str = ""
+    recruiter_phone_normalized: str = ""
+    status: str
+    notes: str
+    cold_call_script: str | None = None
+    cold_call_script_updated_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class RecruiterOpportunityPatchRequest(BaseModel):
+    status: str | None = None
+    notes: str | None = None
 
 
 class AutomationRunResponse(BaseModel):
@@ -232,11 +379,17 @@ class AutomationRunResponse(BaseModel):
     decision_reason: str | None = None
     skip_reason: str | None = None
     routing_reason: str | None = None
+    applied_gmail_label: str | None = None
+    applied_gmail_label_id: str | None = None
     effective_query: str | None = None
     matched_count: int | None = None
     queued_count: int | None = None
     skipped_count: int | None = None
     failed_count: int | None = None
+    auto_sent_count: int | None = None
+    auto_send_failed_count: int | None = None
+    retry_promoted_count: int | None = None
+    retry_skipped_count: int | None = None
 
 
 class AutomationRunRequest(BaseModel):
@@ -251,9 +404,63 @@ class AutomationRunRequest(BaseModel):
         return value
 
 
+class GmailLabelingPreviewRequest(BaseModel):
+    sender: str
+    subject: str
+    body: str
+    state: str = "needs_review"
+    decision: str = "Qualified"
+    routing_status: str = "unverified"
+    routing_confidence: float = 0.0
+    skip_reason: str | None = None
+    draft_reply: str = ""
+
+
+class GmailLabelingPreviewResponse(BaseModel):
+    label: str
+    reason_path: str
+
+
 class TelegramStatusResponse(BaseModel):
     enabled: bool
     polling: bool
     alerts_enabled: bool
     authorized_chats: int
     detail: str
+
+
+class ProductivityEventCreateRequest(BaseModel):
+    event_type: str
+    event_source: str = "ui"
+    entity_id: int | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ProductivityEventResponse(BaseModel):
+    id: int
+    owner_id: str
+    event_type: str
+    event_source: str
+    entity_id: int | None
+    weight: float
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    occurred_at: datetime
+    created_at: datetime
+
+
+class ProductivityBarPoint(BaseModel):
+    ts: datetime
+    sent_count: int
+    failed_count: int = 0
+    needs_review_count: int = 0
+    recent_run_count: int = 0
+
+
+class ProductivityTrendResponse(BaseModel):
+    range: str
+    bucket: str
+    trend_direction: str
+    trend_delta_pct: float
+    kpi_total_sent: int = 0
+    previous_period_total_sent: int = 0
+    bars: list[ProductivityBarPoint] = Field(default_factory=list)

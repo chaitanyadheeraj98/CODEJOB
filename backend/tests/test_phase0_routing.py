@@ -6,6 +6,7 @@ from app.phase0 import (
     draft_reply,
     email_domain,
     greeting_from_to_contact,
+    normalize_employer_domains,
     render_fallback_draft_template,
     resolve_to_cc,
 )
@@ -58,6 +59,25 @@ class RecipientRoutingTests(unittest.TestCase):
 
     def test_email_domain_extracts_from_display_name(self) -> None:
         self.assertEqual(email_domain("Prashanth Kinnera <kprashanth@horizonsoftech.net>"), "horizonsoftech.net")
+
+    def test_employer_domains_can_be_overridden(self) -> None:
+        sender = "Prashanth Kinnera <kprashanth@horizonsoftech.net>"
+        routing = analyze_recipient_routing(
+            sender,
+            "Java Microservices RPA Developer",
+            EMAIL_30_BODY,
+            employer_domains=["cystemslogic.com"],
+        )
+        self.assertEqual(routing.to_email, "kprashanth@horizonsoftech.net")
+        self.assertEqual(routing.cc_email, "sudarsan@cystemslogic.com")
+
+    def test_normalize_employer_domains_defaults_and_normalizes(self) -> None:
+        self.assertEqual(
+            normalize_employer_domains(["  HorizonSoftTech.Net  ", "horizonsoftech.net", ""]),
+            {"horizonsofttech.net", "horizonsoftech.net"},
+        )
+        fallback = normalize_employer_domains([])
+        self.assertIn("horizonsofttech.net", fallback)
 
     def test_draft_reply_uses_plain_text_skill_labels(self) -> None:
         draft = draft_reply(

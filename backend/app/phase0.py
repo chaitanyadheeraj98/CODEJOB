@@ -92,6 +92,13 @@ def _is_employer_email(email: str) -> bool:
     return email_domain(email) in EMPLOYER_DOMAINS
 
 
+def normalize_employer_domains(raw_domains: list[str] | tuple[str, ...] | set[str] | None) -> set[str]:
+    if not raw_domains:
+        return set(EMPLOYER_DOMAINS)
+    normalized = {str(domain).strip().lower() for domain in raw_domains if str(domain).strip()}
+    return normalized or set(EMPLOYER_DOMAINS)
+
+
 def _is_ignored_email(email: str) -> bool:
     domain = email_domain(email)
     return domain == "googlegroups.com" or email.lower().endswith("+unsubscribe@googlegroups.com")
@@ -109,7 +116,12 @@ def analyze_recipient_routing(
     body: str,
     snippet: str = "",
     learned_pairs: list[tuple[str, str]] | None = None,
+    employer_domains: list[str] | tuple[str, ...] | set[str] | None = None,
 ) -> RoutingResult:
+    effective_employer_domains = normalize_employer_domains(employer_domains)
+    def is_employer_email(email: str) -> bool:
+        return email_domain(email) in effective_employer_domains
+
     sender_email = extract_email_address(sender)
     combined_text = f"{subject}\n{body}\n{snippet}"
     evidence: list[RoutingEvidence] = []
@@ -121,7 +133,7 @@ def analyze_recipient_routing(
             unique_emails.append(email)
 
     if sender_email and "@" in sender_email and not _is_ignored_email(sender_email):
-        role = "cc" if _is_employer_email(sender_email) else "to"
+        role = "cc" if is_employer_email(sender_email) else "to"
         item = RoutingEvidence(role=role, email=sender_email, source="sender_header", detail="Sender header")
         _append_unique(candidates, item)
 
@@ -130,7 +142,7 @@ def analyze_recipient_routing(
     forwarded_non_employer = [
         e.lower()
         for e in forwarded_from_matches
-        if not _is_employer_email(e.lower()) and not _is_ignored_email(e.lower())
+        if not is_employer_email(e.lower()) and not _is_ignored_email(e.lower())
     ]
     for email in forwarded_non_employer:
         _append_unique(
@@ -141,7 +153,7 @@ def analyze_recipient_routing(
     for email in unique_emails:
         if _is_ignored_email(email):
             continue
-        role = "cc" if _is_employer_email(email) else "to"
+        role = "cc" if is_employer_email(email) else "to"
         source = "body_employer_contact" if role == "cc" else "body_recruiter_contact"
         _append_unique(candidates, RoutingEvidence(role=role, email=email, source=source, detail="Email body"))
 

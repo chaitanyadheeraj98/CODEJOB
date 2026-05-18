@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from app.ai.resume_context_attribution import (
+    RESUME_CONTEXT_EXTRACT_FAILED,
+    DraftResumeContextStatus,
+    classify_extracted_resume_context,
+)
 from app.ai.deepseek_client import deepseek_chat_completion
 from app.ai.prompting import build_reply_prompts
 from app.ai.resume_context import extract_resume_context
@@ -13,6 +18,7 @@ class ReplyGenerationResult:
     source: str
     ai_model: str | None
     ai_error: str | None
+    resume_context_status: DraftResumeContextStatus
 
 
 def _sanitize_plain_text_reply(text: str) -> str:
@@ -71,7 +77,13 @@ def generate_reply_with_ai_or_fallback(
     fallback_draft: str,
     model_name: str,
 ) -> ReplyGenerationResult:
-    resume_text = extract_resume_context(resume_path, resume_file_name)
+    resume_text = ""
+    context_status: DraftResumeContextStatus = RESUME_CONTEXT_EXTRACT_FAILED
+    try:
+        resume_text = extract_resume_context(resume_path, resume_file_name)
+        context_status = classify_extracted_resume_context(resume_text).status
+    except Exception:
+        context_status = RESUME_CONTEXT_EXTRACT_FAILED
     system_prompt, user_prompt = build_reply_prompts(
         sender=sender,
         recruiter_to_email=recruiter_to_email,
@@ -95,6 +107,7 @@ def generate_reply_with_ai_or_fallback(
             source="deepseek",
             ai_model=model_name,
             ai_error=None,
+            resume_context_status=context_status,
         )
     except Exception as exc:
         return ReplyGenerationResult(
@@ -102,4 +115,5 @@ def generate_reply_with_ai_or_fallback(
             source="rules_only",
             ai_model=model_name,
             ai_error=str(exc),
+            resume_context_status=context_status,
         )

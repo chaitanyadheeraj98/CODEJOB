@@ -1,4 +1,4 @@
-param(
+cparam(
 	[string]$ProjectPath = "."
 )
 

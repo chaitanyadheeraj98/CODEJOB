@@ -172,6 +172,9 @@
 .btnMuted,
 .btnPrimary,
 .topBarAction {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   height: 46px;
   border-radius: 7px;
   padding: 0 18px;
@@ -180,6 +183,7 @@
   color: var(--ink);
   font-weight: 500;
   cursor: pointer;
+  text-decoration: none;
 }
 
 .btnPrimary,
@@ -286,6 +290,290 @@
   align-items: center;
 }
 
+.queryBucketInline {
+  position: relative;
+  min-width: 0;
+}
+
+.queryBucketInput {
+  width: 100%;
+  height: 40px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 0 78px 0 12px;
+  font-size: 17px;
+}
+
+.queryOverlayBtn {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: #fff;
+  color: #1f2f4a;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 3;
+}
+
+.queryOverlayAdd {
+  right: 42px;
+}
+
+.queryOverlayRemove {
+  right: 8px;
+}
+
+.queryBucketMsgInline {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: #4e596f;
+}
+
+.querySuggestionList {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 10px 24px rgba(18, 28, 45, 0.14);
+  max-height: 220px;
+  overflow-y: auto;
+  z-index: 5;
+  padding: 4px;
+}
+
+.querySuggestionItem {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 7px;
+  color: #17253d;
+  cursor: pointer;
+}
+
+.querySuggestionItem:hover,
+.querySuggestionItem.active {
+  background: #ebf1ff;
+}
+
+.liveMonitorCard {
+  margin-top: 18px;
+  background: linear-gradient(145deg, #0d172b, #121f38 58%, #1a2b4f);
+  border: 1px solid #223558;
+  border-radius: 12px;
+  padding: 18px;
+  color: #dce7ff;
+}
+
+.liveMonitorHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.liveMonitorHeader h2 {
+  margin: 0;
+  font-size: 22px;
+  color: #f2f6ff;
+}
+
+.liveMonitorHeader p {
+  margin: 6px 0 0;
+  color: #aab9db;
+  font-size: 13px;
+}
+
+.monitorRange {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  color: #aab9db;
+}
+
+.monitorRange select {
+  border: 1px solid #2c436f;
+  border-radius: 8px;
+  background: rgba(12, 22, 40, 0.7);
+  color: #dce7ff;
+  padding: 7px 10px;
+}
+
+.liveTicker {
+  min-width: 110px;
+  text-align: right;
+}
+
+.liveTicker strong {
+  display: block;
+  font-size: 28px;
+  line-height: 1;
+}
+
+.liveTicker span {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.liveTicker.up {
+  color: #4ee18b;
+}
+
+.liveTicker.down {
+  color: #ff6f8f;
+}
+
+.liveChartWrap {
+  margin-top: 12px;
+  min-height: 250px;
+  border-radius: 10px;
+  border: 1px solid #2c436f;
+  background:
+    linear-gradient(to top, rgba(73, 117, 197, 0.12), rgba(73, 117, 197, 0.02)),
+    repeating-linear-gradient(
+      to right,
+      rgba(165, 192, 247, 0.14),
+      rgba(165, 192, 247, 0.14) 1px,
+      transparent 1px,
+      transparent 36px
+    );
+  overflow: hidden;
+  padding: 10px 12px;
+}
+
+.chartAxisLabel {
+  font-size: 11px;
+  color: #9eb3dd;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.yAxisLabel {
+  margin-bottom: 8px;
+}
+
+.xAxisLabel {
+  margin-top: 8px;
+}
+
+.hBarChart {
+  max-height: 178px;
+  overflow-y: auto;
+  display: grid;
+  gap: 6px;
+  padding-right: 6px;
+}
+
+.hBarRow {
+  display: grid;
+  grid-template-columns: 112px 1fr 44px;
+  align-items: center;
+  gap: 8px;
+}
+
+.hBarLabel {
+  font-size: 11px;
+  color: #c0d1f3;
+  white-space: nowrap;
+}
+
+.hBarTrack {
+  height: 14px;
+  border: 1px solid #325082;
+  border-radius: 999px;
+  background: rgba(5, 13, 24, 0.4);
+  position: relative;
+  overflow: hidden;
+}
+
+.hBarFill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: linear-gradient(90deg, #73bdff, #2f8dff);
+  box-shadow: 0 0 10px rgba(64, 156, 255, 0.4);
+}
+
+.hBarValue {
+  text-align: right;
+  font-size: 11px;
+  color: #dce8ff;
+}
+
+.chartEmptyState {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: #a9bcdf;
+}
+
+.signalTape {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid #2c436f;
+  border-radius: 8px;
+  background: rgba(11, 19, 34, 0.55);
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.signalTape span {
+  border-radius: 999px;
+  border: 1px solid #36558d;
+  padding: 5px 10px;
+  font-size: 12px;
+  color: #c6d8ff;
+  background: rgba(76, 118, 202, 0.18);
+}
+
+.monitorMeta {
+  margin-top: 12px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.monitorMeta span {
+  border: 1px solid #304d80;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: #d6e4ff;
+}
+
+.monitorHistory {
+  margin-top: 10px;
+  border: 1px solid #2c436f;
+  border-radius: 8px;
+  background: rgba(8, 15, 27, 0.62);
+  padding: 10px;
+  display: grid;
+  gap: 6px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.monitorHistory span {
+  font-size: 12px;
+  color: #b7c9ee;
+}
+
+.monitorSectionTitle {
+  margin: 12px 0 6px;
+  font-size: 13px;
+  color: #d5e4ff;
+}
+
 .search,
 .actionBar input,
 .card input,
@@ -383,6 +671,14 @@
   color: #2e3750;
   padding: 4px 8px;
   font-size: 12px;
+}
+
+.automationMetrics {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
 }
 
 .dotOk {
@@ -491,6 +787,7 @@
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
+  align-items: center;
 }
 
 .rowBtns button,
@@ -510,6 +807,38 @@
   border-color: var(--primary);
   background: var(--primary);
   color: #fff;
+}
+
+.verdictBadge {
+  display: inline-flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.verdict-excellent,
+.verdict-strong {
+  color: #14623a;
+  background: #e8f7ee;
+  border-color: #7dc59a;
+}
+
+.verdict-good,
+.verdict-review {
+  color: #7a4a00;
+  background: #fff4dd;
+  border-color: #e3b968;
+}
+
+.verdict-risky {
+  color: #8f1421;
+  background: #fde8ea;
+  border-color: #e7a1a9;
 }
 
 .errorMessage {
@@ -664,5 +993,17 @@
 
   .actionBar {
     grid-template-columns: 1fr;
+  }
+
+  .liveMonitorHeader {
+    flex-direction: column;
+  }
+
+  .liveTicker {
+    text-align: left;
+  }
+
+  .monitorRange {
+    width: 100%;
   }
 }

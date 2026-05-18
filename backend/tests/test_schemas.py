@@ -3,7 +3,7 @@ import unittest
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
-from app.schemas import EmailResponse
+from app.schemas import EmailResponse, SettingsRequest
 
 
 class EmailResponseRoutingTests(unittest.TestCase):
@@ -37,6 +37,10 @@ class EmailResponseRoutingTests(unittest.TestCase):
             external_message_id="abc",
             external_thread_id="abc",
             external_rfc_message_id=None,
+            gmail_received_at=None,
+            applied_gmail_label=None,
+            applied_gmail_label_id=None,
+            applied_gmail_label_at=None,
             gmail_message_url="https://mail.google.com/",
             recipient_email="recruiter@example.com",
             cc_email="employer@example.com",
@@ -61,6 +65,14 @@ class EmailResponseRoutingTests(unittest.TestCase):
 
         self.assertEqual(response.routing_evidence[0].email, "recruiter@example.com")
         self.assertEqual(response.routing_candidates, [])
+
+    def test_settings_request_accepts_employer_domains(self) -> None:
+        payload = SettingsRequest.model_validate({"employer_domains": ["horizonsofttech.net"]})
+        self.assertEqual(payload.employer_domains, ["horizonsofttech.net"])
+
+    def test_settings_request_accepts_saved_gmail_queries(self) -> None:
+        payload = SettingsRequest.model_validate({"saved_gmail_queries": ["is:unread", "tx is:unread"]})
+        self.assertEqual(payload.saved_gmail_queries, ["is:unread", "tx is:unread"])
 
 
 if __name__ == "__main__":
