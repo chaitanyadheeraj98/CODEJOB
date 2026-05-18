@@ -11,7 +11,7 @@ from sqlalchemy.pool import StaticPool
 
 from app import main
 from app.db import Base
-from app.models import NumberReviewQueue, PremiumNumberLead, RecruiterEmail, UserSettings
+from app.models import NumberReviewQueue, PremiumNumberLead, RecruiterEmail, RecruiterNumber, RecruiterOpportunity, UserSettings
 
 
 class PremiumNumbersApiTests(unittest.TestCase):
@@ -236,6 +236,91 @@ class PremiumNumbersApiTests(unittest.TestCase):
         self.assertEqual(payload[0]["recruiter_phone_display"], "+1 214 393 8746")
         self.assertEqual(payload[0]["recruiter_name"], "Dharma Veer")
         self.assertEqual(payload[0]["recruiter_email"], "dharma.veer@intellisoft.com")
+
+    def test_reextract_is_idempotent_for_leads_and_opportunities(self) -> None:
+        now = datetime.now(UTC)
+        with Session(self.engine) as db:
+            db.add(
+                UserSettings(
+                    owner_id=main.settings.owner_id,
+                    enabled=True,
+                    gmail_query="is:unread",
+                    default_gmail_query="is:unread",
+                    default_date_mode="today",
+                    accepted_locations="",
+                    role_keywords="",
+                    must_have_skills="",
+                    employer_domains="horizonsoftech.net",
+                    free_text_guidance="",
+                    remote_preference="any",
+                )
+            )
+            email = RecruiterEmail(
+                owner_id=main.settings.owner_id,
+                sender="Prashanth <kprashanth@horizonsoftech.net>",
+                subject="Java role",
+                body="Call Dharma Veer at +1 (972) 756-1212 Ext 128",
+                role="Java Developer",
+                location="onsite",
+                salary_text="",
+                skills_text="java,spring",
+                score=80,
+                decision="Qualified",
+                state="needs_review",
+                draft_reply="Thanks",
+                source="gmail",
+                external_message_id="m-reextract-idempotent",
+                external_thread_id="t-reextract-idempotent",
+                gmail_received_at=now,
+                recipient_email="to@example.com",
+                cc_email="cc@example.com",
+            )
+            db.add(email)
+            db.commit()
+            db.refresh(email)
+            db.add(
+                RecruiterNumber(
+                    owner_id=main.settings.owner_id,
+                    normalized_phone_number="19727561212",
+                    display_phone_number="(972) 756-1212 ext 128",
+                    recruiter_name="Dharma Veer",
+                    company="Intellisoft",
+                    designation="US IT Recruiter",
+                    recruiter_email="dharma.veer@intellisoft.com",
+                    first_detected_email_id=email.id,
+                )
+            )
+            db.commit()
+            email_id = email.id
+
+        first = self.client.post(f"/premium-numbers/reextract/{email_id}")
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertEqual(first.json()["stored_count"], 1)
+
+        second = self.client.post(f"/premium-numbers/reextract/{email_id}")
+        self.assertEqual(second.status_code, 200, second.text)
+        self.assertEqual(second.json()["stored_count"], 1)
+
+        with Session(self.engine) as db:
+            leads = (
+                db.query(PremiumNumberLead)
+                .filter(
+                    PremiumNumberLead.owner_id == main.settings.owner_id,
+                    PremiumNumberLead.recruiter_email_id == email_id,
+                    PremiumNumberLead.phone_number_normalized == "19727561212",
+                )
+                .count()
+            )
+            opportunities = (
+                db.query(RecruiterOpportunity)
+                .filter(
+                    RecruiterOpportunity.owner_id == main.settings.owner_id,
+                    RecruiterOpportunity.gmail_message_id == "m-reextract-idempotent",
+                )
+                .count()
+            )
+            self.assertEqual(leads, 1)
+            self.assertEqual(opportunities, 1)
 
 
 if __name__ == "__main__":

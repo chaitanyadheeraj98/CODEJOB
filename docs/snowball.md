@@ -27,11 +27,21 @@ Branch context: `snowball-md`
 
 ### HR-3: Phone-intelligence write path is dense and side-effect heavy
 
-- **Status:** Still Open
+- **Status:** Partially Closed
 - **Severity:** High
-- **Remaining issue:** extraction, intelligence classification, review queue, recruiter/employer buckets, and opportunity creation still span multiple helpers with multiple writes.
-- **Evidence:** `premium_numbers/service.py` + `premium_numbers/intelligence.py` + candidate runtime capture path.
-- **Recommended next action:** introduce a single transaction-scoped phone-intelligence workflow boundary with explicit idempotency points.
+- **Closeout evidence:** canonical transaction-scoped workflow boundary now exists in `app/services/phone_intelligence_workflow_service.py`, with centralized idempotency checkpoints for recruiter number, employer number, review-card, and opportunity paths.
+- **Implementation evidence:** premium helper delegation (`premium_numbers/service.py`, `premium_numbers/intelligence.py`) and candidate runtime capture path now route through one workflow boundary; `/premium-numbers/reextract/{id}` is routed through the workflow path via candidate runtime.
+- **Validation evidence:** targeted regression run passed (`39 passed`) across premium + HR safety set:
+  - `backend/tests/test_premium_numbers_extraction.py`
+  - `backend/tests/test_premium_numbers_api.py`
+  - `backend/tests/test_approve_cc_regression.py`
+  - `backend/tests/test_run_once_hotfix.py`
+  - `backend/tests/test_routing_policy.py`
+  - `backend/tests/test_candidate_date_filtering.py`
+  - `backend/tests/test_telegram_interactive.py`
+- **Residual risk:** full-suite confidence is still limited by stale import debt in `backend/tests/test_phone_attribution.py` (`ModuleNotFoundError: No module named 'app.phone_attribution'`).
+- **Debt classification:** stale test/import contract, orphaned test-only reference, non-blocking for HR-3 closure.
+- **Runtime isolation evidence:** no current backend route/service/runtime workflow imports `app.phone_attribution`.
 
 ### HR-4: Runtime schema mutation depends on one additive helper
 
@@ -88,8 +98,8 @@ Branch context: `snowball-md`
 - **Status:** Needs Re-test
 - **Severity:** Medium
 - **Remaining issue:** full-suite confidence is incomplete due stale/contract-mismatch tests and lint/build debt.
-- **Evidence:** full backend run now fails at collection because `test_phone_attribution.py` imports missing `app.phone_attribution`; `test_run_orchestrator.py` is stale vs current dependency contract; dashboard lint/build fail with current rule/type/runtime constraints.
-- **Recommended next action:** provision dependencies and re-run targeted backend/frontend suites after stale tests are fixed.
+- **Evidence:** full backend run now fails at collection because `test_phone_attribution.py` imports missing `app.phone_attribution`; no active runtime path imports that module; `test_run_orchestrator.py` is stale vs current dependency contract; dashboard lint/build fail with current rule/type/runtime constraints.
+- **Recommended next action:** keep `phone_attribution` as non-blocking stale-test debt for current closure gates, and track separate follow-up to decide test removal vs compatibility shim restoration; then re-run full backend/frontend suites.
 
 ## Low-risk tickets
 

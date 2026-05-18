@@ -19,7 +19,8 @@ Branch: `snowball-md`
 - `cd backend; python -m pytest`
   - **Result:** failed during collection
   - **Exact failure:** `ModuleNotFoundError: No module named 'app.phone_attribution'` from `tests/test_phone_attribution.py`
-  - **Blocker class:** stale test
+  - **Blocker class:** stale test/import contract (orphaned test-only reference)
+  - **Gate impact:** non-blocking for HR-3 functional closure when targeted premium + safety suite is green
 
 - `cd backend; python -m pytest tests/test_approve_cc_regression.py tests/test_run_once_hotfix.py tests/test_routing_policy.py tests/test_telegram_interactive.py tests/test_candidate_date_filtering.py`
   - **Result:** passed
@@ -59,6 +60,7 @@ Branch: `snowball-md`
 ## 4) Known stale/mismatched tests
 
 - `test_phone_attribution.py` imports `app.phone_attribution`, which is not present in current backend code.
+- Runtime isolation evidence: no current backend route/service/runtime workflow imports `app.phone_attribution`; this is test-only orphaned logic.
 - `test_run_orchestrator.py` is stale against the current `RunOrchestratorDependencies` contract.
 
 ## 5) Reviewer attention

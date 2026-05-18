@@ -10,8 +10,7 @@ from app.ai.resume_context_attribution import RESUME_CONTEXT_RULES_ONLY
 from app.models import RecruiterEmail, UserSettings
 from app.phase0 import DEFAULT_FALLBACK_DRAFT_TEMPLATE, DEFAULT_SIGNATURE_EMAIL, DEFAULT_SIGNATURE_NAME, DEFAULT_SIGNATURE_PHONE, draft_reply, greeting_from_to_contact, parse_email, render_fallback_draft_template, requested_details_block, skills_from_text
 from app.routing import RoutingDecision
-from app.premium_numbers import extract_and_store_premium_numbers
-from app.premium_numbers.intelligence import process_email_number_intelligence
+from app.services.phone_intelligence_workflow_service import PhoneIntelligenceWorkflowResult, PhoneIntelligenceWorkflowService
 
 logger = logging.getLogger(__name__)
 
@@ -26,15 +25,15 @@ class CandidateRuntimeDeps:
 class CandidateRuntimeService:
     def __init__(self, deps: CandidateRuntimeDeps):
         self.deps = deps
+        self.phone_intelligence_workflow = PhoneIntelligenceWorkflowService(manage_transaction=True)
 
-    def capture_premium_numbers(self, db: Session, email: RecruiterEmail) -> None:
+    def capture_premium_numbers(self, db: Session, email: RecruiterEmail) -> PhoneIntelligenceWorkflowResult | None:
         try:
-            extract_and_store_premium_numbers(db, email)
-            process_email_number_intelligence(db, email)
-            db.commit()
+            return self.phone_intelligence_workflow.process_email(db, email, source="candidate_runtime")
         except Exception as exc:
             db.rollback()
             logger.warning("Premium numbers extraction skipped for email_id=%s: %s", email.id, exc)
+            return None
 
     def apply_draft_learning(self, db: Session, draft: str) -> str:
         _ = db

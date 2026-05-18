@@ -9,7 +9,7 @@ Branch: `snowball-md`
 | --- | --- |
 | HR-1 | Done |
 | HR-2 | Done |
-| HR-3 | Still Open |
+| HR-3 | Partially Closed |
 | HR-4 | Still Open |
 | HR-5 | Still Open |
 | MR-1 | Still Open |
@@ -54,9 +54,18 @@ Branch: `snowball-md`
 - **Residual note:** full backend suite remains blocked by stale `test_phone_attribution.py` import, but HR-2 targeted behavior gate is green.
 
 ### HR-3
-- **Remaining issue:** phone-intelligence path remains multi-write and side-effect dense.
-- **Evidence:** extraction + intelligence + queue + bucket/opportunity writes span multiple modules.
-- **Recommended next action:** consolidate into a transaction-aware service boundary.
+- **Status:** Partially Closed
+- **What changed:** phone-intelligence writes are now centralized behind a canonical transaction-scoped service boundary in `app/services/phone_intelligence_workflow_service.py`.
+- **Implementation evidence:** premium extraction/intelligence helper paths now delegate into the workflow boundary; candidate runtime capture path and `/premium-numbers/reextract/{id}` route through the same workflow path.
+- **Idempotency evidence:** workflow now uses explicit checkpoints for recruiter number, employer number, review-card existence, and opportunity existence before writes.
+- **Validation command:**
+  - `cd backend; python -m pytest tests/test_premium_numbers_extraction.py tests/test_premium_numbers_api.py tests/test_approve_cc_regression.py tests/test_run_once_hotfix.py tests/test_routing_policy.py tests/test_candidate_date_filtering.py tests/test_telegram_interactive.py`
+  - **Result:** `39 passed`
+- **Residual/non-blocking blocker:** full-suite confidence remains limited by separate stale import debt:
+  - **Exact failure:** `ModuleNotFoundError: No module named 'app.phone_attribution'`
+  - **Blocker class:** stale test/import contract (orphaned test-only reference)
+  - **Runtime isolation evidence:** no current backend route/service/runtime workflow imports `app.phone_attribution`
+  - **Gate impact:** non-blocking for HR-3 closure while targeted premium + safety suite remains green
 
 ### HR-4
 - **Remaining issue:** runtime schema patching remains startup migration mechanism.
@@ -71,14 +80,14 @@ Branch: `snowball-md`
 ### MR-5
 - **Remaining issue:** full validation confidence is still incomplete.
 - **Evidence:** full backend suite collection fails due stale import; dashboard lint/build fail with current rule/type constraints.
-- **Recommended next action:** fix stale tests and lint/build blockers, then re-run full suites.
+- **Recommended next action:** keep `phone_attribution` as non-blocking stale-contract debt for current ticket closure gates, and track a separate follow-up decision (remove stale test vs restore compatibility shim) before full-suite re-baseline.
 
 ## 4) Validation command results from this audit session
 
 - `cd backend; python -m pytest`
   - **Result:** failed during collection
   - **Exact failure:** `ModuleNotFoundError: No module named 'app.phone_attribution'`
-  - **Blocker class:** stale test
+  - **Blocker class:** stale test/import contract (orphaned test-only reference)
 
 - `cd backend; python -m pytest tests/test_approve_cc_regression.py tests/test_run_once_hotfix.py tests/test_routing_policy.py tests/test_telegram_interactive.py tests/test_candidate_date_filtering.py`
   - **Result:** passed (`29 passed`)

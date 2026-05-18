@@ -258,6 +258,7 @@ EVENT_WEIGHTS: dict[str, float] = {
     "view_recent_runs": 0.2,
     "view_sent_items": 0.2,
     "view_run_queue": 0.1,
+    "view_premium_numbers": 0.1,
 }
 
 ALLOWED_VIEW_EVENTS = {
@@ -266,6 +267,7 @@ ALLOWED_VIEW_EVENTS = {
     "view_recent_runs",
     "view_sent_items",
     "view_run_queue",
+    "view_premium_numbers",
 }
 
 RANGE_OPTIONS = {"last_1h", "current_day", "current_week", "current_month", "current_year", "last_5y"}
@@ -1620,9 +1622,8 @@ def reextract_premium_numbers(recruiter_email_id: int, db: Session = Depends(get
     )
     if not email:
         raise HTTPException(status_code=404, detail="Candidate not found")
-    count = extract_and_store_premium_numbers(db, email)
-    db.commit()
-    return {"stored_count": count}
+    workflow_result = _get_candidate_runtime_service().capture_premium_numbers(db, email)
+    return {"stored_count": workflow_result.stored_count if workflow_result else 0}
 
 
 @app.get("/number-review", response_model=list[UnknownNumberReviewCardResponse])
