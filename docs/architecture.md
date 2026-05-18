@@ -8,7 +8,8 @@ Branch snapshot: `snowball-md`
 CODEJOB currently runs as:
 - **Backend:** FastAPI app, still centered in `backend/app/main.py` with service extraction helpers.
 - **Frontend:** React + TypeScript SPA, still centered in `dashboard/src/App.tsx`.
-- **Persistence:** SQLite via SQLAlchemy (`backend/app/models.py`, runtime schema patching in `backend/app/db.py`).
+- **Persistence:** SQLite via SQLAlchemy (`backend/app/models.py`) with
+  migration ownership in Alembic (`backend/alembic/*`).
 - **Integrations:** Gmail API, optional Google Sheets append, DeepSeek/OpenAI-compatible chat + embedding providers, Telegram Bot API polling.
 
 ## 2. Backend module map
@@ -16,7 +17,7 @@ CODEJOB currently runs as:
 | Area | Current implementation | Notes |
 | --- | --- | --- |
 | API surface + integration glue | `backend/app/main.py` | Route definitions and service wiring remain centralized |
-| Startup lifecycle | `backend/app/services/startup_service.py` | Creates tables, patches schema, boots labeling/telegram/auto-runner |
+| Startup lifecycle | `backend/app/services/startup_service.py` | Creates tables, enforces migration-ready schema, boots labeling/telegram/auto-runner |
 | Run orchestration | `backend/app/services/orchestration_service.py` + `backend/app/automation/run_orchestrator.py` | Run-once, approve/reject/send-to-failed, resolve-recipients |
 | Routing policy | `backend/app/routing/policy.py` + `backend/app/services/routing_runtime_service.py` | Heuristic routing is active; learned adapter currently fallback-only |
 | Candidate runtime helpers | `backend/app/services/candidate_runtime_service.py` | draft repair, routing refresh, premium-number capture bridge |
@@ -41,7 +42,7 @@ CODEJOB currently runs as:
 
 ### Startup order
 1. `Base.metadata.create_all()`
-2. `ensure_sqlite_phase0_columns()` runtime patching
+2. `MigrationRuntimeService.ensure_schema_ready()` migration revision gate
 3. default settings bootstrap
 4. Gmail labeling service bootstrap + label ensure (when Gmail configured)
 5. Telegram bot start (if token + allowed chats configured)
@@ -98,6 +99,8 @@ Also present for manual/legacy transitions:
 - learned routing adapter is still a parity placeholder.
 - runtime process memory stores telegram auth sessions and runtime health signals (non-durable).
 - `feature_auto_send` and `feature_retry_queue` are persisted settings without full runtime executors.
+- strict startup requires DB revision at Alembic head; Docker backend now pre-runs
+  `alembic upgrade head` before `uvicorn`.
 
 ## 8. Intended vs Current Runtime
 

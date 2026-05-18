@@ -305,7 +305,9 @@ flowchart TD
 - `backend/app/premium_numbers/`  
   Extraction/classification/opportunity intelligence. **High caution**.
 - `backend/app/db.py`  
-  Startup schema creation/migration and uniqueness indexes. **High caution**.
+  SQLAlchemy engine/session base and ORM metadata creation. **High caution**.
+- `backend/alembic/`  
+  Migration-owned schema evolution and versioned upgrades. **High caution**.
 - `backend/app/models.py`  
   ORM schema source of truth.
 - `backend/app/routing/policy.py`  
@@ -338,7 +340,7 @@ Risky areas:
 - Routing policy and sendability checks
 - Approve-send validation and state transitions
 - Number classification + dedupe + opportunity write path
-- SQLite migration/index logic
+- Migration gate and Alembic revision ownership
 - Shared refresh/effect logic in `App.tsx`
 
 Require explicit approval:

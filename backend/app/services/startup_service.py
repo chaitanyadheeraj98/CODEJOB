@@ -4,9 +4,10 @@ import logging
 import threading
 from collections.abc import Callable
 
-from app.db import Base, engine, ensure_sqlite_phase0_columns
+from app.db import Base, engine
 from app.gmail_client import is_gmail_configured
 from app.runtime_state import runtime_state
+from app.services.migration_runtime_service import MigrationRuntimeService
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ class StartupService:
 
     def startup(self) -> None:
         Base.metadata.create_all(bind=engine)
-        ensure_sqlite_phase0_columns()
+        MigrationRuntimeService().ensure_schema_ready()
         self._ensure_default_settings()
         self._ensure_labeling_service()
         if is_gmail_configured():

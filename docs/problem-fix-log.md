@@ -10,7 +10,7 @@ Branch: `snowball-md`
 | HR-1 | Done |
 | HR-2 | Done |
 | HR-3 | Partially Closed |
-| HR-4 | Still Open |
+| HR-4 | Done |
 | HR-5 | Still Open |
 | MR-1 | Still Open |
 | MR-2 | Still Open |
@@ -68,9 +68,18 @@ Branch: `snowball-md`
   - **Gate impact:** non-blocking for HR-3 closure while targeted premium + safety suite remains green
 
 ### HR-4
-- **Remaining issue:** runtime schema patching remains startup migration mechanism.
-- **Evidence:** `ensure_sqlite_phase0_columns()` called at startup.
-- **Recommended next action:** shift schema evolution ownership to explicit migrations.
+- **Status:** Done
+- **What changed:** Alembic migration ownership was introduced (`backend/alembic.ini`, `backend/alembic/env.py`, `backend/alembic/versions/20260518_0001_schema_baseline.py`, `backend/alembic/versions/20260518_0002_phone_bucket_merge.py`).
+- **Implementation evidence:** startup now gates on migration state via `MigrationRuntimeService.ensure_schema_ready()` and no longer directly invokes `ensure_sqlite_phase0_columns()` in `StartupService`.
+- **Strict-mode enforcement evidence:** deprecated runtime fallback execution branch was removed from `MigrationRuntimeService`; behind DB startup path now raises explicit migration-required error.
+- **Validation evidence:**
+  - `cd backend; DEBUG=false DATABASE_URL=sqlite:///./data/codejob.db alembic current`
+  - `cd backend; DEBUG=false DATABASE_URL=sqlite:///./data/codejob.db alembic upgrade head`
+  - `cd backend; DEBUG=false DATABASE_URL=sqlite:///./data/codejob.db alembic current` (head reached: `20260518_0002`)
+  - strict check (behind DB + fallback false) returns expected failure with actionable message.
+  - `docker compose up --build` starts backend successfully in strict mode after
+    prestart Alembic upgrades (`-> 20260518_0001`, `20260518_0001 -> 20260518_0002`)
+    and then `Application startup complete`.
 
 ### HR-5
 - **Remaining issue:** feature flags imply behavior that is not implemented end-to-end.
@@ -88,6 +97,28 @@ Branch: `snowball-md`
   - **Result:** failed during collection
   - **Exact failure:** `ModuleNotFoundError: No module named 'app.phone_attribution'`
   - **Blocker class:** stale test/import contract (orphaned test-only reference)
+
+- `cd backend; DEBUG=false DATABASE_URL=sqlite:///./data/codejob.db alembic current`
+  - **Result:** passed
+  - **Exact output:** revision reported (pre-upgrade `20260518_0001`, post-upgrade `20260518_0002`)
+  - **Blocker class:** none
+
+- `cd backend; DEBUG=false DATABASE_URL=sqlite:///./data/codejob.db alembic upgrade head`
+  - **Result:** passed
+  - **Exact output:** upgrade `20260518_0001 -> 20260518_0002`
+  - **Blocker class:** none
+
+- `docker compose up --build`
+  - **Result:** passed for backend startup path in strict mode
+  - **Exact output:** Alembic upgrades run first, then Uvicorn starts successfully
+  - **Blocker class:** none
+
+- `docker compose logs backend --tail=100`
+  - **Result:** clean in latest run window
+  - **Exact output:** serving traffic with `200 OK` for `/settings`, `/gmail/status`,
+    `/automation/run-once`, `/analytics/events/view`, and number-review/opportunity
+    endpoints
+  - **Blocker class:** none
 
 - `cd backend; python -m pytest tests/test_approve_cc_regression.py tests/test_run_once_hotfix.py tests/test_routing_policy.py tests/test_telegram_interactive.py tests/test_candidate_date_filtering.py`
   - **Result:** passed (`29 passed`)

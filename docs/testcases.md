@@ -8,6 +8,12 @@ Branch: `snowball-md`
 ### Backend (from `backend/`)
 - `python -m pytest`
 - `python -m pytest tests/test_approve_cc_regression.py tests/test_run_once_hotfix.py tests/test_routing_policy.py tests/test_telegram_interactive.py tests/test_candidate_date_filtering.py`
+- `alembic upgrade head`
+- `alembic current`
+
+### Docker runtime (from repo root)
+- `docker compose up --build`
+- `docker compose logs backend --tail=100`
 
 ### Dashboard (from `dashboard/`)
 - `npm run lint`
@@ -47,6 +53,31 @@ Branch: `snowball-md`
   - **Exact failure:** npm cache permission errors (`EPERM` on `npm-cache/_cacache/tmp/*`) and repeated CLI usage-only output in this shell
   - **Blocker class:** incompatible local runtime/tooling invocation
 
+- `cd backend; DEBUG=false DATABASE_URL=sqlite:///./data/codejob.db alembic current`
+  - **Result:** passed
+  - **Exact output:** revision reported (pre-upgrade `20260518_0001`, post-upgrade `20260518_0002`)
+  - **Blocker class:** none
+
+- `cd backend; DEBUG=false DATABASE_URL=sqlite:///./data/codejob.db alembic upgrade head`
+  - **Result:** passed
+  - **Exact output:** `Running upgrade 20260518_0001 -> 20260518_0002`
+  - **Blocker class:** none
+
+- strict migration check (`ALLOW_RUNTIME_SCHEMA_PATCH=false` on behind DB)
+  - **Result:** expected fail
+  - **Exact output:** `RuntimeError: Database migration is required before startup. Run 'alembic upgrade head' in backend/ and restart.`
+  - **Blocker class:** none (expected strict-mode behavior)
+
+- `docker compose up --build`
+  - **Result:** passed for strict-mode startup
+  - **Exact output:** backend prestart runs Alembic upgrades to head, then Uvicorn starts
+  - **Blocker class:** none
+
+- `docker compose logs backend --tail=100`
+  - **Result:** clean in latest run window
+  - **Exact output:** post-start traffic shows `200 OK` on settings/status/analytics/run-once/number-review paths
+  - **Blocker class:** none
+
 ## 3) HR-1 closeout gate mapping
 
 | Behavior gate | Evidence | Outcome |
@@ -67,6 +98,7 @@ Branch: `snowball-md`
 
 - Full backend pass cannot be claimed until stale test imports/contracts are fixed.
 - Dashboard tests pass, but lint/build are currently red and should be treated as active debt.
+- HR-4 strict-mode check is complete in this branch: migration-first startup contract is enforced and runtime patch fallback execution path is removed.
 
 Evidence basis: both  
 Verification limits: full backend and full frontend quality gates are not fully green due stale tests and lint/build blockers.

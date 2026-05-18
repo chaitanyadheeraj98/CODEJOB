@@ -45,11 +45,21 @@ Branch context: `snowball-md`
 
 ### HR-4: Runtime schema mutation depends on one additive helper
 
-- **Status:** Still Open
+- **Status:** Done
 - **Severity:** High
-- **Remaining issue:** startup still performs many SQLite `ALTER TABLE`/`CREATE INDEX` migrations at runtime.
-- **Evidence:** `StartupService.startup()` calls `ensure_sqlite_phase0_columns()` in `app/db.py`.
-- **Recommended next action:** replace runtime additive migration behavior with explicit schema migration tooling ownership.
+- **Closeout evidence:** migration ownership is wired through Alembic (`backend/alembic.ini`, `backend/alembic/env.py`, `backend/alembic/versions/*`) and startup enforces migration-state checks.
+- **Implementation evidence:** `StartupService.startup()` calls `MigrationRuntimeService.ensure_schema_ready()`; deprecated runtime fallback execution path was removed from migration runtime service.
+- **Strict-mode evidence:** with strict mode enabled, behind DB check fails with actionable error (`Database migration is required before startup. Run 'alembic upgrade head'...`).
+- **Validation evidence:** migration commands and targeted regressions passed in this branch phase:
+  - `cd backend; DEBUG=false DATABASE_URL=sqlite:///./data/codejob.db alembic current`
+  - `cd backend; DEBUG=false DATABASE_URL=sqlite:///./data/codejob.db alembic upgrade head`
+  - `cd backend; DEBUG=false DATABASE_URL=sqlite:///./data/codejob.db alembic current`
+  - `docker compose up --build` now runs Alembic upgrades before Uvicorn and
+    reaches healthy startup in strict mode (`ALLOW_RUNTIME_SCHEMA_PATCH=false`).
+  - backend logs confirm migration-first prestart + clean serving path (`GET /settings`,
+    `GET /gmail/status`, `POST /automation/run-once`, and
+    `POST /analytics/events/view` all `200 OK` in latest run window).
+  - `pytest backend/tests/test_run_once_hotfix.py backend/tests/test_approve_cc_regression.py backend/tests/test_routing_policy.py backend/tests/test_candidate_date_filtering.py backend/tests/test_telegram_interactive.py backend/tests/test_premium_numbers_api.py` -> `33 passed`
 
 ### HR-5: Persisted feature flags overstate implemented automation
 
