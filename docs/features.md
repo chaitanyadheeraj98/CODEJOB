@@ -1,83 +1,43 @@
 # CODEJOB Features (Current Implementation)
 
-Audit date: 2026-05-18  
-Branch: `snowball-md`
+## Live behavior
 
-## 1) Inbox automation
-
-| Feature | Current behavior | Status |
+| Feature | Current behavior | Evidence |
 | --- | --- | --- |
-| Gmail OAuth bootstrap | starts OAuth worker and exposes URL/status | Live |
-| Run-once automation | processes unread candidates using policy/query/date inputs | Live |
-| Auto polling | background loop calls run-once when enabled | Live |
-| AI draft path | DeepSeek/OpenAI-compatible drafting with fallback | Live (optional) |
-| Semantic scoring | embedding similarity blend when enabled | Live (optional) |
-| Query bucket | saved-query sanitize/dedupe/cap(10) | Live |
+| Run-once automation | processes unread Gmail candidates through orchestration | `backend/app/services/orchestration_service.py` |
+| Candidate workflow | needs-review, failed-mapping repair, approve/reject actions | `backend/app/main.py`, `dashboard/src/App.tsx` |
+| Phone intelligence | extraction + review queue + recruiter/employer buckets + opportunities | `backend/app/premium_numbers/*` |
+| Gmail labeling | rules-first selection and label application | `backend/app/gmail_labeling/*` |
+| Analytics | event record and trend APIs | `backend/app/main.py` analytics endpoints |
 
-## 2) Candidate workflow
+## Optional behavior
 
-| Feature | Current behavior | Status |
+| Feature | Trigger/control | Evidence |
 | --- | --- | --- |
-| Needs Review queue | qualified/routed candidates await manual action | Live |
-| Approval gate | checks routing sendability, To/CC, draft, active resume | Live |
-| Reject action | marks candidate rejected from needs_review | Live |
-| Failed mapping repair | manual recipient correction returns to needs_review | Live |
-| Bulk reject | rejects multiple needs_review records | Live |
+| AI draft generation | `feature_ai_enabled` | `backend/app/main.py`, `backend/app/schemas.py` |
+| Semantic score blending | `feature_semantic_enabled` | `backend/app/services/scoring_runtime_service.py` |
+| Auto polling | `feature_auto_polling` + interval | `backend/app/services/auto_runner_service.py` |
+| Telegram control plane | token + allowed chats configured | `backend/app/telegram_bot.py` |
 
-## 3) Phone intelligence and opportunities
+## Persisted-and-implemented flags
 
-| Feature | Current behavior | Status |
+| Flag | Runtime behavior | Evidence |
 | --- | --- | --- |
-| Premium lead extraction | upsert phone leads per source email | Live |
-| Domain guard | only captures when sender domain is in configured employer domains | Live |
-| Unknown number review queue | pending queue for unmatched phone identities | Live |
-| Recruiter/employer buckets | separate identity tables with swap actions | Live |
-| Opportunity cards | one per recruiter-number + gmail message combo | Live |
-| Cold call script generation | sanitized script generation with fallback | Live |
+| `feature_auto_send` | auto-sends only current-run queued IDs | `backend/app/services/orchestration_service.py:346-349` |
+| `feature_retry_queue` | retries failed queue and promotes sendable rows | `backend/app/services/orchestration_service.py:341-343`, `:456-497` |
 
-Allowed opportunity statuses:
-- `New`, `Called`, `Applied`, `Follow Up`, `Closed`, `Not Interested`
+Additive `POST /automation/run-once` response counters:
 
-## 4) Labeling, analytics, Telegram
-
-| Feature | Current behavior | Status |
-| --- | --- | --- |
-| Gmail labeling | rules-first label selection + AI fallback, applies Gmail label | Live |
-| Productivity analytics | event recording + trend APIs | Live |
-| Telegram control plane | polling bot with auth-gated action commands | Live |
-| Google Sheets append | post-send best-effort append | Live (optional/best-effort) |
-
-Managed Gmail labels:
-- `assessment`
-- `AVAILABILITY ACTION`
-- `Interview`
-- `must reply`
-- `must reply/important`
-- `screening`
-
-## 5) Feature-flag reality check
-
-| Setting | Actual runtime behavior |
-| --- | --- |
-| `feature_auto_polling` | enables periodic run loop |
-| `feature_auto_poll_interval_minutes` | sets polling interval (1..1440 clamp) |
-| `feature_ai_enabled` | enables AI draft generation in orchestrated/manual draft paths |
-| `feature_semantic_enabled` | enables semantic blending in score computation |
-| `feature_auto_send` | live; auto-sends only candidates queued in the current run |
-| `feature_retry_queue` | live; retries failed candidates and promotes sendable rows to needs_review |
-
-Additive `POST /automation/run-once` response counters now exposed:
 - `auto_sent_count`
 - `auto_send_failed_count`
 - `retry_promoted_count`
 - `retry_skipped_count`
 
-## 6) Active debt tied to features
+## Persisted-but-not-implemented flags
 
-- backend/main + frontend/App remain central coupling points
-- duplicated policy profile definitions (frontend/backend)
-- stale tests reduce confidence in full automation regression coverage
+- None found in the inspected settings schema/runtime paths for this branch.
 
-Evidence basis: both  
-Verification limits: targeted HR-5 validation is complete; full-suite confidence
-remains limited by known stale tests in this branch.
+- Audit date: 2026-05-18
+- Branch: `copilot/update-docs-md-files`
+- Evidence basis: code inspection
+- Verification limits: runtime execution in this session was constrained by missing backend/frontend dependencies.
