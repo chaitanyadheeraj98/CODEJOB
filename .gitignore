@@ -1,2 +1,4 @@
 graphify-out/
 .codex/hooks/rule_state.json
+backend/data/
+dashboard/.tsbuildinfo/

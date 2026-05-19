@@ -121,6 +121,47 @@ class ApproveCcRegressionTests(unittest.TestCase):
         db.refresh(email)
         return email
 
+    def _add_needs_review_nvoids_email(self, db: Session, *, cc_email: str | None) -> RecruiterEmail:
+        now = datetime.now(UTC)
+        email = RecruiterEmail(
+            owner_id=main.settings.owner_id,
+            sender="Recruiter <nvoids@example.com>",
+            subject="Nvoids Java role",
+            body="Body from nvoids listing",
+            role="Java Developer",
+            location="remote",
+            salary_text="$70/hr",
+            skills_text="Java,Spring",
+            score=88,
+            decision="Qualified",
+            state="needs_review",
+            decision_reason="external_feed_nvoids",
+            draft_reply="Hi Recruiter,\n\nInterested.\n\nRegards",
+            draft_source="rules_only",
+            draft_model=None,
+            draft_ai_error=None,
+            approval_status="pending",
+            sent_status="not_sent",
+            source="nvoids",
+            external_message_id=f"nvoids:{now.timestamp()}",
+            external_thread_id=f"nvoids:{now.timestamp()}",
+            gmail_received_at=now,
+            recipient_email="nvoids@example.com",
+            cc_email=cc_email,
+            routing_status="safe",
+            routing_confidence=0.9,
+            routing_reason="External feed recruiter import with employer pool cc.",
+            routing_evidence="[]",
+            routing_candidates="[]",
+            routing_confirmed=False,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(email)
+        db.commit()
+        db.refresh(email)
+        return email
+
     def test_approve_send_returns_400_when_cc_missing_even_if_routing_looks_safe(self) -> None:
         with Session(self.engine) as db:
             self._add_resume(db)
@@ -202,10 +243,12 @@ class ApproveCcRegressionTests(unittest.TestCase):
 
     def test_approve_send_succeeds_when_to_cc_resume_and_routing_are_valid(self) -> None:
         original_send_reply = main.send_reply_with_attachment
+        original_send_new = main.send_new_email_with_attachment
         original_mark_processed = main.mark_message_processed
         original_append_tracking = main.append_tracking_sheet_row
         try:
             main.send_reply_with_attachment = lambda *_args, **_kwargs: "sent-123"
+            main.send_new_email_with_attachment = lambda *_args, **_kwargs: "new-123"
             main.mark_message_processed = lambda *_args, **_kwargs: None
             main.append_tracking_sheet_row = lambda **_kwargs: None
             with Session(self.engine) as db:
@@ -219,7 +262,77 @@ class ApproveCcRegressionTests(unittest.TestCase):
             self.assertEqual(payload["sent_status"], "sent")
         finally:
             main.send_reply_with_attachment = original_send_reply
+            main.send_new_email_with_attachment = original_send_new
             main.mark_message_processed = original_mark_processed
+            main.append_tracking_sheet_row = original_append_tracking
+
+    def test_nvoids_approve_send_uses_new_email_send_and_marks_sent(self) -> None:
+        original_send_reply = main.send_reply_with_attachment
+        original_send_new = main.send_new_email_with_attachment
+        original_append_tracking = main.append_tracking_sheet_row
+        sent_reply_calls: list[tuple[object, ...]] = []
+        sent_new_calls: list[tuple[object, ...]] = []
+        try:
+            main.send_reply_with_attachment = lambda *args, **_kwargs: (sent_reply_calls.append(args), "reply-123")[1]
+            main.send_new_email_with_attachment = lambda *args, **_kwargs: (sent_new_calls.append(args), "new-456")[1]
+            main.append_tracking_sheet_row = lambda **_kwargs: None
+            with Session(self.engine) as db:
+                self._add_resume(db)
+                email = self._add_needs_review_nvoids_email(db, cc_email="vaishnavi@horizonsoftech.net")
+
+            response = self.client.post(f"/candidates/{email.id}/approve-send", json={"edited_reply": None})
+            self.assertEqual(response.status_code, 200, response.text)
+            payload = response.json()
+            self.assertEqual(payload["state"], "approved_sent")
+            self.assertEqual(payload["sent_status"], "sent")
+            self.assertEqual(payload["gmail_sent_id"], "new-456")
+            self.assertEqual(len(sent_reply_calls), 0)
+            self.assertEqual(len(sent_new_calls), 1)
+        finally:
+            main.send_reply_with_attachment = original_send_reply
+            main.send_new_email_with_attachment = original_send_new
+            main.append_tracking_sheet_row = original_append_tracking
+
+    def test_nvoids_approve_send_requires_resume(self) -> None:
+        original_send_new = main.send_new_email_with_attachment
+        original_append_tracking = main.append_tracking_sheet_row
+        try:
+            main.send_new_email_with_attachment = lambda *_args, **_kwargs: "new-456"
+            main.append_tracking_sheet_row = lambda **_kwargs: None
+            with Session(self.engine) as db:
+                email = self._add_needs_review_nvoids_email(db, cc_email="vaishnavi@horizonsoftech.net")
+
+            response = self.client.post(f"/candidates/{email.id}/approve-send", json={"edited_reply": None})
+            self.assertEqual(response.status_code, 400, response.text)
+            self.assertEqual(response.json()["detail"], "No active resume uploaded")
+        finally:
+            main.send_new_email_with_attachment = original_send_new
+            main.append_tracking_sheet_row = original_append_tracking
+
+    def test_nvoids_approve_send_failure_keeps_needs_review(self) -> None:
+        original_send_new = main.send_new_email_with_attachment
+        original_append_tracking = main.append_tracking_sheet_row
+        try:
+            def _raise(*_args, **_kwargs):
+                raise RuntimeError("forced nvoids send failure")
+
+            main.send_new_email_with_attachment = _raise
+            main.append_tracking_sheet_row = lambda **_kwargs: None
+            with Session(self.engine) as db:
+                self._add_resume(db)
+                email = self._add_needs_review_nvoids_email(db, cc_email="vaishnavi@horizonsoftech.net")
+
+            response = self.client.post(f"/candidates/{email.id}/approve-send", json={"edited_reply": None})
+            self.assertEqual(response.status_code, 502, response.text)
+            self.assertIn("Gmail send failed", response.json()["detail"])
+            with Session(self.engine) as db:
+                updated = db.query(RecruiterEmail).filter(RecruiterEmail.id == email.id).first()
+                assert updated is not None
+                self.assertEqual(updated.state, "needs_review")
+                self.assertEqual(updated.sent_status, "not_sent")
+                self.assertIn("forced nvoids send failure", updated.last_error or "")
+        finally:
+            main.send_new_email_with_attachment = original_send_new
             main.append_tracking_sheet_row = original_append_tracking
 
     def test_send_to_failed_mapping_from_needs_review_marks_routing_unconfirmed(self) -> None:

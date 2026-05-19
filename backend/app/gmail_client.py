@@ -445,6 +445,45 @@ def send_reply_with_attachment(
     return message_id if isinstance(message_id, str) else ""
 
 
+def send_new_email_with_attachment(
+    to: str,
+    cc: str | None,
+    subject: str,
+    body: str,
+    attachment_path: str | None = None,
+    attachment_display_name: str | None = None,
+) -> str:
+    service = _gmail_service()
+    message = EmailMessage()
+    message["To"] = to
+    if cc:
+        message["Cc"] = cc
+    message["Subject"] = subject
+    plain_body = body or ""
+    message.set_content(plain_body)
+    try:
+        html_body = draft_text_to_html(plain_body)
+        message.add_alternative(html_body, subtype="html")
+    except Exception:
+        # Fallback to plain text if HTML rendering fails.
+        pass
+
+    if attachment_path:
+        file_path = Path(attachment_path)
+        if file_path.exists():
+            content = file_path.read_bytes()
+            mime_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
+            main_type, sub_type = mime_type.split("/", 1)
+            safe_name = (attachment_display_name or "").strip() or file_path.name
+            message.add_attachment(content, maintype=main_type, subtype=sub_type, filename=safe_name)
+
+    raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
+    payload = {"raw": raw}
+    response = _as_dict(service.users().messages().send(userId="me", body=payload).execute())
+    message_id = response.get("id")
+    return message_id if isinstance(message_id, str) else ""
+
+
 def mark_message_processed(message_id: str) -> None:
     service = _gmail_service()
     body: dict[str, Any] = {"removeLabelIds": ["UNREAD"]}

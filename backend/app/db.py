@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from app.config import settings
@@ -9,8 +9,22 @@ class Base(DeclarativeBase):
     pass
 
 
-connect_args = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
+is_sqlite = settings.database_url.startswith("sqlite")
+connect_args = {"check_same_thread": False, "timeout": 10} if is_sqlite else {}
 engine = create_engine(settings.database_url, connect_args=connect_args)
+
+
+if is_sqlite:
+
+    @event.listens_for(engine, "connect")
+    def _set_sqlite_pragmas(dbapi_connection, _connection_record) -> None:
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA busy_timeout=10000")
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.close()
+
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
@@ -310,6 +324,10 @@ def ensure_sqlite_phase0_columns() -> None:
             ("feature_ai_enabled", "ALTER TABLE user_settings ADD COLUMN feature_ai_enabled BOOLEAN DEFAULT 0"),
             ("feature_semantic_enabled", "ALTER TABLE user_settings ADD COLUMN feature_semantic_enabled BOOLEAN DEFAULT 0"),
             ("feature_auto_poll_interval_minutes", "ALTER TABLE user_settings ADD COLUMN feature_auto_poll_interval_minutes INTEGER DEFAULT 10"),
+            ("feature_nvoids_enabled", "ALTER TABLE user_settings ADD COLUMN feature_nvoids_enabled BOOLEAN DEFAULT 1"),
+            ("feature_nvoids_auto_sync", "ALTER TABLE user_settings ADD COLUMN feature_nvoids_auto_sync BOOLEAN DEFAULT 0"),
+            ("feature_nvoids_poll_interval_minutes", "ALTER TABLE user_settings ADD COLUMN feature_nvoids_poll_interval_minutes INTEGER DEFAULT 30"),
+            ("nvoids_batch_limit", "ALTER TABLE user_settings ADD COLUMN nvoids_batch_limit INTEGER DEFAULT 10"),
             ("fallback_draft_template", "ALTER TABLE user_settings ADD COLUMN fallback_draft_template TEXT DEFAULT ''"),
             ("signature_name", "ALTER TABLE user_settings ADD COLUMN signature_name VARCHAR(255) DEFAULT ''"),
             ("signature_phone", "ALTER TABLE user_settings ADD COLUMN signature_phone VARCHAR(80) DEFAULT ''"),

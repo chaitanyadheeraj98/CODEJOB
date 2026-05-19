@@ -59,6 +59,10 @@ class SettingsRequest(BaseModel):
     qualification_threshold: float = 0.6
     feature_auto_polling: bool = False
     feature_auto_poll_interval_minutes: int = 10
+    feature_nvoids_enabled: bool = True
+    feature_nvoids_auto_sync: bool = False
+    feature_nvoids_poll_interval_minutes: int = 30
+    nvoids_batch_limit: int = 10
     feature_auto_send: bool = False
     feature_retry_queue: bool = False
     feature_ai_enabled: bool = False
@@ -89,6 +93,16 @@ class SettingsRequest(BaseModel):
     @classmethod
     def validate_poll_interval(cls, value: int) -> int:
         return max(1, min(int(value), 1440))
+
+    @field_validator("feature_nvoids_poll_interval_minutes")
+    @classmethod
+    def validate_nvoids_poll_interval(cls, value: int) -> int:
+        return max(1, min(int(value), 1440))
+
+    @field_validator("nvoids_batch_limit")
+    @classmethod
+    def validate_nvoids_batch_limit(cls, value: int) -> int:
+        return max(1, min(int(value), 50))
 
 
 class SettingsResponse(SettingsRequest):
@@ -341,6 +355,9 @@ class RecruiterOpportunityResponse(BaseModel):
     recruiter_number_id: int
     source_email_id: int | None
     gmail_message_id: str
+    source_type: str = "gmail"
+    source_url: str | None = None
+    external_opportunity_id: int | None = None
     email_subject: str
     email_sender: str
     gmail_open_url: str
@@ -369,6 +386,27 @@ class RecruiterOpportunityResponse(BaseModel):
 class RecruiterOpportunityPatchRequest(BaseModel):
     status: str | None = None
     notes: str | None = None
+
+
+class ExternalFeedSyncResponse(BaseModel):
+    source_type: str
+    fetched_count: int
+    created_count: int
+    deduped_count: int
+    failed_count: int
+    run_id: int
+
+
+class ExternalScrapeRunResponse(BaseModel):
+    id: int
+    source_type: str
+    started_at: datetime
+    ended_at: datetime | None
+    fetched_count: int
+    created_count: int
+    deduped_count: int
+    failed_count: int
+    notes: str
 
 
 class AutomationRunResponse(BaseModel):

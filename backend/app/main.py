@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, or_
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -41,9 +42,12 @@ from app.gmail_client import (
     oauth_bootstrap_status,
     oauth_authorization_url,
     send_reply_with_attachment,
+    send_new_email_with_attachment,
     start_oauth_bootstrap,
 )
 from app.gmail_labeling import GmailLabelingService, LabelRuleInput
+from app.external_feeds.service import ExternalFeedService
+from app.external_feeds.models import ExternalScrapeRun
 from app.models import (
     DraftEditFeedback,
     EmployerNumber,
@@ -122,6 +126,8 @@ from app.schemas import (
     ProductivityBarPoint,
     ProductivityTrendResponse,
     TelegramStatusResponse,
+    ExternalFeedSyncResponse,
+    ExternalScrapeRunResponse,
 )
 from app.semantic.embeddings_service import (
     begin_embedding_latency_capture,
@@ -181,6 +187,7 @@ telegram_pending_inputs = runtime_state.telegram_pending_inputs
 auto_runner_thread: threading.Thread | None = runtime_state.auto_runner_thread
 auto_runner_stop_event = runtime_state.auto_runner_stop_event
 gmail_labeling_service: GmailLabelingService | None = runtime_state.gmail_labeling_service
+external_feed_service = ExternalFeedService()
 
 
 class PolicyQuery(TypedDict):
@@ -460,6 +467,14 @@ def _poll_interval_minutes(user_settings: UserSettings) -> int:
     return max(1, min(int(user_settings.feature_auto_poll_interval_minutes or 10), 1440))
 
 
+def _nvoids_poll_interval_minutes(user_settings: UserSettings) -> int:
+    return max(1, min(int(user_settings.feature_nvoids_poll_interval_minutes or 30), 1440))
+
+
+def _nvoids_batch_limit(user_settings: UserSettings) -> int:
+    return max(1, min(int(user_settings.nvoids_batch_limit or 10), 50))
+
+
 def _maybe_generate_cold_call_script(email: object, *, resume: ResumeAsset | None, user_settings: UserSettings | object) -> None:
     _ = user_settings
     if not bool(getattr(email, "is_premium", False)):
@@ -481,6 +496,11 @@ def _get_auto_runner_service() -> AutoRunnerService:
             session_factory=SessionLocal,
             get_settings=_get_settings,
             run_once=automation_run_once,
+            run_nvoids_once=lambda db, max_items: external_feed_service.sync_nvoids(
+                db,
+                owner_id=settings.owner_id,
+                max_items=max_items,
+            ),
             action_lock=telegram_action_lock,
             stop_event=auto_runner_stop_event,
         )
@@ -676,6 +696,7 @@ def _get_orchestration_service() -> OrchestrationService:
                 greeting_from_to_contact=lambda to_email, body: greeting_from_to_contact(to_email, body),
                 generate_reply_with_ai_or_fallback=lambda **kwargs: generate_reply_with_ai_or_fallback(**kwargs),
                 send_reply_with_attachment=lambda *args, **kwargs: send_reply_with_attachment(*args, **kwargs),
+                send_new_email_with_attachment=lambda *args, **kwargs: send_new_email_with_attachment(*args, **kwargs),
                 mark_message_processed=lambda message_id: mark_message_processed(message_id),
                 append_tracking_sheet_row=lambda **kwargs: append_tracking_sheet_row(**kwargs),
             )
@@ -930,6 +951,10 @@ def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
         qualification_threshold=s.qualification_threshold,
         feature_auto_polling=s.feature_auto_polling,
         feature_auto_poll_interval_minutes=_poll_interval_minutes(s),
+        feature_nvoids_enabled=s.feature_nvoids_enabled,
+        feature_nvoids_auto_sync=s.feature_nvoids_auto_sync,
+        feature_nvoids_poll_interval_minutes=_nvoids_poll_interval_minutes(s),
+        nvoids_batch_limit=_nvoids_batch_limit(s),
         feature_auto_send=s.feature_auto_send,
         feature_retry_queue=s.feature_retry_queue,
         feature_ai_enabled=s.feature_ai_enabled,
@@ -986,6 +1011,10 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
     s.qualification_threshold = payload.qualification_threshold
     s.feature_auto_polling = payload.feature_auto_polling
     s.feature_auto_poll_interval_minutes = max(1, min(int(payload.feature_auto_poll_interval_minutes), 1440))
+    s.feature_nvoids_enabled = payload.feature_nvoids_enabled
+    s.feature_nvoids_auto_sync = payload.feature_nvoids_auto_sync
+    s.feature_nvoids_poll_interval_minutes = max(1, min(int(payload.feature_nvoids_poll_interval_minutes), 1440))
+    s.nvoids_batch_limit = max(1, min(int(payload.nvoids_batch_limit), 50))
     s.feature_auto_send = payload.feature_auto_send
     s.feature_retry_queue = payload.feature_retry_queue
     s.feature_ai_enabled = payload.feature_ai_enabled
@@ -1192,13 +1221,31 @@ def telegram_status() -> TelegramStatusResponse:
 def create_view_event(payload: ProductivityEventCreateRequest, db: Session = Depends(get_db)) -> ProductivityEventResponse:
     if payload.event_type not in ALLOWED_VIEW_EVENTS:
         raise HTTPException(status_code=400, detail="Unsupported view event_type")
-    event = _record_productivity_event(
-        db,
-        event_type=payload.event_type,
-        event_source=payload.event_source or "ui",
-        entity_id=payload.entity_id,
-        metadata=payload.metadata,
-    )
+    event_source = payload.event_source or "ui"
+    try:
+        event = _record_productivity_event(
+            db,
+            event_type=payload.event_type,
+            event_source=event_source,
+            entity_id=payload.entity_id,
+            metadata=payload.metadata,
+        )
+    except OperationalError as exc:
+        db.rollback()
+        if "database is locked" not in str(exc).lower():
+            raise
+        now = datetime.now(UTC)
+        return ProductivityEventResponse(
+            id=0,
+            owner_id=settings.owner_id,
+            event_type=payload.event_type,
+            event_source=event_source,
+            entity_id=payload.entity_id,
+            weight=EVENT_WEIGHTS.get(payload.event_type, 0.0),
+            metadata=payload.metadata,
+            occurred_at=now,
+            created_at=now,
+        )
     return _event_response(event)
 
 
@@ -1383,6 +1430,9 @@ def _recruiter_opportunity_response(row: RecruiterOpportunity, recruiter: Recrui
         recruiter_number_id=row.recruiter_number_id,
         source_email_id=row.source_email_id,
         gmail_message_id=row.gmail_message_id,
+        source_type=row.source_type or "gmail",
+        source_url=row.source_url,
+        external_opportunity_id=row.external_opportunity_id,
         email_subject=row.email_subject,
         email_sender=row.email_sender,
         gmail_open_url=row.gmail_open_url,
@@ -1506,13 +1556,21 @@ def list_candidates(
             raise HTTPException(status_code=422, detail="mail_date must be a valid YYYY-MM-DD date") from exc
         start, end = _mail_date_utc_window(selected)
         field_name = _mail_date_filter_field(states)
-        query = query.filter(RecruiterEmail.source == "gmail")
         if field_name == "sent_at":
             query = query.filter(RecruiterEmail.sent_at.is_not(None))
             query = query.filter(RecruiterEmail.sent_at >= start, RecruiterEmail.sent_at < end)
         else:
-            query = query.filter(RecruiterEmail.gmail_received_at.is_not(None))
-            query = query.filter(RecruiterEmail.gmail_received_at >= start, RecruiterEmail.gmail_received_at < end)
+            query = query.filter(
+                or_(
+                    (RecruiterEmail.source == "gmail")
+                    & RecruiterEmail.gmail_received_at.is_not(None)
+                    & (RecruiterEmail.gmail_received_at >= start)
+                    & (RecruiterEmail.gmail_received_at < end),
+                    (RecruiterEmail.source != "gmail")
+                    & (RecruiterEmail.created_at >= start)
+                    & (RecruiterEmail.created_at < end),
+                )
+            )
 
     if sort == "highest_score":
         query = query.order_by(RecruiterEmail.score.desc(), RecruiterEmail.created_at.desc())
@@ -1933,6 +1991,7 @@ def swap_employer_number_to_recruiter(employer_number_id: int, db: Session = Dep
 @app.get("/recruiter-opportunities", response_model=list[RecruiterOpportunityResponse])
 def list_recruiter_opportunities(
     status: str | None = Query(default=None),
+    source_type: str | None = Query(default=None),
     q: str | None = Query(default=None),
     mail_date: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
     db: Session = Depends(get_db),
@@ -1940,6 +1999,8 @@ def list_recruiter_opportunities(
     query = db.query(RecruiterOpportunity).filter(RecruiterOpportunity.owner_id == settings.owner_id)
     if status and status in OPPORTUNITY_STATUS_VALUES:
         query = query.filter(RecruiterOpportunity.status == status)
+    if source_type in {"gmail", "nvoids"}:
+        query = query.filter(RecruiterOpportunity.source_type == source_type)
     if q:
         like = f"%{q.strip()}%"
         query = query.filter(
@@ -1968,6 +2029,71 @@ def list_recruiter_opportunities(
     )
     recruiter_map = {row.id: row for row in recruiter_rows}
     return [_recruiter_opportunity_response(row, recruiter_map.get(row.recruiter_number_id)) for row in rows]
+
+
+@app.post("/external-feeds/nvoids/sync", response_model=ExternalFeedSyncResponse)
+def sync_external_nvoids(
+    batch_limit: int | None = Query(default=None, ge=1, le=50),
+    db: Session = Depends(get_db),
+) -> ExternalFeedSyncResponse:
+    user_settings = _get_settings(db)
+    if not user_settings.feature_nvoids_enabled:
+        raise HTTPException(status_code=400, detail="Nvoids sync is disabled in settings")
+    resolved_batch_limit = batch_limit if batch_limit is not None else _nvoids_batch_limit(user_settings)
+    if not telegram_action_lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="another_run_in_progress")
+    try:
+        result = external_feed_service.sync_nvoids(
+            db,
+            owner_id=settings.owner_id,
+            max_items=resolved_batch_limit,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"nvoids_sync_failed: {exc}") from exc
+    finally:
+        telegram_action_lock.release()
+    return ExternalFeedSyncResponse(
+        source_type=result.source_type,
+        fetched_count=result.fetched_count,
+        created_count=result.created_count,
+        deduped_count=result.deduped_count,
+        failed_count=result.failed_count,
+        run_id=result.run_id,
+    )
+
+
+@app.post("/external-feeds/nvoids/backfill-phones")
+def backfill_external_nvoids_phones(
+    limit: int = Query(default=5000, ge=1, le=50000),
+    db: Session = Depends(get_db),
+) -> dict[str, int]:
+    result = external_feed_service.backfill_nvoids_contact_phones(db, owner_id=settings.owner_id, limit=limit)
+    return result
+
+
+@app.get("/external-feeds/runs", response_model=list[ExternalScrapeRunResponse])
+def list_external_feed_runs(limit: int = Query(default=20, ge=1, le=200), db: Session = Depends(get_db)) -> list[ExternalScrapeRunResponse]:
+    rows = (
+        db.query(ExternalScrapeRun)
+        .filter(ExternalScrapeRun.owner_id == settings.owner_id)
+        .order_by(ExternalScrapeRun.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        ExternalScrapeRunResponse(
+            id=row.id,
+            source_type=row.source_type,
+            started_at=row.started_at,
+            ended_at=row.ended_at,
+            fetched_count=row.fetched_count,
+            created_count=row.created_count,
+            deduped_count=row.deduped_count,
+            failed_count=row.failed_count,
+            notes=row.notes,
+        )
+        for row in rows
+    ]
 
 
 @app.patch("/recruiter-opportunities/{opportunity_id}", response_model=RecruiterOpportunityResponse)

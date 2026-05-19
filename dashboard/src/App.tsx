@@ -10,7 +10,19 @@ import { addEmployerDomain, removeEmployerDomain } from './employerDomains'
 
 const GMAIL_OAUTH_POLL_INTERVAL_MS = 2000
 const GMAIL_OAUTH_POLL_TIMEOUT_MS = 180000
+const VIEW_EVENT_THROTTLE_MS = 60000
 let hasBootstrappedAppOnce = false
+
+export function shouldTrackViewEvent(
+  lastTrackedAtByKey: Record<string, number>,
+  throttleKey: string,
+  now: number,
+  throttleMs = VIEW_EVENT_THROTTLE_MS,
+): boolean {
+  const lastTrackedAt = lastTrackedAtByKey[throttleKey]
+  if (lastTrackedAt === undefined) return true
+  return now - lastTrackedAt >= throttleMs
+}
 
 function escapeHtml(text: string): string {
   return text
@@ -109,6 +121,10 @@ type SettingsPayload = {
   qualification_threshold: number
   feature_auto_polling: boolean
   feature_auto_poll_interval_minutes: number
+  feature_nvoids_enabled: boolean
+  feature_nvoids_auto_sync: boolean
+  feature_nvoids_poll_interval_minutes: number
+  nvoids_batch_limit: number
   feature_auto_send: boolean
   feature_retry_queue: boolean
   feature_ai_enabled: boolean
@@ -211,6 +227,21 @@ type Candidate = {
   resume_file_name: string | null
   state: string
   last_error: string | null
+  source: string
+  external_message_id: string | null
+  external_thread_id: string | null
+}
+
+const sourceListingUrl = (item: Candidate): string | null => {
+  if (item.source !== 'nvoids') return null
+  const thread = (item.external_thread_id ?? '').trim()
+  if (thread.startsWith('http://') || thread.startsWith('https://')) return thread
+  const message = (item.external_message_id ?? '').trim()
+  const nvoidsIdMatch = message.match(/^nvoids:(\d+)$/i)
+  if (nvoidsIdMatch) {
+    return `https://nvoids.com/job_details.jsp?id=${nvoidsIdMatch[1]}`
+  }
+  return null
 }
 
 type PremiumNumberConfidence = 'high' | 'medium' | 'low'
@@ -288,6 +319,9 @@ type RecruiterOpportunityCard = {
   recruiter_number_id: number
   source_email_id: number | null
   gmail_message_id: string
+  source_type: 'gmail' | 'nvoids'
+  source_url: string | null
+  external_opportunity_id: number | null
   email_subject: string
   email_sender: string
   gmail_open_url: string
@@ -501,6 +535,10 @@ function App() {
     qualification_threshold: 0.6,
     feature_auto_polling: false,
     feature_auto_poll_interval_minutes: 10,
+    feature_nvoids_enabled: true,
+    feature_nvoids_auto_sync: false,
+    feature_nvoids_poll_interval_minutes: 30,
+    nvoids_batch_limit: 10,
     feature_auto_send: false,
     feature_retry_queue: false,
     feature_ai_enabled: false,
@@ -514,6 +552,7 @@ function App() {
   const [resumeFile, setResumeFile] = useState<File | null>(null)
   const [activeResume, setActiveResume] = useState<ResumeAsset | null>(null)
   const [running, setRunning] = useState(false)
+  const [nvoidsRunning, setNvoidsRunning] = useState(false)
   const [oauthInProgress, setOauthInProgress] = useState(false)
   const [oauthAuthorizationUrl, setOauthAuthorizationUrl] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -543,6 +582,7 @@ function App() {
   const premiumConfidenceFilter: 'all' | PremiumNumberConfidence = 'all'
   const [premiumScopeFilter, setPremiumScopeFilter] = useState<'all_review' | 'recruiter_numbers' | 'employer_numbers' | 'recruiter_opportunities'>('all_review')
   const [opportunityStatusFilter, setOpportunityStatusFilter] = useState<'all' | OpportunityStatus>('all')
+  const [opportunitySourceFilter, setOpportunitySourceFilter] = useState<'all' | 'gmail' | 'nvoids'>('all')
   const [premiumSearch, setPremiumSearch] = useState('')
   const [updatingOpportunityId, setUpdatingOpportunityId] = useState<number | null>(null)
   const [generatingColdCallId, setGeneratingColdCallId] = useState<number | null>(null)
@@ -551,7 +591,7 @@ function App() {
   const [productivityEvents, setProductivityEvents] = useState<ProductivityEvent[]>([])
   const [productivityTrend, setProductivityTrend] = useState<ProductivityTrendResponse | null>(null)
   const datePickerRef = useRef<HTMLInputElement | null>(null)
-  const lastTrackedViewRef = useRef<string | null>(null)
+  const lastTrackedViewRef = useRef<Record<string, number>>({})
   const hasBootstrappedCandidatesRef = useRef(false)
   const oauthPollingStartedAtRef = useRef<number | null>(null)
   const refreshTimerRef = useRef<number | null>(null)
@@ -659,6 +699,10 @@ function App() {
       saved_gmail_queries: payload.saved_gmail_queries ?? [],
       default_date_mode: payload.default_date_mode === 'off' ? 'off' : 'today',
       feature_auto_poll_interval_minutes: Math.max(1, Math.min(payload.feature_auto_poll_interval_minutes || 10, 1440)),
+      feature_nvoids_enabled: Boolean(payload.feature_nvoids_enabled ?? true),
+      feature_nvoids_auto_sync: Boolean(payload.feature_nvoids_auto_sync ?? false),
+      feature_nvoids_poll_interval_minutes: Math.max(1, Math.min(payload.feature_nvoids_poll_interval_minutes || 30, 1440)),
+      nvoids_batch_limit: Math.max(1, Math.min(payload.nvoids_batch_limit || 10, 50)),
       employer_domains: payload.employer_domains ?? [],
       policy: payload.policy ?? defaultPolicy,
     }
@@ -710,6 +754,7 @@ function App() {
       } else if (premiumScopeFilter === 'recruiter_opportunities') {
         const params = new URLSearchParams()
         if (opportunityStatusFilter !== 'all') params.set('status', opportunityStatusFilter)
+        if (opportunitySourceFilter !== 'all') params.set('source_type', opportunitySourceFilter)
         if (premiumSearch.trim()) params.set('q', premiumSearch.trim())
         if (settings.mail_date) params.set('mail_date', settings.mail_date)
         const res = await fetch(`${apiBase}/recruiter-opportunities?${params.toString()}`)
@@ -854,7 +899,10 @@ function App() {
       premium_numbers: 'view_premium_numbers',
     }
     const eventType = eventMap[page]
-    if (lastTrackedViewRef.current === page) return
+    const throttleKey = `${page}:${timeRange}`
+    const now = Date.now()
+    if (!shouldTrackViewEvent(lastTrackedViewRef.current, throttleKey, now)) return
+    lastTrackedViewRef.current[throttleKey] = now
     await fetch(`${apiBase}/analytics/events/view`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -866,7 +914,6 @@ function App() {
     }).catch(() => {
       // Keep UI responsive even if analytics logging fails.
     })
-    lastTrackedViewRef.current = page
   }
 
   const schedulePostMutationRefresh = () => {
@@ -931,7 +978,7 @@ function App() {
     if (!hasBootstrappedCandidatesRef.current) return
     if (activePage !== 'premium_numbers') return
     loadPremiumNumbers({ append: false, cursor: 0 }).catch((e) => setPremiumError((e as Error).message))
-  }, [activePage, premiumConfidenceFilter, premiumScopeFilter, premiumSearch, settings.mail_date, opportunityStatusFilter])
+  }, [activePage, premiumConfidenceFilter, premiumScopeFilter, premiumSearch, settings.mail_date, opportunityStatusFilter, opportunitySourceFilter])
 
   useEffect(() => {
     loadProductivityAnalytics(timeRange).catch((e) => setError((e as Error).message))
@@ -1096,6 +1143,37 @@ function App() {
       }
     } finally {
       setRunning(false)
+    }
+  }
+
+  const runNvoidsSync = async () => {
+    setNvoidsRunning(true)
+    setError('')
+    try {
+      const params = new URLSearchParams()
+      params.set('batch_limit', String(Math.max(1, Math.min(settings.nvoids_batch_limit || 10, 50))))
+      const res = await fetch(`${apiBase}/external-feeds/nvoids/sync?${params.toString()}`, {
+        method: 'POST',
+      })
+      if (!res.ok) {
+        const details = await res.json().catch(() => null)
+        throw new Error(details?.detail ?? 'Nvoids sync failed')
+      }
+      const data = (await res.json()) as { source_type: string; fetched_count: number; created_count: number; deduped_count: number; failed_count: number }
+      setLogs((prev) => [
+        {
+          status: 'ok',
+          detail: `nvoids sync complete: fetched=${data.fetched_count} created=${data.created_count} deduped=${data.deduped_count} failed=${data.failed_count}`,
+          email_id: null,
+        },
+        ...prev,
+      ].slice(0, RECENT_RUNS_LIMIT))
+      await refreshVisibleCandidates(settings.mail_date ?? null, { activeOnly: false })
+      await loadPremiumNumbers()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setNvoidsRunning(false)
     }
   }
 
@@ -1411,6 +1489,14 @@ function App() {
             <button type="button" className="btnMuted">Batch Queue</button>
             <button
               type="button"
+              className="btnMuted"
+              onClick={runNvoidsSync}
+              disabled={nvoidsRunning || running || !settings.feature_nvoids_enabled}
+            >
+              {nvoidsRunning ? 'Nvoids Syncing...' : 'Sync Nvoids'}
+            </button>
+            <button
+              type="button"
               className="btnPrimary"
               onClick={status?.authenticated ? runAutomation : connectGmail}
               disabled={running || oauthInProgress}
@@ -1508,6 +1594,14 @@ function App() {
               disabled={running || oauthInProgress}
             >
               {running ? 'Running...' : status?.authenticated ? 'Sync + Queue' : oauthInProgress ? 'OAuth In Progress...' : 'Connect Gmail'}
+            </button>
+            <button
+              type="button"
+              className="syncBtn topBarAction"
+              onClick={runNvoidsSync}
+              disabled={nvoidsRunning || running || !settings.feature_nvoids_enabled}
+            >
+              {nvoidsRunning ? 'Syncing Nvoids...' : 'Sync + Queue Nvoids'}
             </button>
           </section>
 
@@ -2009,6 +2103,74 @@ function App() {
                   </button>
                 </div>
               </section>
+
+              <section className="card">
+                <h2>Nvoids Control</h2>
+                <div className="stack">
+                  <label className="toggleRow pillRow">
+                    <span>Enable Nvoids Pipeline</span>
+                    <span className="toggleSwitch">
+                      <input
+                        type="checkbox"
+                        checked={settings.feature_nvoids_enabled}
+                        onChange={(e) => setSettings({ ...settings, feature_nvoids_enabled: e.target.checked })}
+                      />
+                      <span className="toggleTrack" />
+                    </span>
+                  </label>
+                  <label className="toggleRow pillRow">
+                    <span>Auto Sync Nvoids</span>
+                    <span className="toggleSwitch">
+                      <input
+                        type="checkbox"
+                        checked={settings.feature_nvoids_auto_sync}
+                        onChange={(e) => setSettings({ ...settings, feature_nvoids_auto_sync: e.target.checked })}
+                      />
+                      <span className="toggleTrack" />
+                    </span>
+                  </label>
+                  <label>
+                    Nvoids Batch Limit (per run)
+                    <input
+                      type="number"
+                      min={1}
+                      max={50}
+                      value={settings.nvoids_batch_limit}
+                      onChange={(e) =>
+                        setSettings({
+                          ...settings,
+                          nvoids_batch_limit: Math.max(1, Math.min(Number(e.target.value) || 10, 50)),
+                        })
+                      }
+                    />
+                  </label>
+                  <label>
+                    Nvoids Auto Sync Interval (minutes)
+                    <input
+                      type="number"
+                      min={1}
+                      max={1440}
+                      value={settings.feature_nvoids_poll_interval_minutes}
+                      onChange={(e) =>
+                        setSettings({
+                          ...settings,
+                          feature_nvoids_poll_interval_minutes: Math.max(1, Math.min(Number(e.target.value) || 30, 1440)),
+                        })
+                      }
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={runNvoidsSync}
+                    disabled={nvoidsRunning || running || !settings.feature_nvoids_enabled}
+                  >
+                    {nvoidsRunning ? 'Running Nvoids Sync...' : 'Run Nvoids Sync Now'}
+                  </button>
+                  <p className="subtle">
+                    Nvoids sync is isolated from Gmail run queue and serialized to avoid concurrent DB load.
+                  </p>
+                </div>
+              </section>
             </form>
           ) : null}
 
@@ -2022,17 +2184,26 @@ function App() {
             const effectiveDraft = draftEdits[item.id] ?? item.draft_reply
             const routingTrusted = canTrustRouting(item)
             const verdict = getOverallVerdict(item, effectiveDraft, routingTrusted)
+            const requiresResumeForApproval = item.source === 'gmail'
             const canApprove =
               Boolean(item.recipient_email) &&
               Boolean(item.cc_email) &&
               Boolean(effectiveDraft?.trim()) &&
-              Boolean(item.resume_file_name) &&
+              (!requiresResumeForApproval || Boolean(item.resume_file_name)) &&
               routingTrusted
             return (
               <article key={item.id} className="emailItem">
                 <p><strong>Email ID:</strong> {item.id}</p>
                 <p><strong>From:</strong> {item.sender}</p>
                 <p><strong>Subject:</strong> {item.subject}</p>
+                {sourceListingUrl(item) ? (
+                  <p>
+                    <strong>Source Listing:</strong>{' '}
+                    <a href={sourceListingUrl(item)!} target="_blank" rel="noreferrer">
+                      Open source listing
+                    </a>
+                  </p>
+                ) : null}
                 {item.gmail_message_url ? (
                   <p>
                     <strong>Open:</strong>{' '}
@@ -2071,9 +2242,17 @@ function App() {
                     type="button"
                     onClick={() => approveSend(item)}
                     disabled={!canApprove || sendingId === item.id}
-                    title={!canApprove ? 'Safe routing, To, CC, body, and resume are required before send' : 'Approve and send'}
+                    title={
+                      !canApprove
+                        ? requiresResumeForApproval
+                          ? 'Safe routing, To, CC, body, and resume are required before send'
+                          : 'Safe routing, To, CC, and body are required before approval'
+                        : requiresResumeForApproval
+                          ? 'Approve and send'
+                          : 'Approve candidate'
+                    }
                   >
-                    {sendingId === item.id ? 'Sending...' : 'Approve & Send'}
+                    {sendingId === item.id ? 'Sending...' : requiresResumeForApproval ? 'Approve & Send' : 'Approve'}
                   </button>
                   <button
                     type="button"
@@ -2250,18 +2429,28 @@ function App() {
                   <option value="recruiter_opportunities">Recruiter Opportunities</option>
                 </select>
                 {premiumScopeFilter === 'recruiter_opportunities' ? (
-                  <select
-                    value={opportunityStatusFilter}
-                    onChange={(e) => setOpportunityStatusFilter(e.target.value as 'all' | OpportunityStatus)}
-                  >
-                    <option value="all">All statuses</option>
-                    <option value="New">New</option>
-                    <option value="Called">Called</option>
-                    <option value="Applied">Applied</option>
-                    <option value="Follow Up">Follow Up</option>
-                    <option value="Closed">Closed</option>
-                    <option value="Not Interested">Not Interested</option>
-                  </select>
+                  <>
+                    <select
+                      value={opportunityStatusFilter}
+                      onChange={(e) => setOpportunityStatusFilter(e.target.value as 'all' | OpportunityStatus)}
+                    >
+                      <option value="all">All statuses</option>
+                      <option value="New">New</option>
+                      <option value="Called">Called</option>
+                      <option value="Applied">Applied</option>
+                      <option value="Follow Up">Follow Up</option>
+                      <option value="Closed">Closed</option>
+                      <option value="Not Interested">Not Interested</option>
+                    </select>
+                    <select
+                      value={opportunitySourceFilter}
+                      onChange={(e) => setOpportunitySourceFilter(e.target.value as 'all' | 'gmail' | 'nvoids')}
+                    >
+                      <option value="all">All sources</option>
+                      <option value="gmail">Gmail</option>
+                      <option value="nvoids">Nvoids</option>
+                    </select>
+                  </>
                 ) : null}
                 <input
                   value={premiumSearch}
@@ -2372,6 +2561,7 @@ function App() {
                 ? opportunityCards.map((item) => (
                     <article key={`opportunity-${item.id}`} className="emailItem">
                       <p><strong>Subject:</strong> {item.email_subject}</p>
+                      <p><strong>Source:</strong> {(item.source_type || 'gmail').toUpperCase()}</p>
                       <p><strong>Recruiter Name:</strong> {item.recruiter_name || '-'}</p>
                       <p><strong>Recruiter Email:</strong> {item.recruiter_email || '-'}</p>
                       <p><strong>Recruiter Phone:</strong> {item.recruiter_phone_display || '-'}</p>
@@ -2382,8 +2572,13 @@ function App() {
                       <p><strong>Work Mode:</strong> {item.work_mode || '-'}</p>
                       <p><strong>Visa:</strong> {item.visa_restrictions || '-'}</p>
                       <p><strong>Skills:</strong> {item.extracted_skills || '-'}</p>
-                      {item.gmail_open_url ? (
-                        <p><strong>Open:</strong> <a href={item.gmail_open_url} target="_blank" rel="noreferrer">Open exact email in Gmail</a></p>
+                      {item.source_url || item.gmail_open_url ? (
+                        <p>
+                          <strong>Open:</strong>{' '}
+                          <a href={item.source_url || item.gmail_open_url} target="_blank" rel="noreferrer">
+                            {item.source_type === 'nvoids' ? 'Open Original Post' : 'Open exact email in Gmail'}
+                          </a>
+                        </p>
                       ) : null}
                       <label>
                         Status

@@ -68,6 +68,7 @@ class OrchestrationDeps:
     greeting_from_to_contact: Callable[[str | None, str], str]
     generate_reply_with_ai_or_fallback: Callable[..., Any]
     send_reply_with_attachment: Callable[..., str]
+    send_new_email_with_attachment: Callable[..., str]
     mark_message_processed: Callable[[str], None]
     append_tracking_sheet_row: Callable[..., None]
 
@@ -515,25 +516,28 @@ class OrchestrationService:
 
         email.last_error = None
         sent_message_id = None
+        if not email.recipient_email:
+            raise HTTPException(status_code=400, detail="Recipient email is required before sending")
+        if not email.cc_email:
+            raise HTTPException(status_code=400, detail="CC email is required before sending")
+        routing_decision = self.deps.evaluate_routing_for_email(email)
+        if not routing_decision.is_sendable_candidate:
+            detail = (
+                f"{routing_decision.reason} "
+                f"(status={routing_decision.status}, confidence={routing_decision.confidence:.2f})"
+            ).strip()
+            raise HTTPException(status_code=400, detail=f"Recipient routing is not safe to send: {detail}")
+        if not email.draft_reply.strip():
+            raise HTTPException(status_code=400, detail="Draft email body is required before sending")
+        resume = self.deps.active_resume(db)
+        if not resume:
+            raise HTTPException(status_code=400, detail="No active resume uploaded")
+        email.resume_asset_id = resume.id
+        email.resume_file_name = resume.file_name
+
         if email.source == "gmail":
-            if not email.external_thread_id or not email.recipient_email:
+            if not email.external_thread_id:
                 raise HTTPException(status_code=400, detail="Missing Gmail metadata")
-            if not email.cc_email:
-                raise HTTPException(status_code=400, detail="CC email is required before sending")
-            routing_decision = self.deps.evaluate_routing_for_email(email)
-            if not routing_decision.is_sendable_candidate:
-                detail = (
-                    f"{routing_decision.reason} "
-                    f"(status={routing_decision.status}, confidence={routing_decision.confidence:.2f})"
-                ).strip()
-                raise HTTPException(status_code=400, detail=f"Recipient routing is not safe to send: {detail}")
-            if not email.draft_reply.strip():
-                raise HTTPException(status_code=400, detail="Draft email body is required before sending")
-            resume = self.deps.active_resume(db)
-            if not resume:
-                raise HTTPException(status_code=400, detail="No active resume uploaded")
-            email.resume_asset_id = resume.id
-            email.resume_file_name = resume.file_name
             try:
                 sent_message_id = self.deps.send_reply_with_attachment(
                     email.external_thread_id,
@@ -546,6 +550,21 @@ class OrchestrationService:
                 )
                 if email.external_message_id:
                     self.deps.mark_message_processed(email.external_message_id)
+            except Exception as exc:
+                email.last_error = str(exc)
+                db.commit()
+                db.refresh(email)
+                raise HTTPException(status_code=502, detail=f"Gmail send failed: {exc}") from exc
+        elif email.source == "nvoids":
+            try:
+                sent_message_id = self.deps.send_new_email_with_attachment(
+                    email.recipient_email,
+                    email.cc_email,
+                    email.subject,
+                    email.draft_reply,
+                    resume.file_path,
+                    resume.file_name,
+                )
             except Exception as exc:
                 email.last_error = str(exc)
                 db.commit()

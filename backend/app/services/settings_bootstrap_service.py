@@ -22,6 +22,14 @@ class SettingsBootstrapService:
         return max(1, min(int(user_settings.feature_auto_poll_interval_minutes or 10), 1440))
 
     @staticmethod
+    def _nvoids_poll_interval_minutes(user_settings: UserSettings) -> int:
+        return max(1, min(int(user_settings.feature_nvoids_poll_interval_minutes or 30), 1440))
+
+    @staticmethod
+    def _nvoids_batch_limit(user_settings: UserSettings) -> int:
+        return max(1, min(int(user_settings.nvoids_batch_limit or 10), 50))
+
+    @staticmethod
     def _read_saved_gmail_queries(raw: str | None) -> list[str]:
         if not raw:
             return []
@@ -55,6 +63,8 @@ class SettingsBootstrapService:
                     existing.default_gmail_query = (existing.gmail_query or "").strip() or "is:unread in:inbox recruiter"
                 existing.default_date_mode = policy_service.normalize_default_date_mode(existing.default_date_mode)
                 existing.feature_auto_poll_interval_minutes = self._poll_interval_minutes(existing)
+                existing.feature_nvoids_poll_interval_minutes = self._nvoids_poll_interval_minutes(existing)
+                existing.nvoids_batch_limit = self._nvoids_batch_limit(existing)
                 if (
                     not existing.policy_json
                     or not existing.fallback_draft_template
@@ -86,6 +96,10 @@ class SettingsBootstrapService:
                 qualification_threshold=settings.qualification_threshold,
                 feature_auto_polling=settings.feature_auto_polling,
                 feature_auto_poll_interval_minutes=max(1, int(settings.feature_auto_poll_interval_minutes or 10)),
+                feature_nvoids_enabled=True,
+                feature_nvoids_auto_sync=False,
+                feature_nvoids_poll_interval_minutes=30,
+                nvoids_batch_limit=10,
                 feature_auto_send=settings.feature_auto_send,
                 feature_retry_queue=settings.feature_retry_queue,
                 feature_ai_enabled=False,
