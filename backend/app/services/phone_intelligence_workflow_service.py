@@ -12,6 +12,9 @@ from app.premium_numbers.domain_guard import should_capture_premium_numbers
 from app.premium_numbers.extraction import ExtractedPhoneLead, extract_phone_leads
 
 logger = logging.getLogger(__name__)
+TARGET_CONTACT_SIGNAL_RE = re.compile(r"\b(?:share|send|submit|mail|email)[\s\S]{0,120}\bto\b", re.IGNORECASE)
+TARGET_CONTACT_INTENT_RE = re.compile(r"\b(?:share|send|submit|mail|email|contact|reach|call)\b", re.IGNORECASE)
+EMAIL_LOCAL_PART_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9._-]*$")
 
 
 @dataclass(frozen=True)
@@ -112,6 +115,7 @@ class PhoneIntelligenceWorkflowService:
 
                 idempotency = self._idempotency_point(db, email, lead)
                 if idempotency.recruiter_number:
+                    self._enrich_existing_recruiter_number(idempotency.recruiter_number, lead)
                     recruiter_matches += 1
                     if idempotency.existing_opportunity:
                         opportunity_existing += 1
@@ -165,6 +169,78 @@ class PhoneIntelligenceWorkflowService:
         except Exception:
             self._rollback(db)
             raise
+
+    def _enrich_existing_recruiter_number(self, recruiter: RecruiterNumber, lead: ExtractedPhoneLead) -> None:
+        name = (recruiter.recruiter_name or "").strip().lower()
+        lead_name = (lead.owner_name or "").strip()
+        existing_name = (recruiter.recruiter_name or "").strip()
+        normalized_lead_name = lead_name.lower()
+        derived_contact_name = self._derive_name_from_contact_email(lead.contact_email)
+
+        replacement_name = ""
+        if lead_name and normalized_lead_name != "unknown":
+            replacement_name = lead_name
+        elif derived_contact_name:
+            replacement_name = derived_contact_name
+
+        if replacement_name and name in {"", "unknown"}:
+            recruiter.recruiter_name = replacement_name
+        elif self._is_strong_target_contact_signal(lead):
+            candidate_names = [n for n in [replacement_name, derived_contact_name] if n]
+            for candidate in candidate_names:
+                if existing_name and existing_name.lower() != candidate.lower():
+                    recruiter.recruiter_name = candidate
+                    break
+
+        designation = (recruiter.designation or "").strip().lower()
+        lead_designation = (lead.designation or "").strip()
+        if lead_designation and lead_designation.lower() != "unknown" and designation in {"", "unknown"}:
+            recruiter.designation = lead_designation
+
+        company = (recruiter.company or "").strip().lower()
+        lead_company = (lead.company or "").strip()
+        if lead_company and lead_company.lower() != "unknown" and company in {"", "unknown"}:
+            recruiter.company = lead_company
+
+    def _is_strong_target_contact_signal(self, lead: ExtractedPhoneLead) -> bool:
+        fragment = (lead.source_fragment or "").strip()
+        if not fragment:
+            return False
+
+        if TARGET_CONTACT_SIGNAL_RE.search(fragment):
+            return True
+
+        fragment_lower = fragment.lower()
+        has_contact_intent = bool(TARGET_CONTACT_INTENT_RE.search(fragment))
+        has_mailto = "mailto:" in fragment_lower
+
+        normalized_digits = re.sub(r"\D", "", lead.phone_number_normalized or "")
+        display_digits = re.sub(r"\D", "", lead.phone_number_display or "")
+        has_phone_digits = (
+            (normalized_digits and normalized_digits in re.sub(r"\D", "", fragment))
+            or (display_digits and display_digits in re.sub(r"\D", "", fragment))
+        )
+
+        contact_email = (lead.contact_email or "").strip().lower()
+        has_contact_email = bool(contact_email and contact_email in fragment_lower)
+        has_owner_name = bool((lead.owner_name or "").strip() and (lead.owner_name or "").strip().lower() != "unknown")
+
+        return has_owner_name and has_phone_digits and (has_contact_email or has_mailto or has_contact_intent)
+
+    def _derive_name_from_contact_email(self, contact_email: str | None) -> str:
+        email = (contact_email or "").strip().lower()
+        if "@" not in email:
+            return ""
+        local_part = email.split("@", 1)[0].strip()
+        if not local_part or not EMAIL_LOCAL_PART_RE.match(local_part):
+            return ""
+        clean = re.sub(r"[._-]+", " ", local_part).strip()
+        if not clean:
+            return ""
+        parts = [part for part in clean.split() if part]
+        if not parts:
+            return ""
+        return " ".join(part.capitalize() for part in parts)
 
     def _extract_leads(self, db: Session, email: RecruiterEmail) -> list[ExtractedPhoneLead] | None:
         allowed, sender_domain, configured_domains = should_capture_premium_numbers(db, email)

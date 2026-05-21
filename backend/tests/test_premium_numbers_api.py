@@ -237,6 +237,141 @@ class PremiumNumbersApiTests(unittest.TestCase):
         self.assertEqual(payload[0]["recruiter_name"], "Dharma Veer")
         self.assertEqual(payload[0]["recruiter_email"], "dharma.veer@intellisoft.com")
 
+    def test_delete_recruiter_opportunity_deletes_orphan_recruiter_number(self) -> None:
+        with Session(self.engine) as db:
+            recruiter = RecruiterNumber(
+                owner_id=main.settings.owner_id,
+                normalized_phone_number="12145550000",
+                display_phone_number="+1 214 555 0000",
+                recruiter_name="Sam",
+                company="Acme",
+                designation="Recruiter",
+                recruiter_email="sam@acme.com",
+                first_detected_email_id=None,
+            )
+            db.add(recruiter)
+            db.commit()
+            db.refresh(recruiter)
+
+            opportunity = RecruiterOpportunity(
+                owner_id=main.settings.owner_id,
+                recruiter_number_id=recruiter.id,
+                source_email_id=None,
+                gmail_message_id="msg-delete-single",
+                email_subject="Delete me",
+                email_sender="sam@acme.com",
+                gmail_open_url="",
+                received_at=datetime.now(UTC),
+                job_title="Engineer",
+                client="Acme",
+                location="Austin, TX",
+                work_mode="Remote",
+                visa_restrictions="",
+                extracted_skills="java",
+                evidence="test",
+                status="New",
+                notes="",
+            )
+            db.add(opportunity)
+            db.commit()
+            db.refresh(opportunity)
+            opportunity_id = opportunity.id
+            recruiter_id = recruiter.id
+
+        response = self.client.delete(f"/recruiter-opportunities/{opportunity_id}")
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(payload["id"], opportunity_id)
+        self.assertTrue(payload["deleted"])
+        self.assertTrue(payload["recruiter_number_deleted"])
+
+        with Session(self.engine) as db:
+            remaining_opp = db.query(RecruiterOpportunity).filter(RecruiterOpportunity.id == opportunity_id).first()
+            self.assertIsNone(remaining_opp)
+            remaining_recruiter = db.query(RecruiterNumber).filter(RecruiterNumber.id == recruiter_id).first()
+            self.assertIsNone(remaining_recruiter)
+
+    def test_delete_recruiter_opportunity_keeps_recruiter_when_other_opportunities_exist(self) -> None:
+        with Session(self.engine) as db:
+            recruiter = RecruiterNumber(
+                owner_id=main.settings.owner_id,
+                normalized_phone_number="12145550001",
+                display_phone_number="+1 214 555 0001",
+                recruiter_name="Alex",
+                company="BrightPath",
+                designation="Recruiter",
+                recruiter_email="alex@brightpath.com",
+                first_detected_email_id=None,
+            )
+            db.add(recruiter)
+            db.commit()
+            db.refresh(recruiter)
+
+            first = RecruiterOpportunity(
+                owner_id=main.settings.owner_id,
+                recruiter_number_id=recruiter.id,
+                source_email_id=None,
+                gmail_message_id="msg-delete-keep-1",
+                email_subject="Delete first",
+                email_sender="alex@brightpath.com",
+                gmail_open_url="",
+                received_at=datetime.now(UTC),
+                job_title="Engineer",
+                client="BrightPath",
+                location="Dallas, TX",
+                work_mode="Hybrid",
+                visa_restrictions="",
+                extracted_skills="java,spring",
+                evidence="test",
+                status="New",
+                notes="",
+            )
+            second = RecruiterOpportunity(
+                owner_id=main.settings.owner_id,
+                recruiter_number_id=recruiter.id,
+                source_email_id=None,
+                gmail_message_id="msg-delete-keep-2",
+                email_subject="Keep second",
+                email_sender="alex@brightpath.com",
+                gmail_open_url="",
+                received_at=datetime.now(UTC),
+                job_title="Senior Engineer",
+                client="BrightPath",
+                location="Dallas, TX",
+                work_mode="Hybrid",
+                visa_restrictions="",
+                extracted_skills="aws",
+                evidence="test",
+                status="New",
+                notes="",
+            )
+            db.add(first)
+            db.add(second)
+            db.commit()
+            db.refresh(first)
+            db.refresh(second)
+            first_id = first.id
+            second_id = second.id
+            recruiter_id = recruiter.id
+
+        response = self.client.delete(f"/recruiter-opportunities/{first_id}")
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertTrue(payload["deleted"])
+        self.assertFalse(payload["recruiter_number_deleted"])
+
+        with Session(self.engine) as db:
+            deleted = db.query(RecruiterOpportunity).filter(RecruiterOpportunity.id == first_id).first()
+            self.assertIsNone(deleted)
+            survivor = db.query(RecruiterOpportunity).filter(RecruiterOpportunity.id == second_id).first()
+            self.assertIsNotNone(survivor)
+            remaining_recruiter = db.query(RecruiterNumber).filter(RecruiterNumber.id == recruiter_id).first()
+            self.assertIsNotNone(remaining_recruiter)
+
+    def test_delete_recruiter_opportunity_returns_404_for_missing_id(self) -> None:
+        response = self.client.delete("/recruiter-opportunities/999999")
+        self.assertEqual(response.status_code, 404, response.text)
+
     def test_reextract_is_idempotent_for_leads_and_opportunities(self) -> None:
         now = datetime.now(UTC)
         with Session(self.engine) as db:
@@ -321,6 +456,236 @@ class PremiumNumbersApiTests(unittest.TestCase):
             )
             self.assertEqual(leads, 1)
             self.assertEqual(opportunities, 1)
+
+    def test_reextract_enriches_existing_unknown_recruiter_name(self) -> None:
+        now = datetime.now(UTC)
+        with Session(self.engine) as db:
+            db.add(
+                UserSettings(
+                    owner_id=main.settings.owner_id,
+                    enabled=True,
+                    gmail_query="is:unread",
+                    default_gmail_query="is:unread",
+                    default_date_mode="today",
+                    accepted_locations="",
+                    role_keywords="",
+                    must_have_skills="",
+                    employer_domains="horizonsoftech.net",
+                    free_text_guidance="",
+                    remote_preference="any",
+                )
+            )
+            email = RecruiterEmail(
+                owner_id=main.settings.owner_id,
+                sender="Samshritha <samshritha@horizonsoftech.net>",
+                subject="Senior Talend Developer",
+                body="please share the suitable resume to Rabbanis@kgatetech.com - +1 832-271-3861",
+                role="Senior Talend Developer",
+                location="onsite",
+                salary_text="",
+                skills_text="sql,java,aws",
+                score=80,
+                decision="Qualified",
+                state="needs_review",
+                draft_reply="Thanks",
+                source="gmail",
+                external_message_id="m-rabbanis-1",
+                external_thread_id="t-rabbanis-1",
+                gmail_received_at=now,
+                recipient_email="to@example.com",
+                cc_email="cc@example.com",
+            )
+            db.add(email)
+            db.commit()
+            db.refresh(email)
+
+            db.add(
+                RecruiterNumber(
+                    owner_id=main.settings.owner_id,
+                    normalized_phone_number="18322713861",
+                    display_phone_number="(832) 271-3861",
+                    recruiter_name="Unknown",
+                    company="Unknown",
+                    designation="Unknown",
+                    recruiter_email="samshritha@horizonsoftech.net",
+                    first_detected_email_id=email.id,
+                )
+            )
+            db.commit()
+            email_id = email.id
+
+        response = self.client.post(f"/premium-numbers/reextract/{email_id}")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertGreaterEqual(response.json().get("stored_count", 0), 1)
+
+        with Session(self.engine) as db:
+            recruiter = (
+                db.query(RecruiterNumber)
+                .filter(
+                    RecruiterNumber.owner_id == main.settings.owner_id,
+                    RecruiterNumber.normalized_phone_number == "18322713861",
+                )
+                .first()
+            )
+            self.assertIsNotNone(recruiter)
+            assert recruiter is not None
+            self.assertEqual(recruiter.recruiter_name, "Rabbanis")
+
+    def test_reextract_overrides_signature_name_with_target_contact_name(self) -> None:
+        now = datetime.now(UTC)
+        with Session(self.engine) as db:
+            db.add(
+                UserSettings(
+                    owner_id=main.settings.owner_id,
+                    enabled=True,
+                    gmail_query="is:unread",
+                    default_gmail_query="is:unread",
+                    default_date_mode="today",
+                    accepted_locations="",
+                    role_keywords="",
+                    must_have_skills="",
+                    employer_domains="horizonsoftech.net",
+                    free_text_guidance="",
+                    remote_preference="any",
+                )
+            )
+            email = RecruiterEmail(
+                owner_id=main.settings.owner_id,
+                sender="Samshritha Gangula <samshritha@horizonsoftech.net>",
+                subject="Senior Talend Developer",
+                body=(
+                    "please share the suitable resume to \n"
+                    "<mailto:Rabbanis@kgatetech.com> Rabbanis@kgatetech.com - +1 832-271-3861\n"
+                    "Thanks & Regards\n"
+                    "Samshritha Gangula\n"
+                    "Bench Sales Recruiter"
+                ),
+                role="Senior Talend Developer",
+                location="onsite",
+                salary_text="",
+                skills_text="sql,java,aws",
+                score=80,
+                decision="Qualified",
+                state="needs_review",
+                draft_reply="Thanks",
+                source="gmail",
+                external_message_id="m-rabbanis-override-1",
+                external_thread_id="t-rabbanis-override-1",
+                gmail_received_at=now,
+                recipient_email="to@example.com",
+                cc_email="cc@example.com",
+            )
+            db.add(email)
+            db.commit()
+            db.refresh(email)
+
+            db.add(
+                RecruiterNumber(
+                    owner_id=main.settings.owner_id,
+                    normalized_phone_number="18322713861",
+                    display_phone_number="(832) 271-3861",
+                    recruiter_name="Samshritha Gangula",
+                    company="Unknown",
+                    designation="Unknown",
+                    recruiter_email="samshritha@horizonsoftech.net",
+                    first_detected_email_id=email.id,
+                )
+            )
+            db.commit()
+            email_id = email.id
+
+        response = self.client.post(f"/premium-numbers/reextract/{email_id}")
+        self.assertEqual(response.status_code, 200, response.text)
+
+        with Session(self.engine) as db:
+            recruiter = (
+                db.query(RecruiterNumber)
+                .filter(
+                    RecruiterNumber.owner_id == main.settings.owner_id,
+                    RecruiterNumber.normalized_phone_number == "18322713861",
+                )
+                .first()
+            )
+            self.assertIsNotNone(recruiter)
+            assert recruiter is not None
+            self.assertEqual(recruiter.recruiter_name, "Rabbanis")
+
+    def test_reextract_overrides_name_without_to_when_contact_snippet_is_strong(self) -> None:
+        now = datetime.now(UTC)
+        with Session(self.engine) as db:
+            db.add(
+                UserSettings(
+                    owner_id=main.settings.owner_id,
+                    enabled=True,
+                    gmail_query="is:unread",
+                    default_gmail_query="is:unread",
+                    default_date_mode="today",
+                    accepted_locations="",
+                    role_keywords="",
+                    must_have_skills="",
+                    employer_domains="horizonsoftech.net",
+                    free_text_guidance="",
+                    remote_preference="any",
+                )
+            )
+            email = RecruiterEmail(
+                owner_id=main.settings.owner_id,
+                sender="Samshritha Gangula <samshritha@horizonsoftech.net>",
+                subject="Talend Developer",
+                body=(
+                    "please share suitable profile at Rabbanis@kgatetech.com - +1 832-271-3861\n"
+                    "Regards,\n"
+                    "Samshritha Gangula"
+                ),
+                role="Talend Developer",
+                location="onsite",
+                salary_text="",
+                skills_text="sql,java,aws",
+                score=80,
+                decision="Qualified",
+                state="needs_review",
+                draft_reply="Thanks",
+                source="gmail",
+                external_message_id="m-rabbanis-no-to-1",
+                external_thread_id="t-rabbanis-no-to-1",
+                gmail_received_at=now,
+                recipient_email="to@example.com",
+                cc_email="cc@example.com",
+            )
+            db.add(email)
+            db.commit()
+            db.refresh(email)
+
+            db.add(
+                RecruiterNumber(
+                    owner_id=main.settings.owner_id,
+                    normalized_phone_number="18322713861",
+                    display_phone_number="(832) 271-3861",
+                    recruiter_name="Samshritha Gangula",
+                    company="Unknown",
+                    designation="Unknown",
+                    recruiter_email="samshritha@horizonsoftech.net",
+                    first_detected_email_id=email.id,
+                )
+            )
+            db.commit()
+            email_id = email.id
+
+        response = self.client.post(f"/premium-numbers/reextract/{email_id}")
+        self.assertEqual(response.status_code, 200, response.text)
+
+        with Session(self.engine) as db:
+            recruiter = (
+                db.query(RecruiterNumber)
+                .filter(
+                    RecruiterNumber.owner_id == main.settings.owner_id,
+                    RecruiterNumber.normalized_phone_number == "18322713861",
+                )
+                .first()
+            )
+            self.assertIsNotNone(recruiter)
+            assert recruiter is not None
+            self.assertEqual(recruiter.recruiter_name, "Rabbanis")
 
 
 if __name__ == "__main__":

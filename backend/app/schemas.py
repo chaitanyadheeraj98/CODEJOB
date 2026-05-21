@@ -388,6 +388,12 @@ class RecruiterOpportunityPatchRequest(BaseModel):
     notes: str | None = None
 
 
+class RecruiterOpportunityDeleteResponse(BaseModel):
+    id: int
+    deleted: bool
+    recruiter_number_deleted: bool
+
+
 class ExternalFeedSyncResponse(BaseModel):
     source_type: str
     fetched_count: int

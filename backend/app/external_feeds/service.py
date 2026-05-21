@@ -345,7 +345,7 @@ class ExternalFeedService:
             sent_status="not_sent",
             source="nvoids",
             external_message_id=external_message_id,
-            external_thread_id=external_message_id,
+            external_thread_id=item.source_url or external_message_id,
             gmail_received_at=item.posted_at or datetime.now(UTC),
             recipient_email=recruiter_to,
             cc_email=cc_email,

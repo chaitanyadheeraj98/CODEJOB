@@ -232,12 +232,12 @@ type Candidate = {
   external_thread_id: string | null
 }
 
-const sourceListingUrl = (item: Candidate): string | null => {
+export const sourceListingUrl = (item: Candidate): string | null => {
   if (item.source !== 'nvoids') return null
   const thread = (item.external_thread_id ?? '').trim()
   if (thread.startsWith('http://') || thread.startsWith('https://')) return thread
   const message = (item.external_message_id ?? '').trim()
-  const nvoidsIdMatch = message.match(/^nvoids:(\d+)$/i)
+  const nvoidsIdMatch = message.match(/^nvoids:(?:nvoids:)?(\d+)$/i)
   if (nvoidsIdMatch) {
     return `https://nvoids.com/job_details.jsp?id=${nvoidsIdMatch[1]}`
   }
@@ -341,6 +341,12 @@ type RecruiterOpportunityCard = {
   notes: string
   cold_call_script: string | null
   cold_call_script_updated_at: string | null
+}
+
+type RecruiterOpportunityDeleteResponse = {
+  id: number
+  deleted: boolean
+  recruiter_number_deleted: boolean
 }
 
 type RoutingEvidence = {
@@ -585,6 +591,7 @@ function App() {
   const [opportunitySourceFilter, setOpportunitySourceFilter] = useState<'all' | 'gmail' | 'nvoids'>('all')
   const [premiumSearch, setPremiumSearch] = useState('')
   const [updatingOpportunityId, setUpdatingOpportunityId] = useState<number | null>(null)
+  const [deletingOpportunityId, setDeletingOpportunityId] = useState<number | null>(null)
   const [generatingColdCallId, setGeneratingColdCallId] = useState<number | null>(null)
   const [classifyingReviewId, setClassifyingReviewId] = useState<number | null>(null)
   const [timeRange, setTimeRange] = useState<TimeRangeKey>('current_day')
@@ -843,6 +850,23 @@ function App() {
       setPremiumError((e as Error).message)
     } finally {
       setGeneratingColdCallId(null)
+    }
+  }
+
+  const deleteOpportunity = async (id: number) => {
+    setDeletingOpportunityId(id)
+    try {
+      const res = await fetch(`${apiBase}/recruiter-opportunities/${id}`, {
+        method: 'DELETE',
+      })
+      if (!res.ok) throw new Error('Failed to delete opportunity')
+      await res.json() as RecruiterOpportunityDeleteResponse
+      setOpportunityCards((prev) => prev.filter((item) => item.id !== id))
+      schedulePostMutationRefresh()
+    } catch (e) {
+      setPremiumError((e as Error).message)
+    } finally {
+      setDeletingOpportunityId(null)
     }
   }
 
@@ -2613,9 +2637,16 @@ function App() {
                         <button
                           type="button"
                           onClick={() => generateColdCallScript(item.id)}
-                          disabled={generatingColdCallId === item.id}
+                          disabled={generatingColdCallId === item.id || deletingOpportunityId === item.id}
                         >
                           {generatingColdCallId === item.id ? 'Generating...' : 'Generate Cold Call Script'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => deleteOpportunity(item.id)}
+                          disabled={deletingOpportunityId === item.id}
+                        >
+                          {deletingOpportunityId === item.id ? 'Deleting...' : 'Delete'}
                         </button>
                         {item.cold_call_script ? (
                           <button

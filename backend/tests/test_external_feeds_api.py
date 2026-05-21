@@ -129,6 +129,9 @@ class ExternalFeedsApiTests(unittest.TestCase):
             )
             self.assertGreaterEqual(len(rows), 1)
             self.assertEqual(rows[0].cc_email, "employer.cc@example.com")
+            self.assertEqual(rows[0].source, "nvoids")
+            self.assertTrue((rows[0].external_thread_id or "").startswith("https://"))
+            self.assertTrue((rows[0].external_message_id or "").startswith("nvoids:"))
 
         runs = self.client.get("/external-feeds/runs")
         self.assertEqual(runs.status_code, 200, runs.text)

@@ -119,6 +119,83 @@ class PremiumNumbersExtractionTests(unittest.TestCase):
         self.assertFalse(leads[0].is_recruiter_relevant)
         self.assertEqual(leads[0].contact_type, "employer_internal")
 
+    def test_extract_owner_name_from_contact_email_line(self) -> None:
+        leads = extraction.extract_phone_leads(
+            "Samshritha <samshritha@horizonsoftech.net>",
+            "Senior Talend Developer",
+            "please share the suitable resume to Rabbanis@kgatetech.com - +1 832-271-3861",
+        )
+        self.assertTrue(leads)
+        self.assertEqual(leads[0].phone_number_normalized, "18322713861")
+        self.assertEqual(leads[0].owner_name, "Rabbanis")
+
+    def test_extract_owner_name_prefers_target_contact_over_signature_name(self) -> None:
+        leads = extraction.extract_phone_leads(
+            "Samshritha Gangula <samshritha@horizonsoftech.net>",
+            "Senior Talend Developer",
+            (
+                "please share the suitable resume to Rabbanis@kgatetech.com - +1 832-271-3861\n"
+                "Thanks & Regards\n"
+                "Samshritha Gangula\n"
+                "Bench Sales Recruiter"
+            ),
+        )
+        self.assertTrue(leads)
+        target = [lead for lead in leads if lead.phone_number_normalized == "18322713861"]
+        self.assertTrue(target)
+        self.assertEqual(target[0].owner_name, "Rabbanis")
+
+    def test_extract_owner_name_when_to_and_email_are_split_by_newline(self) -> None:
+        leads = extraction.extract_phone_leads(
+            "Samshritha Gangula <samshritha@horizonsoftech.net>",
+            "Senior Talend Developer",
+            (
+                "please share the suitable resume to \n"
+                "<mailto:Rabbanis@kgatetech.com> Rabbanis@kgatetech.com - +1 832-271-3861\n"
+                "Thanks & Regards\n"
+                "Samshritha Gangula\n"
+                "Bench Sales Recruiter"
+            ),
+        )
+        target = [lead for lead in leads if lead.phone_number_normalized == "18322713861"]
+        self.assertTrue(target)
+        self.assertEqual(target[0].owner_name, "Rabbanis")
+
+    def test_dedupe_prefers_non_unknown_owner_on_confidence_tie(self) -> None:
+        unknown = extraction.ExtractedPhoneLead(
+            phone_number_display="+1 832-271-3861",
+            phone_number_normalized="18322713861",
+            owner_name="Unknown",
+            contact_email="",
+            company="Unknown",
+            designation="Unknown",
+            purpose="Signature block phone number",
+            confidence="high",
+            contact_type="unknown",
+            recruiter_relevance_score=0,
+            is_recruiter_relevant=False,
+            relevance_reason="none",
+            source_fragment="x",
+        )
+        named = extraction.ExtractedPhoneLead(
+            phone_number_display="+1 832-271-3861",
+            phone_number_normalized="18322713861",
+            owner_name="Rabbanis",
+            contact_email="rabbanis@kgatetech.com",
+            company="Kgatetech",
+            designation="Unknown",
+            purpose="Recruiter direct number",
+            confidence="high",
+            contact_type="recruiter_direct",
+            recruiter_relevance_score=75,
+            is_recruiter_relevant=True,
+            relevance_reason="external_domain,cta_context",
+            source_fragment="y",
+        )
+        deduped = extraction.dedupe_phone_leads([unknown, named])
+        self.assertEqual(len(deduped), 1)
+        self.assertEqual(deduped[0].owner_name, "Rabbanis")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -113,6 +113,7 @@ from app.schemas import (
     PremiumNumberListResponse,
     PremiumNumberResponse,
     RecruiterNumberResponse,
+    RecruiterOpportunityDeleteResponse,
     RecruiterOpportunityPatchRequest,
     RecruiterOpportunityResponse,
     RejectRequest,
@@ -2123,6 +2124,55 @@ def patch_recruiter_opportunity(
         .first()
     )
     return _recruiter_opportunity_response(row, recruiter)
+
+
+@app.delete("/recruiter-opportunities/{opportunity_id}", response_model=RecruiterOpportunityDeleteResponse)
+def delete_recruiter_opportunity(
+    opportunity_id: int,
+    db: Session = Depends(get_db),
+) -> RecruiterOpportunityDeleteResponse:
+    row = (
+        db.query(RecruiterOpportunity)
+        .filter(RecruiterOpportunity.owner_id == settings.owner_id, RecruiterOpportunity.id == opportunity_id)
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Opportunity not found")
+
+    recruiter_number_id = row.recruiter_number_id
+    db.delete(row)
+    db.flush()
+
+    remaining_count = (
+        db.query(func.count(RecruiterOpportunity.id))
+        .filter(
+            RecruiterOpportunity.owner_id == settings.owner_id,
+            RecruiterOpportunity.recruiter_number_id == recruiter_number_id,
+        )
+        .scalar()
+        or 0
+    )
+
+    recruiter_number_deleted = False
+    if remaining_count == 0:
+        recruiter = (
+            db.query(RecruiterNumber)
+            .filter(
+                RecruiterNumber.owner_id == settings.owner_id,
+                RecruiterNumber.id == recruiter_number_id,
+            )
+            .first()
+        )
+        if recruiter:
+            db.delete(recruiter)
+            recruiter_number_deleted = True
+
+    db.commit()
+    return RecruiterOpportunityDeleteResponse(
+        id=opportunity_id,
+        deleted=True,
+        recruiter_number_deleted=recruiter_number_deleted,
+    )
 
 
 @app.post("/recruiter-opportunities/{opportunity_id}/generate-cold-call-script", response_model=RecruiterOpportunityResponse)

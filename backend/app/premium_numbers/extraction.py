@@ -18,6 +18,25 @@ DESIGNATION_RE = re.compile(
     re.IGNORECASE,
 )
 NAME_LINE_RE = re.compile(r"^\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})\s*$")
+EMAIL_LOCAL_NAME_RE = re.compile(r"\b([A-Za-z][A-Za-z.'\-]{1,30})@[A-Z0-9.\-]+\.[A-Z]{2,}\b", re.IGNORECASE)
+TARGET_CONTACT_EMAIL_RE = re.compile(
+    r"\bto\b[\s\S]{0,120}?([A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,})",
+    re.IGNORECASE,
+)
+GENERIC_LOCAL_NAME_TOKENS = {
+    "admin",
+    "careers",
+    "contact",
+    "hello",
+    "hr",
+    "info",
+    "jobs",
+    "mail",
+    "noreply",
+    "recruiter",
+    "support",
+    "team",
+}
 
 
 @dataclass(frozen=True)
@@ -167,6 +186,16 @@ def _extract_contact_email(fragment: str, sender: str) -> str:
 
 
 def _extract_owner_name(fragment: str, sender: str) -> str:
+    # Prefer explicit target-contact contexts (e.g. "share resume to rabbanis@...").
+    contact_match = TARGET_CONTACT_EMAIL_RE.search(fragment or "")
+    if contact_match:
+        target_email = contact_match.group(1).strip()
+        local_match = EMAIL_LOCAL_NAME_RE.search(target_email)
+        if local_match:
+            local = re.sub(r"[^A-Za-z]", "", local_match.group(1) or "").strip()
+            if len(local) >= 2 and local.lower() not in GENERIC_LOCAL_NAME_TOKENS:
+                return local.title()
+
     lines = [line.strip(" -,\t\r") for line in (fragment or "").splitlines() if line.strip()]
     for line in lines:
         if EMAIL_RE.search(line):
@@ -178,7 +207,36 @@ def _extract_owner_name(fragment: str, sender: str) -> str:
         match = NAME_LINE_RE.match(line)
         if match:
             return match.group(1).strip()
+
+    # Fallback: infer owner name from contact-style email mention in the fragment
+    # e.g. "please share ... to Rabbanis@kgatetech.com - +1 832-271-3861"
+    for line in lines:
+        if "@" not in line:
+            continue
+        match = EMAIL_LOCAL_NAME_RE.search(line)
+        if not match:
+            continue
+        local = re.sub(r"[^A-Za-z]", "", match.group(1) or "").strip()
+        if len(local) < 2:
+            continue
+        if local.lower() in GENERIC_LOCAL_NAME_TOKENS:
+            continue
+        return local.title()
     return _sender_name(sender)
+
+
+def _lead_quality_score(lead: ExtractedPhoneLead) -> int:
+    score = 0
+    owner = (lead.owner_name or "").strip().lower()
+    if owner and owner != "unknown":
+        score += 2
+    if (lead.contact_email or "").strip():
+        score += 1
+    if (lead.designation or "").strip().lower() != "unknown":
+        score += 1
+    if lead.is_recruiter_relevant:
+        score += 1
+    return score
 
 
 def _classify_recruiter_relevance(
@@ -307,7 +365,12 @@ def dedupe_phone_leads(leads: list[ExtractedPhoneLead]) -> list[ExtractedPhoneLe
         if not existing:
             deduped[lead.phone_number_normalized] = lead
             continue
-        if rank.get(lead.confidence, 1) > rank.get(existing.confidence, 1):
+        lead_rank = rank.get(lead.confidence, 1)
+        existing_rank = rank.get(existing.confidence, 1)
+        if lead_rank > existing_rank:
+            deduped[lead.phone_number_normalized] = lead
+            continue
+        if lead_rank == existing_rank and _lead_quality_score(lead) > _lead_quality_score(existing):
             deduped[lead.phone_number_normalized] = lead
     return list(deduped.values())
 
