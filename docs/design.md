@@ -1,106 +1,29 @@
 # CODEJOB UI and Interaction Design (Current Branch)
 
-Audit date: 2026-05-18  
-Branch: `snowball-md`
+## Current UI Shape
 
-## 1) Layout and navigation
+- Single-page shell with left sidebar and content panes.
+- Main workflow surface remains concentrated in `dashboard/src/App.tsx`.
+- Active pages: `run_queue`, `needs_review`, `failed_mapping`, `premium_numbers`, `sent_items`, `recent_runs`.
 
-The dashboard is a single-page interface with left rail navigation and one active content pane.
+## Interaction Contracts
 
-Navigation sections:
-- Run Queue
-- Needs Review
-- Failed Mapping
-- Premium Numbers
-- Sent Items
-- Recent Runs
+| Area | Current behavior | Evidence |
+| --- | --- | --- |
+| Run queue controls | status cards, query/date controls, policy toggles, run actions | `dashboard/src/App.tsx` |
+| Needs review actions | approve/send, reject, send-to-failed, draft/routing fixes | `dashboard/src/App.tsx` |
+| Failed mapping repair | edit To/CC then move back to review queue | `dashboard/src/App.tsx` |
+| Premium numbers operations | classify unknown numbers, swap recruiter/employer, manage opportunity status/notes, generate script | `dashboard/src/App.tsx` |
+| Recent runs summary | displays run details and automation counters | `dashboard/src/App.tsx` |
 
-Placeholder-only controls still rendered:
-- `New Campaign`
-- `Settings` (footer)
-- `Help Center` (footer)
+## Placeholder and UX Debt
 
-## 2) Run Queue surface
+- Sidebar footer actions `Settings` and `Help Center` and top action `New Campaign` are presentational.
+- UI state/effect orchestration remains monolithic; module extraction is partial.
 
-Run Queue combines controls + status + settings:
-- Gmail/AI/Telegram status cards
-- OAuth controls
-- query/date controls with saved-query suggestions
-- policy and execution controls
-- resume upload/replace
-- productivity live monitor
+Mermaid not needed: this is a static UI capability alignment update.
 
-Execution controls currently include:
-- `Dry Run Mode`
-- `Auto Send Current Run Queue` with helper copy:
-  `Auto-send only candidates queued in the current run.`
-- `Retry Failed Queue` with helper copy:
-  `Retry failed candidates and promote sendable ones to Needs Review.`
-
-## 3) Query bucket UX
-
-Implemented behavior:
-- inline query input updates active query state
-- `+` saves current query
-- `-` removes exact current saved query
-- keyboard suggestion navigation (`ArrowUp/Down`, `Enter`, `Escape`)
-- case-insensitive dedupe and max 10 saved queries
-
-## 4) Needs Review UX
-
-Each card supports:
-- sender/subject/context visibility
-- routing panel and routing evidence
-- editable draft + rendered preview
-- verdict badge
-- actions: `Approve & Send`, `Reject`, `Send to Failed Mapping`
-
-Approval button remains blocked until frontend checks pass:
-- recipient + CC
-- non-empty draft
-- resume filename
-- routing considered trusted
-
-## 5) Failed Mapping UX
-
-Each failed item supports:
-- routing evidence review
-- editable corrected `To`/`CC`
-- `Save Mapping & Move to Review` action
-
-## 6) Premium Numbers UX
-
-Scope selector supports:
-- unknown review cards
-- recruiter numbers
-- employer numbers
-- recruiter opportunities
-
-Implemented actions:
-- mark unknown number as recruiter/employer
-- delete review card
-- swap recruiter/employer bucket identity
-- recruiter opportunity status updates
-- recruiter opportunity notes update
-- cold-call script generation + copy
-
-## 7) Sent Items and Recent Runs
-
-- Sent Items: approved/sent history list
-- Recent Runs: recent run summaries, counts, effective query details
-- Recent Runs: additive automation badges when counters are present:
-  - `Auto Sent`
-  - `Auto Send Failed`
-  - `Retry Promoted`
-  - `Retry Skipped`
-- Analytics trend/activity is rendered inside Run Queue (not a separate routed page)
-
-## 8) Design debt still active
-
-- `App.tsx` still controls most state and network flows.
-- Refresh coordination still depends on `schedulePostMutationRefresh()` timers.
-- Placeholder sidebar actions are not feature-routed.
-- `features/ai` is not yet a full UI feature module.
-
-Evidence basis: both  
-Verification limits: UI tests pass, but lint/build remain red in this local runtime.
+- Audit date: 2026-05-22
+- Branch: external-recruiter-feed-ingestion
+- Evidence basis: code inspection
+- Verification limits: UI behavior inferred from source and frontend test run; lint/build checks were not rerun in this session.

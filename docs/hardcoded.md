@@ -1,41 +1,32 @@
 # Hardcoded Values and Constants Review
 
-Audit date: 2026-05-18  
-Branch: `snowball-md`
+## Deployment-Sensitive Defaults
 
-## 1) Deployment-sensitive defaults
-
-| Location | Hardcoded default | Impact |
+| Location | Value | Impact |
 | --- | --- | --- |
-| `backend/app/main.py` | `allow_origins=["*"]` | overly broad CORS default |
-| `backend/app/config.py` | `google_redirect_uri = "http://localhost:8080/"` | local OAuth default |
-| `backend/app/config.py` | spreadsheet id default value | project-specific target baked in |
-| `backend/app/config.py` | `owner_id = "default-owner"` | single-owner default behavior |
-| `backend/app/config.py` | `telegram_auth_ttl_minutes = 30` | in-memory auth session duration |
+| `backend/app/main.py` | `allow_origins=["*"]` | permissive CORS by default |
+| `backend/app/config.py` | `google_redirect_uri` default localhost value | local-only default may be incorrect in deployment |
+| `backend/app/config.py` | owner/project fallback defaults | single-owner assumptions unless overridden |
 
-## 2) Workflow-affecting constants
+## Workflow Constants with Behavioral Impact
 
-| Location | Constant/rule | Effect |
+| Location | Constant class | Runtime effect |
 | --- | --- | --- |
-| `phase0.py` | fallback template + signature defaults | shapes rules-only draft content |
-| `phase0.py` | heuristic keyword/hint sets | affects parse/scoring/routing |
-| `main.py` / `policy_service.py` | policy defaults and profile values | controls run behavior |
-| `query_bucket/service.py` | query limit `10` | query bucket cap |
-| `premium_numbers/intelligence.py` | fixed opportunity status set | API validation contract |
+| `backend/app/main.py` | analytics event-weight map and range options | impacts trend scoring and bucketed reports |
+| `backend/app/phase0.py` | parsing/filter/routing heuristics | affects queue qualification and routing confidence |
+| `backend/app/query_bucket/service.py` | saved-query constraints | enforces dedupe and query limit behavior |
+| `backend/app/premium_numbers/intelligence.py` | opportunity status values | endpoint validation and UI contract |
 
-## 3) Drift hotspots
+## Active Drift Risks
 
-1. **Policy profile duplication** in backend and frontend.
-2. **Settings bootstrap defaults** persisted into DB on missing values.
-3. **Heuristic-heavy parsing/routing defaults** in phase0.
-4. **Execution-control operator clarity**:
-   `feature_auto_send` and `feature_retry_queue` are no longer persisted-only;
-   they now drive live post-orchestration behavior and should stay aligned with
-   UI helper text and run-response counters.
+- Frontend/backend policy defaults can diverge if maintained separately.
+- Hardcoded permissive values can leak from local defaults into non-local environments.
+- Heuristic constants change behavior without obvious external contract changes.
 
-## 4) Current conclusion
+Mermaid not needed: this update is a constant inventory and risk categorization.
 
-Hardcoded values in this branch are not only cosmetic; several directly influence runtime behavior, deployment posture, and operator expectations. Any behavior change to these constants should be paired with test updates and docs updates.
+- Audit date: 2026-05-22
+- Branch: external-recruiter-feed-ingestion
+- Evidence basis: code inspection
+- Verification limits: no dedicated constant-only regression suite was run in this session.
 
-Evidence basis: code inspection  
-Verification limits: behavior impact inferred from config/runtime usage; no dedicated constant-only regression suite.

@@ -26,6 +26,7 @@ You are auditing CODEJOB documentation against the **current checked-out branch 
 ### Protected Files Rule (Do Not Modify)
 
 Do not edit these files during docs audit/update execution:
+
 1. `D:\My Websites\CodeJob\docs\agent-context.md`
 2. `D:\My Websites\CodeJob\docs\follow-this-prompt-for-updating-md-files.md`
 3. `D:\My Websites\CodeJob\docs\Rules.md`
@@ -177,6 +178,7 @@ If yes, fix inconsistencies before finalizing edits.
 ### Dead Flow Detection
 
 During audit, explicitly flag these as debt when discovered:
+
 - unused routes
 - orphaned services
 - stale feature flags
@@ -186,6 +188,7 @@ During audit, explicitly flag these as debt when discovered:
 ### Reviewer Attention Rule
 
 Explicitly call out:
+
 - areas requiring human validation
 - flows not executable in current audit environment
 - assumptions blocked by missing integrations

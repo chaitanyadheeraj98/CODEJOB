@@ -1,83 +1,46 @@
 # CODEJOB Features (Current Implementation)
 
-Audit date: 2026-05-18  
-Branch: `snowball-md`
+## Live Behavior
 
-## 1) Inbox automation
-
-| Feature | Current behavior | Status |
+| Feature | Runtime behavior | Evidence |
 | --- | --- | --- |
-| Gmail OAuth bootstrap | starts OAuth worker and exposes URL/status | Live |
-| Run-once automation | processes unread candidates using policy/query/date inputs | Live |
-| Auto polling | background loop calls run-once when enabled | Live |
-| AI draft path | DeepSeek/OpenAI-compatible drafting with fallback | Live (optional) |
-| Semantic scoring | embedding similarity blend when enabled | Live (optional) |
-| Query bucket | saved-query sanitize/dedupe/cap(10) | Live |
+| Gmail OAuth and status | OAuth bootstrap/status endpoints and auth polling support in UI | `backend/app/main.py`, `dashboard/src/App.tsx` |
+| Run-once automation | Fetch/process candidates and queue state transitions | `backend/app/main.py`, `backend/app/automation/run_orchestrator.py` |
+| Candidate queues | `run_queue`, `needs_review`, `failed_mapping`, `sent_items` views with actions | `dashboard/src/App.tsx` |
+| Premium numbers workflow | extraction, review queue, recruiter/employer buckets, opportunity tracking | `backend/app/premium_numbers/*`, `backend/app/main.py` |
+| Productivity analytics | event write + trend/read APIs and UI rendering | `backend/app/main.py`, `dashboard/src/App.tsx` |
+| External feed ingestion | Nvoids sync endpoints and source-type handling | `backend/app/main.py`, `backend/app/external_feeds/service.py` |
 
-## 2) Candidate workflow
+## Optional Behavior
 
-| Feature | Current behavior | Status |
+| Feature | Behavior when enabled | Evidence |
 | --- | --- | --- |
-| Needs Review queue | qualified/routed candidates await manual action | Live |
-| Approval gate | checks routing sendability, To/CC, draft, active resume | Live |
-| Reject action | marks candidate rejected from needs_review | Live |
-| Failed mapping repair | manual recipient correction returns to needs_review | Live |
-| Bulk reject | rejects multiple needs_review records | Live |
+| AI drafting | AI model-assisted drafts with fallback paths | `backend/app/ai/*`, `dashboard/src/App.tsx` |
+| Semantic scoring | embedding-based scoring blend | `backend/app/semantic/*`, `backend/app/services/scoring_runtime_service.py` |
+| Telegram operations | remote runtime controls via polling bot | `backend/app/telegram_bot.py`, `backend/app/services/telegram_runtime_service.py` |
+| Google Sheets append | post-send best-effort tracking row append | `backend/app/gmail_client.py` send/append helpers |
 
-## 3) Phone intelligence and opportunities
+## Persisted and Runtime-Active Flags
 
-| Feature | Current behavior | Status |
-| --- | --- | --- |
-| Premium lead extraction | upsert phone leads per source email | Live |
-| Domain guard | only captures when sender domain is in configured employer domains | Live |
-| Unknown number review queue | pending queue for unmatched phone identities | Live |
-| Recruiter/employer buckets | separate identity tables with swap actions | Live |
-| Opportunity cards | one per recruiter-number + gmail message combo | Live |
-| Cold call script generation | sanitized script generation with fallback | Live |
-
-Allowed opportunity statuses:
-- `New`, `Called`, `Applied`, `Follow Up`, `Closed`, `Not Interested`
-
-## 4) Labeling, analytics, Telegram
-
-| Feature | Current behavior | Status |
-| --- | --- | --- |
-| Gmail labeling | rules-first label selection + AI fallback, applies Gmail label | Live |
-| Productivity analytics | event recording + trend APIs | Live |
-| Telegram control plane | polling bot with auth-gated action commands | Live |
-| Google Sheets append | post-send best-effort append | Live (optional/best-effort) |
-
-Managed Gmail labels:
-- `assessment`
-- `AVAILABILITY ACTION`
-- `Interview`
-- `must reply`
-- `must reply/important`
-- `screening`
-
-## 5) Feature-flag reality check
-
-| Setting | Actual runtime behavior |
+| Setting | Runtime effect |
 | --- | --- |
 | `feature_auto_polling` | enables periodic run loop |
-| `feature_auto_poll_interval_minutes` | sets polling interval (1..1440 clamp) |
-| `feature_ai_enabled` | enables AI draft generation in orchestrated/manual draft paths |
-| `feature_semantic_enabled` | enables semantic blending in score computation |
-| `feature_auto_send` | live; auto-sends only candidates queued in the current run |
-| `feature_retry_queue` | live; retries failed candidates and promotes sendable rows to needs_review |
+| `feature_auto_poll_interval_minutes` | controls loop interval bounds |
+| `feature_nvoids_enabled` | allows manual sync endpoint execution |
+| `feature_nvoids_auto_sync` | enables periodic external-feed sync in auto runner paths |
+| `feature_auto_send` | permits auto-send phase for current-run queued IDs |
+| `feature_retry_queue` | enables failed-queue retry/promote behavior |
+| `feature_ai_enabled` | toggles AI draft generation paths |
+| `feature_semantic_enabled` | toggles semantic ranking behavior |
 
-Additive `POST /automation/run-once` response counters now exposed:
-- `auto_sent_count`
-- `auto_send_failed_count`
-- `retry_promoted_count`
-- `retry_skipped_count`
+## Placeholder or Not Fully Implemented Signals
 
-## 6) Active debt tied to features
+- Sidebar buttons `New Campaign`, `Settings`, and `Help Center` are presentational actions in current UI shell.
+- Reviewer note: treat these as UI placeholders, not fully implemented workflow features.
 
-- backend/main + frontend/App remain central coupling points
-- duplicated policy profile definitions (frontend/backend)
-- stale tests reduce confidence in full automation regression coverage
+Mermaid not needed: this update is a feature inventory/state alignment, not a flow change.
 
-Evidence basis: both  
-Verification limits: targeted HR-5 validation is complete; full-suite confidence
-remains limited by known stale tests in this branch.
+- Audit date: 2026-05-22
+- Branch: external-recruiter-feed-ingestion
+- Evidence basis: both
+- Verification limits: backend full pytest is currently blocked by stale import in `test_phone_attribution.py`.
