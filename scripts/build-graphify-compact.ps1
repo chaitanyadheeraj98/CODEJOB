@@ -7,6 +7,8 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+$maxReplaceAttempts = 3
+$replaceRetryDelayMs = 400
 
 if (-not (Test-Path -LiteralPath $InputPath)) {
   throw "Graphify full report not found at '$InputPath'. Run Graphify first."
@@ -113,5 +115,37 @@ if ($outputDir -and -not (Test-Path -LiteralPath $outputDir)) {
   New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
 }
 
-$result -join "`n" | Set-Content -LiteralPath $OutputPath -Encoding utf8
+$outputLeaf = Split-Path -Leaf $OutputPath
+$outputBaseDir = if ($outputDir) { $outputDir } else { "." }
+$tempPath = Join-Path $outputBaseDir ("{0}.tmp.{1}.{2}" -f $outputLeaf, $PID, ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()))
+
+try {
+  $result -join "`n" | Set-Content -LiteralPath $tempPath -Encoding utf8
+
+  for ($attempt = 1; $attempt -le $maxReplaceAttempts; $attempt++) {
+    try {
+      Move-Item -LiteralPath $tempPath -Destination $OutputPath -Force
+      break
+    } catch {
+      $exception = $_.Exception
+      $message = $exception.Message
+      $isUnauthorized = $exception -is [System.UnauthorizedAccessException]
+      $isSharingViolation = $message -match "being used by another process|sharing violation|access denied"
+      $shouldRetry = ($attempt -lt $maxReplaceAttempts) -and ($isUnauthorized -or $isSharingViolation)
+      if (-not $shouldRetry) {
+        throw
+      }
+      Start-Sleep -Milliseconds $replaceRetryDelayMs
+    }
+  }
+} finally {
+  if (Test-Path -LiteralPath $tempPath) {
+    try {
+      Remove-Item -LiteralPath $tempPath -Force -ErrorAction Stop
+    } catch {
+      # Best-effort cleanup for temporary write artifact.
+    }
+  }
+}
+
 Write-Output "Wrote compact graph context to $OutputPath"

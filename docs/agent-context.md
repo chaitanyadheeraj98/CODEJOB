@@ -64,6 +64,16 @@ If you want stale graphs to fail CI/local checks:
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/refresh-graph-context.ps1 -SkipGraphify -FailOnStale
 ```
 
+## Troubleshooting
+
+- If compact rebuild reports access denied or sharing violation, close any open preview/editor tabs for `graphify-out/GRAPH_REPORT.md` and `graphify-out/GRAPH_REPORT_COMPACT.md`.
+- Stop concurrent Graphify watcher sessions before rerunning refresh commands.
+- Rerun:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/refresh-graph-context.ps1 -SkipGraphify
+```
+
 ## Behavioral Contract
 
 - `GRAPH_REPORT.md` is the full graph truth source.

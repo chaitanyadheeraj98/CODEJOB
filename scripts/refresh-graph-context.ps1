@@ -37,7 +37,19 @@ if (-not (Test-Path -LiteralPath $compactBuilderScript)) {
   throw "Missing compact builder script: $compactBuilderScript"
 }
 
-& powershell -NoProfile -ExecutionPolicy Bypass -File $compactBuilderScript -InputPath $fullReportPath -OutputPath $compactReportPath
+try {
+  $builderOutput = & powershell -NoProfile -ExecutionPolicy Bypass -File $compactBuilderScript -InputPath $fullReportPath -OutputPath $compactReportPath 2>&1
+  $builderExitCode = $LASTEXITCODE
+  if ($builderOutput) {
+    $builderOutput | Write-Output
+  }
+  if ($builderExitCode -ne 0) {
+    $originalErrorText = ($builderOutput | Out-String).Trim()
+    throw ("Compact report rebuild failed after retry attempts. Possible file lock on '{0}'. Close any open preview/editor tabs for Graphify report files, stop concurrent Graphify watchers, and rerun this command. Original error: {1}" -f $compactReportPath, $originalErrorText)
+  }
+} catch {
+  throw ("Compact report rebuild failed after retry attempts. Possible file lock on '{0}'. Close any open preview/editor tabs for Graphify report files, stop concurrent Graphify watchers, and rerun this command. Original error: {1}" -f $compactReportPath, $_.Exception.Message)
+}
 
 if (-not (Test-Path -LiteralPath $compactReportPath)) {
   throw "Compact report was not generated: $compactReportPath"
