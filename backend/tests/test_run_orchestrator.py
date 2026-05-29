@@ -106,23 +106,25 @@ class RunOrchestratorTests(unittest.TestCase):
             _user_settings: UserSettings,
             _existing: RecruiterEmail | None,
             _resume: ResumeAsset | None,
-        ) -> tuple[float, str, str, str | None, str | None]:
-            return ai_score, "summary", "v1", None, None
+            *_ctx: object,
+        ) -> tuple[float, str, str, str | None, str | None, object]:
+            diag = SimpleNamespace(input_source="latest_block", input_chars=120, chunks=1, fallback_reason=None)
+            return ai_score, "summary", "v1", None, None, diag
 
         def policy_f2f_block(
             _parsed: dict[str, str | int | bool], _policy: dict[str, object]
         ) -> tuple[bool, str]:
             return (True, "blocked") if blocked else (False, "")
 
-        def analyze(
-            _db: Session, _sender: str, _subject: str, _body: str, _snippet: str
-        ) -> RoutingResult:
+        def evaluate_routing_policy(
+            _db: Session, _sender: str, _subject: str, _body: str, _snippet: str, _routing_confirmed: bool
+        ) -> object:
             evidence = []
             if to_email:
                 evidence.append(RoutingEvidence(role="to", email=to_email, source="test", detail="to"))
             if cc_email:
                 evidence.append(RoutingEvidence(role="cc", email=cc_email, source="test", detail="cc"))
-            return RoutingResult(
+            return SimpleNamespace(
                 to_email=to_email,
                 cc_email=cc_email,
                 status="safe" if to_email and cc_email else "missing",
@@ -130,6 +132,9 @@ class RunOrchestratorTests(unittest.TestCase):
                 reason="test",
                 evidence=evidence,
                 candidates=evidence,
+                recommended_state="failed",
+                recommended_skip_reason="missing_to_or_cc" if not (to_email and cc_email) else None,
+                should_mark_failed=not (to_email and cc_email),
             )
 
         def build_user_fallback_draft(
@@ -143,7 +148,7 @@ class RunOrchestratorTests(unittest.TestCase):
         ) -> str:
             return "fallback"
 
-        def apply_routing_result(email: RecruiterEmail, routing: RoutingResult) -> None:
+        def apply_routing_decision(email: RecruiterEmail, routing: object) -> None:
             email.recipient_email = routing.to_email
             email.cc_email = routing.cc_email
             email.routing_status = routing.status
@@ -162,7 +167,7 @@ class RunOrchestratorTests(unittest.TestCase):
             hard_filter_check=hard_filter_check,
             compute_blended_ai_score=compute_blended,
             policy_f2f_block=policy_f2f_block,
-            analyze_email_routing=analyze,
+            evaluate_routing_policy=evaluate_routing_policy,
             greeting_from_to_contact=lambda _to, _body: "Hi Recruiter,",
             build_user_fallback_draft=build_user_fallback_draft,
             generate_reply_with_ai_or_fallback=lambda **_kwargs: SimpleNamespace(
@@ -172,8 +177,10 @@ class RunOrchestratorTests(unittest.TestCase):
                 ai_error=None,
                 resume_context_status="injected",
             ),
-            apply_routing_result=apply_routing_result,
+            apply_routing_decision=apply_routing_decision,
+            capture_premium_numbers=lambda *_args, **_kwargs: None,
             record_productivity_event=record_productivity_event,
+            apply_gmail_label=lambda *_args, **_kwargs: None,
             mark_message_processed=lambda message_id: marked.append(message_id),
         )
         return deps, marked, events

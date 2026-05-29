@@ -174,6 +174,13 @@ embedding_last_error: str | None = None
 embedding_last_attempted_at: datetime | None = None
 embedding_last_success_at: datetime | None = None
 embedding_last_duration_ms: int | None = None
+semantic_input_source: str | None = None
+semantic_input_chars: int | None = None
+semantic_chunks: int | None = None
+semantic_fallback_reason: str | None = None
+keyword_source: str | None = None
+thread_snapshot_used: bool | None = None
+thread_snapshot_email_id: int | None = None
 telegram_service: TelegramBotService | None = runtime_state.telegram_service
 telegram_runtime: TelegramRuntime | None = None
 orchestration_service: OrchestrationService | None = None
@@ -225,6 +232,8 @@ def _set_last_gmail_sync_at(ts: datetime) -> None:
 
 def _set_ai_runtime(values: dict[str, object]) -> None:
     global ai_running, ai_last_error, ai_last_draft_source, ai_last_started_at, ai_last_finished_at, ai_last_duration_ms
+    global semantic_input_source, semantic_input_chars, semantic_chunks, semantic_fallback_reason
+    global keyword_source, thread_snapshot_used, thread_snapshot_email_id
     if "ai_running" in values:
         ai_running = bool(values["ai_running"])
     if "ai_last_error" in values:
@@ -237,6 +246,20 @@ def _set_ai_runtime(values: dict[str, object]) -> None:
         ai_last_finished_at = cast(datetime | None, values["ai_last_finished_at"])
     if "ai_last_duration_ms" in values:
         ai_last_duration_ms = cast(int | None, values["ai_last_duration_ms"])
+    if "semantic_input_source" in values:
+        semantic_input_source = cast(str | None, values["semantic_input_source"])
+    if "semantic_input_chars" in values:
+        semantic_input_chars = cast(int | None, values["semantic_input_chars"])
+    if "semantic_chunks" in values:
+        semantic_chunks = cast(int | None, values["semantic_chunks"])
+    if "semantic_fallback_reason" in values:
+        semantic_fallback_reason = cast(str | None, values["semantic_fallback_reason"])
+    if "keyword_source" in values:
+        keyword_source = cast(str | None, values["keyword_source"])
+    if "thread_snapshot_used" in values:
+        thread_snapshot_used = cast(bool | None, values["thread_snapshot_used"])
+    if "thread_snapshot_email_id" in values:
+        thread_snapshot_email_id = cast(int | None, values["thread_snapshot_email_id"])
 
 
 def _read_saved_gmail_queries(raw: str | None) -> list[str]:
@@ -677,7 +700,7 @@ def _get_orchestration_service() -> OrchestrationService:
                 begin_embedding_latency_capture=begin_embedding_latency_capture,
                 end_embedding_latency_capture=end_embedding_latency_capture,
                 embedding_latency_log_enabled=lambda: settings.semantic_embedding_latency_log_enabled,
-                embedding_provider=lambda: (settings.semantic_embedding_provider or "hash").strip().lower(),
+                embedding_provider=lambda: settings.effective_semantic_embedding_provider,
                 embedding_model=lambda: settings.semantic_embedding_model or "text-embedding-3-small",
                 evaluate_routing_for_email=_evaluate_routing_for_email,
                 is_terminal_state=_is_terminal_state,
@@ -765,7 +788,10 @@ def _compute_blended_ai_score(
     user_settings: UserSettings,
     email_row: RecruiterEmail | None,
     resume: ResumeAsset | None,
-) -> tuple[float, str, str, str | None, str | None]:
+    db: Session | None = None,
+    owner_id: str | None = None,
+    external_thread_id: str | None = None,
+) -> tuple[float, str, str, str | None, str | None, object]:
     return _get_scoring_runtime_service().compute_blended_ai_score(
         subject=subject,
         body=body,
@@ -773,6 +799,9 @@ def _compute_blended_ai_score(
         user_settings=user_settings,
         email_row=email_row,
         resume=resume,
+        db=db,
+        owner_id=owner_id,
+        external_thread_id=external_thread_id,
     )
 
 
@@ -1111,7 +1140,7 @@ def ai_status() -> AIStatusResponse:
     connected = bool(settings.deepseek_api_key)
     configured = connected and bool(settings.deepseek_base_url) and bool(settings.deepseek_model_fast)
     detail = "Ready" if connected else "DeepSeek API key missing (set Deepseek_API_KEY)."
-    embedding_provider = (settings.semantic_embedding_provider or "hash").strip().lower()
+    embedding_provider = settings.effective_semantic_embedding_provider
     embedding_model = settings.semantic_embedding_model or "text-embedding-3-small"
     embedding_configured = False
     embedding_connected = False
@@ -1121,6 +1150,17 @@ def ai_status() -> AIStatusResponse:
         embedding_configured = True
         embedding_connected = True
         embedding_detail = "Ready (local hash embeddings)."
+    elif embedding_provider == "gemini":
+        embedding_configured = bool(settings.google_embedding_api_key)
+        embedding_connected = embedding_configured
+        fallback_provider = (settings.semantic_embedding_fallback_provider or "openrouter").strip().lower()
+        fallback_model = settings.semantic_embedding_fallback_model or "openai/text-embedding-3-small"
+        sbert_model = settings.semantic_embedding_sbert_model or "sentence-transformers/all-MiniLM-L6-v2"
+        embedding_detail = (
+            f"Ready (gemini primary; fallback={fallback_provider}/{fallback_model}; tertiary=sbert/{sbert_model}; terminal=hash)."
+            if embedding_configured
+            else "GOOGLE_EMBEDDING_API_KEY (or GoogleEmbedding_API_KEY) is missing for semantic embedding provider=gemini."
+        )
     elif embedding_provider == "openai":
         embedding_configured = bool(settings.openai_api_key)
         embedding_connected = embedding_configured
@@ -1132,11 +1172,17 @@ def ai_status() -> AIStatusResponse:
     elif embedding_provider == "openrouter":
         embedding_configured = bool(settings.openrouter_api_key) and bool(settings.openrouter_base_url)
         embedding_connected = embedding_configured
+        sbert_model = settings.semantic_embedding_sbert_model or "sentence-transformers/all-MiniLM-L6-v2"
         embedding_detail = (
-            "Ready"
+            f"Ready (openrouter primary; tertiary=sbert/{sbert_model}; terminal=hash)."
             if embedding_configured
             else "OPENROUTER_API_KEY or OPENROUTER_BASE_URL is missing for semantic embedding provider=openrouter."
         )
+    elif embedding_provider == "sbert":
+        embedding_configured = True
+        embedding_connected = True
+        sbert_model = settings.semantic_embedding_sbert_model or "sentence-transformers/all-MiniLM-L6-v2"
+        embedding_detail = f"Ready (local sbert primary; model={sbert_model}; terminal=hash)."
     else:
         embedding_configured = False
         embedding_connected = False
@@ -1164,7 +1210,7 @@ def ai_status() -> AIStatusResponse:
         embedding_detail = embedding_detail
     else:
         embedding_connected = False
-        embedding_detail = "No runtime signal yet (no embedding attempts in this process)."
+        embedding_detail = f"No runtime signal yet (no embedding attempts in this process). {embedding_detail}"
 
     return AIStatusResponse(
         configured=configured,
@@ -1183,6 +1229,13 @@ def ai_status() -> AIStatusResponse:
         embedding_last_attempted_at=embedding_last_attempted_at,
         embedding_last_success_at=embedding_last_success_at,
         embedding_last_duration_ms=embedding_last_duration_ms,
+        semantic_input_source=semantic_input_source,
+        semantic_input_chars=semantic_input_chars,
+        semantic_chunks=semantic_chunks,
+        semantic_fallback_reason=semantic_fallback_reason,
+        keyword_source=keyword_source,
+        thread_snapshot_used=thread_snapshot_used,
+        thread_snapshot_email_id=thread_snapshot_email_id,
         last_error=ai_last_error,
         last_started_at=ai_last_started_at,
         last_finished_at=ai_last_finished_at,
@@ -1469,13 +1522,16 @@ def ingest_email(payload: IngestEmailRequest, db: Session = Depends(get_db)) -> 
     parsed = parse_email(payload.subject, payload.body)
     hard_pass, hard_reason = hard_filter_check(parsed, user_settings)
     active_resume = _active_resume(db)
-    ai_score, ai_summary, ai_score_source, email_embedding_json, resume_embedding_json = _compute_blended_ai_score(
+    ai_score, ai_summary, ai_score_source, email_embedding_json, resume_embedding_json, semantic_diag = _compute_blended_ai_score(
         subject=payload.subject,
         body=payload.body,
         parsed=parsed,
         user_settings=user_settings,
         email_row=None,
         resume=active_resume,
+        db=db,
+        owner_id=settings.owner_id,
+        external_thread_id=None,
     )
     threshold = user_settings.qualification_threshold
     state = "needs_review" if hard_pass and ai_score >= threshold else "auto_rejected"
@@ -1508,6 +1564,13 @@ def ingest_email(payload: IngestEmailRequest, db: Session = Depends(get_db)) -> 
         ai_score=ai_score,
         ai_score_source=ai_score_source,
         ai_summary=ai_summary,
+        semantic_input_source=getattr(semantic_diag, "input_source", None),
+        semantic_input_chars=getattr(semantic_diag, "input_chars", None),
+        semantic_chunks=getattr(semantic_diag, "chunks", None),
+        semantic_fallback_reason=getattr(semantic_diag, "fallback_reason", None),
+        keyword_source=getattr(semantic_diag, "keyword_source", None),
+        thread_snapshot_used=getattr(semantic_diag, "thread_snapshot_used", None),
+        thread_snapshot_email_id=getattr(semantic_diag, "thread_snapshot_email_id", None),
         semantic_embedding=email_embedding_json,
         draft_reply=fallback_draft
         if state == "needs_review"

@@ -24,7 +24,7 @@ class RunOrchestratorDependencies:
     hard_filter_check: Callable[[dict[str, str | int | bool], UserSettings], tuple[bool, str]]
     compute_blended_ai_score: Callable[
         [str, str, dict[str, str | int | bool], UserSettings, RecruiterEmail | None, ResumeAsset | None],
-        tuple[float, str, str, str | None, str | None],
+        tuple[float, str, str, str | None, str | None, Any],
     ]
     policy_f2f_block: Callable[[dict[str, str | int | bool], Mapping[str, Any]], tuple[bool, str]]
     evaluate_routing_policy: Callable[[Session, str, str, str, str, bool], RoutingDecision]
@@ -111,13 +111,16 @@ class RunOrchestrator:
             snippet = str(item.get("snippet", ""))
             parsed = request.deps.parse_email(subject, body)
             hard_pass, hard_reason = request.deps.hard_filter_check(parsed, request.user_settings)
-            ai_score, ai_summary, ai_score_source, email_embedding_json, resume_embedding_json = request.deps.compute_blended_ai_score(
+            ai_score, ai_summary, ai_score_source, email_embedding_json, resume_embedding_json, semantic_diag = request.deps.compute_blended_ai_score(
                 subject,
                 body,
                 parsed,
                 request.user_settings,
                 existing,
                 request.active_resume,
+                request.db,
+                request.owner_id,
+                str(item.get("external_thread_id") or ""),
             )
             if (
                 request.active_resume
@@ -139,6 +142,13 @@ class RunOrchestrator:
                     target.ai_score = ai_score
                     target.ai_score_source = ai_score_source
                     target.ai_summary = ai_summary
+                    target.semantic_input_source = getattr(semantic_diag, "input_source", None)
+                    target.semantic_input_chars = getattr(semantic_diag, "input_chars", None)
+                    target.semantic_chunks = getattr(semantic_diag, "chunks", None)
+                    target.semantic_fallback_reason = getattr(semantic_diag, "fallback_reason", None)
+                    target.keyword_source = getattr(semantic_diag, "keyword_source", None)
+                    target.thread_snapshot_used = getattr(semantic_diag, "thread_snapshot_used", None)
+                    target.thread_snapshot_email_id = getattr(semantic_diag, "thread_snapshot_email_id", None)
                     target.semantic_embedding = email_embedding_json or target.semantic_embedding
                     target.hard_filter_result = hard_reason
                     target.state = "processed_skipped"
@@ -288,6 +298,13 @@ class RunOrchestrator:
                 target.ai_score = ai_score
                 target.ai_score_source = ai_score_source
                 target.ai_summary = ai_summary
+                target.semantic_input_source = getattr(semantic_diag, "input_source", None)
+                target.semantic_input_chars = getattr(semantic_diag, "input_chars", None)
+                target.semantic_chunks = getattr(semantic_diag, "chunks", None)
+                target.semantic_fallback_reason = getattr(semantic_diag, "fallback_reason", None)
+                target.keyword_source = getattr(semantic_diag, "keyword_source", None)
+                target.thread_snapshot_used = getattr(semantic_diag, "thread_snapshot_used", None)
+                target.thread_snapshot_email_id = getattr(semantic_diag, "thread_snapshot_email_id", None)
                 target.semantic_embedding = email_embedding_json or target.semantic_embedding
                 target.hard_filter_result = hard_reason
                 target.draft_reply = reply

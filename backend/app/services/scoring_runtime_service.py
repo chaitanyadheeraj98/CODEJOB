@@ -1,19 +1,31 @@
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass
-from typing import Callable
+from typing import Any, Callable
 
 from app.ai.resume_context import extract_resume_context
 from app.models import RecruiterEmail, ResumeAsset, UserSettings
-from app.phase0 import ai_assist_score
+from app.phase0 import SKILL_KEYWORDS, ai_assist_score
 from app.semantic.embeddings_service import embedding_from_json, embedding_to_json
-from app.semantic.ranking import blend_scores, semantic_similarity
+from app.semantic.ranking import blend_scores, clamp01, semantic_similarity
 
 
 @dataclass
 class ScoringRuntimeDeps:
     generate_embedding_with_health: Callable[[str], tuple[list[float], str]]
+
+
+@dataclass
+class SemanticDiagnostics:
+    input_source: str
+    input_chars: int
+    chunks: int
+    fallback_reason: str | None
+    keyword_source: str | None = None
+    thread_snapshot_used: bool | None = None
+    thread_snapshot_email_id: int | None = None
 
 
 class ScoringRuntimeService:
@@ -42,6 +54,116 @@ class ScoringRuntimeService:
         vector, provider = self.deps.generate_embedding_with_health(text)
         return vector, embedding_to_json(vector), provider
 
+    def _extract_latest_message_block(self, body: str) -> tuple[str, str]:
+        text = (body or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+        if not text:
+            return "", "full_body_fallback"
+        # Keep content before quoted history separators that typically start older thread context.
+        separators = [
+            r"(?im)^\s*On .+wrote:\s*$",
+            r"(?im)^\s*From:\s.+$",
+            r"(?im)^\s*Sent:\s.+$",
+            r"(?im)^\s*----+\s*Original Message\s*----+\s*$",
+            r"(?im)^\s*>+.*$",
+            r"(?is)<div[^>]+class=[\"'][^\"']*gmail_quote[^\"']*[\"'][^>]*>.*$",
+        ]
+        cut_positions: list[int] = []
+        for pattern in separators:
+            match = re.search(pattern, text)
+            if match:
+                cut_positions.append(match.start())
+        if cut_positions:
+            candidate = text[: min(cut_positions)].strip()
+            if candidate:
+                return candidate, "latest_block"
+        return text, "full_body_fallback"
+
+    def _normalize_for_embedding(self, text: str) -> str:
+        return re.sub(r"\s+", " ", (text or "").strip())
+
+    def _chunk_text(self, text: str, chunk_size: int = 900) -> list[str]:
+        normalized = self._normalize_for_embedding(text)
+        if not normalized:
+            return []
+        return [normalized[idx : idx + chunk_size] for idx in range(0, len(normalized), chunk_size)]
+
+    def _average_vectors(self, vectors: list[list[float]]) -> list[float]:
+        if not vectors:
+            return []
+        dims = len(vectors[0])
+        totals = [0.0] * dims
+        for vector in vectors:
+            if len(vector) != dims:
+                raise ValueError("embedding_dim_mismatch")
+            for idx, value in enumerate(vector):
+                totals[idx] += float(value)
+        return [value / len(vectors) for value in totals]
+
+    def _safe_embed_with_chunking(
+        self, current_payload: str | None, text: str
+    ) -> tuple[list[float], str | None, str, int]:
+        normalized = self._normalize_for_embedding(text)
+        if not normalized:
+            return [], current_payload, "empty", 0
+        if len(normalized) <= 900:
+            vector, payload, provider = self.ensure_embedding_cached(current_payload, normalized)
+            return vector, payload, provider, 1
+
+        chunks = self._chunk_text(normalized, chunk_size=900)
+        vectors: list[list[float]] = []
+        provider_name = "chunked"
+        for chunk in chunks:
+            vector, provider = self.deps.generate_embedding_with_health(chunk)
+            provider_name = provider
+            vectors.append(vector)
+        averaged = self._average_vectors(vectors)
+        return averaged, embedding_to_json(averaged), provider_name, len(chunks)
+
+    def _skills_count(self, skills_text: str) -> int:
+        skills = {s.strip().lower() for s in (skills_text or "").split(",") if s.strip() and s.strip().lower() != "none_detected"}
+        return len(skills)
+
+    def _keyword_score_from_text(self, parsed: dict[str, str | int], user_settings: UserSettings, text: str) -> tuple[float, str]:
+        combined_text = text.lower()
+        score = 0.45
+        role_keywords = [k.strip().lower() for k in user_settings.role_keywords.split(",") if k.strip()]
+        if role_keywords:
+            hits = sum(1 for k in role_keywords if k in combined_text)
+            score += min(hits * 0.08, 0.24)
+        skill_hits = sum(1 for skill in SKILL_KEYWORDS if skill in combined_text)
+        score += min(skill_hits * 0.03, 0.21)
+        score = max(0.0, min(score, 1.0))
+        return score, f"AI fit score computed from role keywords and skill overlap ({score:.2f})"
+
+    def _best_thread_snapshot(
+        self,
+        *,
+        db: Any | None,
+        owner_id: str | None,
+        external_thread_id: str | None,
+        current_email_id: int | None,
+    ) -> RecruiterEmail | None:
+        if db is None or not owner_id or not external_thread_id:
+            return None
+        query = (
+            db.query(RecruiterEmail)
+            .filter(RecruiterEmail.owner_id == owner_id)
+            .filter(RecruiterEmail.external_thread_id == external_thread_id)
+            .order_by(RecruiterEmail.created_at.desc())
+            .limit(25)
+        )
+        rows = query.all()
+        best: RecruiterEmail | None = None
+        best_score = -1
+        for row in rows:
+            if current_email_id is not None and row.id == current_email_id:
+                continue
+            richness = self._skills_count(row.skills_text or "")
+            if richness > best_score:
+                best = row
+                best_score = richness
+        return best
+
     def compute_blended_ai_score(
         self,
         *,
@@ -51,27 +173,76 @@ class ScoringRuntimeService:
         user_settings: UserSettings,
         email_row: RecruiterEmail | None,
         resume: ResumeAsset | None,
-    ) -> tuple[float, str, str, str | None, str | None]:
+        db: Any | None = None,
+        owner_id: str | None = None,
+        external_thread_id: str | None = None,
+    ) -> tuple[float, str, str, str | None, str | None, SemanticDiagnostics]:
         keyword_score, keyword_summary = ai_assist_score(parsed, user_settings)
+        current_skills_text = str(parsed.get("skills_text", ""))
+        current_skill_count = self._skills_count(current_skills_text)
+        keyword_source = "parsed_only"
+        snapshot_used = False
+        snapshot_email_id: int | None = None
+
+        latest_block, _latest_source = self._extract_latest_message_block(body)
+        if current_skill_count <= 1:
+            richer_text = f"{parsed.get('role', '')} {current_skills_text} {latest_block} {user_settings.free_text_guidance}"
+            keyword_score, keyword_summary = self._keyword_score_from_text(parsed, user_settings, richer_text)
+            keyword_source = "rich_fallback"
+
+        snapshot = self._best_thread_snapshot(
+            db=db,
+            owner_id=owner_id,
+            external_thread_id=external_thread_id,
+            current_email_id=email_row.id if email_row else None,
+        )
+        if snapshot:
+            snapshot_skill_count = self._skills_count(snapshot.skills_text or "")
+            if snapshot_skill_count > current_skill_count:
+                snapshot_used = True
+                snapshot_email_id = snapshot.id
+                carry_text = f"{parsed.get('role', '')} {snapshot.skills_text or ''} {latest_block} {user_settings.free_text_guidance}"
+                keyword_score, keyword_summary = self._keyword_score_from_text(parsed, user_settings, carry_text)
+                keyword_source = "thread_carry_forward"
+
+        base_diag = SemanticDiagnostics(
+            input_source="semantic_disabled",
+            input_chars=0,
+            chunks=0,
+            fallback_reason=None,
+            keyword_source=keyword_source,
+            thread_snapshot_used=snapshot_used,
+            thread_snapshot_email_id=snapshot_email_id,
+        )
         if not user_settings.feature_semantic_enabled:
-            return keyword_score, keyword_summary, "v1_rules_plus_ai", None, None
+            return keyword_score, keyword_summary, "v1_rules_plus_ai", None, None, base_diag
 
         try:
+            latest_block, source = self._extract_latest_message_block(body)
             email_text = self.semantic_text_for_email(
                 subject,
-                body,
+                latest_block,
                 str(parsed.get("role", "")),
                 str(parsed.get("skills_text", "")),
             )
             resume_text = self.semantic_text_for_resume(resume)
             if not resume_text.strip():
-                return keyword_score, f"{keyword_summary}; semantic skipped (resume text unavailable)", "v2_rules_plus_semantic", None, None
+                diag = SemanticDiagnostics(
+                    input_source=source,
+                    input_chars=len(email_text),
+                    chunks=0,
+                    fallback_reason="resume_text_unavailable",
+                    keyword_source=keyword_source,
+                    thread_snapshot_used=snapshot_used,
+                    thread_snapshot_email_id=snapshot_email_id,
+                )
+                return keyword_score, f"{keyword_summary}; keyword_source={keyword_source}; semantic skipped (resume text unavailable)", "v2_rules_plus_semantic", None, None, diag
 
-            email_embedding, email_embedding_json, _ = self.ensure_embedding_cached(
+            email_embedding, email_embedding_json, _provider, email_chunks = self._safe_embed_with_chunking(
                 email_row.semantic_embedding if email_row else None,
                 email_text,
             )
-            resume_embedding, resume_embedding_json, _ = self.ensure_embedding_cached(
+            resume_embedding, resume_embedding_json, _provider_resume, resume_chunks = self._safe_embed_with_chunking(
                 resume.semantic_embedding if resume else None,
                 resume_text,
             )
@@ -82,9 +253,34 @@ class ScoringRuntimeService:
                 semantic_enabled=True,
             )
             summary = f"{keyword_summary}; {blended.detail}"
-            return blended.final_score, summary, blended.source, email_embedding_json, resume_embedding_json
+            diag = SemanticDiagnostics(
+                input_source="chunked" if email_chunks > 1 or resume_chunks > 1 else source,
+                input_chars=len(email_text),
+                chunks=max(email_chunks, resume_chunks),
+                fallback_reason=None,
+                keyword_source=keyword_source,
+                thread_snapshot_used=snapshot_used,
+                thread_snapshot_email_id=snapshot_email_id,
+            )
+            return blended.final_score, f"{summary}; keyword_source={keyword_source}", blended.source, email_embedding_json, resume_embedding_json, diag
         except Exception as exc:
-            return keyword_score, f"{keyword_summary}; semantic fallback ({exc})", "v2_rules_plus_semantic_fallback", None, None
+            neutral_blended = blend_scores(
+                keyword_score=keyword_score,
+                semantic_similarity=0.0,
+                semantic_enabled=True,
+            )
+            fallback_score = clamp01(max(keyword_score, neutral_blended.final_score))
+            diag = SemanticDiagnostics(
+                input_source="latest_block",
+                input_chars=len(body or ""),
+                chunks=0,
+                fallback_reason=str(exc),
+                keyword_source=keyword_source,
+                thread_snapshot_used=snapshot_used,
+                thread_snapshot_email_id=snapshot_email_id,
+            )
+            summary = f"{keyword_summary}; keyword_source={keyword_source}; semantic fallback ({exc}); neutral semantic score applied ({fallback_score:.2f})"
+            return fallback_score, summary, "v2_rules_plus_semantic_neutral_fallback", None, None, diag
 
     def percentile_ms(self, values: list[float], percentile: float) -> float:
         if not values:

@@ -6,6 +6,7 @@ from collections.abc import Callable
 
 from app.db import Base, engine, ensure_sqlite_phase0_columns
 from app.gmail_client import is_gmail_configured
+from app.config import settings
 from app.runtime_state import runtime_state
 from app.services.migration_runtime_service import MigrationRuntimeService
 
@@ -27,6 +28,20 @@ class StartupService:
         self._auto_runner_loop = auto_runner_loop
 
     def startup(self) -> None:
+        logger.info(
+            "semantic_embedding_config provider=%s model=%s fallback=%s/%s tertiary=sbert/%s terminal=hash",
+            settings.effective_semantic_embedding_provider,
+            settings.semantic_embedding_model,
+            settings.semantic_embedding_fallback_provider,
+            settings.semantic_embedding_fallback_model,
+            settings.semantic_embedding_sbert_model,
+        )
+        if (settings.google_embedding_provider or "").strip():
+            logger.info(
+                "legacy_embedding_provider_env_detected value=%s primary_provider=%s",
+                settings.google_embedding_provider,
+                settings.effective_semantic_embedding_provider,
+            )
         Base.metadata.create_all(bind=engine)
         ensure_sqlite_phase0_columns()
         MigrationRuntimeService().ensure_schema_ready()

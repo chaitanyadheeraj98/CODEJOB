@@ -158,6 +158,13 @@ class EmailResponse(BaseModel):
     ai_score: float | None
     ai_score_source: str | None
     ai_summary: str | None
+    semantic_input_source: str | None = None
+    semantic_input_chars: int | None = None
+    semantic_chunks: int | None = None
+    semantic_fallback_reason: str | None = None
+    keyword_source: str | None = None
+    thread_snapshot_used: bool | None = None
+    thread_snapshot_email_id: int | None = None
     skip_reason: str | None
     sync_batch_id: str | None
     draft_reply: str
@@ -239,6 +246,13 @@ class AIStatusResponse(BaseModel):
     embedding_last_attempted_at: datetime | None = None
     embedding_last_success_at: datetime | None = None
     embedding_last_duration_ms: int | None = None
+    semantic_input_source: str | None = None
+    semantic_input_chars: int | None = None
+    semantic_chunks: int | None = None
+    semantic_fallback_reason: str | None = None
+    keyword_source: str | None = None
+    thread_snapshot_used: bool | None = None
+    thread_snapshot_email_id: int | None = None
     last_error: str | None = None
     last_started_at: datetime | None = None
     last_finished_at: datetime | None = None

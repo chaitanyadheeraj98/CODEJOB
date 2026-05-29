@@ -29,7 +29,7 @@ class OrchestrationDeps:
     get_settings: Callable[[Session], UserSettings]
     active_resume: Callable[[Session], ResumeAsset | None]
     effective_run_inputs: Callable[[UserSettings, str | None], EffectiveRunInputs]
-    compute_blended_ai_score: Callable[..., tuple[float, str, str, str | None, str | None]]
+    compute_blended_ai_score: Callable[..., tuple[float, str, str, str | None, str | None, Any]]
     analyze_email_routing: Callable[[Session, str, str, str, str], RoutingResult]
     build_user_fallback_draft: Callable[..., str]
     apply_routing_result: Callable[[RecruiterEmail, RoutingResult], None]
@@ -116,13 +116,16 @@ class OrchestrationService:
                 parsed = self.deps.parse_email(item["subject"], item["body"])
                 hard_pass, hard_reason = self.deps.hard_filter_check(parsed, user_settings)
                 active_resume = self.deps.active_resume(db)
-                ai_score, ai_summary, ai_score_source, email_embedding_json, resume_embedding_json = self.deps.compute_blended_ai_score(
+                ai_score, ai_summary, ai_score_source, email_embedding_json, resume_embedding_json, semantic_diag = self.deps.compute_blended_ai_score(
                     subject=item["subject"],
                     body=item["body"],
                     parsed=parsed,
                     user_settings=user_settings,
                     email_row=None,
                     resume=active_resume,
+                    db=db,
+                    owner_id=self.deps.owner_id,
+                    external_thread_id=str(item.get("external_thread_id") or ""),
                 )
                 threshold = user_settings.qualification_threshold
 
@@ -181,6 +184,13 @@ class OrchestrationService:
                     ai_score=ai_score,
                     ai_score_source=ai_score_source,
                     ai_summary=ai_summary,
+                    semantic_input_source=getattr(semantic_diag, "input_source", None),
+                    semantic_input_chars=getattr(semantic_diag, "input_chars", None),
+                    semantic_chunks=getattr(semantic_diag, "chunks", None),
+                    semantic_fallback_reason=getattr(semantic_diag, "fallback_reason", None),
+                    keyword_source=getattr(semantic_diag, "keyword_source", None),
+                    thread_snapshot_used=getattr(semantic_diag, "thread_snapshot_used", None),
+                    thread_snapshot_email_id=getattr(semantic_diag, "thread_snapshot_email_id", None),
                     semantic_embedding=email_embedding_json,
                     sync_batch_id=sync_batch_id,
                     draft_reply=draft,
@@ -308,8 +318,16 @@ class OrchestrationService:
                     deps=RunOrchestratorDependencies(
                         parse_email=self.deps.parse_email,
                         hard_filter_check=self.deps.hard_filter_check,
-                        compute_blended_ai_score=lambda subject, body, parsed, user_settings, email_row, resume: self.deps.compute_blended_ai_score(
-                            subject=subject, body=body, parsed=parsed, user_settings=user_settings, email_row=email_row, resume=resume
+                        compute_blended_ai_score=lambda subject, body, parsed, user_settings, email_row, resume, db_ctx=None, owner_id_ctx=None, thread_id_ctx=None: self.deps.compute_blended_ai_score(
+                            subject=subject,
+                            body=body,
+                            parsed=parsed,
+                            user_settings=user_settings,
+                            email_row=email_row,
+                            resume=resume,
+                            db=db_ctx if db_ctx is not None else db,
+                            owner_id=owner_id_ctx if owner_id_ctx is not None else self.deps.owner_id,
+                            external_thread_id=str(thread_id_ctx or getattr(email_row, "external_thread_id", "") or ""),
                         ),
                         policy_f2f_block=self.deps.policy_f2f_block,
                         evaluate_routing_policy=self.deps.evaluate_routing_policy,
@@ -334,6 +352,13 @@ class OrchestrationService:
                     "ai_last_started_at": result.ai_last_started_at,
                     "ai_last_finished_at": result.ai_last_finished_at,
                     "ai_last_duration_ms": result.ai_last_duration_ms,
+                    "semantic_input_source": getattr(result.last_email, "semantic_input_source", None) if result.last_email else None,
+                    "semantic_input_chars": getattr(result.last_email, "semantic_input_chars", None) if result.last_email else None,
+                    "semantic_chunks": getattr(result.last_email, "semantic_chunks", None) if result.last_email else None,
+                    "semantic_fallback_reason": getattr(result.last_email, "semantic_fallback_reason", None) if result.last_email else None,
+                    "keyword_source": getattr(result.last_email, "keyword_source", None) if result.last_email else None,
+                    "thread_snapshot_used": getattr(result.last_email, "thread_snapshot_used", None) if result.last_email else None,
+                    "thread_snapshot_email_id": getattr(result.last_email, "thread_snapshot_email_id", None) if result.last_email else None,
                 }
             )
 

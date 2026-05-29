@@ -2,6 +2,7 @@ import os
 import tempfile
 import unittest
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 os.environ["DEBUG"] = "false"
 
@@ -204,7 +205,14 @@ class ApproveCcRegressionTests(unittest.TestCase):
                 "skills_text": "java,angular,microservices",
             }
             main.hard_filter_check = lambda _p, _u: (True, "pass")
-            main._compute_blended_ai_score = lambda **kwargs: (0.95, "ok", "v1_rules_plus_ai", None, None)
+            main._compute_blended_ai_score = lambda **kwargs: (
+                0.95,
+                "ok",
+                "v1_rules_plus_ai",
+                None,
+                None,
+                SimpleNamespace(input_source="latest_block", input_chars=100, chunks=1, fallback_reason=None),
+            )
             main.should_block_f2f = lambda _p: (False, None)
             main._analyze_email_routing = lambda _db, _sender, _subject, _body, _snippet="": main.RoutingResult(
                 to_email="ankit.negi@codinix.com",

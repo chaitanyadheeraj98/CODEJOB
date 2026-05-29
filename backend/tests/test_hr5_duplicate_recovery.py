@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from sqlalchemy import create_engine
@@ -95,6 +96,7 @@ class HR5DuplicateRecoveryTests(unittest.TestCase):
                 "rules_only",
                 None,
                 None,
+                SimpleNamespace(input_source="latest_block", input_chars=80, chunks=1, fallback_reason=None),
             ),
             policy_f2f_block=lambda _p, _ep: (False, ""),
             evaluate_routing_policy=lambda *_args, **_kwargs: base_decision,

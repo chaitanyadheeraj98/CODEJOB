@@ -1,4 +1,4 @@
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -34,6 +34,26 @@ class Settings(BaseSettings):
     semantic_embedding_provider: str = "hash"
     semantic_embedding_model: str = "text-embedding-3-small"
     semantic_embedding_dimension: int = 256
+    google_embedding_provider: str = Field(
+        default="",
+        validation_alias=AliasChoices("GOOGLE_EMBEDDING_PROVIDER", "GoogleEmbedding_PROVIDER"),
+    )
+    google_embedding_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("GOOGLE_EMBEDDING_API_KEY", "GoogleEmbedding_API_KEY"),
+    )
+    google_embedding_model: str = Field(
+        default="gemini-embedding-2",
+        validation_alias=AliasChoices("GOOGLE_EMBEDDING_MODEL", "GoogleEmbedding_MODEL"),
+    )
+    google_embedding_base_url: str = Field(
+        default="https://generativelanguage.googleapis.com/v1beta",
+        validation_alias=AliasChoices("GOOGLE_EMBEDDING_BASE_URL", "GoogleEmbedding_BASE_URL"),
+    )
+    semantic_embedding_fallback_provider: str = "openrouter"
+    semantic_embedding_fallback_model: str = "openai/text-embedding-3-small"
+    semantic_embedding_sbert_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    semantic_embedding_sbert_device: str = "cpu"
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     semantic_embedding_timeout_seconds: float = 20.0
@@ -52,6 +72,14 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         populate_by_name=True,
     )
+
+    @property
+    def effective_semantic_embedding_provider(self) -> str:
+        primary = (self.semantic_embedding_provider or "").strip().lower()
+        legacy = (self.google_embedding_provider or "").strip().lower()
+        if primary and not (primary == "hash" and legacy):
+            return primary
+        return legacy or "hash"
 
 
 settings = Settings()
