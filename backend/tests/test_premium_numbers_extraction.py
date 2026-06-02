@@ -1,5 +1,6 @@
 import unittest
 import os
+from unittest.mock import patch
 
 os.environ["DEBUG"] = "false"
 
@@ -195,6 +196,158 @@ class PremiumNumbersExtractionTests(unittest.TestCase):
         deduped = extraction.dedupe_phone_leads([unknown, named])
         self.assertEqual(len(deduped), 1)
         self.assertEqual(deduped[0].owner_name, "Rabbanis")
+
+    def test_fallback_ignores_groups_msgid_footer_digits(self) -> None:
+        original_llm = extraction._llm_extract
+        try:
+            extraction._llm_extract = lambda _content: []
+            body = (
+                "To unsubscribe from this group and stop receiving emails from it, send an email to "
+                "hstjava+unsubscribe@googlegroups.com. "
+                "To view this discussion visit "
+                "https://groups.google.com/d/msgid/hstjava/01b001dceedd%2482913610%2487b3a230%24%40horizonsoftech.net"
+            )
+            leads = extraction.extract_phone_leads(
+                "Horizon Team <jobs@horizonsoftech.net>",
+                "Java Full stack Developer",
+                body,
+                employer_domains={"horizonsoftech.net"},
+            )
+            self.assertEqual(leads, [])
+        finally:
+            extraction._llm_extract = original_llm
+
+    def test_fallback_ignores_mailto_unsubscribe_numeric_noise(self) -> None:
+        original_llm = extraction._llm_extract
+        try:
+            extraction._llm_extract = lambda _content: []
+            body = (
+                "Footer: <mailto:hstjava+unsubscribe@googlegroups.com> "
+                "Reference token 2482913610 in mailing metadata only."
+            )
+            leads = extraction.extract_phone_leads(
+                "Horizon Team <jobs@horizonsoftech.net>",
+                "Java Update",
+                body,
+                employer_domains={"horizonsoftech.net"},
+            )
+            self.assertEqual(leads, [])
+        finally:
+            extraction._llm_extract = original_llm
+
+    def test_fallback_keeps_real_phone_with_contact_intent(self) -> None:
+        original_llm = extraction._llm_extract
+        try:
+            extraction._llm_extract = lambda _content: []
+            leads = extraction.extract_phone_leads(
+                "Uma G <uma@brightpathstaffing.com>",
+                "Java role",
+                "Call me at +1 (214) 555-1212 for details.",
+            )
+            self.assertEqual(len(leads), 1)
+            self.assertEqual(leads[0].phone_number_normalized, "12145551212")
+        finally:
+            extraction._llm_extract = original_llm
+
+    def test_sbert_stage_keeps_candidate_when_margin_is_positive(self) -> None:
+        original_llm = extraction._llm_extract
+        original_sbert = extraction._sbert_embedding
+        try:
+            extraction._llm_extract = lambda _content: []
+            extraction._sbert_prototype_centroids.cache_clear()
+
+            def fake_sbert(text: str, _model: str):
+                low = text.lower()
+                if "call me at this number" in low or "reach me on phone" in low or "contact recruiter directly" in low or "thanks and regards recruiter signature phone" in low:
+                    return [1.0, 0.0], "sbert"
+                if "unsubscribe from this group" in low or "view this discussion on groups dot google dot com" in low or "tracking link with utm parameters" in low or "system footer link metadata" in low:
+                    return [0.0, 1.0], "sbert"
+                return [0.9, 0.1], "sbert"
+
+            extraction._sbert_embedding = fake_sbert
+            leads = extraction.extract_phone_leads(
+                "Uma G <uma@brightpathstaffing.com>",
+                "Java role",
+                "Call me at +1 (214) 555-1212. Thanks, recruiter.",
+            )
+            self.assertEqual(len(leads), 1)
+            self.assertIn("sbert_margin=", leads[0].relevance_reason)
+        finally:
+            extraction._llm_extract = original_llm
+            extraction._sbert_embedding = original_sbert
+            extraction._sbert_prototype_centroids.cache_clear()
+
+    def test_sbert_stage_drops_candidate_when_margin_is_negative(self) -> None:
+        original_llm = extraction._llm_extract
+        original_sbert = extraction._sbert_embedding
+        try:
+            extraction._llm_extract = lambda _content: []
+            extraction._sbert_prototype_centroids.cache_clear()
+
+            def fake_sbert(text: str, _model: str):
+                low = text.lower()
+                if "call me at this number" in low or "reach me on phone" in low or "contact recruiter directly" in low or "thanks and regards recruiter signature phone" in low:
+                    return [1.0, 0.0], "sbert"
+                if "unsubscribe from this group" in low or "view this discussion on groups dot google dot com" in low or "tracking link with utm parameters" in low or "system footer link metadata" in low:
+                    return [0.0, 1.0], "sbert"
+                return [0.0, 1.0], "sbert"
+
+            extraction._sbert_embedding = fake_sbert
+            leads = extraction.extract_phone_leads(
+                "Recruiter <r@example.com>",
+                "Role",
+                "Please phone 214-555-1212 for details.",
+            )
+            self.assertEqual(leads, [])
+        finally:
+            extraction._llm_extract = original_llm
+            extraction._sbert_embedding = original_sbert
+            extraction._sbert_prototype_centroids.cache_clear()
+
+    def test_sbert_stage_fail_open_keeps_candidate_on_embedding_error(self) -> None:
+        original_llm = extraction._llm_extract
+        original_sbert = extraction._sbert_embedding
+        try:
+            extraction._llm_extract = lambda _content: []
+            extraction._sbert_prototype_centroids.cache_clear()
+
+            def broken_sbert(_text: str, _model: str):
+                raise RuntimeError("sbert unavailable")
+
+            extraction._sbert_embedding = broken_sbert
+            leads = extraction.extract_phone_leads(
+                "Uma G <uma@brightpathstaffing.com>",
+                "Java role",
+                "Call me at +1 (214) 555-1212. Regards, recruiter.",
+            )
+            self.assertEqual(len(leads), 1)
+            self.assertIn("sbert_error", leads[0].relevance_reason)
+        finally:
+            extraction._llm_extract = original_llm
+            extraction._sbert_embedding = original_sbert
+            extraction._sbert_prototype_centroids.cache_clear()
+
+    def test_deterministic_noise_prefilter_runs_before_sbert(self) -> None:
+        original_llm = extraction._llm_extract
+        try:
+            extraction._llm_extract = lambda _content: []
+            extraction._sbert_prototype_centroids.cache_clear()
+            with patch("app.premium_numbers.extraction._sbert_embedding") as mocked:
+                body = (
+                    "To unsubscribe from this group send an email to hstjava+unsubscribe@googlegroups.com. "
+                    "https://groups.google.com/d/msgid/hstjava/01b001dceedd%2482913610%2487b3a230%24%40horizonsoftech.net"
+                )
+                leads = extraction.extract_phone_leads(
+                    "Horizon Team <jobs@horizonsoftech.net>",
+                    "Role",
+                    body,
+                    employer_domains={"horizonsoftech.net"},
+                )
+                self.assertEqual(leads, [])
+                mocked.assert_not_called()
+        finally:
+            extraction._llm_extract = original_llm
+            extraction._sbert_prototype_centroids.cache_clear()
 
 
 if __name__ == "__main__":

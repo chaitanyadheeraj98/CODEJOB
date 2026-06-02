@@ -3,16 +3,19 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 
 from openai import OpenAI
 
 from app.config import settings
 from app.premium_numbers.phone_normalization import format_phone
 from app.premium_numbers.prompting import build_premium_numbers_prompts
+from app.semantic.embeddings_service import _sbert_embedding
 
 PHONE_RE = re.compile(r"(?:\+?\d[\d\-\s().]{7,}\d)")
 JSON_BLOCK_RE = re.compile(r"\{[\s\S]*\}")
 EMAIL_RE = re.compile(r"\b[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}\b", re.IGNORECASE)
+URL_NOISE_TOKEN_RE = re.compile(r"%(?:[0-9A-Fa-f]{2})")
 DESIGNATION_RE = re.compile(
     r"\b(recruiter|bench sales recruiter|talent acquisition|hiring manager|account manager|vendor)\b",
     re.IGNORECASE,
@@ -37,6 +40,40 @@ GENERIC_LOCAL_NAME_TOKENS = {
     "support",
     "team",
 }
+NOISE_CONTEXT_TERMS = (
+    "unsubscribe",
+    "groups.google.com",
+    "view this discussion",
+    "utm_",
+    "msgid",
+    "http://",
+    "https://",
+    "www.",
+)
+CONTACT_INTENT_TERMS = (
+    "call",
+    "reach",
+    "phone",
+    "text",
+    "ext",
+    "contact",
+    "regards",
+    "thanks",
+    "recruiter",
+)
+SBERT_POSITIVE_PROTOTYPES = (
+    "Call me at this number for recruiter follow up.",
+    "Reach me on phone for job discussion.",
+    "Contact recruiter directly on this number.",
+    "Thanks and regards recruiter signature phone.",
+)
+SBERT_NEGATIVE_PROTOTYPES = (
+    "Unsubscribe from this group and stop receiving emails.",
+    "View this discussion on groups dot google dot com.",
+    "Tracking link with utm parameters and message id token.",
+    "System footer link metadata and list management notice.",
+)
+SBERT_MARGIN_THRESHOLD = 0.12
 
 
 @dataclass(frozen=True)
@@ -303,6 +340,81 @@ def _classify_recruiter_relevance(
     return contact_type, score, is_recruiter_relevant, reason
 
 
+def _looks_like_weak_numeric_candidate(raw_phone: str) -> bool:
+    cleaned = (raw_phone or "").strip()
+    if not cleaned:
+        return True
+    has_plus = "+" in cleaned
+    has_formatting = any(ch in cleaned for ch in ("(", ")", "-", ".", " "))
+    digits = re.sub(r"\D", "", cleaned)
+    return len(digits) == 10 and not has_plus and not has_formatting
+
+
+def _has_contact_intent(fragment: str) -> bool:
+    text = (fragment or "").lower()
+    return any(term in text for term in CONTACT_INTENT_TERMS)
+
+
+def _is_noise_context(raw_fragment: str, normalized_fragment: str, raw_phone: str) -> bool:
+    raw_text = (raw_fragment or "").lower()
+    norm_text = (normalized_fragment or "").lower()
+    if any(term in raw_text for term in NOISE_CONTEXT_TERMS):
+        return True
+    if any(term in norm_text for term in NOISE_CONTEXT_TERMS):
+        return True
+    if "mailto:" in raw_text and ("unsubscribe" in raw_text or "googlegroups" in raw_text):
+        return True
+    if "mailto:" in norm_text and ("unsubscribe" in norm_text or "googlegroups" in norm_text):
+        return True
+    if URL_NOISE_TOKEN_RE.search(raw_phone or ""):
+        return True
+    return False
+
+
+def _dot(lhs: list[float], rhs: list[float]) -> float:
+    if not lhs or not rhs:
+        return 0.0
+    size = min(len(lhs), len(rhs))
+    return sum(lhs[i] * rhs[i] for i in range(size))
+
+
+@lru_cache(maxsize=1)
+def _sbert_prototype_centroids() -> tuple[list[float], list[float]]:
+    model_name = settings.semantic_embedding_sbert_model or "sentence-transformers/all-MiniLM-L6-v2"
+    positive_vectors = [_sbert_embedding(text, model_name)[0] for text in SBERT_POSITIVE_PROTOTYPES]
+    negative_vectors = [_sbert_embedding(text, model_name)[0] for text in SBERT_NEGATIVE_PROTOTYPES]
+
+    def _avg(vectors: list[list[float]]) -> list[float]:
+        if not vectors:
+            return []
+        dims = min(len(v) for v in vectors if v)
+        if dims <= 0:
+            return []
+        sums = [0.0] * dims
+        for vector in vectors:
+            for idx in range(dims):
+                sums[idx] += vector[idx]
+        return [item / len(vectors) for item in sums]
+
+    return _avg(positive_vectors), _avg(negative_vectors)
+
+
+def _sbert_keep_candidate(fragment: str) -> tuple[bool, str]:
+    model_name = settings.semantic_embedding_sbert_model or "sentence-transformers/all-MiniLM-L6-v2"
+    if not fragment.strip():
+        return True, "sbert_skipped"
+    try:
+        candidate_vec, _provider = _sbert_embedding(fragment, model_name)
+        positive_centroid, negative_centroid = _sbert_prototype_centroids()
+        positive_sim = _dot(candidate_vec, positive_centroid)
+        negative_sim = _dot(candidate_vec, negative_centroid)
+        margin = positive_sim - negative_sim
+        keep = margin >= SBERT_MARGIN_THRESHOLD
+        return keep, f"sbert_margin={margin:.3f}"
+    except Exception:
+        return True, "sbert_error"
+
+
 def _fallback_extract(sender: str, body: str, employer_domains: set[str]) -> list[ExtractedPhoneLead]:
     leads: list[ExtractedPhoneLead] = []
     for match in PHONE_RE.finditer(body or ""):
@@ -314,6 +426,13 @@ def _fallback_extract(sender: str, body: str, employer_domains: set[str]) -> lis
         end = min(len(body), match.end() + 200)
         raw_fragment = body[start:end]
         fragment = raw_fragment.replace("\n", " ").strip()
+        if _is_noise_context(raw_fragment, fragment, raw_phone):
+            continue
+        if _looks_like_weak_numeric_candidate(raw_phone) and not _has_contact_intent(fragment):
+            continue
+        sbert_keep, sbert_reason = _sbert_keep_candidate(fragment)
+        if not sbert_keep:
+            continue
         fragment_l = fragment.lower()
 
         designation_match = DESIGNATION_RE.search(fragment)
@@ -337,6 +456,8 @@ def _fallback_extract(sender: str, body: str, employer_domains: set[str]) -> lis
             source_fragment=fragment,
             employer_domains=employer_domains,
         )
+        if sbert_reason:
+            relevance_reason = f"{relevance_reason},{sbert_reason}" if relevance_reason else sbert_reason
         leads.append(
             ExtractedPhoneLead(
                 phone_number_display=display_phone,

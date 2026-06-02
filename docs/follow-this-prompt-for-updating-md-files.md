@@ -98,6 +98,138 @@ Do not edit these files during docs audit/update execution:
 2. Update or remove stale diagrams immediately.
 3. Mermaid, prose, and table claims must agree.
 
+### Mermaid Feature Diagram Update Contract
+
+Use this contract whenever the target file is `docs/mermaid-features.md`
+or whenever a change affects feature workflow diagrams.
+
+Primary objective:
+
+- regenerate or update Mermaid diagrams for every live feature in the current
+  application
+- show how each feature works from frontend action to backend endpoint,
+  service/domain logic, persistence side effects, external integrations, and
+  UI result
+- keep diagrams evidence-backed and remove stale diagrams immediately
+
+Mandatory workflow before editing `docs/mermaid-features.md`:
+
+1. Inspect frontend feature entry points first.
+   - Identify user-visible action, component, button, tab, form, or screen.
+   - Capture file path and handler/function name.
+2. Inspect API calls second.
+   - Identify endpoint path, HTTP method, request payload, response fields, and
+     frontend caller.
+3. Inspect backend route/service flow third.
+   - Identify route handler, service boundary, orchestration helper, models
+     touched, external API calls, and state transitions.
+4. Inspect tests fourth.
+   - Record any test that validates the flow.
+   - If no test exists, mark verification as code inspection only.
+5. Inspect existing `docs/mermaid-features.md` last.
+   - Update diagrams that match current runtime behavior.
+   - Remove or rewrite diagrams that no longer match code.
+
+Diagram requirements for each feature:
+
+- Include one Mermaid block per major feature.
+- Prefer `sequenceDiagram` when explaining frontend-to-backend API interaction.
+- Prefer `flowchart TD` when explaining backend decision logic or processing.
+- Prefer `stateDiagram-v2` when explaining queue/status transitions.
+- Every feature diagram must include, when applicable:
+  - frontend screen/component
+  - user action
+  - API endpoint and method
+  - backend route handler or service
+  - database model/table touched
+  - external integration such as Gmail, AI provider, Telegram, or Sheets
+  - final UI state or response shown to the user
+- Use business-readable node labels.
+- Do not include implementation guesses.
+- Do not draw a backend step unless a current source path/function supports it.
+- Do not claim a frontend path exists unless a current component/action calls it.
+- If a feature is placeholder-only, diagram it as placeholder-only or mark it
+  as `No live flow`.
+
+Required evidence table below each diagram:
+
+| Evidence type | Source |
+| --- | --- |
+| Frontend entry | `<path>:<function/component>` |
+| API endpoint | `<METHOD> <path>` |
+| Backend logic | `<path>:<function/service>` |
+| Data touched | `<model/table/field>` |
+| Tests | `<test path + result>` or `No direct test found` |
+| Verification limit | `<explicit limit or none>` |
+
+Coverage checklist for current CODEJOB feature diagrams:
+
+- Gmail OAuth and inbox sync
+- Run-once automation
+- Candidate scoring, routing, and queue state assignment
+- Needs Review approval and send gate
+- Reject and bulk reject
+- Failed Mapping recovery
+- Premium number extraction
+- Unknown number review classification
+- Recruiter and employer number buckets
+- Recruiter opportunity cards
+- Cold-call script generation
+- Gmail labeling
+- Productivity analytics
+- Query bucket saved searches
+- Resume upload and active resume selection
+- Settings and execution controls
+- Auto polling
+- HR-5 auto-send and retry queue behavior
+- Telegram operations
+- Google Sheets append, if configured as live optional behavior
+
+Required output structure for `docs/mermaid-features.md`:
+
+1. `# CODEJOB Mermaid Feature Flows`
+2. Audit metadata:
+   - `Audit date`
+   - `Branch`
+   - `Commit`
+   - `Evidence basis`
+   - `Verification limits`
+3. Feature coverage summary table:
+   - Feature
+   - Frontend entry
+   - Backend endpoint/service
+   - Status: `Live`, `Live (optional)`, `Placeholder`, `Unknown`
+   - Diagram updated: `Yes` or `No`
+4. One section per feature:
+   - short runtime summary
+   - Mermaid diagram
+   - evidence table
+   - verification limits
+5. Reviewer attention section:
+   - flows not executable locally
+   - stale or missing tests
+   - diagrams needing human validation
+6. Final footer using the standard docs footer template.
+
+Status rules for `docs/mermaid-features.md`:
+
+- `Live` means frontend and backend runtime path are both code-backed.
+- `Live (optional)` means the path exists but depends on settings,
+  credentials, external services, or configured integrations.
+- `Placeholder` means UI/docs mention the feature but no complete runtime path
+  exists.
+- `Unknown` means evidence was insufficient; include the missing path or blocker.
+
+Mermaid correctness checks before save:
+
+1. Does every diagram match the current frontend action and backend endpoint?
+2. Does every decision branch match actual route/service conditions?
+3. Do all model/state names match current backend contracts?
+4. Are optional integrations clearly marked optional?
+5. Did you remove old diagrams for deleted or unreachable flows?
+6. Does each diagram have a nearby evidence table?
+7. Did markdownlint pass for `docs/mermaid-features.md`?
+
 ### File-by-File Update Contract
 
 #### `docs/snowball.md`

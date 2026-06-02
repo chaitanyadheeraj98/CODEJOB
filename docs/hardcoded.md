@@ -1,32 +1,34 @@
+<!-- markdownlint-configure-file {"MD013": false} -->
+
 # Hardcoded Values and Constants Review
 
 ## Deployment-Sensitive Defaults
 
 | Location | Value | Impact |
 | --- | --- | --- |
-| `backend/app/main.py` | `allow_origins=["*"]` | permissive CORS by default |
-| `backend/app/config.py` | `google_redirect_uri` default localhost value | local-only default may be incorrect in deployment |
-| `backend/app/config.py` | owner/project fallback defaults | single-owner assumptions unless overridden |
+| `backend/app/main.py` | `allow_origins=["*"]` | permissive CORS default |
+| `backend/app/config.py` | localhost-style OAuth redirect fallback | non-prod default can leak into deployment if env is incomplete |
+| `backend/app/config.py` | owner/project fallback values | single-owner assumptions unless overridden |
 
-## Workflow Constants with Behavioral Impact
+## Workflow Constants With Behavioral Impact
 
 | Location | Constant class | Runtime effect |
 | --- | --- | --- |
-| `backend/app/main.py` | analytics event-weight map and range options | impacts trend scoring and bucketed reports |
-| `backend/app/phase0.py` | parsing/filter/routing heuristics | affects queue qualification and routing confidence |
-| `backend/app/query_bucket/service.py` | saved-query constraints | enforces dedupe and query limit behavior |
-| `backend/app/premium_numbers/intelligence.py` | opportunity status values | endpoint validation and UI contract |
+| `backend/app/premium_numbers/extraction.py` | SBERT prototypes and `SBERT_MARGIN_THRESHOLD=0.12` | determines keep/drop threshold for fallback extraction candidates |
+| `backend/app/premium_numbers/extraction.py` | noise/context token lists and regex guards | blocks unsubscribe/footer numeric noise from becoming leads |
+| `backend/app/main.py` | analytics weight map and range options | influences trend scoring and dashboard KPI buckets |
+| `backend/app/query_bucket/service.py` | saved-query dedupe and limit constraints | caps and normalizes query bucket persistence |
 
-## Active Drift Risks
+## Current Drift Risks
 
-- Frontend/backend policy defaults can diverge if maintained separately.
-- Hardcoded permissive values can leak from local defaults into non-local environments.
-- Heuristic constants change behavior without obvious external contract changes.
+- Policy defaults split across backend and frontend can drift.
+- Hardcoded permissive defaults can be accidentally promoted to higher environments.
+- Extraction heuristics and threshold constants can change behavior without API-shape changes.
 
-Mermaid not needed: this update is a constant inventory and risk categorization.
+Mermaid not needed: this update is a constants inventory and risk note only.
 
-- Audit date: 2026-05-22
-- Branch: external-recruiter-feed-ingestion
-- Evidence basis: code inspection
-- Verification limits: no dedicated constant-only regression suite was run in this session.
-
+- Audit date: 2026-05-30
+- Branch: semantic-embeddings
+- Commit: 5991f97
+- Evidence basis: code inspection + targeted premium-number tests
+- Verification limits: no constant-specific regression suite beyond extraction tests.

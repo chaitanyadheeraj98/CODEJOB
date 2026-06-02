@@ -1,46 +1,48 @@
+<!-- markdownlint-configure-file {"MD013": false} -->
+
 # CODEJOB Features (Current Implementation)
 
 ## Live Behavior
 
 | Feature | Runtime behavior | Evidence |
 | --- | --- | --- |
-| Gmail OAuth and status | OAuth bootstrap/status endpoints and auth polling support in UI | `backend/app/main.py`, `dashboard/src/App.tsx` |
-| Run-once automation | Fetch/process candidates and queue state transitions | `backend/app/main.py`, `backend/app/automation/run_orchestrator.py` |
-| Candidate queues | `run_queue`, `needs_review`, `failed_mapping`, `sent_items` views with actions | `dashboard/src/App.tsx` |
-| Premium numbers workflow | extraction, review queue, recruiter/employer buckets, opportunity tracking | `backend/app/premium_numbers/*`, `backend/app/main.py` |
-| Productivity analytics | event write + trend/read APIs and UI rendering | `backend/app/main.py`, `dashboard/src/App.tsx` |
-| External feed ingestion | Nvoids sync endpoints and source-type handling | `backend/app/main.py`, `backend/app/external_feeds/service.py` |
+| Gmail OAuth and inbox sync | OAuth start/url/status and sync endpoints are live | `GET /gmail/status`, `POST /gmail/oauth/start`, `GET /gmail/oauth/url`, `POST /gmail/sync` in `backend/app/main.py` |
+| Run-once automation | Run-once processing endpoint is live | `POST /automation/run-once` in `backend/app/main.py` and frontend call in `dashboard/src/App.tsx` |
+| Candidate queue workflow | Needs review, failed, sent queues with approve/reject/fail actions | `/candidates*` endpoints in backend and queue actions in `App.tsx` |
+| Premium number workflow | Re-extract, review classification, recruiter/employer buckets, opportunity CRUD and script generation are live | `/premium-numbers/*`, `/number-review/*`, `/recruiter-numbers/*`, `/employer-numbers/*`, `/recruiter-opportunities/*` |
+| Productivity analytics | View-event write and trend/event read endpoints are live | `/analytics/events/view`, `/analytics/events`, `/analytics/trend` |
+| Nvoids feed sync | External feed sync and run listing routes are live | `/external-feeds/nvoids/sync`, `/external-feeds/runs` |
 
-## Optional Behavior
+## Live (Optional) Behavior
 
-| Feature | Behavior when enabled | Evidence |
+| Feature | Optional condition | Evidence |
 | --- | --- | --- |
-| AI drafting | AI model-assisted drafts with fallback paths | `backend/app/ai/*`, `dashboard/src/App.tsx` |
-| Semantic scoring | embedding-based scoring blend | `backend/app/semantic/*`, `backend/app/services/scoring_runtime_service.py` |
-| Telegram operations | remote runtime controls via polling bot | `backend/app/telegram_bot.py`, `backend/app/services/telegram_runtime_service.py` |
-| Google Sheets append | post-send best-effort tracking row append | `backend/app/gmail_client.py` send/append helpers |
+| AI drafting | Requires `feature_ai_enabled` and provider configuration | AI status and settings flags in `backend/app/main.py`, toggle/UI in `App.tsx` |
+| Semantic embeddings and blended scoring | Requires semantic feature/provider settings | semantic settings fields and AI status metadata in `main.py`; semantic toggle in `App.tsx` |
+| Telegram operations | Requires bot token/allowed chats and polling runtime | `/telegram/status` and runtime wiring in `main.py`; status display in `App.tsx` |
+| Google Sheets append | Best-effort append path on send flows when configured | integration hooks in orchestration path (backend service wiring) |
 
-## Persisted and Runtime-Active Flags
+## Persisted Flags With Runtime Effect
 
 | Setting | Runtime effect |
 | --- | --- |
-| `feature_auto_polling` | enables periodic run loop |
-| `feature_auto_poll_interval_minutes` | controls loop interval bounds |
-| `feature_nvoids_enabled` | allows manual sync endpoint execution |
-| `feature_nvoids_auto_sync` | enables periodic external-feed sync in auto runner paths |
-| `feature_auto_send` | permits auto-send phase for current-run queued IDs |
-| `feature_retry_queue` | enables failed-queue retry/promote behavior |
-| `feature_ai_enabled` | toggles AI draft generation paths |
-| `feature_semantic_enabled` | toggles semantic ranking behavior |
+| `feature_auto_polling` | Enables periodic automation loop |
+| `feature_auto_poll_interval_minutes` | Controls auto-run interval bounds |
+| `feature_nvoids_enabled` | Enables manual Nvoids sync endpoint usage |
+| `feature_nvoids_auto_sync` | Enables periodic Nvoids sync behavior |
+| `feature_auto_send` | Enables auto-send phase behavior |
+| `feature_retry_queue` | Enables retry/promote behavior for failed items |
+| `feature_ai_enabled` | Enables AI draft generation paths |
+| `feature_semantic_enabled` | Enables semantic scoring paths |
 
-## Placeholder or Not Fully Implemented Signals
+## Placeholder Signals
 
-- Sidebar buttons `New Campaign`, `Settings`, and `Help Center` are presentational actions in current UI shell.
-- Reviewer note: treat these as UI placeholders, not fully implemented workflow features.
+- Sidebar actions `New Campaign`, `Settings`, and `Help Center` remain presentational in current shell (`dashboard/src/components/Sidebar.tsx`).
 
-Mermaid not needed: this update is a feature inventory/state alignment, not a flow change.
+Mermaid not needed: this update is feature inventory and status normalization, not a flow change.
 
-- Audit date: 2026-05-22
-- Branch: external-recruiter-feed-ingestion
-- Evidence basis: both
-- Verification limits: backend full pytest is currently blocked by stale import in `test_phone_attribution.py`.
+- Audit date: 2026-05-30
+- Branch: semantic-embeddings
+- Commit: 5991f97
+- Evidence basis: code inspection
+- Verification limits: no end-to-end runtime integration test run in this session.

@@ -1,17 +1,16 @@
+<!-- markdownlint-configure-file {"MD013": false} -->
+
 # Problem Fix Log (Current Branch Verification)
 
-Audit date: 2026-05-17  
-Branch: `snowball-md`
-
-## 1) Ticket verification summary
+## Ticket Status Summary
 
 | Ticket | Status |
 | --- | --- |
-| HR-1 | Done |
+| HR-1 | Partially Closed |
 | HR-2 | Still Open |
 | HR-3 | Still Open |
-| HR-4 | Still Open |
-| HR-5 | Still Open |
+| HR-4 | Unknown |
+| HR-5 | Partially Closed |
 | MR-1 | Still Open |
 | MR-2 | Still Open |
 | MR-3 | Still Open |
@@ -21,91 +20,57 @@ Branch: `snowball-md`
 | LR-2 | Still Open |
 | LR-3 | Still Open |
 
-## 2) HR-1 verification details
+## Evidence Notes
 
-**Status:** Done
+### HR-1
 
-**Remaining issue:** `backend/app/main.py` remains a large integration hub, but HR-1 closeout criteria were met via targeted regression coverage on extracted orchestration/telegram/routing paths.
-
-**Evidence:**
-
-- Service extraction is present (`startup_service.py`, `orchestration_service.py`, `routing_runtime_service.py`, `telegram_runtime_service.py`).
-- `main.py` delegates sync/run/approve/reject/resolve flows into service facades.
-- Targeted closeout suite passed on this branch:
-  - `tests/test_approve_cc_regression.py`
-  - `tests/test_run_once_hotfix.py`
-  - `tests/test_routing_policy.py`
-  - `tests/test_telegram_interactive.py`
-  - `tests/test_candidate_date_filtering.py`
-- Command evidence:
-  - `cd backend; python -m pytest tests/test_approve_cc_regression.py tests/test_run_once_hotfix.py tests/test_routing_policy.py tests/test_telegram_interactive.py tests/test_candidate_date_filtering.py`
-  - Result: `29 passed`
-
-**Reviewer attention:**
-
-- A full backend run is still blocked by stale test import (`tests/test_phone_attribution.py` imports missing `app.phone_attribution`).
-- `test_run_orchestrator.py` still requires contract refresh against current dependency shape.
-
-## 3) Other unresolved verification outcomes
-
-### HR-2
-
-- **Remaining issue:** routing correctness still depends on multi-step contracts.
-- **Evidence:** queue-time routing + approve-time recheck (`routing_is_sendable`).
-- **Recommended next action:** enforce one canonical sendability contract.
+- Status: Partially Closed
+- Remaining issue: `backend/app/main.py` remains central orchestration hub.
+- Evidence: service extraction exists, but route wiring and runtime composition are still centralized in `main.py`.
+- Recommended next action: continue endpoint-by-endpoint extraction from `main.py` into narrower service modules.
 
 ### HR-3
 
-- **Remaining issue:** phone-intelligence path remains multi-write and side-effect dense.
-- **Evidence:** extraction + intelligence + queue + bucket/opportunity writes span multiple modules.
-- **Recommended next action:** consolidate into a transaction-aware service boundary.
+- Status: Still Open
+- Remaining issue: premium-number path remains dense and multi-branch.
+- Evidence: extraction, review, bucket swaps, and opportunity operations span `app/premium_numbers/*` and multiple backend routes.
+- Recommended next action: add focused service-level transaction boundary tests around review-to-opportunity transitions.
 
 ### HR-4
 
-- **Remaining issue:** runtime schema patching remains startup migration mechanism.
-- **Evidence:** `ensure_sqlite_phase0_columns()` called at startup.
-- **Recommended next action:** shift schema evolution ownership to explicit migrations.
+- Status: Unknown
+- Remaining issue: migration/runtime ownership was not re-verified by migration command execution in this session.
+- Evidence: no `alembic` command output captured in this session.
+- Recommended next action: run migration status commands before claiming closure.
 
 ### HR-5
 
-- **Remaining issue:** feature flags imply behavior that is not implemented end-to-end.
-- **Evidence:** persisted `feature_auto_send` and `feature_retry_queue` without runtime workers.
-- **Recommended next action:** implement semantics or deprecate flags.
+- Status: Partially Closed
+- Remaining issue: feature toggles are runtime-active, but full branch verification remains incomplete.
+- Evidence: flag persistence and application in `/settings` and runtime orchestration pathways; no full backend suite pass in this session.
+- Recommended next action: resolve stale backend suite blockers and re-run full validation.
 
-### MR-5
+## Validation Commands in This Session
 
-- **Remaining issue:** full validation confidence is still incomplete.
-- **Evidence:** full backend suite collection fails due stale import; dashboard lint/build fail with current rule/type constraints.
-- **Recommended next action:** fix stale tests and lint/build blockers, then re-run full suites.
+- `cd backend; python -m pytest tests/test_premium_numbers_extraction.py`
+  - Result: passed (`17 passed in 9.40s`)
+  - Blocker class: none
 
-## 4) Validation command results from this audit session
+- `cd backend; python -m pytest tests/test_premium_numbers_extraction.py` (initial attempt)
+  - Result: timeout
+  - Exact failure: command timed out before completion
+  - Blocker class: incompatible local runtime timeout setting (rerun succeeded)
 
 - `cd backend; python -m pytest`
-  - **Result:** failed during collection
-  - **Exact failure:** `ModuleNotFoundError: No module named 'app.phone_attribution'`
-  - **Blocker class:** stale test
+  - Result: not executed in this session
+  - Blocker class: unknown in this session
 
-- `cd backend; python -m pytest tests/test_approve_cc_regression.py tests/test_run_once_hotfix.py tests/test_routing_policy.py tests/test_telegram_interactive.py tests/test_candidate_date_filtering.py`
-  - **Result:** passed (`29 passed`)
-  - **Blocker class:** none
+## Branch Conclusion
 
-- `cd dashboard; npm run lint`
-  - **Result:** failed
-  - **Exact failure:** eslint rule violations (`react-refresh/only-export-components`, missing rule `react/no-array-index-key`, and hook/set-state issues)
-  - **Blocker class:** incompatible local runtime/tooling rules + stale lint contract
+Targeted premium-number extraction verification is green on this branch snapshot, but full-suite confidence is still limited and should not be presented as complete regression closure.
 
-- `cd dashboard; npm run test -- --run`
-  - **Result:** passed (`7 files, 27 tests`)
-  - **Blocker class:** none
-
-- `cd dashboard; npm run build`
-  - **Result:** failed
-  - **Exact failure:** TypeScript write permission (`EPERM` on `.tsbuildinfo`) plus TS6133 unused variable errors
-  - **Blocker class:** incompatible local runtime + stale type/lint debt
-
-## 5) Current branch conclusion
-
-HR-1 closure is supported by targeted behavior tests on this branch. Broader validation debt remains open (MR-5) and should not be interpreted as product-wide green status.
-
-Evidence basis: both  
-Verification limits: full backend suite blocked by stale test import; dashboard lint/build blocked by rule/type/runtime constraints.
+- Audit date: 2026-05-30
+- Branch: semantic-embeddings
+- Commit: 5991f97
+- Evidence basis: both
+- Verification limits: only targeted extraction tests were executed in this session.
