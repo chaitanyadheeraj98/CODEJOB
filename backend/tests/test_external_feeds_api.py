@@ -1,5 +1,7 @@
 import os
+import tempfile
 import unittest
+from types import SimpleNamespace
 
 os.environ["DEBUG"] = "false"
 
@@ -11,9 +13,10 @@ from sqlalchemy.pool import StaticPool
 from app import main
 from app.db import Base
 from app.external_feeds.collector import CollectedPage
+from app.external_feeds import service as external_feed_service_module
 from app.external_feeds.service import ExternalFeedService
 from app.external_feeds.models import ExternalFeedSource, ExternalOpportunity
-from app.models import EmployerNumber, RecruiterEmail, RecruiterNumber, RecruiterOpportunity, UserSettings
+from app.models import EmployerNumber, RecruiterEmail, RecruiterNumber, RecruiterOpportunity, ResumeAsset, UserSettings
 
 
 class _FakeCollector:
@@ -78,6 +81,7 @@ class ExternalFeedsApiTests(unittest.TestCase):
                     feature_nvoids_poll_interval_minutes=30,
                     nvoids_batch_limit=10,
                     nvoids_locations="",
+                    qualification_threshold=0.0,
                 )
             )
             employer_source_email = RecruiterEmail(
@@ -104,6 +108,26 @@ class ExternalFeedsApiTests(unittest.TestCase):
                     owner_name="Employer Contact",
                     company="PoolCo",
                     source_email_id=employer_source_email.id,
+                )
+            )
+            db.commit()
+
+    def _add_resume(self) -> None:
+        fd, path = tempfile.mkstemp(suffix=".pdf")
+        os.close(fd)
+        with open(path, "wb") as handle:
+            handle.write(b"%PDF-1.4 fake")
+        with self.SessionLocal() as db:
+            db.add(
+                ResumeAsset(
+                    owner_id=main.settings.owner_id,
+                    file_path=path,
+                    file_name="resume.pdf",
+                    mime_type="application/pdf",
+                    sha256="resume123",
+                    version=1,
+                    is_current=True,
+                    semantic_embedding=None,
                 )
             )
             db.commit()
@@ -201,6 +225,149 @@ class ExternalFeedsApiTests(unittest.TestCase):
             rows = db.query(ExternalOpportunity).filter(ExternalOpportunity.owner_id == main.settings.owner_id).all()
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0].location, "Remote, USA")
+
+    def test_sync_uses_ai_draft_and_semantic_metadata_when_enabled(self) -> None:
+        self._add_resume()
+        original_generate = external_feed_service_module.generate_reply_with_ai_or_fallback
+        original_compute = main.external_feed_service.scoring_runtime.compute_blended_ai_score
+        try:
+            with self.SessionLocal() as db:
+                settings = db.query(UserSettings).filter(UserSettings.owner_id == main.settings.owner_id).first()
+                assert settings is not None
+                settings.feature_ai_enabled = True
+                settings.feature_semantic_enabled = True
+                settings.qualification_threshold = 0.6
+                db.commit()
+
+            external_feed_service_module.generate_reply_with_ai_or_fallback = lambda **_kwargs: SimpleNamespace(
+                draft_text="AI draft for Nvoids",
+                source="deepseek",
+                ai_model="deepseek-chat",
+                ai_error=None,
+                resume_context_status="injected",
+            )
+            main.external_feed_service.scoring_runtime.compute_blended_ai_score = lambda **_kwargs: (
+                0.92,
+                "strong match",
+                "v2_rules_plus_semantic",
+                "[0.1,0.2]",
+                "[0.3,0.4]",
+                SimpleNamespace(
+                    input_source="latest_block",
+                    input_chars=120,
+                    chunks=2,
+                    fallback_reason=None,
+                    keyword_source="thread_carry_forward",
+                    thread_snapshot_used=True,
+                    thread_snapshot_email_id=77,
+                ),
+            )
+
+            sync = self.client.post("/external-feeds/nvoids/sync")
+            self.assertEqual(sync.status_code, 200, sync.text)
+            with self.SessionLocal() as db:
+                row = (
+                    db.query(RecruiterEmail)
+                    .filter(RecruiterEmail.owner_id == main.settings.owner_id, RecruiterEmail.source == "nvoids")
+                    .order_by(RecruiterEmail.id.desc())
+                    .first()
+                )
+                self.assertIsNotNone(row)
+                assert row is not None
+                self.assertEqual(row.state, "needs_review")
+                self.assertEqual(row.draft_reply, "AI draft for Nvoids")
+                self.assertEqual(row.draft_source, "deepseek")
+                self.assertEqual(row.draft_model, "deepseek-chat")
+                self.assertEqual(row.draft_resume_context_status, "injected")
+                self.assertEqual(row.ai_score_source, "v2_rules_plus_semantic")
+                self.assertEqual(row.semantic_input_source, "latest_block")
+                self.assertEqual(row.semantic_chunks, 2)
+                self.assertEqual(row.semantic_embedding, "[0.1,0.2]")
+        finally:
+            external_feed_service_module.generate_reply_with_ai_or_fallback = original_generate
+            main.external_feed_service.scoring_runtime.compute_blended_ai_score = original_compute
+
+    def test_sync_queues_rules_only_with_missing_resume_when_ai_enabled(self) -> None:
+        original_compute = main.external_feed_service.scoring_runtime.compute_blended_ai_score
+        try:
+            with self.SessionLocal() as db:
+                settings = db.query(UserSettings).filter(UserSettings.owner_id == main.settings.owner_id).first()
+                assert settings is not None
+                settings.feature_ai_enabled = True
+                settings.feature_semantic_enabled = False
+                settings.qualification_threshold = 0.6
+                db.commit()
+
+            main.external_feed_service.scoring_runtime.compute_blended_ai_score = lambda **_kwargs: (
+                0.91,
+                "strong match",
+                "v1_rules_plus_ai",
+                None,
+                None,
+                SimpleNamespace(input_source="semantic_disabled", input_chars=0, chunks=0, fallback_reason=None),
+            )
+            sync = self.client.post("/external-feeds/nvoids/sync")
+            self.assertEqual(sync.status_code, 200, sync.text)
+
+            with self.SessionLocal() as db:
+                row = (
+                    db.query(RecruiterEmail)
+                    .filter(RecruiterEmail.owner_id == main.settings.owner_id, RecruiterEmail.source == "nvoids")
+                    .order_by(RecruiterEmail.id.desc())
+                    .first()
+                )
+                self.assertIsNotNone(row)
+                assert row is not None
+                self.assertEqual(row.draft_source, "rules_only")
+                self.assertEqual(row.draft_resume_context_status, "missing_resume")
+        finally:
+            main.external_feed_service.scoring_runtime.compute_blended_ai_score = original_compute
+
+    def test_sync_skips_non_qualified_rows_instead_of_queueing_them(self) -> None:
+        original_compute = main.external_feed_service.scoring_runtime.compute_blended_ai_score
+        try:
+            with self.SessionLocal() as db:
+                settings = db.query(UserSettings).filter(UserSettings.owner_id == main.settings.owner_id).first()
+                assert settings is not None
+                settings.qualification_threshold = 0.75
+                db.commit()
+
+            main.external_feed_service.scoring_runtime.compute_blended_ai_score = lambda **_kwargs: (
+                0.2,
+                "low match",
+                "v1_rules_plus_ai",
+                None,
+                None,
+                SimpleNamespace(input_source="semantic_disabled", input_chars=0, chunks=0, fallback_reason=None),
+            )
+            sync = self.client.post("/external-feeds/nvoids/sync")
+            self.assertEqual(sync.status_code, 200, sync.text)
+
+            with self.SessionLocal() as db:
+                rows = (
+                    db.query(RecruiterEmail)
+                    .filter(RecruiterEmail.owner_id == main.settings.owner_id, RecruiterEmail.source == "nvoids")
+                    .all()
+                )
+                self.assertEqual(rows, [])
+        finally:
+            main.external_feed_service.scoring_runtime.compute_blended_ai_score = original_compute
+
+    def test_sync_skips_queue_creation_when_employer_pool_cc_missing(self) -> None:
+        with self.SessionLocal() as db:
+            db.query(EmployerNumber).delete()
+            db.commit()
+
+        sync = self.client.post("/external-feeds/nvoids/sync")
+        self.assertEqual(sync.status_code, 200, sync.text)
+
+        with self.SessionLocal() as db:
+            rows = (
+                db.query(RecruiterEmail)
+                .filter(RecruiterEmail.owner_id == main.settings.owner_id, RecruiterEmail.source == "nvoids")
+                .all()
+            )
+            self.assertEqual(rows, [])
 
     def test_backfill_phones_clears_noise_phone_and_normalizes_bridge_number(self) -> None:
         with self.SessionLocal() as db:

@@ -6,9 +6,20 @@ import re
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from app.models import EmployerNumber, RecruiterEmail, RecruiterNumber, RecruiterOpportunity, UserSettings
+from app.ai.reply_service import generate_reply_with_ai_or_fallback
+from app.automation.queue_preparation import (
+    QueuePreparationDependencies,
+    QueuePreparationRequest,
+    prepare_candidate_for_queue,
+)
+from app.models import EmployerNumber, RecruiterEmail, RecruiterNumber, RecruiterOpportunity, ResumeAsset, UserSettings
 from app.premium_numbers.phone_normalization import canonicalize_phone
-from app.phase0 import extract_email_address, parse_email
+from app.phase0 import extract_email_address, greeting_from_to_contact, hard_filter_check, parse_email, should_block_f2f
+from app.routing import RoutingDecision
+from app.semantic.embeddings_service import generate_embedding
+from app.services import policy_service
+from app.services.candidate_runtime_service import CandidateRuntimeDeps, CandidateRuntimeService
+from app.services.scoring_runtime_service import ScoringRuntimeDeps, ScoringRuntimeService
 
 from .collector import NvoidsCollector
 from .dedupe import build_dedupe_hash
@@ -22,6 +33,16 @@ class ExternalFeedService:
         self.collector = NvoidsCollector()
         self.default_query = "(tx or texas) and java and spring* not(*js)"
         self.default_hotlist_mode = "Exclude Hotlists"
+        self.scoring_runtime = ScoringRuntimeService(
+            ScoringRuntimeDeps(generate_embedding_with_health=lambda text: generate_embedding(text))
+        )
+        self.candidate_runtime = CandidateRuntimeService(
+            CandidateRuntimeDeps(
+                get_settings=lambda _db: UserSettings(owner_id="default-owner"),
+                evaluate_routing_policy=lambda *_args, **_kwargs: self._fallback_routing_decision(),
+                apply_routing_decision=lambda *_args, **_kwargs: None,
+            )
+        )
 
     @staticmethod
     def _normalize_location_tokens(raw_locations: list[str] | tuple[str, ...] | None) -> list[str]:
@@ -338,6 +359,47 @@ class ExternalFeedService:
                 return candidate
         return None
 
+    @staticmethod
+    def _fallback_routing_decision() -> RoutingDecision:
+        return RoutingDecision(
+            to_email=None,
+            cc_email=None,
+            status="missing",
+            confidence=0.0,
+            reason="Unavailable",
+            evidence=[],
+            candidates=[],
+            recommended_state="failed",
+            recommended_skip_reason="missing_to_or_cc",
+            should_mark_failed=True,
+            is_sendable_candidate=False,
+            needs_manual_confirmation=False,
+        )
+
+    @staticmethod
+    def _policy_f2f_block(parsed: dict[str, str | int | bool], policy: policy_service.PolicyConfig) -> tuple[bool, str]:
+        normalized = policy_service.normalize_policy(policy)
+        qualification = normalized["qualification"]
+        strictness = policy_service.as_str(qualification.get("location_strictness", "balanced"), "balanced")
+        if strictness == "lenient":
+            return False, ""
+        blocked, reason = should_block_f2f(parsed)
+        if blocked:
+            return True, reason or ""
+        if strictness == "strict":
+            location_text = str(parsed.get("job_location_text", "")).strip().lower()
+            if not location_text or location_text == "unknown":
+                return True, "Location is unclear under strict location policy"
+        return False, ""
+
+    def _active_resume(self, db: Session, *, owner_id: str) -> ResumeAsset | None:
+        return (
+            db.query(ResumeAsset)
+            .filter(ResumeAsset.owner_id == owner_id, ResumeAsset.is_current.is_(True))
+            .order_by(ResumeAsset.version.desc())
+            .first()
+        )
+
     def _enqueue_needs_review_candidate(self, db: Session, *, owner_id: str, item: ExternalOpportunity) -> bool:
         recruiter_to = extract_email_address(item.recruiter_email or "")
         if not recruiter_to:
@@ -355,41 +417,111 @@ class ExternalFeedService:
             return False
         body = item.raw_body or item.role or ""
         subject = item.role or "Nvoids Opportunity"
-        parsed = parse_email(subject, body)
         settings = (
             db.query(UserSettings).filter(UserSettings.owner_id == owner_id).first()
             or UserSettings(owner_id=owner_id)
         )
-        draft_reply = (
-            f"Hi {item.recruiter_name or 'Recruiter'},\n\n"
-            f"Thanks for sharing this role ({subject}). I am interested and would like to discuss fit.\n"
-            f"Please let me know a good time to connect.\n\nRegards"
+        active_resume = self._active_resume(db, owner_id=owner_id)
+        effective_policy = policy_service.read_policy_from_settings(settings.policy_json)
+        threshold = policy_service.policy_threshold(settings.qualification_threshold, effective_policy)
+        routing_decision = RoutingDecision(
+            to_email=recruiter_to,
+            cc_email=cc_email,
+            status="safe",
+            confidence=0.85,
+            reason="External feed recruiter import with employer pool cc.",
+            evidence=[],
+            candidates=[],
+            recommended_state="needs_review",
+            recommended_skip_reason=None,
+            should_mark_failed=False,
+            is_sendable_candidate=True,
+            needs_manual_confirmation=False,
         )
+        preparation = prepare_candidate_for_queue(
+            QueuePreparationRequest(
+                db=db,
+                owner_id=owner_id,
+                sender=recruiter_to,
+                subject=subject,
+                body=body,
+                snippet=body,
+                user_settings=settings,
+                effective_policy=effective_policy,
+                threshold=threshold,
+                model_name="deepseek-chat",
+                scoring_resume=active_resume,
+                draft_resume=active_resume,
+                existing_email=existing,
+                external_thread_id=item.source_url or external_message_id,
+                routing_decision=routing_decision,
+            ),
+            QueuePreparationDependencies(
+                parse_email=parse_email,
+                hard_filter_check=hard_filter_check,
+                compute_blended_ai_score=lambda subject, body, parsed, user_settings, email_row, resume, db_ctx=None, owner_id_ctx=None, thread_id_ctx=None: self.scoring_runtime.compute_blended_ai_score(
+                    subject=subject,
+                    body=body,
+                    parsed=parsed,
+                    user_settings=user_settings,
+                    email_row=email_row,
+                    resume=resume,
+                    db=db_ctx,
+                    owner_id=owner_id_ctx,
+                    external_thread_id=str(thread_id_ctx or ""),
+                ),
+                policy_f2f_block=self._policy_f2f_block,
+                evaluate_routing_policy=lambda *_args, **_kwargs: routing_decision,
+                greeting_from_to_contact=greeting_from_to_contact,
+                build_user_fallback_draft=lambda db, user_settings, sender, role, parsed, greeting_line, resume_file_name: self.candidate_runtime.build_user_fallback_draft(
+                    db,
+                    user_settings,
+                    sender=sender,
+                    role=role,
+                    parsed=parsed,
+                    greeting_line=greeting_line,
+                    resume_file_name=resume_file_name,
+                ),
+                generate_reply_with_ai_or_fallback=lambda **kwargs: generate_reply_with_ai_or_fallback(**kwargs),
+            ),
+        )
+        if active_resume and preparation.resume_embedding_json and active_resume.semantic_embedding != preparation.resume_embedding_json:
+            active_resume.semantic_embedding = preparation.resume_embedding_json
+        if preparation.outcome != "needs_review":
+            return False
         email = RecruiterEmail(
             owner_id=owner_id,
             sender=recruiter_to,
             subject=subject,
             body=body,
-            role=str(parsed.get("role", subject)),
-            location=str(parsed.get("location", item.location or "")),
-            salary_text=str(parsed.get("salary_text", item.rate or "")),
-            skills_text=str(parsed.get("skills_text", item.skills_text or "")),
-            score=80,
+            role=str(preparation.parsed.get("role", subject)),
+            location=str(preparation.parsed.get("location", item.location or "")),
+            salary_text=str(preparation.parsed.get("salary_text", item.rate or "")),
+            skills_text=str(preparation.parsed.get("skills_text", item.skills_text or "")),
+            score=int(preparation.ai_score * 100),
             decision="Qualified",
             state="needs_review",
-            decision_reason="external_feed_nvoids",
-            hard_filter_result="external_feed",
+            decision_reason=preparation.decision_reason,
+            hard_filter_result=preparation.hard_filter_reason,
             auto_reject_reason=None,
-            ai_score=0.8,
-            ai_score_source="external_feed_rule",
-            ai_summary="Imported from nvoids external feed.",
+            ai_score=preparation.ai_score,
+            ai_score_source=preparation.ai_score_source,
+            ai_summary=preparation.ai_summary,
+            semantic_input_source=getattr(preparation.semantic_diag, "input_source", None),
+            semantic_input_chars=getattr(preparation.semantic_diag, "input_chars", None),
+            semantic_chunks=getattr(preparation.semantic_diag, "chunks", None),
+            semantic_fallback_reason=getattr(preparation.semantic_diag, "fallback_reason", None),
+            keyword_source=getattr(preparation.semantic_diag, "keyword_source", None),
+            thread_snapshot_used=getattr(preparation.semantic_diag, "thread_snapshot_used", None),
+            thread_snapshot_email_id=getattr(preparation.semantic_diag, "thread_snapshot_email_id", None),
             skip_reason=None,
             sync_batch_id=f"external-run-{item.id}",
-            draft_reply=draft_reply,
-            draft_source="rules_only",
-            draft_model=None,
-            draft_ai_error=None,
-            draft_resume_context_status="rules_only",
+            draft_reply=preparation.draft_reply or "",
+            draft_source=preparation.draft_source,
+            draft_model=preparation.draft_model,
+            draft_ai_error=preparation.draft_ai_error,
+            draft_resume_context_status=preparation.draft_resume_context_status,
+            semantic_embedding=preparation.email_embedding_json,
             approval_status="pending",
             sent_status="not_sent",
             source="nvoids",
@@ -398,12 +530,14 @@ class ExternalFeedService:
             gmail_received_at=item.posted_at or datetime.now(UTC),
             recipient_email=recruiter_to,
             cc_email=cc_email,
-            routing_status="safe",
-            routing_confidence=0.85,
-            routing_reason="External feed recruiter import with employer pool cc.",
+            routing_status=routing_decision.status,
+            routing_confidence=routing_decision.confidence,
+            routing_reason=routing_decision.reason,
             routing_evidence="[]",
             routing_candidates="[]",
             routing_confirmed=False,
+            resume_asset_id=active_resume.id if active_resume else None,
+            resume_file_name=active_resume.file_name if active_resume else None,
         )
         db.add(email)
         return True
