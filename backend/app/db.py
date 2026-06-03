@@ -335,6 +335,7 @@ def ensure_sqlite_phase0_columns() -> None:
             ("feature_nvoids_auto_sync", "ALTER TABLE user_settings ADD COLUMN feature_nvoids_auto_sync BOOLEAN DEFAULT 0"),
             ("feature_nvoids_poll_interval_minutes", "ALTER TABLE user_settings ADD COLUMN feature_nvoids_poll_interval_minutes INTEGER DEFAULT 30"),
             ("nvoids_batch_limit", "ALTER TABLE user_settings ADD COLUMN nvoids_batch_limit INTEGER DEFAULT 10"),
+            ("nvoids_locations", "ALTER TABLE user_settings ADD COLUMN nvoids_locations TEXT DEFAULT ''"),
             ("fallback_draft_template", "ALTER TABLE user_settings ADD COLUMN fallback_draft_template TEXT DEFAULT ''"),
             ("signature_name", "ALTER TABLE user_settings ADD COLUMN signature_name VARCHAR(255) DEFAULT ''"),
             ("signature_phone", "ALTER TABLE user_settings ADD COLUMN signature_phone VARCHAR(80) DEFAULT ''"),

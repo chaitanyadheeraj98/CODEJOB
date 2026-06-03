@@ -63,6 +63,7 @@ class SettingsRequest(BaseModel):
     feature_nvoids_auto_sync: bool = False
     feature_nvoids_poll_interval_minutes: int = 30
     nvoids_batch_limit: int = 10
+    nvoids_locations: list[str] = Field(default_factory=list)
     feature_auto_send: bool = False
     feature_retry_queue: bool = False
     feature_ai_enabled: bool = False
@@ -414,6 +415,7 @@ class ExternalFeedSyncResponse(BaseModel):
     created_count: int
     deduped_count: int
     failed_count: int
+    skipped_location_count: int
     run_id: int
 
 

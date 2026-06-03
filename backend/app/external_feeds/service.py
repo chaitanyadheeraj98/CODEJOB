@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import re
 
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -21,6 +22,41 @@ class ExternalFeedService:
         self.collector = NvoidsCollector()
         self.default_query = "(tx or texas) and java and spring* not(*js)"
         self.default_hotlist_mode = "Exclude Hotlists"
+
+    @staticmethod
+    def _normalize_location_tokens(raw_locations: list[str] | tuple[str, ...] | None) -> list[str]:
+        if not raw_locations:
+            return []
+        normalized: list[str] = []
+        for value in raw_locations:
+            token = str(value or "").strip().lower()
+            if not token or token in normalized:
+                continue
+            normalized.append(token)
+        return normalized
+
+    def build_nvoids_query(self, raw_locations: list[str] | tuple[str, ...] | None) -> str:
+        locations = self._normalize_location_tokens(raw_locations)
+        if not locations:
+            return self.default_query
+        location_clause = " or ".join(locations)
+        return f"({location_clause}) and java and spring* not(*js)"
+
+    def row_matches_locations(self, row_location: str, raw_locations: list[str] | tuple[str, ...] | None) -> bool:
+        locations = self._normalize_location_tokens(raw_locations)
+        if not locations:
+            return True
+        normalized_row_location = str(row_location or "").strip().lower()
+        if not normalized_row_location:
+            return False
+        for token in locations:
+            if token == "remote":
+                if re.search(r"\bremote\b", normalized_row_location):
+                    return True
+                continue
+            if token in normalized_row_location:
+                return True
+        return False
 
     def ensure_nvoids_source(self, db: Session, *, owner_id: str) -> ExternalFeedSource:
         row = (
@@ -52,6 +88,12 @@ class ExternalFeedService:
         duplicate_stop_threshold: int = 2,
     ) -> ExternalFeedSyncResult:
         source = self.ensure_nvoids_source(db, owner_id=owner_id)
+        user_settings = (
+            db.query(UserSettings).filter(UserSettings.owner_id == owner_id).first()
+            or UserSettings(owner_id=owner_id)
+        )
+        location_filters = self._normalize_location_tokens((user_settings.nvoids_locations or "").split(","))
+        query = self.build_nvoids_query(location_filters)
         run = ExternalScrapeRun(owner_id=owner_id, source_type="nvoids", started_at=datetime.now(UTC), notes="")
         db.add(run)
         db.commit()
@@ -61,12 +103,13 @@ class ExternalFeedService:
         created_count = 0
         deduped_count = 0
         failed_count = 0
+        skipped_location_count = 0
         consecutive_duplicate_pages = 0
 
         try:
             for page in range(max_pages):
                 collected = self.collector.fetch_search_page(
-                    query=self.default_query,
+                    query=query,
                     hotlist_mode=self.default_hotlist_mode,
                     page=page,
                 )
@@ -78,6 +121,9 @@ class ExternalFeedService:
                     if created_count >= max_items:
                         break
                     fetched_count += 1
+                    if not self.row_matches_locations(row.location, location_filters):
+                        skipped_location_count += 1
+                        continue
                     detail_html = ""
                     detail_url = row.href
                     try:
@@ -179,6 +225,8 @@ class ExternalFeedService:
             run.created_count = created_count
             run.deduped_count = deduped_count
             run.failed_count = failed_count
+            if skipped_location_count:
+                run.notes = f"skipped_location_count={skipped_location_count}"
             db.commit()
             db.refresh(run)
             return ExternalFeedSyncResult(
@@ -187,6 +235,7 @@ class ExternalFeedService:
                 created_count=created_count,
                 deduped_count=deduped_count,
                 failed_count=failed_count,
+                skipped_location_count=skipped_location_count,
                 run_id=run.id,
             )
         except Exception as exc:

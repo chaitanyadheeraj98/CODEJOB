@@ -100,6 +100,7 @@ class SettingsBootstrapService:
                 feature_nvoids_auto_sync=False,
                 feature_nvoids_poll_interval_minutes=30,
                 nvoids_batch_limit=10,
+                nvoids_locations="",
                 feature_auto_send=settings.feature_auto_send,
                 feature_retry_queue=settings.feature_retry_queue,
                 feature_ai_enabled=False,

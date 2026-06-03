@@ -125,6 +125,7 @@ type SettingsPayload = {
   feature_nvoids_auto_sync: boolean
   feature_nvoids_poll_interval_minutes: number
   nvoids_batch_limit: number
+  nvoids_locations: string[]
   feature_auto_send: boolean
   feature_retry_queue: boolean
   feature_ai_enabled: boolean
@@ -545,6 +546,7 @@ function App() {
     feature_nvoids_auto_sync: false,
     feature_nvoids_poll_interval_minutes: 30,
     nvoids_batch_limit: 10,
+    nvoids_locations: [],
     feature_auto_send: false,
     feature_retry_queue: false,
     feature_ai_enabled: false,
@@ -575,6 +577,7 @@ function App() {
   const [selectedProfileToApply, setSelectedProfileToApply] = useState<PolicyProfileName>('Balanced')
   const [lastAppliedProfile, setLastAppliedProfile] = useState<PolicyProfileName | null>(null)
   const [skillDraft, setSkillDraft] = useState('')
+  const [nvoidsLocationDraft, setNvoidsLocationDraft] = useState('')
   const [employerDomainDraft, setEmployerDomainDraft] = useState('')
   const [employerDomainError, setEmployerDomainError] = useState('')
   const [numberReviewCards, setNumberReviewCards] = useState<NumberReviewCard[]>([])
@@ -710,6 +713,7 @@ function App() {
       feature_nvoids_auto_sync: Boolean(payload.feature_nvoids_auto_sync ?? false),
       feature_nvoids_poll_interval_minutes: Math.max(1, Math.min(payload.feature_nvoids_poll_interval_minutes || 30, 1440)),
       nvoids_batch_limit: Math.max(1, Math.min(payload.nvoids_batch_limit || 10, 50)),
+      nvoids_locations: payload.nvoids_locations ?? [],
       employer_domains: payload.employer_domains ?? [],
       policy: payload.policy ?? defaultPolicy,
     }
@@ -1183,11 +1187,11 @@ function App() {
         const details = await res.json().catch(() => null)
         throw new Error(details?.detail ?? 'Nvoids sync failed')
       }
-      const data = (await res.json()) as { source_type: string; fetched_count: number; created_count: number; deduped_count: number; failed_count: number }
+      const data = (await res.json()) as { source_type: string; fetched_count: number; created_count: number; deduped_count: number; failed_count: number; skipped_location_count: number }
       setLogs((prev) => [
         {
           status: 'ok',
-          detail: `nvoids sync complete: fetched=${data.fetched_count} created=${data.created_count} deduped=${data.deduped_count} failed=${data.failed_count}`,
+          detail: `nvoids sync complete: fetched=${data.fetched_count} created=${data.created_count} deduped=${data.deduped_count} skipped_location=${data.skipped_location_count} failed=${data.failed_count}`,
           email_id: null,
         },
         ...prev,
@@ -1430,6 +1434,25 @@ function App() {
     setSettings({
       ...settings,
       must_have_skills: settings.must_have_skills.filter((s) => s.toLowerCase() !== skillToRemove.toLowerCase()),
+    })
+  }
+
+  const addNvoidsLocation = (raw: string) => {
+    const location = raw.trim()
+    if (!location) return
+    const exists = settings.nvoids_locations.some((s) => s.toLowerCase() === location.toLowerCase())
+    if (exists) {
+      setNvoidsLocationDraft('')
+      return
+    }
+    setSettings({ ...settings, nvoids_locations: [...settings.nvoids_locations, location] })
+    setNvoidsLocationDraft('')
+  }
+
+  const removeNvoidsLocation = (locationToRemove: string) => {
+    setSettings({
+      ...settings,
+      nvoids_locations: settings.nvoids_locations.filter((s) => s.toLowerCase() !== locationToRemove.toLowerCase()),
     })
   }
 
@@ -2154,6 +2177,40 @@ function App() {
                     </span>
                   </label>
                   <label>
+                    Preferred Nvoids Locations
+                    <div className="skillBox">
+                      {settings.nvoids_locations.map((location) => (
+                        <span key={location} className="skillChip">
+                          {location}
+                          <button
+                            type="button"
+                            className="chipRemove"
+                            onClick={() => removeNvoidsLocation(location)}
+                            aria-label={`Remove ${location}`}
+                            title={`Remove ${location}`}
+                          >
+                            x
+                          </button>
+                        </span>
+                      ))}
+                      <input
+                        value={nvoidsLocationDraft}
+                        className="skillInput"
+                        onChange={(e) => setNvoidsLocationDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ',') {
+                            e.preventDefault()
+                            addNvoidsLocation(nvoidsLocationDraft)
+                          } else if (e.key === 'Backspace' && !nvoidsLocationDraft && settings.nvoids_locations.length > 0) {
+                            removeNvoidsLocation(settings.nvoids_locations[settings.nvoids_locations.length - 1])
+                          }
+                        }}
+                        onBlur={() => addNvoidsLocation(nvoidsLocationDraft)}
+                        placeholder="Add location..."
+                      />
+                    </div>
+                  </label>
+                  <label>
                     Nvoids Batch Limit (per run)
                     <input
                       type="number"
@@ -2191,7 +2248,7 @@ function App() {
                     {nvoidsRunning ? 'Running Nvoids Sync...' : 'Run Nvoids Sync Now'}
                   </button>
                   <p className="subtle">
-                    Nvoids sync is isolated from Gmail run queue and serialized to avoid concurrent DB load.
+                    Nvoids sync is isolated from Gmail run queue, filters by the saved Nvoids locations, and is serialized to avoid concurrent DB load.
                   </p>
                 </div>
               </section>

@@ -985,6 +985,7 @@ def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
         feature_nvoids_auto_sync=s.feature_nvoids_auto_sync,
         feature_nvoids_poll_interval_minutes=_nvoids_poll_interval_minutes(s),
         nvoids_batch_limit=_nvoids_batch_limit(s),
+        nvoids_locations=_csv_to_list(s.nvoids_locations),
         feature_auto_send=s.feature_auto_send,
         feature_retry_queue=s.feature_retry_queue,
         feature_ai_enabled=s.feature_ai_enabled,
@@ -1045,6 +1046,7 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
     s.feature_nvoids_auto_sync = payload.feature_nvoids_auto_sync
     s.feature_nvoids_poll_interval_minutes = max(1, min(int(payload.feature_nvoids_poll_interval_minutes), 1440))
     s.nvoids_batch_limit = max(1, min(int(payload.nvoids_batch_limit), 50))
+    s.nvoids_locations = _to_csv(payload.nvoids_locations)
     s.feature_auto_send = payload.feature_auto_send
     s.feature_retry_queue = payload.feature_retry_queue
     s.feature_ai_enabled = payload.feature_ai_enabled
@@ -2122,6 +2124,7 @@ def sync_external_nvoids(
         created_count=result.created_count,
         deduped_count=result.deduped_count,
         failed_count=result.failed_count,
+        skipped_location_count=result.skipped_location_count,
         run_id=result.run_id,
     )
 

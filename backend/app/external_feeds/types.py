@@ -33,6 +33,7 @@ class ExternalFeedSyncResult:
     created_count: int
     deduped_count: int
     failed_count: int
+    skipped_location_count: int
     run_id: int
 
 

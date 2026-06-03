@@ -11,6 +11,7 @@ from sqlalchemy.pool import StaticPool
 from app import main
 from app.db import Base
 from app.external_feeds.collector import CollectedPage
+from app.external_feeds.service import ExternalFeedService
 from app.external_feeds.models import ExternalFeedSource, ExternalOpportunity
 from app.models import EmployerNumber, RecruiterEmail, RecruiterNumber, RecruiterOpportunity, UserSettings
 
@@ -76,6 +77,7 @@ class ExternalFeedsApiTests(unittest.TestCase):
                     feature_nvoids_auto_sync=False,
                     feature_nvoids_poll_interval_minutes=30,
                     nvoids_batch_limit=10,
+                    nvoids_locations="",
                 )
             )
             employer_source_email = RecruiterEmail(
@@ -117,6 +119,7 @@ class ExternalFeedsApiTests(unittest.TestCase):
         payload = sync.json()
         self.assertEqual(payload["source_type"], "nvoids")
         self.assertGreaterEqual(payload["fetched_count"], 2)
+        self.assertEqual(payload["skipped_location_count"], 0)
         with self.SessionLocal() as db:
             rows = (
                 db.query(RecruiterEmail)
@@ -138,6 +141,66 @@ class ExternalFeedsApiTests(unittest.TestCase):
         run_items = runs.json()
         self.assertGreaterEqual(len(run_items), 1)
         self.assertEqual(run_items[0]["source_type"], "nvoids")
+
+    def test_settings_round_trip_includes_nvoids_locations(self) -> None:
+        res = self.client.put(
+            "/settings",
+            json={
+                "enabled": True,
+                "gmail_query": "is:unread",
+                "default_gmail_query": "is:unread",
+                "saved_gmail_queries": [],
+                "mail_date": None,
+                "default_date_mode": "today",
+                "min_salary": None,
+                "accepted_locations": [],
+                "visa_required_allowed": False,
+                "remote_preference": "any",
+                "role_keywords": [],
+                "must_have_skills": [],
+                "employer_domains": [],
+                "free_text_guidance": "",
+                "qualification_threshold": 0.6,
+                "feature_auto_polling": False,
+                "feature_auto_poll_interval_minutes": 10,
+                "feature_nvoids_enabled": True,
+                "feature_nvoids_auto_sync": False,
+                "feature_nvoids_poll_interval_minutes": 30,
+                "nvoids_batch_limit": 10,
+                "nvoids_locations": ["texas", "remote"],
+                "feature_auto_send": False,
+                "feature_retry_queue": False,
+                "feature_ai_enabled": False,
+                "feature_semantic_enabled": False,
+                "fallback_draft_template": "",
+                "signature_name": "",
+                "signature_phone": "",
+                "signature_email": "",
+                "policy": None,
+            },
+        )
+        self.assertEqual(res.status_code, 200, res.text)
+        payload = res.json()
+        self.assertEqual(payload["nvoids_locations"], ["texas", "remote"])
+
+    def test_sync_skips_rows_outside_nvoids_location_filter(self) -> None:
+        with self.SessionLocal() as db:
+            settings = db.query(UserSettings).filter(UserSettings.owner_id == main.settings.owner_id).first()
+            assert settings is not None
+            settings.nvoids_locations = "remote"
+            db.commit()
+
+        sync = self.client.post("/external-feeds/nvoids/sync")
+        self.assertEqual(sync.status_code, 200, sync.text)
+        payload = sync.json()
+        self.assertEqual(payload["fetched_count"], 2)
+        self.assertEqual(payload["created_count"], 1)
+        self.assertEqual(payload["skipped_location_count"], 1)
+
+        with self.SessionLocal() as db:
+            rows = db.query(ExternalOpportunity).filter(ExternalOpportunity.owner_id == main.settings.owner_id).all()
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0].location, "Remote, USA")
 
     def test_backfill_phones_clears_noise_phone_and_normalizes_bridge_number(self) -> None:
         with self.SessionLocal() as db:
@@ -220,6 +283,21 @@ class ExternalFeedsApiTests(unittest.TestCase):
             assert updated_recruiter is not None
             self.assertEqual(updated_recruiter.display_phone_number, "Unknown")
             self.assertTrue(updated_recruiter.normalized_phone_number.startswith("nvoids-"))
+
+
+class ExternalFeedServiceQueryTests(unittest.TestCase):
+    def test_build_nvoids_query_uses_default_when_locations_empty(self) -> None:
+        service = ExternalFeedService()
+        self.assertEqual(service.build_nvoids_query([]), "(tx or texas) and java and spring* not(*js)")
+
+    def test_build_nvoids_query_includes_location_tokens(self) -> None:
+        service = ExternalFeedService()
+        self.assertEqual(service.build_nvoids_query(["texas", "remote"]), "(texas or remote) and java and spring* not(*js)")
+
+    def test_row_matches_locations_treats_remote_as_explicit_token(self) -> None:
+        service = ExternalFeedService()
+        self.assertTrue(service.row_matches_locations("Remote, Remote, USA", ["remote"]))
+        self.assertFalse(service.row_matches_locations("Dallas, Texas, USA", ["remote"]))
 
 
 if __name__ == "__main__":
