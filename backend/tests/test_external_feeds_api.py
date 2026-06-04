@@ -166,6 +166,40 @@ class ExternalFeedsApiTests(unittest.TestCase):
         self.assertGreaterEqual(len(run_items), 1)
         self.assertEqual(run_items[0]["source_type"], "nvoids")
 
+    def test_manual_sync_keeps_nvoids_candidate_but_skips_unknown_phone_bridge(self) -> None:
+        sync = self.client.post("/external-feeds/nvoids/sync")
+        self.assertEqual(sync.status_code, 200, sync.text)
+
+        with self.SessionLocal() as db:
+            ext_rows = (
+                db.query(ExternalOpportunity)
+                .filter(ExternalOpportunity.owner_id == main.settings.owner_id, ExternalOpportunity.source_type == "nvoids")
+                .order_by(ExternalOpportunity.id.asc())
+                .all()
+            )
+            self.assertGreaterEqual(len(ext_rows), 1)
+            self.assertTrue(all((row.bridge_status or "") == "ignored_no_phone" for row in ext_rows))
+
+            email_rows = (
+                db.query(RecruiterEmail)
+                .filter(
+                    RecruiterEmail.owner_id == main.settings.owner_id,
+                    RecruiterEmail.state == "needs_review",
+                    RecruiterEmail.source == "nvoids",
+                )
+                .all()
+            )
+            self.assertGreaterEqual(len(email_rows), 1)
+
+            recruiter_numbers = db.query(RecruiterNumber).filter(RecruiterNumber.owner_id == main.settings.owner_id).all()
+            recruiter_opportunities = (
+                db.query(RecruiterOpportunity)
+                .filter(RecruiterOpportunity.owner_id == main.settings.owner_id, RecruiterOpportunity.source_type == "nvoids")
+                .all()
+            )
+            self.assertEqual(recruiter_numbers, [])
+            self.assertEqual(recruiter_opportunities, [])
+
     def test_settings_round_trip_includes_nvoids_locations(self) -> None:
         res = self.client.put(
             "/settings",

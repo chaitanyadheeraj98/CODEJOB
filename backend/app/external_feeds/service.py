@@ -547,6 +547,9 @@ class ExternalFeedService:
         if not canonical and not item.recruiter_email:
             item.bridge_status = "ignored"
             return False
+        if not canonical:
+            item.bridge_status = "ignored_no_phone"
+            return False
 
         recruiter = None
         if canonical:
