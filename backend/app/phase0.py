@@ -32,6 +32,16 @@ RECRUITER_HINTS = [
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 TEXAS_RE = re.compile(r"\b(tx|texas)\b", re.IGNORECASE)
 F2F_RE = re.compile(r"\b(face[- ]to[- ]face|f2f)\b", re.IGNORECASE)
+EXPLICIT_INTERVIEW_RE = re.compile(
+    r"("
+    r"\bonsite[\s,:;-]+interview(?:[\s,:;-]+(?:required|mandatory))?\b|"
+    r"\bin[- ]person[\s,:;-]+interview(?:[\s,:;-]+(?:required|mandatory))?\b|"
+    r"\blocal[\s,:;-]+onsite[\s,:;-]+interview\b|"
+    r"\binterview[\s,:;-]+must[\s,:;-]+be[\s,:;-]+onsite\b|"
+    r"\bclient[\s,:;-]+round[\s,:;-]+onsite\b"
+    r")",
+    re.IGNORECASE,
+)
 EMPLOYER_DOMAINS = {"horizonsofttech.net", "horizonsoftech.net"}
 
 
@@ -542,7 +552,8 @@ def parse_email(subject: str, body: str) -> dict[str, str | int]:
     salary_text = _extract_salary(body)
     skills_text = _extract_skills(f"{subject} {body}")
     location_text = _extract_location_text(subject, body)
-    f2f_mentioned = bool(F2F_RE.search(f"{subject}\n{body}"))
+    combined_text = f"{subject}\n{body}"
+    f2f_mentioned = bool(F2F_RE.search(combined_text) or EXPLICIT_INTERVIEW_RE.search(combined_text))
     asks_contact_fields = _needs_contact_fields(body)
     is_texas_role = bool(TEXAS_RE.search(location_text))
     return {

@@ -7,8 +7,10 @@ from app.phase0 import (
     email_domain,
     greeting_from_to_contact,
     normalize_employer_domains,
+    parse_email,
     render_fallback_draft_template,
     resolve_to_cc,
+    should_block_f2f,
 )
 
 
@@ -35,6 +37,63 @@ www.horizonsoftech.net
 
 
 class RecipientRoutingTests(unittest.TestCase):
+    def test_explicit_non_texas_interview_phrases_are_blocked(self) -> None:
+        phrases = [
+            "Onsite interview required",
+            "In-person interview",
+            "In person interview mandatory",
+            "Local onsite interview",
+            "Interview must be onsite",
+            "Client round onsite",
+        ]
+
+        for phrase in phrases:
+            with self.subTest(phrase=phrase):
+                parsed = parse_email(
+                    "Lead Java Developer | O'Fallon, MO (hybrid)",
+                    f"Location: O'Fallon, MO\n{phrase}\nJava Spring Boot Kafka",
+                )
+                blocked, reason = should_block_f2f(parsed)
+                self.assertTrue(bool(parsed["f2f_mentioned"]))
+                self.assertTrue(blocked)
+                self.assertIn("non-Texas", reason)
+
+    def test_explicit_texas_interview_phrase_is_not_blocked(self) -> None:
+        parsed = parse_email(
+            "Lead Java Developer | Plano, TX (hybrid)",
+            "Location: Plano, TX\nOnsite interview required\nJava Spring Boot Kafka",
+        )
+
+        blocked, reason = should_block_f2f(parsed)
+
+        self.assertTrue(bool(parsed["f2f_mentioned"]))
+        self.assertFalse(blocked)
+        self.assertEqual(reason, "")
+
+    def test_generic_onsite_or_hybrid_without_interview_phrase_is_not_blocked(self) -> None:
+        parsed = parse_email(
+            "Lead Java Developer | Cincinnati, OH (Onsite)",
+            "Location: Cincinnati, OH (Onsite)\nHybrid role available\nJava Spring Boot Kafka",
+        )
+
+        blocked, reason = should_block_f2f(parsed)
+
+        self.assertFalse(bool(parsed["f2f_mentioned"]))
+        self.assertFalse(blocked)
+        self.assertEqual(reason, "")
+
+    def test_existing_face_to_face_variants_remain_blocked(self) -> None:
+        for phrase in ["Face-to-Face interview", "Face to face interview", "F2F interview"]:
+            with self.subTest(phrase=phrase):
+                parsed = parse_email(
+                    "Lead Java Developer | Columbus, OH",
+                    f"Location: Columbus, OH\n{phrase}\nJava Spring Boot Kafka",
+                )
+                blocked, reason = should_block_f2f(parsed)
+                self.assertTrue(bool(parsed["f2f_mentioned"]))
+                self.assertTrue(blocked)
+                self.assertIn("Columbus, OH", reason)
+
     def test_email_30_routes_to_body_recruiter_and_sender_employer(self) -> None:
         sender = "Prashanth Kinnera <kprashanth@horizonsoftech.net>"
 

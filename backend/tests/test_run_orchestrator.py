@@ -279,6 +279,38 @@ class RunOrchestratorTests(unittest.TestCase):
             self.assertEqual(row.state, "processed_skipped")
             self.assertEqual(marked, ["m-3"])
 
+    def test_explicit_interview_block_skips_before_draft_generation(self) -> None:
+        with Session(self.engine) as db:
+            user_settings = self._seed_user_settings(db, feature_ai_enabled=True)
+            resume = self._seed_resume(db)
+            deps, marked, _events = self._deps(blocked=True)
+            RunOrchestrator().execute(
+                RunOrchestratorRequest(
+                    db=db,
+                    owner_id="default-owner",
+                    items=[self._item("m-3b")],
+                    user_settings=user_settings,
+                    resume=resume,
+                    active_resume=resume,
+                    effective_policy={},
+                    threshold=0.6,
+                    dry_run=False,
+                    model_name="deepseek-chat",
+                    deps=deps,
+                )
+            )
+            row = db.query(RecruiterEmail).filter(RecruiterEmail.external_message_id == "m-3b").first()
+            self.assertIsNotNone(row)
+            assert row is not None
+            self.assertEqual(row.state, "processed_skipped")
+            self.assertEqual(row.auto_reject_reason, "f2f_non_texas")
+            self.assertEqual(row.skip_reason, "f2f_non_texas_blocked")
+            self.assertEqual(row.decision, "Reject")
+            self.assertEqual(row.decision_reason, "blocked")
+            self.assertIsNone(row.draft_source)
+            self.assertEqual(row.draft_reply, "")
+            self.assertEqual(marked, ["m-3b"])
+
     def test_routing_missing_path_persists_failed_and_event(self) -> None:
         with Session(self.engine) as db:
             user_settings = self._seed_user_settings(db, feature_ai_enabled=False)
