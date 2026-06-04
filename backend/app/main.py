@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, TypedDict, cast
+from typing import Mapping, TypedDict, TypeVar, cast
 import threading
 from zoneinfo import ZoneInfo
 
@@ -81,7 +81,7 @@ from app.phase0 import (
 )
 from app.routing import RoutingDecision
 from app.premium_numbers.intelligence import OPPORTUNITY_STATUS_VALUES
-from app.premium_numbers.phone_normalization import canonicalize_phone
+from app.premium_numbers.phone_normalization import best_display_phone, canonicalize_phone
 from app.query_bucket import sanitize_saved_queries
 from app.runtime_state import runtime_state
 from app.services import analytics_service, policy_service
@@ -110,10 +110,13 @@ from app.schemas import (
     OAuthStartResponse,
     OAuthUrlResponse,
     EmployerNumberResponse,
+    EmployerNumberListResponse,
     PremiumNumberListResponse,
     PremiumNumberResponse,
     RecruiterNumberResponse,
+    RecruiterNumberListResponse,
     RecruiterOpportunityDeleteResponse,
+    RecruiterOpportunityListResponse,
     RecruiterOpportunityPatchRequest,
     RecruiterOpportunityResponse,
     RejectRequest,
@@ -121,6 +124,7 @@ from app.schemas import (
     ResumeResponse,
     SettingsRequest,
     SettingsResponse,
+    UnknownNumberReviewCardListResponse,
     UnknownNumberReviewCardResponse,
     ProductivityEventCreateRequest,
     ProductivityEventResponse,
@@ -1677,6 +1681,39 @@ def _log_gmail_labeling_stats() -> None:
     gmail_labeling_runtime_service.log_stats()
 
 
+def _is_hidden_nvoids_placeholder_recruiter(row: RecruiterNumber | None) -> bool:
+    if row is None:
+        return False
+    normalized = str(row.normalized_phone_number or "").strip().lower()
+    display = str(row.display_phone_number or "").strip().lower()
+    return normalized.startswith("nvoids-") and display == "unknown" and row.first_detected_email_id is None
+
+
+def _is_hidden_invalid_employer_number(row: EmployerNumber | None) -> bool:
+    if row is None:
+        return False
+    display = str(row.display_phone_number or "").strip()
+    if not display or display.lower() == "unknown":
+        return False
+    normalized = str(row.normalized_phone_number or "").strip()
+    return not canonicalize_phone(normalized) and not canonicalize_phone(display)
+
+
+def _standardized_display_phone(raw: str, canonical: str, *, fallback: str = "Unknown") -> str:
+    return best_display_phone(raw or canonical, fallback=fallback)
+
+
+TItem = TypeVar("TItem")
+
+
+def _paginate_items(items: list[TItem], *, cursor: int, limit: int) -> tuple[list[TItem], int | None, bool]:
+    page = items[cursor : cursor + limit + 1]
+    has_next = len(page) > limit
+    visible = page[:limit]
+    next_cursor = cursor + limit if has_next else None
+    return visible, next_cursor, has_next
+
+
 @app.get("/premium-numbers", response_model=PremiumNumberListResponse)
 def list_premium_numbers(
     cursor: int = Query(0, ge=0),
@@ -1762,15 +1799,38 @@ def reextract_premium_numbers(recruiter_email_id: int, db: Session = Depends(get
     return {"stored_count": workflow_result.stored_count if workflow_result else 0}
 
 
-@app.get("/number-review", response_model=list[UnknownNumberReviewCardResponse])
-def list_number_review_queue(db: Session = Depends(get_db)) -> list[UnknownNumberReviewCardResponse]:
-    rows = (
-        db.query(NumberReviewQueue)
-        .filter(NumberReviewQueue.owner_id == settings.owner_id, NumberReviewQueue.state == "pending")
-        .order_by(NumberReviewQueue.created_at.desc())
-        .all()
+@app.get("/number-review", response_model=UnknownNumberReviewCardListResponse)
+def list_number_review_queue(
+    cursor: int = Query(0, ge=0),
+    limit: int = Query(25, ge=1, le=100),
+    q: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> UnknownNumberReviewCardListResponse:
+    query = db.query(NumberReviewQueue).filter(
+        NumberReviewQueue.owner_id == settings.owner_id,
+        NumberReviewQueue.state == "pending",
     )
-    return [UnknownNumberReviewCardResponse.model_validate(row) for row in rows]
+    if q:
+        like = f"%{q.strip()}%"
+        query = query.filter(
+            or_(
+                NumberReviewQueue.display_phone_number.ilike(like),
+                NumberReviewQueue.owner_name.ilike(like),
+                NumberReviewQueue.company.ilike(like),
+                NumberReviewQueue.designation.ilike(like),
+                NumberReviewQueue.email_sender.ilike(like),
+                NumberReviewQueue.email_subject.ilike(like),
+            )
+        )
+    items = query.order_by(NumberReviewQueue.created_at.desc()).offset(cursor).limit(limit + 1).all()
+    has_next = len(items) > limit
+    visible = items[:limit]
+    next_cursor = cursor + limit if has_next else None
+    return UnknownNumberReviewCardListResponse(
+        items=[UnknownNumberReviewCardResponse.model_validate(row) for row in visible],
+        next_cursor=next_cursor,
+        has_next=has_next,
+    )
 
 
 @app.post("/number-review/{review_id}/mark-recruiter", response_model=dict[str, int | str])
@@ -1801,7 +1861,10 @@ def mark_number_as_recruiter(review_id: int, db: Session = Depends(get_db)) -> d
         recruiter = RecruiterNumber(
             owner_id=settings.owner_id,
             normalized_phone_number=canonical_phone,
-            display_phone_number=card.display_phone_number,
+            display_phone_number=_standardized_display_phone(
+                card.display_phone_number or card.normalized_phone_number,
+                canonical_phone,
+            ),
             recruiter_name=card.owner_name or "Unknown",
             company=card.company or "Unknown",
             designation=card.designation or "Unknown",
@@ -1892,7 +1955,10 @@ def mark_number_as_employer(review_id: int, db: Session = Depends(get_db)) -> di
             EmployerNumber(
                 owner_id=settings.owner_id,
                 normalized_phone_number=canonical_phone,
-                display_phone_number=card.display_phone_number,
+                display_phone_number=_standardized_display_phone(
+                    card.display_phone_number or card.normalized_phone_number,
+                    canonical_phone,
+                ),
                 owner_name=card.owner_name,
                 company=card.company,
                 source_email_id=card.source_email_id,
@@ -1919,16 +1985,34 @@ def delete_number_review_card(review_id: int, db: Session = Depends(get_db)) -> 
     return {"review_id": card.id, "status": card.state}
 
 
-@app.get("/recruiter-numbers", response_model=list[RecruiterNumberResponse])
-def list_recruiter_numbers(db: Session = Depends(get_db)) -> list[RecruiterNumberResponse]:
+@app.get("/recruiter-numbers", response_model=RecruiterNumberListResponse)
+def list_recruiter_numbers(
+    cursor: int = Query(0, ge=0),
+    limit: int = Query(25, ge=1, le=100),
+    q: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> RecruiterNumberListResponse:
+    query = db.query(RecruiterNumber).filter(RecruiterNumber.owner_id == settings.owner_id)
+    if q:
+        like = f"%{q.strip()}%"
+        query = query.filter(
+            or_(
+                RecruiterNumber.display_phone_number.ilike(like),
+                RecruiterNumber.recruiter_name.ilike(like),
+                RecruiterNumber.company.ilike(like),
+                RecruiterNumber.designation.ilike(like),
+                RecruiterNumber.recruiter_email.ilike(like),
+            )
+        )
     rows = (
-        db.query(RecruiterNumber)
-        .filter(RecruiterNumber.owner_id == settings.owner_id)
+        query
         .order_by(RecruiterNumber.updated_at.desc())
         .all()
     )
     results: list[RecruiterNumberResponse] = []
     for row in rows:
+        if _is_hidden_nvoids_placeholder_recruiter(row):
+            continue
         total = (
             db.query(func.count(RecruiterOpportunity.id))
             .filter(
@@ -1962,7 +2046,8 @@ def list_recruiter_numbers(db: Session = Depends(get_db)) -> list[RecruiterNumbe
                 updated_at=row.updated_at,
             )
         )
-    return results
+    visible, next_cursor, has_next = _paginate_items(results, cursor=cursor, limit=limit)
+    return RecruiterNumberListResponse(items=visible, next_cursor=next_cursor, has_next=has_next)
 
 
 @app.post("/recruiter-numbers/{recruiter_number_id}/swap-to-employer", response_model=dict[str, int | str])
@@ -1991,7 +2076,10 @@ def swap_recruiter_number_to_employer(recruiter_number_id: int, db: Session = De
             EmployerNumber(
                 owner_id=settings.owner_id,
                 normalized_phone_number=canonical_phone,
-                display_phone_number=recruiter.display_phone_number,
+                display_phone_number=_standardized_display_phone(
+                    recruiter.display_phone_number or recruiter.normalized_phone_number,
+                    canonical_phone,
+                ),
                 owner_name=recruiter.recruiter_name or "Unknown",
                 company=recruiter.company or "Unknown",
                 source_email_id=recruiter.first_detected_email_id,
@@ -2003,15 +2091,31 @@ def swap_recruiter_number_to_employer(recruiter_number_id: int, db: Session = De
     return {"id": recruiter_number_id, "swapped_to": "employer"}
 
 
-@app.get("/employer-numbers", response_model=list[EmployerNumberResponse])
-def list_employer_numbers(db: Session = Depends(get_db)) -> list[EmployerNumberResponse]:
+@app.get("/employer-numbers", response_model=EmployerNumberListResponse)
+def list_employer_numbers(
+    cursor: int = Query(0, ge=0),
+    limit: int = Query(25, ge=1, le=100),
+    q: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> EmployerNumberListResponse:
+    query = db.query(EmployerNumber).filter(EmployerNumber.owner_id == settings.owner_id)
+    if q:
+        like = f"%{q.strip()}%"
+        query = query.filter(
+            or_(
+                EmployerNumber.display_phone_number.ilike(like),
+                EmployerNumber.owner_name.ilike(like),
+                EmployerNumber.company.ilike(like),
+            )
+        )
     rows = (
-        db.query(EmployerNumber)
-        .filter(EmployerNumber.owner_id == settings.owner_id)
+        query
         .order_by(EmployerNumber.updated_at.desc())
         .all()
     )
-    return [EmployerNumberResponse.model_validate(row) for row in rows]
+    items = [EmployerNumberResponse.model_validate(row) for row in rows if not _is_hidden_invalid_employer_number(row)]
+    visible, next_cursor, has_next = _paginate_items(items, cursor=cursor, limit=limit)
+    return EmployerNumberListResponse(items=visible, next_cursor=next_cursor, has_next=has_next)
 
 
 @app.post("/employer-numbers/{employer_number_id}/swap-to-recruiter", response_model=dict[str, int | str])
@@ -2040,7 +2144,10 @@ def swap_employer_number_to_recruiter(employer_number_id: int, db: Session = Dep
             RecruiterNumber(
                 owner_id=settings.owner_id,
                 normalized_phone_number=canonical_phone,
-                display_phone_number=employer.display_phone_number,
+                display_phone_number=_standardized_display_phone(
+                    employer.display_phone_number or employer.normalized_phone_number,
+                    canonical_phone,
+                ),
                 recruiter_name=employer.owner_name or "Unknown",
                 company=employer.company or "Unknown",
                 designation="Unknown",
@@ -2054,31 +2161,21 @@ def swap_employer_number_to_recruiter(employer_number_id: int, db: Session = Dep
     return {"id": employer_number_id, "swapped_to": "recruiter"}
 
 
-@app.get("/recruiter-opportunities", response_model=list[RecruiterOpportunityResponse])
+@app.get("/recruiter-opportunities", response_model=RecruiterOpportunityListResponse)
 def list_recruiter_opportunities(
+    cursor: int = Query(0, ge=0),
+    limit: int = Query(25, ge=1, le=100),
     status: str | None = Query(default=None),
     source_type: str | None = Query(default=None),
     q: str | None = Query(default=None),
     mail_date: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
     db: Session = Depends(get_db),
-) -> list[RecruiterOpportunityResponse]:
+) -> RecruiterOpportunityListResponse:
     query = db.query(RecruiterOpportunity).filter(RecruiterOpportunity.owner_id == settings.owner_id)
     if status and status in OPPORTUNITY_STATUS_VALUES:
         query = query.filter(RecruiterOpportunity.status == status)
     if source_type in {"gmail", "nvoids"}:
         query = query.filter(RecruiterOpportunity.source_type == source_type)
-    if q:
-        like = f"%{q.strip()}%"
-        query = query.filter(
-            or_(
-                RecruiterOpportunity.email_subject.ilike(like),
-                RecruiterOpportunity.email_sender.ilike(like),
-                RecruiterOpportunity.job_title.ilike(like),
-                RecruiterOpportunity.client.ilike(like),
-                RecruiterOpportunity.location.ilike(like),
-                RecruiterOpportunity.extracted_skills.ilike(like),
-            )
-        )
     if mail_date:
         selected = date.fromisoformat(mail_date)
         start, end = _mail_date_utc_window(selected)
@@ -2094,7 +2191,29 @@ def list_recruiter_opportunities(
         else []
     )
     recruiter_map = {row.id: row for row in recruiter_rows}
-    return [_recruiter_opportunity_response(row, recruiter_map.get(row.recruiter_number_id)) for row in rows]
+    items = [
+        _recruiter_opportunity_response(row, recruiter)
+        for row in rows
+        for recruiter in [recruiter_map.get(row.recruiter_number_id)]
+        if not _is_hidden_nvoids_placeholder_recruiter(recruiter)
+    ]
+    if q:
+        needle = q.strip().lower()
+        items = [
+            item
+            for item in items
+            if needle in (item.email_subject or "").lower()
+            or needle in (item.email_sender or "").lower()
+            or needle in (item.job_title or "").lower()
+            or needle in (item.client or "").lower()
+            or needle in (item.location or "").lower()
+            or needle in (item.extracted_skills or "").lower()
+            or needle in (item.recruiter_name or "").lower()
+            or needle in (item.recruiter_email or "").lower()
+            or needle in (item.recruiter_phone_display or "").lower()
+        ]
+    visible, next_cursor, has_next = _paginate_items(items, cursor=cursor, limit=limit)
+    return RecruiterOpportunityListResponse(items=visible, next_cursor=next_cursor, has_next=has_next)
 
 
 @app.post("/external-feeds/nvoids/sync", response_model=ExternalFeedSyncResponse)

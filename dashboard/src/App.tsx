@@ -7,10 +7,12 @@ import { withSavedQueries } from './features/query_bucket/api'
 import QueryBucket from './features/query_bucket/QueryBucket'
 import { type CandidateState, useCandidateBuckets } from './candidateBuckets'
 import { addEmployerDomain, removeEmployerDomain } from './employerDomains'
+import { buildPremiumScopeUrl, defaultPremiumPageMeta, type PremiumScope } from './premiumNumbers'
 
 const GMAIL_OAUTH_POLL_INTERVAL_MS = 2000
 const GMAIL_OAUTH_POLL_TIMEOUT_MS = 180000
 const VIEW_EVENT_THROTTLE_MS = 60000
+const PREMIUM_PAGE_LIMIT = 25
 let hasBootstrappedAppOnce = false
 
 export function shouldTrackViewEvent(
@@ -247,30 +249,8 @@ export const sourceListingUrl = (item: Candidate): string | null => {
 
 type PremiumNumberConfidence = 'high' | 'medium' | 'low'
 
-type PremiumNumberCard = {
-  id: number
-  recruiter_email_id: number
-  phone_number_display: string
-  phone_number_normalized: string
-  owner_name: string
-  company: string
-  designation: string
-  purpose: string
-  confidence: PremiumNumberConfidence
-  contact_type: 'recruiter_direct' | 'submission_contact' | 'employer_internal' | 'unknown'
-  recruiter_relevance_score: number
-  is_recruiter_relevant: boolean
-  relevance_reason: string
-  source_fragment: string
-  source_email_sender: string
-  source_email_subject: string
-  source_email_message_id: string | null
-  created_at: string
-  updated_at: string
-}
-
-type PremiumNumberListResponse = {
-  items: PremiumNumberCard[]
+type PaginatedListResponse<TItem> = {
+  items: TItem[]
   next_cursor: number | null
   has_next: boolean
 }
@@ -584,12 +564,10 @@ function App() {
   const [recruiterNumberCards, setRecruiterNumberCards] = useState<RecruiterNumberCard[]>([])
   const [employerNumberCards, setEmployerNumberCards] = useState<EmployerNumberCard[]>([])
   const [opportunityCards, setOpportunityCards] = useState<RecruiterOpportunityCard[]>([])
-  const [premiumNextCursor, setPremiumNextCursor] = useState<number | null>(null)
-  const [premiumHasNext, setPremiumHasNext] = useState(false)
+  const [premiumPageMeta, setPremiumPageMeta] = useState(defaultPremiumPageMeta())
   const [premiumLoading, setPremiumLoading] = useState(false)
   const [premiumError, setPremiumError] = useState('')
-  const premiumConfidenceFilter: 'all' | PremiumNumberConfidence = 'all'
-  const [premiumScopeFilter, setPremiumScopeFilter] = useState<'all_review' | 'recruiter_numbers' | 'employer_numbers' | 'recruiter_opportunities'>('all_review')
+  const [premiumScopeFilter, setPremiumScopeFilter] = useState<PremiumScope>('all_review')
   const [opportunityStatusFilter, setOpportunityStatusFilter] = useState<'all' | OpportunityStatus>('all')
   const [opportunitySourceFilter, setOpportunitySourceFilter] = useState<'all' | 'gmail' | 'nvoids'>('all')
   const [premiumSearch, setPremiumSearch] = useState('')
@@ -605,6 +583,7 @@ function App() {
   const hasBootstrappedCandidatesRef = useRef(false)
   const oauthPollingStartedAtRef = useRef<number | null>(null)
   const refreshTimerRef = useRef<number | null>(null)
+  const premiumRequestTrackerRef = useRef(0)
 
   const {
     queue,
@@ -740,57 +719,74 @@ function App() {
   }
 
   const loadPremiumNumbers = async (opts?: { append?: boolean; cursor?: number | null }) => {
+    const append = Boolean(opts?.append)
     const cursor = opts?.cursor ?? 0
+    const scope = premiumScopeFilter
+    const requestId = premiumRequestTrackerRef.current + 1
+    premiumRequestTrackerRef.current = requestId
     setPremiumLoading(true)
     setPremiumError('')
     try {
-      if (premiumScopeFilter === 'all_review') {
-        const res = await fetch(`${apiBase}/number-review`)
-        if (!res.ok) throw new Error('Failed to load number review queue')
-        setNumberReviewCards((await res.json()) as NumberReviewCard[])
-        setPremiumHasNext(false)
-        setPremiumNextCursor(null)
-      } else if (premiumScopeFilter === 'recruiter_numbers') {
-        const res = await fetch(`${apiBase}/recruiter-numbers`)
-        if (!res.ok) throw new Error('Failed to load recruiter numbers')
-        setRecruiterNumberCards((await res.json()) as RecruiterNumberCard[])
-        setPremiumHasNext(false)
-        setPremiumNextCursor(null)
-      } else if (premiumScopeFilter === 'employer_numbers') {
-        const res = await fetch(`${apiBase}/employer-numbers`)
-        if (!res.ok) throw new Error('Failed to load employer numbers')
-        setEmployerNumberCards((await res.json()) as EmployerNumberCard[])
-        setPremiumHasNext(false)
-        setPremiumNextCursor(null)
-      } else if (premiumScopeFilter === 'recruiter_opportunities') {
-        const params = new URLSearchParams()
-        if (opportunityStatusFilter !== 'all') params.set('status', opportunityStatusFilter)
-        if (opportunitySourceFilter !== 'all') params.set('source_type', opportunitySourceFilter)
-        if (premiumSearch.trim()) params.set('q', premiumSearch.trim())
-        if (settings.mail_date) params.set('mail_date', settings.mail_date)
-        const res = await fetch(`${apiBase}/recruiter-opportunities?${params.toString()}`)
-        if (!res.ok) throw new Error('Failed to load recruiter opportunities')
-        setOpportunityCards((await res.json()) as RecruiterOpportunityCard[])
-        setPremiumHasNext(false)
-        setPremiumNextCursor(null)
+      const url = buildPremiumScopeUrl({
+        apiBase,
+        scope,
+        cursor,
+        limit: PREMIUM_PAGE_LIMIT,
+        q: premiumSearch,
+        mailDate: settings.mail_date,
+        opportunityStatus: opportunityStatusFilter,
+        opportunitySource: opportunitySourceFilter,
+      })
+      const res = await fetch(url)
+      if (!res.ok) {
+        const errorLabel =
+          scope === 'all_review'
+            ? 'number review queue'
+            : scope === 'recruiter_numbers'
+              ? 'recruiter numbers'
+              : scope === 'employer_numbers'
+                ? 'employer numbers'
+                : 'recruiter opportunities'
+        throw new Error(`Failed to load ${errorLabel}`)
+      }
+      if (requestId !== premiumRequestTrackerRef.current) return
+      if (scope === 'all_review') {
+        const payload = (await res.json()) as PaginatedListResponse<NumberReviewCard>
+        setNumberReviewCards((prev) => (append ? [...prev, ...payload.items] : payload.items))
+        setPremiumPageMeta((prev) => ({
+          ...prev,
+          [scope]: { nextCursor: payload.next_cursor, hasNext: payload.has_next },
+        }))
+      } else if (scope === 'recruiter_numbers') {
+        const payload = (await res.json()) as PaginatedListResponse<RecruiterNumberCard>
+        setRecruiterNumberCards((prev) => (append ? [...prev, ...payload.items] : payload.items))
+        setPremiumPageMeta((prev) => ({
+          ...prev,
+          [scope]: { nextCursor: payload.next_cursor, hasNext: payload.has_next },
+        }))
+      } else if (scope === 'employer_numbers') {
+        const payload = (await res.json()) as PaginatedListResponse<EmployerNumberCard>
+        setEmployerNumberCards((prev) => (append ? [...prev, ...payload.items] : payload.items))
+        setPremiumPageMeta((prev) => ({
+          ...prev,
+          [scope]: { nextCursor: payload.next_cursor, hasNext: payload.has_next },
+        }))
       } else {
-        const params = new URLSearchParams({
-          cursor: String(cursor),
-          limit: '25',
-        })
-        if (premiumConfidenceFilter !== 'all') params.set('confidence', premiumConfidenceFilter)
-        if (premiumSearch.trim()) params.set('q', premiumSearch.trim())
-        if (settings.mail_date) params.set('mail_date', settings.mail_date)
-        const res = await fetch(`${apiBase}/premium-numbers?${params.toString()}`)
-        if (!res.ok) throw new Error('Failed to load premium numbers')
-        const payload = (await res.json()) as PremiumNumberListResponse
-        setPremiumNextCursor(payload.next_cursor)
-        setPremiumHasNext(payload.has_next)
+        const payload = (await res.json()) as PaginatedListResponse<RecruiterOpportunityCard>
+        setOpportunityCards((prev) => (append ? [...prev, ...payload.items] : payload.items))
+        setPremiumPageMeta((prev) => ({
+          ...prev,
+          [scope]: { nextCursor: payload.next_cursor, hasNext: payload.has_next },
+        }))
       }
     } catch (e) {
-      setPremiumError((e as Error).message)
+      if (requestId === premiumRequestTrackerRef.current) {
+        setPremiumError((e as Error).message)
+      }
     } finally {
-      setPremiumLoading(false)
+      if (requestId === premiumRequestTrackerRef.current) {
+        setPremiumLoading(false)
+      }
     }
   }
 
@@ -1006,7 +1002,7 @@ function App() {
     if (!hasBootstrappedCandidatesRef.current) return
     if (activePage !== 'premium_numbers') return
     loadPremiumNumbers({ append: false, cursor: 0 }).catch((e) => setPremiumError((e as Error).message))
-  }, [activePage, premiumConfidenceFilter, premiumScopeFilter, premiumSearch, settings.mail_date, opportunityStatusFilter, opportunitySourceFilter])
+  }, [activePage, premiumScopeFilter, premiumSearch, settings.mail_date, opportunityStatusFilter, opportunitySourceFilter])
 
   useEffect(() => {
     loadProductivityAnalytics(timeRange).catch((e) => setError((e as Error).message))
@@ -2498,11 +2494,7 @@ function App() {
               <div className="actionBar">
                 <select
                   value={premiumScopeFilter}
-                  onChange={(e) =>
-                    setPremiumScopeFilter(
-                      e.target.value as 'all_review' | 'recruiter_numbers' | 'employer_numbers' | 'recruiter_opportunities',
-                    )
-                  }
+                  onChange={(e) => setPremiumScopeFilter(e.target.value as PremiumScope)}
                 >
                   <option value="all_review">All</option>
                   <option value="recruiter_numbers">Recruiter Numbers</option>
@@ -2731,16 +2723,17 @@ function App() {
                     </article>
                   ))
                 : null}
-              {premiumHasNext ? (
+              {premiumPageMeta[premiumScopeFilter].hasNext ? (
                 <button
                   type="button"
                   onClick={() => {
-                    if (premiumNextCursor == null) return
-                    loadPremiumNumbers({ append: true, cursor: premiumNextCursor }).catch((e) =>
+                    const nextCursor = premiumPageMeta[premiumScopeFilter].nextCursor
+                    if (nextCursor == null) return
+                    loadPremiumNumbers({ append: true, cursor: nextCursor }).catch((e) =>
                       setPremiumError((e as Error).message),
                     )
                   }}
-                  disabled={premiumLoading || premiumNextCursor == null}
+                  disabled={premiumLoading || premiumPageMeta[premiumScopeFilter].nextCursor == null}
                 >
                   {premiumLoading ? 'Loading...' : 'Load More'}
                 </button>

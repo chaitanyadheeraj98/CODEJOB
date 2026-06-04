@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 
 
-EXTENSION_RE = re.compile(r"(?:ext\.?|x|extension)\s*[:\-]?\s*(\d{1,6})\b", re.IGNORECASE)
+EXTENSION_RE = re.compile(r"(?:ext\.?|x|extension|\*)\s*[:\-]?\s*(\d{1,6})\b", re.IGNORECASE)
 
 
 def _extract_extension(raw: str) -> tuple[str, str]:
@@ -37,3 +37,10 @@ def format_phone(raw: str) -> tuple[str, str, str]:
 def canonicalize_phone(raw: str) -> str:
     canonical, _display, _ext = format_phone(raw)
     return canonical
+
+
+def best_display_phone(raw: str, fallback: str = "") -> str:
+    canonical, display, _ext = format_phone(raw)
+    if canonical and display:
+        return display
+    return fallback.strip()

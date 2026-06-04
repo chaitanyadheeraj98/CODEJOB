@@ -11,7 +11,7 @@ from sqlalchemy.pool import StaticPool
 
 from app import main
 from app.db import Base
-from app.models import NumberReviewQueue, PremiumNumberLead, RecruiterEmail, RecruiterNumber, RecruiterOpportunity, UserSettings
+from app.models import EmployerNumber, NumberReviewQueue, PremiumNumberLead, RecruiterEmail, RecruiterNumber, RecruiterOpportunity, UserSettings
 
 
 class PremiumNumbersApiTests(unittest.TestCase):
@@ -231,11 +231,69 @@ class PremiumNumbersApiTests(unittest.TestCase):
         list_res = self.client.get("/recruiter-opportunities")
         self.assertEqual(list_res.status_code, 200, list_res.text)
         payload = list_res.json()
-        self.assertGreaterEqual(len(payload), 1)
-        self.assertIn("recruiter_phone_display", payload[0])
-        self.assertEqual(payload[0]["recruiter_phone_display"], "+1 214 393 8746")
-        self.assertEqual(payload[0]["recruiter_name"], "Dharma Veer")
-        self.assertEqual(payload[0]["recruiter_email"], "dharma.veer@intellisoft.com")
+        self.assertGreaterEqual(len(payload["items"]), 1)
+        self.assertIn("recruiter_phone_display", payload["items"][0])
+        self.assertEqual(payload["items"][0]["recruiter_phone_display"], "(214) 393-8746")
+        self.assertEqual(payload["items"][0]["recruiter_name"], "Dharma Veer")
+        self.assertEqual(payload["items"][0]["recruiter_email"], "dharma.veer@intellisoft.com")
+
+    def test_mark_number_as_employer_standardizes_display_phone(self) -> None:
+        now = datetime.now(UTC)
+        with Session(self.engine) as db:
+            email = RecruiterEmail(
+                owner_id=main.settings.owner_id,
+                sender="Recruiter <recruiter@example.com>",
+                subject="Role",
+                body="Call +1 (980) 9070802",
+                role="Engineer",
+                location="Remote",
+                salary_text="",
+                skills_text="java",
+                score=80,
+                decision="Qualified",
+                state="needs_review",
+                draft_reply="Thanks",
+                source="gmail",
+                external_message_id="m-standardize-employer",
+                external_thread_id="t-standardize-employer",
+                gmail_received_at=now,
+                recipient_email="to@example.com",
+                cc_email="cc@example.com",
+            )
+            db.add(email)
+            db.commit()
+            db.refresh(email)
+            db.add(
+                NumberReviewQueue(
+                    owner_id=main.settings.owner_id,
+                    source_email_id=email.id,
+                    normalized_phone_number="19809070802",
+                    display_phone_number="+1 (980) 9070802",
+                    owner_name="Employer Owner",
+                    company="Perficient",
+                    designation="Recruiter",
+                    confidence="high",
+                    purpose="Contact number",
+                    evidence_snippet="snippet",
+                    email_subject=email.subject,
+                    email_sender="recruiter@example.com",
+                    gmail_open_url=email.gmail_message_url or "",
+                    state="pending",
+                )
+            )
+            db.commit()
+            card = db.query(NumberReviewQueue).filter(NumberReviewQueue.owner_id == main.settings.owner_id).first()
+            assert card is not None
+            review_id = card.id
+
+        response = self.client.post(f"/number-review/{review_id}/mark-employer")
+        self.assertEqual(response.status_code, 200, response.text)
+
+        with Session(self.engine) as db:
+            employer = db.query(EmployerNumber).filter(EmployerNumber.owner_id == main.settings.owner_id).first()
+            self.assertIsNotNone(employer)
+            assert employer is not None
+            self.assertEqual(employer.display_phone_number, "(980) 907-0802")
 
     def test_delete_recruiter_opportunity_deletes_orphan_recruiter_number(self) -> None:
         with Session(self.engine) as db:
@@ -367,6 +425,285 @@ class PremiumNumbersApiTests(unittest.TestCase):
             self.assertIsNotNone(survivor)
             remaining_recruiter = db.query(RecruiterNumber).filter(RecruiterNumber.id == recruiter_id).first()
             self.assertIsNotNone(remaining_recruiter)
+
+    def test_swap_recruiter_number_to_employer_standardizes_display_phone(self) -> None:
+        with Session(self.engine) as db:
+            recruiter = RecruiterNumber(
+                owner_id=main.settings.owner_id,
+                normalized_phone_number="12012772419",
+                display_phone_number="+1 (201) 277-2419",
+                recruiter_name="Unknown",
+                company="Unknown",
+                designation="Recruiter",
+                recruiter_email="riyas@example.com",
+                first_detected_email_id=None,
+            )
+            db.add(recruiter)
+            db.commit()
+            db.refresh(recruiter)
+            recruiter_id = recruiter.id
+
+        response = self.client.post(f"/recruiter-numbers/{recruiter_id}/swap-to-employer")
+        self.assertEqual(response.status_code, 200, response.text)
+
+        with Session(self.engine) as db:
+            employer = db.query(EmployerNumber).filter(EmployerNumber.owner_id == main.settings.owner_id).first()
+            self.assertIsNotNone(employer)
+            assert employer is not None
+            self.assertEqual(employer.display_phone_number, "(201) 277-2419")
+
+    def test_swap_employer_number_to_recruiter_standardizes_display_phone(self) -> None:
+        with Session(self.engine) as db:
+            employer = EmployerNumber(
+                owner_id=main.settings.owner_id,
+                normalized_phone_number="19809070802",
+                display_phone_number="+1 (980) 9070802",
+                owner_name="Owner",
+                company="Corp",
+                source_email_id=None,
+            )
+            db.add(employer)
+            db.commit()
+            db.refresh(employer)
+            employer_id = employer.id
+
+        response = self.client.post(f"/employer-numbers/{employer_id}/swap-to-recruiter")
+        self.assertEqual(response.status_code, 200, response.text)
+
+        with Session(self.engine) as db:
+            recruiter = db.query(RecruiterNumber).filter(RecruiterNumber.owner_id == main.settings.owner_id).first()
+            self.assertIsNotNone(recruiter)
+            assert recruiter is not None
+            self.assertEqual(recruiter.display_phone_number, "(980) 907-0802")
+
+    def test_employer_numbers_hides_unparseable_junk_rows(self) -> None:
+        with Session(self.engine) as db:
+            db.add(
+                EmployerNumber(
+                    owner_id=main.settings.owner_id,
+                    normalized_phone_number="12487222694",
+                    display_phone_number="(248) 722-2694",
+                    owner_name="Valid Owner",
+                    company="Valid Corp",
+                    source_email_id=None,
+                )
+            )
+            db.add(
+                EmployerNumber(
+                    owner_id=main.settings.owner_id,
+                    normalized_phone_number="63686972753038383338393540676",
+                    display_phone_number="636869727530 38383338393540676",
+                    owner_name="Junk Owner",
+                    company="Junk Corp",
+                    source_email_id=None,
+                )
+            )
+            db.commit()
+
+        response = self.client.get("/employer-numbers")
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(len(payload["items"]), 1)
+        self.assertEqual(payload["items"][0]["company"], "Valid Corp")
+        self.assertEqual(payload["items"][0]["display_phone_number"], "(248) 722-2694")
+
+    def test_number_review_supports_pagination_and_search(self) -> None:
+        with Session(self.engine) as db:
+            db.add_all(
+                [
+                    NumberReviewQueue(
+                        owner_id=main.settings.owner_id,
+                        source_email_id=1,
+                        normalized_phone_number="12405550111",
+                        display_phone_number="(240) 555-0111",
+                        owner_name="Nancy Recruiter",
+                        company="Oss",
+                        designation="Recruiter",
+                        confidence="high",
+                        purpose="Recruiter contact number",
+                        evidence_snippet="snippet",
+                        email_subject="Java role",
+                        email_sender="nancy@example.com",
+                        gmail_open_url="",
+                        state="pending",
+                    ),
+                    NumberReviewQueue(
+                        owner_id=main.settings.owner_id,
+                        source_email_id=2,
+                        normalized_phone_number="12015550112",
+                        display_phone_number="(201) 555-0112",
+                        owner_name="Riya",
+                        company="Smart",
+                        designation="Recruiter",
+                        confidence="high",
+                        purpose="Recruiter contact number",
+                        evidence_snippet="snippet",
+                        email_subject="Python role",
+                        email_sender="riya@example.com",
+                        gmail_open_url="",
+                        state="pending",
+                    ),
+                ]
+            )
+            db.commit()
+
+        response = self.client.get("/number-review", params={"limit": 1, "q": "nancy"})
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(len(payload["items"]), 1)
+        self.assertEqual(payload["items"][0]["owner_name"], "Nancy Recruiter")
+        self.assertFalse(payload["has_next"])
+        self.assertIsNone(payload["next_cursor"])
+
+    def test_recruiter_numbers_support_pagination_and_search(self) -> None:
+        with Session(self.engine) as db:
+            db.add_all(
+                [
+                    RecruiterNumber(
+                        owner_id=main.settings.owner_id,
+                        normalized_phone_number="12406571540",
+                        display_phone_number="(240) 657-1540",
+                        recruiter_name="Nancy",
+                        company="OSS",
+                        designation="Recruiter",
+                        recruiter_email="nancy@ossinc.us.com",
+                        first_detected_email_id=None,
+                    ),
+                    RecruiterNumber(
+                        owner_id=main.settings.owner_id,
+                        normalized_phone_number="12012772419",
+                        display_phone_number="(201) 277-2419",
+                        recruiter_name="Riyas",
+                        company="Smart IT",
+                        designation="Recruiter",
+                        recruiter_email="riyas@example.com",
+                        first_detected_email_id=None,
+                    ),
+                ]
+            )
+            db.commit()
+
+        response = self.client.get("/recruiter-numbers", params={"limit": 1})
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(len(payload["items"]), 1)
+        self.assertTrue(payload["has_next"])
+        self.assertEqual(payload["next_cursor"], 1)
+
+        search = self.client.get("/recruiter-numbers", params={"q": "ossinc"})
+        self.assertEqual(search.status_code, 200, search.text)
+        search_payload = search.json()
+        self.assertEqual(len(search_payload["items"]), 1)
+        self.assertEqual(search_payload["items"][0]["recruiter_email"], "nancy@ossinc.us.com")
+
+    def test_employer_numbers_support_pagination_and_search(self) -> None:
+        with Session(self.engine) as db:
+            db.add_all(
+                [
+                    EmployerNumber(
+                        owner_id=main.settings.owner_id,
+                        normalized_phone_number="12487222694",
+                        display_phone_number="(248) 722-2694",
+                        owner_name="Mohan",
+                        company="Horizon Softech Inc",
+                        source_email_id=None,
+                    ),
+                    EmployerNumber(
+                        owner_id=main.settings.owner_id,
+                        normalized_phone_number="12404649780",
+                        display_phone_number="(240) 464-9780",
+                        owner_name="Alekya",
+                        company="Rpa",
+                        source_email_id=None,
+                    ),
+                ]
+            )
+            db.commit()
+
+        response = self.client.get("/employer-numbers", params={"limit": 1})
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(len(payload["items"]), 1)
+        self.assertTrue(payload["has_next"])
+        self.assertEqual(payload["next_cursor"], 1)
+
+        search = self.client.get("/employer-numbers", params={"q": "mohan"})
+        self.assertEqual(search.status_code, 200, search.text)
+        search_payload = search.json()
+        self.assertEqual(len(search_payload["items"]), 1)
+        self.assertEqual(search_payload["items"][0]["owner_name"], "Mohan")
+
+    def test_recruiter_opportunities_support_pagination_search_and_filters(self) -> None:
+        with Session(self.engine) as db:
+            recruiter = RecruiterNumber(
+                owner_id=main.settings.owner_id,
+                normalized_phone_number="12145550111",
+                display_phone_number="(214) 555-0111",
+                recruiter_name="Visible Recruiter",
+                company="Visible Co",
+                designation="Recruiter",
+                recruiter_email="visible@example.com",
+                first_detected_email_id=None,
+            )
+            db.add(recruiter)
+            db.flush()
+            db.add_all(
+                [
+                    RecruiterOpportunity(
+                        owner_id=main.settings.owner_id,
+                        recruiter_number_id=recruiter.id,
+                        source_email_id=None,
+                        gmail_message_id="opp-1",
+                        source_type="gmail",
+                        source_url=None,
+                        external_opportunity_id=None,
+                        email_subject="Java Engineer",
+                        email_sender="visible@example.com",
+                        gmail_open_url="",
+                        received_at=datetime.now(UTC),
+                        job_title="Java Engineer",
+                        client="Visible Co",
+                        location="Texas",
+                        work_mode="Remote",
+                        visa_restrictions="",
+                        extracted_skills="Java, Spring",
+                        evidence="gmail",
+                        status="New",
+                        notes="",
+                    ),
+                    RecruiterOpportunity(
+                        owner_id=main.settings.owner_id,
+                        recruiter_number_id=recruiter.id,
+                        source_email_id=None,
+                        gmail_message_id="opp-2",
+                        source_type="nvoids",
+                        source_url="https://nvoids.com/job_details.jsp?id=2",
+                        external_opportunity_id=2,
+                        email_subject="Python Engineer",
+                        email_sender="visible@example.com",
+                        gmail_open_url="",
+                        received_at=datetime.now(UTC),
+                        job_title="Python Engineer",
+                        client="Visible Co",
+                        location="Texas",
+                        work_mode="Remote",
+                        visa_restrictions="",
+                        extracted_skills="Python",
+                        evidence="nvoids",
+                        status="Called",
+                        notes="",
+                    ),
+                ]
+            )
+            db.commit()
+
+        response = self.client.get("/recruiter-opportunities", params={"limit": 1, "status": "New", "q": "214"})
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(len(payload["items"]), 1)
+        self.assertEqual(payload["items"][0]["job_title"], "Java Engineer")
+        self.assertFalse(payload["has_next"])
+        self.assertIsNone(payload["next_cursor"])
 
     def test_delete_recruiter_opportunity_returns_404_for_missing_id(self) -> None:
         response = self.client.delete("/recruiter-opportunities/999999")

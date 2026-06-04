@@ -337,6 +337,12 @@ class UnknownNumberReviewCardResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class UnknownNumberReviewCardListResponse(BaseModel):
+    items: list[UnknownNumberReviewCardResponse]
+    next_cursor: int | None
+    has_next: bool
+
+
 class RecruiterNumberResponse(BaseModel):
     id: int
     normalized_phone_number: str
@@ -363,6 +369,18 @@ class EmployerNumberResponse(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class RecruiterNumberListResponse(BaseModel):
+    items: list[RecruiterNumberResponse]
+    next_cursor: int | None
+    has_next: bool
+
+
+class EmployerNumberListResponse(BaseModel):
+    items: list[EmployerNumberResponse]
+    next_cursor: int | None
+    has_next: bool
 
 
 class RecruiterOpportunityResponse(BaseModel):
@@ -396,6 +414,12 @@ class RecruiterOpportunityResponse(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class RecruiterOpportunityListResponse(BaseModel):
+    items: list[RecruiterOpportunityResponse]
+    next_cursor: int | None
+    has_next: bool
 
 
 class RecruiterOpportunityPatchRequest(BaseModel):

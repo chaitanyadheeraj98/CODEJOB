@@ -16,7 +16,7 @@ from app.external_feeds.collector import CollectedPage
 from app.external_feeds import service as external_feed_service_module
 from app.external_feeds.service import ExternalFeedService
 from app.external_feeds.models import ExternalFeedSource, ExternalOpportunity
-from app.models import EmployerNumber, RecruiterEmail, RecruiterNumber, RecruiterOpportunity, ResumeAsset, UserSettings
+from app.models import EmployerNumber, NumberReviewQueue, RecruiterEmail, RecruiterNumber, RecruiterOpportunity, ResumeAsset, UserSettings
 
 
 class _FakeCollector:
@@ -112,6 +112,84 @@ class ExternalFeedsApiTests(unittest.TestCase):
             )
             db.commit()
 
+    def _seed_nvoids_placeholder_recruiter(
+        self,
+        *,
+        normalized_phone_number: str = "nvoids-123",
+        display_phone_number: str = "Unknown",
+        recruiter_email: str = "placeholder@example.com",
+        recruiter_name: str = "Unknown",
+        company: str = "Unknown",
+        external_phone: str = "",
+    ) -> tuple[int, int, int]:
+        with self.SessionLocal() as db:
+            source = ExternalFeedSource(owner_id=main.settings.owner_id, source_type="nvoids", base_url="https://nvoids.com")
+            db.add(source)
+            db.flush()
+            raw_html = "<table><tr><td>Email: placeholder@example.com</td></tr></table>"
+            if external_phone:
+                raw_html = (
+                    "<table>"
+                    "<tr><td>Email: placeholder@example.com</td></tr>"
+                    f"<tr><td>Phone: {external_phone}</td></tr>"
+                    "</table>"
+                )
+            ext = ExternalOpportunity(
+                owner_id=main.settings.owner_id,
+                feed_source_id=source.id,
+                source_type="nvoids",
+                external_post_id="nvoids:seed-placeholder",
+                source_url="https://nvoids.com/job_details.jsp?id=seed&uid=abc",
+                recruiter_email=recruiter_email,
+                recruiter_phone=external_phone,
+                recruiter_name=recruiter_name,
+                company=company,
+                role="Seed Role",
+                location="Remote, USA",
+                raw_body="raw",
+                raw_html=raw_html,
+                dedupe_hash=f"hash-{normalized_phone_number}",
+                parse_confidence=0.7,
+                bridge_status="bridged",
+            )
+            db.add(ext)
+            db.flush()
+            recruiter = RecruiterNumber(
+                owner_id=main.settings.owner_id,
+                normalized_phone_number=normalized_phone_number,
+                display_phone_number=display_phone_number,
+                recruiter_name=recruiter_name,
+                company=company,
+                designation="Recruiter",
+                recruiter_email=recruiter_email,
+                first_detected_email_id=None,
+            )
+            db.add(recruiter)
+            db.flush()
+            opportunity = RecruiterOpportunity(
+                owner_id=main.settings.owner_id,
+                recruiter_number_id=recruiter.id,
+                source_email_id=None,
+                gmail_message_id="nvoids:nvoids:seed-placeholder",
+                source_type="nvoids",
+                source_url=ext.source_url,
+                external_opportunity_id=ext.id,
+                email_subject=ext.role,
+                email_sender=ext.recruiter_email,
+                gmail_open_url=ext.source_url,
+                job_title=ext.role,
+                client=ext.company,
+                location=ext.location,
+                work_mode="Remote",
+                visa_restrictions="Mentioned",
+                extracted_skills="Java",
+                evidence="External feed: nvoids",
+                status="New",
+            )
+            db.add(opportunity)
+            db.commit()
+            return recruiter.id, opportunity.id, ext.id
+
     def _add_resume(self) -> None:
         fd, path = tempfile.mkstemp(suffix=".pdf")
         os.close(fd)
@@ -165,6 +243,37 @@ class ExternalFeedsApiTests(unittest.TestCase):
         run_items = runs.json()
         self.assertGreaterEqual(len(run_items), 1)
         self.assertEqual(run_items[0]["source_type"], "nvoids")
+
+    def test_manual_sync_standardizes_nvoids_recruiter_phone_display(self) -> None:
+        class _PhoneCollector(_FakeCollector):
+            def fetch_detail_page(self, *, url: str) -> CollectedPage:
+                phone = "240-657-1540"
+                if "id=2" in url:
+                    phone = "+1 (201) 277-2419"
+                html = f"""
+                <html><body>
+                <table>
+                  <tr><td>Email: recruiter@example.com</td></tr>
+                  <tr><td>From: Sarika Singh</td></tr>
+                  <tr><td>Phone: {phone}</td></tr>
+                </table>
+                </body></html>
+                """
+                return CollectedPage(url=url, html=html)
+
+        main.external_feed_service.collector = _PhoneCollector()
+
+        sync = self.client.post("/external-feeds/nvoids/sync")
+        self.assertEqual(sync.status_code, 200, sync.text)
+
+        with self.SessionLocal() as db:
+            rows = (
+                db.query(RecruiterNumber)
+                .filter(RecruiterNumber.owner_id == main.settings.owner_id)
+                .order_by(RecruiterNumber.id.asc())
+                .all()
+            )
+            self.assertEqual([row.display_phone_number for row in rows], ["(240) 657-1540", "(201) 277-2419"])
 
     def test_manual_sync_keeps_nvoids_candidate_but_skips_unknown_phone_bridge(self) -> None:
         sync = self.client.post("/external-feeds/nvoids/sync")
@@ -403,7 +512,79 @@ class ExternalFeedsApiTests(unittest.TestCase):
             )
             self.assertEqual(rows, [])
 
-    def test_backfill_phones_clears_noise_phone_and_normalizes_bridge_number(self) -> None:
+    def test_recruiter_numbers_hides_nvoids_placeholder_rows_but_keeps_real_rows(self) -> None:
+        self._seed_nvoids_placeholder_recruiter()
+        with self.SessionLocal() as db:
+            db.add(
+                RecruiterNumber(
+                    owner_id=main.settings.owner_id,
+                    normalized_phone_number="12145550123",
+                    display_phone_number="+1 214 555 0123",
+                    recruiter_name="Real Recruiter",
+                    company="Real Co",
+                    designation="Recruiter",
+                    recruiter_email="real@example.com",
+                    first_detected_email_id=99,
+                )
+            )
+            db.commit()
+
+        res = self.client.get("/recruiter-numbers")
+        self.assertEqual(res.status_code, 200, res.text)
+        payload = res.json()
+        emails = {row["recruiter_email"] for row in payload["items"]}
+        self.assertIn("real@example.com", emails)
+        self.assertNotIn("placeholder@example.com", emails)
+
+    def test_recruiter_opportunities_hides_nvoids_placeholder_rows_but_keeps_real_rows(self) -> None:
+        self._seed_nvoids_placeholder_recruiter(recruiter_email="hidden@example.com")
+        with self.SessionLocal() as db:
+            recruiter = RecruiterNumber(
+                owner_id=main.settings.owner_id,
+                normalized_phone_number="12145550124",
+                display_phone_number="+1 214 555 0124",
+                recruiter_name="Visible Recruiter",
+                company="Visible Co",
+                designation="Recruiter",
+                recruiter_email="visible@example.com",
+                first_detected_email_id=None,
+            )
+            db.add(recruiter)
+            db.flush()
+            db.add(
+                RecruiterOpportunity(
+                    owner_id=main.settings.owner_id,
+                    recruiter_number_id=recruiter.id,
+                    source_email_id=None,
+                    gmail_message_id="gmail-visible-1",
+                    source_type="gmail",
+                    source_url=None,
+                    external_opportunity_id=None,
+                    email_subject="Visible subject",
+                    email_sender="visible@example.com",
+                    gmail_open_url="https://mail.google.com/",
+                    received_at=None,
+                    job_title="Visible role",
+                    client="Visible Co",
+                    location="Texas",
+                    work_mode="Remote",
+                    visa_restrictions="",
+                    extracted_skills="Java",
+                    evidence="gmail",
+                    status="New",
+                    notes="",
+                )
+            )
+            db.commit()
+
+        res = self.client.get("/recruiter-opportunities")
+        self.assertEqual(res.status_code, 200, res.text)
+        payload = res.json()
+        emails = {row["recruiter_email"] for row in payload["items"]}
+        self.assertIn("visible@example.com", emails)
+        self.assertNotIn("hidden@example.com", emails)
+
+    def test_backfill_phones_clears_noise_phone_and_deletes_placeholder_bridge(self) -> None:
         with self.SessionLocal() as db:
             source = ExternalFeedSource(owner_id=main.settings.owner_id, source_type="nvoids", base_url="https://nvoids.com")
             db.add(source)
@@ -472,6 +653,8 @@ class ExternalFeedsApiTests(unittest.TestCase):
         payload = res.json()
         self.assertGreaterEqual(payload["scanned"], 1)
         self.assertGreaterEqual(payload["corrected"], 1)
+        self.assertEqual(payload["deleted_placeholder_opportunities"], 1)
+        self.assertEqual(payload["deleted_placeholder_recruiters"], 1)
 
         with self.SessionLocal() as db:
             updated_ext = db.query(ExternalOpportunity).filter(ExternalOpportunity.external_post_id == "nvoids:3385623").first()
@@ -480,10 +663,150 @@ class ExternalFeedsApiTests(unittest.TestCase):
             self.assertEqual(updated_ext.recruiter_phone, "")
             self.assertEqual(updated_ext.recruiter_name, "Nitin Tehriya")
             updated_recruiter = db.query(RecruiterNumber).filter(RecruiterNumber.id == 1).first()
-            self.assertIsNotNone(updated_recruiter)
-            assert updated_recruiter is not None
-            self.assertEqual(updated_recruiter.display_phone_number, "Unknown")
-            self.assertTrue(updated_recruiter.normalized_phone_number.startswith("nvoids-"))
+            self.assertIsNone(updated_recruiter)
+            recruiter_opp = db.query(RecruiterOpportunity).filter(RecruiterOpportunity.recruiter_number_id == 1).first()
+            self.assertIsNone(recruiter_opp)
+
+    def test_backfill_keeps_valid_nvoids_recruiter_bucket_with_real_phone(self) -> None:
+        recruiter_id, opportunity_id, ext_id = self._seed_nvoids_placeholder_recruiter(
+            normalized_phone_number="12145550125",
+            display_phone_number="+1 214 555 0125",
+            recruiter_email="valid@example.com",
+            recruiter_name="Valid Recruiter",
+            company="Valid Co",
+            external_phone="+1 214 555 0125",
+        )
+
+        res = self.client.post("/external-feeds/nvoids/backfill-phones?limit=100")
+        self.assertEqual(res.status_code, 200, res.text)
+        payload = res.json()
+        self.assertEqual(payload["deleted_placeholder_opportunities"], 0)
+        self.assertEqual(payload["deleted_placeholder_recruiters"], 0)
+
+        with self.SessionLocal() as db:
+            self.assertIsNotNone(db.query(RecruiterNumber).filter(RecruiterNumber.id == recruiter_id).first())
+            self.assertIsNotNone(db.query(RecruiterOpportunity).filter(RecruiterOpportunity.id == opportunity_id).first())
+            self.assertIsNotNone(db.query(ExternalOpportunity).filter(ExternalOpportunity.id == ext_id).first())
+
+    def test_backfill_standardizes_existing_stored_phone_displays(self) -> None:
+        with self.SessionLocal() as db:
+            db.add(
+                RecruiterNumber(
+                    owner_id=main.settings.owner_id,
+                    normalized_phone_number="12406571540",
+                    display_phone_number="240-657-1540",
+                    recruiter_name="Unknown",
+                    company="Unknown",
+                    designation="Recruiter",
+                    recruiter_email="nancy@example.com",
+                    first_detected_email_id=None,
+                )
+            )
+            db.add(
+                EmployerNumber(
+                    owner_id=main.settings.owner_id,
+                    normalized_phone_number="19809070802",
+                    display_phone_number="+1 (980) 9070802",
+                    owner_name="Owner",
+                    company="Corp",
+                    source_email_id=1,
+                )
+            )
+            email = RecruiterEmail(
+                owner_id=main.settings.owner_id,
+                sender="sender@example.com",
+                subject="Role",
+                body="Body",
+                role="Developer",
+                location="Remote",
+                salary_text="",
+                skills_text="Java",
+                score=0,
+                decision="Qualified",
+                state="needs_review",
+                source="gmail",
+            )
+            db.add(email)
+            db.flush()
+            db.add(
+                NumberReviewQueue(
+                    owner_id=main.settings.owner_id,
+                    source_email_id=email.id,
+                    normalized_phone_number="12012772419",
+                    display_phone_number="+1 (201) 277-2419",
+                    owner_name="Review Owner",
+                    company="Review Co",
+                    designation="Recruiter",
+                    confidence="high",
+                    purpose="Recruiter contact number",
+                    evidence_snippet="snippet",
+                    email_subject="subject",
+                    email_sender="review@example.com",
+                    gmail_open_url="",
+                    state="pending",
+                )
+            )
+            db.commit()
+
+        res = self.client.post("/external-feeds/nvoids/backfill-phones?limit=100")
+        self.assertEqual(res.status_code, 200, res.text)
+        payload = res.json()
+        self.assertEqual(payload["recruiter_numbers_reformatted"], 1)
+        self.assertEqual(payload["employer_numbers_reformatted"], 2)
+        self.assertEqual(payload["review_numbers_reformatted"], 1)
+
+        with self.SessionLocal() as db:
+            recruiter = db.query(RecruiterNumber).filter(RecruiterNumber.recruiter_email == "nancy@example.com").first()
+            employer = db.query(EmployerNumber).filter(EmployerNumber.company == "Corp").first()
+            review = db.query(NumberReviewQueue).filter(NumberReviewQueue.owner_name == "Review Owner").first()
+            assert recruiter is not None and employer is not None and review is not None
+            self.assertEqual(recruiter.display_phone_number, "(240) 657-1540")
+            self.assertEqual(employer.display_phone_number, "(980) 907-0802")
+            self.assertEqual(review.display_phone_number, "(201) 277-2419")
+
+    def test_backfill_standardizes_extension_style_recruiter_numbers(self) -> None:
+        with self.SessionLocal() as db:
+            db.add(
+                RecruiterNumber(
+                    owner_id=main.settings.owner_id,
+                    normalized_phone_number="9727561212128",
+                    display_phone_number="(972) - 756 - 1212 Ext 128",
+                    recruiter_name="Dharma Veer",
+                    company="Intellisoft",
+                    designation="Recruiter",
+                    recruiter_email="dharma@example.com",
+                    first_detected_email_id=1,
+                )
+            )
+            db.add(
+                RecruiterNumber(
+                    owner_id=main.settings.owner_id,
+                    normalized_phone_number="6098886198113",
+                    display_phone_number="(609) 888 6198 * 113",
+                    recruiter_name="Vikas Rao",
+                    company="DVG Tech",
+                    designation="Recruiter",
+                    recruiter_email="vikas@example.com",
+                    first_detected_email_id=2,
+                )
+            )
+            db.commit()
+
+        res = self.client.post("/external-feeds/nvoids/backfill-phones?limit=100")
+        self.assertEqual(res.status_code, 200, res.text)
+        payload = res.json()
+        self.assertEqual(payload["recruiter_numbers_reformatted"], 2)
+
+        with self.SessionLocal() as db:
+            rows = (
+                db.query(RecruiterNumber)
+                .filter(RecruiterNumber.recruiter_email.in_(["dharma@example.com", "vikas@example.com"]))
+                .order_by(RecruiterNumber.recruiter_email.asc())
+                .all()
+            )
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(rows[0].display_phone_number, "(972) 756-1212 ext 128")
+            self.assertEqual(rows[1].display_phone_number, "(609) 888-6198 ext 113")
 
 
 class ExternalFeedServiceQueryTests(unittest.TestCase):

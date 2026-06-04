@@ -12,8 +12,8 @@ from app.automation.queue_preparation import (
     QueuePreparationRequest,
     prepare_candidate_for_queue,
 )
-from app.models import EmployerNumber, RecruiterEmail, RecruiterNumber, RecruiterOpportunity, ResumeAsset, UserSettings
-from app.premium_numbers.phone_normalization import canonicalize_phone
+from app.models import EmployerNumber, NumberReviewQueue, RecruiterEmail, RecruiterNumber, RecruiterOpportunity, ResumeAsset, UserSettings
+from app.premium_numbers.phone_normalization import best_display_phone, canonicalize_phone
 from app.phase0 import extract_email_address, greeting_from_to_contact, hard_filter_check, parse_email, should_block_f2f
 from app.routing import RoutingDecision
 from app.semantic.embeddings_service import generate_embedding
@@ -280,7 +280,11 @@ class ExternalFeedService:
         scanned = 0
         corrected = 0
         unchanged = 0
-        recruiter_numbers_normalized = 0
+        deleted_placeholder_opportunities = 0
+        deleted_placeholder_recruiters = 0
+        recruiter_numbers_reformatted = 0
+        employer_numbers_reformatted = 0
+        review_numbers_reformatted = 0
         errors = 0
 
         for row in rows:
@@ -308,7 +312,7 @@ class ExternalFeedService:
             .all()
         )
         for recruiter in recruiter_numbers:
-            opportunities = (
+            nvoids_opportunities = (
                 db.query(RecruiterOpportunity, ExternalOpportunity)
                 .outerjoin(
                     ExternalOpportunity,
@@ -321,25 +325,97 @@ class ExternalFeedService:
                 )
                 .all()
             )
-            if not opportunities:
+            if not nvoids_opportunities:
                 continue
-            has_any_phone = any((ext and (ext.recruiter_phone or "").strip()) for _, ext in opportunities)
+            has_any_phone = any((ext and (ext.recruiter_phone or "").strip()) for _, ext in nvoids_opportunities)
             if has_any_phone:
                 continue
             if recruiter.first_detected_email_id is not None:
                 continue
-            recruiter.normalized_phone_number = f"nvoids-{recruiter.id}"
-            recruiter.display_phone_number = "Unknown"
-            recruiter_numbers_normalized += 1
+
+            for opportunity, _ext in nvoids_opportunities:
+                db.delete(opportunity)
+                deleted_placeholder_opportunities += 1
+            db.flush()
+
+            remaining_opportunities = (
+                db.query(RecruiterOpportunity.id)
+                .filter(
+                    RecruiterOpportunity.owner_id == owner_id,
+                    RecruiterOpportunity.recruiter_number_id == recruiter.id,
+                )
+                .first()
+            )
+            if remaining_opportunities is None:
+                db.delete(recruiter)
+                deleted_placeholder_recruiters += 1
+
+        recruiter_numbers = (
+            db.query(RecruiterNumber)
+            .filter(RecruiterNumber.owner_id == owner_id)
+            .all()
+        )
+        for recruiter in recruiter_numbers:
+            reformatted = self._standardize_stored_display(
+                normalized=recruiter.normalized_phone_number,
+                display=recruiter.display_phone_number,
+            )
+            if reformatted is not None and reformatted != recruiter.display_phone_number:
+                recruiter.display_phone_number = reformatted
+                recruiter_numbers_reformatted += 1
+
+        employer_numbers = (
+            db.query(EmployerNumber)
+            .filter(EmployerNumber.owner_id == owner_id)
+            .all()
+        )
+        for employer in employer_numbers:
+            reformatted = self._standardize_stored_display(
+                normalized=employer.normalized_phone_number,
+                display=employer.display_phone_number,
+            )
+            if reformatted is not None and reformatted != employer.display_phone_number:
+                employer.display_phone_number = reformatted
+                employer_numbers_reformatted += 1
+
+        review_numbers = (
+            db.query(NumberReviewQueue)
+            .filter(NumberReviewQueue.owner_id == owner_id)
+            .all()
+        )
+        for review in review_numbers:
+            reformatted = self._standardize_stored_display(
+                normalized=review.normalized_phone_number,
+                display=review.display_phone_number,
+            )
+            if reformatted is not None and reformatted != review.display_phone_number:
+                review.display_phone_number = reformatted
+                review_numbers_reformatted += 1
 
         db.commit()
         return {
             "scanned": scanned,
             "corrected": corrected,
             "unchanged": unchanged,
-            "recruiter_numbers_normalized": recruiter_numbers_normalized,
+            "deleted_placeholder_opportunities": deleted_placeholder_opportunities,
+            "deleted_placeholder_recruiters": deleted_placeholder_recruiters,
+            "recruiter_numbers_reformatted": recruiter_numbers_reformatted,
+            "employer_numbers_reformatted": employer_numbers_reformatted,
+            "review_numbers_reformatted": review_numbers_reformatted,
             "errors": errors,
         }
+
+    @staticmethod
+    def _standardize_stored_display(*, normalized: str, display: str) -> str | None:
+        raw_display = str(display or "").strip()
+        if not raw_display or raw_display.lower() == "unknown":
+            return None
+        canonical = canonicalize_phone(str(normalized or "").strip())
+        if not canonical:
+            canonical = canonicalize_phone(raw_display)
+        if not canonical:
+            return None
+        return best_display_phone(raw_display or canonical, fallback=raw_display)
 
     def _pick_cc_from_employer_pool(self, db: Session, *, owner_id: str, exclude: str) -> str | None:
         pool = (
@@ -562,7 +638,7 @@ class ExternalFeedService:
             recruiter = RecruiterNumber(
                 owner_id=owner_id,
                 normalized_phone_number=canonical or f"nvoids-{item.id}",
-                display_phone_number=item.recruiter_phone or canonical or "Unknown",
+                display_phone_number=best_display_phone(item.recruiter_phone or canonical, fallback="Unknown"),
                 recruiter_name=item.recruiter_name or "Unknown",
                 company=item.company or "Unknown",
                 designation="Recruiter",

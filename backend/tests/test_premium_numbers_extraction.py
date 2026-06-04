@@ -109,6 +109,12 @@ class PremiumNumbersExtractionTests(unittest.TestCase):
         self.assertEqual(display, "(972) 756-1212 ext 128")
         self.assertEqual(ext, "128")
 
+    def test_phone_formatter_standardizes_star_extension(self) -> None:
+        normalized, display, ext = format_phone("(609) 888 6198 * 113")
+        self.assertEqual(normalized, "16098886198")
+        self.assertEqual(display, "(609) 888-6198 ext 113")
+        self.assertEqual(ext, "113")
+
     def test_employer_domain_marks_internal_number(self) -> None:
         leads = extraction.extract_phone_leads(
             "Sheshwika <sheshwika@horizonsoftech.net>",
