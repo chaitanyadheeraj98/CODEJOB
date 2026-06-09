@@ -604,6 +604,7 @@ def _init_telegram_service() -> TelegramBotService | None:
             ai_status=ai_status,
             gmail_sync=gmail_sync,
             automation_run_once=automation_run_once,
+            get_candidate_review=_get_candidate_review,
             approve_and_send=approve_and_send,
             reject_candidate=reject_candidate,
             owner_id=settings.owner_id,
@@ -1013,6 +1014,34 @@ def _repair_unknown_role_drafts(db: Session, emails: list[RecruiterEmail]) -> No
 
 def _refresh_unconfirmed_routing(db: Session, emails: list[RecruiterEmail]) -> None:
     _get_candidate_runtime_service().refresh_unconfirmed_routing(db, emails)
+
+
+def _hydrate_candidates_for_review(db: Session, emails: list[RecruiterEmail]) -> None:
+    if not emails:
+        return
+    _repair_unknown_role_drafts(db, emails)
+    _refresh_unconfirmed_routing(db, emails)
+    _fill_missing_gmail_rfc_ids(db, emails)
+
+
+def _serialize_candidate_for_review(db: Session, email: RecruiterEmail) -> EmailResponse:
+    _hydrate_candidates_for_review(db, [email])
+    return EmailResponse.model_validate(email)
+
+
+def _get_candidate_for_review(db: Session, email_id: int) -> RecruiterEmail:
+    email = (
+        db.query(RecruiterEmail)
+        .filter(RecruiterEmail.owner_id == settings.owner_id, RecruiterEmail.id == email_id)
+        .first()
+    )
+    if not email:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+    return email
+
+
+def _get_candidate_review(email_id: int, db: Session) -> EmailResponse:
+    return _serialize_candidate_for_review(db, _get_candidate_for_review(db, email_id))
 
 
 @app.get("/health")
@@ -1650,9 +1679,7 @@ def list_candidates(
     items = query.offset(cursor).limit(limit + 1).all()
     has_next = len(items) > limit
     visible = items[:limit]
-    _repair_unknown_role_drafts(db, visible)
-    _refresh_unconfirmed_routing(db, visible)
-    _fill_missing_gmail_rfc_ids(db, visible)
+    _hydrate_candidates_for_review(db, visible)
     next_cursor = cursor + limit if has_next else None
     return CandidateListResponse(
         items=[EmailResponse.model_validate(item) for item in visible],
@@ -2406,15 +2433,8 @@ def generate_recruiter_opportunity_cold_call_script(
 
 
 @app.get("/candidates/{email_id}", response_model=EmailResponse)
-def get_candidate(email_id: int, db: Session = Depends(get_db)) -> RecruiterEmail:
-    email = (
-        db.query(RecruiterEmail)
-        .filter(RecruiterEmail.owner_id == settings.owner_id, RecruiterEmail.id == email_id)
-        .first()
-    )
-    if not email:
-        raise HTTPException(status_code=404, detail="Candidate not found")
-    return email
+def get_candidate(email_id: int, db: Session = Depends(get_db)) -> EmailResponse:
+    return _get_candidate_review(email_id, db)
 
 
 @app.post("/candidates/{email_id}/approve-send", response_model=EmailResponse)

@@ -10,7 +10,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models import RecruiterEmail, SyncRun, UserSettings
-from app.schemas import ApproveSendRequest, AutomationRunResponse, RejectRequest
+from app.schemas import ApproveSendRequest, AutomationRunResponse, EmailResponse, RejectRequest
 from app.services.telegram_runtime import TelegramRuntimeState
 from app.telegram_bot import TelegramReply
 
@@ -32,6 +32,7 @@ class TelegramRuntimeDeps:
     ai_status: Callable[[], Any]
     gmail_sync: Callable[[Session], Any]
     automation_run_once: Callable[[Any, Session], AutomationRunResponse]
+    get_candidate_review: Callable[[int, Session], EmailResponse]
     approve_and_send: Callable[[int, ApproveSendRequest, Session], Any]
     reject_candidate: Callable[[int, RejectRequest, Session], Any]
     owner_id: str
@@ -149,6 +150,7 @@ class TelegramRuntime:
             buttons = [
                 cls._tg_btn("Status", "cmd:/status"),
                 cls._tg_btn("Needs Review", "cmd:/needs_review"),
+                cls._tg_btn("Review by ID", "flow:await_review_id"),
                 cls._tg_btn("Failed Mapping", "cmd:/failed_mapping"),
                 cls._tg_btn("Recent Runs", "cmd:/recent_runs"),
             ]
@@ -195,6 +197,7 @@ class TelegramRuntime:
             "await_setdefaultquery": "Send the new default Gmail query (or tap Cancel).",
             "await_setdefaultdate": "Send `today` or `off` (or tap Cancel).",
             "await_setautointerval": "Send the auto-run interval in minutes (1-1440).",
+            "await_review_id": "Send the email ID to review (number only).",
             "await_approve_id": "Send the email ID to approve (number only).",
             "await_reject_id": "Send the email ID to reject (number only).",
             "await_auth_pin": "Send your PIN to authenticate this chat session.",
@@ -211,6 +214,90 @@ class TelegramRuntime:
             if len(subject) > 90:
                 subject = subject[:87] + "..."
             lines.append(f"#{row.id} - {subject}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _truncate_text(value: str | None, *, limit: int) -> tuple[str, bool]:
+        clean = " ".join((value or "").split())
+        if len(clean) <= limit:
+            return clean, False
+        return clean[: max(0, limit - 3)].rstrip() + "...", True
+
+    @staticmethod
+    def _draft_source_label(source: str | None) -> str:
+        normalized = (source or "").strip().lower()
+        if normalized == "deepseek":
+            return "DeepSeek"
+        if normalized == "rules_only":
+            return "Rules fallback"
+        return source or "Unknown"
+
+    @staticmethod
+    def _resume_context_label(value: str | None) -> str:
+        normalized = (value or "").strip().lower()
+        if normalized == "injected":
+            return "Injected"
+        if normalized == "limited":
+            return "Limited"
+        if normalized == "missing_resume":
+            return "Missing Resume"
+        if normalized == "extract_failed":
+            return "Extract Failed"
+        if normalized == "rules_only":
+            return "Rules Only"
+        return "Unknown"
+
+    @staticmethod
+    def _source_listing_url(candidate: EmailResponse) -> str | None:
+        if candidate.source != "nvoids":
+            return None
+        thread = (candidate.external_thread_id or "").strip()
+        if thread.startswith("http://") or thread.startswith("https://"):
+            return thread
+        message = (candidate.external_message_id or "").strip()
+        if message.startswith("nvoids:"):
+            suffix = message.split(":")[-1].strip()
+            if suffix.isdigit():
+                return f"https://nvoids.com/job_details.jsp?id={suffix}"
+        return None
+
+    @classmethod
+    def _format_review_message(cls, candidate: EmailResponse) -> str:
+        draft_preview, was_clipped = cls._truncate_text(candidate.draft_reply, limit=600)
+        subject, _ = cls._truncate_text(candidate.subject, limit=160)
+        routing_reason, _ = cls._truncate_text(candidate.routing_reason, limit=220)
+        lines = [
+            f"Email ID: {candidate.id}",
+            f"From: {candidate.sender}",
+            f"Subject: {subject}",
+        ]
+        source_listing = cls._source_listing_url(candidate)
+        if source_listing:
+            lines.append(f"Source Listing: {source_listing}")
+        if candidate.gmail_message_url:
+            lines.append(f"Open: {candidate.gmail_message_url}")
+        lines.extend(
+            [
+                f"To: {candidate.recipient_email or '-'}",
+                f"CC: {candidate.cc_email or '-'}",
+                f"Routing: {candidate.routing_status} ({round(float(candidate.routing_confidence or 0.0) * 100)}%)",
+                f"Routing Reason: {routing_reason or 'No routing evidence captured yet.'}",
+                f"Resume: {candidate.resume_file_name or '-'}",
+            ]
+        )
+        draft_source = cls._draft_source_label(candidate.draft_source)
+        if candidate.draft_model:
+            draft_source = f"{draft_source} ({candidate.draft_model})"
+        lines.append(f"Draft source: {draft_source}")
+        lines.append(f"Resume Context: {cls._resume_context_label(candidate.draft_resume_context_status)}")
+        if candidate.draft_ai_error:
+            lines.append(f"AI fallback: {candidate.draft_ai_error}")
+        if candidate.last_error:
+            lines.append(f"Last Error: {candidate.last_error}")
+        lines.append("Draft Preview:")
+        lines.append(draft_preview or "(empty)")
+        if was_clipped:
+            lines.append("[truncated]")
         return "\n".join(lines)
 
     def _action_authorized(self, pin: str | None) -> bool:
@@ -251,6 +338,8 @@ class TelegramRuntime:
                 return self.handle_command(chat_id, user_id, username, f"/setdefaultdate {command_line}")
             if pending_mode == "await_setautointerval":
                 return self.handle_command(chat_id, user_id, username, f"/setautointerval {command_line}")
+            if pending_mode == "await_review_id":
+                return self.handle_command(chat_id, user_id, username, f"/review {command_line}")
             if pending_mode == "await_approve_id":
                 return self.handle_command(chat_id, user_id, username, f"/approve {command_line}")
             if pending_mode == "await_reject_id":
@@ -417,6 +506,18 @@ class TelegramRuntime:
                     .count()
                 )
                 return f"Needs Review: {count}\nTop items:\n{self._format_candidate_lines(rows)}"
+
+            if cmd == "/review":
+                if not args:
+                    return "Usage: /review <email_id>"
+                try:
+                    email_id = int(args[0])
+                except ValueError:
+                    return "Invalid email_id. Usage: /review <email_id>"
+                candidate = self.deps.get_candidate_review(email_id, db)
+                if candidate.state != "needs_review":
+                    return f"Only needs_review candidates can be reviewed from Telegram. Current state: {candidate.state}"
+                return self._format_review_message(candidate)
 
             if cmd == "/failed_mapping":
                 rows = (

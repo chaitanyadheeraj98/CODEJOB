@@ -1,6 +1,17 @@
+import os
 import unittest
+from datetime import UTC, datetime
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+os.environ["DEBUG"] = "false"
 
 from app import main
+from app.db import Base
+from app.models import RecruiterEmail, UserSettings
+from app.schemas import AIStatusResponse, AutomationRunResponse, EmailResponse
+from app.services.telegram_runtime_service import TelegramRuntime, TelegramRuntimeDeps
 from app.telegram_bot import TelegramBotService, TelegramReply
 
 
@@ -79,6 +90,155 @@ class TelegramBotServiceCallbackTests(unittest.TestCase):
         methods = [item[0] for item in sent]
         self.assertIn("answerCallbackQuery", methods)
         self.assertIn("editMessageText", methods)
+
+
+class TelegramReviewCommandTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+        Base.metadata.create_all(self.engine)
+        self.session_factory = sessionmaker(bind=self.engine, autoflush=False, autocommit=False, future=True)
+        self._candidate_seq = 0
+        with self.session_factory() as db:
+            db.add(
+                UserSettings(
+                    owner_id="default-owner",
+                    gmail_query="is:unread",
+                    default_gmail_query="is:unread",
+                )
+            )
+            db.commit()
+        self.runtime = TelegramRuntime(self._deps())
+
+    def _deps(self) -> TelegramRuntimeDeps:
+        return TelegramRuntimeDeps(
+            session_factory=self.session_factory,
+            get_settings=lambda db: db.query(UserSettings).filter(UserSettings.owner_id == "default-owner").first(),
+            read_policy_from_settings=lambda _settings: {},
+            policy_dry_run=lambda _policy: False,
+            format_query_preflight=lambda _settings, _policy: "preflight",
+            poll_interval_minutes=lambda _settings: 10,
+            build_telegram_digest=lambda prefix, _result: prefix,
+            gmail_auth_status=lambda: (False, False, "not configured"),
+            ai_status=lambda: AIStatusResponse(
+                configured=False,
+                connected=False,
+                running=False,
+                provider="deepseek",
+                model="deepseek-chat",
+                detail="offline",
+                embedding_provider="hash",
+                embedding_model="text-embedding-3-small",
+                embedding_connected=False,
+                embedding_detail="offline",
+            ),
+            gmail_sync=lambda _db: None,
+            automation_run_once=lambda _payload, _db: AutomationRunResponse(status="idle", detail="idle"),
+            get_candidate_review=lambda email_id, db: main._get_candidate_review(email_id, db),
+            approve_and_send=lambda _email_id, _payload, _db: None,
+            reject_candidate=lambda _email_id, _payload, _db: None,
+            owner_id="default-owner",
+            action_lock=main.telegram_action_lock,
+            action_pin=lambda: "",
+            auth_ttl_minutes=lambda: 30,
+        )
+
+    def _add_candidate(self, **overrides: object) -> RecruiterEmail:
+        self._candidate_seq += 1
+        suffix = str(self._candidate_seq)
+        payload = {
+            "owner_id": "default-owner",
+            "sender": "shubham.sonkar@gvrinfotek.com",
+            "subject": "MongoDB Engineer with Atlas (Cloud Migration) || REMOTE || SKYPE",
+            "body": "Hello recruiter body",
+            "role": "MongoDB Engineer",
+            "location": "Remote",
+            "salary_text": "$70/hr",
+            "skills_text": "mongodb, atlas, migration",
+            "decision": "Qualified",
+            "state": "needs_review",
+            "decision_reason": "Qualified and queued for manual approval",
+            "draft_reply": "Hi, I am interested in this role.",
+            "draft_source": "deepseek",
+            "draft_model": "deepseek-chat",
+            "draft_resume_context_status": "injected",
+            "approval_status": "pending",
+            "sent_status": "not_sent",
+            "source": "nvoids",
+            "external_message_id": f"nvoids:{12345 + self._candidate_seq}",
+            "external_thread_id": f"https://nvoids.com/job_details.jsp?id={12345 + self._candidate_seq}",
+            "recipient_email": "shubham.sonkar@gvrinfotek.com",
+            "cc_email": "alekya@rpatechnologyinc.com",
+            "routing_status": "safe",
+            "routing_confidence": 0.85,
+            "routing_reason": "External feed recruiter import with employer pool cc.",
+            "routing_confirmed": True,
+            "resume_file_name": "Resume.docx",
+            "created_at": datetime.now(UTC),
+            "updated_at": datetime.now(UTC),
+        }
+        payload.update(overrides)
+        with self.session_factory() as db:
+            row = RecruiterEmail(**payload)
+            db.add(row)
+            db.commit()
+            db.refresh(row)
+            return row
+
+    def test_review_command_returns_rich_candidate_details(self) -> None:
+        row = self._add_candidate(draft_ai_error="fallback used", last_error="sheet warning")
+        reply = self.runtime.handle_command(123, "u1", "tester", f"/review {row.id}")
+
+        self.assertIsInstance(reply, str)
+        text = str(reply)
+        self.assertIn(f"Email ID: {row.id}", text)
+        self.assertIn(f"Source Listing: {row.external_thread_id}", text)
+        self.assertIn("To: shubham.sonkar@gvrinfotek.com", text)
+        self.assertIn("CC: alekya@rpatechnologyinc.com", text)
+        self.assertIn("Routing: safe (85%)", text)
+        self.assertIn("Draft source: DeepSeek (deepseek-chat)", text)
+        self.assertIn("Resume Context: Injected", text)
+        self.assertIn("AI fallback: fallback used", text)
+        self.assertIn("Last Error: sheet warning", text)
+        self.assertIn("Draft Preview:", text)
+
+    def test_review_command_rejects_non_review_candidate(self) -> None:
+        row = self._add_candidate(state="approved_sent", sent_status="sent", approval_status="approved")
+        reply = self.runtime.handle_command(123, "u1", "tester", f"/review {row.id}")
+
+        self.assertEqual(
+            reply,
+            "Only needs_review candidates can be reviewed from Telegram. Current state: approved_sent",
+        )
+
+    def test_review_command_reports_missing_candidate(self) -> None:
+        reply = self.runtime.handle_command(123, "u1", "tester", "/review 99999")
+        self.assertEqual(reply, "Command failed (404): Candidate not found")
+
+    def test_needs_review_stays_compact(self) -> None:
+        first = self._add_candidate(subject="First candidate subject")
+        self._add_candidate(subject="Second candidate subject")
+        reply = self.runtime.handle_command(123, "u1", "tester", "/needs_review")
+
+        self.assertIsInstance(reply, str)
+        text = str(reply)
+        self.assertIn("Needs Review: 2", text)
+        self.assertIn(f"#{first.id} - First candidate subject", text)
+        self.assertNotIn("To:", text)
+        self.assertNotIn("Draft Preview:", text)
+
+    def test_review_message_truncates_long_draft_preview(self) -> None:
+        candidate = EmailResponse.model_validate(
+            self._add_candidate(
+                draft_reply="Paragraph " * 200,
+                subject="X" * 220,
+                routing_reason="Reason " * 80,
+            )
+        )
+
+        text = TelegramRuntime._format_review_message(candidate)
+
+        self.assertIn("[truncated]", text)
+        self.assertLess(len(text), 2000)
 
 
 if __name__ == "__main__":
