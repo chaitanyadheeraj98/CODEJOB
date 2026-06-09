@@ -52,25 +52,22 @@
 
 ## Validation Commands in This Session
 
-- `cd backend; python -m pytest tests/test_premium_numbers_extraction.py`
-  - Result: passed (`17 passed in 9.40s`)
-  - Blocker class: none
+- `python -m pytest tests/test_telegram_interactive.py`
+  - Result: failed with `No module named pytest` (system Python)
+  - Blocker class: missing dependency
 
-- `cd backend; python -m pytest tests/test_premium_numbers_extraction.py` (initial attempt)
-  - Result: timeout
-  - Exact failure: command timed out before completion
-  - Blocker class: incompatible local runtime timeout setting (rerun succeeded)
+- `uv run python -m pytest tests/test_telegram_interactive.py`
+  - Result: failed with `bash: uv: command not found`
+  - Blocker class: incompatible local runtime
 
-- `cd backend; python -m pytest`
-  - Result: not executed in this session
-  - Blocker class: unknown in this session
+- No dashboard validation run in this session.
 
 ## Branch Conclusion
 
-Targeted premium-number extraction verification is green on this branch snapshot, but full-suite confidence is still limited and should not be presented as complete regression closure.
+New Telegram `/review <email_id>` command and supporting helpers have been added to `backend/app/main.py` and `backend/app/services/telegram_runtime_service.py`. Five new tests exist in `TelegramReviewCommandTests`. Tests are code-inspection-verified only; no runtime execution was possible in this session due to missing dependencies.
 
-- Audit date: 2026-05-30
-- Branch: semantic-embeddings
-- Commit: 5991f97
-- Evidence basis: both
-- Verification limits: only targeted extraction tests were executed in this session.
+- Audit date: 2026-06-09
+- Branch: copilot/update-md-files-another-one
+- Commit: 7c71e7c
+- Evidence basis: code inspection
+- Verification limits: test execution blocked by missing deps; no previous session test results carried forward.

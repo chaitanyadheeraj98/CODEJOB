@@ -17,7 +17,7 @@
 | `backend/app/premium_numbers/extraction.py` | SBERT prototypes and `SBERT_MARGIN_THRESHOLD=0.12` | determines keep/drop threshold for fallback extraction candidates |
 | `backend/app/premium_numbers/extraction.py` | noise/context token lists and regex guards | blocks unsubscribe/footer numeric noise from becoming leads |
 | `backend/app/main.py` | analytics weight map and range options | influences trend scoring and dashboard KPI buckets |
-| `backend/app/query_bucket/service.py` | saved-query dedupe and limit constraints | caps and normalizes query bucket persistence |
+| `backend/app/services/telegram_runtime_service.py` | `_truncate_text` draft preview limit `600` chars; subject limit `160`; routing reason limit `220` | caps Telegram review message field lengths to avoid bot message overflow |
 
 ## Current Drift Risks
 
@@ -27,8 +27,8 @@
 
 Mermaid not needed: this update is a constants inventory and risk note only.
 
-- Audit date: 2026-05-30
-- Branch: semantic-embeddings
-- Commit: 5991f97
-- Evidence basis: code inspection + targeted premium-number tests
-- Verification limits: no constant-specific regression suite beyond extraction tests.
+- Audit date: 2026-06-09
+- Branch: copilot/update-md-files-another-one
+- Commit: 7c71e7c
+- Evidence basis: code inspection
+- Verification limits: no constant-specific regression suite; telegram review tests not run in this session.

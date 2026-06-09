@@ -1,7 +1,7 @@
 # CODEJOB Test and Validation Matrix
 
-Audit date: 2026-05-17  
-Branch: `snowball-md`
+Audit date: 2026-06-09
+Branch: `copilot/update-md-files-another-one`
 
 ## 1) Standard repo validation commands
 
@@ -18,35 +18,19 @@ Branch: `snowball-md`
 
 ## 2) Command results in this audit session
 
-- `cd backend; python -m pytest`
-  - **Result:** failed during collection
-  - **Exact failure:** `ModuleNotFoundError: No module named 'app.phone_attribution'` from `tests/test_phone_attribution.py`
-  - **Blocker class:** stale test
-
-- `cd backend; python -m pytest tests/test_approve_cc_regression.py tests/test_run_once_hotfix.py tests/test_routing_policy.py tests/test_telegram_interactive.py tests/test_candidate_date_filtering.py`
-  - **Result:** passed
-  - **Exact output:** `29 passed`
-  - **Blocker class:** none
-
-- `cd dashboard; npm run lint`
+- `python -m pytest tests/test_telegram_interactive.py`
   - **Result:** failed
-  - **Exact failure:** eslint rule failures in `App.tsx`, `QueryBucket.tsx`, and test files (including missing rule definition and hook/effect violations)
-  - **Blocker class:** stale lint contract / incompatible local rule configuration
+  - **Exact failure:** `No module named pytest` (system Python 3.12.3)
+  - **Blocker class:** missing dependency
 
-- `cd dashboard; npm run test -- --run`
-  - **Result:** passed
-  - **Exact output:** `7 passed files`, `27 passed tests`
-  - **Blocker class:** none
-
-- `cd dashboard; npm run build`
+- `uv run python -m pytest tests/test_telegram_interactive.py`
   - **Result:** failed
-  - **Exact failure:** `EPERM` writing `.tsbuildinfo` under `node_modules/.tmp` plus TS6133 unused-variable errors
-  - **Blocker class:** incompatible local runtime + type/lint debt
+  - **Exact failure:** `bash: uv: command not found`
+  - **Blocker class:** incompatible local runtime
 
-- `npx markdownlint-cli docs/architecture.md docs/context.md docs/data.md docs/design.md docs/features.md docs/hardcoded.md docs/problem-fix-log.md docs/snowball.md docs/testcases.md`
-  - **Result:** failed to produce lint report
-  - **Exact failure:** npm cache permission errors (`EPERM` on `npm-cache/_cacache/tmp/*`) and repeated CLI usage-only output in this shell
-  - **Blocker class:** incompatible local runtime/tooling invocation
+- All other backend suite commands were not attempted in this session due to shared dep blocker.
+- Dashboard commands (`npm run lint`, `npm run build`, `npm run test`) were not run in this session.
+- markdownlint: `npx markdownlint-cli docs/*.md` produced only usage output (no file errors); docs/** excluded via `.markdownlintignore`.
 
 ## 3) HR-1 closeout gate mapping
 
@@ -63,10 +47,22 @@ Branch: `snowball-md`
 - `test_phone_attribution.py` imports `app.phone_attribution`, which is not present in current backend code.
 - `test_run_orchestrator.py` is stale against the current `RunOrchestratorDependencies` contract.
 
-## 5) Reviewer attention
+## 5) New tests added in this branch
 
-- Full backend pass cannot be claimed until stale test imports/contracts are fixed.
+- `backend/tests/test_telegram_interactive.py` — `TelegramReviewCommandTests` class (5 tests):
+  - `test_review_command_returns_rich_candidate_details` — verifies `/review <id>` returns routing, draft source, resume context, error fields
+  - `test_review_command_rejects_non_review_candidate` — verifies non-`needs_review` state is rejected
+  - `test_review_command_reports_missing_candidate` — verifies 404 path
+  - `test_needs_review_stays_compact` — verifies `/needs_review` list stays compact (no detail fields)
+  - `test_review_message_truncates_long_draft_preview` — verifies `_format_review_message` truncates long drafts
+
+Verification: code inspection only; tests could not be executed in this session due to missing dependencies.
+
+## 6) Reviewer attention
+
+- Full backend pass cannot be claimed until stale test imports/contracts are fixed and deps are available.
 - Dashboard tests pass, but lint/build are currently red and should be treated as active debt.
+- New `TelegramReviewCommandTests` tests could not be run; verification is code-inspection-limited.
 
-Evidence basis: both  
-Verification limits: full backend and full frontend quality gates are not fully green due stale tests and lint/build blockers.
+Evidence basis: both
+Verification limits: backend test execution blocked (missing deps / uv not available); dashboard validation not rerun; new telegram review tests are code-inspection-verified only.

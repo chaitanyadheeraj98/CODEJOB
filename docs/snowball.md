@@ -122,8 +122,8 @@ stateDiagram-v2
   Done --> [*]
 ```
 
-- Audit date: 2026-05-30
-- Branch: semantic-embeddings
-- Commit: 5991f97
+- Audit date: 2026-06-09
+- Branch: copilot/update-md-files-another-one
+- Commit: 7c71e7c
 - Evidence basis: both
 - Verification limits: targeted premium-number extraction tests only; no full-suite rerun in this session.

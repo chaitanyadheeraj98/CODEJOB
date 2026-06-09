@@ -46,8 +46,8 @@ Evidence: embedding and fallback metadata fields are exposed in `/ai/status` res
 - Feature flags control behavior but still rely on centralized orchestration wiring.
 - Runtime state for some operational signals remains process-memory scoped.
 
-- Audit date: 2026-05-30
-- Branch: semantic-embeddings
-- Commit: 5991f97
+- Audit date: 2026-06-09
+- Branch: copilot/update-md-files-another-one
+- Commit: 7c71e7c
 - Evidence basis: code inspection
-- Verification limits: full backend suite not re-run in this session; premium number extraction tests were re-run only.
+- Verification limits: full backend suite not re-run in this session; no targeted test execution possible due to missing deps.
