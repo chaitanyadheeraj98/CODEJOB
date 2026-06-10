@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
+from urllib.parse import urlparse
 
 from app.ai.resume_context_attribution import RESUME_CONTEXT_MISSING, RESUME_CONTEXT_RULES_ONLY
 from app.models import RecruiterEmail, ResumeAsset, UserSettings
@@ -59,6 +60,35 @@ class QueuePreparationResult:
     draft_model: str | None
     draft_ai_error: str | None
     draft_resume_context_status: str | None
+
+
+def _valid_nvoids_listing_url(value: str | None) -> str | None:
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    parsed = urlparse(raw)
+    if parsed.scheme not in {"http", "https"}:
+        return None
+    host = (parsed.netloc or "").lower()
+    if not host.endswith("nvoids.com"):
+        return None
+    path = (parsed.path or "").lower()
+    if not path or path == "/":
+        return None
+    return raw
+
+
+def prepend_nvoids_listing_line(draft_text: str | None, listing_url: str | None) -> str:
+    draft = (draft_text or "").strip()
+    valid_url = _valid_nvoids_listing_url(listing_url)
+    if not valid_url:
+        return draft
+    prefix = f"Nvoids Listing: {valid_url}"
+    if any(line.strip() == prefix for line in draft.splitlines()):
+        return draft
+    if not draft:
+        return prefix
+    return f"{prefix}\n\n{draft}"
 
 
 def prepare_candidate_for_queue(
@@ -178,6 +208,8 @@ def prepare_candidate_for_queue(
         draft_model = None
         draft_ai_error = None
         draft_resume_context_status = RESUME_CONTEXT_RULES_ONLY
+
+    draft_reply = prepend_nvoids_listing_line(draft_reply, request.external_thread_id)
 
     return QueuePreparationResult(
         outcome="needs_review",

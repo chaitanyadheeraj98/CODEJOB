@@ -11,6 +11,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app import main
+from app.automation.queue_preparation import prepend_nvoids_listing_line
 from app.db import Base
 from app.external_feeds.collector import CollectedPage
 from app.external_feeds import service as external_feed_service_module
@@ -418,7 +419,8 @@ class ExternalFeedsApiTests(unittest.TestCase):
                 self.assertIsNotNone(row)
                 assert row is not None
                 self.assertEqual(row.state, "needs_review")
-                self.assertEqual(row.draft_reply, "AI draft for Nvoids")
+                self.assertTrue((row.external_thread_id or "").startswith("https://"))
+                self.assertEqual(row.draft_reply, f"Nvoids Listing: {row.external_thread_id}\n\nAI draft for Nvoids")
                 self.assertEqual(row.draft_source, "deepseek")
                 self.assertEqual(row.draft_model, "deepseek-chat")
                 self.assertEqual(row.draft_resume_context_status, "injected")
@@ -463,8 +465,22 @@ class ExternalFeedsApiTests(unittest.TestCase):
                 assert row is not None
                 self.assertEqual(row.draft_source, "rules_only")
                 self.assertEqual(row.draft_resume_context_status, "missing_resume")
+                self.assertTrue((row.external_thread_id or "").startswith("https://"))
+                self.assertTrue((row.draft_reply or "").startswith(f"Nvoids Listing: {row.external_thread_id}\n\n"))
         finally:
             main.external_feed_service.scoring_runtime.compute_blended_ai_score = original_compute
+
+    def test_prepend_nvoids_listing_line_skips_non_nvoids_urls_and_avoids_duplicates(self) -> None:
+        listing_url = "https://nvoids.com/job_details.jsp?id=3435393&uid=abc"
+        prefixed = prepend_nvoids_listing_line("Subject: Example\n\nHi,\n\nBody", listing_url)
+        self.assertEqual(
+            prefixed,
+            f"Nvoids Listing: {listing_url}\n\nSubject: Example\n\nHi,\n\nBody",
+        )
+        self.assertEqual(prepend_nvoids_listing_line(prefixed, listing_url), prefixed)
+        self.assertEqual(prepend_nvoids_listing_line("Hi,\n\nBody", "https://example.com/job_details.jsp?id=1"), "Hi,\n\nBody")
+        self.assertEqual(prepend_nvoids_listing_line("Hi,\n\nBody", "nvoids:3435393"), "Hi,\n\nBody")
+        self.assertEqual(prepend_nvoids_listing_line("Hi,\n\nBody", None), "Hi,\n\nBody")
 
     def test_sync_skips_non_qualified_rows_instead_of_queueing_them(self) -> None:
         original_compute = main.external_feed_service.scoring_runtime.compute_blended_ai_score
