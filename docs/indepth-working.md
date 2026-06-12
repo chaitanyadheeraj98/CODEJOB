@@ -122,7 +122,7 @@ Process:
 - Semantic comparison uses cleaned latest email block + parsed role/skills vs resume extracted text.
 
 ### 5.2 For Nvoids Sync + Queue
-- Nvoids listing rows and detail pages are fetched/parsing in `external_feeds/parser.py`.
+- Nvoids listing rows and detail pages are fetched/parsed in `external_feeds/parser.py`.
 - Posts are deduped and stored as `ExternalOpportunity`.
 - `_enqueue_needs_review_candidate(...)` creates pseudo-email candidates from Nvoids fields and passes them into `prepare_candidate_for_queue(...)`.
 - That means Nvoids candidates use the same ATS scoring function (`compute_blended_ai_score`) and same embedding logic as Gmail.
