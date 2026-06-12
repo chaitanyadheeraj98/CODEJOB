@@ -131,6 +131,7 @@ class UserSettings(Base):
     feature_retry_queue: Mapped[bool] = mapped_column(default=False)
     feature_ai_enabled: Mapped[bool] = mapped_column(default=False)
     feature_semantic_enabled: Mapped[bool] = mapped_column(default=False)
+    draft_text_size: Mapped[str] = mapped_column(String(20), default="normal")
     fallback_draft_template: Mapped[str] = mapped_column(Text, default="")
     signature_name: Mapped[str] = mapped_column(String(255), default="")
     signature_phone: Mapped[str] = mapped_column(String(80), default="")

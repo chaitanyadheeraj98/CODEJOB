@@ -6,6 +6,7 @@ from collections.abc import Callable
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from app.ai.draft_formatting import normalize_draft_text_size
 from app.config import settings
 from app.models import UserSettings
 from app.phase0 import DEFAULT_FALLBACK_DRAFT_TEMPLATE, DEFAULT_SIGNATURE_EMAIL, DEFAULT_SIGNATURE_NAME, DEFAULT_SIGNATURE_PHONE, normalize_employer_domains
@@ -51,6 +52,9 @@ class SettingsBootstrapService:
                     existing.saved_gmail_queries_json = normalized_saved_queries_json
                 if not existing.policy_json:
                     existing.policy_json = json.dumps(policy_service.default_policy(), separators=(",", ":"))
+                normalized_draft_text_size = normalize_draft_text_size(existing.draft_text_size)
+                if existing.draft_text_size != normalized_draft_text_size:
+                    existing.draft_text_size = normalized_draft_text_size
                 if not existing.fallback_draft_template:
                     existing.fallback_draft_template = DEFAULT_FALLBACK_DRAFT_TEMPLATE
                 if not existing.signature_name:
@@ -67,6 +71,7 @@ class SettingsBootstrapService:
                 existing.nvoids_batch_limit = self._nvoids_batch_limit(existing)
                 if (
                     not existing.policy_json
+                    or existing.draft_text_size != normalized_draft_text_size
                     or not existing.fallback_draft_template
                     or not existing.signature_name
                     or not existing.signature_phone
@@ -105,6 +110,7 @@ class SettingsBootstrapService:
                 feature_retry_queue=settings.feature_retry_queue,
                 feature_ai_enabled=False,
                 feature_semantic_enabled=False,
+                draft_text_size="normal",
                 fallback_draft_template=DEFAULT_FALLBACK_DRAFT_TEMPLATE,
                 signature_name=DEFAULT_SIGNATURE_NAME,
                 signature_phone=DEFAULT_SIGNATURE_PHONE,

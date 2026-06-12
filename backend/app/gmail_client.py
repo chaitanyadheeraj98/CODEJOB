@@ -413,6 +413,7 @@ def send_reply_with_attachment(
     body: str,
     attachment_path: str | None = None,
     attachment_display_name: str | None = None,
+    draft_text_size: str = "normal",
 ) -> str:
     service = _gmail_service()
     message = EmailMessage()
@@ -423,7 +424,7 @@ def send_reply_with_attachment(
     plain_body = body or ""
     message.set_content(plain_body)
     try:
-        html_body = draft_text_to_html(plain_body)
+        html_body = draft_text_to_html(plain_body, draft_text_size=draft_text_size)
         message.add_alternative(html_body, subtype="html")
     except Exception:
         # Fallback to plain text if HTML rendering fails.
@@ -452,6 +453,7 @@ def send_new_email_with_attachment(
     body: str,
     attachment_path: str | None = None,
     attachment_display_name: str | None = None,
+    draft_text_size: str = "normal",
 ) -> str:
     service = _gmail_service()
     message = EmailMessage()
@@ -462,7 +464,7 @@ def send_new_email_with_attachment(
     plain_body = body or ""
     message.set_content(plain_body)
     try:
-        html_body = draft_text_to_html(plain_body)
+        html_body = draft_text_to_html(plain_body, draft_text_size=draft_text_size)
         message.add_alternative(html_body, subtype="html")
     except Exception:
         # Fallback to plain text if HTML rendering fails.

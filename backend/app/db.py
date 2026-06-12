@@ -330,6 +330,7 @@ def ensure_sqlite_phase0_columns() -> None:
             ("default_date_mode", "ALTER TABLE user_settings ADD COLUMN default_date_mode VARCHAR(20) DEFAULT 'today'"),
             ("feature_ai_enabled", "ALTER TABLE user_settings ADD COLUMN feature_ai_enabled BOOLEAN DEFAULT 0"),
             ("feature_semantic_enabled", "ALTER TABLE user_settings ADD COLUMN feature_semantic_enabled BOOLEAN DEFAULT 0"),
+            ("draft_text_size", "ALTER TABLE user_settings ADD COLUMN draft_text_size VARCHAR(20) DEFAULT 'normal'"),
             ("feature_auto_poll_interval_minutes", "ALTER TABLE user_settings ADD COLUMN feature_auto_poll_interval_minutes INTEGER DEFAULT 10"),
             ("feature_nvoids_enabled", "ALTER TABLE user_settings ADD COLUMN feature_nvoids_enabled BOOLEAN DEFAULT 1"),
             ("feature_nvoids_auto_sync", "ALTER TABLE user_settings ADD COLUMN feature_nvoids_auto_sync BOOLEAN DEFAULT 0"),

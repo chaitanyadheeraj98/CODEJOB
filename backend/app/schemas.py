@@ -4,6 +4,8 @@ from typing import Any, cast
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.ai.draft_formatting import DRAFT_TEXT_SIZE_VALUES, normalize_draft_text_size
+
 
 class IngestEmailRequest(BaseModel):
     sender: str
@@ -68,6 +70,7 @@ class SettingsRequest(BaseModel):
     feature_retry_queue: bool = False
     feature_ai_enabled: bool = False
     feature_semantic_enabled: bool = False
+    draft_text_size: str = "normal"
     fallback_draft_template: str = ""
     signature_name: str = ""
     signature_phone: str = ""
@@ -104,6 +107,14 @@ class SettingsRequest(BaseModel):
     @classmethod
     def validate_nvoids_batch_limit(cls, value: int) -> int:
         return max(1, min(int(value), 50))
+
+    @field_validator("draft_text_size")
+    @classmethod
+    def validate_draft_text_size(cls, value: str) -> str:
+        normalized = (value or "").strip().lower()
+        if normalized not in DRAFT_TEXT_SIZE_VALUES:
+            raise ValueError("draft_text_size must be one of: small, normal, large, huge")
+        return normalize_draft_text_size(normalized)
 
 
 class SettingsResponse(SettingsRequest):

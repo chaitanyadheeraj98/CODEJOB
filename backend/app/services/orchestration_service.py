@@ -541,6 +541,7 @@ class OrchestrationService:
 
         email.last_error = None
         sent_message_id = None
+        user_settings = self.deps.get_settings(db)
         if not email.recipient_email:
             raise HTTPException(status_code=400, detail="Recipient email is required before sending")
         if not email.cc_email:
@@ -572,6 +573,7 @@ class OrchestrationService:
                     email.draft_reply,
                     resume.file_path,
                     resume.file_name,
+                    user_settings.draft_text_size,
                 )
                 if email.external_message_id:
                     self.deps.mark_message_processed(email.external_message_id)
@@ -589,6 +591,7 @@ class OrchestrationService:
                     email.draft_reply,
                     resume.file_path,
                     resume.file_name,
+                    user_settings.draft_text_size,
                 )
             except Exception as exc:
                 email.last_error = str(exc)

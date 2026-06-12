@@ -340,6 +340,7 @@ class ExternalFeedsApiTests(unittest.TestCase):
                 "feature_retry_queue": False,
                 "feature_ai_enabled": False,
                 "feature_semantic_enabled": False,
+                "draft_text_size": "huge",
                 "fallback_draft_template": "",
                 "signature_name": "",
                 "signature_phone": "",
@@ -350,6 +351,47 @@ class ExternalFeedsApiTests(unittest.TestCase):
         self.assertEqual(res.status_code, 200, res.text)
         payload = res.json()
         self.assertEqual(payload["nvoids_locations"], ["texas", "remote"])
+        self.assertEqual(payload["draft_text_size"], "huge")
+
+    def test_settings_reject_invalid_draft_text_size(self) -> None:
+        res = self.client.put(
+            "/settings",
+            json={
+                "enabled": True,
+                "gmail_query": "is:unread",
+                "default_gmail_query": "is:unread",
+                "saved_gmail_queries": [],
+                "mail_date": None,
+                "default_date_mode": "today",
+                "min_salary": None,
+                "accepted_locations": [],
+                "visa_required_allowed": False,
+                "remote_preference": "any",
+                "role_keywords": [],
+                "must_have_skills": [],
+                "employer_domains": [],
+                "free_text_guidance": "",
+                "qualification_threshold": 0.6,
+                "feature_auto_polling": False,
+                "feature_auto_poll_interval_minutes": 10,
+                "feature_nvoids_enabled": True,
+                "feature_nvoids_auto_sync": False,
+                "feature_nvoids_poll_interval_minutes": 30,
+                "nvoids_batch_limit": 10,
+                "nvoids_locations": [],
+                "feature_auto_send": False,
+                "feature_retry_queue": False,
+                "feature_ai_enabled": False,
+                "feature_semantic_enabled": False,
+                "draft_text_size": "gigantic",
+                "fallback_draft_template": "",
+                "signature_name": "",
+                "signature_phone": "",
+                "signature_email": "",
+                "policy": None,
+            },
+        )
+        self.assertEqual(res.status_code, 422, res.text)
 
     def test_sync_skips_rows_outside_nvoids_location_filter(self) -> None:
         with self.SessionLocal() as db:

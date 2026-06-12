@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.ai.reply_service import generate_reply_with_ai_or_fallback
+from app.ai.draft_formatting import normalize_draft_text_size
 from app.ai.resume_context_attribution import (
     RESUME_CONTEXT_MISSING,
     RESUME_CONTEXT_RULES_ONLY,
@@ -706,7 +707,7 @@ def _get_orchestration_service() -> OrchestrationService:
                 end_embedding_latency_capture=end_embedding_latency_capture,
                 embedding_latency_log_enabled=lambda: settings.semantic_embedding_latency_log_enabled,
                 embedding_provider=lambda: settings.effective_semantic_embedding_provider,
-                embedding_model=lambda: settings.semantic_embedding_model or "text-embedding-3-small",
+                embedding_model=lambda: settings.effective_semantic_embedding_model,
                 evaluate_routing_for_email=_evaluate_routing_for_email,
                 is_terminal_state=_is_terminal_state,
                 email_domain=_email_domain,
@@ -995,6 +996,7 @@ def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
         feature_retry_queue=s.feature_retry_queue,
         feature_ai_enabled=s.feature_ai_enabled,
         feature_semantic_enabled=s.feature_semantic_enabled,
+        draft_text_size=normalize_draft_text_size(s.draft_text_size),
         fallback_draft_template=s.fallback_draft_template or DEFAULT_FALLBACK_DRAFT_TEMPLATE,
         signature_name=(s.signature_name or "").strip() or DEFAULT_SIGNATURE_NAME,
         signature_phone=(s.signature_phone or "").strip() or DEFAULT_SIGNATURE_PHONE,
@@ -1084,6 +1086,7 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
     s.feature_retry_queue = payload.feature_retry_queue
     s.feature_ai_enabled = payload.feature_ai_enabled
     s.feature_semantic_enabled = payload.feature_semantic_enabled
+    s.draft_text_size = normalize_draft_text_size(payload.draft_text_size)
     s.fallback_draft_template = payload.fallback_draft_template.strip() if payload.fallback_draft_template.strip() else DEFAULT_FALLBACK_DRAFT_TEMPLATE
     s.signature_name = payload.signature_name.strip() if payload.signature_name.strip() else DEFAULT_SIGNATURE_NAME
     s.signature_phone = payload.signature_phone.strip() if payload.signature_phone.strip() else DEFAULT_SIGNATURE_PHONE
@@ -1176,7 +1179,7 @@ def ai_status() -> AIStatusResponse:
     configured = connected and bool(settings.deepseek_base_url) and bool(settings.deepseek_model_fast)
     detail = "Ready" if connected else "DeepSeek API key missing (set Deepseek_API_KEY)."
     embedding_provider = settings.effective_semantic_embedding_provider
-    embedding_model = settings.semantic_embedding_model or "text-embedding-3-small"
+    embedding_model = settings.effective_semantic_embedding_model
     embedding_configured = False
     embedding_connected = False
     embedding_runtime_healthy: bool | None = None
@@ -1185,39 +1188,10 @@ def ai_status() -> AIStatusResponse:
         embedding_configured = True
         embedding_connected = True
         embedding_detail = "Ready (local hash embeddings)."
-    elif embedding_provider == "gemini":
-        embedding_configured = bool(settings.google_embedding_api_key)
-        embedding_connected = embedding_configured
-        fallback_provider = (settings.semantic_embedding_fallback_provider or "openrouter").strip().lower()
-        fallback_model = settings.semantic_embedding_fallback_model or "openai/text-embedding-3-small"
-        sbert_model = settings.semantic_embedding_sbert_model or "sentence-transformers/all-MiniLM-L6-v2"
-        embedding_detail = (
-            f"Ready (gemini primary; fallback={fallback_provider}/{fallback_model}; tertiary=sbert/{sbert_model}; terminal=hash)."
-            if embedding_configured
-            else "GOOGLE_EMBEDDING_API_KEY (or GoogleEmbedding_API_KEY) is missing for semantic embedding provider=gemini."
-        )
-    elif embedding_provider == "openai":
-        embedding_configured = bool(settings.openai_api_key)
-        embedding_connected = embedding_configured
-        embedding_detail = (
-            "Ready"
-            if embedding_configured
-            else "OPENAI_API_KEY is missing for semantic embedding provider=openai."
-        )
-    elif embedding_provider == "openrouter":
-        embedding_configured = bool(settings.openrouter_api_key) and bool(settings.openrouter_base_url)
-        embedding_connected = embedding_configured
-        sbert_model = settings.semantic_embedding_sbert_model or "sentence-transformers/all-MiniLM-L6-v2"
-        embedding_detail = (
-            f"Ready (openrouter primary; tertiary=sbert/{sbert_model}; terminal=hash)."
-            if embedding_configured
-            else "OPENROUTER_API_KEY or OPENROUTER_BASE_URL is missing for semantic embedding provider=openrouter."
-        )
     elif embedding_provider == "sbert":
         embedding_configured = True
         embedding_connected = True
-        sbert_model = settings.semantic_embedding_sbert_model or "sentence-transformers/all-MiniLM-L6-v2"
-        embedding_detail = f"Ready (local sbert primary; model={sbert_model}; terminal=hash)."
+        embedding_detail = f"Ready (local sbert primary; model={embedding_model}; fallback=hash)."
     else:
         embedding_configured = False
         embedding_connected = False

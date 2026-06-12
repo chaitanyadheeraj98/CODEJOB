@@ -25,9 +25,9 @@ class SettingsEmbeddingEnvCompatTests(unittest.TestCase):
             )
         )
         self.assertEqual(cfg.google_embedding_provider, "gemini")
-        self.assertEqual(cfg.effective_semantic_embedding_provider, "gemini")
+        self.assertEqual(cfg.effective_semantic_embedding_provider, "sbert")
 
-    def test_semantic_embedding_provider_takes_precedence(self) -> None:
+    def test_semantic_embedding_provider_is_normalized_to_runtime_provider(self) -> None:
         cfg = self._load_from_env_text(
             "\n".join(
                 [
@@ -36,11 +36,16 @@ class SettingsEmbeddingEnvCompatTests(unittest.TestCase):
                 ]
             )
         )
-        self.assertEqual(cfg.effective_semantic_embedding_provider, "openrouter")
+        self.assertEqual(cfg.effective_semantic_embedding_provider, "sbert")
 
     def test_uppercase_legacy_provider_alias_is_accepted(self) -> None:
         cfg = self._load_from_env_text("GOOGLEEMBEDDING_PROVIDER=gemini")
-        self.assertEqual(cfg.effective_semantic_embedding_provider, "gemini")
+        self.assertEqual(cfg.effective_semantic_embedding_provider, "sbert")
+
+    def test_hash_provider_remains_available_as_explicit_escape_hatch(self) -> None:
+        cfg = self._load_from_env_text("SEMANTIC_EMBEDDING_PROVIDER=hash")
+        self.assertEqual(cfg.effective_semantic_embedding_provider, "hash")
+        self.assertEqual(cfg.effective_semantic_embedding_model, "hash:256")
 
 
 if __name__ == "__main__":

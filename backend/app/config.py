@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     feature_auto_poll_interval_minutes: int = 10
     feature_auto_send: bool = False
     feature_retry_queue: bool = False
-    semantic_embedding_provider: str = "hash"
+    semantic_embedding_provider: str = "sbert"
     semantic_embedding_model: str = "text-embedding-3-small"
     semantic_embedding_dimension: int = 256
     google_embedding_provider: str = Field(
@@ -73,13 +73,30 @@ class Settings(BaseSettings):
         populate_by_name=True,
     )
 
+    def _normalize_runtime_embedding_provider(self, provider: str | None) -> str | None:
+        normalized = (provider or "").strip().lower()
+        if normalized in {"sbert", "hash"}:
+            return normalized
+        if normalized in {"gemini", "openrouter", "openai"}:
+            return "sbert"
+        return None
+
     @property
     def effective_semantic_embedding_provider(self) -> str:
-        primary = (self.semantic_embedding_provider or "").strip().lower()
-        legacy = (self.google_embedding_provider or "").strip().lower()
-        if primary and not (primary == "hash" and legacy):
+        primary = self._normalize_runtime_embedding_provider(self.semantic_embedding_provider)
+        if primary:
             return primary
-        return legacy or "hash"
+        legacy = self._normalize_runtime_embedding_provider(self.google_embedding_provider)
+        if legacy:
+            return legacy
+        return "sbert"
+
+    @property
+    def effective_semantic_embedding_model(self) -> str:
+        if self.effective_semantic_embedding_provider == "hash":
+            dims = max(32, int(self.semantic_embedding_dimension or 256))
+            return f"hash:{dims}"
+        return (self.semantic_embedding_sbert_model or "sentence-transformers/all-MiniLM-L6-v2").strip() or "sentence-transformers/all-MiniLM-L6-v2"
 
 
 settings = Settings()

@@ -14,6 +14,14 @@ const GMAIL_OAUTH_POLL_TIMEOUT_MS = 180000
 const VIEW_EVENT_THROTTLE_MS = 60000
 const PREMIUM_PAGE_LIMIT = 25
 let hasBootstrappedAppOnce = false
+export const DRAFT_TEXT_SIZE_OPTIONS = ['small', 'normal', 'large', 'huge'] as const
+export type DraftTextSize = (typeof DRAFT_TEXT_SIZE_OPTIONS)[number]
+const DRAFT_TEXT_SIZE_STYLES: Record<DraftTextSize, { fontSize: string; lineHeight: string }> = {
+  small: { fontSize: '12px', lineHeight: '1.5' },
+  normal: { fontSize: '16px', lineHeight: '1.5' },
+  large: { fontSize: '20px', lineHeight: '1.5' },
+  huge: { fontSize: '28px', lineHeight: '1.4' },
+}
 
 export function shouldTrackViewEvent(
   lastTrackedAtByKey: Record<string, number>,
@@ -40,7 +48,16 @@ function renderInline(text: string): string {
   return escaped.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
 }
 
-function draftToPreviewHtml(draftText: string): string {
+export function normalizeDraftTextSize(value: string | null | undefined): DraftTextSize {
+  const normalized = (value ?? '').trim().toLowerCase()
+  return (DRAFT_TEXT_SIZE_OPTIONS as readonly string[]).includes(normalized) ? (normalized as DraftTextSize) : 'normal'
+}
+
+export function draftTextSizeToPreviewStyle(draftTextSize: string | null | undefined): { fontSize: string; lineHeight: string } {
+  return DRAFT_TEXT_SIZE_STYLES[normalizeDraftTextSize(draftTextSize)]
+}
+
+export function draftToPreviewHtml(draftText: string): string {
   const normalized = (draftText ?? '').replaceAll('\r\n', '\n').trim()
   if (!normalized) return '<p></p>'
   const blocks = normalized.split(/\n\s*\n/).map((part) => part.trim()).filter(Boolean)
@@ -132,6 +149,7 @@ type SettingsPayload = {
   feature_retry_queue: boolean
   feature_ai_enabled: boolean
   feature_semantic_enabled: boolean
+  draft_text_size: DraftTextSize
   fallback_draft_template: string
   signature_name: string
   signature_phone: string
@@ -531,6 +549,7 @@ function App() {
     feature_retry_queue: false,
     feature_ai_enabled: false,
     feature_semantic_enabled: false,
+    draft_text_size: 'normal',
     fallback_draft_template: '',
     signature_name: '',
     signature_phone: '',
@@ -694,6 +713,7 @@ function App() {
       nvoids_batch_limit: Math.max(1, Math.min(payload.nvoids_batch_limit || 10, 50)),
       nvoids_locations: payload.nvoids_locations ?? [],
       employer_domains: payload.employer_domains ?? [],
+      draft_text_size: normalizeDraftTextSize(payload.draft_text_size),
       policy: payload.policy ?? defaultPolicy,
     }
     setSettings(normalized)
@@ -2124,6 +2144,18 @@ function App() {
                     </select>
                   </label>
                   <label>
+                    Draft Text Size
+                    <select
+                      value={settings.draft_text_size}
+                      onChange={(e) => setSettings({ ...settings, draft_text_size: normalizeDraftTextSize(e.target.value) })}
+                    >
+                      <option value="small">Small</option>
+                      <option value="normal">Normal</option>
+                      <option value="large">Large</option>
+                      <option value="huge">Huge</option>
+                    </select>
+                  </label>
+                  <label>
                     Fallback Draft Template
                     <textarea
                       className="fallbackTemplateTextarea"
@@ -2310,6 +2342,7 @@ function App() {
                   <label className="draftPaneLabel">Live Preview</label>
                   <div
                     className="draftPreview"
+                    style={draftTextSizeToPreviewStyle(settings.draft_text_size)}
                     dangerouslySetInnerHTML={{ __html: draftToPreviewHtml(effectiveDraft) }}
                   />
                 </div>
