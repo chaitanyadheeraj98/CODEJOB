@@ -13,9 +13,9 @@ from sqlalchemy.orm import Session
 from app.ai.resume_context_attribution import RESUME_CONTEXT_MISSING, RESUME_CONTEXT_RULES_ONLY
 from app.automation import RunOrchestrator, RunOrchestratorDependencies, RunOrchestratorRequest
 from app.services.policy_service import EffectiveRunInputs
-from app.models import DraftEditFeedback, RecipientRoutingFeedback, RecruiterEmail, ResumeAsset, SyncRun, UserSettings
+from app.gmail_client import GmailMessageCandidate, MailAttachment
+from app.models import AttachmentAsset, DraftEditFeedback, RecipientRoutingFeedback, RecruiterEmail, ResumeAsset, SyncRun, UserSettings
 from app.phase0 import RoutingResult
-from app.gmail_client import GmailMessageCandidate
 from app.routing import RoutingDecision
 from app.schemas import ApproveSendRequest, AutomationRunRequest, AutomationRunResponse, GmailSyncResponse, RejectRequest, ResolveRecipientsRequest
 
@@ -28,6 +28,7 @@ class OrchestrationDeps:
     model_name: str
     get_settings: Callable[[Session], UserSettings]
     active_resume: Callable[[Session], ResumeAsset | None]
+    enabled_attachment_assets: Callable[[Session], list[AttachmentAsset]]
     effective_run_inputs: Callable[[UserSettings, str | None], EffectiveRunInputs]
     compute_blended_ai_score: Callable[..., tuple[float, str, str, str | None, str | None, Any]]
     analyze_email_routing: Callable[[Session, str, str, str, str], RoutingResult]
@@ -558,6 +559,14 @@ class OrchestrationService:
         resume = self.deps.active_resume(db)
         if not resume:
             raise HTTPException(status_code=400, detail="No active resume uploaded")
+        extra_attachments = self.deps.enabled_attachment_assets(db)
+        attachments = [
+            MailAttachment(path=resume.file_path, display_name=resume.file_name, mime_type=resume.mime_type),
+            *[
+                MailAttachment(path=item.file_path, display_name=item.file_name, mime_type=item.mime_type)
+                for item in extra_attachments
+            ],
+        ]
         email.resume_asset_id = resume.id
         email.resume_file_name = resume.file_name
 
@@ -571,9 +580,8 @@ class OrchestrationService:
                     email.cc_email,
                     email.subject,
                     email.draft_reply,
-                    resume.file_path,
-                    resume.file_name,
-                    user_settings.draft_text_size,
+                    draft_text_size=user_settings.draft_text_size,
+                    attachments=attachments,
                 )
                 if email.external_message_id:
                     self.deps.mark_message_processed(email.external_message_id)
@@ -589,9 +597,8 @@ class OrchestrationService:
                     email.cc_email,
                     email.subject,
                     email.draft_reply,
-                    resume.file_path,
-                    resume.file_name,
-                    user_settings.draft_text_size,
+                    draft_text_size=user_settings.draft_text_size,
+                    attachments=attachments,
                 )
             except Exception as exc:
                 email.last_error = str(exc)

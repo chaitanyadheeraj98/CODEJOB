@@ -17,7 +17,7 @@ from app.external_feeds.collector import CollectedPage
 from app.external_feeds import service as external_feed_service_module
 from app.external_feeds.service import ExternalFeedService
 from app.external_feeds.models import ExternalFeedSource, ExternalOpportunity
-from app.models import EmployerNumber, NumberReviewQueue, RecruiterEmail, RecruiterNumber, RecruiterOpportunity, ResumeAsset, UserSettings
+from app.models import AttachmentAsset, EmployerNumber, NumberReviewQueue, RecruiterEmail, RecruiterNumber, RecruiterOpportunity, ResumeAsset, UserSettings
 
 
 class _FakeCollector:
@@ -392,6 +392,51 @@ class ExternalFeedsApiTests(unittest.TestCase):
             },
         )
         self.assertEqual(res.status_code, 422, res.text)
+
+    def test_attachment_file_crud_round_trip(self) -> None:
+        first_fd, first_path = tempfile.mkstemp(suffix=".txt")
+        second_fd, second_path = tempfile.mkstemp(suffix=".pdf")
+        os.close(first_fd)
+        os.close(second_fd)
+        try:
+            with open(first_path, "wb") as handle:
+                handle.write(b"first attachment")
+            with open(second_path, "wb") as handle:
+                handle.write(b"%PDF-1.4 second attachment")
+            with open(first_path, "rb") as first_handle, open(second_path, "rb") as second_handle:
+                upload = self.client.post(
+                    "/settings/attachments",
+                    files=[
+                        ("files", ("notes.txt", first_handle, "text/plain")),
+                        ("files", ("portfolio.pdf", second_handle, "application/pdf")),
+                    ],
+                )
+            self.assertEqual(upload.status_code, 200, upload.text)
+            upload_items = upload.json()
+            self.assertEqual(len(upload_items), 2)
+            attachment_id = upload_items[0]["id"]
+
+            listed = self.client.get("/settings/attachments")
+            self.assertEqual(listed.status_code, 200, listed.text)
+            listed_items = listed.json()
+            self.assertEqual({item["file_name"] for item in listed_items}, {"notes.txt", "portfolio.pdf"})
+            self.assertTrue(all(item["is_enabled"] for item in listed_items))
+
+            toggled = self.client.patch(f"/settings/attachments/{attachment_id}", json={"is_enabled": False})
+            self.assertEqual(toggled.status_code, 200, toggled.text)
+            self.assertFalse(toggled.json()["is_enabled"])
+
+            deleted = self.client.delete(f"/settings/attachments/{attachment_id}")
+            self.assertEqual(deleted.status_code, 200, deleted.text)
+
+            with self.SessionLocal() as db:
+                rows = db.query(AttachmentAsset).filter(AttachmentAsset.owner_id == main.settings.owner_id).all()
+                self.assertEqual(len(rows), 1)
+        finally:
+            if os.path.exists(first_path):
+                os.unlink(first_path)
+            if os.path.exists(second_path):
+                os.unlink(second_path)
 
     def test_sync_skips_rows_outside_nvoids_location_filter(self) -> None:
         with self.SessionLocal() as db:

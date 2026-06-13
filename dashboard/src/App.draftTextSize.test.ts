@@ -4,6 +4,7 @@ import {
   DRAFT_TEXT_SIZE_OPTIONS,
   draftTextSizeToPreviewStyle,
   draftToPreviewHtml,
+  formatAttachmentSize,
   normalizeDraftTextSize,
 } from './App'
 
@@ -26,5 +27,11 @@ describe('draft text size helpers', () => {
     const html = draftToPreviewHtml('Hello **Java**\n\n- Spring')
     expect(html).toContain('<strong>Java</strong>')
     expect(html).toContain('<ul><li>Spring</li></ul>')
+  })
+
+  it('formats attachment sizes for stable settings display', () => {
+    expect(formatAttachmentSize(512)).toBe('512 B')
+    expect(formatAttachmentSize(2048)).toBe('2 KB')
+    expect(formatAttachmentSize(2 * 1024 * 1024)).toBe('2.0 MB')
   })
 })

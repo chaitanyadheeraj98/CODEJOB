@@ -223,6 +223,17 @@ type ResumeAsset = {
   updated_at: string
 }
 
+type AttachmentAsset = {
+  id: number
+  file_name: string
+  mime_type: string
+  sha256: string
+  file_size: number
+  is_enabled: boolean
+  created_at: string
+  updated_at: string
+}
+
 type Candidate = {
   id: number
   subject: string
@@ -246,6 +257,7 @@ type Candidate = {
   draft_resume_context_status: string | null
   draft_quality?: DraftQuality | null
   resume_file_name: string | null
+  attachment_file_names: string[]
   state: string
   last_error: string | null
   source: string
@@ -421,6 +433,13 @@ export function clamp100(value: number): number {
   return Math.max(0, Math.min(Math.round(value), 100))
 }
 
+export function formatAttachmentSize(size: number | null | undefined): string {
+  const value = typeof size === 'number' && Number.isFinite(size) ? size : 0
+  if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`
+  if (value >= 1024) return `${Math.round(value / 1024)} KB`
+  return `${value} B`
+}
+
 export function getOverallVerdict(
   candidate: VerdictCandidateInput,
   effectiveDraft: string,
@@ -557,7 +576,9 @@ function App() {
     policy: defaultPolicy,
   })
   const [resumeFile, setResumeFile] = useState<File | null>(null)
+  const [attachmentUploadFiles, setAttachmentUploadFiles] = useState<File[]>([])
   const [activeResume, setActiveResume] = useState<ResumeAsset | null>(null)
+  const [attachmentFiles, setAttachmentFiles] = useState<AttachmentAsset[]>([])
   const [running, setRunning] = useState(false)
   const [nvoidsRunning, setNvoidsRunning] = useState(false)
   const [oauthInProgress, setOauthInProgress] = useState(false)
@@ -736,6 +757,12 @@ function App() {
     const items = (await res.json()) as ResumeAsset[]
     const current = items.find((item) => item.is_current) ?? null
     setActiveResume(current)
+  }
+
+  const loadAttachmentFiles = async () => {
+    const res = await fetch(`${apiBase}/settings/attachments`)
+    if (!res.ok) throw new Error('Failed to load attachment files')
+    setAttachmentFiles((await res.json()) as AttachmentAsset[])
   }
 
   const loadPremiumNumbers = async (opts?: { append?: boolean; cursor?: number | null }) => {
@@ -986,6 +1013,7 @@ function App() {
         await Promise.all([
           loadStatus(),
           loadActiveResume(),
+          loadAttachmentFiles(),
           loadAiStatus(),
           loadTelegramStatus(),
         ])
@@ -1145,6 +1173,49 @@ function App() {
     }
   }
 
+  const uploadAttachmentFiles = async () => {
+    if (attachmentUploadFiles.length === 0) return
+    setError('')
+    const fd = new FormData()
+    for (const file of attachmentUploadFiles) {
+      fd.append('files', file)
+    }
+    try {
+      const res = await fetch(`${apiBase}/settings/attachments`, { method: 'POST', body: fd })
+      if (!res.ok) throw new Error('Failed to upload attachment files')
+      setAttachmentUploadFiles([])
+      await loadAttachmentFiles()
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }
+
+  const toggleAttachmentFile = async (attachmentId: number, isEnabled: boolean) => {
+    setError('')
+    try {
+      const res = await fetch(`${apiBase}/settings/attachments/${attachmentId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_enabled: isEnabled }),
+      })
+      if (!res.ok) throw new Error('Failed to update attachment file')
+      await loadAttachmentFiles()
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }
+
+  const deleteAttachmentFile = async (attachmentId: number) => {
+    setError('')
+    try {
+      const res = await fetch(`${apiBase}/settings/attachments/${attachmentId}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error('Failed to delete attachment file')
+      await loadAttachmentFiles()
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }
+
   const runAutomation = async () => {
     setRunning(true)
     setError('')
@@ -1189,6 +1260,8 @@ function App() {
       setRunning(false)
     }
   }
+
+  const enabledAttachmentNames = attachmentFiles.filter((item) => item.is_enabled).map((item) => item.file_name)
 
   const runNvoidsSync = async () => {
     setNvoidsRunning(true)
@@ -2176,6 +2249,43 @@ function App() {
                   <button type="button" onClick={uploadResume} disabled={!resumeFile}>
                     {activeResume ? 'Replace Resume' : 'Upload Resume'}
                   </button>
+                  <div className="stack">
+                    <strong>Attachment files</strong>
+                    <p className="subtle">Upload global reusable files that will be sent alongside the active resume.</p>
+                    <input
+                      type="file"
+                      multiple
+                      onChange={(e) => setAttachmentUploadFiles(Array.from(e.target.files ?? []))}
+                    />
+                    <button type="button" onClick={uploadAttachmentFiles} disabled={attachmentUploadFiles.length === 0}>
+                      Upload Attachment Files
+                    </button>
+                    {attachmentFiles.length === 0 ? (
+                      <p className="subtle">No extra attachment files uploaded yet.</p>
+                    ) : (
+                      attachmentFiles.map((attachment) => (
+                        <div key={attachment.id} className="pillRow">
+                          <label className="toggleRow" style={{ flex: 1 }}>
+                            <span>
+                              {attachment.file_name}
+                              {` (${formatAttachmentSize(attachment.file_size)})`}
+                            </span>
+                            <span className="toggleSwitch">
+                              <input
+                                type="checkbox"
+                                checked={attachment.is_enabled}
+                                onChange={(e) => toggleAttachmentFile(attachment.id, e.target.checked)}
+                              />
+                              <span className="toggleTrack" />
+                            </span>
+                          </label>
+                          <button type="button" onClick={() => deleteAttachmentFile(attachment.id)}>
+                            Delete
+                          </button>
+                        </div>
+                      ))
+                    )}
+                  </div>
                 </div>
               </section>
 
@@ -2325,6 +2435,7 @@ function App() {
                 <p><strong>CC:</strong> {item.cc_email ?? '-'}</p>
                 {renderRoutingPanel(item)}
                 <p><strong>Resume:</strong> {item.resume_file_name ?? '-'}</p>
+                <p><strong>Attachment files:</strong> {(enabledAttachmentNames.length > 0 ? enabledAttachmentNames : item.attachment_file_names ?? []).join(', ') || '-'}</p>
                 <p>
                   <strong>Draft source:</strong> {getDraftSourceLabel(item.draft_source)}
                   {item.draft_model ? ` (${item.draft_model})` : ''}

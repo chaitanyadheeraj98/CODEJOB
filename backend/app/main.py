@@ -50,6 +50,7 @@ from app.gmail_labeling import GmailLabelingService, LabelRuleInput
 from app.external_feeds.service import ExternalFeedService
 from app.external_feeds.models import ExternalScrapeRun
 from app.models import (
+    AttachmentAsset,
     DraftEditFeedback,
     EmployerNumber,
     NumberReviewQueue,
@@ -98,6 +99,8 @@ from app.services.telegram_runtime_service import TelegramRuntime, TelegramRunti
 from app.schemas import (
     AIStatusResponse,
     ApproveSendRequest,
+    AttachmentAssetResponse,
+    AttachmentAssetUpdateRequest,
     AutomationRunRequest,
     AutomationRunResponse,
     BulkRejectRequest,
@@ -671,6 +674,7 @@ def _get_orchestration_service() -> OrchestrationService:
                 model_name=settings.deepseek_model_fast,
                 get_settings=_get_settings,
                 active_resume=_active_resume,
+                enabled_attachment_assets=_enabled_attachment_assets,
                 effective_run_inputs=lambda user_settings, requested_mail_date: policy_service.effective_run_inputs(
                     gmail_query=user_settings.gmail_query,
                     default_gmail_query=user_settings.default_gmail_query,
@@ -772,6 +776,28 @@ def _active_resume(db: Session) -> ResumeAsset | None:
         .order_by(ResumeAsset.version.desc())
         .first()
     )
+
+
+def _list_attachment_assets(db: Session) -> list[AttachmentAsset]:
+    return (
+        db.query(AttachmentAsset)
+        .filter(AttachmentAsset.owner_id == settings.owner_id)
+        .order_by(AttachmentAsset.created_at.desc(), AttachmentAsset.id.desc())
+        .all()
+    )
+
+
+def _enabled_attachment_assets(db: Session) -> list[AttachmentAsset]:
+    return (
+        db.query(AttachmentAsset)
+        .filter(AttachmentAsset.owner_id == settings.owner_id, AttachmentAsset.is_enabled.is_(True))
+        .order_by(AttachmentAsset.created_at.asc(), AttachmentAsset.id.asc())
+        .all()
+    )
+
+
+def _enabled_attachment_file_names(db: Session) -> list[str]:
+    return [item.file_name for item in _enabled_attachment_assets(db)]
 
 
 def _semantic_text_for_email(subject: str, body: str, role: str, skills_text: str) -> str:
@@ -1028,7 +1054,9 @@ def _hydrate_candidates_for_review(db: Session, emails: list[RecruiterEmail]) ->
 
 def _serialize_candidate_for_review(db: Session, email: RecruiterEmail) -> EmailResponse:
     _hydrate_candidates_for_review(db, [email])
-    return EmailResponse.model_validate(email)
+    payload = EmailResponse.model_validate(email).model_dump()
+    payload["attachment_file_names"] = _enabled_attachment_file_names(db)
+    return EmailResponse.model_validate(payload)
 
 
 def _get_candidate_for_review(db: Session, email_id: int) -> RecruiterEmail:
@@ -1159,6 +1187,83 @@ def list_resumes(db: Session = Depends(get_db)) -> list[ResumeAsset]:
         .order_by(ResumeAsset.version.desc())
         .all()
     )
+
+
+@app.post("/settings/attachments", response_model=list[AttachmentAssetResponse])
+def upload_attachment_files(files: list[UploadFile] = File(...), db: Session = Depends(get_db)) -> list[AttachmentAssetResponse]:
+    if not files:
+        raise HTTPException(status_code=400, detail="At least one file is required")
+    Path(settings.attachment_storage_dir).mkdir(parents=True, exist_ok=True)
+    created: list[AttachmentAsset] = []
+    for file in files:
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="File name required")
+        content = file.file.read()
+        if not content:
+            raise HTTPException(status_code=400, detail=f"Empty file not allowed: {file.filename}")
+        sha256 = hashlib.sha256(content).hexdigest()
+        target_path = Path(settings.attachment_storage_dir) / f"{sha256}_{uuid.uuid4().hex}_{file.filename}"
+        target_path.write_bytes(content)
+        created.append(
+            AttachmentAsset(
+                owner_id=settings.owner_id,
+                file_path=str(target_path),
+                file_name=file.filename,
+                mime_type=file.content_type or "application/octet-stream",
+                sha256=sha256,
+                file_size=len(content),
+                is_enabled=True,
+            )
+        )
+    db.add_all(created)
+    db.commit()
+    for item in created:
+        db.refresh(item)
+    return [AttachmentAssetResponse.model_validate(item) for item in created]
+
+
+@app.get("/settings/attachments", response_model=list[AttachmentAssetResponse])
+def list_attachment_files(db: Session = Depends(get_db)) -> list[AttachmentAssetResponse]:
+    return [AttachmentAssetResponse.model_validate(item) for item in _list_attachment_assets(db)]
+
+
+@app.patch("/settings/attachments/{attachment_id}", response_model=AttachmentAssetResponse)
+def update_attachment_file(
+    attachment_id: int,
+    payload: AttachmentAssetUpdateRequest,
+    db: Session = Depends(get_db),
+) -> AttachmentAssetResponse:
+    attachment = (
+        db.query(AttachmentAsset)
+        .filter(AttachmentAsset.owner_id == settings.owner_id, AttachmentAsset.id == attachment_id)
+        .first()
+    )
+    if not attachment:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+    attachment.is_enabled = payload.is_enabled
+    db.commit()
+    db.refresh(attachment)
+    return AttachmentAssetResponse.model_validate(attachment)
+
+
+@app.delete("/settings/attachments/{attachment_id}")
+def delete_attachment_file(attachment_id: int, db: Session = Depends(get_db)) -> dict[str, object]:
+    attachment = (
+        db.query(AttachmentAsset)
+        .filter(AttachmentAsset.owner_id == settings.owner_id, AttachmentAsset.id == attachment_id)
+        .first()
+    )
+    if not attachment:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+    file_path = Path(attachment.file_path)
+    db.delete(attachment)
+    db.commit()
+    try:
+        if file_path.exists():
+            file_path.unlink()
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Attachment deleted from database but not disk: {exc}") from exc
+    return {"id": attachment_id, "deleted": True}
 
 
 @app.get("/gmail/status", response_model=GmailStatusResponse)
@@ -1655,8 +1760,17 @@ def list_candidates(
     visible = items[:limit]
     _hydrate_candidates_for_review(db, visible)
     next_cursor = cursor + limit if has_next else None
+    attachment_file_names = _enabled_attachment_file_names(db)
     return CandidateListResponse(
-        items=[EmailResponse.model_validate(item) for item in visible],
+        items=[
+            EmailResponse.model_validate(
+                {
+                    **EmailResponse.model_validate(item).model_dump(),
+                    "attachment_file_names": attachment_file_names,
+                }
+            )
+            for item in visible
+        ],
         next_cursor=next_cursor,
         has_next=has_next,
     )

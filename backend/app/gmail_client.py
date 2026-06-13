@@ -6,6 +6,7 @@ import logging
 import mimetypes
 import re
 import threading
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.message import EmailMessage
 from pathlib import Path
@@ -45,6 +46,13 @@ class GmailMessageCandidate(TypedDict):
     snippet: str
     gmail_received_at: datetime | None
     label_ids: list[str]
+
+
+@dataclass(frozen=True)
+class MailAttachment:
+    path: str
+    display_name: str | None = None
+    mime_type: str | None = None
 
 
 def _as_dict(value: Any) -> dict[str, Any]:
@@ -405,6 +413,29 @@ def get_message_rfc_message_id(message_id: str) -> str:
     return _get_header(headers, "Message-ID")
 
 
+def _resolve_mail_attachments(
+    attachments: list[MailAttachment] | None,
+    attachment_path: str | None,
+    attachment_display_name: str | None,
+) -> list[MailAttachment]:
+    resolved = list(attachments or [])
+    if attachment_path:
+        resolved.append(MailAttachment(path=attachment_path, display_name=attachment_display_name))
+    return resolved
+
+
+def _add_mail_attachments(message: EmailMessage, attachments: list[MailAttachment]) -> None:
+    for attachment in attachments:
+        file_path = Path(attachment.path)
+        safe_name = (attachment.display_name or "").strip() or file_path.name
+        if not file_path.exists():
+            raise FileNotFoundError(f"Attachment file missing on disk: {safe_name}")
+        content = file_path.read_bytes()
+        mime_type = attachment.mime_type or mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
+        main_type, sub_type = mime_type.split("/", 1)
+        message.add_attachment(content, maintype=main_type, subtype=sub_type, filename=safe_name)
+
+
 def send_reply_with_attachment(
     thread_id: str,
     to: str,
@@ -414,6 +445,7 @@ def send_reply_with_attachment(
     attachment_path: str | None = None,
     attachment_display_name: str | None = None,
     draft_text_size: str = "normal",
+    attachments: list[MailAttachment] | None = None,
 ) -> str:
     service = _gmail_service()
     message = EmailMessage()
@@ -430,14 +462,7 @@ def send_reply_with_attachment(
         # Fallback to plain text if HTML rendering fails.
         pass
 
-    if attachment_path:
-        file_path = Path(attachment_path)
-        if file_path.exists():
-            content = file_path.read_bytes()
-            mime_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
-            main_type, sub_type = mime_type.split("/", 1)
-            safe_name = (attachment_display_name or "").strip() or file_path.name
-            message.add_attachment(content, maintype=main_type, subtype=sub_type, filename=safe_name)
+    _add_mail_attachments(message, _resolve_mail_attachments(attachments, attachment_path, attachment_display_name))
 
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
     payload = {"raw": raw, "threadId": thread_id}
@@ -454,6 +479,7 @@ def send_new_email_with_attachment(
     attachment_path: str | None = None,
     attachment_display_name: str | None = None,
     draft_text_size: str = "normal",
+    attachments: list[MailAttachment] | None = None,
 ) -> str:
     service = _gmail_service()
     message = EmailMessage()
@@ -470,14 +496,7 @@ def send_new_email_with_attachment(
         # Fallback to plain text if HTML rendering fails.
         pass
 
-    if attachment_path:
-        file_path = Path(attachment_path)
-        if file_path.exists():
-            content = file_path.read_bytes()
-            mime_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
-            main_type, sub_type = mime_type.split("/", 1)
-            safe_name = (attachment_display_name or "").strip() or file_path.name
-            message.add_attachment(content, maintype=main_type, subtype=sub_type, filename=safe_name)
+    _add_mail_attachments(message, _resolve_mail_attachments(attachments, attachment_path, attachment_display_name))
 
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
     payload = {"raw": raw}

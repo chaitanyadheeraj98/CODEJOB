@@ -141,6 +141,24 @@ class ResumeResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class AttachmentAssetResponse(BaseModel):
+    id: int
+    owner_id: str
+    file_name: str
+    mime_type: str
+    sha256: str
+    file_size: int
+    is_enabled: bool
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class AttachmentAssetUpdateRequest(BaseModel):
+    is_enabled: bool
+
+
 class DraftQualityResponse(BaseModel):
     content_valid: bool
     greeting_compliance: str
@@ -206,6 +224,7 @@ class EmailResponse(BaseModel):
     routing_confirmed: bool
     resume_asset_id: int | None
     resume_file_name: str | None
+    attachment_file_names: list[str] = Field(default_factory=list)
     sent_at: datetime | None
     gmail_sent_id: str | None
     last_error: str | None

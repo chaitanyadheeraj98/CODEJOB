@@ -13,7 +13,7 @@ from sqlalchemy.pool import StaticPool
 
 from app import main
 from app.db import Base
-from app.models import RecruiterEmail, ResumeAsset, UserSettings
+from app.models import AttachmentAsset, RecruiterEmail, ResumeAsset, UserSettings
 
 
 class ApproveCcRegressionTests(unittest.TestCase):
@@ -163,6 +163,25 @@ class ApproveCcRegressionTests(unittest.TestCase):
         db.refresh(email)
         return email
 
+    def _add_attachment(self, db: Session, *, file_name: str = "cover-letter.pdf", enabled: bool = True) -> AttachmentAsset:
+        fd, path = tempfile.mkstemp(suffix=".pdf")
+        os.close(fd)
+        with open(path, "wb") as handle:
+            handle.write(b"%PDF-1.4 extra")
+        attachment = AttachmentAsset(
+            owner_id=main.settings.owner_id,
+            file_path=path,
+            file_name=file_name,
+            mime_type="application/pdf",
+            sha256=f"sha-{file_name}",
+            file_size=14,
+            is_enabled=enabled,
+        )
+        db.add(attachment)
+        db.commit()
+        db.refresh(attachment)
+        return attachment
+
     def test_approve_send_returns_400_when_cc_missing_even_if_routing_looks_safe(self) -> None:
         with Session(self.engine) as db:
             self._add_resume(db)
@@ -254,13 +273,15 @@ class ApproveCcRegressionTests(unittest.TestCase):
         original_send_new = main.send_new_email_with_attachment
         original_mark_processed = main.mark_message_processed
         original_append_tracking = main.append_tracking_sheet_row
+        sent_reply_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
         try:
-            main.send_reply_with_attachment = lambda *_args, **_kwargs: "sent-123"
+            main.send_reply_with_attachment = lambda *args, **kwargs: (sent_reply_calls.append((args, kwargs)), "sent-123")[1]
             main.send_new_email_with_attachment = lambda *_args, **_kwargs: "new-123"
             main.mark_message_processed = lambda *_args, **_kwargs: None
             main.append_tracking_sheet_row = lambda **_kwargs: None
             with Session(self.engine) as db:
                 self._add_resume(db)
+                self._add_attachment(db)
                 email = self._add_needs_review_email(db, cc_email="vaishnavi@horizonsoftech.net")
 
             response = self.client.post(f"/candidates/{email.id}/approve-send", json={"edited_reply": None})
@@ -268,6 +289,11 @@ class ApproveCcRegressionTests(unittest.TestCase):
             payload = response.json()
             self.assertEqual(payload["state"], "approved_sent")
             self.assertEqual(payload["sent_status"], "sent")
+            self.assertEqual(len(sent_reply_calls), 1)
+            attachments = sent_reply_calls[0][1].get("attachments")
+            self.assertIsInstance(attachments, list)
+            assert isinstance(attachments, list)
+            self.assertEqual(len(attachments), 2)
         finally:
             main.send_reply_with_attachment = original_send_reply
             main.send_new_email_with_attachment = original_send_new
@@ -279,13 +305,14 @@ class ApproveCcRegressionTests(unittest.TestCase):
         original_send_new = main.send_new_email_with_attachment
         original_append_tracking = main.append_tracking_sheet_row
         sent_reply_calls: list[tuple[object, ...]] = []
-        sent_new_calls: list[tuple[object, ...]] = []
+        sent_new_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
         try:
             main.send_reply_with_attachment = lambda *args, **_kwargs: (sent_reply_calls.append(args), "reply-123")[1]
-            main.send_new_email_with_attachment = lambda *args, **_kwargs: (sent_new_calls.append(args), "new-456")[1]
+            main.send_new_email_with_attachment = lambda *args, **kwargs: (sent_new_calls.append((args, kwargs)), "new-456")[1]
             main.append_tracking_sheet_row = lambda **_kwargs: None
             with Session(self.engine) as db:
                 self._add_resume(db)
+                self._add_attachment(db, file_name="portfolio.zip")
                 email = self._add_needs_review_nvoids_email(db, cc_email="vaishnavi@horizonsoftech.net")
 
             response = self.client.post(f"/candidates/{email.id}/approve-send", json={"edited_reply": None})
@@ -296,6 +323,10 @@ class ApproveCcRegressionTests(unittest.TestCase):
             self.assertEqual(payload["gmail_sent_id"], "new-456")
             self.assertEqual(len(sent_reply_calls), 0)
             self.assertEqual(len(sent_new_calls), 1)
+            attachments = sent_new_calls[0][1].get("attachments")
+            self.assertIsInstance(attachments, list)
+            assert isinstance(attachments, list)
+            self.assertEqual(len(attachments), 2)
         finally:
             main.send_reply_with_attachment = original_send_reply
             main.send_new_email_with_attachment = original_send_new

@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     google_sheets_tracking_tab_name: str = "Sheet1"
     owner_id: str = "default-owner"
     resume_storage_dir: str = "./data/resumes"
+    attachment_storage_dir: str = "./data/attachments"
     qualification_threshold: float = 0.6
     feature_auto_polling: bool = False
     feature_auto_poll_interval_minutes: int = 10

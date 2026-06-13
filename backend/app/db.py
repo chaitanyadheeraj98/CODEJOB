@@ -358,6 +358,41 @@ def ensure_sqlite_phase0_columns() -> None:
 
         conn.exec_driver_sql(
             """
+            CREATE TABLE IF NOT EXISTS attachment_assets (
+                id INTEGER PRIMARY KEY,
+                owner_id VARCHAR(100),
+                file_path TEXT,
+                file_name VARCHAR(255),
+                mime_type VARCHAR(120) DEFAULT 'application/octet-stream',
+                sha256 VARCHAR(64),
+                file_size INTEGER DEFAULT 0,
+                is_enabled BOOLEAN DEFAULT 1,
+                created_at DATETIME,
+                updated_at DATETIME
+            )
+            """
+        )
+        conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_attachment_assets_owner_id ON attachment_assets (owner_id)"
+        )
+        conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_attachment_assets_sha256 ON attachment_assets (sha256)"
+        )
+        existing_attachment_assets = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(attachment_assets)")}
+        attachment_assets_alter_statements = [
+            ("mime_type", "ALTER TABLE attachment_assets ADD COLUMN mime_type VARCHAR(120) DEFAULT 'application/octet-stream'"),
+            ("sha256", "ALTER TABLE attachment_assets ADD COLUMN sha256 VARCHAR(64)"),
+            ("file_size", "ALTER TABLE attachment_assets ADD COLUMN file_size INTEGER DEFAULT 0"),
+            ("is_enabled", "ALTER TABLE attachment_assets ADD COLUMN is_enabled BOOLEAN DEFAULT 1"),
+            ("created_at", "ALTER TABLE attachment_assets ADD COLUMN created_at DATETIME"),
+            ("updated_at", "ALTER TABLE attachment_assets ADD COLUMN updated_at DATETIME"),
+        ]
+        for column_name, statement in attachment_assets_alter_statements:
+            if column_name not in existing_attachment_assets:
+                conn.exec_driver_sql(statement)
+
+        conn.exec_driver_sql(
+            """
             CREATE TABLE IF NOT EXISTS productivity_events (
                 id INTEGER PRIMARY KEY,
                 owner_id VARCHAR(100),
