@@ -218,6 +218,7 @@ type ResumeAsset = {
   mime_type: string
   sha256: string
   version: number
+  skills_text: string
   is_enabled: boolean
   is_current: boolean
   created_at: string
@@ -584,6 +585,8 @@ function App() {
     policy: defaultPolicy,
   })
   const [resumeFile, setResumeFile] = useState<File | null>(null)
+  const [resumeSkillsInput, setResumeSkillsInput] = useState('')
+  const [resumeSkillEdits, setResumeSkillEdits] = useState<Record<number, string>>({})
   const [attachmentUploadFiles, setAttachmentUploadFiles] = useState<File[]>([])
   const [resumeAssets, setResumeAssets] = useState<ResumeAsset[]>([])
   const [attachmentFiles, setAttachmentFiles] = useState<AttachmentAsset[]>([])
@@ -762,7 +765,9 @@ function App() {
   const loadResumes = async () => {
     const res = await fetch(`${apiBase}/settings/resumes`)
     if (!res.ok) throw new Error('Failed to load resumes')
-    setResumeAssets((await res.json()) as ResumeAsset[])
+    const payload = (await res.json()) as ResumeAsset[]
+    setResumeAssets(payload)
+    setResumeSkillEdits(Object.fromEntries(payload.map((resume) => [resume.id, resume.skills_text ?? ''])))
   }
 
   const loadAttachmentFiles = async () => {
@@ -1171,10 +1176,27 @@ function App() {
     setError('')
     const fd = new FormData()
     fd.append('file', resumeFile)
+    fd.append('skills_text', resumeSkillsInput)
     try {
       const res = await fetch(`${apiBase}/settings/resume`, { method: 'POST', body: fd })
       if (!res.ok) throw new Error('Failed to upload resume')
       setResumeFile(null)
+      setResumeSkillsInput('')
+      await loadResumes()
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }
+
+  const saveResumeSkills = async (resumeId: number) => {
+    setError('')
+    try {
+      const res = await fetch(`${apiBase}/settings/resumes/${resumeId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skills_text: resumeSkillEdits[resumeId] ?? '' }),
+      })
+      if (!res.ok) throw new Error('Failed to save resume skills')
       await loadResumes()
     } catch (e) {
       setError((e as Error).message)
@@ -2325,6 +2347,16 @@ function App() {
                       : 'No legacy current fallback resume is available yet.'}
                   </p>
                   <input type="file" accept=".pdf,.doc,.docx" onChange={(e) => setResumeFile(e.target.files?.[0] ?? null)} />
+                  <label>
+                    Resume Skills
+                    <textarea
+                      rows={3}
+                      value={resumeSkillsInput}
+                      onChange={(e) => setResumeSkillsInput(e.target.value)}
+                      placeholder="java, spring boot, microservices, aws"
+                    />
+                  </label>
+                  <p className="subtle">Use clean comma-separated skills for faster and more accurate resume matching.</p>
                   <button type="button" onClick={uploadResume} disabled={!resumeFile}>
                     Upload Resume To Database
                   </button>
@@ -2342,6 +2374,21 @@ function App() {
                           {resume.is_current ? ' | Legacy current fallback' : ''}
                           {resume.is_enabled ? ' | Enabled' : ' | Disabled'}
                         </p>
+                        <label>
+                          Stored Skills
+                          <textarea
+                            rows={3}
+                            value={resumeSkillEdits[resume.id] ?? ''}
+                            onChange={(e) =>
+                              setResumeSkillEdits((prev) => ({
+                                ...prev,
+                                [resume.id]: e.target.value,
+                              }))
+                            }
+                            placeholder="java, spring boot, microservices, aws"
+                          />
+                        </label>
+                        <p className="subtle">{resume.skills_text ? `Matching skills: ${resume.skills_text}` : 'No manual skills saved yet. File extraction will be used as fallback.'}</p>
                         <div className="rowBtns">
                           <label className="toggleRow pillRow" style={{ flex: 1 }}>
                             <span>{resume.is_enabled ? 'Enabled' : 'Disabled'}</span>
@@ -2354,6 +2401,9 @@ function App() {
                               <span className="toggleTrack" />
                             </span>
                           </label>
+                          <button type="button" onClick={() => saveResumeSkills(resume.id)}>
+                            Save Skills
+                          </button>
                           <button type="button" onClick={() => deleteResumeAsset(resume.id)}>
                             Delete
                           </button>

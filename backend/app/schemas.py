@@ -134,6 +134,7 @@ class ResumeResponse(BaseModel):
     mime_type: str
     sha256: str
     version: int
+    skills_text: str
     is_enabled: bool
     is_current: bool
     created_at: datetime
@@ -143,7 +144,8 @@ class ResumeResponse(BaseModel):
 
 
 class ResumeUpdateRequest(BaseModel):
-    is_enabled: bool
+    is_enabled: bool | None = None
+    skills_text: str | None = None
 
 
 class AttachmentAssetResponse(BaseModel):

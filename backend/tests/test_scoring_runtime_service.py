@@ -4,6 +4,19 @@ from app.services.scoring_runtime_service import ScoringRuntimeDeps, ScoringRunt
 
 
 class ScoringRuntimeServiceTests(unittest.TestCase):
+    def test_semantic_text_for_resume_prefers_manual_skills(self) -> None:
+        service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1], "hash")))
+
+        class Resume:
+            skills_text = "java, spring boot, aws"
+            file_path = "missing.docx"
+            file_name = "missing.docx"
+
+        self.assertEqual(
+            service.semantic_text_for_resume(Resume()),
+            "Skills: java, spring boot, aws",
+        )
+
     def test_extract_latest_message_block_prefers_newest_segment(self) -> None:
         service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1], "hash")))
         body = (

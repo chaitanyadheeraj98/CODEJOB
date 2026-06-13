@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -28,9 +29,11 @@ class OrchestrationDeps:
     model_name: str
     get_settings: Callable[[Session], UserSettings]
     active_resume: Callable[[Session], ResumeAsset | None]
+    enabled_resumes: Callable[[Session], list[ResumeAsset]]
     enabled_attachment_assets: Callable[[Session], list[AttachmentAsset]]
     effective_run_inputs: Callable[[UserSettings, str | None], EffectiveRunInputs]
     compute_blended_ai_score: Callable[..., tuple[float, str, str, str | None, str | None, Any]]
+    select_best_resume_match: Callable[..., Any]
     analyze_email_routing: Callable[[Session, str, str, str, str], RoutingResult]
     build_user_fallback_draft: Callable[..., str]
     apply_routing_result: Callable[[RecruiterEmail, RoutingResult], None]
@@ -117,17 +120,23 @@ class OrchestrationService:
                 parsed = self.deps.parse_email(item["subject"], item["body"])
                 hard_pass, hard_reason = self.deps.hard_filter_check(parsed, user_settings)
                 active_resume = self.deps.active_resume(db)
-                ai_score, ai_summary, ai_score_source, email_embedding_json, resume_embedding_json, semantic_diag = self.deps.compute_blended_ai_score(
+                resume_selection = self.deps.select_best_resume_match(
                     subject=item["subject"],
                     body=item["body"],
                     parsed=parsed,
                     user_settings=user_settings,
                     email_row=None,
-                    resume=active_resume,
                     db=db,
                     owner_id=self.deps.owner_id,
                     external_thread_id=str(item.get("external_thread_id") or ""),
                 )
+                selected_resume = getattr(resume_selection, "resume", None) or active_resume
+                ai_score = float(getattr(resume_selection, "ai_score", 0.0))
+                ai_summary = str(getattr(resume_selection, "ai_summary", ""))
+                ai_score_source = str(getattr(resume_selection, "ai_score_source", ""))
+                email_embedding_json = cast(str | None, getattr(resume_selection, "email_embedding_json", None))
+                resume_embedding_json = cast(str | None, getattr(resume_selection, "resume_embedding_json", None))
+                semantic_diag = getattr(resume_selection, "semantic_diag", None)
                 threshold = user_settings.qualification_threshold
 
                 state = "needs_review"
@@ -164,7 +173,7 @@ class OrchestrationService:
                             role=str(parsed["role"]),
                             parsed=parsed,
                             greeting_line=greeting_line,
-                            resume_file_name=None,
+                            resume_file_name=selected_resume.file_name if selected_resume else None,
                         )
 
                 email = RecruiterEmail(
@@ -207,13 +216,15 @@ class OrchestrationService:
                     external_rfc_message_id=item.get("external_rfc_message_id"),
                     gmail_received_at=item.get("gmail_received_at"),
                     recipient_email=item["recipient_email"],
+                    resume_asset_id=selected_resume.id if selected_resume else None,
+                    resume_file_name=selected_resume.file_name if selected_resume else None,
                 )
                 if routed:
                     self.deps.apply_routing_result(email, routed)
                     email.routing_confirmed = False
                 self.deps.apply_gmail_label_for_email(email=email, candidate_item=item)
-                if active_resume and resume_embedding_json and active_resume.semantic_embedding != resume_embedding_json:
-                    active_resume.semantic_embedding = resume_embedding_json
+                if selected_resume and resume_embedding_json and selected_resume.semantic_embedding != resume_embedding_json:
+                    selected_resume.semantic_embedding = resume_embedding_json
                 db.add(email)
                 imported_count += 1
 
@@ -303,6 +314,7 @@ class OrchestrationService:
         self.deps.set_ai_runtime(ai_state)
         try:
             active_resume = self.deps.active_resume(db)
+            enabled_resumes = self.deps.enabled_resumes(db)
             run_orchestrator = RunOrchestrator()
             result = run_orchestrator.execute(
                 RunOrchestratorRequest(
@@ -312,6 +324,7 @@ class OrchestrationService:
                     user_settings=user_settings,
                     resume=resume,
                     active_resume=active_resume,
+                    enabled_resumes=enabled_resumes,
                     effective_policy=effective_policy,
                     threshold=threshold,
                     dry_run=dry_run,
@@ -338,6 +351,7 @@ class OrchestrationService:
                         ),
                         generate_reply_with_ai_or_fallback=self.deps.generate_reply_with_ai_or_fallback,
                         apply_routing_decision=self.deps.apply_routing_decision,
+                        select_best_resume_match=self.deps.select_best_resume_match,
                         capture_premium_numbers=self.deps.capture_premium_numbers,
                         record_productivity_event=self.deps.record_productivity_event,
                         apply_gmail_label=lambda _db, email, item: self.deps.apply_gmail_label_for_email(email=email, candidate_item=item),
@@ -556,10 +570,26 @@ class OrchestrationService:
             raise HTTPException(status_code=400, detail=f"Recipient routing is not safe to send: {detail}")
         if not email.draft_reply.strip():
             raise HTTPException(status_code=400, detail="Draft email body is required before sending")
-        resume = self.deps.active_resume(db)
+        resume = None
+        if email.resume_asset_id:
+            resume = (
+                db.query(ResumeAsset)
+                .filter(ResumeAsset.owner_id == self.deps.owner_id, ResumeAsset.id == email.resume_asset_id)
+                .first()
+            )
+        if resume is None:
+            resume = self.deps.active_resume(db)
         if not resume:
             raise HTTPException(status_code=400, detail="No active resume uploaded")
         extra_attachments = self.deps.enabled_attachment_assets(db)
+        if not resume.file_path or not os.path.exists(resume.file_path):
+            raise HTTPException(status_code=400, detail=f"Resume file missing on disk: {resume.file_name}")
+        missing_attachments = [item.file_name for item in extra_attachments if not item.file_path or not os.path.exists(item.file_path)]
+        if missing_attachments:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Attachment files missing on disk: {', '.join(missing_attachments)}",
+            )
         attachments = [
             MailAttachment(path=resume.file_path, display_name=resume.file_name, mime_type=resume.mime_type),
             *[
@@ -719,7 +749,17 @@ class OrchestrationService:
         role = str(parsed["role"])
         greeting_line = self.deps.greeting_from_to_contact(to_email, email.body)
         user_settings = self.deps.get_settings(db)
-        resume = self.deps.active_resume(db)
+        resume_selection = self.deps.select_best_resume_match(
+            subject=email.subject,
+            body=email.body,
+            parsed=parsed,
+            user_settings=user_settings,
+            email_row=email,
+            db=db,
+            owner_id=self.deps.owner_id,
+            external_thread_id=email.external_thread_id,
+        )
+        resume = getattr(resume_selection, "resume", None) or self.deps.active_resume(db)
         fallback_reply = self.deps.build_user_fallback_draft(
             db,
             user_settings,

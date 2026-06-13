@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any, Callable
 
 from app.ai.resume_context import extract_resume_context
@@ -28,6 +29,17 @@ class SemanticDiagnostics:
     thread_snapshot_email_id: int | None = None
 
 
+@dataclass
+class ResumeMatchSelection:
+    resume: ResumeAsset | None
+    ai_score: float
+    ai_summary: str
+    ai_score_source: str
+    email_embedding_json: str | None
+    resume_embedding_json: str | None
+    semantic_diag: SemanticDiagnostics
+
+
 class ScoringRuntimeService:
     def __init__(self, deps: ScoringRuntimeDeps):
         self.deps = deps
@@ -45,7 +57,79 @@ class ScoringRuntimeService:
     def semantic_text_for_resume(self, resume: ResumeAsset | None) -> str:
         if not resume:
             return ""
+        skills_text = str(getattr(resume, "skills_text", "") or "").strip()
+        if skills_text and skills_text.lower() != "none_detected":
+            return f"Skills: {skills_text}"
         return extract_resume_context(resume.file_path, resume.file_name)
+
+    def select_best_resume_match(
+        self,
+        *,
+        subject: str,
+        body: str,
+        parsed: dict[str, str | int],
+        user_settings: UserSettings,
+        email_row: RecruiterEmail | None,
+        resumes: list[ResumeAsset],
+        fallback_resume: ResumeAsset | None,
+        db: Any | None = None,
+        owner_id: str | None = None,
+        external_thread_id: str | None = None,
+    ) -> ResumeMatchSelection:
+        enabled_resumes = [resume for resume in resumes if getattr(resume, "is_enabled", False)]
+
+        def _score_resume(resume: ResumeAsset | None, email_ctx: RecruiterEmail | Any | None) -> tuple[ResumeMatchSelection, RecruiterEmail | Any | None]:
+            ai_score, ai_summary, ai_score_source, email_embedding_json, resume_embedding_json, semantic_diag = self.compute_blended_ai_score(
+                subject=subject,
+                body=body,
+                parsed=parsed,
+                user_settings=user_settings,
+                email_row=email_ctx,
+                resume=resume,
+                db=db,
+                owner_id=owner_id,
+                external_thread_id=external_thread_id,
+            )
+            if resume and resume_embedding_json and resume.semantic_embedding != resume_embedding_json:
+                resume.semantic_embedding = resume_embedding_json
+            next_email_ctx = email_ctx
+            if email_embedding_json and (email_ctx is None or getattr(email_ctx, "semantic_embedding", None) != email_embedding_json):
+                next_email_ctx = SimpleNamespace(
+                    id=getattr(email_ctx, "id", None),
+                    semantic_embedding=email_embedding_json,
+                    external_thread_id=external_thread_id,
+                )
+            return (
+                ResumeMatchSelection(
+                    resume=resume,
+                    ai_score=ai_score,
+                    ai_summary=ai_summary,
+                    ai_score_source=ai_score_source,
+                    email_embedding_json=email_embedding_json,
+                    resume_embedding_json=resume_embedding_json,
+                    semantic_diag=semantic_diag,
+                ),
+                next_email_ctx,
+            )
+
+        if not user_settings.feature_semantic_enabled:
+            selected_resume = fallback_resume or (enabled_resumes[0] if enabled_resumes else None)
+            selection, _ = _score_resume(selected_resume, email_row)
+            return selection
+
+        if not enabled_resumes:
+            selection, _ = _score_resume(fallback_resume, email_row)
+            return selection
+
+        best_selection: ResumeMatchSelection | None = None
+        email_ctx: RecruiterEmail | Any | None = email_row
+        for resume in enabled_resumes:
+            selection, email_ctx = _score_resume(resume, email_ctx)
+            if best_selection is None or selection.ai_score > best_selection.ai_score:
+                best_selection = selection
+
+        assert best_selection is not None
+        return best_selection
 
     def ensure_embedding_cached(self, current_payload: str | None, text: str) -> tuple[list[float], str | None, str]:
         cached = embedding_from_json(current_payload)

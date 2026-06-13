@@ -39,6 +39,7 @@ class RunOrchestratorDependencies:
     ]
     generate_reply_with_ai_or_fallback: Callable[..., Any]
     apply_routing_decision: Callable[[RecruiterEmail, RoutingDecision], None]
+    select_best_resume_match: Callable[..., Any]
     capture_premium_numbers: Callable[[Session, RecruiterEmail], None]
     record_productivity_event: Callable[..., Any]
     apply_gmail_label: Callable[[Session, RecruiterEmail, CandidateItem], None]
@@ -53,6 +54,7 @@ class RunOrchestratorRequest:
     user_settings: UserSettings
     resume: ResumeAsset
     active_resume: ResumeAsset | None
+    enabled_resumes: list[ResumeAsset]
     effective_policy: Mapping[str, Any]
     threshold: float
     dry_run: bool
@@ -113,6 +115,20 @@ class RunOrchestrator:
             body = str(item["body"])
             sender = str(item["sender"])
             snippet = str(item.get("snippet", ""))
+            parsed_for_selection = request.deps.parse_email(subject, body)
+            resume_selection = request.deps.select_best_resume_match(
+                subject=subject,
+                body=body,
+                parsed=parsed_for_selection,
+                user_settings=request.user_settings,
+                email_row=existing,
+                resumes=request.enabled_resumes,
+                fallback_resume=request.active_resume,
+                db=request.db,
+                owner_id=request.owner_id,
+                external_thread_id=str(item.get("external_thread_id") or ""),
+            )
+            selected_resume = getattr(resume_selection, "resume", None) or request.active_resume or request.resume
             if request.user_settings.feature_ai_enabled:
                 ai_last_error = None
                 ai_last_started_at = datetime.now(UTC)
@@ -132,8 +148,8 @@ class RunOrchestrator:
                         effective_policy=request.effective_policy,
                         threshold=request.threshold,
                         model_name=request.model_name,
-                        scoring_resume=request.active_resume,
-                        draft_resume=request.resume,
+                        scoring_resume=selected_resume,
+                        draft_resume=selected_resume,
                         existing_email=existing,
                         external_thread_id=str(item.get("external_thread_id") or ""),
                     ),
@@ -154,11 +170,11 @@ class RunOrchestrator:
                     ai_last_duration_ms = int((ai_last_finished_at - ai_last_started_at).total_seconds() * 1000)
             parsed = preparation.parsed
             if (
-                request.active_resume
+                selected_resume
                 and preparation.resume_embedding_json
-                and request.active_resume.semantic_embedding != preparation.resume_embedding_json
+                and selected_resume.semantic_embedding != preparation.resume_embedding_json
             ):
-                request.active_resume.semantic_embedding = preparation.resume_embedding_json
+                selected_resume.semantic_embedding = preparation.resume_embedding_json
 
             if preparation.outcome == "not_qualified":
                 if request.dry_run:
@@ -227,8 +243,8 @@ class RunOrchestrator:
                     target.decision_reason = preparation.decision_reason
                     request.deps.apply_routing_decision(target, routing_decision)
                     target.routing_confirmed = False
-                    target.resume_asset_id = request.resume.id
-                    target.resume_file_name = request.resume.file_name
+                    target.resume_asset_id = selected_resume.id if selected_resume else None
+                    target.resume_file_name = selected_resume.file_name if selected_resume else None
 
                 apply_failed_state(email)
                 email = self._commit_email_phase(
@@ -296,8 +312,8 @@ class RunOrchestrator:
                 target.gmail_sent_id = None
                 request.deps.apply_routing_decision(target, routing_decision)
                 target.routing_confirmed = False
-                target.resume_asset_id = request.resume.id
-                target.resume_file_name = request.resume.file_name
+                target.resume_asset_id = selected_resume.id if selected_resume else None
+                target.resume_file_name = selected_resume.file_name if selected_resume else None
                 target.skip_reason = None
 
             apply_queued_state(email)

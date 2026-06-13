@@ -476,6 +476,14 @@ class ExternalFeedService:
             .first()
         )
 
+    def _enabled_resumes(self, db: Session, *, owner_id: str) -> list[ResumeAsset]:
+        return (
+            db.query(ResumeAsset)
+            .filter(ResumeAsset.owner_id == owner_id, ResumeAsset.is_enabled.is_(True))
+            .order_by(ResumeAsset.is_current.desc(), ResumeAsset.updated_at.desc(), ResumeAsset.version.desc(), ResumeAsset.id.desc())
+            .all()
+        )
+
     def _enqueue_needs_review_candidate(self, db: Session, *, owner_id: str, item: ExternalOpportunity) -> bool:
         recruiter_to = extract_email_address(item.recruiter_email or "")
         if not recruiter_to:
@@ -498,6 +506,7 @@ class ExternalFeedService:
             or UserSettings(owner_id=owner_id)
         )
         active_resume = self._active_resume(db, owner_id=owner_id)
+        enabled_resumes = self._enabled_resumes(db, owner_id=owner_id)
         effective_policy = policy_service.read_policy_from_settings(settings.policy_json)
         threshold = policy_service.policy_threshold(settings.qualification_threshold, effective_policy)
         routing_decision = RoutingDecision(
@@ -514,6 +523,20 @@ class ExternalFeedService:
             is_sendable_candidate=True,
             needs_manual_confirmation=False,
         )
+        parsed = parse_email(subject, body)
+        resume_selection = self.scoring_runtime.select_best_resume_match(
+            subject=subject,
+            body=body,
+            parsed=parsed,
+            user_settings=settings,
+            email_row=existing,
+            resumes=enabled_resumes,
+            fallback_resume=active_resume,
+            db=db,
+            owner_id=owner_id,
+            external_thread_id=item.source_url or external_message_id,
+        )
+        selected_resume = resume_selection.resume or active_resume
         preparation = prepare_candidate_for_queue(
             QueuePreparationRequest(
                 db=db,
@@ -526,8 +549,8 @@ class ExternalFeedService:
                 effective_policy=effective_policy,
                 threshold=threshold,
                 model_name="deepseek-chat",
-                scoring_resume=active_resume,
-                draft_resume=active_resume,
+                scoring_resume=selected_resume,
+                draft_resume=selected_resume,
                 existing_email=existing,
                 external_thread_id=item.source_url or external_message_id,
                 routing_decision=routing_decision,
@@ -561,8 +584,8 @@ class ExternalFeedService:
                 generate_reply_with_ai_or_fallback=lambda **kwargs: generate_reply_with_ai_or_fallback(**kwargs),
             ),
         )
-        if active_resume and preparation.resume_embedding_json and active_resume.semantic_embedding != preparation.resume_embedding_json:
-            active_resume.semantic_embedding = preparation.resume_embedding_json
+        if selected_resume and preparation.resume_embedding_json and selected_resume.semantic_embedding != preparation.resume_embedding_json:
+            selected_resume.semantic_embedding = preparation.resume_embedding_json
         if preparation.outcome != "needs_review":
             return False
         email = RecruiterEmail(
@@ -612,8 +635,8 @@ class ExternalFeedService:
             routing_evidence="[]",
             routing_candidates="[]",
             routing_confirmed=False,
-            resume_asset_id=active_resume.id if active_resume else None,
-            resume_file_name=active_resume.file_name if active_resume else None,
+            resume_asset_id=selected_resume.id if selected_resume else None,
+            resume_file_name=selected_resume.file_name if selected_resume else None,
         )
         db.add(email)
         return True

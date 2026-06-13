@@ -451,18 +451,28 @@ class ExternalFeedsApiTests(unittest.TestCase):
                 handle.write(b"%PDF-1.4 second resume")
 
             with open(first_path, "rb") as first_handle:
-                first_upload = self.client.post("/settings/resume", files={"file": ("resume-one.pdf", first_handle, "application/pdf")})
+                first_upload = self.client.post(
+                    "/settings/resume",
+                    files={"file": ("resume-one.pdf", first_handle, "application/pdf")},
+                    data={"skills_text": "java, spring boot"},
+                )
             self.assertEqual(first_upload.status_code, 200, first_upload.text)
             first_resume = first_upload.json()
             self.assertTrue(first_resume["is_enabled"])
             self.assertTrue(first_resume["is_current"])
+            self.assertEqual(first_resume["skills_text"], "java, spring boot")
 
             with open(second_path, "rb") as second_handle:
-                second_upload = self.client.post("/settings/resume", files={"file": ("resume-two.pdf", second_handle, "application/pdf")})
+                second_upload = self.client.post(
+                    "/settings/resume",
+                    files={"file": ("resume-two.pdf", second_handle, "application/pdf")},
+                    data={"skills_text": "java, angular"},
+                )
             self.assertEqual(second_upload.status_code, 200, second_upload.text)
             second_resume = second_upload.json()
             self.assertTrue(second_resume["is_enabled"])
             self.assertTrue(second_resume["is_current"])
+            self.assertEqual(second_resume["skills_text"], "java, angular")
 
             listed = self.client.get("/settings/resumes")
             self.assertEqual(listed.status_code, 200, listed.text)
@@ -470,6 +480,13 @@ class ExternalFeedsApiTests(unittest.TestCase):
             self.assertEqual(len(items), 2)
             self.assertEqual(sum(1 for item in items if item["is_current"]), 1)
             self.assertEqual(sum(1 for item in items if item["is_enabled"]), 2)
+
+            updated_skills = self.client.patch(
+                f"/settings/resumes/{second_resume['id']}",
+                json={"skills_text": "java, angular, microservices"},
+            )
+            self.assertEqual(updated_skills.status_code, 200, updated_skills.text)
+            self.assertEqual(updated_skills.json()["skills_text"], "java, angular, microservices")
 
             disabled = self.client.patch(f"/settings/resumes/{second_resume['id']}", json={"is_enabled": False})
             self.assertEqual(disabled.status_code, 200, disabled.text)

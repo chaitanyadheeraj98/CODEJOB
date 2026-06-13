@@ -11,7 +11,7 @@ from typing import Mapping, TypedDict, TypeVar, cast
 import threading
 from zoneinfo import ZoneInfo
 
-from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, or_
 from sqlalchemy.exc import OperationalError
@@ -675,6 +675,7 @@ def _get_orchestration_service() -> OrchestrationService:
                 model_name=settings.deepseek_model_fast,
                 get_settings=_get_settings,
                 active_resume=_active_resume,
+                enabled_resumes=_enabled_resumes,
                 enabled_attachment_assets=_enabled_attachment_assets,
                 effective_run_inputs=lambda user_settings, requested_mail_date: policy_service.effective_run_inputs(
                     gmail_query=user_settings.gmail_query,
@@ -685,6 +686,7 @@ def _get_orchestration_service() -> OrchestrationService:
                     requested_mail_date=requested_mail_date,
                 ),
                 compute_blended_ai_score=lambda **kwargs: _compute_blended_ai_score(**kwargs),
+                select_best_resume_match=lambda **kwargs: _select_best_resume_match(**kwargs),
                 analyze_email_routing=lambda db, sender, subject, body, snippet: _analyze_email_routing(db, sender, subject, body, snippet),
                 build_user_fallback_draft=lambda db, user_settings, sender, role, parsed, greeting_line, resume_file_name: _build_user_fallback_draft(
                     db,
@@ -788,6 +790,15 @@ def _list_resumes(db: Session) -> list[ResumeAsset]:
     )
 
 
+def _enabled_resumes(db: Session) -> list[ResumeAsset]:
+    return (
+        db.query(ResumeAsset)
+        .filter(ResumeAsset.owner_id == settings.owner_id, ResumeAsset.is_enabled.is_(True))
+        .order_by(ResumeAsset.is_current.desc(), ResumeAsset.updated_at.desc(), ResumeAsset.version.desc(), ResumeAsset.id.desc())
+        .all()
+    )
+
+
 def _most_recent_enabled_resume(db: Session, *, exclude_resume_id: int | None = None) -> ResumeAsset | None:
     query = (
         db.query(ResumeAsset)
@@ -814,6 +825,70 @@ def _set_legacy_current_resume(
             item.is_current = False
     if target_resume:
         target_resume.is_current = True
+
+
+def _normalize_resume_skills_text(raw: str | None) -> str:
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for part in str(raw or "").split(","):
+        token = part.strip()
+        if not token:
+            continue
+        normalized = token.lower()
+        if normalized == "none_detected" or normalized in seen:
+            continue
+        seen.add(normalized)
+        ordered.append(token)
+    return ", ".join(ordered)
+
+
+def _refresh_resume_embedding(resume: ResumeAsset) -> None:
+    try:
+        resume_text = _semantic_text_for_resume(resume)
+        if resume_text.strip():
+            resume_vector, _provider = _generate_embedding_with_health(resume_text)
+            resume.semantic_embedding = embedding_to_json(resume_vector)
+        else:
+            resume.semantic_embedding = None
+    except Exception as exc:
+        logger.warning("Resume semantic embedding skipped: %s", exc)
+
+
+def _resume_for_candidate(db: Session, email: RecruiterEmail) -> ResumeAsset | None:
+    if email.resume_asset_id:
+        pinned = (
+            db.query(ResumeAsset)
+            .filter(ResumeAsset.owner_id == settings.owner_id, ResumeAsset.id == email.resume_asset_id)
+            .first()
+        )
+        if pinned:
+            return pinned
+    return _active_resume(db)
+
+
+def _select_best_resume_match(
+    *,
+    subject: str,
+    body: str,
+    parsed: dict[str, str | int],
+    user_settings: UserSettings,
+    email_row: RecruiterEmail | None,
+    db: Session,
+    owner_id: str | None,
+    external_thread_id: str | None,
+) -> object:
+    return _get_scoring_runtime_service().select_best_resume_match(
+        subject=subject,
+        body=body,
+        parsed=parsed,
+        user_settings=user_settings,
+        email_row=email_row,
+        resumes=_enabled_resumes(db),
+        fallback_resume=_active_resume(db),
+        db=db,
+        owner_id=owner_id,
+        external_thread_id=external_thread_id,
+    )
 
 
 def _list_attachment_assets(db: Session) -> list[AttachmentAsset]:
@@ -1167,7 +1242,11 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
 
 
 @app.post("/settings/resume", response_model=ResumeResponse)
-def upload_resume(file: UploadFile = File(...), db: Session = Depends(get_db)) -> ResumeResponse:
+def upload_resume(
+    file: UploadFile = File(...),
+    skills_text: str = Form(""),
+    db: Session = Depends(get_db),
+) -> ResumeResponse:
     if not file.filename:
         raise HTTPException(status_code=400, detail="File name required")
     content = file.file.read()
@@ -1202,16 +1281,11 @@ def upload_resume(file: UploadFile = File(...), db: Session = Depends(get_db)) -
         mime_type=file.content_type or "application/pdf",
         sha256=sha256,
         version=next_version,
+        skills_text=_normalize_resume_skills_text(skills_text),
         is_enabled=True,
         is_current=True,
     )
-    try:
-        resume_text = _semantic_text_for_resume(resume)
-        if resume_text.strip():
-            resume_vector, _provider = _generate_embedding_with_health(resume_text)
-            resume.semantic_embedding = embedding_to_json(resume_vector)
-    except Exception as exc:
-        logger.warning("Resume semantic embedding skipped: %s", exc)
+    _refresh_resume_embedding(resume)
     db.add(resume)
     db.commit()
     db.refresh(resume)
@@ -1233,13 +1307,21 @@ def update_resume(resume_id: int, payload: ResumeUpdateRequest, db: Session = De
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found")
 
-    resume.is_enabled = payload.is_enabled
-    if payload.is_enabled:
-        _set_legacy_current_resume(db, target_resume=resume)
-    elif resume.is_current:
-        replacement = _most_recent_enabled_resume(db, exclude_resume_id=resume.id)
-        resume.is_current = False
-        _set_legacy_current_resume(db, target_resume=replacement)
+    if payload.is_enabled is None and payload.skills_text is None:
+        raise HTTPException(status_code=400, detail="At least one resume update field is required")
+
+    if payload.skills_text is not None:
+        resume.skills_text = _normalize_resume_skills_text(payload.skills_text)
+        _refresh_resume_embedding(resume)
+
+    if payload.is_enabled is not None:
+        resume.is_enabled = payload.is_enabled
+        if payload.is_enabled:
+            _set_legacy_current_resume(db, target_resume=resume)
+        elif resume.is_current:
+            replacement = _most_recent_enabled_resume(db, exclude_resume_id=resume.id)
+            resume.is_current = False
+            _set_legacy_current_resume(db, target_resume=replacement)
     db.commit()
     db.refresh(resume)
     return ResumeResponse.model_validate(resume)
@@ -1718,17 +1800,23 @@ def ingest_email(payload: IngestEmailRequest, db: Session = Depends(get_db)) -> 
     parsed = parse_email(payload.subject, payload.body)
     hard_pass, hard_reason = hard_filter_check(parsed, user_settings)
     active_resume = _active_resume(db)
-    ai_score, ai_summary, ai_score_source, email_embedding_json, resume_embedding_json, semantic_diag = _compute_blended_ai_score(
+    resume_selection = _select_best_resume_match(
         subject=payload.subject,
         body=payload.body,
         parsed=parsed,
         user_settings=user_settings,
         email_row=None,
-        resume=active_resume,
         db=db,
         owner_id=settings.owner_id,
         external_thread_id=None,
     )
+    selected_resume = cast(ResumeAsset | None, getattr(resume_selection, "resume", None)) or active_resume
+    ai_score = cast(float, getattr(resume_selection, "ai_score"))
+    ai_summary = cast(str, getattr(resume_selection, "ai_summary"))
+    ai_score_source = cast(str, getattr(resume_selection, "ai_score_source"))
+    email_embedding_json = cast(str | None, getattr(resume_selection, "email_embedding_json"))
+    resume_embedding_json = cast(str | None, getattr(resume_selection, "resume_embedding_json"))
+    semantic_diag = getattr(resume_selection, "semantic_diag")
     threshold = user_settings.qualification_threshold
     state = "needs_review" if hard_pass and ai_score >= threshold else "auto_rejected"
     decision = "Qualified" if state == "needs_review" else "Reject"
@@ -1739,7 +1827,7 @@ def ingest_email(payload: IngestEmailRequest, db: Session = Depends(get_db)) -> 
         role=str(parsed["role"]),
         parsed=parsed,
         greeting_line=greeting_from_to_contact(None, payload.body),
-        resume_file_name=active_resume.file_name if active_resume else None,
+        resume_file_name=selected_resume.file_name if selected_resume else None,
     )
 
     email = RecruiterEmail(
@@ -1768,6 +1856,8 @@ def ingest_email(payload: IngestEmailRequest, db: Session = Depends(get_db)) -> 
         thread_snapshot_used=getattr(semantic_diag, "thread_snapshot_used", None),
         thread_snapshot_email_id=getattr(semantic_diag, "thread_snapshot_email_id", None),
         semantic_embedding=email_embedding_json,
+        resume_asset_id=selected_resume.id if selected_resume else None,
+        resume_file_name=selected_resume.file_name if selected_resume else None,
         draft_reply=fallback_draft
         if state == "needs_review"
         else "",
@@ -1780,8 +1870,8 @@ def ingest_email(payload: IngestEmailRequest, db: Session = Depends(get_db)) -> 
         source="manual",
     )
     db.add(email)
-    if active_resume and resume_embedding_json and active_resume.semantic_embedding != resume_embedding_json:
-        active_resume.semantic_embedding = resume_embedding_json
+    if selected_resume and resume_embedding_json and selected_resume.semantic_embedding != resume_embedding_json:
+        selected_resume.semantic_embedding = resume_embedding_json
     db.commit()
     db.refresh(email)
     if state == "needs_review":

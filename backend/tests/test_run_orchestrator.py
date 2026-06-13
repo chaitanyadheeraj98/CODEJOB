@@ -162,6 +162,18 @@ class RunOrchestratorTests(unittest.TestCase):
         ) -> None:
             events.append((event_type, event_source))
 
+        def select_best_resume_match(**kwargs: object) -> object:
+            resume = kwargs.get("fallback_resume")
+            return SimpleNamespace(
+                resume=resume,
+                ai_score=ai_score,
+                ai_summary="summary",
+                ai_score_source="v1",
+                email_embedding_json=None,
+                resume_embedding_json=None,
+                semantic_diag=SimpleNamespace(input_source="latest_block", input_chars=120, chunks=1, fallback_reason=None),
+            )
+
         deps = RunOrchestratorDependencies(
             parse_email=parse_email,
             hard_filter_check=hard_filter_check,
@@ -178,6 +190,7 @@ class RunOrchestratorTests(unittest.TestCase):
                 resume_context_status="injected",
             ),
             apply_routing_decision=apply_routing_decision,
+            select_best_resume_match=select_best_resume_match,
             capture_premium_numbers=lambda *_args, **_kwargs: None,
             record_productivity_event=record_productivity_event,
             apply_gmail_label=lambda *_args, **_kwargs: None,
@@ -218,6 +231,7 @@ class RunOrchestratorTests(unittest.TestCase):
                     user_settings=user_settings,
                     resume=resume,
                     active_resume=resume,
+                    enabled_resumes=[resume],
                     effective_policy={},
                     threshold=0.6,
                     dry_run=False,
@@ -241,6 +255,7 @@ class RunOrchestratorTests(unittest.TestCase):
                     user_settings=user_settings,
                     resume=resume,
                     active_resume=resume,
+                    enabled_resumes=[resume],
                     effective_policy={},
                     threshold=0.6,
                     dry_run=True,
@@ -266,6 +281,7 @@ class RunOrchestratorTests(unittest.TestCase):
                     user_settings=user_settings,
                     resume=resume,
                     active_resume=resume,
+                    enabled_resumes=[resume],
                     effective_policy={},
                     threshold=0.6,
                     dry_run=False,
@@ -292,6 +308,7 @@ class RunOrchestratorTests(unittest.TestCase):
                     user_settings=user_settings,
                     resume=resume,
                     active_resume=resume,
+                    enabled_resumes=[resume],
                     effective_policy={},
                     threshold=0.6,
                     dry_run=False,
@@ -324,6 +341,7 @@ class RunOrchestratorTests(unittest.TestCase):
                     user_settings=user_settings,
                     resume=resume,
                     active_resume=resume,
+                    enabled_resumes=[resume],
                     effective_policy={},
                     threshold=0.6,
                     dry_run=False,
@@ -352,6 +370,7 @@ class RunOrchestratorTests(unittest.TestCase):
                     user_settings=user_settings,
                     resume=resume,
                     active_resume=resume,
+                    enabled_resumes=[resume],
                     effective_policy={},
                     threshold=0.6,
                     dry_run=False,
