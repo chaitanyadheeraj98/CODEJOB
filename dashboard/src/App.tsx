@@ -218,6 +218,7 @@ type ResumeAsset = {
   mime_type: string
   sha256: string
   version: number
+  is_enabled: boolean
   is_current: boolean
   created_at: string
   updated_at: string
@@ -440,6 +441,13 @@ export function formatAttachmentSize(size: number | null | undefined): string {
   return `${value} B`
 }
 
+export function formatSettingsDate(value: string | null | undefined): string {
+  if (!value) return 'Unknown'
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return value
+  return parsed.toLocaleDateString()
+}
+
 export function getOverallVerdict(
   candidate: VerdictCandidateInput,
   effectiveDraft: string,
@@ -577,7 +585,7 @@ function App() {
   })
   const [resumeFile, setResumeFile] = useState<File | null>(null)
   const [attachmentUploadFiles, setAttachmentUploadFiles] = useState<File[]>([])
-  const [activeResume, setActiveResume] = useState<ResumeAsset | null>(null)
+  const [resumeAssets, setResumeAssets] = useState<ResumeAsset[]>([])
   const [attachmentFiles, setAttachmentFiles] = useState<AttachmentAsset[]>([])
   const [running, setRunning] = useState(false)
   const [nvoidsRunning, setNvoidsRunning] = useState(false)
@@ -751,12 +759,10 @@ function App() {
     return normalized
   }
 
-  const loadActiveResume = async () => {
+  const loadResumes = async () => {
     const res = await fetch(`${apiBase}/settings/resumes`)
     if (!res.ok) throw new Error('Failed to load resumes')
-    const items = (await res.json()) as ResumeAsset[]
-    const current = items.find((item) => item.is_current) ?? null
-    setActiveResume(current)
+    setResumeAssets((await res.json()) as ResumeAsset[])
   }
 
   const loadAttachmentFiles = async () => {
@@ -764,6 +770,8 @@ function App() {
     if (!res.ok) throw new Error('Failed to load attachment files')
     setAttachmentFiles((await res.json()) as AttachmentAsset[])
   }
+
+  const activeResume = resumeAssets.find((item) => item.is_current) ?? null
 
   const loadPremiumNumbers = async (opts?: { append?: boolean; cursor?: number | null }) => {
     const append = Boolean(opts?.append)
@@ -1012,7 +1020,7 @@ function App() {
       try {
         await Promise.all([
           loadStatus(),
-          loadActiveResume(),
+          loadResumes(),
           loadAttachmentFiles(),
           loadAiStatus(),
           loadTelegramStatus(),
@@ -1167,7 +1175,33 @@ function App() {
       const res = await fetch(`${apiBase}/settings/resume`, { method: 'POST', body: fd })
       if (!res.ok) throw new Error('Failed to upload resume')
       setResumeFile(null)
-      await loadActiveResume()
+      await loadResumes()
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }
+
+  const toggleResumeAsset = async (resumeId: number, isEnabled: boolean) => {
+    setError('')
+    try {
+      const res = await fetch(`${apiBase}/settings/resumes/${resumeId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_enabled: isEnabled }),
+      })
+      if (!res.ok) throw new Error('Failed to update resume')
+      await loadResumes()
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }
+
+  const deleteResumeAsset = async (resumeId: number) => {
+    setError('')
+    try {
+      const res = await fetch(`${apiBase}/settings/resumes/${resumeId}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error('Failed to delete resume')
+      await loadResumes()
     } catch (e) {
       setError((e as Error).message)
     }
@@ -2242,13 +2276,6 @@ function App() {
                     Available tokens: {'{{greeting}}'}, {'{{role}}'}, {'{{sender}}'}, {'{{location}}'}, {'{{salary_text}}'}, {'{{skills_list}}'}, {'{{skills_inline}}'}, {'{{resume_file_name}}'}, {'{{signature_name}}'}, {'{{signature_phone}}'}, {'{{signature_email}}'}, {'{{requested_details_block}}'}.
                   </p>
                   <button type="submit" disabled={saving}>{saving ? 'Saving...' : 'Save Filters'}</button>
-                  <p className="subtle">
-                    {activeResume ? `Active resume: ${activeResume.file_name} (v${activeResume.version})` : 'No active resume uploaded yet.'}
-                  </p>
-                  <input type="file" accept=".pdf,.doc,.docx" onChange={(e) => setResumeFile(e.target.files?.[0] ?? null)} />
-                  <button type="button" onClick={uploadResume} disabled={!resumeFile}>
-                    {activeResume ? 'Replace Resume' : 'Upload Resume'}
-                  </button>
                   <div className="stack">
                     <strong>Attachment files</strong>
                     <p className="subtle">Upload global reusable files that will be sent alongside the active resume.</p>
@@ -2286,6 +2313,54 @@ function App() {
                       ))
                     )}
                   </div>
+                </div>
+              </section>
+
+              <section className="card">
+                <h2>Resume Database</h2>
+                <div className="stack">
+                  <p className="subtle">
+                    {activeResume
+                      ? `Legacy current fallback: ${activeResume.file_name} (v${activeResume.version})`
+                      : 'No legacy current fallback resume is available yet.'}
+                  </p>
+                  <input type="file" accept=".pdf,.doc,.docx" onChange={(e) => setResumeFile(e.target.files?.[0] ?? null)} />
+                  <button type="button" onClick={uploadResume} disabled={!resumeFile}>
+                    Upload Resume To Database
+                  </button>
+                  {resumeAssets.length === 0 ? (
+                    <p className="subtle">No resumes stored yet.</p>
+                  ) : (
+                    resumeAssets.map((resume) => (
+                      <div key={resume.id} className="stack pillRow">
+                        <div className="rowBtns" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+                          <strong>{resume.file_name}</strong>
+                          <span>{`v${resume.version}`}</span>
+                        </div>
+                        <p className="subtle">
+                          Added: {formatSettingsDate(resume.created_at)}
+                          {resume.is_current ? ' | Legacy current fallback' : ''}
+                          {resume.is_enabled ? ' | Enabled' : ' | Disabled'}
+                        </p>
+                        <div className="rowBtns">
+                          <label className="toggleRow pillRow" style={{ flex: 1 }}>
+                            <span>{resume.is_enabled ? 'Enabled' : 'Disabled'}</span>
+                            <span className="toggleSwitch">
+                              <input
+                                type="checkbox"
+                                checked={resume.is_enabled}
+                                onChange={(e) => toggleResumeAsset(resume.id, e.target.checked)}
+                              />
+                              <span className="toggleTrack" />
+                            </span>
+                          </label>
+                          <button type="button" onClick={() => deleteResumeAsset(resume.id)}>
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
                 </div>
               </section>
 

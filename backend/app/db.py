@@ -350,6 +350,7 @@ def ensure_sqlite_phase0_columns() -> None:
 
         existing_resume_assets = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(resume_assets)")}
         resume_assets_alter_statements = [
+            ("is_enabled", "ALTER TABLE resume_assets ADD COLUMN is_enabled BOOLEAN DEFAULT 1"),
             ("semantic_embedding", "ALTER TABLE resume_assets ADD COLUMN semantic_embedding TEXT"),
         ]
         for column_name, statement in resume_assets_alter_statements:

@@ -134,11 +134,16 @@ class ResumeResponse(BaseModel):
     mime_type: str
     sha256: str
     version: int
+    is_enabled: bool
     is_current: bool
     created_at: datetime
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class ResumeUpdateRequest(BaseModel):
+    is_enabled: bool
 
 
 class AttachmentAssetResponse(BaseModel):

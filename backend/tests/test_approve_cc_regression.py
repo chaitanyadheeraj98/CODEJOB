@@ -73,6 +73,7 @@ class ApproveCcRegressionTests(unittest.TestCase):
             mime_type="application/pdf",
             sha256="abc123",
             version=1,
+            is_enabled=True,
             is_current=True,
             semantic_embedding=None,
         )

@@ -205,6 +205,7 @@ class ExternalFeedsApiTests(unittest.TestCase):
                     mime_type="application/pdf",
                     sha256="resume123",
                     version=1,
+                    is_enabled=True,
                     is_current=True,
                     semantic_embedding=None,
                 )
@@ -432,6 +433,66 @@ class ExternalFeedsApiTests(unittest.TestCase):
             with self.SessionLocal() as db:
                 rows = db.query(AttachmentAsset).filter(AttachmentAsset.owner_id == main.settings.owner_id).all()
                 self.assertEqual(len(rows), 1)
+        finally:
+            if os.path.exists(first_path):
+                os.unlink(first_path)
+            if os.path.exists(second_path):
+                os.unlink(second_path)
+
+    def test_resume_database_toggle_and_delete_maintains_legacy_current_fallback(self) -> None:
+        first_fd, first_path = tempfile.mkstemp(suffix=".pdf")
+        second_fd, second_path = tempfile.mkstemp(suffix=".pdf")
+        os.close(first_fd)
+        os.close(second_fd)
+        try:
+            with open(first_path, "wb") as handle:
+                handle.write(b"%PDF-1.4 first resume")
+            with open(second_path, "wb") as handle:
+                handle.write(b"%PDF-1.4 second resume")
+
+            with open(first_path, "rb") as first_handle:
+                first_upload = self.client.post("/settings/resume", files={"file": ("resume-one.pdf", first_handle, "application/pdf")})
+            self.assertEqual(first_upload.status_code, 200, first_upload.text)
+            first_resume = first_upload.json()
+            self.assertTrue(first_resume["is_enabled"])
+            self.assertTrue(first_resume["is_current"])
+
+            with open(second_path, "rb") as second_handle:
+                second_upload = self.client.post("/settings/resume", files={"file": ("resume-two.pdf", second_handle, "application/pdf")})
+            self.assertEqual(second_upload.status_code, 200, second_upload.text)
+            second_resume = second_upload.json()
+            self.assertTrue(second_resume["is_enabled"])
+            self.assertTrue(second_resume["is_current"])
+
+            listed = self.client.get("/settings/resumes")
+            self.assertEqual(listed.status_code, 200, listed.text)
+            items = listed.json()
+            self.assertEqual(len(items), 2)
+            self.assertEqual(sum(1 for item in items if item["is_current"]), 1)
+            self.assertEqual(sum(1 for item in items if item["is_enabled"]), 2)
+
+            disabled = self.client.patch(f"/settings/resumes/{second_resume['id']}", json={"is_enabled": False})
+            self.assertEqual(disabled.status_code, 200, disabled.text)
+            self.assertFalse(disabled.json()["is_enabled"])
+            self.assertFalse(disabled.json()["is_current"])
+
+            listed_after_disable = self.client.get("/settings/resumes")
+            self.assertEqual(listed_after_disable.status_code, 200, listed_after_disable.text)
+            items_after_disable = listed_after_disable.json()
+            fallback = next(item for item in items_after_disable if item["file_name"] == "resume-one.pdf")
+            self.assertTrue(fallback["is_current"])
+            self.assertTrue(fallback["is_enabled"])
+
+            deleted = self.client.delete(f"/settings/resumes/{fallback['id']}")
+            self.assertEqual(deleted.status_code, 200, deleted.text)
+
+            listed_after_delete = self.client.get("/settings/resumes")
+            self.assertEqual(listed_after_delete.status_code, 200, listed_after_delete.text)
+            final_items = listed_after_delete.json()
+            self.assertEqual(len(final_items), 1)
+            self.assertEqual(final_items[0]["file_name"], "resume-two.pdf")
+            self.assertFalse(final_items[0]["is_enabled"])
+            self.assertFalse(final_items[0]["is_current"])
         finally:
             if os.path.exists(first_path):
                 os.unlink(first_path)

@@ -5,6 +5,7 @@ import {
   draftTextSizeToPreviewStyle,
   draftToPreviewHtml,
   formatAttachmentSize,
+  formatSettingsDate,
   normalizeDraftTextSize,
 } from './App'
 
@@ -33,5 +34,10 @@ describe('draft text size helpers', () => {
     expect(formatAttachmentSize(512)).toBe('512 B')
     expect(formatAttachmentSize(2048)).toBe('2 KB')
     expect(formatAttachmentSize(2 * 1024 * 1024)).toBe('2.0 MB')
+  })
+
+  it('formats settings dates for resume database cards', () => {
+    expect(formatSettingsDate('2026-06-12T01:02:03Z')).toMatch(/2026|6\/11|6\/12/)
+    expect(formatSettingsDate('')).toBe('Unknown')
   })
 })

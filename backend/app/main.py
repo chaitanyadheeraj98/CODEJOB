@@ -126,6 +126,7 @@ from app.schemas import (
     RejectRequest,
     ResolveRecipientsRequest,
     ResumeResponse,
+    ResumeUpdateRequest,
     SettingsRequest,
     SettingsResponse,
     UnknownNumberReviewCardListResponse,
@@ -778,6 +779,43 @@ def _active_resume(db: Session) -> ResumeAsset | None:
     )
 
 
+def _list_resumes(db: Session) -> list[ResumeAsset]:
+    return (
+        db.query(ResumeAsset)
+        .filter(ResumeAsset.owner_id == settings.owner_id)
+        .order_by(ResumeAsset.version.desc(), ResumeAsset.updated_at.desc())
+        .all()
+    )
+
+
+def _most_recent_enabled_resume(db: Session, *, exclude_resume_id: int | None = None) -> ResumeAsset | None:
+    query = (
+        db.query(ResumeAsset)
+        .filter(ResumeAsset.owner_id == settings.owner_id, ResumeAsset.is_enabled.is_(True))
+    )
+    if exclude_resume_id is not None:
+        query = query.filter(ResumeAsset.id != exclude_resume_id)
+    return query.order_by(ResumeAsset.updated_at.desc(), ResumeAsset.version.desc(), ResumeAsset.id.desc()).first()
+
+
+def _set_legacy_current_resume(
+    db: Session,
+    *,
+    target_resume: ResumeAsset | None,
+) -> None:
+    current_items = (
+        db.query(ResumeAsset)
+        .filter(ResumeAsset.owner_id == settings.owner_id, ResumeAsset.is_current.is_(True))
+        .all()
+    )
+    target_id = target_resume.id if target_resume else None
+    for item in current_items:
+        if item.id != target_id:
+            item.is_current = False
+    if target_resume:
+        target_resume.is_current = True
+
+
 def _list_attachment_assets(db: Session) -> list[AttachmentAsset]:
     return (
         db.query(AttachmentAsset)
@@ -1164,6 +1202,7 @@ def upload_resume(file: UploadFile = File(...), db: Session = Depends(get_db)) -
         mime_type=file.content_type or "application/pdf",
         sha256=sha256,
         version=next_version,
+        is_enabled=True,
         is_current=True,
     )
     try:
@@ -1181,12 +1220,55 @@ def upload_resume(file: UploadFile = File(...), db: Session = Depends(get_db)) -
 
 @app.get("/settings/resumes", response_model=list[ResumeResponse])
 def list_resumes(db: Session = Depends(get_db)) -> list[ResumeAsset]:
-    return (
+    return _list_resumes(db)
+
+
+@app.patch("/settings/resumes/{resume_id}", response_model=ResumeResponse)
+def update_resume(resume_id: int, payload: ResumeUpdateRequest, db: Session = Depends(get_db)) -> ResumeResponse:
+    resume = (
         db.query(ResumeAsset)
-        .filter(ResumeAsset.owner_id == settings.owner_id)
-        .order_by(ResumeAsset.version.desc())
-        .all()
+        .filter(ResumeAsset.owner_id == settings.owner_id, ResumeAsset.id == resume_id)
+        .first()
     )
+    if not resume:
+        raise HTTPException(status_code=404, detail="Resume not found")
+
+    resume.is_enabled = payload.is_enabled
+    if payload.is_enabled:
+        _set_legacy_current_resume(db, target_resume=resume)
+    elif resume.is_current:
+        replacement = _most_recent_enabled_resume(db, exclude_resume_id=resume.id)
+        resume.is_current = False
+        _set_legacy_current_resume(db, target_resume=replacement)
+    db.commit()
+    db.refresh(resume)
+    return ResumeResponse.model_validate(resume)
+
+
+@app.delete("/settings/resumes/{resume_id}")
+def delete_resume(resume_id: int, db: Session = Depends(get_db)) -> dict[str, object]:
+    resume = (
+        db.query(ResumeAsset)
+        .filter(ResumeAsset.owner_id == settings.owner_id, ResumeAsset.id == resume_id)
+        .first()
+    )
+    if not resume:
+        raise HTTPException(status_code=404, detail="Resume not found")
+
+    file_path = Path(resume.file_path)
+    deleted_was_current = bool(resume.is_current)
+    db.delete(resume)
+    db.flush()
+    if deleted_was_current:
+        replacement = _most_recent_enabled_resume(db, exclude_resume_id=resume_id)
+        _set_legacy_current_resume(db, target_resume=replacement)
+    db.commit()
+    try:
+        if file_path.exists():
+            file_path.unlink()
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Resume deleted from database but not disk: {exc}") from exc
+    return {"id": resume_id, "deleted": True}
 
 
 @app.post("/settings/attachments", response_model=list[AttachmentAssetResponse])

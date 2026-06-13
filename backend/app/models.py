@@ -151,6 +151,7 @@ class ResumeAsset(Base):
     mime_type: Mapped[str] = mapped_column(String(120), default="application/pdf")
     sha256: Mapped[str] = mapped_column(String(64), index=True)
     version: Mapped[int] = mapped_column(Integer, default=1)
+    is_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     is_current: Mapped[bool] = mapped_column(default=True)
     semantic_embedding: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
