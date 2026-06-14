@@ -809,6 +809,90 @@
   color: #fff;
 }
 
+.resumeDatabaseCard,
+.resumeDatabaseStack,
+.resumeDatabaseUpload,
+.resumeDatabaseList,
+.resumeDatabaseItem,
+.resumeDatabaseHeader,
+.resumeDatabaseActions,
+.resumeDatabaseButtons,
+.resumeDatabaseField {
+  min-width: 0;
+}
+
+.resumeDatabaseUpload,
+.resumeDatabaseList {
+  display: grid;
+  gap: 14px;
+}
+
+.resumeDatabaseField {
+  display: grid;
+  gap: 8px;
+}
+
+.resumeDatabaseFallback,
+.resumeDatabaseHelp,
+.resumeDatabaseFileName,
+.resumeDatabaseMeta,
+.resumeDatabaseMatch {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.resumeDatabaseItem {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
+.resumeDatabaseHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.resumeDatabaseFileName {
+  flex: 1 1 220px;
+}
+
+.resumeDatabaseVersion {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  color: #33405a;
+}
+
+.resumeDatabaseTextarea {
+  max-width: 100%;
+}
+
+.resumeDatabaseActions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: stretch;
+}
+
+.resumeDatabaseToggle {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.resumeDatabaseButtons {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.resumeDatabaseButtons button {
+  flex: 0 0 auto;
+}
+
 .verdictBadge {
   display: inline-flex;
   align-items: center;
@@ -1005,5 +1089,13 @@
 
   .monitorRange {
     width: 100%;
+  }
+
+  .resumeDatabaseButtons {
+    width: 100%;
+  }
+
+  .resumeDatabaseButtons button {
+    flex: 1 1 140px;
   }
 }

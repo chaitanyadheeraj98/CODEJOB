@@ -236,6 +236,126 @@ type AttachmentAsset = {
   updated_at: string
 }
 
+type ResumeDatabaseSectionProps = {
+  activeResume: ResumeAsset | null
+  resumeFile: File | null
+  resumeSkillsInput: string
+  resumeSkillEdits: Record<number, string>
+  resumeAssets: ResumeAsset[]
+  setResumeFile: (file: File | null) => void
+  setResumeSkillsInput: (value: string) => void
+  setResumeSkillEdits: React.Dispatch<React.SetStateAction<Record<number, string>>>
+  uploadResume: () => void
+  saveResumeSkills: (resumeId: number) => void
+  toggleResumeAsset: (resumeId: number, isEnabled: boolean) => void
+  deleteResumeAsset: (resumeId: number) => void
+}
+
+export function ResumeDatabaseSection({
+  activeResume,
+  resumeFile,
+  resumeSkillsInput,
+  resumeSkillEdits,
+  resumeAssets,
+  setResumeFile,
+  setResumeSkillsInput,
+  setResumeSkillEdits,
+  uploadResume,
+  saveResumeSkills,
+  toggleResumeAsset,
+  deleteResumeAsset,
+}: ResumeDatabaseSectionProps) {
+  return (
+    <section className="card resumeDatabaseCard">
+      <h2>Resume Database</h2>
+      <div className="stack resumeDatabaseStack">
+        <p className="subtle resumeDatabaseFallback">
+          {activeResume
+            ? `Legacy current fallback: ${activeResume.file_name} (v${activeResume.version})`
+            : 'No legacy current fallback resume is available yet.'}
+        </p>
+        <div className="stack resumeDatabaseUpload">
+          <input type="file" accept=".pdf,.doc,.docx" onChange={(e) => setResumeFile(e.target.files?.[0] ?? null)} />
+          <label className="resumeDatabaseField">
+            <span>Resume Skills</span>
+            <textarea
+              className="resumeDatabaseTextarea"
+              rows={3}
+              value={resumeSkillsInput}
+              onChange={(e) => setResumeSkillsInput(e.target.value)}
+              placeholder="java, spring boot, microservices, aws"
+            />
+          </label>
+          <p className="subtle resumeDatabaseHelp">Use clean comma-separated skills for faster and more accurate resume matching.</p>
+          <button type="button" onClick={uploadResume} disabled={!resumeFile}>
+            Upload Resume To Database
+          </button>
+        </div>
+        {resumeAssets.length === 0 ? (
+          <p className="subtle">No resumes stored yet.</p>
+        ) : (
+          <div className="resumeDatabaseList">
+            {resumeAssets.map((resume) => (
+              <article key={resume.id} className="resumeDatabaseItem pillRow">
+                <div className="resumeDatabaseHeader">
+                  <strong className="resumeDatabaseFileName">{resume.file_name}</strong>
+                  <span className="resumeDatabaseVersion">{`v${resume.version}`}</span>
+                </div>
+                <p className="subtle resumeDatabaseMeta">
+                  Added: {formatSettingsDate(resume.created_at)}
+                  {resume.is_current ? ' | Legacy current fallback' : ''}
+                  {resume.is_enabled ? ' | Enabled' : ' | Disabled'}
+                </p>
+                <label className="resumeDatabaseField">
+                  <span>Stored Skills</span>
+                  <textarea
+                    className="resumeDatabaseTextarea"
+                    rows={3}
+                    value={resumeSkillEdits[resume.id] ?? ''}
+                    onChange={(e) =>
+                      setResumeSkillEdits((prev) => ({
+                        ...prev,
+                        [resume.id]: e.target.value,
+                      }))
+                    }
+                    placeholder="java, spring boot, microservices, aws"
+                  />
+                </label>
+                <p className="subtle resumeDatabaseMatch">
+                  {resume.skills_text
+                    ? `Matching skills: ${resume.skills_text}`
+                    : 'No manual skills saved yet. File extraction will be used as fallback.'}
+                </p>
+                <div className="resumeDatabaseActions">
+                  <label className="toggleRow pillRow resumeDatabaseToggle">
+                    <span>{resume.is_enabled ? 'Enabled' : 'Disabled'}</span>
+                    <span className="toggleSwitch">
+                      <input
+                        type="checkbox"
+                        checked={resume.is_enabled}
+                        onChange={(e) => toggleResumeAsset(resume.id, e.target.checked)}
+                      />
+                      <span className="toggleTrack" />
+                    </span>
+                  </label>
+                  <div className="resumeDatabaseButtons">
+                    <button type="button" onClick={() => saveResumeSkills(resume.id)}>
+                      Save Skills
+                    </button>
+                    <button type="button" onClick={() => deleteResumeAsset(resume.id)}>
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
+  )
+}
+
 type Candidate = {
   id: number
   subject: string
@@ -2338,81 +2458,20 @@ function App() {
                 </div>
               </section>
 
-              <section className="card">
-                <h2>Resume Database</h2>
-                <div className="stack">
-                  <p className="subtle">
-                    {activeResume
-                      ? `Legacy current fallback: ${activeResume.file_name} (v${activeResume.version})`
-                      : 'No legacy current fallback resume is available yet.'}
-                  </p>
-                  <input type="file" accept=".pdf,.doc,.docx" onChange={(e) => setResumeFile(e.target.files?.[0] ?? null)} />
-                  <label>
-                    Resume Skills
-                    <textarea
-                      rows={3}
-                      value={resumeSkillsInput}
-                      onChange={(e) => setResumeSkillsInput(e.target.value)}
-                      placeholder="java, spring boot, microservices, aws"
-                    />
-                  </label>
-                  <p className="subtle">Use clean comma-separated skills for faster and more accurate resume matching.</p>
-                  <button type="button" onClick={uploadResume} disabled={!resumeFile}>
-                    Upload Resume To Database
-                  </button>
-                  {resumeAssets.length === 0 ? (
-                    <p className="subtle">No resumes stored yet.</p>
-                  ) : (
-                    resumeAssets.map((resume) => (
-                      <div key={resume.id} className="stack pillRow">
-                        <div className="rowBtns" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-                          <strong>{resume.file_name}</strong>
-                          <span>{`v${resume.version}`}</span>
-                        </div>
-                        <p className="subtle">
-                          Added: {formatSettingsDate(resume.created_at)}
-                          {resume.is_current ? ' | Legacy current fallback' : ''}
-                          {resume.is_enabled ? ' | Enabled' : ' | Disabled'}
-                        </p>
-                        <label>
-                          Stored Skills
-                          <textarea
-                            rows={3}
-                            value={resumeSkillEdits[resume.id] ?? ''}
-                            onChange={(e) =>
-                              setResumeSkillEdits((prev) => ({
-                                ...prev,
-                                [resume.id]: e.target.value,
-                              }))
-                            }
-                            placeholder="java, spring boot, microservices, aws"
-                          />
-                        </label>
-                        <p className="subtle">{resume.skills_text ? `Matching skills: ${resume.skills_text}` : 'No manual skills saved yet. File extraction will be used as fallback.'}</p>
-                        <div className="rowBtns">
-                          <label className="toggleRow pillRow" style={{ flex: 1 }}>
-                            <span>{resume.is_enabled ? 'Enabled' : 'Disabled'}</span>
-                            <span className="toggleSwitch">
-                              <input
-                                type="checkbox"
-                                checked={resume.is_enabled}
-                                onChange={(e) => toggleResumeAsset(resume.id, e.target.checked)}
-                              />
-                              <span className="toggleTrack" />
-                            </span>
-                          </label>
-                          <button type="button" onClick={() => saveResumeSkills(resume.id)}>
-                            Save Skills
-                          </button>
-                          <button type="button" onClick={() => deleteResumeAsset(resume.id)}>
-                            Delete
-                          </button>
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </section>
+              <ResumeDatabaseSection
+                activeResume={activeResume}
+                resumeFile={resumeFile}
+                resumeSkillsInput={resumeSkillsInput}
+                resumeSkillEdits={resumeSkillEdits}
+                resumeAssets={resumeAssets}
+                setResumeFile={setResumeFile}
+                setResumeSkillsInput={setResumeSkillsInput}
+                setResumeSkillEdits={setResumeSkillEdits}
+                uploadResume={uploadResume}
+                saveResumeSkills={saveResumeSkills}
+                toggleResumeAsset={toggleResumeAsset}
+                deleteResumeAsset={deleteResumeAsset}
+              />
 
               <section className="card">
                 <h2>Nvoids Control</h2>
