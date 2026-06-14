@@ -1,5 +1,32 @@
 # Section-Aware JD Extraction And Resume Scoring Build Plan
 
+## Current Status
+
+- Completed Phases:
+  - `Phase 1: Footer And Recruiter Noise Suppression` completed on `2026-06-13`
+  - `Phase 2: Section Slicing And Bucket Classification` completed on `2026-06-13`
+  - `Phase 3: JD-Specific Skill Evidence Extraction` completed on `2026-06-13`
+  - `Phase 6: Wire Section-Aware Extraction Into parse_email()` completed on `2026-06-13`
+  - `Phase 4: Role-Family Consistency Filter` completed on `2026-06-13`
+  - `Phase 5: Noise Guards And Alias Collision Protection` completed on `2026-06-13`
+- Current Phase:
+  - `Phase 5` completed and verified
+- Next Phase:
+  - `Phase 7: Regression And Real-JD Validation`
+- Last Verification:
+  - Focused parser tests: `backend/tests/test_skill_taxonomy.py` and `backend/tests/test_phase0_routing.py` passed (`44 passed`, `9 subtests passed`)
+  - Core regressions: `backend/tests/test_scoring_runtime_service.py`, `backend/tests/test_external_feeds_api.py`, `backend/tests/test_run_orchestrator.py`, and `backend/tests/test_approve_cc_regression.py` passed (`45 passed`)
+  - AI Engineer JD sandbox validation:
+    - role remained `AI Engineer`
+    - location remained `Alpharetta, GA`
+    - final `skills_text` still included richer JD signals such as `Agentic Workflows`, `RAG`, `Prompt Engineering`, `Tool Calling`, `Secure SDLC`, `Embeddings`, and `Observability`
+    - alias-collision noise like `Angular Services` and `SAFe` no longer appeared in the structured AI JD output
+- Open Risks / Notes:
+  - Phase 6 still provides the section-aware default parser path for structured JDs, with legacy cleaned-body fallback for headingless or weakly structured JDs
+  - Phase 5 hardens risky alias matching, but Phase 7 still needs broader regression and real-JD validation across multiple JD shapes
+  - Domain headings are intentionally explicit-only to avoid treating values like `Payments` as headings
+  - The next Codex implementation turn should start from `Phase 7`
+
 ## Goal
 
 Implement production-safe, section-aware JD skill extraction and then a follow-up AI-intent resume scoring upgrade on top of the current backend without breaking the existing queue, settings, resume pinning, or send flows.

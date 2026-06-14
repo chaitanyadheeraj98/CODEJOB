@@ -2,7 +2,7 @@ import re
 from dataclasses import asdict, dataclass
 
 from app.models import UserSettings
-from app.skill_taxonomy import display_skill_label, extract_skills_text, score_taxonomy_skills
+from app.skill_taxonomy import display_skill_label, extract_jd_skills_text, extract_skills_text, score_taxonomy_skills
 
 RECRUITER_HINTS = [
     "recruiter",
@@ -16,6 +16,17 @@ RECRUITER_HINTS = [
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 TEXAS_RE = re.compile(r"\b(tx|texas)\b", re.IGNORECASE)
 F2F_RE = re.compile(r"\b(face[- ]to[- ]face|f2f)\b", re.IGNORECASE)
+FORWARDED_HEADER_RE = re.compile(r"^\s*(from|sent|to|cc|subject)\s*:", re.IGNORECASE)
+FOOTER_SIGNOFF_RE = re.compile(
+    r"^\s*(thanks(?:\s*(?:and|&)\s*regards)?|best regards|regards|thanks)\b",
+    re.IGNORECASE,
+)
+FOOTER_TITLE_RE = re.compile(
+    r"\b(technical recruiter|recruiter|bench sales recruiter|account manager|talent acquisition|staffing specialist|lead recruiter)\b",
+    re.IGNORECASE,
+)
+PHONE_RE = re.compile(r"(?:\+?\d[\d(). -]{7,}\d)")
+URL_RE = re.compile(r"(https?://|www\.)", re.IGNORECASE)
 EXPLICIT_INTERVIEW_RE = re.compile(
     r"("
     r"\bonsite[\s,:;-]+interview(?:[\s,:;-]+(?:required|mandatory))?\b|"
@@ -27,6 +38,147 @@ EXPLICIT_INTERVIEW_RE = re.compile(
     re.IGNORECASE,
 )
 EMPLOYER_DOMAINS = {"horizonsofttech.net", "horizonsoftech.net"}
+
+SECTION_WEIGHTS: dict[str, float] = {
+    "mandatory": 1.00,
+    "required": 0.95,
+    "technical_skills": 0.95,
+    "essential": 0.95,
+    "responsibilities": 0.80,
+    "summary": 0.75,
+    "domain": 0.85,
+    "ai_compliance": 0.75,
+    "preferred": 0.55,
+    "hard_filter": 0.00,
+    "footer": 0.00,
+    "unknown": 0.35,
+}
+
+SECTION_HEADING_ALIASES: dict[str, tuple[str, ...]] = {
+    "mandatory": (
+        "mandatory skills",
+        "must have",
+        "must-have skills",
+        "minimum qualifications",
+        "basic qualifications",
+    ),
+    "required": (
+        "required qualifications",
+        "required skills",
+        "required skills & qualifications",
+        "skills required",
+        "required experience",
+        "qualifications",
+    ),
+    "technical_skills": (
+        "technical skills",
+        "tech skill",
+        "core skills",
+        "primary skills",
+        "knowledge and skills",
+    ),
+    "essential": (
+        "essential skills",
+        "hands-on experience",
+    ),
+    "responsibilities": (
+        "key responsibilities",
+        "responsibilities",
+        "role responsibilities",
+        "job responsibilities",
+        "duties",
+        "what you will do",
+        "what you'll do",
+        "day-to-day responsibilities",
+    ),
+    "summary": (
+        "job description",
+        "role description",
+        "role descriptions",
+        "job summary",
+        "role summary",
+        "overview",
+        "project overview",
+        "about the role",
+    ),
+    "preferred": (
+        "preferred qualifications",
+        "preferred skills",
+        "nice to have",
+        "good to have",
+        "plus",
+        "bonus skills",
+        "desired skills",
+        "additional skills",
+        "additional notes",
+        "exposure to",
+        "familiarity with",
+    ),
+    "domain": (
+        "domain skill",
+        "domain skills",
+        "domain experience",
+        "industry experience",
+        "banking domain",
+        "healthcare domain",
+        "client environment",
+        "project context",
+    ),
+    "ai_compliance": (
+        "compliance & responsible ai expectations",
+        "responsible ai expectations",
+        "compliance expectations",
+        "security requirements",
+        "data privacy",
+        "secure sdlc",
+        "guardrails",
+        "evaluation requirements",
+        "what success looks like",
+        "operational readiness",
+    ),
+    "hard_filter": (
+        "location",
+        "job location",
+        "work location",
+        "visa",
+        "duration",
+        "rate",
+        "interview mode",
+        "local only",
+        "onsite",
+        "hybrid",
+        "remote",
+        "experience",
+        "years of experience",
+        "education",
+        "client",
+    ),
+    "footer": (
+        "regards",
+        "best regards",
+        "thanks",
+        "thanks & regards",
+        "contact",
+    ),
+}
+
+SECTION_HEADING_LOOKUP = {
+    alias: bucket
+    for bucket, aliases in SECTION_HEADING_ALIASES.items()
+    for alias in aliases
+}
+
+SYNTHETIC_REQUIREMENT_PREFIXES: tuple[tuple[str, str], ...] = (
+    ("must have", "mandatory"),
+    ("required", "required"),
+    ("required skills", "required"),
+    ("required qualifications", "required"),
+    ("strong proficiency in", "technical_skills"),
+    ("proficiency in", "technical_skills"),
+    ("experience with", "essential"),
+    ("hands-on experience", "essential"),
+    ("knowledge of", "technical_skills"),
+)
 
 
 @dataclass
@@ -52,6 +204,16 @@ class RoutingResult:
         payload["evidence"] = [asdict(item) for item in self.evidence]
         payload["candidates"] = [asdict(item) for item in self.candidates]
         return payload
+
+
+@dataclass
+class JDSection:
+    heading: str
+    bucket: str
+    weight: float
+    text: str
+    start_line: int | None = None
+    end_line: int | None = None
 
 
 def is_recruiter_like(sender: str, subject: str, body: str) -> bool:
@@ -282,6 +444,269 @@ def _extract_role(subject: str, body: str) -> str:
 
 def _extract_skills(text: str) -> str:
     return extract_skills_text(text)
+
+
+def _normalize_section_heading(value: str) -> str:
+    heading = re.sub(r"[\s_]+", " ", str(value or "").strip().lower())
+    heading = re.sub(r"\s*&\s*", " & ", heading)
+    return re.sub(r"\s+", " ", heading).strip(" :-")
+
+
+def classify_section_heading(heading: str) -> tuple[str, float]:
+    normalized = _normalize_section_heading(heading)
+    bucket = SECTION_HEADING_LOOKUP.get(normalized, "unknown")
+    return bucket, SECTION_WEIGHTS.get(bucket, SECTION_WEIGHTS["unknown"])
+
+
+def _split_heading_line(line: str) -> tuple[str, str] | None:
+    stripped = line.strip()
+    if not stripped:
+        return None
+
+    exact_bucket, _ = classify_section_heading(stripped)
+    if exact_bucket != "unknown":
+        return stripped, ""
+
+    if ":" not in stripped:
+        return None
+
+    heading_part, remainder = stripped.split(":", 1)
+    bucket, _ = classify_section_heading(heading_part)
+    if bucket == "unknown":
+        return None
+    return heading_part.strip(), remainder.strip()
+
+
+def _build_section(
+    heading: str,
+    bucket: str,
+    text_lines: list[str],
+    start_line: int | None,
+    end_line: int | None,
+) -> JDSection:
+    text = "\n".join(line.rstrip() for line in text_lines).strip()
+    return JDSection(
+        heading=heading.strip(),
+        bucket=bucket,
+        weight=SECTION_WEIGHTS.get(bucket, SECTION_WEIGHTS["unknown"]),
+        text=text,
+        start_line=start_line,
+        end_line=end_line,
+    )
+
+
+def _looks_like_synthetic_requirement(line: str) -> tuple[str, float] | None:
+    normalized = _normalize_section_heading(line)
+    for prefix, bucket in SYNTHETIC_REQUIREMENT_PREFIXES:
+        if normalized.startswith(prefix):
+            return bucket, SECTION_WEIGHTS.get(bucket, SECTION_WEIGHTS["unknown"])
+    return None
+
+
+def slice_jd_sections(body: str) -> list[JDSection]:
+    cleaned = strip_recruiter_footer(strip_forward_headers(body or ""))
+    lines = cleaned.splitlines()
+    sections: list[JDSection] = []
+    current_heading = "Body"
+    current_bucket = "unknown"
+    current_start: int | None = None
+    current_lines: list[str] = []
+    found_heading = False
+
+    def flush(end_idx: int) -> None:
+        nonlocal current_heading, current_bucket, current_start, current_lines
+        if current_start is None:
+            return
+        if not any(line.strip() for line in current_lines):
+            current_heading = "Body"
+            current_bucket = "unknown"
+            current_start = None
+            current_lines = []
+            return
+        sections.append(
+            _build_section(
+                heading=current_heading,
+                bucket=current_bucket,
+                text_lines=current_lines,
+                start_line=current_start,
+                end_line=end_idx,
+            )
+        )
+        current_heading = "Body"
+        current_bucket = "unknown"
+        current_start = None
+        current_lines = []
+
+    for idx, raw_line in enumerate(lines):
+        line = raw_line.rstrip()
+        split_heading = _split_heading_line(line)
+        if split_heading:
+            flush(idx - 1)
+            heading, remainder = split_heading
+            current_heading = heading
+            current_bucket, _ = classify_section_heading(heading)
+            current_start = idx
+            current_lines = [remainder] if remainder else []
+            found_heading = True
+            continue
+
+        if current_start is None:
+            current_start = idx
+            current_heading = "Body"
+            current_bucket = "unknown"
+        current_lines.append(line)
+
+    flush(len(lines) - 1)
+
+    synthetic_sections: list[JDSection] = []
+    covered_lines = {
+        line_no
+        for section in sections
+        if section.bucket != "unknown"
+        for line_no in range(section.start_line or 0, (section.end_line or -1) + 1)
+    }
+    for idx, raw_line in enumerate(lines):
+        if idx in covered_lines:
+            continue
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        synthetic = _looks_like_synthetic_requirement(stripped)
+        if not synthetic:
+            continue
+        bucket, weight = synthetic
+        synthetic_sections.append(
+            JDSection(
+                heading="Synthetic Requirement",
+                bucket=bucket,
+                weight=weight,
+                text=stripped,
+                start_line=idx,
+                end_line=idx,
+            )
+        )
+
+    if not found_heading and synthetic_sections:
+        return synthetic_sections
+
+    if not sections and cleaned.strip():
+        sections.append(
+            JDSection(
+                heading="Body",
+                bucket="unknown",
+                weight=SECTION_WEIGHTS["unknown"],
+                text=cleaned.strip(),
+                start_line=0,
+                end_line=max(len(lines) - 1, 0),
+            )
+        )
+
+    sections.extend(synthetic_sections)
+    sections.sort(key=lambda section: (section.start_line or 0, section.end_line or 0, section.heading))
+    return sections
+
+
+def build_skill_source_sections(sections: list[JDSection]) -> list[JDSection]:
+    eligible = [
+        section
+        for section in sections
+        if section.bucket not in {"hard_filter", "footer"} and section.text.strip()
+    ]
+    if eligible:
+        return eligible
+
+    fallback_text = "\n".join(section.text for section in sections if section.text.strip()).strip()
+    if not fallback_text:
+        return []
+
+    return [
+        JDSection(
+            heading="Body",
+            bucket="unknown",
+            weight=SECTION_WEIGHTS["unknown"],
+            text=fallback_text,
+            start_line=sections[0].start_line if sections else 0,
+            end_line=sections[-1].end_line if sections else 0,
+        )
+    ]
+
+
+def strip_forward_headers(body: str) -> str:
+    lines = body.splitlines()
+    if not lines:
+        return body
+
+    header_lines = 0
+    idx = 0
+    while idx < len(lines):
+        line = lines[idx].strip()
+        if not line:
+            if header_lines >= 2:
+                return "\n".join(lines[idx + 1 :]).strip()
+            break
+        if FORWARDED_HEADER_RE.match(line):
+            header_lines += 1
+            idx += 1
+            continue
+        break
+    return body
+
+
+def _looks_like_footer_cluster(lines: list[str], start_idx: int) -> bool:
+    window = [line.strip() for line in lines[start_idx : start_idx + 6] if line.strip()]
+    if not window:
+        return False
+    title_hits = sum(1 for line in window if FOOTER_TITLE_RE.search(line))
+    contact_hits = sum(
+        1
+        for line in window
+        if EMAIL_RE.search(line) or PHONE_RE.search(line) or URL_RE.search(line)
+    )
+    return title_hits >= 1 and contact_hits >= 1
+
+
+def strip_recruiter_footer(body: str) -> str:
+    lines = body.splitlines()
+    if not lines:
+        return body
+
+    for idx, raw_line in enumerate(lines):
+        line = raw_line.strip()
+        if not line:
+            continue
+        normalized = re.sub(r"\s+", " ", line).strip().lower()
+        if FOOTER_SIGNOFF_RE.match(line) and _looks_like_footer_cluster(lines, idx):
+            return "\n".join(lines[:idx]).strip()
+        if FOOTER_TITLE_RE.search(line) and _looks_like_footer_cluster(lines, idx):
+            return "\n".join(lines[:idx]).strip()
+        if any(
+            phrase in normalized
+            for phrase in (
+                "unsubscribe",
+                "reply if interested",
+                "please share resume",
+                "call me",
+            )
+        ):
+            return "\n".join(lines[:idx]).strip()
+
+    inline_footer_patterns = [
+        r"(?is)\b(?:thanks(?:\s*(?:and|&)\s*regards)?|best regards|regards)\b.*$",
+        r"(?is)\b[A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+){0,3}\s+(?:technical recruiter|recruiter|account manager)\b(?=.*(?:email\s*:|phone\s*:|ph\s*:|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})).*$",
+    ]
+    for pattern in inline_footer_patterns:
+        stripped = re.sub(pattern, "", body).strip()
+        if stripped and stripped != body and len(stripped) >= max(80, int(len(body) * 0.35)):
+            return stripped
+    return body
+
+
+def _clean_body_for_skill_extraction(subject: str, body: str) -> str:
+    cleaned = strip_forward_headers(body)
+    cleaned = strip_recruiter_footer(cleaned)
+    if not cleaned:
+        return f"{subject} {body}".strip()
+    return f"{subject} {cleaned}".strip()
 
 
 def _extract_location_text(subject: str, body: str) -> str:
@@ -551,7 +976,21 @@ def parse_email(subject: str, body: str) -> dict[str, str | int]:
     role = _extract_role(subject, body)
     location = _extract_location(body)
     salary_text = _extract_salary(body)
-    skills_text = _extract_skills(f"{subject} {body}")
+    cleaned_body = strip_recruiter_footer(strip_forward_headers(body))
+    sections = slice_jd_sections(cleaned_body)
+    skill_sections = build_skill_source_sections(sections)
+    fallback_text = f"{subject} {cleaned_body}".strip() if cleaned_body else f"{subject} {body}".strip()
+    has_structured_skill_sections = any(
+        section.bucket not in {"unknown", "hard_filter", "footer"} for section in sections
+    )
+    if has_structured_skill_sections and skill_sections:
+        skills_text = extract_jd_skills_text(
+            skill_sections,
+            role_text=role,
+            fallback_text=fallback_text,
+        )
+    else:
+        skills_text = _extract_skills(fallback_text)
     location_text = _extract_location_text(subject, body)
     combined_text = f"{subject}\n{body}"
     f2f_mentioned = bool(F2F_RE.search(combined_text) or EXPLICIT_INTERVIEW_RE.search(combined_text))

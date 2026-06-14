@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from typing import Iterable, Protocol
 
 _WORD_RE = re.compile(r"[^a-z0-9]+")
 _SKILL_SPLIT_RE = re.compile(r"[,;\n]+")
@@ -12,6 +13,11 @@ _ROLE_FAMILY_AI_RE = re.compile(
     r"\b(ai|artificial intelligence|genai|llm|machine learning|ml|prompt)\b",
     re.IGNORECASE,
 )
+_ROLE_FAMILY_JAVA_FULLSTACK_RE = re.compile(r"\b(full stack|fullstack)\b", re.IGNORECASE)
+_ROLE_FAMILY_JAVA_BACKEND_RE = re.compile(r"\b(java|spring|backend|microservices?)\b", re.IGNORECASE)
+_ROLE_FAMILY_FRONTEND_RE = re.compile(r"\b(frontend|front end|ui|react|angular|typescript)\b", re.IGNORECASE)
+_ROLE_FAMILY_DEVOPS_RE = re.compile(r"\b(devops|sre|platform|cloud|kubernetes|docker|aws)\b", re.IGNORECASE)
+_ROLE_FAMILY_DATA_RE = re.compile(r"\b(data|etl|analytics|bi|warehouse|pipeline)\b", re.IGNORECASE)
 _FALLBACK_WEIGHTS = {
     "language": 1.0,
     "backend": 1.0,
@@ -36,6 +42,142 @@ _FALLBACK_SKILLS = [
     ("AWS", ["aws"], "cloud"),
     ("Docker", ["docker"], "devops"),
 ]
+_STRONG_EVIDENCE_BUCKETS = {"mandatory", "required", "technical_skills", "essential"}
+_WEAK_EVIDENCE_BUCKETS = {"preferred", "summary", "unknown"}
+_FOUNDATION_CATEGORIES = {
+    "language",
+    "backend",
+    "framework",
+    "architecture",
+    "database",
+    "devops",
+    "cloud",
+    "testing",
+    "security",
+    "observability",
+    "messaging",
+}
+_MATCH_GUARDS: dict[str, dict[str, object]] = {
+    "safe": {
+        "blocked_single_token": True,
+        "allowed_phrases": {"scaled agile framework"},
+    },
+    "services": {
+        "blocked_single_token": True,
+        "allowed_phrases": {"angular services", "rest services", "soap services"},
+    },
+}
+_ROLE_FAMILY_CONFIG: dict[str, dict[str, object]] = {
+    "ai": {
+        "preferred_clusters": {
+            "retrieval_rag",
+            "agentic_workflows",
+            "safe_responsible_ai",
+            "ai_operations",
+            "compliance_security",
+            "ai_runtime",
+        },
+        "preferred_categories": {
+            "ai_data",
+            "ai",
+            "observability",
+            "security",
+            "testing",
+            "language",
+            "backend",
+            "framework",
+            "architecture",
+            "cloud",
+            "database",
+            "messaging",
+        },
+        "suppress_categories": {"frontend", "methodology", "domain_banking", "domain_healthcare", "operations"},
+        "suppress_skills": {"angular services", "safe"},
+    },
+    "java_fullstack": {
+        "preferred_clusters": {"production_engineering"},
+        "preferred_categories": {
+            "language",
+            "backend",
+            "framework",
+            "frontend",
+            "database",
+            "devops",
+            "cloud",
+            "observability",
+            "testing",
+            "security",
+            "messaging",
+        },
+        "suppress_categories": set(),
+        "suppress_skills": set(),
+    },
+    "java_backend": {
+        "preferred_clusters": {"production_engineering"},
+        "preferred_categories": {
+            "language",
+            "backend",
+            "framework",
+            "database",
+            "devops",
+            "cloud",
+            "observability",
+            "testing",
+            "security",
+            "messaging",
+        },
+        "suppress_categories": {"frontend"},
+        "suppress_skills": set(),
+    },
+    "frontend": {
+        "preferred_clusters": {"production_engineering"},
+        "preferred_categories": {
+            "frontend",
+            "language",
+            "backend",
+            "testing",
+            "observability",
+            "security",
+        },
+        "suppress_categories": {"domain_banking"},
+        "suppress_skills": set(),
+    },
+    "devops_cloud": {
+        "preferred_clusters": {"production_engineering"},
+        "preferred_categories": {
+            "devops",
+            "cloud",
+            "observability",
+            "security",
+            "backend",
+            "architecture",
+            "messaging",
+            "testing",
+        },
+        "suppress_categories": {"frontend"},
+        "suppress_skills": set(),
+    },
+    "data": {
+        "preferred_clusters": {"production_engineering"},
+        "preferred_categories": {
+            "data",
+            "database",
+            "language",
+            "backend",
+            "observability",
+            "cloud",
+            "security",
+        },
+        "suppress_categories": {"frontend"},
+        "suppress_skills": set(),
+    },
+    "general": {
+        "preferred_clusters": set(),
+        "preferred_categories": set(),
+        "suppress_categories": set(),
+        "suppress_skills": set(),
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -73,6 +215,36 @@ class IntentMatchBreakdown:
     weak_signal_hits: tuple[str, ...]
     jd_role_family: str
     resume_role_family: str
+
+
+class JDSectionLike(Protocol):
+    heading: str
+    bucket: str
+    weight: float
+    text: str
+
+
+@dataclass(frozen=True)
+class SkillEvidence:
+    skill_id: str
+    canonical_name: str
+    bucket: str
+    section_heading: str
+    section_weight: float
+    skill_weight: float
+    evidence_text: str
+    first_position: int
+
+
+@dataclass(frozen=True)
+class AggregatedSkill:
+    skill_id: str
+    canonical_name: str
+    total_weight: float
+    buckets: tuple[str, ...]
+    section_headings: tuple[str, ...]
+    evidence_count: int
+    first_position: int
 
 
 def _artifact_path() -> Path:
@@ -333,12 +505,15 @@ def extract_taxonomy_skills(text: str | None) -> list[SkillTaxonomyEntry]:
     normalized_text = normalize_taxonomy_text(text)
     if not normalized_text:
         return []
+    raw_text = str(text or "")
     haystack = f" {normalized_text} "
     matches: list[tuple[int, float, str, SkillTaxonomyEntry]] = []
     seen: set[str] = set()
     for entry in load_skill_taxonomy().entries_for_search:
         first_match: int | None = None
         for token in entry.normalized_forms:
+            if not _is_allowed_taxonomy_match(token, entry, normalized_text, raw_text):
+                continue
             position = haystack.find(f" {token} ")
             if position >= 0 and (first_match is None or position < first_match):
                 first_match = position
@@ -348,6 +523,225 @@ def extract_taxonomy_skills(text: str | None) -> list[SkillTaxonomyEntry]:
         matches.append((first_match, -entry.weight, entry.canonical_name.lower(), entry))
     matches.sort(key=lambda item: (item[0], item[1], item[2]))
     return [entry for *_ignored, entry in matches]
+
+
+def _is_allowed_taxonomy_match(token: str, entry: SkillTaxonomyEntry, normalized_text: str, raw_text: str) -> bool:
+    guard = _MATCH_GUARDS.get(token)
+    if not guard:
+        return True
+    if token == normalize_taxonomy_text(entry.canonical_name):
+        return entry.canonical_name in raw_text
+    if token in set(guard.get("allowed_phrases", set())):
+        return True
+    if guard.get("blocked_single_token", False) and len(token.split()) == 1:
+        return False
+    return True
+
+
+def _entry_by_skill_id(skill_id: str) -> SkillTaxonomyEntry | None:
+    for entry in load_skill_taxonomy().entries:
+        if entry.id == skill_id:
+            return entry
+    return None
+
+
+def _entry_by_canonical_name(canonical_name: str) -> SkillTaxonomyEntry | None:
+    return load_skill_taxonomy().exact_lookup.get(normalize_taxonomy_text(canonical_name))
+
+
+def _jd_skill_bucket_rank(bucket: str) -> int:
+    order = {
+        "mandatory": 0,
+        "required": 1,
+        "technical_skills": 2,
+        "essential": 3,
+        "domain": 4,
+        "responsibilities": 5,
+        "summary": 6,
+        "ai_compliance": 7,
+        "preferred": 8,
+        "unknown": 9,
+    }
+    return order.get(bucket, 10)
+
+
+def extract_jd_skill_evidence(sections: Iterable[JDSectionLike]) -> list[SkillEvidence]:
+    evidence: list[SkillEvidence] = []
+    for section_index, section in enumerate(sections):
+        bucket = str(getattr(section, "bucket", "") or "unknown")
+        if bucket in {"hard_filter", "footer"}:
+            continue
+        section_text = str(getattr(section, "text", "") or "").strip()
+        if not section_text:
+            continue
+        section_heading = str(getattr(section, "heading", "") or "Body").strip() or "Body"
+        section_weight = max(0.0, float(getattr(section, "weight", 0.0) or 0.0))
+        if section_weight <= 0.0:
+            continue
+        matched_entries = extract_taxonomy_skills(section_text)
+        for entry_index, entry in enumerate(matched_entries):
+            evidence.append(
+                SkillEvidence(
+                    skill_id=entry.id,
+                    canonical_name=entry.canonical_name,
+                    bucket=bucket,
+                    section_heading=section_heading,
+                    section_weight=section_weight,
+                    skill_weight=max(0.1, float(entry.weight)),
+                    evidence_text=section_text,
+                    first_position=(section_index * 1000) + entry_index,
+                )
+            )
+    return evidence
+
+
+def aggregate_jd_skill_evidence(evidence: Iterable[SkillEvidence]) -> list[AggregatedSkill]:
+    grouped: dict[str, dict[str, object]] = {}
+    for item in evidence:
+        current = grouped.setdefault(
+            item.skill_id,
+            {
+                "canonical_name": item.canonical_name,
+                "total_weight": 0.0,
+                "buckets": [],
+                "headings": [],
+                "count": 0,
+                "first_position": item.first_position,
+                "best_bucket_rank": _jd_skill_bucket_rank(item.bucket),
+            },
+        )
+        current["total_weight"] = float(current["total_weight"]) + (item.section_weight * item.skill_weight)
+        current["count"] = int(current["count"]) + 1
+        current["first_position"] = min(int(current["first_position"]), item.first_position)
+        current["best_bucket_rank"] = min(int(current["best_bucket_rank"]), _jd_skill_bucket_rank(item.bucket))
+        if item.bucket not in current["buckets"]:
+            current["buckets"].append(item.bucket)
+        if item.section_heading not in current["headings"]:
+            current["headings"].append(item.section_heading)
+
+    aggregated = [
+        AggregatedSkill(
+            skill_id=skill_id,
+            canonical_name=str(payload["canonical_name"]),
+            total_weight=float(payload["total_weight"]),
+            buckets=tuple(payload["buckets"]),
+            section_headings=tuple(payload["headings"]),
+            evidence_count=int(payload["count"]),
+            first_position=int(payload["first_position"]),
+        )
+        for skill_id, payload in grouped.items()
+    ]
+    aggregated.sort(
+        key=lambda item: (
+            min(_jd_skill_bucket_rank(bucket) for bucket in item.buckets) if item.buckets else 10,
+            -item.total_weight,
+            item.first_position,
+            item.canonical_name.lower(),
+        )
+    )
+    return aggregated
+
+
+def _aggregated_skill_is_foundation(skill: AggregatedSkill, entry: SkillTaxonomyEntry | None) -> bool:
+    if entry is None:
+        return False
+    category = normalize_taxonomy_text(entry.category)
+    return entry.match_tier == "foundation" or category in _FOUNDATION_CATEGORIES
+
+
+def _aggregated_skill_is_aligned(skill: AggregatedSkill, entry: SkillTaxonomyEntry | None, role_family: str) -> bool:
+    if entry is None or role_family == "general":
+        return True
+    config = _ROLE_FAMILY_CONFIG.get(role_family, _ROLE_FAMILY_CONFIG["general"])
+    preferred_categories = {normalize_taxonomy_text(item) for item in config["preferred_categories"]}
+    preferred_clusters = {normalize_taxonomy_text(item) for item in config["preferred_clusters"]}
+    category = normalize_taxonomy_text(entry.category)
+    clusters = {normalize_taxonomy_text(cluster) for cluster in entry.intent_clusters}
+    if category in preferred_categories:
+        return True
+    if clusters & preferred_clusters:
+        return True
+    if role_family == "ai" and entry.match_tier == "role_defining":
+        return True
+    return False
+
+
+def _aggregated_skill_is_weak_off_family(skill: AggregatedSkill, entry: SkillTaxonomyEntry | None, role_family: str) -> bool:
+    if entry is None or role_family == "general":
+        return False
+    config = _ROLE_FAMILY_CONFIG.get(role_family, _ROLE_FAMILY_CONFIG["general"])
+    suppressed_categories = {normalize_taxonomy_text(item) for item in config["suppress_categories"]}
+    suppressed_skills = {normalize_taxonomy_text(item) for item in config["suppress_skills"]}
+    category = normalize_taxonomy_text(entry.category)
+    canonical = normalize_taxonomy_text(entry.canonical_name)
+    if not (category in suppressed_categories or canonical in suppressed_skills):
+        return False
+    strong_bucket = any(bucket in _STRONG_EVIDENCE_BUCKETS for bucket in skill.buckets)
+    return skill.evidence_count <= 1 and skill.total_weight < 0.85 and not strong_bucket
+
+
+def filter_jd_skills_by_role_family(
+    aggregated_skills: list[AggregatedSkill],
+    *,
+    role_family: str,
+    role_text: str | None = None,
+) -> list[AggregatedSkill]:
+    if role_family == "general" or not aggregated_skills:
+        return aggregated_skills
+
+    filtered: list[AggregatedSkill] = []
+    for skill in aggregated_skills:
+        entry = _entry_by_skill_id(skill.skill_id)
+        strong_bucket = any(bucket in _STRONG_EVIDENCE_BUCKETS for bucket in skill.buckets)
+        aligned = _aggregated_skill_is_aligned(skill, entry, role_family)
+        foundation = _aggregated_skill_is_foundation(skill, entry)
+        weak_off_family = _aggregated_skill_is_weak_off_family(skill, entry, role_family)
+
+        if strong_bucket or aligned or foundation:
+            filtered.append(skill)
+            continue
+        if weak_off_family:
+            continue
+        filtered.append(skill)
+
+    if not filtered or len(filtered) < min(3, len(aggregated_skills)):
+        return aggregated_skills
+
+    def sort_key(skill: AggregatedSkill) -> tuple[int, int, float, int]:
+        entry = _entry_by_skill_id(skill.skill_id)
+        aligned = _aggregated_skill_is_aligned(skill, entry, role_family)
+        foundation = _aggregated_skill_is_foundation(skill, entry)
+        strong_bucket = any(bucket in _STRONG_EVIDENCE_BUCKETS for bucket in skill.buckets)
+        priority = 0 if strong_bucket else 1 if aligned else 2 if foundation else 3
+        return (
+            priority,
+            min(_jd_skill_bucket_rank(bucket) for bucket in skill.buckets) if skill.buckets else 10,
+            -skill.total_weight,
+            skill.first_position,
+        )
+
+    return sorted(filtered, key=sort_key)
+
+
+def extract_jd_skills_text(
+    sections: Iterable[JDSectionLike],
+    *,
+    role_text: str | None = None,
+    fallback_text: str | None = None,
+) -> str:
+    evidence = extract_jd_skill_evidence(sections)
+    aggregated = aggregate_jd_skill_evidence(evidence)
+    if aggregated:
+        role_family = detect_role_family_from_entries(role_text, aggregated)
+        filtered = filter_jd_skills_by_role_family(
+            aggregated,
+            role_family=role_family,
+            role_text=role_text,
+        )
+        return ", ".join(item.canonical_name for item in filtered)
+    if fallback_text:
+        return extract_skills_text(fallback_text)
+    return "none_detected"
 
 
 def extract_skills_text(text: str | None) -> str:
@@ -362,11 +756,79 @@ def detect_role_family(role_text: str | None, skills_text: str | None = None) ->
     if normalized_role and _ROLE_FAMILY_AI_RE.search(normalized_role):
         return "ai"
     entries = entries_from_skills_text(skills_text)
-    ai_like = sum(1 for entry in entries if entry.match_tier == "role_defining")
-    if ai_like >= 3:
+    if detect_role_family_from_entries(normalized_role or role_text, entries) == "ai":
         return "ai"
-    if normalized_role and any(token in normalized_role for token in ("java", "backend", "frontend", "full stack", "software engineer", "developer")):
-        return "software"
+    if normalized_role and _ROLE_FAMILY_JAVA_FULLSTACK_RE.search(normalized_role):
+        return "java_fullstack"
+    if normalized_role and _ROLE_FAMILY_FRONTEND_RE.search(normalized_role):
+        return "frontend"
+    if normalized_role and _ROLE_FAMILY_DEVOPS_RE.search(normalized_role):
+        return "devops_cloud"
+    if normalized_role and _ROLE_FAMILY_DATA_RE.search(normalized_role):
+        return "data"
+    if normalized_role and _ROLE_FAMILY_JAVA_BACKEND_RE.search(normalized_role):
+        return "java_backend"
+    detected = detect_role_family_from_entries(normalized_role or role_text, entries)
+    if detected != "general":
+        return detected
+    return "general"
+
+
+def detect_role_family_from_entries(
+    role_text: str | None,
+    entries: Iterable[SkillTaxonomyEntry] | Iterable[AggregatedSkill],
+) -> str:
+    normalized_role = normalize_taxonomy_text(role_text)
+    if normalized_role and _ROLE_FAMILY_AI_RE.search(normalized_role):
+        return "ai"
+    if normalized_role and _ROLE_FAMILY_JAVA_FULLSTACK_RE.search(normalized_role):
+        return "java_fullstack"
+    if normalized_role and _ROLE_FAMILY_FRONTEND_RE.search(normalized_role):
+        return "frontend"
+    if normalized_role and _ROLE_FAMILY_DEVOPS_RE.search(normalized_role):
+        return "devops_cloud"
+    if normalized_role and _ROLE_FAMILY_DATA_RE.search(normalized_role):
+        return "data"
+    if normalized_role and _ROLE_FAMILY_JAVA_BACKEND_RE.search(normalized_role):
+        return "java_backend"
+
+    scores = {
+        "ai": 0.0,
+        "java_fullstack": 0.0,
+        "java_backend": 0.0,
+        "frontend": 0.0,
+        "devops_cloud": 0.0,
+        "data": 0.0,
+    }
+    for raw_entry in entries:
+        if isinstance(raw_entry, AggregatedSkill):
+            entry = _entry_by_skill_id(raw_entry.skill_id)
+            weight = max(0.1, raw_entry.total_weight)
+        else:
+            entry = raw_entry
+            weight = max(0.1, float(entry.weight))
+        if entry is None:
+            continue
+        category = normalize_taxonomy_text(entry.category)
+        clusters = {normalize_taxonomy_text(cluster) for cluster in entry.intent_clusters}
+        if entry.match_tier == "role_defining" or category.startswith("ai") or clusters & _ROLE_FAMILY_CONFIG["ai"]["preferred_clusters"]:
+            scores["ai"] += weight
+        if category in {"language", "backend", "framework", "architecture", "database", "devops", "cloud"}:
+            scores["java_backend"] += weight
+        if category in {"frontend", "language", "backend", "framework", "database", "devops", "cloud"}:
+            scores["java_fullstack"] += weight
+        if category == "frontend" or normalize_taxonomy_text(entry.canonical_name) in {"typescript", "react", "angular services"}:
+            scores["frontend"] += weight
+        if category in {"devops", "cloud", "observability", "security"}:
+            scores["devops_cloud"] += weight
+        if category in {"data", "database"}:
+            scores["data"] += weight
+    ai_like = scores["ai"]
+    if ai_like >= 2.5:
+        return "ai"
+    best_family = max(scores, key=scores.get)
+    if scores[best_family] >= 2.0:
+        return best_family
     return "general"
 
 

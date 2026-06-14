@@ -3,6 +3,8 @@ import unittest
 from app.phase0 import (
     DEFAULT_FALLBACK_DRAFT_TEMPLATE,
     analyze_recipient_routing,
+    build_skill_source_sections,
+    classify_section_heading,
     draft_reply,
     email_domain,
     greeting_from_to_contact,
@@ -10,6 +12,7 @@ from app.phase0 import (
     parse_email,
     render_fallback_draft_template,
     resolve_to_cc,
+    slice_jd_sections,
     should_block_f2f,
 )
 
@@ -37,6 +40,86 @@ www.horizonsoftech.net
 
 
 class RecipientRoutingTests(unittest.TestCase):
+    def test_classify_section_heading_maps_project_headings(self) -> None:
+        self.assertEqual(classify_section_heading("Role Summary")[0], "summary")
+        self.assertEqual(classify_section_heading("Required Qualifications")[0], "required")
+        self.assertEqual(classify_section_heading("Preferred Qualifications")[0], "preferred")
+        self.assertEqual(classify_section_heading("Technical Skills")[0], "technical_skills")
+        self.assertEqual(classify_section_heading("Domain Skill")[0], "domain")
+        self.assertEqual(classify_section_heading("What Success Looks Like")[0], "ai_compliance")
+        self.assertEqual(classify_section_heading("Compliance & Responsible AI Expectations")[0], "ai_compliance")
+
+    def test_slice_jd_sections_splits_multiline_jd_by_known_headings(self) -> None:
+        body = """
+Role Summary:
+Build AI-assisted tooling.
+Required Qualifications:
+Python, Java, RAG
+Preferred Qualifications:
+Observability
+Technical Skills:
+REST APIs
+Domain Skill:
+Payments
+What Success Looks Like:
+Production readiness
+"""
+
+        sections = slice_jd_sections(body)
+        buckets = [section.bucket for section in sections]
+
+        self.assertIn("summary", buckets)
+        self.assertIn("required", buckets)
+        self.assertIn("preferred", buckets)
+        self.assertIn("technical_skills", buckets)
+        self.assertIn("domain", buckets)
+        self.assertIn("ai_compliance", buckets)
+
+    def test_slice_jd_sections_classifies_inline_hard_filters(self) -> None:
+        body = """
+Location: Alpharetta, GA
+Visa: H1B
+Duration: Long term
+Rate: $70/hr
+Required Qualifications:
+Python, Java
+"""
+
+        sections = slice_jd_sections(body)
+        hard_filter_headings = [section.heading for section in sections if section.bucket == "hard_filter"]
+
+        self.assertIn("Location", hard_filter_headings)
+        self.assertIn("Visa", hard_filter_headings)
+        self.assertIn("Duration", hard_filter_headings)
+        self.assertIn("Rate", hard_filter_headings)
+
+        skill_sections = build_skill_source_sections(sections)
+        self.assertTrue(all(section.bucket != "hard_filter" for section in skill_sections))
+
+    def test_slice_jd_sections_adds_conservative_synthetic_requirements(self) -> None:
+        body = """
+Must have Banking domain experience
+Strong proficiency in Java 21
+This team supports enterprise systems.
+"""
+
+        sections = slice_jd_sections(body)
+        self.assertEqual([section.bucket for section in sections], ["mandatory", "technical_skills"])
+        self.assertEqual(sections[0].text, "Must have Banking domain experience")
+        self.assertEqual(sections[1].text, "Strong proficiency in Java 21")
+
+    def test_slice_jd_sections_does_not_promote_regular_prose_to_heading(self) -> None:
+        body = """
+This role builds onboarding systems and secure operational tooling.
+The candidate should collaborate closely with platform partners.
+"""
+
+        sections = slice_jd_sections(body)
+
+        self.assertEqual(len(sections), 1)
+        self.assertEqual(sections[0].bucket, "unknown")
+        self.assertIn("secure operational tooling", sections[0].text)
+
     def test_explicit_non_texas_interview_phrases_are_blocked(self) -> None:
         phrases = [
             "Onsite interview required",
