@@ -1,0 +1,6596 @@
+{
+  "schema_version": 1,
+  "source_markdown": "docs/taxonomy.md",
+  "categories": [
+    {
+      "id": "ai",
+      "default_weight": 1.15
+    },
+    {
+      "id": "ai_data",
+      "default_weight": 1.15
+    },
+    {
+      "id": "ai_framework",
+      "default_weight": 1.0
+    },
+    {
+      "id": "ai_pattern",
+      "default_weight": 1.2
+    },
+    {
+      "id": "ai_safety",
+      "default_weight": 1.15
+    },
+    {
+      "id": "ai_security",
+      "default_weight": 1.0
+    },
+    {
+      "id": "ai_tool",
+      "default_weight": 0.85
+    },
+    {
+      "id": "ai_use_case",
+      "default_weight": 1.0
+    },
+    {
+      "id": "app_server",
+      "default_weight": 0.7
+    },
+    {
+      "id": "architecture",
+      "default_weight": 1.05
+    },
+    {
+      "id": "automation",
+      "default_weight": 0.95
+    },
+    {
+      "id": "aws_service",
+      "default_weight": 0.95
+    },
+    {
+      "id": "backend",
+      "default_weight": 1.0
+    },
+    {
+      "id": "build_tool",
+      "default_weight": 0.85
+    },
+    {
+      "id": "cloud",
+      "default_weight": 0.95
+    },
+    {
+      "id": "collaboration",
+      "default_weight": 0.7
+    },
+    {
+      "id": "data",
+      "default_weight": 0.95
+    },
+    {
+      "id": "database",
+      "default_weight": 0.95
+    },
+    {
+      "id": "design_tool",
+      "default_weight": 0.5
+    },
+    {
+      "id": "devops",
+      "default_weight": 0.95
+    },
+    {
+      "id": "domain",
+      "default_weight": 0.55
+    },
+    {
+      "id": "domain_banking",
+      "default_weight": 0.6
+    },
+    {
+      "id": "domain_ecommerce",
+      "default_weight": 0.55
+    },
+    {
+      "id": "domain_finance",
+      "default_weight": 0.6
+    },
+    {
+      "id": "domain_healthcare",
+      "default_weight": 0.6
+    },
+    {
+      "id": "domain_marketing",
+      "default_weight": 0.55
+    },
+    {
+      "id": "domain_payments",
+      "default_weight": 0.6
+    },
+    {
+      "id": "domain_pharma",
+      "default_weight": 0.55
+    },
+    {
+      "id": "domain_science",
+      "default_weight": 0.55
+    },
+    {
+      "id": "domain_telecom",
+      "default_weight": 0.6
+    },
+    {
+      "id": "engineering_practice",
+      "default_weight": 0.85
+    },
+    {
+      "id": "framework",
+      "default_weight": 1.0
+    },
+    {
+      "id": "frontend",
+      "default_weight": 0.95
+    },
+    {
+      "id": "frontend_security",
+      "default_weight": 0.95
+    },
+    {
+      "id": "iac",
+      "default_weight": 0.95
+    },
+    {
+      "id": "ide",
+      "default_weight": 0.4
+    },
+    {
+      "id": "integration",
+      "default_weight": 1.0
+    },
+    {
+      "id": "language",
+      "default_weight": 1.0
+    },
+    {
+      "id": "leadership",
+      "default_weight": 0.65
+    },
+    {
+      "id": "legacy",
+      "default_weight": 0.7
+    },
+    {
+      "id": "marketing",
+      "default_weight": 0.5
+    },
+    {
+      "id": "marketing_platform",
+      "default_weight": 0.7
+    },
+    {
+      "id": "messaging",
+      "default_weight": 1.0
+    },
+    {
+      "id": "methodology",
+      "default_weight": 0.7
+    },
+    {
+      "id": "observability",
+      "default_weight": 0.75
+    },
+    {
+      "id": "operations",
+      "default_weight": 0.9
+    },
+    {
+      "id": "performance",
+      "default_weight": 0.95
+    },
+    {
+      "id": "platform",
+      "default_weight": 0.8
+    },
+    {
+      "id": "project_management",
+      "default_weight": 0.65
+    },
+    {
+      "id": "python_framework",
+      "default_weight": 1.0
+    },
+    {
+      "id": "reporting",
+      "default_weight": 0.6
+    },
+    {
+      "id": "scripting",
+      "default_weight": 0.9
+    },
+    {
+      "id": "security",
+      "default_weight": 1.1
+    },
+    {
+      "id": "soft_skill",
+      "default_weight": 0.45
+    },
+    {
+      "id": "testing",
+      "default_weight": 0.9
+    },
+    {
+      "id": "version_control",
+      "default_weight": 0.8
+    }
+  ],
+  "skills": [
+    {
+      "id": "java",
+      "canonical_name": "Java",
+      "category": "language",
+      "weight": 1.0,
+      "aliases": [
+        "core java",
+        "advanced java",
+        "jdk 8",
+        "jdk 11",
+        "jdk 17",
+        "jdk 18",
+        "jdk 21",
+        "java 8",
+        "java 11",
+        "java 17",
+        "java 18",
+        "java 21"
+      ],
+      "normalized_forms": [
+        "java",
+        "core java",
+        "advanced java",
+        "jdk 8",
+        "jdk 11",
+        "jdk 17",
+        "jdk 18",
+        "jdk 21",
+        "java 8",
+        "java 11",
+        "java 17",
+        "java 18",
+        "java 21"
+      ],
+      "cluster_id": "cluster_language",
+      "related_skill_ids": []
+    },
+    {
+      "id": "python",
+      "canonical_name": "Python",
+      "category": "language",
+      "weight": 1.0,
+      "aliases": [
+        "py"
+      ],
+      "normalized_forms": [
+        "python",
+        "py"
+      ],
+      "cluster_id": "cluster_language",
+      "related_skill_ids": []
+    },
+    {
+      "id": "typescript",
+      "canonical_name": "TypeScript",
+      "category": "language",
+      "weight": 1.0,
+      "aliases": [
+        "ts"
+      ],
+      "normalized_forms": [
+        "typescript",
+        "ts"
+      ],
+      "cluster_id": "cluster_language",
+      "related_skill_ids": []
+    },
+    {
+      "id": "javascript",
+      "canonical_name": "JavaScript",
+      "category": "language",
+      "weight": 1.0,
+      "aliases": [
+        "js",
+        "ecmascript",
+        "es6",
+        "modern javascript"
+      ],
+      "normalized_forms": [
+        "javascript",
+        "js",
+        "ecmascript",
+        "es6",
+        "modern javascript"
+      ],
+      "cluster_id": "cluster_language",
+      "related_skill_ids": []
+    },
+    {
+      "id": "sql",
+      "canonical_name": "SQL",
+      "category": "language",
+      "weight": 1.0,
+      "aliases": [
+        "structured query language"
+      ],
+      "normalized_forms": [
+        "sql",
+        "structured query language"
+      ],
+      "cluster_id": "cluster_language",
+      "related_skill_ids": []
+    },
+    {
+      "id": "pl_sql",
+      "canonical_name": "PL/SQL",
+      "category": "language",
+      "weight": 1.0,
+      "aliases": [
+        "plsql",
+        "oracle pl sql"
+      ],
+      "normalized_forms": [
+        "pl sql",
+        "plsql",
+        "oracle pl sql"
+      ],
+      "cluster_id": "cluster_language",
+      "related_skill_ids": []
+    },
+    {
+      "id": "groovy",
+      "canonical_name": "Groovy",
+      "category": "language",
+      "weight": 1.0,
+      "aliases": [
+        "groovy 3"
+      ],
+      "normalized_forms": [
+        "groovy",
+        "groovy 3"
+      ],
+      "cluster_id": "cluster_language",
+      "related_skill_ids": []
+    },
+    {
+      "id": "html5",
+      "canonical_name": "HTML5",
+      "category": "frontend",
+      "weight": 0.95,
+      "aliases": [
+        "html",
+        "hypertext markup language"
+      ],
+      "normalized_forms": [
+        "html5",
+        "html",
+        "hypertext markup language"
+      ],
+      "cluster_id": "cluster_frontend",
+      "related_skill_ids": []
+    },
+    {
+      "id": "css3",
+      "canonical_name": "CSS3",
+      "category": "frontend",
+      "weight": 0.95,
+      "aliases": [
+        "css",
+        "stylesheets"
+      ],
+      "normalized_forms": [
+        "css3",
+        "css",
+        "stylesheets"
+      ],
+      "cluster_id": "cluster_frontend",
+      "related_skill_ids": []
+    },
+    {
+      "id": "node_js",
+      "canonical_name": "Node.js",
+      "category": "backend",
+      "weight": 1.0,
+      "aliases": [
+        "node",
+        "nodejs"
+      ],
+      "normalized_forms": [
+        "node js",
+        "node",
+        "nodejs"
+      ],
+      "cluster_id": "cluster_backend",
+      "related_skill_ids": []
+    },
+    {
+      "id": "express_js",
+      "canonical_name": "Express.js",
+      "category": "backend",
+      "weight": 1.0,
+      "aliases": [
+        "express",
+        "node express"
+      ],
+      "normalized_forms": [
+        "express js",
+        "express",
+        "node express"
+      ],
+      "cluster_id": "cluster_backend",
+      "related_skill_ids": []
+    },
+    {
+      "id": "j2ee",
+      "canonical_name": "J2EE",
+      "category": "backend",
+      "weight": 1.0,
+      "aliases": [
+        "java ee",
+        "enterprise java"
+      ],
+      "normalized_forms": [
+        "j2ee",
+        "java ee",
+        "enterprise java"
+      ],
+      "cluster_id": "cluster_backend",
+      "related_skill_ids": []
+    },
+    {
+      "id": "spring_boot",
+      "canonical_name": "Spring Boot",
+      "category": "framework",
+      "weight": 1.0,
+      "aliases": [
+        "springboot",
+        "spring boot 3",
+        "spring boot microservices"
+      ],
+      "normalized_forms": [
+        "spring boot",
+        "springboot",
+        "spring boot 3",
+        "spring boot microservices"
+      ],
+      "cluster_id": "cluster_framework",
+      "related_skill_ids": []
+    },
+    {
+      "id": "spring_framework",
+      "canonical_name": "Spring Framework",
+      "category": "framework",
+      "weight": 1.0,
+      "aliases": [
+        "spring",
+        "spring core"
+      ],
+      "normalized_forms": [
+        "spring framework",
+        "spring",
+        "spring core"
+      ],
+      "cluster_id": "cluster_framework",
+      "related_skill_ids": []
+    },
+    {
+      "id": "spring_mvc",
+      "canonical_name": "Spring MVC",
+      "category": "framework",
+      "weight": 1.0,
+      "aliases": [
+        "spring model view controller"
+      ],
+      "normalized_forms": [
+        "spring mvc",
+        "spring model view controller"
+      ],
+      "cluster_id": "cluster_framework",
+      "related_skill_ids": []
+    },
+    {
+      "id": "spring_rest",
+      "canonical_name": "Spring REST",
+      "category": "framework",
+      "weight": 1.0,
+      "aliases": [
+        "spring rest services",
+        "spring restful services"
+      ],
+      "normalized_forms": [
+        "spring rest",
+        "spring rest services",
+        "spring restful services"
+      ],
+      "cluster_id": "cluster_framework",
+      "related_skill_ids": []
+    },
+    {
+      "id": "spring_webflux",
+      "canonical_name": "Spring WebFlux",
+      "category": "framework",
+      "weight": 1.0,
+      "aliases": [
+        "webflux",
+        "reactive spring"
+      ],
+      "normalized_forms": [
+        "spring webflux",
+        "webflux",
+        "reactive spring"
+      ],
+      "cluster_id": "cluster_framework",
+      "related_skill_ids": []
+    },
+    {
+      "id": "project_reactor",
+      "canonical_name": "Project Reactor",
+      "category": "framework",
+      "weight": 1.0,
+      "aliases": [
+        "reactor",
+        "reactive streams"
+      ],
+      "normalized_forms": [
+        "project reactor",
+        "reactor",
+        "reactive streams"
+      ],
+      "cluster_id": "cluster_framework",
+      "related_skill_ids": []
+    },
+    {
+      "id": "vert_x",
+      "canonical_name": "Vert.x",
+      "category": "framework",
+      "weight": 1.0,
+      "aliases": [
+        "vertx"
+      ],
+      "normalized_forms": [
+        "vert x",
+        "vertx"
+      ],
+      "cluster_id": "cluster_framework",
+      "related_skill_ids": []
+    },
+    {
+      "id": "spring_data",
+      "canonical_name": "Spring Data",
+      "category": "framework",
+      "weight": 1.0,
+      "aliases": [
+        "spring data framework"
+      ],
+      "normalized_forms": [
+        "spring data",
+        "spring data framework"
+      ],
+      "cluster_id": "cluster_framework",
+      "related_skill_ids": []
+    },
+    {
+      "id": "spring_data_jpa",
+      "canonical_name": "Spring Data JPA",
+      "category": "framework",
+      "weight": 1.0,
+      "aliases": [
+        "spring data jpa repositories"
+      ],
+      "normalized_forms": [
+        "spring data jpa",
+        "spring data jpa repositories"
+      ],
+      "cluster_id": "cluster_framework",
+      "related_skill_ids": []
+    },
+    {
+      "id": "jpa",
+      "canonical_name": "JPA",
+      "category": "framework",
+      "weight": 1.0,
+      "aliases": [
+        "java persistence api"
+      ],
+      "normalized_forms": [
+        "jpa",
+        "java persistence api"
+      ],
+      "cluster_id": "cluster_framework",
+      "related_skill_ids": []
+    },
+    {
+      "id": "hibernate",
+      "canonical_name": "Hibernate",
+      "category": "framework",
+      "weight": 1.0,
+      "aliases": [
+        "hibernate orm"
+      ],
+      "normalized_forms": [
+        "hibernate",
+        "hibernate orm"
+      ],
+      "cluster_id": "cluster_framework",
+      "related_skill_ids": []
+    },
+    {
+      "id": "spring_security",
+      "canonical_name": "Spring Security",
+      "category": "security",
+      "weight": 1.1,
+      "aliases": [
+        "spring security framework"
+      ],
+      "normalized_forms": [
+        "spring security",
+        "spring security framework"
+      ],
+      "cluster_id": "cluster_security",
+      "related_skill_ids": []
+    },
+    {
+      "id": "spring_batch",
+      "canonical_name": "Spring Batch",
+      "category": "framework",
+      "weight": 1.0,
+      "aliases": [
+        "batch processing",
+        "spring batch jobs"
+      ],
+      "normalized_forms": [
+        "spring batch",
+        "batch processing",
+        "spring batch jobs"
+      ],
+      "cluster_id": "cluster_framework",
+      "related_skill_ids": []
+    },
+    {
+      "id": "spring_jms",
+      "canonical_name": "Spring JMS",
+      "category": "messaging",
+      "weight": 1.0,
+      "aliases": [
+        "spring java messaging service"
+      ],
+      "normalized_forms": [
+        "spring jms",
+        "spring java messaging service"
+      ],
+      "cluster_id": "cluster_messaging",
+      "related_skill_ids": []
+    },
+    {
+      "id": "spring_cloud_gateway",
+      "canonical_name": "Spring Cloud Gateway",
+      "category": "integration",
+      "weight": 1.0,
+      "aliases": [
+        "spring gateway"
+      ],
+      "normalized_forms": [
+        "spring cloud gateway",
+        "spring gateway"
+      ],
+      "cluster_id": "cluster_integration",
+      "related_skill_ids": []
+    },
+    {
+      "id": "microservices",
+      "canonical_name": "Microservices",
+      "category": "architecture",
+      "weight": 1.05,
+      "aliases": [
+        "microservice architecture",
+        "micro services",
+        "distributed services"
+      ],
+      "normalized_forms": [
+        "microservices",
+        "microservice architecture",
+        "micro services",
+        "distributed services"
+      ],
+      "cluster_id": "cluster_architecture",
+      "related_skill_ids": []
+    },
+    {
+      "id": "rest_apis",
+      "canonical_name": "REST APIs",
+      "category": "backend",
+      "weight": 1.0,
+      "aliases": [
+        "rest api",
+        "restful api",
+        "restful apis",
+        "rest services"
+      ],
+      "normalized_forms": [
+        "rest apis",
+        "rest api",
+        "restful api",
+        "restful apis",
+        "rest services"
+      ],
+      "cluster_id": "cluster_backend",
+      "related_skill_ids": []
+    },
+    {
+      "id": "soap_web_services",
+      "canonical_name": "SOAP Web Services",
+      "category": "backend",
+      "weight": 1.0,
+      "aliases": [
+        "soap",
+        "soap services",
+        "soap api"
+      ],
+      "normalized_forms": [
+        "soap web services",
+        "soap",
+        "soap services",
+        "soap api"
+      ],
+      "cluster_id": "cluster_backend",
+      "related_skill_ids": []
+    },
+    {
+      "id": "graphql",
+      "canonical_name": "GraphQL",
+      "category": "backend",
+      "weight": 1.0,
+      "aliases": [
+        "graphql api"
+      ],
+      "normalized_forms": [
+        "graphql",
+        "graphql api"
+      ],
+      "cluster_id": "cluster_backend",
+      "related_skill_ids": []
+    },
+    {
+      "id": "grpc",
+      "canonical_name": "gRPC",
+      "category": "backend",
+      "weight": 1.0,
+      "aliases": [
+        "grpc",
+        "grpc services"
+      ],
+      "normalized_forms": [
+        "grpc",
+        "grpc services"
+      ],
+      "cluster_id": "cluster_backend",
+      "related_skill_ids": []
+    },
+    {
+      "id": "api_development",
+      "canonical_name": "API Development",
+      "category": "backend",
+      "weight": 1.0,
+      "aliases": [
+        "api design",
+        "api implementation",
+        "api engineering"
+      ],
+      "normalized_forms": [
+        "api development",
+        "api design",
+        "api implementation",
+        "api engineering"
+      ],
+      "cluster_id": "cluster_backend",
+      "related_skill_ids": []
+    },
+    {
+      "id": "api_integration",
+      "canonical_name": "API Integration",
+      "category": "integration",
+      "weight": 1.0,
+      "aliases": [
+        "api integrations",
+        "system integration",
+        "service integration"
+      ],
+      "normalized_forms": [
+        "api integration",
+        "api integrations",
+        "system integration",
+        "service integration"
+      ],
+      "cluster_id": "cluster_integration",
+      "related_skill_ids": []
+    },
+    {
+      "id": "api_gateway",
+      "canonical_name": "API Gateway",
+      "category": "integration",
+      "weight": 1.0,
+      "aliases": [
+        "gateway integration",
+        "api gateway integration"
+      ],
+      "normalized_forms": [
+        "api gateway",
+        "gateway integration",
+        "api gateway integration"
+      ],
+      "cluster_id": "cluster_integration",
+      "related_skill_ids": []
+    },
+    {
+      "id": "mulesoft",
+      "canonical_name": "MuleSoft",
+      "category": "integration",
+      "weight": 1.0,
+      "aliases": [
+        "mulesoft api",
+        "mulesoft api manager",
+        "mulesoft integration"
+      ],
+      "normalized_forms": [
+        "mulesoft",
+        "mulesoft api",
+        "mulesoft api manager",
+        "mulesoft integration"
+      ],
+      "cluster_id": "cluster_integration",
+      "related_skill_ids": []
+    },
+    {
+      "id": "api_proxy",
+      "canonical_name": "API Proxy",
+      "category": "integration",
+      "weight": 1.0,
+      "aliases": [
+        "api proxies",
+        "proxy integration"
+      ],
+      "normalized_forms": [
+        "api proxy",
+        "api proxies",
+        "proxy integration"
+      ],
+      "cluster_id": "cluster_integration",
+      "related_skill_ids": []
+    },
+    {
+      "id": "kong",
+      "canonical_name": "Kong",
+      "category": "integration",
+      "weight": 1.0,
+      "aliases": [
+        "kong api gateway"
+      ],
+      "normalized_forms": [
+        "kong",
+        "kong api gateway"
+      ],
+      "cluster_id": "cluster_integration",
+      "related_skill_ids": []
+    },
+    {
+      "id": "apigee",
+      "canonical_name": "Apigee",
+      "category": "integration",
+      "weight": 1.0,
+      "aliases": [
+        "apigee gateway",
+        "apigee client credentials"
+      ],
+      "normalized_forms": [
+        "apigee",
+        "apigee gateway",
+        "apigee client credentials"
+      ],
+      "cluster_id": "cluster_integration",
+      "related_skill_ids": []
+    },
+    {
+      "id": "kafka",
+      "canonical_name": "Kafka",
+      "category": "messaging",
+      "weight": 1.0,
+      "aliases": [
+        "apache kafka",
+        "kafka message broker",
+        "kafka framework"
+      ],
+      "normalized_forms": [
+        "kafka",
+        "apache kafka",
+        "kafka message broker",
+        "kafka framework"
+      ],
+      "cluster_id": "cluster_messaging",
+      "related_skill_ids": []
+    },
+    {
+      "id": "kafka_streams",
+      "canonical_name": "Kafka Streams",
+      "category": "messaging",
+      "weight": 1.0,
+      "aliases": [
+        "kafka stream processing"
+      ],
+      "normalized_forms": [
+        "kafka streams",
+        "kafka stream processing"
+      ],
+      "cluster_id": "cluster_messaging",
+      "related_skill_ids": []
+    },
+    {
+      "id": "ksqldb",
+      "canonical_name": "ksqlDB",
+      "category": "messaging",
+      "weight": 1.0,
+      "aliases": [
+        "kafka sql",
+        "ksqldb streaming"
+      ],
+      "normalized_forms": [
+        "ksqldb",
+        "kafka sql",
+        "ksqldb streaming"
+      ],
+      "cluster_id": "cluster_messaging",
+      "related_skill_ids": []
+    },
+    {
+      "id": "confluent_kafka",
+      "canonical_name": "Confluent Kafka",
+      "category": "messaging",
+      "weight": 1.0,
+      "aliases": [
+        "confluent platform",
+        "confluent"
+      ],
+      "normalized_forms": [
+        "confluent kafka",
+        "confluent platform",
+        "confluent"
+      ],
+      "cluster_id": "cluster_messaging",
+      "related_skill_ids": []
+    },
+    {
+      "id": "jms",
+      "canonical_name": "JMS",
+      "category": "messaging",
+      "weight": 1.0,
+      "aliases": [
+        "java message service"
+      ],
+      "normalized_forms": [
+        "jms",
+        "java message service"
+      ],
+      "cluster_id": "cluster_messaging",
+      "related_skill_ids": []
+    },
+    {
+      "id": "mq",
+      "canonical_name": "MQ",
+      "category": "messaging",
+      "weight": 1.0,
+      "aliases": [
+        "message queue",
+        "message queues",
+        "mq technologies"
+      ],
+      "normalized_forms": [
+        "mq",
+        "message queue",
+        "message queues",
+        "mq technologies"
+      ],
+      "cluster_id": "cluster_messaging",
+      "related_skill_ids": []
+    },
+    {
+      "id": "rabbitmq",
+      "canonical_name": "RabbitMQ",
+      "category": "messaging",
+      "weight": 1.0,
+      "aliases": [
+        "rabbit mq"
+      ],
+      "normalized_forms": [
+        "rabbitmq",
+        "rabbit mq"
+      ],
+      "cluster_id": "cluster_messaging",
+      "related_skill_ids": []
+    },
+    {
+      "id": "activemq",
+      "canonical_name": "ActiveMQ",
+      "category": "messaging",
+      "weight": 1.0,
+      "aliases": [
+        "apache activemq"
+      ],
+      "normalized_forms": [
+        "activemq",
+        "apache activemq"
+      ],
+      "cluster_id": "cluster_messaging",
+      "related_skill_ids": []
+    },
+    {
+      "id": "amazon_sqs",
+      "canonical_name": "Amazon SQS",
+      "category": "aws_service",
+      "weight": 0.95,
+      "aliases": [
+        "sqs",
+        "simple queue service"
+      ],
+      "normalized_forms": [
+        "amazon sqs",
+        "sqs",
+        "simple queue service"
+      ],
+      "cluster_id": "cluster_aws_service",
+      "related_skill_ids": []
+    },
+    {
+      "id": "amazon_sns",
+      "canonical_name": "Amazon SNS",
+      "category": "aws_service",
+      "weight": 0.95,
+      "aliases": [
+        "sns",
+        "simple notification service"
+      ],
+      "normalized_forms": [
+        "amazon sns",
+        "sns",
+        "simple notification service"
+      ],
+      "cluster_id": "cluster_aws_service",
+      "related_skill_ids": []
+    },
+    {
+      "id": "amazon_eventbridge",
+      "canonical_name": "Amazon EventBridge",
+      "category": "aws_service",
+      "weight": 0.95,
+      "aliases": [
+        "eventbridge",
+        "event bus"
+      ],
+      "normalized_forms": [
+        "amazon eventbridge",
+        "eventbridge",
+        "event bus"
+      ],
+      "cluster_id": "cluster_aws_service",
+      "related_skill_ids": []
+    },
+    {
+      "id": "amazon_kinesis",
+      "canonical_name": "Amazon Kinesis",
+      "category": "aws_service",
+      "weight": 0.95,
+      "aliases": [
+        "kinesis",
+        "data streams"
+      ],
+      "normalized_forms": [
+        "amazon kinesis",
+        "kinesis",
+        "data streams"
+      ],
+      "cluster_id": "cluster_aws_service",
+      "related_skill_ids": []
+    },
+    {
+      "id": "event_driven_architecture",
+      "canonical_name": "Event-Driven Architecture",
+      "category": "architecture",
+      "weight": 1.05,
+      "aliases": [
+        "event driven systems",
+        "event driven microservices",
+        "asynchronous messaging"
+      ],
+      "normalized_forms": [
+        "event driven architecture",
+        "event driven systems",
+        "event driven microservices",
+        "asynchronous messaging"
+      ],
+      "cluster_id": "cluster_architecture",
+      "related_skill_ids": []
+    },
+    {
+      "id": "distributed_systems",
+      "canonical_name": "Distributed Systems",
+      "category": "architecture",
+      "weight": 1.05,
+      "aliases": [
+        "distributed architecture",
+        "distributed applications"
+      ],
+      "normalized_forms": [
+        "distributed systems",
+        "distributed architecture",
+        "distributed applications"
+      ],
+      "cluster_id": "cluster_architecture",
+      "related_skill_ids": []
+    },
+    {
+      "id": "system_design",
+      "canonical_name": "System Design",
+      "category": "architecture",
+      "weight": 1.05,
+      "aliases": [
+        "architectural design",
+        "solution design",
+        "technical design"
+      ],
+      "normalized_forms": [
+        "system design",
+        "architectural design",
+        "solution design",
+        "technical design"
+      ],
+      "cluster_id": "cluster_architecture",
+      "related_skill_ids": []
+    },
+    {
+      "id": "microservices_design_patterns",
+      "canonical_name": "Microservices Design Patterns",
+      "category": "architecture",
+      "weight": 1.05,
+      "aliases": [
+        "microservice patterns",
+        "distributed design patterns"
+      ],
+      "normalized_forms": [
+        "microservices design patterns",
+        "microservice patterns",
+        "distributed design patterns"
+      ],
+      "cluster_id": "cluster_architecture",
+      "related_skill_ids": []
+    },
+    {
+      "id": "design_patterns",
+      "canonical_name": "Design Patterns",
+      "category": "architecture",
+      "weight": 1.05,
+      "aliases": [
+        "software design patterns"
+      ],
+      "normalized_forms": [
+        "design patterns",
+        "software design patterns"
+      ],
+      "cluster_id": "cluster_architecture",
+      "related_skill_ids": []
+    },
+    {
+      "id": "oop",
+      "canonical_name": "OOP",
+      "category": "architecture",
+      "weight": 1.05,
+      "aliases": [
+        "object oriented programming",
+        "object-oriented design",
+        "object oriented design"
+      ],
+      "normalized_forms": [
+        "oop",
+        "object oriented programming",
+        "object oriented design"
+      ],
+      "cluster_id": "cluster_architecture",
+      "related_skill_ids": []
+    },
+    {
+      "id": "solid_principles",
+      "canonical_name": "SOLID Principles",
+      "category": "architecture",
+      "weight": 1.05,
+      "aliases": [
+        "solid design",
+        "solid principles"
+      ],
+      "normalized_forms": [
+        "solid principles",
+        "solid design"
+      ],
+      "cluster_id": "cluster_architecture",
+      "related_skill_ids": []
+    },
+    {
+      "id": "ioc",
+      "canonical_name": "IoC",
+      "category": "architecture",
+      "weight": 1.05,
+      "aliases": [
+        "inversion of control"
+      ],
+      "normalized_forms": [
+        "ioc",
+        "inversion of control"
+      ],
+      "cluster_id": "cluster_architecture",
+      "related_skill_ids": []
+    },
+    {
+      "id": "dependency_injection",
+      "canonical_name": "Dependency Injection",
+      "category": "architecture",
+      "weight": 1.05,
+      "aliases": [
+        "di",
+        "dependency injection pattern"
+      ],
+      "normalized_forms": [
+        "dependency injection",
+        "di",
+        "dependency injection pattern"
+      ],
+      "cluster_id": "cluster_architecture",
+      "related_skill_ids": []
+    },
+    {
+      "id": "domain_driven_design",
+      "canonical_name": "Domain Driven Design",
+      "category": "architecture",
+      "weight": 1.05,
+      "aliases": [
+        "ddd",
+        "domain-driven development"
+      ],
+      "normalized_forms": [
+        "domain driven design",
+        "ddd",
+        "domain driven development"
+      ],
+      "cluster_id": "cluster_architecture",
+      "related_skill_ids": []
+    },
+    {
+      "id": "behavior_driven_development",
+      "canonical_name": "Behavior Driven Development",
+      "category": "testing",
+      "weight": 0.9,
+      "aliases": [
+        "bdd",
+        "behavior-driven development"
+      ],
+      "normalized_forms": [
+        "behavior driven development",
+        "bdd"
+      ],
+      "cluster_id": "cluster_testing",
+      "related_skill_ids": []
+    },
+    {
+      "id": "test_driven_development",
+      "canonical_name": "Test Driven Development",
+      "category": "testing",
+      "weight": 0.9,
+      "aliases": [
+        "tdd",
+        "test-driven development"
+      ],
+      "normalized_forms": [
+        "test driven development",
+        "tdd"
+      ],
+      "cluster_id": "cluster_testing",
+      "related_skill_ids": []
+    },
+    {
+      "id": "resiliency",
+      "canonical_name": "Resiliency",
+      "category": "architecture",
+      "weight": 1.05,
+      "aliases": [
+        "resilience",
+        "fault tolerance",
+        "fault-tolerant design"
+      ],
+      "normalized_forms": [
+        "resiliency",
+        "resilience",
+        "fault tolerance",
+        "fault tolerant design"
+      ],
+      "cluster_id": "cluster_architecture",
+      "related_skill_ids": []
+    },
+    {
+      "id": "scalability",
+      "canonical_name": "Scalability",
+      "category": "architecture",
+      "weight": 1.05,
+      "aliases": [
+        "scalable systems",
+        "scalable architecture"
+      ],
+      "normalized_forms": [
+        "scalability",
+        "scalable systems",
+        "scalable architecture"
+      ],
+      "cluster_id": "cluster_architecture",
+      "related_skill_ids": []
+    },
+    {
+      "id": "high_availability",
+      "canonical_name": "High Availability",
+      "category": "architecture",
+      "weight": 1.05,
+      "aliases": [
+        "ha",
+        "availability"
+      ],
+      "normalized_forms": [
+        "high availability",
+        "ha",
+        "availability"
+      ],
+      "cluster_id": "cluster_architecture",
+      "related_skill_ids": []
+    },
+    {
+      "id": "performance_tuning",
+      "canonical_name": "Performance Tuning",
+      "category": "performance",
+      "weight": 0.95,
+      "aliases": [
+        "performance optimization",
+        "performance engineering"
+      ],
+      "normalized_forms": [
+        "performance tuning",
+        "performance optimization",
+        "performance engineering"
+      ],
+      "cluster_id": "cluster_performance",
+      "related_skill_ids": []
+    },
+    {
+      "id": "jvm_tuning",
+      "canonical_name": "JVM Tuning",
+      "category": "performance",
+      "weight": 0.95,
+      "aliases": [
+        "jvm performance",
+        "jvm optimization"
+      ],
+      "normalized_forms": [
+        "jvm tuning",
+        "jvm performance",
+        "jvm optimization"
+      ],
+      "cluster_id": "cluster_performance",
+      "related_skill_ids": []
+    },
+    {
+      "id": "jvm_internals",
+      "canonical_name": "JVM Internals",
+      "category": "performance",
+      "weight": 0.95,
+      "aliases": [
+        "garbage collection",
+        "heap analysis",
+        "thread analysis",
+        "jvm concepts"
+      ],
+      "normalized_forms": [
+        "jvm internals",
+        "garbage collection",
+        "heap analysis",
+        "thread analysis",
+        "jvm concepts"
+      ],
+      "cluster_id": "cluster_performance",
+      "related_skill_ids": []
+    },
+    {
+      "id": "cpu_profiling",
+      "canonical_name": "CPU Profiling",
+      "category": "performance",
+      "weight": 0.95,
+      "aliases": [
+        "cpu analysis",
+        "cpu optimization"
+      ],
+      "normalized_forms": [
+        "cpu profiling",
+        "cpu analysis",
+        "cpu optimization"
+      ],
+      "cluster_id": "cluster_performance",
+      "related_skill_ids": []
+    },
+    {
+      "id": "memory_profiling",
+      "canonical_name": "Memory Profiling",
+      "category": "performance",
+      "weight": 0.95,
+      "aliases": [
+        "memory analysis",
+        "heap profiling"
+      ],
+      "normalized_forms": [
+        "memory profiling",
+        "memory analysis",
+        "heap profiling"
+      ],
+      "cluster_id": "cluster_performance",
+      "related_skill_ids": []
+    },
+    {
+      "id": "i_o_bottleneck_analysis",
+      "canonical_name": "I/O Bottleneck Analysis",
+      "category": "performance",
+      "weight": 0.95,
+      "aliases": [
+        "io bottleneck analysis",
+        "i/o performance",
+        "slow io analysis"
+      ],
+      "normalized_forms": [
+        "i o bottleneck analysis",
+        "io bottleneck analysis",
+        "i o performance",
+        "slow io analysis"
+      ],
+      "cluster_id": "cluster_performance",
+      "related_skill_ids": []
+    },
+    {
+      "id": "connection_pooling",
+      "canonical_name": "Connection Pooling",
+      "category": "performance",
+      "weight": 0.95,
+      "aliases": [
+        "connection pool tuning",
+        "database connection pooling"
+      ],
+      "normalized_forms": [
+        "connection pooling",
+        "connection pool tuning",
+        "database connection pooling"
+      ],
+      "cluster_id": "cluster_performance",
+      "related_skill_ids": []
+    },
+    {
+      "id": "caching_strategies",
+      "canonical_name": "Caching Strategies",
+      "category": "performance",
+      "weight": 0.95,
+      "aliases": [
+        "caching",
+        "cache optimization"
+      ],
+      "normalized_forms": [
+        "caching strategies",
+        "caching",
+        "cache optimization"
+      ],
+      "cluster_id": "cluster_performance",
+      "related_skill_ids": []
+    },
+    {
+      "id": "redis",
+      "canonical_name": "Redis",
+      "category": "database",
+      "weight": 0.95,
+      "aliases": [
+        "redis cache",
+        "distributed cache"
+      ],
+      "normalized_forms": [
+        "redis",
+        "redis cache",
+        "distributed cache"
+      ],
+      "cluster_id": "cluster_database",
+      "related_skill_ids": []
+    },
+    {
+      "id": "postgresql",
+      "canonical_name": "PostgreSQL",
+      "category": "database",
+      "weight": 0.95,
+      "aliases": [
+        "postgres",
+        "postgresql database"
+      ],
+      "normalized_forms": [
+        "postgresql",
+        "postgres",
+        "postgresql database"
+      ],
+      "cluster_id": "cluster_database",
+      "related_skill_ids": []
+    },
+    {
+      "id": "mysql",
+      "canonical_name": "MySQL",
+      "category": "database",
+      "weight": 0.95,
+      "aliases": [
+        "mysql database"
+      ],
+      "normalized_forms": [
+        "mysql",
+        "mysql database"
+      ],
+      "cluster_id": "cluster_database",
+      "related_skill_ids": []
+    },
+    {
+      "id": "oracle",
+      "canonical_name": "Oracle",
+      "category": "database",
+      "weight": 0.95,
+      "aliases": [
+        "oracle db",
+        "oracle database",
+        "oracle 12c",
+        "oracle 19c"
+      ],
+      "normalized_forms": [
+        "oracle",
+        "oracle db",
+        "oracle database",
+        "oracle 12c",
+        "oracle 19c"
+      ],
+      "cluster_id": "cluster_database",
+      "related_skill_ids": []
+    },
+    {
+      "id": "mongodb",
+      "canonical_name": "MongoDB",
+      "category": "database",
+      "weight": 0.95,
+      "aliases": [
+        "mongo",
+        "nosql mongodb"
+      ],
+      "normalized_forms": [
+        "mongodb",
+        "mongo",
+        "nosql mongodb"
+      ],
+      "cluster_id": "cluster_database",
+      "related_skill_ids": []
+    },
+    {
+      "id": "cassandra",
+      "canonical_name": "Cassandra",
+      "category": "database",
+      "weight": 0.95,
+      "aliases": [
+        "apache cassandra",
+        "cassandra db"
+      ],
+      "normalized_forms": [
+        "cassandra",
+        "apache cassandra",
+        "cassandra db"
+      ],
+      "cluster_id": "cluster_database",
+      "related_skill_ids": []
+    },
+    {
+      "id": "cockroachdb",
+      "canonical_name": "CockroachDB",
+      "category": "database",
+      "weight": 0.95,
+      "aliases": [
+        "cockroach",
+        "cockroach database"
+      ],
+      "normalized_forms": [
+        "cockroachdb",
+        "cockroach",
+        "cockroach database"
+      ],
+      "cluster_id": "cluster_database",
+      "related_skill_ids": []
+    },
+    {
+      "id": "couchbase",
+      "canonical_name": "Couchbase",
+      "category": "database",
+      "weight": 0.95,
+      "aliases": [
+        "couchbase db"
+      ],
+      "normalized_forms": [
+        "couchbase",
+        "couchbase db"
+      ],
+      "cluster_id": "cluster_database",
+      "related_skill_ids": []
+    },
+    {
+      "id": "db2",
+      "canonical_name": "DB2",
+      "category": "database",
+      "weight": 0.95,
+      "aliases": [
+        "ibm db2"
+      ],
+      "normalized_forms": [
+        "db2",
+        "ibm db2"
+      ],
+      "cluster_id": "cluster_database",
+      "related_skill_ids": []
+    },
+    {
+      "id": "dynamodb",
+      "canonical_name": "DynamoDB",
+      "category": "aws_service",
+      "weight": 0.95,
+      "aliases": [
+        "amazon dynamodb",
+        "dynamodb table"
+      ],
+      "normalized_forms": [
+        "dynamodb",
+        "amazon dynamodb",
+        "dynamodb table"
+      ],
+      "cluster_id": "cluster_aws_service",
+      "related_skill_ids": []
+    },
+    {
+      "id": "aurora",
+      "canonical_name": "Aurora",
+      "category": "aws_service",
+      "weight": 0.95,
+      "aliases": [
+        "aws aurora",
+        "amazon aurora",
+        "aurora postgres",
+        "aurora postgresql"
+      ],
+      "normalized_forms": [
+        "aurora",
+        "aws aurora",
+        "amazon aurora",
+        "aurora postgres",
+        "aurora postgresql"
+      ],
+      "cluster_id": "cluster_aws_service",
+      "related_skill_ids": []
+    },
+    {
+      "id": "amazon_rds",
+      "canonical_name": "Amazon RDS",
+      "category": "aws_service",
+      "weight": 0.95,
+      "aliases": [
+        "rds",
+        "relational database service"
+      ],
+      "normalized_forms": [
+        "amazon rds",
+        "rds",
+        "relational database service"
+      ],
+      "cluster_id": "cluster_aws_service",
+      "related_skill_ids": []
+    },
+    {
+      "id": "amazon_s3",
+      "canonical_name": "Amazon S3",
+      "category": "aws_service",
+      "weight": 0.95,
+      "aliases": [
+        "s3",
+        "aws s3",
+        "object storage"
+      ],
+      "normalized_forms": [
+        "amazon s3",
+        "s3",
+        "aws s3",
+        "object storage"
+      ],
+      "cluster_id": "cluster_aws_service",
+      "related_skill_ids": []
+    },
+    {
+      "id": "elasticache",
+      "canonical_name": "ElastiCache",
+      "category": "aws_service",
+      "weight": 0.95,
+      "aliases": [
+        "elasticache",
+        "aws cache"
+      ],
+      "normalized_forms": [
+        "elasticache",
+        "aws cache"
+      ],
+      "cluster_id": "cluster_aws_service",
+      "related_skill_ids": []
+    },
+    {
+      "id": "cloudfront",
+      "canonical_name": "CloudFront",
+      "category": "aws_service",
+      "weight": 0.95,
+      "aliases": [
+        "amazon cloudfront",
+        "cdn"
+      ],
+      "normalized_forms": [
+        "cloudfront",
+        "amazon cloudfront",
+        "cdn"
+      ],
+      "cluster_id": "cluster_aws_service",
+      "related_skill_ids": []
+    },
+    {
+      "id": "data_modeling",
+      "canonical_name": "Data Modeling",
+      "category": "database",
+      "weight": 0.95,
+      "aliases": [
+        "data models",
+        "database modeling",
+        "schema design"
+      ],
+      "normalized_forms": [
+        "data modeling",
+        "data models",
+        "database modeling",
+        "schema design"
+      ],
+      "cluster_id": "cluster_database",
+      "related_skill_ids": []
+    },
+    {
+      "id": "sql_optimization",
+      "canonical_name": "SQL Optimization",
+      "category": "database",
+      "weight": 0.95,
+      "aliases": [
+        "query tuning",
+        "sql tuning",
+        "query optimization"
+      ],
+      "normalized_forms": [
+        "sql optimization",
+        "query tuning",
+        "sql tuning",
+        "query optimization"
+      ],
+      "cluster_id": "cluster_database",
+      "related_skill_ids": []
+    },
+    {
+      "id": "stored_procedures",
+      "canonical_name": "Stored Procedures",
+      "category": "database",
+      "weight": 0.95,
+      "aliases": [
+        "stored procedure",
+        "procedural sql"
+      ],
+      "normalized_forms": [
+        "stored procedures",
+        "stored procedure",
+        "procedural sql"
+      ],
+      "cluster_id": "cluster_database",
+      "related_skill_ids": []
+    },
+    {
+      "id": "database_migration",
+      "canonical_name": "Database Migration",
+      "category": "database",
+      "weight": 0.95,
+      "aliases": [
+        "schema migration",
+        "data migration"
+      ],
+      "normalized_forms": [
+        "database migration",
+        "schema migration",
+        "data migration"
+      ],
+      "cluster_id": "cluster_database",
+      "related_skill_ids": []
+    },
+    {
+      "id": "etl",
+      "canonical_name": "ETL",
+      "category": "data",
+      "weight": 0.95,
+      "aliases": [
+        "extract transform load",
+        "data extraction",
+        "data transformation",
+        "data loading"
+      ],
+      "normalized_forms": [
+        "etl",
+        "extract transform load",
+        "data extraction",
+        "data transformation",
+        "data loading"
+      ],
+      "cluster_id": "cluster_data",
+      "related_skill_ids": []
+    },
+    {
+      "id": "data_synchronization",
+      "canonical_name": "Data Synchronization",
+      "category": "data",
+      "weight": 0.95,
+      "aliases": [
+        "data sync",
+        "scheduled sync jobs"
+      ],
+      "normalized_forms": [
+        "data synchronization",
+        "data sync",
+        "scheduled sync jobs"
+      ],
+      "cluster_id": "cluster_data",
+      "related_skill_ids": []
+    },
+    {
+      "id": "react_js",
+      "canonical_name": "React.js",
+      "category": "frontend",
+      "weight": 0.95,
+      "aliases": [
+        "react",
+        "reactjs"
+      ],
+      "normalized_forms": [
+        "react js",
+        "react",
+        "reactjs"
+      ],
+      "cluster_id": "cluster_frontend",
+      "related_skill_ids": []
+    },
+    {
+      "id": "redux",
+      "canonical_name": "Redux",
+      "category": "frontend",
+      "weight": 0.95,
+      "aliases": [
+        "react redux",
+        "state management"
+      ],
+      "normalized_forms": [
+        "redux",
+        "react redux",
+        "state management"
+      ],
+      "cluster_id": "cluster_frontend",
+      "related_skill_ids": []
+    },
+    {
+      "id": "redux_saga",
+      "canonical_name": "Redux-Saga",
+      "category": "frontend",
+      "weight": 0.95,
+      "aliases": [
+        "redux saga",
+        "redux sagas"
+      ],
+      "normalized_forms": [
+        "redux saga",
+        "redux sagas"
+      ],
+      "cluster_id": "cluster_frontend",
+      "related_skill_ids": []
+    },
+    {
+      "id": "angular",
+      "canonical_name": "Angular",
+      "category": "frontend",
+      "weight": 0.95,
+      "aliases": [
+        "angular framework",
+        "angular 13",
+        "angular 17"
+      ],
+      "normalized_forms": [
+        "angular",
+        "angular framework",
+        "angular 13",
+        "angular 17"
+      ],
+      "cluster_id": "cluster_frontend",
+      "related_skill_ids": []
+    },
+    {
+      "id": "angularjs",
+      "canonical_name": "AngularJS",
+      "category": "frontend",
+      "weight": 0.95,
+      "aliases": [
+        "angular js"
+      ],
+      "normalized_forms": [
+        "angularjs",
+        "angular js"
+      ],
+      "cluster_id": "cluster_frontend",
+      "related_skill_ids": []
+    },
+    {
+      "id": "rxjs",
+      "canonical_name": "RxJS",
+      "category": "frontend",
+      "weight": 0.95,
+      "aliases": [
+        "reactive extensions for javascript"
+      ],
+      "normalized_forms": [
+        "rxjs",
+        "reactive extensions for javascript"
+      ],
+      "cluster_id": "cluster_frontend",
+      "related_skill_ids": []
+    },
+    {
+      "id": "jquery",
+      "canonical_name": "jQuery",
+      "category": "frontend",
+      "weight": 0.95,
+      "aliases": [
+        "jquery"
+      ],
+      "normalized_forms": [
+        "jquery"
+      ],
+      "cluster_id": "cluster_frontend",
+      "related_skill_ids": []
+    },
+    {
+      "id": "jquery_ui",
+      "canonical_name": "jQuery UI",
+      "category": "frontend",
+      "weight": 0.95,
+      "aliases": [
+        "jqueryui",
+        "jquery user interface"
+      ],
+      "normalized_forms": [
+        "jquery ui",
+        "jqueryui",
+        "jquery user interface"
+      ],
+      "cluster_id": "cluster_frontend",
+      "related_skill_ids": []
+    },
+    {
+      "id": "bootstrap",
+      "canonical_name": "Bootstrap",
+      "category": "frontend",
+      "weight": 0.95,
+      "aliases": [
+        "bootstrap css"
+      ],
+      "normalized_forms": [
+        "bootstrap",
+        "bootstrap css"
+      ],
+      "cluster_id": "cluster_frontend",
+      "related_skill_ids": []
+    },
+    {
+      "id": "datatables",
+      "canonical_name": "DataTables",
+      "category": "frontend",
+      "weight": 0.95,
+      "aliases": [
+        "jquery datatables",
+        "data tables"
+      ],
+      "normalized_forms": [
+        "datatables",
+        "jquery datatables",
+        "data tables"
+      ],
+      "cluster_id": "cluster_frontend",
+      "related_skill_ids": []
+    },
+    {
+      "id": "next_js",
+      "canonical_name": "Next.js",
+      "category": "frontend",
+      "weight": 0.95,
+      "aliases": [
+        "nextjs",
+        "next js"
+      ],
+      "normalized_forms": [
+        "next js",
+        "nextjs"
+      ],
+      "cluster_id": "cluster_frontend",
+      "related_skill_ids": []
+    },
+    {
+      "id": "bit",
+      "canonical_name": "Bit",
+      "category": "frontend",
+      "weight": 0.95,
+      "aliases": [
+        "bit components",
+        "bit.dev"
+      ],
+      "normalized_forms": [
+        "bit",
+        "bit components",
+        "bit dev"
+      ],
+      "cluster_id": "cluster_frontend",
+      "related_skill_ids": []
+    },
+    {
+      "id": "nx",
+      "canonical_name": "Nx",
+      "category": "frontend",
+      "weight": 0.95,
+      "aliases": [
+        "nrwl nx",
+        "nx monorepo"
+      ],
+      "normalized_forms": [
+        "nx",
+        "nrwl nx",
+        "nx monorepo"
+      ],
+      "cluster_id": "cluster_frontend",
+      "related_skill_ids": []
+    },
+    {
+      "id": "sanity",
+      "canonical_name": "Sanity",
+      "category": "frontend",
+      "weight": 0.95,
+      "aliases": [
+        "sanity cms"
+      ],
+      "normalized_forms": [
+        "sanity",
+        "sanity cms"
+      ],
+      "cluster_id": "cluster_frontend",
+      "related_skill_ids": []
+    },
+    {
+      "id": "responsive_design",
+      "canonical_name": "Responsive Design",
+      "category": "frontend",
+      "weight": 0.95,
+      "aliases": [
+        "responsive ui",
+        "adaptive layouts",
+        "mobile responsive"
+      ],
+      "normalized_forms": [
+        "responsive design",
+        "responsive ui",
+        "adaptive layouts",
+        "mobile responsive"
+      ],
+      "cluster_id": "cluster_frontend",
+      "related_skill_ids": []
+    },
+    {
+      "id": "ui_components",
+      "canonical_name": "UI Components",
+      "category": "frontend",
+      "weight": 0.95,
+      "aliases": [
+        "component based design",
+        "reusable components"
+      ],
+      "normalized_forms": [
+        "ui components",
+        "component based design",
+        "reusable components"
+      ],
+      "cluster_id": "cluster_frontend",
+      "related_skill_ids": []
+    },
+    {
+      "id": "component_libraries",
+      "canonical_name": "Component Libraries",
+      "category": "frontend",
+      "weight": 0.95,
+      "aliases": [
+        "design system components",
+        "living component library"
+      ],
+      "normalized_forms": [
+        "component libraries",
+        "design system components",
+        "living component library"
+      ],
+      "cluster_id": "cluster_frontend",
+      "related_skill_ids": []
+    },
+    {
+      "id": "design_systems",
+      "canonical_name": "Design Systems",
+      "category": "frontend",
+      "weight": 0.95,
+      "aliases": [
+        "ui design system",
+        "component design system"
+      ],
+      "normalized_forms": [
+        "design systems",
+        "ui design system",
+        "component design system"
+      ],
+      "cluster_id": "cluster_frontend",
+      "related_skill_ids": []
+    },
+    {
+      "id": "accessibility",
+      "canonical_name": "Accessibility",
+      "category": "frontend",
+      "weight": 0.95,
+      "aliases": [
+        "wcag",
+        "wcag 2.1",
+        "a11y"
+      ],
+      "normalized_forms": [
+        "accessibility",
+        "wcag",
+        "wcag 2 1",
+        "a11y"
+      ],
+      "cluster_id": "cluster_frontend",
+      "related_skill_ids": []
+    },
+    {
+      "id": "core_web_vitals",
+      "canonical_name": "Core Web Vitals",
+      "category": "frontend",
+      "weight": 0.95,
+      "aliases": [
+        "web vitals",
+        "lcp",
+        "cls",
+        "fid"
+      ],
+      "normalized_forms": [
+        "core web vitals",
+        "web vitals",
+        "lcp",
+        "cls",
+        "fid"
+      ],
+      "cluster_id": "cluster_frontend",
+      "related_skill_ids": []
+    },
+    {
+      "id": "micro_interactions",
+      "canonical_name": "Micro-interactions",
+      "category": "frontend",
+      "weight": 0.95,
+      "aliases": [
+        "micro interactions",
+        "ui animations"
+      ],
+      "normalized_forms": [
+        "micro interactions",
+        "ui animations"
+      ],
+      "cluster_id": "cluster_frontend",
+      "related_skill_ids": []
+    },
+    {
+      "id": "form_validation",
+      "canonical_name": "Form Validation",
+      "category": "frontend",
+      "weight": 0.95,
+      "aliases": [
+        "frontend validation",
+        "form validations"
+      ],
+      "normalized_forms": [
+        "form validation",
+        "frontend validation",
+        "form validations"
+      ],
+      "cluster_id": "cluster_frontend",
+      "related_skill_ids": []
+    },
+    {
+      "id": "reactive_forms",
+      "canonical_name": "Reactive Forms",
+      "category": "frontend",
+      "weight": 0.95,
+      "aliases": [
+        "angular reactive forms"
+      ],
+      "normalized_forms": [
+        "reactive forms",
+        "angular reactive forms"
+      ],
+      "cluster_id": "cluster_frontend",
+      "related_skill_ids": []
+    },
+    {
+      "id": "angular_routing",
+      "canonical_name": "Angular Routing",
+      "category": "frontend",
+      "weight": 0.95,
+      "aliases": [
+        "routing",
+        "route configuration"
+      ],
+      "normalized_forms": [
+        "angular routing",
+        "routing",
+        "route configuration"
+      ],
+      "cluster_id": "cluster_frontend",
+      "related_skill_ids": []
+    },
+    {
+      "id": "angular_services",
+      "canonical_name": "Angular Services",
+      "category": "frontend",
+      "weight": 0.95,
+      "aliases": [
+        "services",
+        "angular service layer"
+      ],
+      "normalized_forms": [
+        "angular services",
+        "services",
+        "angular service layer"
+      ],
+      "cluster_id": "cluster_frontend",
+      "related_skill_ids": []
+    },
+    {
+      "id": "angular_modules",
+      "canonical_name": "Angular Modules",
+      "category": "frontend",
+      "weight": 0.95,
+      "aliases": [
+        "modules",
+        "angular modules"
+      ],
+      "normalized_forms": [
+        "angular modules",
+        "modules"
+      ],
+      "cluster_id": "cluster_frontend",
+      "related_skill_ids": []
+    },
+    {
+      "id": "angular_components",
+      "canonical_name": "Angular Components",
+      "category": "frontend",
+      "weight": 0.95,
+      "aliases": [
+        "components",
+        "angular components"
+      ],
+      "normalized_forms": [
+        "angular components",
+        "components"
+      ],
+      "cluster_id": "cluster_frontend",
+      "related_skill_ids": []
+    },
+    {
+      "id": "angular_lifecycle_hooks",
+      "canonical_name": "Angular Lifecycle Hooks",
+      "category": "frontend",
+      "weight": 0.95,
+      "aliases": [
+        "lifecycle hooks"
+      ],
+      "normalized_forms": [
+        "angular lifecycle hooks",
+        "lifecycle hooks"
+      ],
+      "cluster_id": "cluster_frontend",
+      "related_skill_ids": []
+    },
+    {
+      "id": "custom_directives",
+      "canonical_name": "Custom Directives",
+      "category": "frontend",
+      "weight": 0.95,
+      "aliases": [
+        "angular directives",
+        "directives"
+      ],
+      "normalized_forms": [
+        "custom directives",
+        "angular directives",
+        "directives"
+      ],
+      "cluster_id": "cluster_frontend",
+      "related_skill_ids": []
+    },
+    {
+      "id": "angular_interceptors",
+      "canonical_name": "Angular Interceptors",
+      "category": "frontend",
+      "weight": 0.95,
+      "aliases": [
+        "http interceptors",
+        "interceptors"
+      ],
+      "normalized_forms": [
+        "angular interceptors",
+        "http interceptors",
+        "interceptors"
+      ],
+      "cluster_id": "cluster_frontend",
+      "related_skill_ids": []
+    },
+    {
+      "id": "route_guards",
+      "canonical_name": "Route Guards",
+      "category": "frontend_security",
+      "weight": 0.95,
+      "aliases": [
+        "angular guards",
+        "auth guards"
+      ],
+      "normalized_forms": [
+        "route guards",
+        "angular guards",
+        "auth guards"
+      ],
+      "cluster_id": "cluster_frontend_security",
+      "related_skill_ids": []
+    },
+    {
+      "id": "local_storage",
+      "canonical_name": "Local Storage",
+      "category": "frontend_security",
+      "weight": 0.95,
+      "aliases": [
+        "browser local storage"
+      ],
+      "normalized_forms": [
+        "local storage",
+        "browser local storage"
+      ],
+      "cluster_id": "cluster_frontend_security",
+      "related_skill_ids": []
+    },
+    {
+      "id": "session_storage",
+      "canonical_name": "Session Storage",
+      "category": "frontend_security",
+      "weight": 0.95,
+      "aliases": [
+        "browser session storage"
+      ],
+      "normalized_forms": [
+        "session storage",
+        "browser session storage"
+      ],
+      "cluster_id": "cluster_frontend_security",
+      "related_skill_ids": []
+    },
+    {
+      "id": "spa",
+      "canonical_name": "SPA",
+      "category": "frontend",
+      "weight": 0.95,
+      "aliases": [
+        "single page application",
+        "single-page applications"
+      ],
+      "normalized_forms": [
+        "spa",
+        "single page application",
+        "single page applications"
+      ],
+      "cluster_id": "cluster_frontend",
+      "related_skill_ids": []
+    },
+    {
+      "id": "figma",
+      "canonical_name": "Figma",
+      "category": "design_tool",
+      "weight": 0.5,
+      "aliases": [
+        "figma mockups",
+        "figma designs"
+      ],
+      "normalized_forms": [
+        "figma",
+        "figma mockups",
+        "figma designs"
+      ],
+      "cluster_id": "cluster_design_tool",
+      "related_skill_ids": []
+    },
+    {
+      "id": "sketch",
+      "canonical_name": "Sketch",
+      "category": "design_tool",
+      "weight": 0.5,
+      "aliases": [
+        "sketch designs",
+        "sketch mockups"
+      ],
+      "normalized_forms": [
+        "sketch",
+        "sketch designs",
+        "sketch mockups"
+      ],
+      "cluster_id": "cluster_design_tool",
+      "related_skill_ids": []
+    },
+    {
+      "id": "adobe_experience_manager",
+      "canonical_name": "Adobe Experience Manager",
+      "category": "marketing_platform",
+      "weight": 0.7,
+      "aliases": [
+        "aem",
+        "adobe aem"
+      ],
+      "normalized_forms": [
+        "adobe experience manager",
+        "aem",
+        "adobe aem"
+      ],
+      "cluster_id": "cluster_marketing_platform",
+      "related_skill_ids": []
+    },
+    {
+      "id": "adobe_analytics",
+      "canonical_name": "Adobe Analytics",
+      "category": "marketing_platform",
+      "weight": 0.7,
+      "aliases": [
+        "adobe analytics tracking"
+      ],
+      "normalized_forms": [
+        "adobe analytics",
+        "adobe analytics tracking"
+      ],
+      "cluster_id": "cluster_marketing_platform",
+      "related_skill_ids": []
+    },
+    {
+      "id": "adobe_target",
+      "canonical_name": "Adobe Target",
+      "category": "marketing_platform",
+      "weight": 0.7,
+      "aliases": [
+        "adobe target personalization"
+      ],
+      "normalized_forms": [
+        "adobe target",
+        "adobe target personalization"
+      ],
+      "cluster_id": "cluster_marketing_platform",
+      "related_skill_ids": []
+    },
+    {
+      "id": "dtm",
+      "canonical_name": "DTM",
+      "category": "marketing_platform",
+      "weight": 0.7,
+      "aliases": [
+        "dynamic tag management",
+        "adobe dtm"
+      ],
+      "normalized_forms": [
+        "dtm",
+        "dynamic tag management",
+        "adobe dtm"
+      ],
+      "cluster_id": "cluster_marketing_platform",
+      "related_skill_ids": []
+    },
+    {
+      "id": "salesforce_marketing_cloud",
+      "canonical_name": "Salesforce Marketing Cloud",
+      "category": "marketing_platform",
+      "weight": 0.7,
+      "aliases": [
+        "sfmc",
+        "marketing cloud"
+      ],
+      "normalized_forms": [
+        "salesforce marketing cloud",
+        "sfmc",
+        "marketing cloud"
+      ],
+      "cluster_id": "cluster_marketing_platform",
+      "related_skill_ids": []
+    },
+    {
+      "id": "email_studio",
+      "canonical_name": "Email Studio",
+      "category": "marketing_platform",
+      "weight": 0.7,
+      "aliases": [
+        "salesforce email studio"
+      ],
+      "normalized_forms": [
+        "email studio",
+        "salesforce email studio"
+      ],
+      "cluster_id": "cluster_marketing_platform",
+      "related_skill_ids": []
+    },
+    {
+      "id": "content_builder",
+      "canonical_name": "Content Builder",
+      "category": "marketing_platform",
+      "weight": 0.7,
+      "aliases": [
+        "salesforce content builder"
+      ],
+      "normalized_forms": [
+        "content builder",
+        "salesforce content builder"
+      ],
+      "cluster_id": "cluster_marketing_platform",
+      "related_skill_ids": []
+    },
+    {
+      "id": "journey_builder",
+      "canonical_name": "Journey Builder",
+      "category": "marketing_platform",
+      "weight": 0.7,
+      "aliases": [
+        "salesforce journey builder"
+      ],
+      "normalized_forms": [
+        "journey builder",
+        "salesforce journey builder"
+      ],
+      "cluster_id": "cluster_marketing_platform",
+      "related_skill_ids": []
+    },
+    {
+      "id": "automation_studio",
+      "canonical_name": "Automation Studio",
+      "category": "marketing_platform",
+      "weight": 0.7,
+      "aliases": [
+        "salesforce automation studio"
+      ],
+      "normalized_forms": [
+        "automation studio",
+        "salesforce automation studio"
+      ],
+      "cluster_id": "cluster_marketing_platform",
+      "related_skill_ids": []
+    },
+    {
+      "id": "cloudpages",
+      "canonical_name": "CloudPages",
+      "category": "marketing_platform",
+      "weight": 0.7,
+      "aliases": [
+        "cloud pages",
+        "salesforce cloudpages"
+      ],
+      "normalized_forms": [
+        "cloudpages",
+        "cloud pages",
+        "salesforce cloudpages"
+      ],
+      "cluster_id": "cluster_marketing_platform",
+      "related_skill_ids": []
+    },
+    {
+      "id": "mobile_studio",
+      "canonical_name": "Mobile Studio",
+      "category": "marketing_platform",
+      "weight": 0.7,
+      "aliases": [
+        "salesforce mobile studio"
+      ],
+      "normalized_forms": [
+        "mobile studio",
+        "salesforce mobile studio"
+      ],
+      "cluster_id": "cluster_marketing_platform",
+      "related_skill_ids": []
+    },
+    {
+      "id": "contact_builder",
+      "canonical_name": "Contact Builder",
+      "category": "marketing_platform",
+      "weight": 0.7,
+      "aliases": [
+        "salesforce contact builder"
+      ],
+      "normalized_forms": [
+        "contact builder",
+        "salesforce contact builder"
+      ],
+      "cluster_id": "cluster_marketing_platform",
+      "related_skill_ids": []
+    },
+    {
+      "id": "data_extensions",
+      "canonical_name": "Data Extensions",
+      "category": "marketing_platform",
+      "weight": 0.7,
+      "aliases": [
+        "salesforce data extensions"
+      ],
+      "normalized_forms": [
+        "data extensions",
+        "salesforce data extensions"
+      ],
+      "cluster_id": "cluster_marketing_platform",
+      "related_skill_ids": []
+    },
+    {
+      "id": "customer_journeys",
+      "canonical_name": "Customer Journeys",
+      "category": "domain",
+      "weight": 0.55,
+      "aliases": [
+        "customer journey design",
+        "digital journeys"
+      ],
+      "normalized_forms": [
+        "customer journeys",
+        "customer journey design",
+        "digital journeys"
+      ],
+      "cluster_id": "cluster_domain",
+      "related_skill_ids": []
+    },
+    {
+      "id": "aws",
+      "canonical_name": "AWS",
+      "category": "cloud",
+      "weight": 0.95,
+      "aliases": [
+        "amazon web services",
+        "aws cloud"
+      ],
+      "normalized_forms": [
+        "aws",
+        "amazon web services",
+        "aws cloud"
+      ],
+      "cluster_id": "cluster_cloud",
+      "related_skill_ids": []
+    },
+    {
+      "id": "azure",
+      "canonical_name": "Azure",
+      "category": "cloud",
+      "weight": 0.95,
+      "aliases": [
+        "microsoft azure",
+        "azure cloud"
+      ],
+      "normalized_forms": [
+        "azure",
+        "microsoft azure",
+        "azure cloud"
+      ],
+      "cluster_id": "cluster_cloud",
+      "related_skill_ids": []
+    },
+    {
+      "id": "gcp",
+      "canonical_name": "GCP",
+      "category": "cloud",
+      "weight": 0.95,
+      "aliases": [
+        "google cloud platform",
+        "google cloud"
+      ],
+      "normalized_forms": [
+        "gcp",
+        "google cloud platform",
+        "google cloud"
+      ],
+      "cluster_id": "cluster_cloud",
+      "related_skill_ids": []
+    },
+    {
+      "id": "pcf",
+      "canonical_name": "PCF",
+      "category": "cloud",
+      "weight": 0.95,
+      "aliases": [
+        "pivotal cloud foundry",
+        "cloud foundry"
+      ],
+      "normalized_forms": [
+        "pcf",
+        "pivotal cloud foundry",
+        "cloud foundry"
+      ],
+      "cluster_id": "cluster_cloud",
+      "related_skill_ids": []
+    },
+    {
+      "id": "openshift",
+      "canonical_name": "OpenShift",
+      "category": "cloud",
+      "weight": 0.95,
+      "aliases": [
+        "openshift",
+        "ocp",
+        "open shift",
+        "openshift container platform"
+      ],
+      "normalized_forms": [
+        "openshift",
+        "ocp",
+        "open shift",
+        "openshift container platform"
+      ],
+      "cluster_id": "cluster_cloud",
+      "related_skill_ids": []
+    },
+    {
+      "id": "openstack",
+      "canonical_name": "OpenStack",
+      "category": "cloud",
+      "weight": 0.95,
+      "aliases": [
+        "open stack"
+      ],
+      "normalized_forms": [
+        "openstack",
+        "open stack"
+      ],
+      "cluster_id": "cluster_cloud",
+      "related_skill_ids": []
+    },
+    {
+      "id": "docker",
+      "canonical_name": "Docker",
+      "category": "devops",
+      "weight": 0.95,
+      "aliases": [
+        "containers",
+        "containerization"
+      ],
+      "normalized_forms": [
+        "docker",
+        "containers",
+        "containerization"
+      ],
+      "cluster_id": "cluster_devops",
+      "related_skill_ids": []
+    },
+    {
+      "id": "kubernetes",
+      "canonical_name": "Kubernetes",
+      "category": "devops",
+      "weight": 0.95,
+      "aliases": [
+        "k8s",
+        "container orchestration"
+      ],
+      "normalized_forms": [
+        "kubernetes",
+        "k8s",
+        "container orchestration"
+      ],
+      "cluster_id": "cluster_devops",
+      "related_skill_ids": []
+    },
+    {
+      "id": "amazon_eks",
+      "canonical_name": "Amazon EKS",
+      "category": "aws_service",
+      "weight": 0.95,
+      "aliases": [
+        "eks",
+        "elastic kubernetes service"
+      ],
+      "normalized_forms": [
+        "amazon eks",
+        "eks",
+        "elastic kubernetes service"
+      ],
+      "cluster_id": "cluster_aws_service",
+      "related_skill_ids": []
+    },
+    {
+      "id": "amazon_ecs",
+      "canonical_name": "Amazon ECS",
+      "category": "aws_service",
+      "weight": 0.95,
+      "aliases": [
+        "ecs",
+        "elastic container service"
+      ],
+      "normalized_forms": [
+        "amazon ecs",
+        "ecs",
+        "elastic container service"
+      ],
+      "cluster_id": "cluster_aws_service",
+      "related_skill_ids": []
+    },
+    {
+      "id": "aws_lambda",
+      "canonical_name": "AWS Lambda",
+      "category": "aws_service",
+      "weight": 0.95,
+      "aliases": [
+        "lambda",
+        "serverless lambda"
+      ],
+      "normalized_forms": [
+        "aws lambda",
+        "lambda",
+        "serverless lambda"
+      ],
+      "cluster_id": "cluster_aws_service",
+      "related_skill_ids": []
+    },
+    {
+      "id": "aws_fargate",
+      "canonical_name": "AWS Fargate",
+      "category": "aws_service",
+      "weight": 0.95,
+      "aliases": [
+        "fargate",
+        "serverless containers"
+      ],
+      "normalized_forms": [
+        "aws fargate",
+        "fargate",
+        "serverless containers"
+      ],
+      "cluster_id": "cluster_aws_service",
+      "related_skill_ids": []
+    },
+    {
+      "id": "aws_api_gateway",
+      "canonical_name": "AWS API Gateway",
+      "category": "aws_service",
+      "weight": 0.95,
+      "aliases": [
+        "amazon api gateway"
+      ],
+      "normalized_forms": [
+        "aws api gateway",
+        "amazon api gateway"
+      ],
+      "cluster_id": "cluster_aws_service",
+      "related_skill_ids": []
+    },
+    {
+      "id": "aws_cdk",
+      "canonical_name": "AWS CDK",
+      "category": "iac",
+      "weight": 0.95,
+      "aliases": [
+        "cloud development kit",
+        "aws cloud development kit"
+      ],
+      "normalized_forms": [
+        "aws cdk",
+        "cloud development kit",
+        "aws cloud development kit"
+      ],
+      "cluster_id": "cluster_iac",
+      "related_skill_ids": []
+    },
+    {
+      "id": "terraform",
+      "canonical_name": "Terraform",
+      "category": "iac",
+      "weight": 0.95,
+      "aliases": [
+        "terraform iac",
+        "infrastructure as code"
+      ],
+      "normalized_forms": [
+        "terraform",
+        "terraform iac",
+        "infrastructure as code"
+      ],
+      "cluster_id": "cluster_iac",
+      "related_skill_ids": []
+    },
+    {
+      "id": "ansible",
+      "canonical_name": "Ansible",
+      "category": "iac",
+      "weight": 0.95,
+      "aliases": [
+        "ansible automation"
+      ],
+      "normalized_forms": [
+        "ansible",
+        "ansible automation"
+      ],
+      "cluster_id": "cluster_iac",
+      "related_skill_ids": []
+    },
+    {
+      "id": "chef",
+      "canonical_name": "Chef",
+      "category": "iac",
+      "weight": 0.95,
+      "aliases": [
+        "chef automation"
+      ],
+      "normalized_forms": [
+        "chef",
+        "chef automation"
+      ],
+      "cluster_id": "cluster_iac",
+      "related_skill_ids": []
+    },
+    {
+      "id": "iam",
+      "canonical_name": "IAM",
+      "category": "security",
+      "weight": 1.1,
+      "aliases": [
+        "aws iam",
+        "identity and access management"
+      ],
+      "normalized_forms": [
+        "iam",
+        "aws iam",
+        "identity and access management"
+      ],
+      "cluster_id": "cluster_security",
+      "related_skill_ids": []
+    },
+    {
+      "id": "secrets_manager",
+      "canonical_name": "Secrets Manager",
+      "category": "security",
+      "weight": 1.1,
+      "aliases": [
+        "aws secrets manager"
+      ],
+      "normalized_forms": [
+        "secrets manager",
+        "aws secrets manager"
+      ],
+      "cluster_id": "cluster_security",
+      "related_skill_ids": []
+    },
+    {
+      "id": "kms",
+      "canonical_name": "KMS",
+      "category": "security",
+      "weight": 1.1,
+      "aliases": [
+        "aws kms",
+        "key management service"
+      ],
+      "normalized_forms": [
+        "kms",
+        "aws kms",
+        "key management service"
+      ],
+      "cluster_id": "cluster_security",
+      "related_skill_ids": []
+    },
+    {
+      "id": "least_privilege",
+      "canonical_name": "Least Privilege",
+      "category": "security",
+      "weight": 1.1,
+      "aliases": [
+        "least-privilege access",
+        "minimum privilege"
+      ],
+      "normalized_forms": [
+        "least privilege",
+        "least privilege access",
+        "minimum privilege"
+      ],
+      "cluster_id": "cluster_security",
+      "related_skill_ids": []
+    },
+    {
+      "id": "secure_sdlc",
+      "canonical_name": "Secure SDLC",
+      "category": "security",
+      "weight": 1.1,
+      "aliases": [
+        "secure software development lifecycle"
+      ],
+      "normalized_forms": [
+        "secure sdlc",
+        "secure software development lifecycle"
+      ],
+      "cluster_id": "cluster_security",
+      "related_skill_ids": []
+    },
+    {
+      "id": "oauth2",
+      "canonical_name": "OAuth2",
+      "category": "security",
+      "weight": 1.1,
+      "aliases": [
+        "oauth",
+        "oauth 2.0"
+      ],
+      "normalized_forms": [
+        "oauth2",
+        "oauth",
+        "oauth 2 0"
+      ],
+      "cluster_id": "cluster_security",
+      "related_skill_ids": []
+    },
+    {
+      "id": "oidc",
+      "canonical_name": "OIDC",
+      "category": "security",
+      "weight": 1.1,
+      "aliases": [
+        "openid connect"
+      ],
+      "normalized_forms": [
+        "oidc",
+        "openid connect"
+      ],
+      "cluster_id": "cluster_security",
+      "related_skill_ids": []
+    },
+    {
+      "id": "sso",
+      "canonical_name": "SSO",
+      "category": "security",
+      "weight": 1.1,
+      "aliases": [
+        "single sign on",
+        "single sign-on"
+      ],
+      "normalized_forms": [
+        "sso",
+        "single sign on"
+      ],
+      "cluster_id": "cluster_security",
+      "related_skill_ids": []
+    },
+    {
+      "id": "saml",
+      "canonical_name": "SAML",
+      "category": "security",
+      "weight": 1.1,
+      "aliases": [
+        "saml authentication"
+      ],
+      "normalized_forms": [
+        "saml",
+        "saml authentication"
+      ],
+      "cluster_id": "cluster_security",
+      "related_skill_ids": []
+    },
+    {
+      "id": "jwt",
+      "canonical_name": "JWT",
+      "category": "security",
+      "weight": 1.1,
+      "aliases": [
+        "json web token",
+        "jwt tokens"
+      ],
+      "normalized_forms": [
+        "jwt",
+        "json web token",
+        "jwt tokens"
+      ],
+      "cluster_id": "cluster_security",
+      "related_skill_ids": []
+    },
+    {
+      "id": "rbac",
+      "canonical_name": "RBAC",
+      "category": "security",
+      "weight": 1.1,
+      "aliases": [
+        "role based access control",
+        "role-based access control"
+      ],
+      "normalized_forms": [
+        "rbac",
+        "role based access control"
+      ],
+      "cluster_id": "cluster_security",
+      "related_skill_ids": []
+    },
+    {
+      "id": "authentication",
+      "canonical_name": "Authentication",
+      "category": "security",
+      "weight": 1.1,
+      "aliases": [
+        "authn",
+        "user authentication"
+      ],
+      "normalized_forms": [
+        "authentication",
+        "authn",
+        "user authentication"
+      ],
+      "cluster_id": "cluster_security",
+      "related_skill_ids": []
+    },
+    {
+      "id": "authorization",
+      "canonical_name": "Authorization",
+      "category": "security",
+      "weight": 1.1,
+      "aliases": [
+        "authz",
+        "user authorization"
+      ],
+      "normalized_forms": [
+        "authorization",
+        "authz",
+        "user authorization"
+      ],
+      "cluster_id": "cluster_security",
+      "related_skill_ids": []
+    },
+    {
+      "id": "secure_sessions",
+      "canonical_name": "Secure Sessions",
+      "category": "security",
+      "weight": 1.1,
+      "aliases": [
+        "secure session management",
+        "session security"
+      ],
+      "normalized_forms": [
+        "secure sessions",
+        "secure session management",
+        "session security"
+      ],
+      "cluster_id": "cluster_security",
+      "related_skill_ids": []
+    },
+    {
+      "id": "encryption",
+      "canonical_name": "Encryption",
+      "category": "security",
+      "weight": 1.1,
+      "aliases": [
+        "data encryption",
+        "encryption at rest",
+        "encryption in transit"
+      ],
+      "normalized_forms": [
+        "encryption",
+        "data encryption",
+        "encryption at rest",
+        "encryption in transit"
+      ],
+      "cluster_id": "cluster_security",
+      "related_skill_ids": []
+    },
+    {
+      "id": "api_security",
+      "canonical_name": "API Security",
+      "category": "security",
+      "weight": 1.1,
+      "aliases": [
+        "application security",
+        "api/application security"
+      ],
+      "normalized_forms": [
+        "api security",
+        "application security",
+        "api application security"
+      ],
+      "cluster_id": "cluster_security",
+      "related_skill_ids": []
+    },
+    {
+      "id": "input_validation",
+      "canonical_name": "Input Validation",
+      "category": "security",
+      "weight": 1.1,
+      "aliases": [
+        "request validation",
+        "validation rules"
+      ],
+      "normalized_forms": [
+        "input validation",
+        "request validation",
+        "validation rules"
+      ],
+      "cluster_id": "cluster_security",
+      "related_skill_ids": []
+    },
+    {
+      "id": "guardrails",
+      "canonical_name": "Guardrails",
+      "category": "ai_safety",
+      "weight": 1.15,
+      "aliases": [
+        "ai guardrails",
+        "safety guardrails",
+        "policy guardrails"
+      ],
+      "normalized_forms": [
+        "guardrails",
+        "ai guardrails",
+        "safety guardrails",
+        "policy guardrails"
+      ],
+      "cluster_id": "cluster_ai_safety",
+      "related_skill_ids": []
+    },
+    {
+      "id": "pii_handling",
+      "canonical_name": "PII Handling",
+      "category": "security",
+      "weight": 1.1,
+      "aliases": [
+        "sensitive data handling",
+        "client data protection"
+      ],
+      "normalized_forms": [
+        "pii handling",
+        "sensitive data handling",
+        "client data protection"
+      ],
+      "cluster_id": "cluster_security",
+      "related_skill_ids": []
+    },
+    {
+      "id": "data_privacy",
+      "canonical_name": "Data Privacy",
+      "category": "security",
+      "weight": 1.1,
+      "aliases": [
+        "privacy",
+        "data governance"
+      ],
+      "normalized_forms": [
+        "data privacy",
+        "privacy",
+        "data governance"
+      ],
+      "cluster_id": "cluster_security",
+      "related_skill_ids": []
+    },
+    {
+      "id": "jenkins",
+      "canonical_name": "Jenkins",
+      "category": "devops",
+      "weight": 0.95,
+      "aliases": [
+        "jenkins pipeline",
+        "jenkins ci"
+      ],
+      "normalized_forms": [
+        "jenkins",
+        "jenkins pipeline",
+        "jenkins ci"
+      ],
+      "cluster_id": "cluster_devops",
+      "related_skill_ids": []
+    },
+    {
+      "id": "github_actions",
+      "canonical_name": "GitHub Actions",
+      "category": "devops",
+      "weight": 0.95,
+      "aliases": [
+        "github actions ci",
+        "actions workflow"
+      ],
+      "normalized_forms": [
+        "github actions",
+        "github actions ci",
+        "actions workflow"
+      ],
+      "cluster_id": "cluster_devops",
+      "related_skill_ids": []
+    },
+    {
+      "id": "gitlab_ci",
+      "canonical_name": "GitLab CI",
+      "category": "devops",
+      "weight": 0.95,
+      "aliases": [
+        "gitlab ci/cd",
+        "gitlab pipelines"
+      ],
+      "normalized_forms": [
+        "gitlab ci",
+        "gitlab ci cd",
+        "gitlab pipelines"
+      ],
+      "cluster_id": "cluster_devops",
+      "related_skill_ids": []
+    },
+    {
+      "id": "ci_cd",
+      "canonical_name": "CI/CD",
+      "category": "devops",
+      "weight": 0.95,
+      "aliases": [
+        "cicd",
+        "continuous integration",
+        "continuous delivery",
+        "continuous deployment"
+      ],
+      "normalized_forms": [
+        "ci cd",
+        "cicd",
+        "continuous integration",
+        "continuous delivery",
+        "continuous deployment"
+      ],
+      "cluster_id": "cluster_devops",
+      "related_skill_ids": []
+    },
+    {
+      "id": "maven",
+      "canonical_name": "Maven",
+      "category": "build_tool",
+      "weight": 0.85,
+      "aliases": [
+        "maven build",
+        "maven dependency management"
+      ],
+      "normalized_forms": [
+        "maven",
+        "maven build",
+        "maven dependency management"
+      ],
+      "cluster_id": "cluster_build_tool",
+      "related_skill_ids": []
+    },
+    {
+      "id": "gradle",
+      "canonical_name": "Gradle",
+      "category": "build_tool",
+      "weight": 0.85,
+      "aliases": [
+        "gradle build",
+        "gradle multi module"
+      ],
+      "normalized_forms": [
+        "gradle",
+        "gradle build",
+        "gradle multi module"
+      ],
+      "cluster_id": "cluster_build_tool",
+      "related_skill_ids": []
+    },
+    {
+      "id": "nexus",
+      "canonical_name": "Nexus",
+      "category": "devops",
+      "weight": 0.95,
+      "aliases": [
+        "nexus repository",
+        "nexus artifact repository"
+      ],
+      "normalized_forms": [
+        "nexus",
+        "nexus repository",
+        "nexus artifact repository"
+      ],
+      "cluster_id": "cluster_devops",
+      "related_skill_ids": []
+    },
+    {
+      "id": "sonar",
+      "canonical_name": "Sonar",
+      "category": "devops",
+      "weight": 0.95,
+      "aliases": [
+        "sonarqube",
+        "sonar quality gates"
+      ],
+      "normalized_forms": [
+        "sonar",
+        "sonarqube",
+        "sonar quality gates"
+      ],
+      "cluster_id": "cluster_devops",
+      "related_skill_ids": []
+    },
+    {
+      "id": "harness",
+      "canonical_name": "Harness",
+      "category": "devops",
+      "weight": 0.95,
+      "aliases": [
+        "harness ci cd",
+        "harness deployment"
+      ],
+      "normalized_forms": [
+        "harness",
+        "harness ci cd",
+        "harness deployment"
+      ],
+      "cluster_id": "cluster_devops",
+      "related_skill_ids": []
+    },
+    {
+      "id": "argocd",
+      "canonical_name": "ArgoCD",
+      "category": "devops",
+      "weight": 0.95,
+      "aliases": [
+        "argo cd",
+        "gitops deployment"
+      ],
+      "normalized_forms": [
+        "argocd",
+        "argo cd",
+        "gitops deployment"
+      ],
+      "cluster_id": "cluster_devops",
+      "related_skill_ids": []
+    },
+    {
+      "id": "git",
+      "canonical_name": "Git",
+      "category": "version_control",
+      "weight": 0.8,
+      "aliases": [
+        "version control",
+        "source control"
+      ],
+      "normalized_forms": [
+        "git",
+        "version control",
+        "source control"
+      ],
+      "cluster_id": "cluster_version_control",
+      "related_skill_ids": []
+    },
+    {
+      "id": "github",
+      "canonical_name": "GitHub",
+      "category": "version_control",
+      "weight": 0.8,
+      "aliases": [
+        "github repository"
+      ],
+      "normalized_forms": [
+        "github",
+        "github repository"
+      ],
+      "cluster_id": "cluster_version_control",
+      "related_skill_ids": []
+    },
+    {
+      "id": "gitlab",
+      "canonical_name": "GitLab",
+      "category": "version_control",
+      "weight": 0.8,
+      "aliases": [
+        "gitlab repository"
+      ],
+      "normalized_forms": [
+        "gitlab",
+        "gitlab repository"
+      ],
+      "cluster_id": "cluster_version_control",
+      "related_skill_ids": []
+    },
+    {
+      "id": "bitbucket",
+      "canonical_name": "Bitbucket",
+      "category": "version_control",
+      "weight": 0.8,
+      "aliases": [
+        "bitbucket repository"
+      ],
+      "normalized_forms": [
+        "bitbucket",
+        "bitbucket repository"
+      ],
+      "cluster_id": "cluster_version_control",
+      "related_skill_ids": []
+    },
+    {
+      "id": "svn",
+      "canonical_name": "SVN",
+      "category": "version_control",
+      "weight": 0.8,
+      "aliases": [
+        "subversion"
+      ],
+      "normalized_forms": [
+        "svn",
+        "subversion"
+      ],
+      "cluster_id": "cluster_version_control",
+      "related_skill_ids": []
+    },
+    {
+      "id": "jira",
+      "canonical_name": "JIRA",
+      "category": "collaboration",
+      "weight": 0.7,
+      "aliases": [
+        "jira software",
+        "jira agile"
+      ],
+      "normalized_forms": [
+        "jira",
+        "jira software",
+        "jira agile"
+      ],
+      "cluster_id": "cluster_collaboration",
+      "related_skill_ids": []
+    },
+    {
+      "id": "confluence",
+      "canonical_name": "Confluence",
+      "category": "collaboration",
+      "weight": 0.7,
+      "aliases": [
+        "confluence documentation"
+      ],
+      "normalized_forms": [
+        "confluence",
+        "confluence documentation"
+      ],
+      "cluster_id": "cluster_collaboration",
+      "related_skill_ids": []
+    },
+    {
+      "id": "draw_io",
+      "canonical_name": "Draw.io",
+      "category": "collaboration",
+      "weight": 0.7,
+      "aliases": [
+        "drawio",
+        "diagrams.net",
+        "architecture diagrams"
+      ],
+      "normalized_forms": [
+        "draw io",
+        "drawio",
+        "diagrams net",
+        "architecture diagrams"
+      ],
+      "cluster_id": "cluster_collaboration",
+      "related_skill_ids": []
+    },
+    {
+      "id": "agile",
+      "canonical_name": "Agile",
+      "category": "methodology",
+      "weight": 0.7,
+      "aliases": [
+        "agile methodology",
+        "agile delivery"
+      ],
+      "normalized_forms": [
+        "agile",
+        "agile methodology",
+        "agile delivery"
+      ],
+      "cluster_id": "cluster_methodology",
+      "related_skill_ids": []
+    },
+    {
+      "id": "scrum",
+      "canonical_name": "Scrum",
+      "category": "methodology",
+      "weight": 0.7,
+      "aliases": [
+        "scrum methodology",
+        "sprint planning",
+        "daily standup",
+        "retrospective"
+      ],
+      "normalized_forms": [
+        "scrum",
+        "scrum methodology",
+        "sprint planning",
+        "daily standup",
+        "retrospective"
+      ],
+      "cluster_id": "cluster_methodology",
+      "related_skill_ids": []
+    },
+    {
+      "id": "kanban",
+      "canonical_name": "Kanban",
+      "category": "methodology",
+      "weight": 0.7,
+      "aliases": [
+        "kanban methodology"
+      ],
+      "normalized_forms": [
+        "kanban",
+        "kanban methodology"
+      ],
+      "cluster_id": "cluster_methodology",
+      "related_skill_ids": []
+    },
+    {
+      "id": "safe",
+      "canonical_name": "SAFe",
+      "category": "methodology",
+      "weight": 0.7,
+      "aliases": [
+        "scaled agile framework"
+      ],
+      "normalized_forms": [
+        "safe",
+        "scaled agile framework"
+      ],
+      "cluster_id": "cluster_methodology",
+      "related_skill_ids": []
+    },
+    {
+      "id": "sdlc",
+      "canonical_name": "SDLC",
+      "category": "methodology",
+      "weight": 0.7,
+      "aliases": [
+        "software development lifecycle",
+        "full software development lifecycle"
+      ],
+      "normalized_forms": [
+        "sdlc",
+        "software development lifecycle",
+        "full software development lifecycle"
+      ],
+      "cluster_id": "cluster_methodology",
+      "related_skill_ids": []
+    },
+    {
+      "id": "code_reviews",
+      "canonical_name": "Code Reviews",
+      "category": "engineering_practice",
+      "weight": 0.85,
+      "aliases": [
+        "peer review",
+        "code review"
+      ],
+      "normalized_forms": [
+        "code reviews",
+        "peer review",
+        "code review"
+      ],
+      "cluster_id": "cluster_engineering_practice",
+      "related_skill_ids": []
+    },
+    {
+      "id": "architecture_reviews",
+      "canonical_name": "Architecture Reviews",
+      "category": "engineering_practice",
+      "weight": 0.85,
+      "aliases": [
+        "design review",
+        "technical review"
+      ],
+      "normalized_forms": [
+        "architecture reviews",
+        "design review",
+        "technical review"
+      ],
+      "cluster_id": "cluster_engineering_practice",
+      "related_skill_ids": []
+    },
+    {
+      "id": "technical_documentation",
+      "canonical_name": "Technical Documentation",
+      "category": "engineering_practice",
+      "weight": 0.85,
+      "aliases": [
+        "documentation",
+        "api documentation",
+        "runbooks"
+      ],
+      "normalized_forms": [
+        "technical documentation",
+        "documentation",
+        "api documentation",
+        "runbooks"
+      ],
+      "cluster_id": "cluster_engineering_practice",
+      "related_skill_ids": []
+    },
+    {
+      "id": "technical_specifications",
+      "canonical_name": "Technical Specifications",
+      "category": "engineering_practice",
+      "weight": 0.85,
+      "aliases": [
+        "tech specs",
+        "technical design docs"
+      ],
+      "normalized_forms": [
+        "technical specifications",
+        "tech specs",
+        "technical design docs"
+      ],
+      "cluster_id": "cluster_engineering_practice",
+      "related_skill_ids": []
+    },
+    {
+      "id": "project_estimation",
+      "canonical_name": "Project Estimation",
+      "category": "project_management",
+      "weight": 0.65,
+      "aliases": [
+        "estimates",
+        "delivery estimates"
+      ],
+      "normalized_forms": [
+        "project estimation",
+        "estimates",
+        "delivery estimates"
+      ],
+      "cluster_id": "cluster_project_management",
+      "related_skill_ids": []
+    },
+    {
+      "id": "risk_management",
+      "canonical_name": "Risk Management",
+      "category": "project_management",
+      "weight": 0.65,
+      "aliases": [
+        "risk mitigation",
+        "risk tracking"
+      ],
+      "normalized_forms": [
+        "risk management",
+        "risk mitigation",
+        "risk tracking"
+      ],
+      "cluster_id": "cluster_project_management",
+      "related_skill_ids": []
+    },
+    {
+      "id": "resource_planning",
+      "canonical_name": "Resource Planning",
+      "category": "project_management",
+      "weight": 0.65,
+      "aliases": [
+        "team planning",
+        "capacity planning"
+      ],
+      "normalized_forms": [
+        "resource planning",
+        "team planning",
+        "capacity planning"
+      ],
+      "cluster_id": "cluster_project_management",
+      "related_skill_ids": []
+    },
+    {
+      "id": "stakeholder_management",
+      "canonical_name": "Stakeholder Management",
+      "category": "collaboration",
+      "weight": 0.7,
+      "aliases": [
+        "stakeholder communication",
+        "business stakeholders"
+      ],
+      "normalized_forms": [
+        "stakeholder management",
+        "stakeholder communication",
+        "business stakeholders"
+      ],
+      "cluster_id": "cluster_collaboration",
+      "related_skill_ids": []
+    },
+    {
+      "id": "mentoring",
+      "canonical_name": "Mentoring",
+      "category": "leadership",
+      "weight": 0.65,
+      "aliases": [
+        "coaching",
+        "developer mentoring"
+      ],
+      "normalized_forms": [
+        "mentoring",
+        "coaching",
+        "developer mentoring"
+      ],
+      "cluster_id": "cluster_leadership",
+      "related_skill_ids": []
+    },
+    {
+      "id": "technical_leadership",
+      "canonical_name": "Technical Leadership",
+      "category": "leadership",
+      "weight": 0.65,
+      "aliases": [
+        "tech lead",
+        "technical lead",
+        "engineering leadership"
+      ],
+      "normalized_forms": [
+        "technical leadership",
+        "tech lead",
+        "technical lead",
+        "engineering leadership"
+      ],
+      "cluster_id": "cluster_leadership",
+      "related_skill_ids": []
+    },
+    {
+      "id": "team_management",
+      "canonical_name": "Team Management",
+      "category": "leadership",
+      "weight": 0.65,
+      "aliases": [
+        "team coordination",
+        "lead developers"
+      ],
+      "normalized_forms": [
+        "team management",
+        "team coordination",
+        "lead developers"
+      ],
+      "cluster_id": "cluster_leadership",
+      "related_skill_ids": []
+    },
+    {
+      "id": "onshore_offshore_coordination",
+      "canonical_name": "Onshore-Offshore Coordination",
+      "category": "leadership",
+      "weight": 0.65,
+      "aliases": [
+        "distributed teams",
+        "global teams",
+        "offshore coordination"
+      ],
+      "normalized_forms": [
+        "onshore offshore coordination",
+        "distributed teams",
+        "global teams",
+        "offshore coordination"
+      ],
+      "cluster_id": "cluster_leadership",
+      "related_skill_ids": []
+    },
+    {
+      "id": "junit",
+      "canonical_name": "JUnit",
+      "category": "testing",
+      "weight": 0.9,
+      "aliases": [
+        "junit testing"
+      ],
+      "normalized_forms": [
+        "junit",
+        "junit testing"
+      ],
+      "cluster_id": "cluster_testing",
+      "related_skill_ids": []
+    },
+    {
+      "id": "mockito",
+      "canonical_name": "Mockito",
+      "category": "testing",
+      "weight": 0.9,
+      "aliases": [
+        "mockito unit testing"
+      ],
+      "normalized_forms": [
+        "mockito",
+        "mockito unit testing"
+      ],
+      "cluster_id": "cluster_testing",
+      "related_skill_ids": []
+    },
+    {
+      "id": "jest",
+      "canonical_name": "Jest",
+      "category": "testing",
+      "weight": 0.9,
+      "aliases": [
+        "jest testing"
+      ],
+      "normalized_forms": [
+        "jest",
+        "jest testing"
+      ],
+      "cluster_id": "cluster_testing",
+      "related_skill_ids": []
+    },
+    {
+      "id": "vitest",
+      "canonical_name": "Vitest",
+      "category": "testing",
+      "weight": 0.9,
+      "aliases": [
+        "vitest testing"
+      ],
+      "normalized_forms": [
+        "vitest",
+        "vitest testing"
+      ],
+      "cluster_id": "cluster_testing",
+      "related_skill_ids": []
+    },
+    {
+      "id": "mocha",
+      "canonical_name": "Mocha",
+      "category": "testing",
+      "weight": 0.9,
+      "aliases": [
+        "mocha testing"
+      ],
+      "normalized_forms": [
+        "mocha",
+        "mocha testing"
+      ],
+      "cluster_id": "cluster_testing",
+      "related_skill_ids": []
+    },
+    {
+      "id": "pytest",
+      "canonical_name": "PyTest",
+      "category": "testing",
+      "weight": 0.9,
+      "aliases": [
+        "pytest testing"
+      ],
+      "normalized_forms": [
+        "pytest",
+        "pytest testing"
+      ],
+      "cluster_id": "cluster_testing",
+      "related_skill_ids": []
+    },
+    {
+      "id": "selenium",
+      "canonical_name": "Selenium",
+      "category": "testing",
+      "weight": 0.9,
+      "aliases": [
+        "selenium automation"
+      ],
+      "normalized_forms": [
+        "selenium",
+        "selenium automation"
+      ],
+      "cluster_id": "cluster_testing",
+      "related_skill_ids": []
+    },
+    {
+      "id": "testng",
+      "canonical_name": "TestNG",
+      "category": "testing",
+      "weight": 0.9,
+      "aliases": [
+        "testng testing"
+      ],
+      "normalized_forms": [
+        "testng",
+        "testng testing"
+      ],
+      "cluster_id": "cluster_testing",
+      "related_skill_ids": []
+    },
+    {
+      "id": "cypress",
+      "canonical_name": "Cypress",
+      "category": "testing",
+      "weight": 0.9,
+      "aliases": [
+        "cypress testing"
+      ],
+      "normalized_forms": [
+        "cypress",
+        "cypress testing"
+      ],
+      "cluster_id": "cluster_testing",
+      "related_skill_ids": []
+    },
+    {
+      "id": "playwright",
+      "canonical_name": "Playwright",
+      "category": "testing",
+      "weight": 0.9,
+      "aliases": [
+        "playwright testing"
+      ],
+      "normalized_forms": [
+        "playwright",
+        "playwright testing"
+      ],
+      "cluster_id": "cluster_testing",
+      "related_skill_ids": []
+    },
+    {
+      "id": "cucumber",
+      "canonical_name": "Cucumber",
+      "category": "testing",
+      "weight": 0.9,
+      "aliases": [
+        "cucumber bdd"
+      ],
+      "normalized_forms": [
+        "cucumber",
+        "cucumber bdd"
+      ],
+      "cluster_id": "cluster_testing",
+      "related_skill_ids": []
+    },
+    {
+      "id": "karate",
+      "canonical_name": "Karate",
+      "category": "testing",
+      "weight": 0.9,
+      "aliases": [
+        "karate api testing"
+      ],
+      "normalized_forms": [
+        "karate",
+        "karate api testing"
+      ],
+      "cluster_id": "cluster_testing",
+      "related_skill_ids": []
+    },
+    {
+      "id": "wiremock",
+      "canonical_name": "WireMock",
+      "category": "testing",
+      "weight": 0.9,
+      "aliases": [
+        "wiremock service virtualization"
+      ],
+      "normalized_forms": [
+        "wiremock",
+        "wiremock service virtualization"
+      ],
+      "cluster_id": "cluster_testing",
+      "related_skill_ids": []
+    },
+    {
+      "id": "jasmine",
+      "canonical_name": "Jasmine",
+      "category": "testing",
+      "weight": 0.9,
+      "aliases": [
+        "jasmine testing"
+      ],
+      "normalized_forms": [
+        "jasmine",
+        "jasmine testing"
+      ],
+      "cluster_id": "cluster_testing",
+      "related_skill_ids": []
+    },
+    {
+      "id": "karma",
+      "canonical_name": "Karma",
+      "category": "testing",
+      "weight": 0.9,
+      "aliases": [
+        "karma test runner"
+      ],
+      "normalized_forms": [
+        "karma",
+        "karma test runner"
+      ],
+      "cluster_id": "cluster_testing",
+      "related_skill_ids": []
+    },
+    {
+      "id": "postman",
+      "canonical_name": "Postman",
+      "category": "testing",
+      "weight": 0.9,
+      "aliases": [
+        "postman api testing"
+      ],
+      "normalized_forms": [
+        "postman",
+        "postman api testing"
+      ],
+      "cluster_id": "cluster_testing",
+      "related_skill_ids": []
+    },
+    {
+      "id": "jmeter",
+      "canonical_name": "JMeter",
+      "category": "testing",
+      "weight": 0.9,
+      "aliases": [
+        "apache jmeter",
+        "performance testing"
+      ],
+      "normalized_forms": [
+        "jmeter",
+        "apache jmeter",
+        "performance testing"
+      ],
+      "cluster_id": "cluster_testing",
+      "related_skill_ids": []
+    },
+    {
+      "id": "unit_testing",
+      "canonical_name": "Unit Testing",
+      "category": "testing",
+      "weight": 0.9,
+      "aliases": [
+        "unit tests",
+        "unit test automation"
+      ],
+      "normalized_forms": [
+        "unit testing",
+        "unit tests",
+        "unit test automation"
+      ],
+      "cluster_id": "cluster_testing",
+      "related_skill_ids": []
+    },
+    {
+      "id": "integration_testing",
+      "canonical_name": "Integration Testing",
+      "category": "testing",
+      "weight": 0.9,
+      "aliases": [
+        "integration tests"
+      ],
+      "normalized_forms": [
+        "integration testing",
+        "integration tests"
+      ],
+      "cluster_id": "cluster_testing",
+      "related_skill_ids": []
+    },
+    {
+      "id": "regression_testing",
+      "canonical_name": "Regression Testing",
+      "category": "testing",
+      "weight": 0.9,
+      "aliases": [
+        "regression tests"
+      ],
+      "normalized_forms": [
+        "regression testing",
+        "regression tests"
+      ],
+      "cluster_id": "cluster_testing",
+      "related_skill_ids": []
+    },
+    {
+      "id": "system_testing",
+      "canonical_name": "System Testing",
+      "category": "testing",
+      "weight": 0.9,
+      "aliases": [
+        "system tests"
+      ],
+      "normalized_forms": [
+        "system testing",
+        "system tests"
+      ],
+      "cluster_id": "cluster_testing",
+      "related_skill_ids": []
+    },
+    {
+      "id": "end_to_end_testing",
+      "canonical_name": "End-to-End Testing",
+      "category": "testing",
+      "weight": 0.9,
+      "aliases": [
+        "e2e testing",
+        "end to end testing"
+      ],
+      "normalized_forms": [
+        "end to end testing",
+        "e2e testing"
+      ],
+      "cluster_id": "cluster_testing",
+      "related_skill_ids": []
+    },
+    {
+      "id": "contract_testing",
+      "canonical_name": "Contract Testing",
+      "category": "testing",
+      "weight": 0.9,
+      "aliases": [
+        "contract tests",
+        "api contract testing"
+      ],
+      "normalized_forms": [
+        "contract testing",
+        "contract tests",
+        "api contract testing"
+      ],
+      "cluster_id": "cluster_testing",
+      "related_skill_ids": []
+    },
+    {
+      "id": "api_testing",
+      "canonical_name": "API Testing",
+      "category": "testing",
+      "weight": 0.9,
+      "aliases": [
+        "api test automation"
+      ],
+      "normalized_forms": [
+        "api testing",
+        "api test automation"
+      ],
+      "cluster_id": "cluster_testing",
+      "related_skill_ids": []
+    },
+    {
+      "id": "performance_testing",
+      "canonical_name": "Performance Testing",
+      "category": "testing",
+      "weight": 0.9,
+      "aliases": [
+        "load testing",
+        "performance validation"
+      ],
+      "normalized_forms": [
+        "performance testing",
+        "load testing",
+        "performance validation"
+      ],
+      "cluster_id": "cluster_testing",
+      "related_skill_ids": []
+    },
+    {
+      "id": "debugging",
+      "canonical_name": "Debugging",
+      "category": "engineering_practice",
+      "weight": 0.85,
+      "aliases": [
+        "troubleshooting",
+        "defect analysis"
+      ],
+      "normalized_forms": [
+        "debugging",
+        "troubleshooting",
+        "defect analysis"
+      ],
+      "cluster_id": "cluster_engineering_practice",
+      "related_skill_ids": []
+    },
+    {
+      "id": "root_cause_analysis",
+      "canonical_name": "Root Cause Analysis",
+      "category": "engineering_practice",
+      "weight": 0.85,
+      "aliases": [
+        "rca",
+        "production rca"
+      ],
+      "normalized_forms": [
+        "root cause analysis",
+        "rca",
+        "production rca"
+      ],
+      "cluster_id": "cluster_engineering_practice",
+      "related_skill_ids": []
+    },
+    {
+      "id": "production_support",
+      "canonical_name": "Production Support",
+      "category": "operations",
+      "weight": 0.9,
+      "aliases": [
+        "application support",
+        "prod support",
+        "incident resolution"
+      ],
+      "normalized_forms": [
+        "production support",
+        "application support",
+        "prod support",
+        "incident resolution"
+      ],
+      "cluster_id": "cluster_operations",
+      "related_skill_ids": []
+    },
+    {
+      "id": "incident_management",
+      "canonical_name": "Incident Management",
+      "category": "operations",
+      "weight": 0.9,
+      "aliases": [
+        "incident handling",
+        "production incidents"
+      ],
+      "normalized_forms": [
+        "incident management",
+        "incident handling",
+        "production incidents"
+      ],
+      "cluster_id": "cluster_operations",
+      "related_skill_ids": []
+    },
+    {
+      "id": "runbooks",
+      "canonical_name": "Runbooks",
+      "category": "operations",
+      "weight": 0.9,
+      "aliases": [
+        "operational runbooks",
+        "support procedures"
+      ],
+      "normalized_forms": [
+        "runbooks",
+        "operational runbooks",
+        "support procedures"
+      ],
+      "cluster_id": "cluster_operations",
+      "related_skill_ids": []
+    },
+    {
+      "id": "monitoring",
+      "canonical_name": "Monitoring",
+      "category": "observability",
+      "weight": 0.75,
+      "aliases": [
+        "system monitoring",
+        "application monitoring"
+      ],
+      "normalized_forms": [
+        "monitoring",
+        "system monitoring",
+        "application monitoring"
+      ],
+      "cluster_id": "cluster_observability",
+      "related_skill_ids": []
+    },
+    {
+      "id": "observability",
+      "canonical_name": "Observability",
+      "category": "observability",
+      "weight": 0.75,
+      "aliases": [
+        "logs",
+        "metrics",
+        "traces"
+      ],
+      "normalized_forms": [
+        "observability",
+        "logs",
+        "metrics",
+        "traces"
+      ],
+      "cluster_id": "cluster_observability",
+      "related_skill_ids": []
+    },
+    {
+      "id": "logging",
+      "canonical_name": "Logging",
+      "category": "observability",
+      "weight": 0.75,
+      "aliases": [
+        "centralized logging",
+        "logging modernization"
+      ],
+      "normalized_forms": [
+        "logging",
+        "centralized logging",
+        "logging modernization"
+      ],
+      "cluster_id": "cluster_observability",
+      "related_skill_ids": []
+    },
+    {
+      "id": "log4j",
+      "canonical_name": "Log4j",
+      "category": "observability",
+      "weight": 0.75,
+      "aliases": [
+        "log4j logging"
+      ],
+      "normalized_forms": [
+        "log4j",
+        "log4j logging"
+      ],
+      "cluster_id": "cluster_observability",
+      "related_skill_ids": []
+    },
+    {
+      "id": "cloudwatch",
+      "canonical_name": "CloudWatch",
+      "category": "observability",
+      "weight": 0.75,
+      "aliases": [
+        "aws cloudwatch"
+      ],
+      "normalized_forms": [
+        "cloudwatch",
+        "aws cloudwatch"
+      ],
+      "cluster_id": "cluster_observability",
+      "related_skill_ids": []
+    },
+    {
+      "id": "x_ray",
+      "canonical_name": "X-Ray",
+      "category": "observability",
+      "weight": 0.75,
+      "aliases": [
+        "aws xray",
+        "aws x-ray"
+      ],
+      "normalized_forms": [
+        "x ray",
+        "aws xray",
+        "aws x ray"
+      ],
+      "cluster_id": "cluster_observability",
+      "related_skill_ids": []
+    },
+    {
+      "id": "dynatrace",
+      "canonical_name": "Dynatrace",
+      "category": "observability",
+      "weight": 0.75,
+      "aliases": [
+        "dynatrace apm"
+      ],
+      "normalized_forms": [
+        "dynatrace",
+        "dynatrace apm"
+      ],
+      "cluster_id": "cluster_observability",
+      "related_skill_ids": []
+    },
+    {
+      "id": "splunk",
+      "canonical_name": "Splunk",
+      "category": "observability",
+      "weight": 0.75,
+      "aliases": [
+        "splunk logging"
+      ],
+      "normalized_forms": [
+        "splunk",
+        "splunk logging"
+      ],
+      "cluster_id": "cluster_observability",
+      "related_skill_ids": []
+    },
+    {
+      "id": "appdynamics",
+      "canonical_name": "AppDynamics",
+      "category": "observability",
+      "weight": 0.75,
+      "aliases": [
+        "appdynamics apm"
+      ],
+      "normalized_forms": [
+        "appdynamics",
+        "appdynamics apm"
+      ],
+      "cluster_id": "cluster_observability",
+      "related_skill_ids": []
+    },
+    {
+      "id": "grafana",
+      "canonical_name": "Grafana",
+      "category": "observability",
+      "weight": 0.75,
+      "aliases": [
+        "grafana dashboards"
+      ],
+      "normalized_forms": [
+        "grafana",
+        "grafana dashboards"
+      ],
+      "cluster_id": "cluster_observability",
+      "related_skill_ids": []
+    },
+    {
+      "id": "prometheus",
+      "canonical_name": "Prometheus",
+      "category": "observability",
+      "weight": 0.75,
+      "aliases": [
+        "prometheus metrics"
+      ],
+      "normalized_forms": [
+        "prometheus",
+        "prometheus metrics"
+      ],
+      "cluster_id": "cluster_observability",
+      "related_skill_ids": []
+    },
+    {
+      "id": "jaeger",
+      "canonical_name": "Jaeger",
+      "category": "observability",
+      "weight": 0.75,
+      "aliases": [
+        "jaeger tracing"
+      ],
+      "normalized_forms": [
+        "jaeger",
+        "jaeger tracing"
+      ],
+      "cluster_id": "cluster_observability",
+      "related_skill_ids": []
+    },
+    {
+      "id": "zipkin",
+      "canonical_name": "Zipkin",
+      "category": "observability",
+      "weight": 0.75,
+      "aliases": [
+        "zipkin tracing"
+      ],
+      "normalized_forms": [
+        "zipkin",
+        "zipkin tracing"
+      ],
+      "cluster_id": "cluster_observability",
+      "related_skill_ids": []
+    },
+    {
+      "id": "elk",
+      "canonical_name": "ELK",
+      "category": "observability",
+      "weight": 0.75,
+      "aliases": [
+        "elastic stack",
+        "elasticsearch logstash kibana"
+      ],
+      "normalized_forms": [
+        "elk",
+        "elastic stack",
+        "elasticsearch logstash kibana"
+      ],
+      "cluster_id": "cluster_observability",
+      "related_skill_ids": []
+    },
+    {
+      "id": "jboss",
+      "canonical_name": "JBoss",
+      "category": "app_server",
+      "weight": 0.7,
+      "aliases": [
+        "jboss enterprise",
+        "jboss eap"
+      ],
+      "normalized_forms": [
+        "jboss",
+        "jboss enterprise",
+        "jboss eap"
+      ],
+      "cluster_id": "cluster_app_server",
+      "related_skill_ids": []
+    },
+    {
+      "id": "jboss_developer_studio",
+      "canonical_name": "JBoss Developer Studio",
+      "category": "ide",
+      "weight": 0.4,
+      "aliases": [
+        "jboss ide",
+        "jboss dev studio"
+      ],
+      "normalized_forms": [
+        "jboss developer studio",
+        "jboss ide",
+        "jboss dev studio"
+      ],
+      "cluster_id": "cluster_ide",
+      "related_skill_ids": []
+    },
+    {
+      "id": "tomcat",
+      "canonical_name": "Tomcat",
+      "category": "app_server",
+      "weight": 0.7,
+      "aliases": [
+        "apache tomcat"
+      ],
+      "normalized_forms": [
+        "tomcat",
+        "apache tomcat"
+      ],
+      "cluster_id": "cluster_app_server",
+      "related_skill_ids": []
+    },
+    {
+      "id": "ibm_websphere",
+      "canonical_name": "IBM WebSphere",
+      "category": "app_server",
+      "weight": 0.7,
+      "aliases": [
+        "websphere",
+        "ibm websphere application server"
+      ],
+      "normalized_forms": [
+        "ibm websphere",
+        "websphere",
+        "ibm websphere application server"
+      ],
+      "cluster_id": "cluster_app_server",
+      "related_skill_ids": []
+    },
+    {
+      "id": "spring_xml",
+      "canonical_name": "Spring XML",
+      "category": "legacy",
+      "weight": 0.7,
+      "aliases": [
+        "spring xml configuration",
+        "xml based spring"
+      ],
+      "normalized_forms": [
+        "spring xml",
+        "spring xml configuration",
+        "xml based spring"
+      ],
+      "cluster_id": "cluster_legacy",
+      "related_skill_ids": []
+    },
+    {
+      "id": "apache_tiles",
+      "canonical_name": "Apache Tiles",
+      "category": "legacy",
+      "weight": 0.7,
+      "aliases": [
+        "tiles",
+        "apache tiles framework"
+      ],
+      "normalized_forms": [
+        "apache tiles",
+        "tiles",
+        "apache tiles framework"
+      ],
+      "cluster_id": "cluster_legacy",
+      "related_skill_ids": []
+    },
+    {
+      "id": "jasper_reports",
+      "canonical_name": "Jasper Reports",
+      "category": "reporting",
+      "weight": 0.6,
+      "aliases": [
+        "jasperreports"
+      ],
+      "normalized_forms": [
+        "jasper reports",
+        "jasperreports"
+      ],
+      "cluster_id": "cluster_reporting",
+      "related_skill_ids": []
+    },
+    {
+      "id": "crystal_reports",
+      "canonical_name": "Crystal Reports",
+      "category": "reporting",
+      "weight": 0.6,
+      "aliases": [
+        "crystal reporting"
+      ],
+      "normalized_forms": [
+        "crystal reports",
+        "crystal reporting"
+      ],
+      "cluster_id": "cluster_reporting",
+      "related_skill_ids": []
+    },
+    {
+      "id": "business_objects",
+      "canonical_name": "Business Objects",
+      "category": "reporting",
+      "weight": 0.6,
+      "aliases": [
+        "sap businessobjects",
+        "businessobjects"
+      ],
+      "normalized_forms": [
+        "business objects",
+        "sap businessobjects",
+        "businessobjects"
+      ],
+      "cluster_id": "cluster_reporting",
+      "related_skill_ids": []
+    },
+    {
+      "id": "snowbound",
+      "canonical_name": "Snowbound",
+      "category": "legacy",
+      "weight": 0.7,
+      "aliases": [
+        "snowbound dependency"
+      ],
+      "normalized_forms": [
+        "snowbound",
+        "snowbound dependency"
+      ],
+      "cluster_id": "cluster_legacy",
+      "related_skill_ids": []
+    },
+    {
+      "id": "orchestra_migration",
+      "canonical_name": "Orchestra Migration",
+      "category": "legacy",
+      "weight": 0.7,
+      "aliases": [
+        "orchestra modernization",
+        "orchestra migration"
+      ],
+      "normalized_forms": [
+        "orchestra migration",
+        "orchestra modernization"
+      ],
+      "cluster_id": "cluster_legacy",
+      "related_skill_ids": []
+    },
+    {
+      "id": "legacy_modernization",
+      "canonical_name": "Legacy Modernization",
+      "category": "architecture",
+      "weight": 1.05,
+      "aliases": [
+        "application modernization",
+        "legacy migration",
+        "monolith modernization"
+      ],
+      "normalized_forms": [
+        "legacy modernization",
+        "application modernization",
+        "legacy migration",
+        "monolith modernization"
+      ],
+      "cluster_id": "cluster_architecture",
+      "related_skill_ids": []
+    },
+    {
+      "id": "monolith_migration",
+      "canonical_name": "Monolith Migration",
+      "category": "architecture",
+      "weight": 1.05,
+      "aliases": [
+        "monolith decomposition",
+        "monolith to microservices"
+      ],
+      "normalized_forms": [
+        "monolith migration",
+        "monolith decomposition",
+        "monolith to microservices"
+      ],
+      "cluster_id": "cluster_architecture",
+      "related_skill_ids": []
+    },
+    {
+      "id": "local_disk_dependency_elimination",
+      "canonical_name": "Local Disk Dependency Elimination",
+      "category": "architecture",
+      "weight": 1.05,
+      "aliases": [
+        "local disk removal",
+        "file dependency removal"
+      ],
+      "normalized_forms": [
+        "local disk dependency elimination",
+        "local disk removal",
+        "file dependency removal"
+      ],
+      "cluster_id": "cluster_architecture",
+      "related_skill_ids": []
+    },
+    {
+      "id": "build_restructuring",
+      "canonical_name": "Build Restructuring",
+      "category": "build_tool",
+      "weight": 0.85,
+      "aliases": [
+        "maven to gradle",
+        "build migration"
+      ],
+      "normalized_forms": [
+        "build restructuring",
+        "maven to gradle",
+        "build migration"
+      ],
+      "cluster_id": "cluster_build_tool",
+      "related_skill_ids": []
+    },
+    {
+      "id": "eclipse",
+      "canonical_name": "Eclipse",
+      "category": "ide",
+      "weight": 0.4,
+      "aliases": [
+        "eclipse ide"
+      ],
+      "normalized_forms": [
+        "eclipse",
+        "eclipse ide"
+      ],
+      "cluster_id": "cluster_ide",
+      "related_skill_ids": []
+    },
+    {
+      "id": "intellij_idea",
+      "canonical_name": "IntelliJ IDEA",
+      "category": "ide",
+      "weight": 0.4,
+      "aliases": [
+        "intellij",
+        "idea ide"
+      ],
+      "normalized_forms": [
+        "intellij idea",
+        "intellij",
+        "idea ide"
+      ],
+      "cluster_id": "cluster_ide",
+      "related_skill_ids": []
+    },
+    {
+      "id": "visual_studio_code",
+      "canonical_name": "Visual Studio Code",
+      "category": "ide",
+      "weight": 0.4,
+      "aliases": [
+        "vscode",
+        "vs code"
+      ],
+      "normalized_forms": [
+        "visual studio code",
+        "vscode",
+        "vs code"
+      ],
+      "cluster_id": "cluster_ide",
+      "related_skill_ids": []
+    },
+    {
+      "id": "spring_tool_suite",
+      "canonical_name": "Spring Tool Suite",
+      "category": "ide",
+      "weight": 0.4,
+      "aliases": [
+        "sts",
+        "eclipse sts"
+      ],
+      "normalized_forms": [
+        "spring tool suite",
+        "sts",
+        "eclipse sts"
+      ],
+      "cluster_id": "cluster_ide",
+      "related_skill_ids": []
+    },
+    {
+      "id": "linux",
+      "canonical_name": "Linux",
+      "category": "platform",
+      "weight": 0.8,
+      "aliases": [
+        "linux server",
+        "linux administration"
+      ],
+      "normalized_forms": [
+        "linux",
+        "linux server",
+        "linux administration"
+      ],
+      "cluster_id": "cluster_platform",
+      "related_skill_ids": []
+    },
+    {
+      "id": "windows_server",
+      "canonical_name": "Windows Server",
+      "category": "platform",
+      "weight": 0.8,
+      "aliases": [
+        "windows server administration",
+        "windows admin"
+      ],
+      "normalized_forms": [
+        "windows server",
+        "windows server administration",
+        "windows admin"
+      ],
+      "cluster_id": "cluster_platform",
+      "related_skill_ids": []
+    },
+    {
+      "id": "powershell",
+      "canonical_name": "PowerShell",
+      "category": "scripting",
+      "weight": 0.9,
+      "aliases": [
+        "powershell scripting"
+      ],
+      "normalized_forms": [
+        "powershell",
+        "powershell scripting"
+      ],
+      "cluster_id": "cluster_scripting",
+      "related_skill_ids": []
+    },
+    {
+      "id": "shell_scripting",
+      "canonical_name": "Shell Scripting",
+      "category": "scripting",
+      "weight": 0.9,
+      "aliases": [
+        "unix shell",
+        "linux shell"
+      ],
+      "normalized_forms": [
+        "shell scripting",
+        "unix shell",
+        "linux shell"
+      ],
+      "cluster_id": "cluster_scripting",
+      "related_skill_ids": []
+    },
+    {
+      "id": "ai",
+      "canonical_name": "AI",
+      "category": "ai",
+      "weight": 1.15,
+      "aliases": [
+        "artificial intelligence",
+        "ai concepts"
+      ],
+      "normalized_forms": [
+        "ai",
+        "artificial intelligence",
+        "ai concepts"
+      ],
+      "cluster_id": "cluster_ai",
+      "related_skill_ids": []
+    },
+    {
+      "id": "generative_ai",
+      "canonical_name": "Generative AI",
+      "category": "ai",
+      "weight": 1.15,
+      "aliases": [
+        "genai",
+        "generative ai solutions"
+      ],
+      "normalized_forms": [
+        "generative ai",
+        "genai",
+        "generative ai solutions"
+      ],
+      "cluster_id": "cluster_ai",
+      "related_skill_ids": []
+    },
+    {
+      "id": "llm",
+      "canonical_name": "LLM",
+      "category": "ai",
+      "weight": 1.15,
+      "aliases": [
+        "large language model",
+        "llm-powered",
+        "llm applications"
+      ],
+      "normalized_forms": [
+        "llm",
+        "large language model",
+        "llm powered",
+        "llm applications"
+      ],
+      "cluster_id": "cluster_ai",
+      "related_skill_ids": []
+    },
+    {
+      "id": "prompt_engineering",
+      "canonical_name": "Prompt Engineering",
+      "category": "ai",
+      "weight": 1.15,
+      "aliases": [
+        "prompt design",
+        "prompting"
+      ],
+      "normalized_forms": [
+        "prompt engineering",
+        "prompt design",
+        "prompting"
+      ],
+      "cluster_id": "cluster_ai",
+      "related_skill_ids": []
+    },
+    {
+      "id": "rag",
+      "canonical_name": "RAG",
+      "category": "ai_pattern",
+      "weight": 1.2,
+      "aliases": [
+        "retrieval augmented generation",
+        "retrieval-augmented generation",
+        "grounded retrieval"
+      ],
+      "normalized_forms": [
+        "rag",
+        "retrieval augmented generation",
+        "grounded retrieval"
+      ],
+      "cluster_id": "cluster_ai_pattern",
+      "related_skill_ids": []
+    },
+    {
+      "id": "agentic_workflows",
+      "canonical_name": "Agentic Workflows",
+      "category": "ai_pattern",
+      "weight": 1.2,
+      "aliases": [
+        "agent workflow",
+        "agentic ai",
+        "workflow orchestration",
+        "multi-step workflows"
+      ],
+      "normalized_forms": [
+        "agentic workflows",
+        "agent workflow",
+        "agentic ai",
+        "workflow orchestration",
+        "multi step workflows"
+      ],
+      "cluster_id": "cluster_ai_pattern",
+      "related_skill_ids": []
+    },
+    {
+      "id": "ai_agents",
+      "canonical_name": "AI Agents",
+      "category": "ai_pattern",
+      "weight": 1.2,
+      "aliases": [
+        "agents",
+        "agent orchestration",
+        "agentic systems"
+      ],
+      "normalized_forms": [
+        "ai agents",
+        "agents",
+        "agent orchestration",
+        "agentic systems"
+      ],
+      "cluster_id": "cluster_ai_pattern",
+      "related_skill_ids": []
+    },
+    {
+      "id": "tool_calling",
+      "canonical_name": "Tool Calling",
+      "category": "ai_pattern",
+      "weight": 1.2,
+      "aliases": [
+        "function calling",
+        "tool use",
+        "tool-use",
+        "api tool calls"
+      ],
+      "normalized_forms": [
+        "tool calling",
+        "function calling",
+        "tool use",
+        "api tool calls"
+      ],
+      "cluster_id": "cluster_ai_pattern",
+      "related_skill_ids": []
+    },
+    {
+      "id": "mcp",
+      "canonical_name": "MCP",
+      "category": "ai_pattern",
+      "weight": 1.2,
+      "aliases": [
+        "model context protocol"
+      ],
+      "normalized_forms": [
+        "mcp",
+        "model context protocol"
+      ],
+      "cluster_id": "cluster_ai_pattern",
+      "related_skill_ids": []
+    },
+    {
+      "id": "human_in_the_loop",
+      "canonical_name": "Human-in-the-Loop",
+      "category": "ai_safety",
+      "weight": 1.15,
+      "aliases": [
+        "human in the loop",
+        "hitl",
+        "approval gates",
+        "human approval"
+      ],
+      "normalized_forms": [
+        "human in the loop",
+        "hitl",
+        "approval gates",
+        "human approval"
+      ],
+      "cluster_id": "cluster_ai_safety",
+      "related_skill_ids": []
+    },
+    {
+      "id": "responsible_ai",
+      "canonical_name": "Responsible AI",
+      "category": "ai_safety",
+      "weight": 1.15,
+      "aliases": [
+        "responsible ai practices",
+        "ai safety",
+        "ai transparency"
+      ],
+      "normalized_forms": [
+        "responsible ai",
+        "responsible ai practices",
+        "ai safety",
+        "ai transparency"
+      ],
+      "cluster_id": "cluster_ai_safety",
+      "related_skill_ids": []
+    },
+    {
+      "id": "ai_evaluations",
+      "canonical_name": "AI Evaluations",
+      "category": "ai_safety",
+      "weight": 1.15,
+      "aliases": [
+        "llm evals",
+        "automated evaluations",
+        "quality evals"
+      ],
+      "normalized_forms": [
+        "ai evaluations",
+        "llm evals",
+        "automated evaluations",
+        "quality evals"
+      ],
+      "cluster_id": "cluster_ai_safety",
+      "related_skill_ids": []
+    },
+    {
+      "id": "groundedness",
+      "canonical_name": "Groundedness",
+      "category": "ai_safety",
+      "weight": 1.15,
+      "aliases": [
+        "grounded responses",
+        "grounding quality"
+      ],
+      "normalized_forms": [
+        "groundedness",
+        "grounded responses",
+        "grounding quality"
+      ],
+      "cluster_id": "cluster_ai_safety",
+      "related_skill_ids": []
+    },
+    {
+      "id": "safety_evaluation",
+      "canonical_name": "Safety Evaluation",
+      "category": "ai_safety",
+      "weight": 1.15,
+      "aliases": [
+        "safety eval",
+        "safety testing"
+      ],
+      "normalized_forms": [
+        "safety evaluation",
+        "safety eval",
+        "safety testing"
+      ],
+      "cluster_id": "cluster_ai_safety",
+      "related_skill_ids": []
+    },
+    {
+      "id": "fallback_strategies",
+      "canonical_name": "Fallback Strategies",
+      "category": "ai_safety",
+      "weight": 1.15,
+      "aliases": [
+        "fallback handling",
+        "safe failure modes"
+      ],
+      "normalized_forms": [
+        "fallback strategies",
+        "fallback handling",
+        "safe failure modes"
+      ],
+      "cluster_id": "cluster_ai_safety",
+      "related_skill_ids": []
+    },
+    {
+      "id": "policy_aware_prompting",
+      "canonical_name": "Policy-Aware Prompting",
+      "category": "ai_safety",
+      "weight": 1.15,
+      "aliases": [
+        "policy based prompting",
+        "policy-aware ai"
+      ],
+      "normalized_forms": [
+        "policy aware prompting",
+        "policy based prompting",
+        "policy aware ai"
+      ],
+      "cluster_id": "cluster_ai_safety",
+      "related_skill_ids": []
+    },
+    {
+      "id": "content_chunking",
+      "canonical_name": "Content Chunking",
+      "category": "ai_data",
+      "weight": 1.15,
+      "aliases": [
+        "chunking",
+        "document chunking"
+      ],
+      "normalized_forms": [
+        "content chunking",
+        "chunking",
+        "document chunking"
+      ],
+      "cluster_id": "cluster_ai_data",
+      "related_skill_ids": []
+    },
+    {
+      "id": "embeddings",
+      "canonical_name": "Embeddings",
+      "category": "ai_data",
+      "weight": 1.15,
+      "aliases": [
+        "vector embeddings",
+        "embedding"
+      ],
+      "normalized_forms": [
+        "embeddings",
+        "vector embeddings",
+        "embedding"
+      ],
+      "cluster_id": "cluster_ai_data",
+      "related_skill_ids": []
+    },
+    {
+      "id": "vector_stores",
+      "canonical_name": "Vector Stores",
+      "category": "ai_data",
+      "weight": 1.15,
+      "aliases": [
+        "vector database",
+        "vector db"
+      ],
+      "normalized_forms": [
+        "vector stores",
+        "vector database",
+        "vector db"
+      ],
+      "cluster_id": "cluster_ai_data",
+      "related_skill_ids": []
+    },
+    {
+      "id": "semantic_search",
+      "canonical_name": "Semantic Search",
+      "category": "ai_data",
+      "weight": 1.15,
+      "aliases": [
+        "semantic retrieval",
+        "similarity search"
+      ],
+      "normalized_forms": [
+        "semantic search",
+        "semantic retrieval",
+        "similarity search"
+      ],
+      "cluster_id": "cluster_ai_data",
+      "related_skill_ids": []
+    },
+    {
+      "id": "cosine_similarity",
+      "canonical_name": "Cosine Similarity",
+      "category": "ai_data",
+      "weight": 1.15,
+      "aliases": [
+        "cosine similarity scoring"
+      ],
+      "normalized_forms": [
+        "cosine similarity",
+        "cosine similarity scoring"
+      ],
+      "cluster_id": "cluster_ai_data",
+      "related_skill_ids": []
+    },
+    {
+      "id": "sbert",
+      "canonical_name": "SBERT",
+      "category": "ai_data",
+      "weight": 1.15,
+      "aliases": [
+        "sentence bert",
+        "sentence embeddings"
+      ],
+      "normalized_forms": [
+        "sbert",
+        "sentence bert",
+        "sentence embeddings"
+      ],
+      "cluster_id": "cluster_ai_data",
+      "related_skill_ids": []
+    },
+    {
+      "id": "search_and_retrieval",
+      "canonical_name": "Search and Retrieval",
+      "category": "ai_data",
+      "weight": 1.15,
+      "aliases": [
+        "retrieval systems",
+        "ranking",
+        "search ranking"
+      ],
+      "normalized_forms": [
+        "search and retrieval",
+        "retrieval systems",
+        "ranking",
+        "search ranking"
+      ],
+      "cluster_id": "cluster_ai_data",
+      "related_skill_ids": []
+    },
+    {
+      "id": "langchain",
+      "canonical_name": "LangChain",
+      "category": "ai_framework",
+      "weight": 1.0,
+      "aliases": [
+        "langchain framework"
+      ],
+      "normalized_forms": [
+        "langchain",
+        "langchain framework"
+      ],
+      "cluster_id": "cluster_ai_framework",
+      "related_skill_ids": []
+    },
+    {
+      "id": "langgraph",
+      "canonical_name": "LangGraph",
+      "category": "ai_framework",
+      "weight": 1.0,
+      "aliases": [
+        "langgraph framework"
+      ],
+      "normalized_forms": [
+        "langgraph",
+        "langgraph framework"
+      ],
+      "cluster_id": "cluster_ai_framework",
+      "related_skill_ids": []
+    },
+    {
+      "id": "fastapi",
+      "canonical_name": "FastAPI",
+      "category": "python_framework",
+      "weight": 1.0,
+      "aliases": [
+        "fast api",
+        "python fastapi"
+      ],
+      "normalized_forms": [
+        "fastapi",
+        "fast api",
+        "python fastapi"
+      ],
+      "cluster_id": "cluster_python_framework",
+      "related_skill_ids": []
+    },
+    {
+      "id": "flask",
+      "canonical_name": "Flask",
+      "category": "python_framework",
+      "weight": 1.0,
+      "aliases": [
+        "python flask"
+      ],
+      "normalized_forms": [
+        "flask",
+        "python flask"
+      ],
+      "cluster_id": "cluster_python_framework",
+      "related_skill_ids": []
+    },
+    {
+      "id": "django",
+      "canonical_name": "Django",
+      "category": "python_framework",
+      "weight": 1.0,
+      "aliases": [
+        "django framework"
+      ],
+      "normalized_forms": [
+        "django",
+        "django framework"
+      ],
+      "cluster_id": "cluster_python_framework",
+      "related_skill_ids": []
+    },
+    {
+      "id": "claude",
+      "canonical_name": "Claude",
+      "category": "ai_tool",
+      "weight": 0.85,
+      "aliases": [
+        "anthropic claude"
+      ],
+      "normalized_forms": [
+        "claude",
+        "anthropic claude"
+      ],
+      "cluster_id": "cluster_ai_tool",
+      "related_skill_ids": []
+    },
+    {
+      "id": "cursor",
+      "canonical_name": "Cursor",
+      "category": "ai_tool",
+      "weight": 0.85,
+      "aliases": [
+        "cursor ai"
+      ],
+      "normalized_forms": [
+        "cursor",
+        "cursor ai"
+      ],
+      "cluster_id": "cluster_ai_tool",
+      "related_skill_ids": []
+    },
+    {
+      "id": "windsurf",
+      "canonical_name": "Windsurf",
+      "category": "ai_tool",
+      "weight": 0.85,
+      "aliases": [
+        "windsurf ai"
+      ],
+      "normalized_forms": [
+        "windsurf",
+        "windsurf ai"
+      ],
+      "cluster_id": "cluster_ai_tool",
+      "related_skill_ids": []
+    },
+    {
+      "id": "github_copilot",
+      "canonical_name": "GitHub Copilot",
+      "category": "ai_tool",
+      "weight": 0.85,
+      "aliases": [
+        "copilot",
+        "github ai copilot"
+      ],
+      "normalized_forms": [
+        "github copilot",
+        "copilot",
+        "github ai copilot"
+      ],
+      "cluster_id": "cluster_ai_tool",
+      "related_skill_ids": []
+    },
+    {
+      "id": "chatgpt",
+      "canonical_name": "ChatGPT",
+      "category": "ai_tool",
+      "weight": 0.85,
+      "aliases": [
+        "openai chatgpt"
+      ],
+      "normalized_forms": [
+        "chatgpt",
+        "openai chatgpt"
+      ],
+      "cluster_id": "cluster_ai_tool",
+      "related_skill_ids": []
+    },
+    {
+      "id": "deepseek",
+      "canonical_name": "DeepSeek",
+      "category": "ai_tool",
+      "weight": 0.85,
+      "aliases": [
+        "deepseek ai"
+      ],
+      "normalized_forms": [
+        "deepseek",
+        "deepseek ai"
+      ],
+      "cluster_id": "cluster_ai_tool",
+      "related_skill_ids": []
+    },
+    {
+      "id": "ai_assisted_development",
+      "canonical_name": "AI-Assisted Development",
+      "category": "ai_tool",
+      "weight": 0.85,
+      "aliases": [
+        "ai coding",
+        "ai-assisted coding",
+        "ai developer tools"
+      ],
+      "normalized_forms": [
+        "ai assisted development",
+        "ai coding",
+        "ai assisted coding",
+        "ai developer tools"
+      ],
+      "cluster_id": "cluster_ai_tool",
+      "related_skill_ids": []
+    },
+    {
+      "id": "llm_security_testing",
+      "canonical_name": "LLM Security Testing",
+      "category": "ai_security",
+      "weight": 1.0,
+      "aliases": [
+        "ai security testing",
+        "llm security"
+      ],
+      "normalized_forms": [
+        "llm security testing",
+        "ai security testing",
+        "llm security"
+      ],
+      "cluster_id": "cluster_ai_security",
+      "related_skill_ids": []
+    },
+    {
+      "id": "red_teaming",
+      "canonical_name": "Red Teaming",
+      "category": "ai_security",
+      "weight": 1.0,
+      "aliases": [
+        "llm red teaming",
+        "ai red teaming"
+      ],
+      "normalized_forms": [
+        "red teaming",
+        "llm red teaming",
+        "ai red teaming"
+      ],
+      "cluster_id": "cluster_ai_security",
+      "related_skill_ids": []
+    },
+    {
+      "id": "rag_pipelines",
+      "canonical_name": "RAG Pipelines",
+      "category": "ai_pattern",
+      "weight": 1.2,
+      "aliases": [
+        "rag pipeline",
+        "retrieval pipeline"
+      ],
+      "normalized_forms": [
+        "rag pipelines",
+        "rag pipeline",
+        "retrieval pipeline"
+      ],
+      "cluster_id": "cluster_ai_pattern",
+      "related_skill_ids": []
+    },
+    {
+      "id": "api_automation_testing",
+      "canonical_name": "API Automation Testing",
+      "category": "testing",
+      "weight": 0.9,
+      "aliases": [
+        "api automation",
+        "test automation for api"
+      ],
+      "normalized_forms": [
+        "api automation testing",
+        "api automation",
+        "test automation for api"
+      ],
+      "cluster_id": "cluster_testing",
+      "related_skill_ids": []
+    },
+    {
+      "id": "digital_banking",
+      "canonical_name": "Digital Banking",
+      "category": "domain_banking",
+      "weight": 0.6,
+      "aliases": [
+        "online banking",
+        "mobile banking",
+        "banking applications"
+      ],
+      "normalized_forms": [
+        "digital banking",
+        "online banking",
+        "mobile banking",
+        "banking applications"
+      ],
+      "cluster_id": "cluster_domain_banking",
+      "related_skill_ids": []
+    },
+    {
+      "id": "banking",
+      "canonical_name": "Banking",
+      "category": "domain_banking",
+      "weight": 0.6,
+      "aliases": [
+        "financial services",
+        "banking domain"
+      ],
+      "normalized_forms": [
+        "banking",
+        "financial services",
+        "banking domain"
+      ],
+      "cluster_id": "cluster_domain_banking",
+      "related_skill_ids": []
+    },
+    {
+      "id": "payments",
+      "canonical_name": "Payments",
+      "category": "domain_payments",
+      "weight": 0.6,
+      "aliases": [
+        "payment systems",
+        "digital payments",
+        "payment workflows"
+      ],
+      "normalized_forms": [
+        "payments",
+        "payment systems",
+        "digital payments",
+        "payment workflows"
+      ],
+      "cluster_id": "cluster_domain_payments",
+      "related_skill_ids": []
+    },
+    {
+      "id": "ach",
+      "canonical_name": "ACH",
+      "category": "domain_payments",
+      "weight": 0.6,
+      "aliases": [
+        "ach payments",
+        "automated clearing house"
+      ],
+      "normalized_forms": [
+        "ach",
+        "ach payments",
+        "automated clearing house"
+      ],
+      "cluster_id": "cluster_domain_payments",
+      "related_skill_ids": []
+    },
+    {
+      "id": "bill_pay",
+      "canonical_name": "Bill Pay",
+      "category": "domain_payments",
+      "weight": 0.6,
+      "aliases": [
+        "bill payment",
+        "bill pay workflows"
+      ],
+      "normalized_forms": [
+        "bill pay",
+        "bill payment",
+        "bill pay workflows"
+      ],
+      "cluster_id": "cluster_domain_payments",
+      "related_skill_ids": []
+    },
+    {
+      "id": "treasury_operations",
+      "canonical_name": "Treasury Operations",
+      "category": "domain_banking",
+      "weight": 0.6,
+      "aliases": [
+        "treasury payments",
+        "treasury workflows"
+      ],
+      "normalized_forms": [
+        "treasury operations",
+        "treasury payments",
+        "treasury workflows"
+      ],
+      "cluster_id": "cluster_domain_banking",
+      "related_skill_ids": []
+    },
+    {
+      "id": "funds_transfer",
+      "canonical_name": "Funds Transfer",
+      "category": "domain_payments",
+      "weight": 0.6,
+      "aliases": [
+        "account transfers",
+        "money movement"
+      ],
+      "normalized_forms": [
+        "funds transfer",
+        "account transfers",
+        "money movement"
+      ],
+      "cluster_id": "cluster_domain_payments",
+      "related_skill_ids": []
+    },
+    {
+      "id": "transaction_processing",
+      "canonical_name": "Transaction Processing",
+      "category": "domain_payments",
+      "weight": 0.6,
+      "aliases": [
+        "transaction workflows",
+        "transaction systems"
+      ],
+      "normalized_forms": [
+        "transaction processing",
+        "transaction workflows",
+        "transaction systems"
+      ],
+      "cluster_id": "cluster_domain_payments",
+      "related_skill_ids": []
+    },
+    {
+      "id": "claims_processing",
+      "canonical_name": "Claims Processing",
+      "category": "domain_healthcare",
+      "weight": 0.6,
+      "aliases": [
+        "healthcare claims",
+        "claims handling"
+      ],
+      "normalized_forms": [
+        "claims processing",
+        "healthcare claims",
+        "claims handling"
+      ],
+      "cluster_id": "cluster_domain_healthcare",
+      "related_skill_ids": []
+    },
+    {
+      "id": "claims_adjudication",
+      "canonical_name": "Claims Adjudication",
+      "category": "domain_healthcare",
+      "weight": 0.6,
+      "aliases": [
+        "adjudication",
+        "claims adjudication support"
+      ],
+      "normalized_forms": [
+        "claims adjudication",
+        "adjudication",
+        "claims adjudication support"
+      ],
+      "cluster_id": "cluster_domain_healthcare",
+      "related_skill_ids": []
+    },
+    {
+      "id": "eligibility_processing",
+      "canonical_name": "Eligibility Processing",
+      "category": "domain_healthcare",
+      "weight": 0.6,
+      "aliases": [
+        "eligibility",
+        "healthcare eligibility"
+      ],
+      "normalized_forms": [
+        "eligibility processing",
+        "eligibility",
+        "healthcare eligibility"
+      ],
+      "cluster_id": "cluster_domain_healthcare",
+      "related_skill_ids": []
+    },
+    {
+      "id": "benefits",
+      "canonical_name": "Benefits",
+      "category": "domain_healthcare",
+      "weight": 0.6,
+      "aliases": [
+        "member benefits",
+        "benefits information"
+      ],
+      "normalized_forms": [
+        "benefits",
+        "member benefits",
+        "benefits information"
+      ],
+      "cluster_id": "cluster_domain_healthcare",
+      "related_skill_ids": []
+    },
+    {
+      "id": "medicaid",
+      "canonical_name": "Medicaid",
+      "category": "domain_healthcare",
+      "weight": 0.6,
+      "aliases": [
+        "medicaid programs"
+      ],
+      "normalized_forms": [
+        "medicaid",
+        "medicaid programs"
+      ],
+      "cluster_id": "cluster_domain_healthcare",
+      "related_skill_ids": []
+    },
+    {
+      "id": "medicare",
+      "canonical_name": "Medicare",
+      "category": "domain_healthcare",
+      "weight": 0.6,
+      "aliases": [
+        "medicare programs"
+      ],
+      "normalized_forms": [
+        "medicare",
+        "medicare programs"
+      ],
+      "cluster_id": "cluster_domain_healthcare",
+      "related_skill_ids": []
+    },
+    {
+      "id": "hipaa",
+      "canonical_name": "HIPAA",
+      "category": "domain_healthcare",
+      "weight": 0.6,
+      "aliases": [
+        "hipaa compliance",
+        "healthcare compliance"
+      ],
+      "normalized_forms": [
+        "hipaa",
+        "hipaa compliance",
+        "healthcare compliance"
+      ],
+      "cluster_id": "cluster_domain_healthcare",
+      "related_skill_ids": []
+    },
+    {
+      "id": "healthcare",
+      "canonical_name": "Healthcare",
+      "category": "domain_healthcare",
+      "weight": 0.6,
+      "aliases": [
+        "healthcare domain",
+        "healthcare applications"
+      ],
+      "normalized_forms": [
+        "healthcare",
+        "healthcare domain",
+        "healthcare applications"
+      ],
+      "cluster_id": "cluster_domain_healthcare",
+      "related_skill_ids": []
+    },
+    {
+      "id": "billing",
+      "canonical_name": "Billing",
+      "category": "domain",
+      "weight": 0.55,
+      "aliases": [
+        "billing systems",
+        "billing workflows"
+      ],
+      "normalized_forms": [
+        "billing",
+        "billing systems",
+        "billing workflows"
+      ],
+      "cluster_id": "cluster_domain",
+      "related_skill_ids": []
+    },
+    {
+      "id": "claims_and_billing",
+      "canonical_name": "Claims and Billing",
+      "category": "domain_healthcare",
+      "weight": 0.6,
+      "aliases": [
+        "claims billing",
+        "claims & billing"
+      ],
+      "normalized_forms": [
+        "claims and billing",
+        "claims billing"
+      ],
+      "cluster_id": "cluster_domain_healthcare",
+      "related_skill_ids": []
+    },
+    {
+      "id": "telecom",
+      "canonical_name": "Telecom",
+      "category": "domain_telecom",
+      "weight": 0.6,
+      "aliases": [
+        "telecommunications",
+        "telecom domain"
+      ],
+      "normalized_forms": [
+        "telecom",
+        "telecommunications",
+        "telecom domain"
+      ],
+      "cluster_id": "cluster_domain_telecom",
+      "related_skill_ids": []
+    },
+    {
+      "id": "mobility",
+      "canonical_name": "Mobility",
+      "category": "domain_telecom",
+      "weight": 0.6,
+      "aliases": [
+        "mobile services",
+        "mobility domain"
+      ],
+      "normalized_forms": [
+        "mobility",
+        "mobile services",
+        "mobility domain"
+      ],
+      "cluster_id": "cluster_domain_telecom",
+      "related_skill_ids": []
+    },
+    {
+      "id": "isp_account_management",
+      "canonical_name": "ISP Account Management",
+      "category": "domain_telecom",
+      "weight": 0.6,
+      "aliases": [
+        "internet account management",
+        "isp accounts"
+      ],
+      "normalized_forms": [
+        "isp account management",
+        "internet account management",
+        "isp accounts"
+      ],
+      "cluster_id": "cluster_domain_telecom",
+      "related_skill_ids": []
+    },
+    {
+      "id": "service_requests",
+      "canonical_name": "Service Requests",
+      "category": "domain_telecom",
+      "weight": 0.6,
+      "aliases": [
+        "customer service requests"
+      ],
+      "normalized_forms": [
+        "service requests",
+        "customer service requests"
+      ],
+      "cluster_id": "cluster_domain_telecom",
+      "related_skill_ids": []
+    },
+    {
+      "id": "e_commerce",
+      "canonical_name": "E-commerce",
+      "category": "domain_ecommerce",
+      "weight": 0.55,
+      "aliases": [
+        "ecommerce",
+        "e-commerce applications"
+      ],
+      "normalized_forms": [
+        "e commerce",
+        "ecommerce",
+        "e commerce applications"
+      ],
+      "cluster_id": "cluster_domain_ecommerce",
+      "related_skill_ids": []
+    },
+    {
+      "id": "automotive",
+      "canonical_name": "Automotive",
+      "category": "domain",
+      "weight": 0.55,
+      "aliases": [
+        "automotive domain",
+        "vehicle data"
+      ],
+      "normalized_forms": [
+        "automotive",
+        "automotive domain",
+        "vehicle data"
+      ],
+      "cluster_id": "cluster_domain",
+      "related_skill_ids": []
+    },
+    {
+      "id": "pharma",
+      "canonical_name": "Pharma",
+      "category": "domain_pharma",
+      "weight": 0.55,
+      "aliases": [
+        "pharmaceutical domain",
+        "pharma client"
+      ],
+      "normalized_forms": [
+        "pharma",
+        "pharmaceutical domain",
+        "pharma client"
+      ],
+      "cluster_id": "cluster_domain_pharma",
+      "related_skill_ids": []
+    },
+    {
+      "id": "scientific_informatics",
+      "canonical_name": "Scientific Informatics",
+      "category": "domain_science",
+      "weight": 0.55,
+      "aliases": [
+        "scientific applications",
+        "scientific data"
+      ],
+      "normalized_forms": [
+        "scientific informatics",
+        "scientific applications",
+        "scientific data"
+      ],
+      "cluster_id": "cluster_domain_science",
+      "related_skill_ids": []
+    },
+    {
+      "id": "bioinformatics",
+      "canonical_name": "Bioinformatics",
+      "category": "domain_science",
+      "weight": 0.55,
+      "aliases": [
+        "bioinformatics algorithms"
+      ],
+      "normalized_forms": [
+        "bioinformatics",
+        "bioinformatics algorithms"
+      ],
+      "cluster_id": "cluster_domain_science",
+      "related_skill_ids": []
+    },
+    {
+      "id": "cheminformatics",
+      "canonical_name": "Cheminformatics",
+      "category": "domain_science",
+      "weight": 0.55,
+      "aliases": [
+        "cheminformatics"
+      ],
+      "normalized_forms": [
+        "cheminformatics"
+      ],
+      "cluster_id": "cluster_domain_science",
+      "related_skill_ids": []
+    },
+    {
+      "id": "lims",
+      "canonical_name": "LIMS",
+      "category": "domain_science",
+      "weight": 0.55,
+      "aliases": [
+        "laboratory information management system"
+      ],
+      "normalized_forms": [
+        "lims",
+        "laboratory information management system"
+      ],
+      "cluster_id": "cluster_domain_science",
+      "related_skill_ids": []
+    },
+    {
+      "id": "fda_regulated_environment",
+      "canonical_name": "FDA-Regulated Environment",
+      "category": "domain_healthcare",
+      "weight": 0.6,
+      "aliases": [
+        "fda regulated",
+        "fda compliance"
+      ],
+      "normalized_forms": [
+        "fda regulated environment",
+        "fda regulated",
+        "fda compliance"
+      ],
+      "cluster_id": "cluster_domain_healthcare",
+      "related_skill_ids": []
+    },
+    {
+      "id": "ehr_integrations",
+      "canonical_name": "EHR Integrations",
+      "category": "domain_healthcare",
+      "weight": 0.6,
+      "aliases": [
+        "ehr",
+        "electronic health records"
+      ],
+      "normalized_forms": [
+        "ehr integrations",
+        "ehr",
+        "electronic health records"
+      ],
+      "cluster_id": "cluster_domain_healthcare",
+      "related_skill_ids": []
+    },
+    {
+      "id": "redox",
+      "canonical_name": "Redox",
+      "category": "domain_healthcare",
+      "weight": 0.6,
+      "aliases": [
+        "redox integration"
+      ],
+      "normalized_forms": [
+        "redox",
+        "redox integration"
+      ],
+      "cluster_id": "cluster_domain_healthcare",
+      "related_skill_ids": []
+    },
+    {
+      "id": "gene_data_biologics",
+      "canonical_name": "Gene Data Biologics",
+      "category": "domain_science",
+      "weight": 0.55,
+      "aliases": [
+        "gene data biologics",
+        "swiss cots"
+      ],
+      "normalized_forms": [
+        "gene data biologics",
+        "swiss cots"
+      ],
+      "cluster_id": "cluster_domain_science",
+      "related_skill_ids": []
+    },
+    {
+      "id": "capital_markets",
+      "canonical_name": "Capital Markets",
+      "category": "domain_finance",
+      "weight": 0.6,
+      "aliases": [
+        "capital market",
+        "investment banking",
+        "trading systems"
+      ],
+      "normalized_forms": [
+        "capital markets",
+        "capital market",
+        "investment banking",
+        "trading systems"
+      ],
+      "cluster_id": "cluster_domain_finance",
+      "related_skill_ids": []
+    },
+    {
+      "id": "ibor",
+      "canonical_name": "IBOR",
+      "category": "domain_finance",
+      "weight": 0.6,
+      "aliases": [
+        "ibor",
+        "interest benchmark rates"
+      ],
+      "normalized_forms": [
+        "ibor",
+        "interest benchmark rates"
+      ],
+      "cluster_id": "cluster_domain_finance",
+      "related_skill_ids": []
+    },
+    {
+      "id": "marketing_technology",
+      "canonical_name": "Marketing Technology",
+      "category": "domain_marketing",
+      "weight": 0.55,
+      "aliases": [
+        "martech",
+        "marketing analytics"
+      ],
+      "normalized_forms": [
+        "marketing technology",
+        "martech",
+        "marketing analytics"
+      ],
+      "cluster_id": "cluster_domain_marketing",
+      "related_skill_ids": []
+    },
+    {
+      "id": "analytics",
+      "canonical_name": "Analytics",
+      "category": "data",
+      "weight": 0.95,
+      "aliases": [
+        "data analytics",
+        "business analytics"
+      ],
+      "normalized_forms": [
+        "analytics",
+        "data analytics",
+        "business analytics"
+      ],
+      "cluster_id": "cluster_data",
+      "related_skill_ids": []
+    },
+    {
+      "id": "business_intelligence",
+      "canonical_name": "Business Intelligence",
+      "category": "data",
+      "weight": 0.95,
+      "aliases": [
+        "bi",
+        "enterprise bi"
+      ],
+      "normalized_forms": [
+        "business intelligence",
+        "bi",
+        "enterprise bi"
+      ],
+      "cluster_id": "cluster_data",
+      "related_skill_ids": []
+    },
+    {
+      "id": "data_analysis",
+      "canonical_name": "Data Analysis",
+      "category": "data",
+      "weight": 0.95,
+      "aliases": [
+        "analytics reporting",
+        "reporting analytics"
+      ],
+      "normalized_forms": [
+        "data analysis",
+        "analytics reporting",
+        "reporting analytics"
+      ],
+      "cluster_id": "cluster_data",
+      "related_skill_ids": []
+    },
+    {
+      "id": "customer_behavior_insights",
+      "canonical_name": "Customer Behavior Insights",
+      "category": "data",
+      "weight": 0.95,
+      "aliases": [
+        "customer analytics",
+        "behavioral analytics"
+      ],
+      "normalized_forms": [
+        "customer behavior insights",
+        "customer analytics",
+        "behavioral analytics"
+      ],
+      "cluster_id": "cluster_data",
+      "related_skill_ids": []
+    },
+    {
+      "id": "a_b_testing",
+      "canonical_name": "A/B Testing",
+      "category": "marketing",
+      "weight": 0.5,
+      "aliases": [
+        "ab testing",
+        "split testing"
+      ],
+      "normalized_forms": [
+        "a b testing",
+        "ab testing",
+        "split testing"
+      ],
+      "cluster_id": "cluster_marketing",
+      "related_skill_ids": []
+    },
+    {
+      "id": "multivariate_testing",
+      "canonical_name": "Multivariate Testing",
+      "category": "marketing",
+      "weight": 0.5,
+      "aliases": [
+        "mvt",
+        "multivariate test"
+      ],
+      "normalized_forms": [
+        "multivariate testing",
+        "mvt",
+        "multivariate test"
+      ],
+      "cluster_id": "cluster_marketing",
+      "related_skill_ids": []
+    },
+    {
+      "id": "experience_targeting",
+      "canonical_name": "Experience Targeting",
+      "category": "marketing",
+      "weight": 0.5,
+      "aliases": [
+        "xt",
+        "targeting"
+      ],
+      "normalized_forms": [
+        "experience targeting",
+        "xt",
+        "targeting"
+      ],
+      "cluster_id": "cluster_marketing",
+      "related_skill_ids": []
+    },
+    {
+      "id": "runbook_execution",
+      "canonical_name": "Runbook Execution",
+      "category": "operations",
+      "weight": 0.9,
+      "aliases": [
+        "runbook automation",
+        "operational runbooks"
+      ],
+      "normalized_forms": [
+        "runbook execution",
+        "runbook automation",
+        "operational runbooks"
+      ],
+      "cluster_id": "cluster_operations",
+      "related_skill_ids": []
+    },
+    {
+      "id": "guided_intake",
+      "canonical_name": "Guided Intake",
+      "category": "operations",
+      "weight": 0.9,
+      "aliases": [
+        "intake automation",
+        "guided workflows"
+      ],
+      "normalized_forms": [
+        "guided intake",
+        "intake automation",
+        "guided workflows"
+      ],
+      "cluster_id": "cluster_operations",
+      "related_skill_ids": []
+    },
+    {
+      "id": "ticket_summarization",
+      "canonical_name": "Ticket Summarization",
+      "category": "ai_use_case",
+      "weight": 1.0,
+      "aliases": [
+        "case summarization",
+        "ticket summary"
+      ],
+      "normalized_forms": [
+        "ticket summarization",
+        "case summarization",
+        "ticket summary"
+      ],
+      "cluster_id": "cluster_ai_use_case",
+      "related_skill_ids": []
+    },
+    {
+      "id": "knowledge_q_and_a",
+      "canonical_name": "Knowledge Q&A",
+      "category": "ai_use_case",
+      "weight": 1.0,
+      "aliases": [
+        "knowledge grounded qa",
+        "grounded q&a"
+      ],
+      "normalized_forms": [
+        "knowledge q and a",
+        "knowledge grounded qa",
+        "grounded q and a"
+      ],
+      "cluster_id": "cluster_ai_use_case",
+      "related_skill_ids": []
+    },
+    {
+      "id": "workflow_automation",
+      "canonical_name": "Workflow Automation",
+      "category": "automation",
+      "weight": 0.95,
+      "aliases": [
+        "process automation",
+        "operational automation"
+      ],
+      "normalized_forms": [
+        "workflow automation",
+        "process automation",
+        "operational automation"
+      ],
+      "cluster_id": "cluster_automation",
+      "related_skill_ids": []
+    },
+    {
+      "id": "service_management",
+      "canonical_name": "Service Management",
+      "category": "operations",
+      "weight": 0.9,
+      "aliases": [
+        "it service management",
+        "service operations"
+      ],
+      "normalized_forms": [
+        "service management",
+        "it service management",
+        "service operations"
+      ],
+      "cluster_id": "cluster_operations",
+      "related_skill_ids": []
+    },
+    {
+      "id": "incident_process",
+      "canonical_name": "Incident Process",
+      "category": "operations",
+      "weight": 0.9,
+      "aliases": [
+        "incident workflow",
+        "incident management process"
+      ],
+      "normalized_forms": [
+        "incident process",
+        "incident workflow",
+        "incident management process"
+      ],
+      "cluster_id": "cluster_operations",
+      "related_skill_ids": []
+    },
+    {
+      "id": "change_process",
+      "canonical_name": "Change Process",
+      "category": "operations",
+      "weight": 0.9,
+      "aliases": [
+        "change management",
+        "change workflow"
+      ],
+      "normalized_forms": [
+        "change process",
+        "change management",
+        "change workflow"
+      ],
+      "cluster_id": "cluster_operations",
+      "related_skill_ids": []
+    },
+    {
+      "id": "documentation",
+      "canonical_name": "Documentation",
+      "category": "engineering_practice",
+      "weight": 0.85,
+      "aliases": [
+        "technical writing",
+        "project documentation"
+      ],
+      "normalized_forms": [
+        "documentation",
+        "technical writing",
+        "project documentation"
+      ],
+      "cluster_id": "cluster_engineering_practice",
+      "related_skill_ids": []
+    },
+    {
+      "id": "communication",
+      "canonical_name": "Communication",
+      "category": "soft_skill",
+      "weight": 0.45,
+      "aliases": [
+        "written communication",
+        "verbal communication"
+      ],
+      "normalized_forms": [
+        "communication",
+        "written communication",
+        "verbal communication"
+      ],
+      "cluster_id": "cluster_soft_skill",
+      "related_skill_ids": []
+    },
+    {
+      "id": "problem_solving",
+      "canonical_name": "Problem Solving",
+      "category": "soft_skill",
+      "weight": 0.45,
+      "aliases": [
+        "analytical skills",
+        "troubleshooting mindset"
+      ],
+      "normalized_forms": [
+        "problem solving",
+        "analytical skills",
+        "troubleshooting mindset"
+      ],
+      "cluster_id": "cluster_soft_skill",
+      "related_skill_ids": []
+    },
+    {
+      "id": "collaboration",
+      "canonical_name": "Collaboration",
+      "category": "soft_skill",
+      "weight": 0.45,
+      "aliases": [
+        "cross functional collaboration",
+        "team collaboration"
+      ],
+      "normalized_forms": [
+        "collaboration",
+        "cross functional collaboration",
+        "team collaboration"
+      ],
+      "cluster_id": "cluster_soft_skill",
+      "related_skill_ids": []
+    },
+    {
+      "id": "quick_learner",
+      "canonical_name": "Quick Learner",
+      "category": "soft_skill",
+      "weight": 0.45,
+      "aliases": [
+        "adaptability",
+        "willingness to learn"
+      ],
+      "normalized_forms": [
+        "quick learner",
+        "adaptability",
+        "willingness to learn"
+      ],
+      "cluster_id": "cluster_soft_skill",
+      "related_skill_ids": []
+    },
+    {
+      "id": "time_management",
+      "canonical_name": "Time Management",
+      "category": "soft_skill",
+      "weight": 0.45,
+      "aliases": [
+        "delivery management",
+        "time management skills"
+      ],
+      "normalized_forms": [
+        "time management",
+        "delivery management",
+        "time management skills"
+      ],
+      "cluster_id": "cluster_soft_skill",
+      "related_skill_ids": []
+    }
+  ]
+}

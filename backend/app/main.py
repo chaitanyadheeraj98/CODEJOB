@@ -82,6 +82,7 @@ from app.phase0 import (
     should_block_f2f,
 )
 from app.routing import RoutingDecision
+from app.skill_taxonomy import normalize_skills_text
 from app.premium_numbers.intelligence import OPPORTUNITY_STATUS_VALUES
 from app.premium_numbers.phone_normalization import best_display_phone, canonicalize_phone
 from app.query_bucket import sanitize_saved_queries
@@ -828,18 +829,7 @@ def _set_legacy_current_resume(
 
 
 def _normalize_resume_skills_text(raw: str | None) -> str:
-    ordered: list[str] = []
-    seen: set[str] = set()
-    for part in str(raw or "").split(","):
-        token = part.strip()
-        if not token:
-            continue
-        normalized = token.lower()
-        if normalized == "none_detected" or normalized in seen:
-            continue
-        seen.add(normalized)
-        ordered.append(token)
-    return ", ".join(ordered)
+    return normalize_skills_text(raw, preserve_unknown=True)
 
 
 def _refresh_resume_embedding(resume: ResumeAsset) -> None:

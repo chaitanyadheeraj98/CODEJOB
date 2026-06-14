@@ -4,6 +4,8 @@ import re
 from datetime import UTC, datetime
 from urllib.parse import parse_qs, urljoin, urlparse
 
+from app.skill_taxonomy import normalize_skills_text
+
 try:
     from bs4 import BeautifulSoup
 except ModuleNotFoundError:  # pragma: no cover - fallback path for minimal envs
@@ -135,7 +137,7 @@ def parse_external_post(*, source_type: str, source_url: str, title: str, locati
         visa_hints=visa_hints,
         duration=duration,
         rate=rate,
-        skills_text=", ".join(sorted(set(skills))),
+        skills_text=normalize_skills_text(", ".join(sorted(set(skills))), preserve_unknown=True),
         raw_body=body,
         raw_html=raw_html,
         parse_confidence=0.7 if emails and recruiter_phone else (0.65 if emails else 0.45),

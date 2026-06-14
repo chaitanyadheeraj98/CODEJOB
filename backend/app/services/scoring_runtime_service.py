@@ -8,9 +8,16 @@ from typing import Any, Callable
 
 from app.ai.resume_context import extract_resume_context
 from app.models import RecruiterEmail, ResumeAsset, UserSettings
-from app.phase0 import SKILL_KEYWORDS, ai_assist_score
+from app.phase0 import ai_assist_score
 from app.semantic.embeddings_service import embedding_from_json, embedding_to_json
 from app.semantic.ranking import blend_scores, clamp01, semantic_similarity
+from app.skill_taxonomy import (
+    build_semantic_skill_summary,
+    compute_intent_weighted_match,
+    detect_role_family,
+    extract_taxonomy_skills,
+    score_taxonomy_skills,
+)
 
 
 @dataclass
@@ -45,11 +52,12 @@ class ScoringRuntimeService:
         self.deps = deps
 
     def semantic_text_for_email(self, subject: str, body: str, role: str, skills_text: str) -> str:
+        compact_skills = build_semantic_skill_summary(skills_text, role_text=role, limit=14) or skills_text or ""
         return "\n".join(
             [
                 f"Subject: {subject or ''}",
                 f"Role: {role or ''}",
-                f"Skills: {skills_text or ''}",
+                f"Skills: {compact_skills}",
                 f"Body: {body or ''}",
             ]
         )
@@ -59,7 +67,8 @@ class ScoringRuntimeService:
             return ""
         skills_text = str(getattr(resume, "skills_text", "") or "").strip()
         if skills_text and skills_text.lower() != "none_detected":
-            return f"Skills: {skills_text}"
+            compact_skills = build_semantic_skill_summary(skills_text, limit=12) or skills_text
+            return f"Skills: {compact_skills}"
         return extract_resume_context(resume.file_path, resume.file_name)
 
     def select_best_resume_match(
@@ -214,10 +223,51 @@ class ScoringRuntimeService:
         if role_keywords:
             hits = sum(1 for k in role_keywords if k in combined_text)
             score += min(hits * 0.08, 0.24)
-        skill_hits = sum(1 for skill in SKILL_KEYWORDS if skill in combined_text)
-        score += min(skill_hits * 0.03, 0.21)
+        taxonomy_skills_text = ", ".join(entry.canonical_name for entry in extract_taxonomy_skills(text))
+        score += score_taxonomy_skills(taxonomy_skills_text)
         score = max(0.0, min(score, 1.0))
         return score, f"AI fit score computed from role keywords and skill overlap ({score:.2f})"
+
+    def _intent_weighted_keyword_score(
+        self,
+        *,
+        parsed: dict[str, str | int],
+        user_settings: UserSettings,
+        resume: ResumeAsset | None,
+    ) -> tuple[float, str]:
+        base_score, _base_summary = ai_assist_score(parsed, user_settings)
+        if not resume:
+            return base_score, f"AI fit score computed from role keywords and skill overlap ({base_score:.2f})"
+
+        intent = compute_intent_weighted_match(
+            jd_role=str(parsed.get("role", "")),
+            jd_skills_text=str(parsed.get("skills_text", "")),
+            resume_skills_text=str(getattr(resume, "skills_text", "") or ""),
+        )
+        jd_role_family = detect_role_family(str(parsed.get("role", "")), str(parsed.get("skills_text", "")))
+        if jd_role_family == "ai":
+            final_score = (base_score * 0.35) + (intent.score * 0.65)
+        else:
+            final_score = (base_score * 0.7) + (intent.score * 0.3)
+        final_score = clamp01(final_score)
+
+        summary_parts = [
+            f"Intent-weighted fit ({final_score:.2f})",
+            f"specialization={intent.specialization_score:.2f}",
+            f"foundation={intent.foundation_score:.2f}",
+            f"role_alignment={intent.role_alignment_score:.2f}",
+            f"jd_role_family={intent.jd_role_family}",
+            f"resume_role_family={intent.resume_role_family}",
+        ]
+        if intent.matched_clusters:
+            summary_parts.append(f"matched_clusters={', '.join(intent.matched_clusters)}")
+        if intent.matched_specialization_skills:
+            summary_parts.append(f"matched_ai_core={', '.join(intent.matched_specialization_skills)}")
+        if intent.missing_specialization_skills:
+            summary_parts.append(f"missing_ai_core={', '.join(intent.missing_specialization_skills)}")
+        if intent.weak_signal_hits:
+            summary_parts.append(f"weak_signals={', '.join(intent.weak_signal_hits)}")
+        return final_score, "; ".join(summary_parts)
 
     def _best_thread_snapshot(
         self,
@@ -261,7 +311,11 @@ class ScoringRuntimeService:
         owner_id: str | None = None,
         external_thread_id: str | None = None,
     ) -> tuple[float, str, str, str | None, str | None, SemanticDiagnostics]:
-        keyword_score, keyword_summary = ai_assist_score(parsed, user_settings)
+        keyword_score, keyword_summary = self._intent_weighted_keyword_score(
+            parsed=parsed,
+            user_settings=user_settings,
+            resume=resume,
+        )
         current_skills_text = str(parsed.get("skills_text", ""))
         current_skill_count = self._skills_count(current_skills_text)
         keyword_source = "parsed_only"

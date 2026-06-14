@@ -4,18 +4,31 @@ from app.services.scoring_runtime_service import ScoringRuntimeDeps, ScoringRunt
 
 
 class ScoringRuntimeServiceTests(unittest.TestCase):
+    def test_semantic_text_for_email_compacts_skills(self) -> None:
+        service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1], "hash")))
+        text = service.semantic_text_for_email(
+            "",
+            "Need AI Engineer with strong RAG and tool calling experience.",
+            "AI Engineer",
+            "RAG, Tool Calling, Human-in-the-Loop, Agentic Workflows, Embeddings, Observability, Python, Java, TypeScript, REST APIs",
+        )
+        self.assertIn("RoleFamily:ai", text)
+        self.assertIn("Clusters:", text)
+        self.assertIn("RAG", text)
+
     def test_semantic_text_for_resume_prefers_manual_skills(self) -> None:
         service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1], "hash")))
 
         class Resume:
-            skills_text = "java, spring boot, aws"
+            skills_text = "Java, Spring Boot, AWS"
             file_path = "missing.docx"
             file_name = "missing.docx"
 
-        self.assertEqual(
-            service.semantic_text_for_resume(Resume()),
-            "Skills: java, spring boot, aws",
-        )
+        text = service.semantic_text_for_resume(Resume())
+        self.assertIn("Skills:", text)
+        self.assertIn("Java", text)
+        self.assertIn("Spring Boot", text)
+        self.assertIn("AWS", text)
 
     def test_extract_latest_message_block_prefers_newest_segment(self) -> None:
         service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1], "hash")))
@@ -76,7 +89,7 @@ class ScoringRuntimeServiceTests(unittest.TestCase):
         )
         self.assertEqual(source, "v2_rules_plus_semantic_neutral_fallback")
         self.assertIn("neutral semantic score applied", summary)
-        self.assertGreater(score, 0.57)
+        self.assertGreater(score, 0.45)
         self.assertIsNotNone(diag.fallback_reason)
 
     def test_weak_skills_uses_rich_fallback_keyword_source(self) -> None:
@@ -153,6 +166,96 @@ class ScoringRuntimeServiceTests(unittest.TestCase):
         self.assertEqual(diag.keyword_source, "thread_carry_forward")
         self.assertTrue(diag.thread_snapshot_used)
         self.assertEqual(diag.thread_snapshot_email_id, 11)
+
+    def test_select_best_resume_match_prefers_hands_on_ai_resume_for_ai_jd(self) -> None:
+        service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1, 0.2], "hash")))
+        parsed = {
+            "role": "AI Engineer",
+            "skills_text": "RAG, Tool Calling, Human-in-the-Loop, Agentic Workflows, Embeddings, Observability, Python, Java, TypeScript, REST APIs, Secure SDLC",
+            "salary_text": "",
+            "location": "Alpharetta, GA",
+        }
+
+        class Settings:
+            feature_semantic_enabled = False
+            role_keywords = ""
+            free_text_guidance = ""
+
+        class Resume:
+            def __init__(self, rid: int, name: str, skills: str, current: bool = False):
+                self.id = rid
+                self.file_name = name
+                self.skills_text = skills
+                self.semantic_embedding = None
+                self.file_path = name
+                self.is_enabled = True
+                self.is_current = current
+
+        resumes = [
+            Resume(
+                1,
+                "Chaithanya_Dheeraj_Full_Stack_Engineer_Java_Python_GenAI.docx",
+                "Java, Python, Prompt Engineering, RAG, Semantic Retrieval, Embeddings, Agentic Workflows, Human-in-the-Loop, AI Evaluations, Observability, Secure SDLC",
+                True,
+            ),
+            Resume(
+                2,
+                "Chaithanya_Dheeraj_Full_Stack_Java_Engineer_React_AI_Dallas.docx",
+                "Java, TypeScript, REST APIs, Generative AI, AI exposure, Agentic AI Concepts, AI-Assisted Engineering, Observability",
+            ),
+        ]
+
+        selection = service.select_best_resume_match(
+            subject="",
+            body="Role: AI Engineer. Need RAG, tool calling, embeddings, HITL and observability.",
+            parsed=parsed,
+            user_settings=Settings(),
+            email_row=None,
+            resumes=resumes,
+            fallback_resume=resumes[0],
+        )
+        self.assertIsNotNone(selection.resume)
+        self.assertEqual(selection.resume.file_name, "Chaithanya_Dheeraj_Full_Stack_Engineer_Java_Python_GenAI.docx")
+        self.assertIn("matched_ai_core", selection.ai_summary)
+
+    def test_non_ai_jd_keeps_foundation_bias_stable(self) -> None:
+        service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1, 0.2], "hash")))
+        parsed = {
+            "role": "Java Developer",
+            "skills_text": "Java, Spring Boot, Microservices, REST APIs, AWS, CI/CD",
+            "salary_text": "",
+            "location": "Dallas, TX",
+        }
+
+        class Settings:
+            feature_semantic_enabled = False
+            role_keywords = ""
+            free_text_guidance = ""
+
+        class Resume:
+            def __init__(self, rid: int, name: str, skills: str):
+                self.id = rid
+                self.file_name = name
+                self.skills_text = skills
+                self.semantic_embedding = None
+                self.file_path = name
+                self.is_enabled = True
+                self.is_current = False
+
+        full_stack = Resume(1, "java_full_stack.docx", "Java, Spring Boot, Microservices, REST APIs, AWS, CI/CD, SQL")
+        ai_specialist = Resume(2, "ai_specialist.docx", "RAG, Tool Calling, Embeddings, Prompt Engineering, Python")
+
+        selection = service.select_best_resume_match(
+            subject="",
+            body="Java Developer role with Spring Boot and AWS.",
+            parsed=parsed,
+            user_settings=Settings(),
+            email_row=None,
+            resumes=[full_stack, ai_specialist],
+            fallback_resume=full_stack,
+        )
+        self.assertIsNotNone(selection.resume)
+        self.assertEqual(selection.resume.file_name, "java_full_stack.docx")
 
 
 if __name__ == "__main__":

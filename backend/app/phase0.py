@@ -2,23 +2,7 @@ import re
 from dataclasses import asdict, dataclass
 
 from app.models import UserSettings
-
-SKILL_KEYWORDS = [
-    "python",
-    "fastapi",
-    "sql",
-    "postgres",
-    "sqlite",
-    "react",
-    "typescript",
-    "java",
-    "spring",
-    "spring boot",
-    "microservices",
-    "kafka",
-    "aws",
-    "docker",
-]
+from app.skill_taxonomy import display_skill_label, extract_skills_text, score_taxonomy_skills
 
 RECRUITER_HINTS = [
     "recruiter",
@@ -238,7 +222,18 @@ def resolve_to_cc(sender: str, subject: str, body: str, snippet: str = "") -> tu
 
 def _extract_location(text: str) -> str:
     match = re.search(r"(remote|hybrid|onsite|on-site)", text, re.IGNORECASE)
-    return match.group(1).lower() if match else "unknown"
+    if match:
+        return match.group(1).lower()
+    labeled = re.search(
+        r"(?is)\b(?:location|job location)\s*[:\-]\s*([A-Za-z .'-]+,\s*[A-Z]{2})(?=\s+\b(?:duration|visa|rate|client|job id|summary|responsibilities|required qualifications|preferred qualifications|what success looks like|compliance)\b\s*[:\-]|\n|$)",
+        text,
+    )
+    if labeled:
+        return labeled.group(1).strip()
+    city_state = re.search(r"\b([A-Za-z .'-]+,\s*[A-Z]{2})\b", text)
+    if city_state:
+        return city_state.group(1).strip()
+    return "unknown"
 
 
 def _extract_salary(text: str) -> str:
@@ -249,15 +244,23 @@ def _extract_salary(text: str) -> str:
 def _extract_role(subject: str, body: str) -> str:
     combined = f"{subject}\n{body}"
     labeled_role = re.search(
-        r"(?im)^\s*(title|job title|role|position)\s*[:\-]\s*(.+?)\s*$",
+        r"(?is)\b(?:title|job title|role|position)\s*[:\-]\s*(.+?)(?=\s+\b(?:location|duration|visa|rate|client|job id|summary|responsibilities|required qualifications|preferred qualifications|what success looks like|compliance)\b\s*[:\-]|\n|$)",
         combined,
     )
     if labeled_role:
-        role = labeled_role.group(2).strip(" .:-")
+        role = labeled_role.group(1).strip(" .:-")
         if role:
             return role
 
     role_patterns = [
+        r"(applied ai engineer)",
+        r"(genai engineer)",
+        r"(llm engineer)",
+        r"(ml engineer)",
+        r"(machine learning engineer)",
+        r"(prompt engineer)",
+        r"(ai engineer(?:\s+\w+)?)",
+        r"(ai developer)",
         r"(software engineer)",
         r"(backend engineer)",
         r"(frontend engineer)",
@@ -278,16 +281,17 @@ def _extract_role(subject: str, body: str) -> str:
 
 
 def _extract_skills(text: str) -> str:
-    lower = text.lower()
-    hits = [skill for skill in SKILL_KEYWORDS if skill in lower]
-    return ", ".join(hits) if hits else "none_detected"
+    return extract_skills_text(text)
 
 
 def _extract_location_text(subject: str, body: str) -> str:
     combined = f"{subject}\n{body}"
-    line_hit = re.search(r"(?im)^\s*(location|job location)\s*[:\-]\s*(.+)$", combined)
+    line_hit = re.search(
+        r"(?is)\b(?:location|job location)\s*[:\-]\s*(.+?)(?=\s+\b(?:duration|visa|rate|client|job id|summary|responsibilities|required qualifications|preferred qualifications|what success looks like|compliance)\b\s*[:\-]|\n|$)",
+        combined,
+    )
     if line_hit:
-        return line_hit.group(2).strip()
+        return line_hit.group(1).strip()
 
     city_state = re.search(r"\b([A-Za-z .'-]+,\s*[A-Z]{2})\b", combined)
     if city_state:
@@ -356,8 +360,7 @@ def ai_assist_score(parsed: dict[str, str | int], settings: UserSettings) -> tup
         hits = sum(1 for k in role_keywords if k in text)
         score += min(hits * 0.08, 0.24)
 
-    skill_hits = sum(1 for skill in SKILL_KEYWORDS if skill in text)
-    score += min(skill_hits * 0.03, 0.21)
+    score += score_taxonomy_skills(str(parsed.get("skills_text", "")))
     score = max(0.0, min(score, 1.0))
     return score, f"AI fit score computed from role keywords and skill overlap ({score:.2f})"
 
@@ -372,14 +375,6 @@ def should_block_f2f(parsed: dict[str, str | int | bool]) -> tuple[bool, str]:
         return True, f"F2F mentioned but non-Texas location ({location_text})"
     return False, ""
 
-
-SKILL_DISPLAY_NAMES = {
-    "aws": "AWS",
-    "sql": "SQL",
-    "postgres": "Postgres",
-    "react": "React",
-    "spring boot": "Spring Boot",
-}
 
 GENERIC_TO_LOCAL_PARTS = {
     "jobs",
@@ -424,8 +419,8 @@ Best regards,
 
 
 def _format_skill(skill: str) -> str:
-    normalized = skill.strip().lower()
-    return SKILL_DISPLAY_NAMES.get(normalized, normalized.title())
+    label = display_skill_label(skill)
+    return label or str(skill or "").strip().title()
 
 
 def skills_from_text(skills_text: str) -> list[str]:
@@ -492,8 +487,14 @@ def _name_from_body_for_email(to_email: str, body: str) -> str | None:
 
 
 def greeting_from_to_contact(to_email: str | None, body: str) -> str:
-    _ = to_email
-    _ = body
+    if not to_email:
+        return "Hi,"
+    local_part = extract_email_address(to_email).split("@", 1)[0]
+    if local_part.lower() in GENERIC_TO_LOCAL_PARTS:
+        return "Hi,"
+    inferred_name = _name_from_body_for_email(to_email, body)
+    if inferred_name:
+        return f"Hi {inferred_name},"
     return "Hi,"
 
 

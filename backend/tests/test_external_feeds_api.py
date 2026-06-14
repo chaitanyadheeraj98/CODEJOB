@@ -460,7 +460,7 @@ class ExternalFeedsApiTests(unittest.TestCase):
             first_resume = first_upload.json()
             self.assertTrue(first_resume["is_enabled"])
             self.assertTrue(first_resume["is_current"])
-            self.assertEqual(first_resume["skills_text"], "java, spring boot")
+            self.assertEqual(first_resume["skills_text"], "Java, Spring Boot")
 
             with open(second_path, "rb") as second_handle:
                 second_upload = self.client.post(
@@ -472,7 +472,7 @@ class ExternalFeedsApiTests(unittest.TestCase):
             second_resume = second_upload.json()
             self.assertTrue(second_resume["is_enabled"])
             self.assertTrue(second_resume["is_current"])
-            self.assertEqual(second_resume["skills_text"], "java, angular")
+            self.assertEqual(second_resume["skills_text"], "Java, Angular")
 
             listed = self.client.get("/settings/resumes")
             self.assertEqual(listed.status_code, 200, listed.text)
@@ -486,7 +486,7 @@ class ExternalFeedsApiTests(unittest.TestCase):
                 json={"skills_text": "java, angular, microservices"},
             )
             self.assertEqual(updated_skills.status_code, 200, updated_skills.text)
-            self.assertEqual(updated_skills.json()["skills_text"], "java, angular, microservices")
+            self.assertEqual(updated_skills.json()["skills_text"], "Java, Angular, Microservices")
 
             disabled = self.client.patch(f"/settings/resumes/{second_resume['id']}", json={"is_enabled": False})
             self.assertEqual(disabled.status_code, 200, disabled.text)
