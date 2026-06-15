@@ -836,7 +836,9 @@
 .resumeDatabaseHelp,
 .resumeDatabaseFileName,
 .resumeDatabaseMeta,
-.resumeDatabaseMatch {
+.resumeDatabaseMatch,
+.resumeDatabaseSummary,
+.resumeDatabaseBadge {
   min-width: 0;
   overflow-wrap: anywhere;
   word-break: break-word;
@@ -856,14 +858,54 @@
   flex-wrap: wrap;
 }
 
+.resumeDatabaseTitleBlock {
+  display: grid;
+  gap: 8px;
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
 .resumeDatabaseFileName {
   flex: 1 1 220px;
+}
+
+.resumeDatabaseBadges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
 }
 
 .resumeDatabaseVersion {
   flex: 0 0 auto;
   white-space: nowrap;
   color: #33405a;
+}
+
+.resumeDatabaseBadge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: #eef2f8;
+  color: #33405a;
+  font-size: 13px;
+}
+
+.resumeDatabaseExpandButton {
+  flex: 0 0 auto;
+}
+
+.resumeDatabaseSummary,
+.resumeDatabaseMatch {
+  margin: 0;
+}
+
+.resumeDatabaseBody {
+  display: grid;
+  gap: 12px;
 }
 
 .resumeDatabaseTextarea {

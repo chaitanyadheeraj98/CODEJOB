@@ -265,6 +265,23 @@ export function ResumeDatabaseSection({
   toggleResumeAsset,
   deleteResumeAsset,
 }: ResumeDatabaseSectionProps) {
+  const [expandedResumeIds, setExpandedResumeIds] = useState<Record<number, boolean>>({})
+
+  const toggleResumeExpanded = (resumeId: number) => {
+    setExpandedResumeIds((prev) => ({
+      ...prev,
+      [resumeId]: !prev[resumeId],
+    }))
+  }
+
+  const previewSkills = (skillsText: string) => {
+    const normalized = (skillsText || '').trim()
+    if (!normalized) return 'No manual skills saved yet. File extraction will be used as fallback.'
+    const items = normalized.split(',').map((item) => item.trim()).filter(Boolean)
+    if (items.length <= 5) return items.join(', ')
+    return `${items.slice(0, 5).join(', ')} +${items.length - 5} more`
+  }
+
   return (
     <section className="card resumeDatabaseCard">
       <h2>Resume Database</h2>
@@ -295,60 +312,80 @@ export function ResumeDatabaseSection({
           <p className="subtle">No resumes stored yet.</p>
         ) : (
           <div className="resumeDatabaseList">
-            {resumeAssets.map((resume) => (
-              <article key={resume.id} className="resumeDatabaseItem pillRow">
-                <div className="resumeDatabaseHeader">
-                  <strong className="resumeDatabaseFileName">{resume.file_name}</strong>
-                  <span className="resumeDatabaseVersion">{`v${resume.version}`}</span>
-                </div>
-                <p className="subtle resumeDatabaseMeta">
-                  Added: {formatSettingsDate(resume.created_at)}
-                  {resume.is_current ? ' | Legacy current fallback' : ''}
-                  {resume.is_enabled ? ' | Enabled' : ' | Disabled'}
-                </p>
-                <label className="resumeDatabaseField">
-                  <span>Stored Skills</span>
-                  <textarea
-                    className="resumeDatabaseTextarea"
-                    rows={3}
-                    value={resumeSkillEdits[resume.id] ?? ''}
-                    onChange={(e) =>
-                      setResumeSkillEdits((prev) => ({
-                        ...prev,
-                        [resume.id]: e.target.value,
-                      }))
-                    }
-                    placeholder="java, spring boot, microservices, aws"
-                  />
-                </label>
-                <p className="subtle resumeDatabaseMatch">
-                  {resume.skills_text
-                    ? `Matching skills: ${resume.skills_text}`
-                    : 'No manual skills saved yet. File extraction will be used as fallback.'}
-                </p>
-                <div className="resumeDatabaseActions">
-                  <label className="toggleRow pillRow resumeDatabaseToggle">
-                    <span>{resume.is_enabled ? 'Enabled' : 'Disabled'}</span>
-                    <span className="toggleSwitch">
-                      <input
-                        type="checkbox"
-                        checked={resume.is_enabled}
-                        onChange={(e) => toggleResumeAsset(resume.id, e.target.checked)}
-                      />
-                      <span className="toggleTrack" />
-                    </span>
-                  </label>
-                  <div className="resumeDatabaseButtons">
-                    <button type="button" onClick={() => saveResumeSkills(resume.id)}>
-                      Save Skills
-                    </button>
-                    <button type="button" onClick={() => deleteResumeAsset(resume.id)}>
-                      Delete
+            {resumeAssets.map((resume) => {
+              const isExpanded = !!expandedResumeIds[resume.id]
+              return (
+                <article key={resume.id} className="resumeDatabaseItem pillRow">
+                  <div className="resumeDatabaseHeader">
+                    <div className="resumeDatabaseTitleBlock">
+                      <strong className="resumeDatabaseFileName">{resume.file_name}</strong>
+                      <div className="resumeDatabaseBadges">
+                        <span className="resumeDatabaseVersion">{`v${resume.version}`}</span>
+                        {resume.is_current ? <span className="resumeDatabaseBadge">Legacy current fallback</span> : null}
+                        <span className="resumeDatabaseBadge">{resume.is_enabled ? 'Enabled' : 'Disabled'}</span>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="resumeDatabaseExpandButton"
+                      onClick={() => toggleResumeExpanded(resume.id)}
+                      aria-expanded={isExpanded}
+                    >
+                      {isExpanded ? 'Collapse' : 'Expand'}
                     </button>
                   </div>
-                </div>
-              </article>
-            ))}
+                  <p className="subtle resumeDatabaseMeta">Added: {formatSettingsDate(resume.created_at)}</p>
+                  <p className="subtle resumeDatabaseSummary">
+                    Matching skills preview: {previewSkills(resume.skills_text)}
+                  </p>
+                  {isExpanded ? (
+                    <div className="resumeDatabaseBody">
+                      <label className="resumeDatabaseField">
+                        <span>Stored Skills</span>
+                        <textarea
+                          className="resumeDatabaseTextarea"
+                          rows={3}
+                          value={resumeSkillEdits[resume.id] ?? ''}
+                          onChange={(e) =>
+                            setResumeSkillEdits((prev) => ({
+                              ...prev,
+                              [resume.id]: e.target.value,
+                            }))
+                          }
+                          placeholder="java, spring boot, microservices, aws"
+                        />
+                      </label>
+                      <p className="subtle resumeDatabaseMatch">
+                        {resume.skills_text
+                          ? `Matching skills: ${resume.skills_text}`
+                          : 'No manual skills saved yet. File extraction will be used as fallback.'}
+                      </p>
+                      <div className="resumeDatabaseActions">
+                        <label className="toggleRow pillRow resumeDatabaseToggle">
+                          <span>{resume.is_enabled ? 'Enabled' : 'Disabled'}</span>
+                          <span className="toggleSwitch">
+                            <input
+                              type="checkbox"
+                              checked={resume.is_enabled}
+                              onChange={(e) => toggleResumeAsset(resume.id, e.target.checked)}
+                            />
+                            <span className="toggleTrack" />
+                          </span>
+                        </label>
+                        <div className="resumeDatabaseButtons">
+                          <button type="button" onClick={() => saveResumeSkills(resume.id)}>
+                            Save Skills
+                          </button>
+                          <button type="button" onClick={() => deleteResumeAsset(resume.id)}>
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+                </article>
+              )
+            })}
           </div>
         )}
       </div>

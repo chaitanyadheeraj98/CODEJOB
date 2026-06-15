@@ -14,7 +14,7 @@ describe('ResumeDatabaseSection', () => {
     while (cleanups.length) cleanups.pop()?.()
   })
 
-  it('renders contained resume database structure for long resume names', () => {
+  it('renders collapsed resume cards by default and expands details on demand', () => {
     const container = document.createElement('div')
     document.body.appendChild(container)
     const root: Root = createRoot(container)
@@ -73,8 +73,26 @@ describe('ResumeDatabaseSection', () => {
     expect(container.querySelector('.resumeDatabaseFallback')?.textContent ?? '').toContain(longFileName)
     expect(container.querySelector('.resumeDatabaseFileName')?.textContent).toBe(longFileName)
     expect(container.querySelector('.resumeDatabaseList')).not.toBeNull()
+    expect(container.querySelector('.resumeDatabaseSummary')?.textContent ?? '').toContain('Matching skills preview:')
+    expect(container.querySelector('.resumeDatabaseBody')).toBeNull()
+
+    const expandButton = container.querySelector('.resumeDatabaseExpandButton') as HTMLButtonElement | null
+    expect(expandButton?.textContent).toBe('Expand')
+
+    act(() => {
+      expandButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(container.querySelector('.resumeDatabaseBody')).not.toBeNull()
     expect(container.querySelector('.resumeDatabaseActions')).not.toBeNull()
     expect(container.querySelector('.resumeDatabaseButtons')?.textContent ?? '').toContain('Save Skills')
     expect(container.querySelector('.resumeDatabaseButtons')?.textContent ?? '').toContain('Delete')
+    expect(container.querySelector('.resumeDatabaseMatch')?.textContent ?? '').toContain('Matching skills:')
+
+    act(() => {
+      expandButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(container.querySelector('.resumeDatabaseBody')).toBeNull()
   })
 })

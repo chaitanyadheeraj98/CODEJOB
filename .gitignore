@@ -1,6 +1,9 @@
 graphify-out/
 .codex/hooks/rule_state.json
 backend/data/
+backend/test-data/
+data/
 dashboard/.tsbuildinfo/
 .github/agents/
 .agents/skills/
+tmp_resume_match_report*.json

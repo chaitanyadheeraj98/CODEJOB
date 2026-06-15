@@ -1,204 +1,224 @@
-### Problem: Frontend fetch fails with 500 Internal Server Error when hitting `/automation/run-once` in Docker setup
+## 1. High-level overview of the application
 
-## 1. High-level overview
+The Resume Database is already working functionally. The problem is only **UI design**: every resume card shows all stored skills, textarea, matching skills, toggle, save, and delete controls at once. That makes the Settings page very long and hard to navigate.
 
-The frontend “fetch” is failing because the backend API call is returning **500 Internal Server Error**, not because Docker networking is broken.
+So this fix should be **frontend-only**. No backend/database change is needed.
 
-Your logs show:
+---
 
-`POST /automation/run-once HTTP/1.1" 500 Internal Server Error`
+## 2. Repository structure
 
-Then the real backend crash is:
+Relevant area:
 
-`TypeError: _select_best_resume_match() got an unexpected keyword argument 'resumes'`
+```txt id="r8tp1m"
+dashboard/src/App.tsx
+dashboard/src/App.css
+```
 
-## 2. Repository structure checked
+The current `ResumeDatabaseSection` already receives:
 
-I checked the Docker files on the `semantic-embeddings` branch:
+```txt id="js9qx5"
+activeResume
+resumeAssets
+resumeSkillEdits
+uploadResume
+saveResumeSkills
+toggleResumeAsset
+deleteResumeAsset
+```
 
-* `docker-compose.yml`
-* `backend/Dockerfile`
-* `dashboard/Dockerfile`
-* backend scoring/resume-selection flow around `run_orchestrator.py`
-* backend wrapper in `main.py`
+Then it loops through `resumeAssets` and renders every resume card fully expanded.
+
+---
 
 ## 3. Main technologies used
 
-The Docker setup runs:
+This part is plain React + CSS:
 
-* FastAPI backend on port `8000`
-* Vite React dashboard on port `5173`
-* Redis on port `6379`
-* SQLite DB stored in Docker volume `backend_data`
-
-The compose file maps backend `8000:8000`, dashboard `5173:5173`, and sets `VITE_API_BASE_URL: http://localhost:8000`, so the frontend is pointed at the correct backend URL.
-
-## 4. Core features involved
-
-The failing feature is **Sync + Queue / fetch automation**, triggered by:
-
-```txt
-POST /automation/run-once
+```txt id="eeh1yc"
+React state controls which resume card is expanded/collapsed.
+CSS controls the compact card layout.
+Backend APIs stay the same.
 ```
 
-This enters:
+---
 
-```txt
-main.py
-→ OrchestrationService
-→ RunOrchestrator.execute()
-→ select_best_resume_match()
+## 4. Core feature to improve
+
+Current behavior:
+
+```txt id="d1r0et"
+Resume card always shows:
+- filename
+- version
+- added date
+- current/enabled status
+- full stored skills textarea
+- full matching skills paragraph
+- enabled toggle
+- save skills button
+- delete button
 ```
+
+Desired behavior:
+
+```txt id="l0mbnm"
+Resume card collapsed by default:
+- show only filename/version/status
+- show short skills preview
+- show expand/collapse button
+
+When expanded:
+- show stored skills textarea
+- full matching skills
+- enable toggle
+- save skills
+- delete
+```
+
+---
 
 ## 5. Architecture and code flow
 
-The bug is here:
+No backend logic changes.
 
-`run_orchestrator.py` calls:
+Current flow remains:
 
-```python
-request.deps.select_best_resume_match(
-    subject=subject,
-    body=body,
-    parsed=parsed_for_selection,
-    user_settings=request.user_settings,
-    email_row=existing,
-    resumes=request.enabled_resumes,
-    fallback_resume=request.active_resume,
-    db=request.db,
-    owner_id=request.owner_id,
-    external_thread_id=...
-)
+```txt id="3jqh6o"
+GET /settings/resumes
+↓
+resumeAssets state
+↓
+ResumeDatabaseSection
+↓
+resumeAssets.map(...)
+↓
+render each resume card
 ```
 
-So it sends two keywords:
+The only added frontend state should be something like:
 
-```txt
-resumes
-fallback_resume
+```tsx id="8vb1kv"
+const [expandedResumeIds, setExpandedResumeIds] = useState<Record<number, boolean>>({})
 ```
 
-But in `main.py`, `_select_best_resume_match()` is defined without those parameters:
+Then each resume card checks:
 
-```python
-def _select_best_resume_match(
-    *,
-    subject,
-    body,
-    parsed,
-    user_settings,
-    email_row,
-    db,
-    owner_id,
-    external_thread_id,
-)
+```tsx id="uz8w8h"
+const isExpanded = !!expandedResumeIds[resume.id]
 ```
 
-Inside that wrapper, it separately calls `_enabled_resumes(db)` and `_active_resume(db)` itself. So when the orchestrator passes `resumes=...`, Python throws:
+Collapsed card shows a compact summary. Expanded card shows the existing detailed UI.
 
-```txt
-TypeError: _select_best_resume_match() got an unexpected keyword argument 'resumes'
-```
-
-That exactly matches your Docker log crash.  
+---
 
 ## 6. Important files and folders
 
-### `docker-compose.yml`
+### `dashboard/src/App.tsx`
 
-The backend is built from `./backend`, loads `./backend/.env`, uses SQLite at `./data/codejob.db`, and persists `/app/data` into `backend_data`.
+Plan:
 
-Important point: there is **no backend source-code bind mount**. The backend code is copied into the Docker image during build.
+1. Add `expandedResumeIds` state near other resume UI state.
+2. Pass it into `ResumeDatabaseSection`.
+3. Add a `toggleResumeExpanded(resumeId)` handler.
+4. Inside `resumeAssets.map(...)`, render:
 
-### `backend/Dockerfile`
+   * compact header always visible
+   * detailed body only when expanded
 
-The backend Dockerfile installs dependencies from `pyproject.toml`, then copies the backend code into `/app`.
+Suggested component behavior:
 
-That means after changing Python code, the container must be rebuilt. But in this case, even the branch code itself has the signature mismatch, so rebuild alone would not fix the underlying bug.
+```txt id="f6mdad"
+Resume Card Header:
+[filename] [v20] [Current] [Enabled] [Expand/Collapse]
 
-### `dashboard/Dockerfile`
+Collapsed body:
+Matching skills: Java, Spring Boot, Microservices, AWS... +12 more
 
-The dashboard runs Vite dev server on `0.0.0.0:5173`, which is correct for Docker browser access.
-
-## 7. How the application likely runs
-
-The app starts correctly:
-
-* Alembic runs.
-* Uvicorn starts.
-* `/gmail/status`, `/ai/status`, `/settings`, `/settings/resumes`, `/candidates`, etc. return `200 OK`.
-
-So Docker networking is working.
-
-The failure happens only when the dashboard triggers `/automation/run-once`. The backend crashes during resume selection before the automation run can complete.
-
-## 8. Key observations for you
-
-This is **not mainly a Docker-file issue**.
-
-The real issue is a **code contract mismatch** between:
-
-```txt
-backend/app/automation/run_orchestrator.py
+Expanded body:
+Stored Skills textarea
+Full Matching Skills
+Enable toggle
+Save Skills
+Delete
 ```
 
-and
+### `dashboard/src/App.css`
 
-```txt
-backend/app/main.py
+Add styles for:
+
+```txt id="no9kwb"
+.resumeDatabaseItemCollapsed
+.resumeDatabaseCardHeader
+.resumeDatabaseSummary
+.resumeDatabaseBody
+.resumeDatabaseExpandButton
+.resumeDatabaseBadges
 ```
 
-`run_orchestrator.py` was updated to pass `resumes` and `fallback_resume`, but `main.py` wrapper was not updated to accept those keyword arguments.
+Existing styling already has resume database class names in `App.css`, so the new styles should extend the current design instead of replacing it.
 
-Also, the Docker setup explains why this can be confusing: since backend code is copied into the image and not mounted live, local code changes will not appear unless the backend image is rebuilt. But the current branch still has the mismatch, so the fetch fails because `/automation/run-once` crashes with 500.
+---
 
-Solution:
+## 7. How the application likely runs after the change
 
-### Solution
+User flow after fix:
 
-The backend did not fully crash. The `Resume Database` routes are up right now, and `GET /settings/resumes` is returning `200`. The failure is in the queue run path, not the settings/resume UI path.
-
-What the logs show:
-
-* `POST /automation/run-once` is failing with `500 Internal Server Error`
-* the exception is:
-
-```text
-TypeError: _select_best_resume_match() got an unexpected keyword argument 'resumes'
+```txt id="rzhsz0"
+Open Settings
+↓
+Resume Database shows compact resume cards
+↓
+User clicks a resume card / chevron
+↓
+That card expands
+↓
+User edits skills, saves, toggles enabled, or deletes
+↓
+Other cards remain collapsed
 ```
 
-Where it breaks:
+Upload flow should stay the same:
 
-* [run_orchestrator.py](/D:/My%20Websites/CodeJob/backend/app/automation/run_orchestrator.py:119) calls `request.deps.select_best_resume_match(...)` with `resumes=` and `fallback_resume=`
-* that dependency points to the lambda in [main.py](/D:/My%20Websites/CodeJob/backend/app/main.py:690)
-* the wrapper function in [main.py](/D:/My%20Websites/CodeJob/backend/app/main.py:859) still has the older signature and does not accept `resumes` or `fallback_resume`
+```txt id="s7ltrg"
+Choose file
+Enter skills
+Upload Resume To Database
+↓
+loadResumes()
+↓
+new resume appears in the list
+```
 
-So this is a signature mismatch introduced by the multi-resume resume-selection work:
+Optional nice behavior: after upload, auto-expand the newest uploaded resume so the user can immediately verify skills.
 
-* the orchestrator now expects the newer contract
-* the `main.py` wrapper still exposes the old contract
+---
 
-Why the UI says `Failed to fetch`:
+## 8. Key observations for the human
 
-* the frontend `runAutomation()` in [App.tsx](/D:/My%20Websites/CodeJob/dashboard/src/App.tsx:1388) is calling `/automation/run-once`
-* that backend request blows up before a normal success response
-* so the dashboard only surfaces a generic network/request failure instead of the real traceback
+This is the safest fix because:
 
-Important clarification:
+```txt id="wtbse0"
+- No backend change needed
+- No DB migration needed
+- No API change needed
+- Existing upload/save/toggle/delete logic remains untouched
+- Only the card presentation changes
+```
 
-* this is not the `Resume Database` card crashing the backend
-* it is the `Sync Now` / `Batch Queue` backend path using the broken resume-match dependency wiring
+Best implementation plan:
 
-Best solution:
+```txt id="b1y5yh"
+1. Keep ResumeDatabaseSection in App.tsx.
+2. Add expandedResumeIds state.
+3. Make each resume card header clickable.
+4. Hide textarea/full skills/actions unless expanded.
+5. Keep filename, version, current/enabled status visible always.
+6. Add a short one-line skills preview in collapsed mode.
+7. Add CSS for compact cards.
+8. Test upload, save skills, enable/disable, delete, and page refresh.
+```
 
-* update `_select_best_resume_match(...)` in [main.py](/D:/My%20Websites/CodeJob/backend/app/main.py:859) to accept the newer optional kwargs:
-  * `resumes`
-  * `fallback_resume`
-* then forward those directly to `scoring_runtime_service.select_best_resume_match(...)`
-* keep backward compatibility by defaulting to `_enabled_resumes(db)` and `_active_resume(db)` if those args are not supplied
+In simple words:
 
-That is the safest fix because:
-
-* it matches the orchestrator’s current call shape
-* it preserves existing callers
-* it keeps the multi-resume design intact instead of reverting newer code to the old single-resume contract
+**The resume database works. The cards are just too expanded. Make each resume card collapsed by default, show only a short summary, and reveal the full skills/actions only when the user clicks expand.**
