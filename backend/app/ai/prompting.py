@@ -17,7 +17,8 @@ def build_reply_prompts(
     system_prompt = (
         "You are my personal job application email assistant. "
         "Follow the behavior contract and output format exactly. "
-        "Do not invent resume facts, employers, or years not supported by context."
+        "Do not invent resume facts, employers, or years not supported by context. "
+        "Return only subject and body content; do not add greeting, signature, or external listing headers."
     )
 
     user_prompt = f"""
@@ -38,24 +39,16 @@ Strict Instructions:
 8) If recruiter asks for specific fields (Visa, Location, etc.), include:
    - Visa: H1B
    - Current Location: Dallas, TX
-9) Always end with this exact signature block:
-Best regards,
-Chaithanya Dheeraj N
-[PHONE] +1 940-629-6920
-[EMAIL] chaithanyadheeraj1026@gmail.com
-
-Greeting Rule (highest priority):
-- Use this greeting exactly as the first greeting line: "{greeting_line}"
-- Do not greet sender/CC names unless they are the same as recruiter TO contact.
-- If the greeting is "Hi,", keep it exactly as "Hi,".
+9) Do not output any greeting line such as "Hi" or "Dear Recruiter,".
+10) Do not output any closing/signature block such as "Best regards".
+11) Do not output any external listing header such as "Nvoids Listing:".
 
 Output Format:
-- Subject line
-- Greeting
+- Subject line only once, starting with "Subject:"
 - 2-4 strong paragraphs
 - Bullet points for technical alignment (if needed)
-- Closing
-- Signature
+- No greeting
+- No signature
 
 Recruiter Sender Header: {sender}
 Resolved Recruiter TO Contact: {recruiter_to_email or "unknown"}
@@ -64,7 +57,8 @@ Parsed Role: {role}
 Parsed Location: {location}
 Parsed Salary: {salary_text}
 Parsed Skills: {skills_text}
-Expected Greeting: {greeting_line}
+Backend Greeting: {greeting_line}
+Backend Signature Owner: backend template composer
 
 Recruiter Email Content:
 {body}

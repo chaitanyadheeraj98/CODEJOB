@@ -242,18 +242,18 @@ Sudarsan
 Email: sudarsan@cystemslogic.com
 """
         greeting = greeting_from_to_contact("sudarsan@cystemslogic.com", body)
-        self.assertEqual(greeting, "Hi Sudarsan,")
+        self.assertEqual(greeting, "Dear Recruiter,")
 
     def test_greeting_falls_back_to_generic_for_role_mailbox(self) -> None:
         body = "Please send your resume to jobs@yvstech.com"
         greeting = greeting_from_to_contact("jobs@yvstech.com", body)
-        self.assertEqual(greeting, "Hi,")
+        self.assertEqual(greeting, "Dear Recruiter,")
 
     def test_render_fallback_template_replaces_supported_tokens(self) -> None:
         rendered = render_fallback_draft_template(
             DEFAULT_FALLBACK_DRAFT_TEMPLATE,
             {
-                "greeting": "Hi Sudarsan,",
+                "greeting": "Dear Recruiter,",
                 "role": "Java Developer",
                 "sender": "Recruiter <recruiter@example.com>",
                 "location": "TX",
@@ -268,7 +268,7 @@ Email: sudarsan@cystemslogic.com
             },
         )
 
-        self.assertIn("Hi Sudarsan,", rendered)
+        self.assertIn("Dear Recruiter,", rendered)
         self.assertIn("Application for Java Developer", rendered)
         self.assertIn("- Java", rendered)
         self.assertIn("Jane Doe", rendered)

@@ -824,6 +824,7 @@ GENERIC_TO_LOCAL_PARTS = {
 DEFAULT_SIGNATURE_NAME = "Chaithanya Dheeraj N"
 DEFAULT_SIGNATURE_PHONE = "+1 940-629-6920"
 DEFAULT_SIGNATURE_EMAIL = "chaithanyadheeraj1026@gmail.com"
+DEFAULT_GREETING_LINE = "Dear Recruiter,"
 
 DEFAULT_FALLBACK_DRAFT_TEMPLATE = """Subject: Application for {{role}} - 7+ Years Full Stack Experience
 
@@ -912,22 +913,15 @@ def _name_from_body_for_email(to_email: str, body: str) -> str | None:
 
 
 def greeting_from_to_contact(to_email: str | None, body: str) -> str:
-    if not to_email:
-        return "Hi,"
-    local_part = extract_email_address(to_email).split("@", 1)[0]
-    if local_part.lower() in GENERIC_TO_LOCAL_PARTS:
-        return "Hi,"
-    inferred_name = _name_from_body_for_email(to_email, body)
-    if inferred_name:
-        return f"Hi {inferred_name},"
-    return "Hi,"
+    _ = (to_email, body)
+    return DEFAULT_GREETING_LINE
 
 
 def draft_reply(
     sender: str,
     role: str,
     parsed: dict[str, str | int | bool],
-    greeting_line: str = "Hi,",
+    greeting_line: str = DEFAULT_GREETING_LINE,
 ) -> str:
     include_contact_fields = bool(parsed.get("asks_contact_fields", False))
     skill_summary = skills_from_text(str(parsed.get("skills_text", "none_detected")))

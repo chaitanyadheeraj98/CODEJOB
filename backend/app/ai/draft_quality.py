@@ -35,7 +35,11 @@ def _greeting_compliance(draft_text: str) -> DraftGreetingCompliance:
     lines = [line.strip() for line in draft_text.splitlines() if line.strip()]
     if not lines:
         return "missing"
-    greeting_lines = [line for line in lines if line.lower().startswith("hi")]
+    greeting_lines = [
+        line
+        for line in lines
+        if line.lower().startswith("hi") or line.lower().startswith("dear recruiter,")
+    ]
     if not greeting_lines:
         return "missing"
     if len(greeting_lines) > 1:
