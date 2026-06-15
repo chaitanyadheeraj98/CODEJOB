@@ -1,6 +1,12 @@
 import unittest
 
-from app.external_feeds.parser import parse_external_post, parse_job_detail_contacts, parse_listing_rows
+from app.external_feeds.parser import (
+    extract_nvoids_clean_body,
+    extract_nvoids_detail_title,
+    parse_external_post,
+    parse_job_detail_contacts,
+    parse_listing_rows,
+)
 
 
 class ExternalFeedsParserTests(unittest.TestCase):
@@ -84,6 +90,80 @@ class ExternalFeedsParserTests(unittest.TestCase):
         self.assertEqual(email, "recruiter@example.com")
         self.assertEqual(name, "Jane Recruiter")
         self.assertIn("214", phone)
+
+    def test_extract_nvoids_detail_title_prefers_first_meaningful_row_after_home(self) -> None:
+        html = """
+        <html><body>
+        <a>Home</a>
+        <table>
+          <tr><td>Full Stack Developer (Java, Microservices, Spring Boot, API, ReactJS) -- Charlotte, NC, Islin, NJ & Irving, TX at Charlotte, North Carolina, USA</td></tr>
+          <tr><td>Email: saurabhampstek@gmail.com</td></tr>
+          <tr><td>https://jobs.nvoids.com/job_details.jsp?id=3445247&uid=abc</td></tr>
+          <tr><td>Job Role : Full Stack Developer (Java, Microservices, Spring Boot, API, ReactJS)</td></tr>
+        </table>
+        </body></html>
+        """
+        title = extract_nvoids_detail_title(html, "Fallback Title")
+        self.assertEqual(
+            title,
+            "Full Stack Developer (Java, Microservices, Spring Boot, API, ReactJS) -- Charlotte, NC, Islin, NJ & Irving, TX at Charlotte, North Carolina, USA",
+        )
+
+    def test_extract_nvoids_clean_body_removes_html_noise_and_preserves_readable_text(self) -> None:
+        html = """
+        <html><body>
+        <a>Home</a>
+        <table>
+          <tr><td>Full Stack Developer (Java, Microservices, Spring Boot, API, ReactJS) -- Charlotte, NC, Islin, NJ & Irving, TX at Charlotte, North Carolina, USA</td></tr>
+          <tr><td>Email: saurabhampstek@gmail.com</td></tr>
+          <tr><td>http://bit.ly/4ey8w48</td></tr>
+          <tr><td>Hi,</td></tr>
+          <tr><td>Job description</td></tr>
+          <tr><td>Backend Development Design, develop, and maintain scalable backend services.</td></tr>
+          <tr><td>Thanks and Regards</td></tr>
+          <tr><td>data-cfemail protected</td></tr>
+        </table>
+        </body></html>
+        """
+        body = extract_nvoids_clean_body(
+            html,
+            "Full Stack Developer (Java, Microservices, Spring Boot, API, ReactJS) -- Charlotte, NC, Islin, NJ & Irving, TX at Charlotte, North Carolina, USA",
+            "Charlotte, North Carolina, USA",
+        )
+        self.assertIn("Full Stack Developer (Java, Microservices, Spring Boot, API, ReactJS)", body)
+        self.assertIn("Backend Development Design, develop, and maintain scalable backend services.", body)
+        self.assertNotIn("data-cfemail", body)
+        self.assertNotIn("http://bit.ly", body)
+        self.assertNotIn("Thanks and Regards", body)
+
+    def test_parse_external_post_uses_clean_nvoids_title_and_plain_text_body(self) -> None:
+        html = """
+        <html><body>
+        <a>Home</a>
+        <table>
+          <tr><td>Full Stack Developer (Java, Microservices, Spring Boot, API, ReactJS) -- Charlotte, NC, Islin, NJ & Irving, TX at Charlotte, North Carolina, USA</td></tr>
+          <tr><td>Email: recruiter@example.com</td></tr>
+          <tr><td>Job description</td></tr>
+          <tr><td>Backend Development Design, develop, and maintain scalable backend services.</td></tr>
+          <tr><td>Thanks and Regards</td></tr>
+        </table>
+        </body></html>
+        """
+        post = parse_external_post(
+            source_type="nvoids",
+            source_url="https://nvoids.com/job_details.jsp?id=3445247&uid=abc",
+            title="Dirty fallback title",
+            location="Charlotte, North Carolina, USA",
+            posted_text="11:00 PM 07-May-26",
+            raw_body=html,
+            raw_html=html,
+        )
+        self.assertEqual(
+            post.role,
+            "Full Stack Developer (Java, Microservices, Spring Boot, API, ReactJS) -- Charlotte, NC, Islin, NJ & Irving, TX at Charlotte, North Carolina, USA",
+        )
+        self.assertNotIn("<tr>", post.raw_body)
+        self.assertNotIn("Thanks and Regards", post.raw_body)
 
 
 if __name__ == "__main__":

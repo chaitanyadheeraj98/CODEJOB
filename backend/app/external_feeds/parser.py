@@ -25,6 +25,104 @@ _NOISE_LINE_RE = re.compile(
     r"(?:job_kill|time taken|cloudflare|googletagmanager|server timeout|page[s]? not loading|cf-beacon|data-cfemail)",
     re.IGNORECASE,
 )
+_HTML_ROLE_NOISE_RE = re.compile(
+    r"(?:<br|</|<td|<tr|href=|data-cfemail|job description|thanks and regards)",
+    re.IGNORECASE,
+)
+_SKIP_DETAIL_TITLE_RE = re.compile(
+    r"^(?:home|email\s*:|from\s*:|http://|https://|www\.|hi\b|hope\b|job description\b|location\s*:|long term contract\b|thanks\b|thanks and regards\b|regards\b)",
+    re.IGNORECASE,
+)
+
+
+def _normalize_line(value: str) -> str:
+    line = re.sub(r"\s+", " ", str(value or "")).strip()
+    return line.strip(" |:-")
+
+
+def _is_meaningful_nvoids_title_line(line: str) -> bool:
+    normalized = _normalize_line(line)
+    if not normalized:
+        return False
+    if _SKIP_DETAIL_TITLE_RE.search(normalized):
+        return False
+    if _NOISE_LINE_RE.search(normalized) or _HTML_ROLE_NOISE_RE.search(normalized):
+        return False
+    if _EMAIL_RE.search(normalized) or normalized.lower().startswith("http"):
+        return False
+    return True
+
+
+def _has_meaningful_html_text(detail_html: str) -> bool:
+    if not detail_html:
+        return False
+    text = re.sub(r"<[^>]+>", " ", detail_html)
+    text = re.sub(r"\s+", " ", text).strip()
+    return bool(text)
+
+
+def extract_nvoids_detail_title(detail_html: str, fallback_title: str) -> str:
+    fallback = _normalize_line(fallback_title)
+    if BeautifulSoup is not None:
+        soup = BeautifulSoup(detail_html or "", "lxml")
+        for tag in soup(["script", "style", "noscript"]):
+            tag.decompose()
+        lines = [
+            _normalize_line(cell.get_text(" ", strip=True))
+            for cell in soup.find_all(["td", "th", "div", "p"])
+        ]
+    else:
+        text = re.sub(r"(?i)</(td|tr|div|p|br|li|h1|h2|h3|h4|h5|h6)>", "\n", detail_html or "")
+        text = re.sub(r"<[^>]+>", " ", text)
+        lines = [_normalize_line(line) for line in text.splitlines()]
+
+    saw_home = False
+    for line in lines:
+        if not line:
+            continue
+        if line.lower() == "home":
+            saw_home = True
+            continue
+        if saw_home and _is_meaningful_nvoids_title_line(line):
+            return line
+
+    for line in lines:
+        if _is_meaningful_nvoids_title_line(line):
+            return line
+    return fallback or fallback_title
+
+
+def extract_nvoids_clean_body(detail_html: str, fallback_title: str, location: str) -> str:
+    canonical_title = extract_nvoids_detail_title(detail_html, fallback_title)
+    body_text = _extract_detail_scope_text(detail_html)
+    lines: list[str] = []
+    seen: set[str] = set()
+    for raw_line in body_text.splitlines():
+        line = _normalize_line(raw_line)
+        if not line:
+            continue
+        lower = line.lower()
+        if _NOISE_LINE_RE.search(line) or _HTML_ROLE_NOISE_RE.search(line):
+            continue
+        if "cf_email" in lower or "email protected" in lower:
+            continue
+        if lower == "home" or lower.startswith("email:") or lower.startswith("from:"):
+            continue
+        if lower.startswith("http://") or lower.startswith("https://") or lower.startswith("www."):
+            continue
+        if lower.startswith("hi") or lower.startswith("hope"):
+            continue
+        if lower.startswith("thanks") or lower.startswith("regards"):
+            continue
+        if line in {canonical_title, _normalize_line(location)}:
+            continue
+        if line in seen:
+            continue
+        seen.add(line)
+        lines.append(line)
+
+    parts = [part for part in [canonical_title, _normalize_line(location), "\n".join(lines).strip()] if part]
+    return "\n".join(parts).strip()
 
 
 def parse_listing_rows(html: str, base_url: str) -> list[ParsedListingRow]:
@@ -103,7 +201,12 @@ def _extract_external_post_id(source_url: str) -> str:
 
 
 def parse_external_post(*, source_type: str, source_url: str, title: str, location: str, posted_text: str, raw_body: str, raw_html: str) -> ParsedExternalPost:
-    body = f"{title}\n{location}\n{raw_body}".strip()
+    canonical_title = _normalize_line(title)
+    if source_type == "nvoids" and _has_meaningful_html_text(raw_html):
+        canonical_title = extract_nvoids_detail_title(raw_html, canonical_title)
+        body = extract_nvoids_clean_body(raw_html, canonical_title, location)
+    else:
+        body = f"{canonical_title}\n{location}\n{raw_body}".strip()
     emails = _EMAIL_RE.findall(body)
     recruiter_phone = _extract_recruiter_phone(body)
     lc = body.lower()
@@ -127,7 +230,7 @@ def parse_external_post(*, source_type: str, source_url: str, title: str, locati
         external_post_id=external_post_id,
         source_url=source_url,
         posted_at=_parse_posted_at(posted_text),
-        role=title,
+        role=canonical_title or title,
         location=location,
         work_mode=work_mode,
         recruiter_email=(emails[0] if emails else ""),

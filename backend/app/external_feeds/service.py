@@ -554,6 +554,7 @@ class ExternalFeedService:
                 existing_email=existing,
                 external_thread_id=item.source_url or external_message_id,
                 routing_decision=routing_decision,
+                parsed_overrides={"role": item.role} if item.role else None,
             ),
             QueuePreparationDependencies(
                 parse_email=parse_email,
@@ -593,7 +594,7 @@ class ExternalFeedService:
             sender=recruiter_to,
             subject=subject,
             body=body,
-            role=str(preparation.parsed.get("role", subject)),
+            role=str(item.role or preparation.parsed.get("role", subject)),
             location=str(preparation.parsed.get("location", item.location or "")),
             salary_text=str(preparation.parsed.get("salary_text", item.rate or "")),
             skills_text=str(preparation.parsed.get("skills_text", item.skills_text or "")),

@@ -677,6 +677,62 @@ class ExternalFeedsApiTests(unittest.TestCase):
         finally:
             main.external_feed_service.scoring_runtime.compute_blended_ai_score = original_compute
 
+    def test_sync_uses_canonical_nvoids_title_and_clean_body_for_rules_fallback(self) -> None:
+        class _UglyNvoidsCollector(_FakeCollector):
+            def fetch_search_page(self, *, query: str, hotlist_mode: str = "Exclude Hotlists", page: int = 0) -> CollectedPage:
+                _ = query, hotlist_mode
+                if page > 0:
+                    return CollectedPage(url="https://nvoids.com/search_sph.jsp?p=1", html="<html><body></body></html>")
+                html = """
+                <table>
+                  <tr><td><a href='job_details.jsp?id=3445247&uid=abc'>Full Stack Developer (Java, Microservices, Spring Boot, API, ReactJS) -- Charlotte, NC, Islin, NJ & Irving, TX</a></td><td>Charlotte, North Carolina, USA</td><td>11:00 PM 07-May-26</td></tr>
+                </table>
+                """
+                return CollectedPage(url="https://nvoids.com/search_sph.jsp", html=html)
+
+            def fetch_detail_page(self, *, url: str) -> CollectedPage:
+                html = """
+                <html><body>
+                <a>Home</a>
+                <table>
+                  <tr><td>Full Stack Developer (Java, Microservices, Spring Boot, API, ReactJS) -- Charlotte, NC, Islin, NJ & Irving, TX at Charlotte, North Carolina, USA</td></tr>
+                  <tr><td>Email: saurabhampstek@gmail.com</td></tr>
+                  <tr><td>http://bit.ly/4ey8w48</td></tr>
+                  <tr><td>https://jobs.nvoids.com/job_details.jsp?id=3445247&uid=115e12ace9214a28804a59d7aa3da1ba</td></tr>
+                  <tr><td>Hi,</td></tr>
+                  <tr><td>Job description</td></tr>
+                  <tr><td>Backend Development Design, develop, and maintain scalable backend services using Java, Spring Boot, and Microservices architecture.</td></tr>
+                  <tr><td>Thanks and Regards</td></tr>
+                  <tr><td>data-cfemail protected</td></tr>
+                </table>
+                </body></html>
+                """
+                return CollectedPage(url=url, html=html)
+
+        original_collector = main.external_feed_service.collector
+        try:
+            main.external_feed_service.collector = _UglyNvoidsCollector()
+            sync = self.client.post("/external-feeds/nvoids/sync")
+            self.assertEqual(sync.status_code, 200, sync.text)
+
+            with self.SessionLocal() as db:
+                row = (
+                    db.query(RecruiterEmail)
+                    .filter(RecruiterEmail.owner_id == main.settings.owner_id, RecruiterEmail.source == "nvoids")
+                    .order_by(RecruiterEmail.id.desc())
+                    .first()
+                )
+                self.assertIsNotNone(row)
+                assert row is not None
+                expected_role = "Full Stack Developer (Java, Microservices, Spring Boot, API, ReactJS) -- Charlotte, NC, Islin, NJ & Irving, TX at Charlotte, North Carolina, USA"
+                self.assertEqual(row.role, expected_role)
+                self.assertIn(f"Subject: Application for {expected_role}", row.draft_reply or "")
+                self.assertNotIn("<br", row.draft_reply or "")
+                self.assertNotIn("data-cfemail", row.draft_reply or "")
+                self.assertNotIn("Thanks and Regards", row.draft_reply or "")
+        finally:
+            main.external_feed_service.collector = original_collector
+
     def test_sync_skips_queue_creation_when_employer_pool_cc_missing(self) -> None:
         with self.SessionLocal() as db:
             db.query(EmployerNumber).delete()
