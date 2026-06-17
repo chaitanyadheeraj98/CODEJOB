@@ -2513,6 +2513,13 @@ def sync_external_nvoids(
             max_items=resolved_batch_limit,
         )
     except Exception as exc:
+        logger.exception(
+            "nvoids_sync_endpoint_failed owner_id=%r batch_limit=%s semantic_enabled=%s ai_enabled=%s",
+            settings.owner_id,
+            resolved_batch_limit,
+            getattr(user_settings, "feature_semantic_enabled", None),
+            getattr(user_settings, "feature_ai_enabled", None),
+        )
         raise HTTPException(status_code=502, detail=f"nvoids_sync_failed: {exc}") from exc
     finally:
         telegram_action_lock.release()

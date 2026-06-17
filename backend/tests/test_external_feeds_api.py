@@ -733,6 +733,74 @@ class ExternalFeedsApiTests(unittest.TestCase):
         finally:
             main.external_feed_service.collector = original_collector
 
+    def test_sync_uses_structured_nvoids_detail_email_role_and_location(self) -> None:
+        class _StructuredNvoidsCollector(_FakeCollector):
+            def fetch_search_page(self, *, query: str, hotlist_mode: str = "Exclude Hotlists", page: int = 0) -> CollectedPage:
+                _ = query, hotlist_mode
+                if page > 0:
+                    return CollectedPage(url="https://nvoids.com/search_sph.jsp?p=1", html="<html><body></body></html>")
+                html = """
+                <table>
+                  <tr><td><a href='job_details.jsp?id=3550001&uid=abc'>Looking for GCP AI Engineer in Irving, TX, or Charlotte NC - Onsite</a></td><td>Irving, Texas, USA</td><td>04:49 AM 17-Jun-26</td></tr>
+                </table>
+                """
+                return CollectedPage(url="https://nvoids.com/search_sph.jsp", html=html)
+
+            def fetch_detail_page(self, *, url: str) -> CollectedPage:
+                html = """
+                <html><body>
+                <a href='index.jsp'>Home</a>
+                <table border="1">
+                  <tr><td>Looking for GCP AI Engineer in Irving, TX, or Charlotte NC - Onsite at Irving, Texas, USA</td></tr>
+                  <tr><td>Email: <a href='mailto:tanuja@digitaldhara.com'>tanuja@digitaldhara.com</a></td></tr>
+                  <tr><td>Job Title:</td></tr>
+                  <tr><td>GCP AI Engineer</td></tr>
+                  <tr><td>Location: Irving, TX, or Charlotte NC - Onsite</td></tr>
+                  <tr><td>Experience with Vertex AI, GKE, Python, and GenAI workflows.</td></tr>
+                  <tr><td>tanuja@digitaldhara.com | View All</td></tr>
+                  <tr><td>04:49 AM 17-Jun-26</td></tr>
+                </table>
+                <div>job_kill Pages not loading. Time Taken: 0. Footer Location: Dallas, Texas</div>
+                </body></html>
+                """
+                return CollectedPage(url=url, html=html)
+
+        original_collector = main.external_feed_service.collector
+        try:
+            main.external_feed_service.collector = _StructuredNvoidsCollector()
+            sync = self.client.post("/external-feeds/nvoids/sync")
+            self.assertEqual(sync.status_code, 200, sync.text)
+
+            with self.SessionLocal() as db:
+                ext = (
+                    db.query(ExternalOpportunity)
+                    .filter(ExternalOpportunity.owner_id == main.settings.owner_id, ExternalOpportunity.external_post_id == "nvoids:3550001")
+                    .first()
+                )
+                self.assertIsNotNone(ext)
+                assert ext is not None
+                self.assertEqual(ext.recruiter_email, "tanuja@digitaldhara.com")
+                self.assertEqual(ext.role, "GCP AI Engineer")
+                self.assertEqual(ext.location, "Irving, TX, or Charlotte NC - Onsite")
+                self.assertIn("Vertex AI, GKE, Python, and GenAI workflows.", ext.raw_body)
+                self.assertNotIn("job_kill", ext.raw_body)
+                self.assertNotIn("View All", ext.raw_body)
+
+                row = (
+                    db.query(RecruiterEmail)
+                    .filter(RecruiterEmail.owner_id == main.settings.owner_id, RecruiterEmail.source == "nvoids")
+                    .order_by(RecruiterEmail.id.desc())
+                    .first()
+                )
+                self.assertIsNotNone(row)
+                assert row is not None
+                self.assertEqual(row.recipient_email, "tanuja@digitaldhara.com")
+                self.assertEqual(row.role, "GCP AI Engineer")
+                self.assertIn("Subject: Application for GCP AI Engineer", row.draft_reply or "")
+                self.assertNotIn("job_kill", row.draft_reply or "")
+        finally:
+            main.external_feed_service.collector = original_collector
+
     def test_sync_skips_queue_creation_when_employer_pool_cc_missing(self) -> None:
         with self.SessionLocal() as db:
             db.query(EmployerNumber).delete()

@@ -3,6 +3,7 @@ import unittest
 from app.external_feeds.parser import (
     extract_nvoids_clean_body,
     extract_nvoids_detail_title,
+    parse_nvoids_detail,
     parse_external_post,
     parse_job_detail_contacts,
     parse_listing_rows,
@@ -21,6 +22,17 @@ class ExternalFeedsParserTests(unittest.TestCase):
         self.assertEqual(rows[0].title, "Senior Python Developer")
         self.assertEqual(rows[0].location, "Dallas, Texas, USA")
         self.assertIn("job1.jsp?id=1", rows[0].href)
+
+    def test_parse_listing_rows_rejects_fake_search_artifact_titles(self) -> None:
+        html = """
+        <table>
+          <tr><td><a href='job_details.jsp?id=1'>A collection of search strings</a></td><td>Texas</td><td>11:00 PM 07-May-26</td></tr>
+          <tr><td><a href='job_details.jsp?id=2'>Senior Java Developer</a></td><td>Dallas, Texas, USA</td><td>10:00 PM 07-May-26</td></tr>
+        </table>
+        """
+        rows = parse_listing_rows(html, "https://www.nvoids.com/search_sph.jsp")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].title, "Senior Java Developer")
 
     def test_parse_external_post_extracts_contact_hints(self) -> None:
         post = parse_external_post(
@@ -91,6 +103,57 @@ class ExternalFeedsParserTests(unittest.TestCase):
         self.assertEqual(name, "Jane Recruiter")
         self.assertIn("214", phone)
 
+    def test_parse_job_detail_contacts_prefers_mailto_and_role_table_scope(self) -> None:
+        html = """
+        <html><body>
+        <a>Home</a>
+        <table>
+          <tr><td>Application Architect - AWS Cloud Migration at Dallas, Texas, USA</td></tr>
+          <tr><td>Email: <a href='mailto:nupur.kumari@tanishasystems.com'>nupur.kumari@tanishasystems.com</a></td></tr>
+          <tr><td>From</td></tr>
+          <tr><td>Nupur Kumari</td></tr>
+          <tr><td>Phone: +1 (214) 555-1212</td></tr>
+          <tr><td>Job Title: Application Architect - AWS Cloud Migration</td></tr>
+          <tr><td>Location: Dallas TX (ONSITE)</td></tr>
+          <tr><td>AWS Outposts and Java 17 migration support.</td></tr>
+          <tr><td>View All</td></tr>
+          <tr><td>04:49 AM 17-Jun-26</td></tr>
+        </table>
+        <div>job_kill Pages not loading Time Taken footer Location: Dallas, Texas</div>
+        </body></html>
+        """
+        email, phone, name = parse_job_detail_contacts(html)
+        self.assertEqual(email, "nupur.kumari@tanishasystems.com")
+        self.assertEqual(name, "Nupur Kumari")
+        self.assertIn("214", phone)
+
+    def test_parse_nvoids_detail_extracts_structured_rows(self) -> None:
+        html = """
+        <html><body>
+        <a href='index.jsp'>Home</a>
+        <table border="1">
+          <tr><td>Looking for GCP AI Engineer in Irving, TX, or Charlotte NC - Onsite at Irving, Texas, USA</td></tr>
+          <tr><td>Email: <a href='mailto:tanuja@digitaldhara.com'>tanuja@digitaldhara.com</a></td></tr>
+          <tr><td>Job Title:</td></tr>
+          <tr><td>GCP AI Engineer</td></tr>
+          <tr><td>Location: Irving, TX, or Charlotte NC - Onsite</td></tr>
+          <tr><td>Experience with Vertex AI, GKE, Python, and GenAI workflows.</td></tr>
+          <tr><td>tanuja@digitaldhara.com | View All</td></tr>
+          <tr><td>04:49 AM 17-Jun-26</td></tr>
+        </table>
+        <div>job_kill Time Taken footer Location: Dallas, Texas</div>
+        </body></html>
+        """
+        detail = parse_nvoids_detail(html, "Fallback Title", "Fallback Location")
+        self.assertEqual(detail.listing_subject, "Looking for GCP AI Engineer in Irving, TX, or Charlotte NC - Onsite at Irving, Texas, USA")
+        self.assertEqual(detail.recruiter_email, "tanuja@digitaldhara.com")
+        self.assertEqual(detail.repeated_email, "tanuja@digitaldhara.com")
+        self.assertEqual(detail.posted_text, "04:49 AM 17-Jun-26")
+        self.assertEqual(detail.role, "GCP AI Engineer")
+        self.assertEqual(detail.location, "Irving, TX, or Charlotte NC - Onsite")
+        self.assertIn("Vertex AI, GKE, Python, and GenAI workflows.", detail.body)
+        self.assertNotIn("job_kill", detail.body)
+
     def test_extract_nvoids_detail_title_prefers_first_meaningful_row_after_home(self) -> None:
         html = """
         <html><body>
@@ -135,6 +198,7 @@ class ExternalFeedsParserTests(unittest.TestCase):
         self.assertNotIn("data-cfemail", body)
         self.assertNotIn("http://bit.ly", body)
         self.assertNotIn("Thanks and Regards", body)
+        self.assertNotIn("Charlotte, North Carolina, USA\nCharlotte, North Carolina, USA", body)
 
     def test_parse_external_post_uses_clean_nvoids_title_and_plain_text_body(self) -> None:
         html = """
@@ -143,9 +207,11 @@ class ExternalFeedsParserTests(unittest.TestCase):
         <table>
           <tr><td>Full Stack Developer (Java, Microservices, Spring Boot, API, ReactJS) -- Charlotte, NC, Islin, NJ & Irving, TX at Charlotte, North Carolina, USA</td></tr>
           <tr><td>Email: recruiter@example.com</td></tr>
-          <tr><td>Job description</td></tr>
+          <tr><td>Job Title: Full Stack Developer</td></tr>
+          <tr><td>Location: Charlotte, NC, Islin, NJ & Irving, TX</td></tr>
           <tr><td>Backend Development Design, develop, and maintain scalable backend services.</td></tr>
           <tr><td>Thanks and Regards</td></tr>
+          <tr><td>11:00 PM 07-May-26</td></tr>
         </table>
         </body></html>
         """
@@ -158,12 +224,12 @@ class ExternalFeedsParserTests(unittest.TestCase):
             raw_body=html,
             raw_html=html,
         )
-        self.assertEqual(
-            post.role,
-            "Full Stack Developer (Java, Microservices, Spring Boot, API, ReactJS) -- Charlotte, NC, Islin, NJ & Irving, TX at Charlotte, North Carolina, USA",
-        )
+        self.assertEqual(post.role, "Full Stack Developer")
+        self.assertEqual(post.location, "Charlotte, NC, Islin, NJ & Irving, TX")
+        self.assertEqual(post.recruiter_email, "recruiter@example.com")
         self.assertNotIn("<tr>", post.raw_body)
         self.assertNotIn("Thanks and Regards", post.raw_body)
+        self.assertIn("Backend Development Design, develop, and maintain scalable backend services.", post.raw_body)
 
 
 if __name__ == "__main__":

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from urllib.parse import urlencode
 
 import httpx
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -41,8 +45,31 @@ class NvoidsCollector:
         }
         with httpx.Client(timeout=self.timeout_seconds, follow_redirects=True, headers=headers) as client:
             # nvoids accepts query via both landing and search page flows; send direct search endpoint.
-            res = client.get("https://nvoids.com/search_sph.jsp", params=params)
+            logger.info(
+                "nvoids_fetch_search_start page=%s timeout_seconds=%.1f query=%r hotlist_mode=%r",
+                page,
+                self.timeout_seconds,
+                query,
+                hotlist_mode,
+            )
+            try:
+                res = client.get("https://nvoids.com/search_sph.jsp", params=params)
+            except Exception:
+                logger.exception(
+                    "nvoids_fetch_search_failed page=%s timeout_seconds=%.1f query=%r",
+                    page,
+                    self.timeout_seconds,
+                    query,
+                )
+                raise
             res.raise_for_status()
+            logger.info(
+                "nvoids_fetch_search_ok page=%s final_url=%r status_code=%s chars=%s",
+                page,
+                str(res.url),
+                res.status_code,
+                len(res.text or ""),
+            )
             return CollectedPage(url=str(res.url), html=res.text)
 
     def fetch_detail_page(self, *, url: str) -> CollectedPage:
@@ -51,6 +78,18 @@ class NvoidsCollector:
             "Accept": "text/html,application/xhtml+xml",
         }
         with httpx.Client(timeout=self.timeout_seconds, follow_redirects=True, headers=headers) as client:
-            res = client.get(url)
+            logger.info("nvoids_fetch_detail_start timeout_seconds=%.1f url=%r", self.timeout_seconds, url)
+            try:
+                res = client.get(url)
+            except Exception:
+                logger.exception("nvoids_fetch_detail_failed timeout_seconds=%.1f url=%r", self.timeout_seconds, url)
+                raise
             res.raise_for_status()
+            logger.info(
+                "nvoids_fetch_detail_ok url=%r final_url=%r status_code=%s chars=%s",
+                url,
+                str(res.url),
+                res.status_code,
+                len(res.text or ""),
+            )
             return CollectedPage(url=str(res.url), html=res.text)

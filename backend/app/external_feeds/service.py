@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import logging
 import re
 
 from sqlalchemy import or_
@@ -26,6 +27,9 @@ from .dedupe import build_dedupe_hash
 from .models import ExternalFeedSource, ExternalOpportunity, ExternalScrapeRun
 from .parser import parse_external_post, parse_job_detail_contacts, parse_listing_rows
 from .types import ExternalFeedSyncResult
+
+
+logger = logging.getLogger(__name__)
 
 
 class ExternalFeedService:
@@ -126,6 +130,20 @@ class ExternalFeedService:
         failed_count = 0
         skipped_location_count = 0
         consecutive_duplicate_pages = 0
+        enqueue_attempts = 0
+        enqueue_successes = 0
+
+        logger.info(
+            "nvoids_sync_start owner_id=%r max_pages=%s max_items=%s query=%r locations=%s semantic_enabled=%s ai_enabled=%s threshold=%s",
+            owner_id,
+            max_pages,
+            max_items,
+            query,
+            location_filters,
+            getattr(user_settings, "feature_semantic_enabled", None),
+            getattr(user_settings, "feature_ai_enabled", None),
+            getattr(user_settings, "qualification_threshold", None),
+        )
 
         try:
             for page in range(max_pages):
@@ -135,6 +153,7 @@ class ExternalFeedService:
                     page=page,
                 )
                 rows = parse_listing_rows(collected.html, collected.url)
+                logger.info("nvoids_sync_page_loaded page=%s rows=%s url=%r", page, len(rows), collected.url)
                 if not rows:
                     break
                 page_deduped = 0
@@ -144,6 +163,13 @@ class ExternalFeedService:
                     fetched_count += 1
                     if not self.row_matches_locations(row.location, location_filters):
                         skipped_location_count += 1
+                        logger.info(
+                            "nvoids_sync_skip_location page=%s title=%r location=%r allowed_locations=%s",
+                            page,
+                            row.title,
+                            row.location,
+                            location_filters,
+                        )
                         continue
                     detail_html = ""
                     detail_url = row.href
@@ -174,6 +200,15 @@ class ExternalFeedService:
                                 "parse_confidence": max(parsed.parse_confidence, 0.8),
                             }
                         )
+                    logger.info(
+                        "nvoids_sync_row_parsed page=%s external_post_id=%r role=%r recruiter_email=%r recruiter_phone=%r confidence=%.2f",
+                        page,
+                        parsed.external_post_id,
+                        parsed.role,
+                        parsed.recruiter_email,
+                        parsed.recruiter_phone,
+                        parsed.parse_confidence,
+                    )
                     dedupe_hash = build_dedupe_hash(
                         recruiter_phone=parsed.recruiter_phone,
                         recruiter_email=parsed.recruiter_email,
@@ -197,6 +232,12 @@ class ExternalFeedService:
                     if exists:
                         deduped_count += 1
                         page_deduped += 1
+                        logger.info(
+                            "nvoids_sync_row_deduped page=%s external_post_id=%r dedupe_hash=%r",
+                            page,
+                            parsed.external_post_id,
+                            dedupe_hash,
+                        )
                         continue
 
                     record = ExternalOpportunity(
@@ -227,7 +268,10 @@ class ExternalFeedService:
                     db.flush()
                     if self._bridge_to_recruiter_opportunity(db, owner_id=owner_id, item=record):
                         record.bridge_status = "bridged"
-                    self._enqueue_needs_review_candidate(db, owner_id=owner_id, item=record)
+                    enqueue_attempts += 1
+                    enqueued = self._enqueue_needs_review_candidate(db, owner_id=owner_id, item=record)
+                    if enqueued:
+                        enqueue_successes += 1
                     created_count += 1
 
                 db.commit()
@@ -250,6 +294,18 @@ class ExternalFeedService:
                 run.notes = f"skipped_location_count={skipped_location_count}"
             db.commit()
             db.refresh(run)
+            logger.info(
+                "nvoids_sync_complete owner_id=%r fetched=%s created=%s deduped=%s skipped_location=%s failed=%s enqueue_attempts=%s enqueue_successes=%s run_id=%s",
+                owner_id,
+                fetched_count,
+                created_count,
+                deduped_count,
+                skipped_location_count,
+                failed_count,
+                enqueue_attempts,
+                enqueue_successes,
+                run.id,
+            )
             return ExternalFeedSyncResult(
                 source_type="nvoids",
                 fetched_count=fetched_count,
@@ -487,6 +543,12 @@ class ExternalFeedService:
     def _enqueue_needs_review_candidate(self, db: Session, *, owner_id: str, item: ExternalOpportunity) -> bool:
         recruiter_to = extract_email_address(item.recruiter_email or "")
         if not recruiter_to:
+            logger.info(
+                "nvoids_enqueue_skip reason=no_recruiter_email external_post_id=%r role=%r raw_recruiter_email=%r",
+                item.external_post_id,
+                item.role,
+                item.recruiter_email,
+            )
             return False
         external_message_id = f"nvoids:{item.external_post_id}"
         existing = (
@@ -495,9 +557,19 @@ class ExternalFeedService:
             .first()
         )
         if existing:
+            logger.info(
+                "nvoids_enqueue_skip reason=duplicate_candidate external_post_id=%r candidate_id=%s",
+                item.external_post_id,
+                existing.id,
+            )
             return False
         cc_email = self._pick_cc_from_employer_pool(db, owner_id=owner_id, exclude=recruiter_to)
         if not cc_email:
+            logger.info(
+                "nvoids_enqueue_skip reason=no_cc_pool_match external_post_id=%r recruiter_to=%r",
+                item.external_post_id,
+                recruiter_to,
+            )
             return False
         body = item.raw_body or item.role or ""
         subject = item.role or "Nvoids Opportunity"
@@ -588,6 +660,20 @@ class ExternalFeedService:
         if selected_resume and preparation.resume_embedding_json and selected_resume.semantic_embedding != preparation.resume_embedding_json:
             selected_resume.semantic_embedding = preparation.resume_embedding_json
         if preparation.outcome != "needs_review":
+            logger.info(
+                "nvoids_enqueue_skip reason=queue_preparation_outcome external_post_id=%r outcome=%r role=%r ai_score=%.3f threshold=%.3f hard_filter=%r skip_reason=%r auto_reject_reason=%r routing_status=%r draft_source=%r semantic_source=%r",
+                item.external_post_id,
+                preparation.outcome,
+                parsed.get("role"),
+                preparation.ai_score,
+                threshold,
+                preparation.hard_filter_reason,
+                preparation.skip_reason,
+                preparation.auto_reject_reason,
+                getattr(preparation.routing_decision, "status", None),
+                preparation.draft_source,
+                getattr(preparation.semantic_diag, "input_source", None),
+            )
             return False
         email = RecruiterEmail(
             owner_id=owner_id,
@@ -638,6 +724,17 @@ class ExternalFeedService:
             routing_confirmed=False,
             resume_asset_id=selected_resume.id if selected_resume else None,
             resume_file_name=selected_resume.file_name if selected_resume else None,
+        )
+        logger.info(
+            "nvoids_enqueue_success external_post_id=%r recruiter_to=%r cc_email=%r role=%r ai_score=%.3f resume_id=%r resume_name=%r draft_source=%r",
+            item.external_post_id,
+            recruiter_to,
+            cc_email,
+            email.role,
+            preparation.ai_score,
+            email.resume_asset_id,
+            email.resume_file_name,
+            email.draft_source,
         )
         db.add(email)
         return True
