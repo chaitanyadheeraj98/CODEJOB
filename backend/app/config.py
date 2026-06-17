@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     semantic_embedding_fallback_model: str = "openai/text-embedding-3-small"
     semantic_embedding_sbert_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     semantic_embedding_sbert_device: str = "cpu"
+    hf_token: str = Field(
+        default="",
+        validation_alias=AliasChoices("HF_TOKEN", "HUGGINGFACE_HUB_TOKEN"),
+    )
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     semantic_embedding_timeout_seconds: float = 20.0

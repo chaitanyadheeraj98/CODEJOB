@@ -1,11 +1,14 @@
 import os
+import sys
 import unittest
 from contextlib import contextmanager
+from types import SimpleNamespace
 from unittest.mock import patch
 
 os.environ["DEBUG"] = "false"
 
 from app.config import settings
+from app.semantic import embeddings_service
 from app.semantic.embeddings_service import generate_embedding
 
 
@@ -104,6 +107,34 @@ class EmbeddingsServiceTests(unittest.TestCase):
         latency_call = warning.call_args_list[-1]
         self.assertEqual(latency_call.args[1], "sbert")
         self.assertEqual(latency_call.args[2], "sentence-transformers/all-MiniLM-L6-v2")
+
+    def test_sbert_model_load_passes_hf_token(self) -> None:
+        previous_instance = embeddings_service._sbert_model_instance
+        previous_name = embeddings_service._sbert_model_name
+        previous_device = embeddings_service._sbert_model_device
+        embeddings_service._sbert_model_instance = None
+        embeddings_service._sbert_model_name = ""
+        embeddings_service._sbert_model_device = ""
+        try:
+            with self._settings(
+                hf_token="hf_test_token",
+                semantic_embedding_sbert_device="cpu",
+            ):
+                fake_constructor = SimpleNamespace()
+                fake_module = SimpleNamespace(SentenceTransformer=lambda *args, **kwargs: fake_constructor)
+                with patch.dict(sys.modules, {"sentence_transformers": fake_module}):
+                    with patch.object(fake_module, "SentenceTransformer", return_value=fake_constructor) as constructor:
+                        model = embeddings_service._load_sbert_model("sentence-transformers/all-MiniLM-L6-v2", "cpu")
+            self.assertIsNotNone(model)
+            constructor.assert_called_once_with(
+                "sentence-transformers/all-MiniLM-L6-v2",
+                device="cpu",
+                token="hf_test_token",
+            )
+        finally:
+            embeddings_service._sbert_model_instance = previous_instance
+            embeddings_service._sbert_model_name = previous_name
+            embeddings_service._sbert_model_device = previous_device
 
 
 if __name__ == "__main__":

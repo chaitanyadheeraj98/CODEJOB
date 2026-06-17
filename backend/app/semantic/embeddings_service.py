@@ -86,7 +86,12 @@ def _load_sbert_model(model_name: str, device: str):
             from sentence_transformers import SentenceTransformer
         except Exception as exc:
             raise RuntimeError("SBERT dependency missing: install sentence-transformers") from exc
-        model = SentenceTransformer(model_name, device=device)
+        hf_token = (settings.hf_token or "").strip() or None
+        model = SentenceTransformer(
+            model_name,
+            device=device,
+            token=hf_token,
+        )
         _sbert_model_instance = model
         _sbert_model_name = model_name
         _sbert_model_device = device
