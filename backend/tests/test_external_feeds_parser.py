@@ -172,6 +172,37 @@ class ExternalFeedsParserTests(unittest.TestCase):
             "Full Stack Developer (Java, Microservices, Spring Boot, API, ReactJS) -- Charlotte, NC, Islin, NJ & Irving, TX at Charlotte, North Carolina, USA",
         )
 
+    def test_extract_nvoids_detail_title_returns_fallback_for_empty_html(self) -> None:
+        self.assertEqual(
+            extract_nvoids_detail_title("", "Fallback Java Developer"),
+            "Fallback Java Developer",
+        )
+
+    def test_parse_nvoids_detail_returns_safe_fallback_for_empty_html(self) -> None:
+        detail = parse_nvoids_detail("", "Fallback Title", "Dallas, TX")
+        self.assertEqual(detail.listing_subject, "Fallback Title")
+        self.assertEqual(detail.role, "Fallback Title")
+        self.assertEqual(detail.location, "Dallas, TX")
+        self.assertEqual(detail.recruiter_email, "")
+        self.assertEqual(detail.recruiter_phone, "")
+        self.assertEqual(detail.body, "")
+
+    def test_parse_job_detail_contacts_returns_empty_for_empty_html(self) -> None:
+        self.assertEqual(parse_job_detail_contacts(""), ("", "", ""))
+
+    def test_parse_nvoids_detail_malformed_html_does_not_recurse(self) -> None:
+        html = """
+        <html><body>
+        <table>
+          <tr><td>https://jobs.nvoids.com/job_details.jsp?id=1&uid=abc</td></tr>
+          <tr><td>Email: recruiter@example.com</td></tr>
+        </table>
+        </body></html>
+        """
+        detail = parse_nvoids_detail(html, "Fallback Title", "Fallback Location")
+        self.assertEqual(detail.listing_subject, "Fallback Title")
+        self.assertEqual(detail.recruiter_email, "recruiter@example.com")
+
     def test_extract_nvoids_clean_body_removes_html_noise_and_preserves_readable_text(self) -> None:
         html = """
         <html><body>

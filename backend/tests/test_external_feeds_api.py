@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from types import SimpleNamespace
 
+import httpx
 os.environ["DEBUG"] = "false"
 
 from fastapi.testclient import TestClient
@@ -800,6 +801,66 @@ class ExternalFeedsApiTests(unittest.TestCase):
                 self.assertNotIn("job_kill", row.draft_reply or "")
         finally:
             main.external_feed_service.collector = original_collector
+
+    def test_sync_continues_when_detail_fetch_times_out(self) -> None:
+        class _TimeoutCollector(_FakeCollector):
+            def fetch_detail_page(self, *, url: str) -> CollectedPage:
+                if "id=1" in url:
+                    raise httpx.ReadTimeout("The read operation timed out")
+                return super().fetch_detail_page(url=url)
+
+        original_collector = main.external_feed_service.collector
+        try:
+            main.external_feed_service.collector = _TimeoutCollector()
+            sync = self.client.post("/external-feeds/nvoids/sync")
+            self.assertEqual(sync.status_code, 200, sync.text)
+
+            with self.SessionLocal() as db:
+                ext_rows = (
+                    db.query(ExternalOpportunity)
+                    .filter(ExternalOpportunity.owner_id == main.settings.owner_id, ExternalOpportunity.source_type == "nvoids")
+                    .order_by(ExternalOpportunity.external_post_id.asc())
+                    .all()
+                )
+                self.assertEqual(len(ext_rows), 2)
+                timed_out_row = next(row for row in ext_rows if row.external_post_id == "nvoids:1")
+                self.assertEqual(timed_out_row.recruiter_email, "")
+                self.assertEqual(timed_out_row.role, "Senior Python Developer")
+                self.assertEqual(timed_out_row.location, "Dallas, Texas, USA")
+        finally:
+            main.external_feed_service.collector = original_collector
+
+    def test_sync_continues_when_one_row_parser_fails(self) -> None:
+        original_parse_external_post = external_feed_service_module.parse_external_post
+
+        def _boom(*, source_type: str, source_url: str, title: str, location: str, posted_text: str, raw_body: str, raw_html: str):
+            if title == "Senior Python Developer":
+                raise RuntimeError("forced row parse failure")
+            return original_parse_external_post(
+                source_type=source_type,
+                source_url=source_url,
+                title=title,
+                location=location,
+                posted_text=posted_text,
+                raw_body=raw_body,
+                raw_html=raw_html,
+            )
+
+        external_feed_service_module.parse_external_post = _boom
+        try:
+            sync = self.client.post("/external-feeds/nvoids/sync")
+            self.assertEqual(sync.status_code, 200, sync.text)
+
+            with self.SessionLocal() as db:
+                ext_rows = (
+                    db.query(ExternalOpportunity)
+                    .filter(ExternalOpportunity.owner_id == main.settings.owner_id, ExternalOpportunity.source_type == "nvoids")
+                    .all()
+                )
+                self.assertEqual(len(ext_rows), 1)
+                self.assertEqual(ext_rows[0].external_post_id, "nvoids:2")
+        finally:
+            external_feed_service_module.parse_external_post = original_parse_external_post
 
     def test_sync_skips_queue_creation_when_employer_pool_cc_missing(self) -> None:
         with self.SessionLocal() as db:

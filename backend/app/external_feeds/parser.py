@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from datetime import UTC, datetime
 from urllib.parse import parse_qs, urljoin, urlparse
@@ -12,6 +13,9 @@ except ModuleNotFoundError:  # pragma: no cover - fallback path for minimal envs
     BeautifulSoup = None
 
 from .types import ParsedExternalPost, ParsedListingRow, ParsedNvoidsDetail
+
+
+logger = logging.getLogger(__name__)
 
 _EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
 _PHONE_RE = re.compile(r"(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4})")
@@ -276,7 +280,28 @@ def _extract_nvoids_table_rows(detail_html: str) -> tuple[list[str], list[str]]:
     return row_texts, row_htmls
 
 
+def _fallback_nvoids_detail(fallback_title: str, fallback_location: str) -> ParsedNvoidsDetail:
+    normalized_title = _normalize_line(fallback_title)
+    normalized_location = _normalize_line(fallback_location)
+    return ParsedNvoidsDetail(
+        listing_subject=normalized_title,
+        recruiter_email="",
+        recruiter_phone="",
+        recruiter_name="",
+        body="",
+        repeated_email="",
+        posted_text="",
+        role=normalized_title,
+        location=normalized_location,
+        raw_table_text="",
+        parse_confidence=0.15,
+    )
+
+
 def parse_nvoids_detail(detail_html: str, fallback_title: str, fallback_location: str) -> ParsedNvoidsDetail:
+    if not (detail_html or "").strip():
+        logger.info("nvoids_parse_detail_skipped_empty_html fallback_title=%r", fallback_title)
+        return _fallback_nvoids_detail(fallback_title, fallback_location)
     row_texts, row_htmls = _extract_nvoids_table_rows(detail_html)
     listing_subject = ""
     posted_text = ""
@@ -284,7 +309,7 @@ def parse_nvoids_detail(detail_html: str, fallback_title: str, fallback_location
     repeated_email = ""
 
     for row_text, row_html in zip(row_texts, row_htmls):
-        if not listing_subject and _looks_like_listing_title(row_text):
+        if not listing_subject and _is_meaningful_nvoids_title_line(row_text) and _looks_like_listing_title(row_text):
             listing_subject = row_text
         if not recruiter_email and row_text.lower().startswith("email:"):
             emails = _extract_emails_from_fragment(row_html, row_text)
@@ -367,8 +392,16 @@ def parse_nvoids_detail(detail_html: str, fallback_title: str, fallback_location
 
 
 def extract_nvoids_detail_title(detail_html: str, fallback_title: str) -> str:
-    detail = parse_nvoids_detail(detail_html, fallback_title, "")
-    return detail.listing_subject or _normalize_line(fallback_title) or fallback_title
+    row_texts, _row_htmls = _extract_nvoids_table_rows(detail_html)
+    for row_text in row_texts:
+        normalized = _normalize_line(row_text)
+        if _is_meaningful_nvoids_title_line(normalized) and _looks_like_listing_title(normalized):
+            return normalized
+    for row_text in row_texts:
+        normalized = _normalize_line(row_text)
+        if _is_meaningful_nvoids_title_line(normalized):
+            return normalized
+    return _normalize_line(fallback_title) or fallback_title
 
 
 def extract_nvoids_clean_body(detail_html: str, fallback_title: str, location: str) -> str:
@@ -515,6 +548,9 @@ def parse_external_post(*, source_type: str, source_url: str, title: str, locati
 
 
 def parse_job_detail_contacts(detail_html: str) -> tuple[str, str, str]:
+    if not (detail_html or "").strip():
+        logger.info("nvoids_parse_contacts_skipped_empty_html")
+        return "", "", ""
     detail = parse_nvoids_detail(detail_html, "", "")
     recruiter_email = detail.recruiter_email
     recruiter_phone = detail.recruiter_phone

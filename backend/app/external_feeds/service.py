@@ -173,6 +173,10 @@ class ExternalFeedService:
                         continue
                     detail_html = ""
                     detail_url = row.href
+                    recruiter_email = ""
+                    recruiter_phone = ""
+                    recruiter_name = ""
+                    fallback_used = False
                     try:
                         detail_page = self.collector.fetch_detail_page(url=row.href)
                         detail_html = detail_page.html
@@ -180,16 +184,37 @@ class ExternalFeedService:
                     except Exception:
                         # Keep ingestion resilient: listing row still ingests even if one detail page fails.
                         failed_count += 1
-                    recruiter_email, recruiter_phone, recruiter_name = parse_job_detail_contacts(detail_html)
-                    parsed = parse_external_post(
-                        source_type="nvoids",
-                        source_url=detail_url,
-                        title=row.title,
-                        location=row.location,
-                        posted_text=row.posted_text,
-                        raw_body=detail_html or row.title,
-                        raw_html=detail_html or collected.html,
-                    )
+                        fallback_used = True
+                        logger.warning(
+                            "nvoids_sync_row_detail_fetch_failed page=%s title=%r href=%r",
+                            page,
+                            row.title,
+                            row.href,
+                        )
+                    try:
+                        if detail_html.strip():
+                            recruiter_email, recruiter_phone, recruiter_name = parse_job_detail_contacts(detail_html)
+                        else:
+                            fallback_used = True
+                        parsed = parse_external_post(
+                            source_type="nvoids",
+                            source_url=detail_url,
+                            title=row.title,
+                            location=row.location,
+                            posted_text=row.posted_text,
+                            raw_body=detail_html or "",
+                            raw_html=detail_html or "",
+                        )
+                    except Exception:
+                        failed_count += 1
+                        logger.exception(
+                            "nvoids_sync_row_parse_failed page=%s title=%r href=%r detail_html_present=%s",
+                            page,
+                            row.title,
+                            row.href,
+                            bool(detail_html.strip()),
+                        )
+                        continue
                     if recruiter_email:
                         parsed = parsed.__class__(
                             **{
@@ -199,6 +224,15 @@ class ExternalFeedService:
                                 "recruiter_name": recruiter_name or parsed.recruiter_name,
                                 "parse_confidence": max(parsed.parse_confidence, 0.8),
                             }
+                        )
+                    if fallback_used:
+                        logger.info(
+                            "nvoids_sync_row_fallback_used page=%s external_post_id=%r title=%r detail_html_present=%s recruiter_email=%r",
+                            page,
+                            parsed.external_post_id,
+                            row.title,
+                            bool(detail_html.strip()),
+                            parsed.recruiter_email,
                         )
                     logger.info(
                         "nvoids_sync_row_parsed page=%s external_post_id=%r role=%r recruiter_email=%r recruiter_phone=%r confidence=%.2f",
