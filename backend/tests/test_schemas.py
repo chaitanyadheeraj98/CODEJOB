@@ -54,6 +54,7 @@ class EmailResponseRoutingTests(unittest.TestCase):
             routing_confirmed=False,
             resume_asset_id=None,
             resume_file_name=None,
+            parser_details_json='{"parser_version":"spacy_enrichment_v1","merged_result":{"role":"Java Developer"}}',
             sent_at=None,
             gmail_sent_id=None,
             last_error=None,
@@ -65,6 +66,7 @@ class EmailResponseRoutingTests(unittest.TestCase):
 
         self.assertEqual(response.routing_evidence[0].email, "recruiter@example.com")
         self.assertEqual(response.routing_candidates, [])
+        self.assertEqual(response.parser_details, {"parser_version": "spacy_enrichment_v1", "merged_result": {"role": "Java Developer"}})
 
     def test_settings_request_accepts_employer_domains(self) -> None:
         payload = SettingsRequest.model_validate({"employer_domains": ["horizonsofttech.net"]})

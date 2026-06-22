@@ -68,6 +68,7 @@ class RecruiterEmail(Base):
     routing_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
     resume_asset_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     resume_file_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    parser_details_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     gmail_sent_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)

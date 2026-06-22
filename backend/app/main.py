@@ -79,6 +79,7 @@ from app.phase0 import (
     is_recruiter_like,
     normalize_employer_domains,
     parse_email,
+    parse_email_with_details,
     should_block_f2f,
 )
 from app.routing import RoutingDecision
@@ -1161,6 +1162,7 @@ def _serialize_candidate_for_review(db: Session, email: RecruiterEmail) -> Email
     _hydrate_candidates_for_review(db, [email])
     payload = EmailResponse.model_validate(email).model_dump()
     payload["attachment_file_names"] = _enabled_attachment_file_names(db)
+    payload["parser_details"] = email.parser_details_json
     return EmailResponse.model_validate(payload)
 
 
@@ -1789,7 +1791,7 @@ def automation_run_once(payload: AutomationRunRequest | None = None, db: Session
 @app.post("/phase0/emails/ingest", response_model=EmailResponse)
 def ingest_email(payload: IngestEmailRequest, db: Session = Depends(get_db)) -> RecruiterEmail:
     user_settings = _get_settings(db)
-    parsed = parse_email(payload.subject, payload.body)
+    parsed, parser_details = parse_email_with_details(payload.subject, payload.body, source="manual")
     hard_pass, hard_reason = hard_filter_check(parsed, user_settings)
     active_resume = _active_resume(db)
     resume_selection = _select_best_resume_match(
@@ -1860,6 +1862,7 @@ def ingest_email(payload: IngestEmailRequest, db: Session = Depends(get_db)) -> 
         approval_status="pending",
         sent_status="not_sent",
         source="manual",
+        parser_details_json=json.dumps(parser_details, separators=(",", ":")),
     )
     db.add(email)
     if selected_resume and resume_embedding_json and selected_resume.semantic_embedding != resume_embedding_json:
@@ -1931,6 +1934,7 @@ def list_candidates(
                 {
                     **EmailResponse.model_validate(item).model_dump(),
                     "attachment_file_names": attachment_file_names,
+                    "parser_details": item.parser_details_json,
                 }
             )
             for item in visible

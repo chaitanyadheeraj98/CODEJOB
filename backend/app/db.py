@@ -277,6 +277,7 @@ def ensure_sqlite_phase0_columns() -> None:
             ("routing_confirmed", "ALTER TABLE recruiter_emails ADD COLUMN routing_confirmed BOOLEAN DEFAULT 0"),
             ("resume_asset_id", "ALTER TABLE recruiter_emails ADD COLUMN resume_asset_id INTEGER"),
             ("resume_file_name", "ALTER TABLE recruiter_emails ADD COLUMN resume_file_name VARCHAR(255)"),
+            ("parser_details_json", "ALTER TABLE recruiter_emails ADD COLUMN parser_details_json TEXT"),
             ("sent_at", "ALTER TABLE recruiter_emails ADD COLUMN sent_at DATETIME"),
             ("last_error", "ALTER TABLE recruiter_emails ADD COLUMN last_error TEXT"),
             ("state", "ALTER TABLE recruiter_emails ADD COLUMN state VARCHAR(50) DEFAULT 'auto_rejected'"),

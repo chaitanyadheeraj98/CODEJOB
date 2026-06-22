@@ -416,6 +416,7 @@ type Candidate = {
   draft_resume_context_status: string | null
   draft_quality?: DraftQuality | null
   resume_file_name: string | null
+  parser_details: Record<string, unknown> | null
   attachment_file_names: string[]
   state: string
   last_error: string | null
@@ -592,6 +593,90 @@ export function clamp100(value: number): number {
   return Math.max(0, Math.min(Math.round(value), 100))
 }
 
+type ParserDetailsPayload = {
+  parser_version?: string
+  source?: string
+  base_parser_result?: Record<string, unknown>
+  enrichment_result?: Record<string, unknown>
+  merged_result?: Record<string, unknown>
+  merge_notes?: string[]
+  source_hints?: Record<string, unknown>
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function normalizeParserDetails(value: unknown): ParserDetailsPayload | null {
+  if (!isRecord(value)) return null
+  return value as ParserDetailsPayload
+}
+
+function renderParserValue(value: unknown): string {
+  if (value === null || value === undefined) return '-'
+  if (typeof value === 'string') return value || '-'
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (Array.isArray(value)) {
+    return value.length === 0 ? '-' : value.map((item) => renderParserValue(item)).join(', ')
+  }
+  if (isRecord(value)) {
+    const pairs = Object.entries(value)
+    if (pairs.length === 0) return '-'
+    return pairs.map(([key, item]) => `${key}: ${renderParserValue(item)}`).join('\n')
+  }
+  return String(value)
+}
+
+type ParserDetailsPanelProps = {
+  candidateId: number
+  source: string
+  parserDetails: Record<string, unknown> | null
+  expanded: boolean
+  onToggle: (candidateId: number) => void
+}
+
+export function ParserDetailsPanel({ candidateId, source, parserDetails, expanded, onToggle }: ParserDetailsPanelProps) {
+  const normalized = normalizeParserDetails(parserDetails)
+  if (!normalized) return null
+  return (
+    <div className="parserDetailsSection">
+      <button type="button" className="parserDetailsToggle" onClick={() => onToggle(candidateId)}>
+        {expanded ? 'Hide Details' : 'View Details'}
+      </button>
+      {expanded ? (
+        <div className="parserDetailsPanel">
+          <div className="parserDetailsMeta">
+            <span><strong>Parser Version:</strong> {normalized.parser_version ?? '-'}</span>
+            <span><strong>Source:</strong> {normalized.source ?? source}</span>
+          </div>
+          <div className="parserDetailsGrid">
+            <section className="parserDetailsBlock">
+              <h3>Final Extracted Result</h3>
+              <pre>{renderParserValue(normalized.merged_result ?? {})}</pre>
+            </section>
+            <section className="parserDetailsBlock">
+              <h3>Base Parser Result</h3>
+              <pre>{renderParserValue(normalized.base_parser_result ?? {})}</pre>
+            </section>
+            <section className="parserDetailsBlock">
+              <h3>Enrichment Result</h3>
+              <pre>{renderParserValue(normalized.enrichment_result ?? {})}</pre>
+            </section>
+            <section className="parserDetailsBlock">
+              <h3>Merge Notes</h3>
+              <pre>{renderParserValue(normalized.merge_notes ?? [])}</pre>
+            </section>
+            <section className="parserDetailsBlock">
+              <h3>Source Hints</h3>
+              <pre>{renderParserValue(normalized.source_hints ?? {})}</pre>
+            </section>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 export function formatAttachmentSize(size: number | null | undefined): string {
   const value = typeof size === 'number' && Number.isFinite(size) ? size : 0
   if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`
@@ -758,6 +843,7 @@ function App() {
   const [rejectingId, setRejectingId] = useState<number | null>(null)
   const [movingToFailedId, setMovingToFailedId] = useState<number | null>(null)
   const [draftEdits, setDraftEdits] = useState<Record<number, string>>({})
+  const [expandedParserDetailIds, setExpandedParserDetailIds] = useState<Record<number, boolean>>({})
   const [routingFixes, setRoutingFixes] = useState<Record<number, { to: string; cc: string }>>({})
   const [fixingId, setFixingId] = useState<number | null>(null)
   const [activePage, setActivePage] = useState<'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'premium_numbers'>('run_queue')
@@ -2624,6 +2710,8 @@ function App() {
             const effectiveDraft = draftEdits[item.id] ?? item.draft_reply
             const routingTrusted = canTrustRouting(item)
             const verdict = getOverallVerdict(item, effectiveDraft, routingTrusted)
+            const parserDetails = normalizeParserDetails(item.parser_details)
+            const parserExpanded = Boolean(expandedParserDetailIds[item.id])
             const requiresResumeForApproval = item.source === 'gmail'
             const canApprove =
               Boolean(item.recipient_email) &&
@@ -2662,6 +2750,18 @@ function App() {
                   {item.draft_model ? ` (${item.draft_model})` : ''}
                 </p>
                 <p><strong>Resume Context:</strong> {getResumeContextLabel(item.draft_resume_context_status)}</p>
+                <ParserDetailsPanel
+                  candidateId={item.id}
+                  source={item.source}
+                  parserDetails={parserDetails}
+                  expanded={parserExpanded}
+                  onToggle={(candidateId) =>
+                    setExpandedParserDetailIds((prev) => ({
+                      ...prev,
+                      [candidateId]: !prev[candidateId],
+                    }))
+                  }
+                />
                 {item.draft_ai_error ? <p className="subtle"><strong>AI fallback:</strong> {item.draft_ai_error}</p> : null}
                 <p><strong>Draft:</strong></p>
                 <div className="draftUnified">

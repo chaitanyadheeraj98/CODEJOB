@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import json
 import logging
 import re
 
@@ -15,7 +16,14 @@ from app.automation.queue_preparation import (
 )
 from app.models import EmployerNumber, NumberReviewQueue, RecruiterEmail, RecruiterNumber, RecruiterOpportunity, ResumeAsset, UserSettings
 from app.premium_numbers.phone_normalization import best_display_phone, canonicalize_phone
-from app.phase0 import extract_email_address, greeting_from_to_contact, hard_filter_check, parse_email, should_block_f2f
+from app.phase0 import (
+    extract_email_address,
+    greeting_from_to_contact,
+    hard_filter_check,
+    parse_email,
+    parse_email_with_details,
+    should_block_f2f,
+)
 from app.routing import RoutingDecision
 from app.semantic.embeddings_service import generate_embedding
 from app.services import policy_service
@@ -629,7 +637,18 @@ class ExternalFeedService:
             is_sendable_candidate=True,
             needs_manual_confirmation=False,
         )
-        parsed = parse_email(subject, body)
+        parsed, parser_details = parse_email_with_details(
+            subject,
+            body,
+            source="nvoids",
+            source_hints={
+                "canonical_title": item.role,
+                "canonical_location": item.location,
+                "company": item.company,
+                "work_mode": item.work_mode,
+                "visa_hints": item.visa_hints,
+            },
+        )
         resume_selection = self.scoring_runtime.select_best_resume_match(
             subject=subject,
             body=body,
@@ -660,7 +679,16 @@ class ExternalFeedService:
                 existing_email=existing,
                 external_thread_id=item.source_url or external_message_id,
                 routing_decision=routing_decision,
-                parsed_overrides={"role": item.role} if item.role else None,
+                parsed_overrides={
+                    "role": str(parsed.get("role", item.role or subject)),
+                    "location": str(parsed.get("location", item.location or "")),
+                    "job_location_text": str(parsed.get("job_location_text", item.location or "")),
+                    "salary_text": str(parsed.get("salary_text", item.rate or "")),
+                    "skills_text": str(parsed.get("skills_text", item.skills_text or "")),
+                    "f2f_mentioned": bool(parsed.get("f2f_mentioned", False)),
+                    "asks_contact_fields": bool(parsed.get("asks_contact_fields", False)),
+                    "is_texas_role": bool(parsed.get("is_texas_role", False)),
+                },
             ),
             QueuePreparationDependencies(
                 parse_email=parse_email,
@@ -758,6 +786,7 @@ class ExternalFeedService:
             routing_confirmed=False,
             resume_asset_id=selected_resume.id if selected_resume else None,
             resume_file_name=selected_resume.file_name if selected_resume else None,
+            parser_details_json=json.dumps(parser_details, separators=(",", ":")),
         )
         logger.info(
             "nvoids_enqueue_success external_post_id=%r recruiter_to=%r cc_email=%r role=%r ai_score=%.3f resume_id=%r resume_name=%r draft_source=%r",

@@ -16,7 +16,7 @@ from app.automation import RunOrchestrator, RunOrchestratorDependencies, RunOrch
 from app.services.policy_service import EffectiveRunInputs
 from app.gmail_client import GmailMessageCandidate, MailAttachment
 from app.models import AttachmentAsset, DraftEditFeedback, RecipientRoutingFeedback, RecruiterEmail, ResumeAsset, SyncRun, UserSettings
-from app.phase0 import RoutingResult
+from app.phase0 import RoutingResult, parse_email_with_details
 from app.routing import RoutingDecision
 from app.schemas import ApproveSendRequest, AutomationRunRequest, AutomationRunResponse, GmailSyncResponse, RejectRequest, ResolveRecipientsRequest
 
@@ -117,7 +117,7 @@ class OrchestrationService:
                     skipped_count += 1
                     continue
 
-                parsed = self.deps.parse_email(item["subject"], item["body"])
+                parsed, parser_details = parse_email_with_details(item["subject"], item["body"], source="gmail")
                 hard_pass, hard_reason = self.deps.hard_filter_check(parsed, user_settings)
                 active_resume = self.deps.active_resume(db)
                 resume_selection = self.deps.select_best_resume_match(
@@ -218,6 +218,7 @@ class OrchestrationService:
                     recipient_email=item["recipient_email"],
                     resume_asset_id=selected_resume.id if selected_resume else None,
                     resume_file_name=selected_resume.file_name if selected_resume else None,
+                    parser_details_json=json.dumps(parser_details, separators=(",", ":")),
                 )
                 if routed:
                     self.deps.apply_routing_result(email, routed)

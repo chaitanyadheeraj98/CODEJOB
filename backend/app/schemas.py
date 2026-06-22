@@ -2,7 +2,7 @@ from datetime import datetime
 import json
 from typing import Any, cast
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import AliasChoices, BaseModel, Field, field_validator
 
 from app.ai.draft_formatting import DRAFT_TEXT_SIZE_VALUES, normalize_draft_text_size
 
@@ -231,6 +231,10 @@ class EmailResponse(BaseModel):
     routing_confirmed: bool
     resume_asset_id: int | None
     resume_file_name: str | None
+    parser_details: dict[str, object] | None = Field(
+        default=None,
+        validation_alias=AliasChoices("parser_details", "parser_details_json"),
+    )
     attachment_file_names: list[str] = Field(default_factory=list)
     sent_at: datetime | None
     gmail_sent_id: str | None
@@ -257,6 +261,21 @@ class EmailResponse(BaseModel):
         if isinstance(value, list):
             return cast(RoutingListInput, value)
         return empty_list
+
+    @field_validator("parser_details", mode="before")
+    @classmethod
+    def parse_parser_details(cls, value: Any) -> dict[str, object] | None:
+        if value in (None, ""):
+            return None
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except json.JSONDecodeError:
+                return None
+            return cast(dict[str, object], parsed) if isinstance(parsed, dict) else None
+        if isinstance(value, dict):
+            return cast(dict[str, object], value)
+        return None
 
 
 class GmailStatusResponse(BaseModel):

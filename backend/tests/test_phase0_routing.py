@@ -10,6 +10,7 @@ from app.phase0 import (
     greeting_from_to_contact,
     normalize_employer_domains,
     parse_email,
+    parse_email_with_details,
     render_fallback_draft_template,
     resolve_to_cc,
     slice_jd_sections,
@@ -40,6 +41,21 @@ www.horizonsoftech.net
 
 
 class RecipientRoutingTests(unittest.TestCase):
+    def test_parse_email_with_details_preserves_contract_and_adds_metadata(self) -> None:
+        parsed, details = parse_email_with_details(
+            "Role: AI Engineer",
+            "Location: Alpharetta, GA\nRequired Qualifications:\nPython, Java, RAG, Embeddings",
+            source="gmail",
+        )
+
+        self.assertEqual(set(parsed.keys()), {"role", "location", "job_location_text", "salary_text", "skills_text", "f2f_mentioned", "asks_contact_fields", "is_texas_role"})
+        self.assertEqual(details["source"], "gmail")
+        self.assertIn("base_parser_result", details)
+        self.assertIn("enrichment_result", details)
+        self.assertIn("merged_result", details)
+        self.assertEqual(parsed["role"], "AI Engineer")
+        self.assertIn("Python", str(parsed["skills_text"]))
+
     def test_classify_section_heading_maps_project_headings(self) -> None:
         self.assertEqual(classify_section_heading("Role Summary")[0], "summary")
         self.assertEqual(classify_section_heading("Required Qualifications")[0], "required")

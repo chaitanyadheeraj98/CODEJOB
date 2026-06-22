@@ -5,7 +5,7 @@ import re
 from datetime import UTC, datetime
 from urllib.parse import parse_qs, urljoin, urlparse
 
-from app.skill_taxonomy import normalize_skills_text
+from app.skill_taxonomy import extract_skills_text, normalize_skills_text
 
 try:
     from bs4 import BeautifulSoup
@@ -519,11 +519,6 @@ def parse_external_post(*, source_type: str, source_url: str, title: str, locati
     rate = rate_match.group(1).strip() if rate_match else ""
     company_match = re.search(r"(?:client|company)\s*[:\-]\s*([^\n,;]+)", body, flags=re.IGNORECASE)
     company = company_match.group(1).strip() if company_match else ""
-    skills = []
-    for token in ("java", "python", "react", "node", "aws", "sql", "azure", "sap", "salesforce", "ai", "ml"):
-        if token in lc:
-            skills.append(token.upper() if token in {"aws", "sql", "ai", "ml", "sap"} else token.title())
-
     external_post_id = _extract_external_post_id(source_url)
     return ParsedExternalPost(
         source_type=source_type,
@@ -540,7 +535,7 @@ def parse_external_post(*, source_type: str, source_url: str, title: str, locati
         visa_hints=visa_hints,
         duration=duration,
         rate=rate,
-        skills_text=normalize_skills_text(", ".join(sorted(set(skills))), preserve_unknown=True),
+        skills_text=normalize_skills_text(extract_skills_text(body), preserve_unknown=True),
         raw_body=body,
         raw_html=raw_html,
         parse_confidence=parse_confidence,

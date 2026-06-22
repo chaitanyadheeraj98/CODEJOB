@@ -1,8 +1,16 @@
 import re
 from dataclasses import asdict, dataclass
+from typing import Any, Mapping
 
 from app.models import UserSettings
-from app.skill_taxonomy import display_skill_label, extract_jd_skills_text, extract_skills_text, score_taxonomy_skills
+from app.parsing.spacy_enrichment import enrich_job_text, enrichment_to_payload
+from app.skill_taxonomy import (
+    display_skill_label,
+    extract_jd_skills_text,
+    extract_skills_text,
+    normalize_skills_text,
+    score_taxonomy_skills,
+)
 
 RECRUITER_HINTS = [
     "recruiter",
@@ -966,7 +974,7 @@ def draft_reply(
     )
     return "\n".join(body_lines)
 
-def parse_email(subject: str, body: str) -> dict[str, str | int]:
+def _base_parse_email(subject: str, body: str) -> dict[str, str | int | bool]:
     role = _extract_role(subject, body)
     location = _extract_location(body)
     salary_text = _extract_salary(body)
@@ -1000,4 +1008,80 @@ def parse_email(subject: str, body: str) -> dict[str, str | int]:
         "asks_contact_fields": asks_contact_fields,
         "is_texas_role": is_texas_role,
     }
+
+
+def _should_use_enriched_role(
+    base_role: str,
+    enriched_role: str,
+    *,
+    confidence: float,
+    source: str,
+    source_hints: Mapping[str, Any] | None,
+) -> bool:
+    base_value = str(base_role or "").strip()
+    enriched_value = str(enriched_role or "").strip()
+    if not enriched_value:
+        return False
+    if source == "nvoids":
+        canonical_title = str((source_hints or {}).get("canonical_title") or "").strip()
+        return bool(canonical_title and canonical_title == enriched_value)
+    if not base_value or base_value == "Unknown Role":
+        return confidence >= 0.2
+    return False
+
+
+def parse_email_with_details(
+    subject: str,
+    body: str,
+    *,
+    source: str = "gmail",
+    source_hints: Mapping[str, Any] | None = None,
+) -> tuple[dict[str, str | int | bool], dict[str, Any]]:
+    base = _base_parse_email(subject, body)
+    enrichment = enrich_job_text(subject, body, source=source, source_hints=source_hints)
+    merged: dict[str, str | int | bool] = dict(base)
+    merge_notes: list[str] = []
+
+    base_skills = normalize_skills_text(str(base.get("skills_text", "")), preserve_unknown=True)
+    merged["skills_text"] = base_skills
+    enriched_skills = normalize_skills_text(enrichment.skills_text, preserve_unknown=False)
+    if enrichment.confidence >= 0.2 and enriched_skills != "none_detected":
+        combined_skills = normalize_skills_text(
+            ", ".join(part for part in [base_skills, enriched_skills] if part and part != "none_detected"),
+            preserve_unknown=True,
+        )
+        if combined_skills and combined_skills != base_skills:
+            merged["skills_text"] = combined_skills
+            merge_notes.append("merged taxonomy-normalized skills from deterministic parser and enrichment")
+
+    enriched_role = enrichment.role_candidates[0] if enrichment.role_candidates else ""
+    if _should_use_enriched_role(
+        str(base.get("role", "")),
+        enriched_role,
+        confidence=enrichment.confidence,
+        source=source,
+        source_hints=source_hints,
+    ):
+        merged["role"] = enriched_role
+        merge_notes.append("used enrichment role candidate because base role was weak or source-locked")
+
+    if (not str(base.get("location", "")).strip() or str(base.get("location")) == "Unknown") and enrichment.primary_location:
+        merged["location"] = enrichment.primary_location
+        merge_notes.append("used enrichment primary location because base location was weak")
+
+    parser_details = {
+        "parser_version": "spacy_enrichment_v1",
+        "source": source,
+        "base_parser_result": base,
+        "enrichment_result": enrichment_to_payload(enrichment),
+        "merged_result": merged,
+        "merge_notes": merge_notes,
+        "source_hints": {key: value for key, value in dict(source_hints or {}).items() if value not in (None, "")},
+    }
+    return merged, parser_details
+
+
+def parse_email(subject: str, body: str) -> dict[str, str | int | bool]:
+    merged, _details = parse_email_with_details(subject, body)
+    return merged
 

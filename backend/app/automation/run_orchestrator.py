@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import logging
@@ -9,6 +10,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
 from app.models import RecruiterEmail, ResumeAsset, UserSettings
+from app.phase0 import parse_email_with_details
 from app.routing import RoutingDecision
 from .queue_preparation import (
     QueuePreparationDependencies,
@@ -365,21 +367,27 @@ class RunOrchestrator:
     ) -> RecruiterEmail:
         if existing:
             return existing
+        parsed_with_details, parser_details = parse_email_with_details(
+            str(item["subject"]),
+            str(item["body"]),
+            source="gmail",
+        )
         return RecruiterEmail(
             owner_id=request.owner_id,
             sender=str(item["sender"]),
             subject=str(item["subject"]),
             body=str(item["body"]),
-            role=str(parsed["role"]),
-            location=str(parsed["location"]),
-            salary_text=str(parsed["salary_text"]),
-            skills_text=str(parsed["skills_text"]),
+            role=str(parsed["role"] or parsed_with_details["role"]),
+            location=str(parsed["location"] or parsed_with_details["location"]),
+            salary_text=str(parsed["salary_text"] or parsed_with_details["salary_text"]),
+            skills_text=str(parsed["skills_text"] or parsed_with_details["skills_text"]),
             source="gmail",
             external_message_id=str(item["external_message_id"]),
             external_thread_id=item.get("external_thread_id"),
             external_rfc_message_id=item.get("external_rfc_message_id"),
             gmail_received_at=item.get("gmail_received_at"),
             recipient_email=item.get("recipient_email"),
+            parser_details_json=json.dumps(parser_details, separators=(",", ":")),
         )
 
     def _commit_email_phase(

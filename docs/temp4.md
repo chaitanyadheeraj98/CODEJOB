@@ -17,7 +17,7 @@ Everything outside this table should be ignored.
 
 The correction is important: for the current Nvoids pages you showed, the recruiter email is usually plain text or a normal `mailto:` link. So the parser should **first extract the simple email from Row 2**, not assume Cloudflare decoding. Cloudflare decoding should only be a fallback for rare pages that actually use `data-cfemail`.
 
-The `Job Details.pdf` confirms this page shape: `Home`, then the title, `Email: nupur.kumari@tanishasystems.com`, job body, repeated email/View All/timestamp, then footer noise like `job_kill`, admin timeout text, `Time Taken`, and footer `Location`. 
+The `Job Details.pdf` confirms this page shape: `Home`, then the title, `Email: nupur.kumari@tanishasystems.com`, job body, repeated email/View All/timestamp, then footer noise like `job_kill`, admin timeout text, `Time Taken`, and footer `Location`.
 
 ---
 
@@ -25,9 +25,9 @@ The `Job Details.pdf` confirms this page shape: `Home`, then the title, `Email: 
 
 Current Nvoids sync has two separate issues.
 
-First, the parser can still miss recruiter emails or accidentally use noisy page text. Your diagnostic doc shows many imported Nvoids rows never reached `Needs Review` because `recruiter_email` was empty, and `_enqueue_needs_review_candidate(...)` returns early when there is no recruiter email. 
+First, the parser can still miss recruiter emails or accidentally use noisy page text. Your diagnostic doc shows many imported Nvoids rows never reached `Needs Review` because `recruiter_email` was empty, and `_enqueue_needs_review_candidate(...)` returns early when there is no recruiter email.
 
-Second, imported Nvoids rows can silently disappear from the UI because they are stored as `ExternalOpportunity`, but not always converted into visible `RecruiterEmail` candidates. The doc shows `created` means external rows created, not guaranteed `Needs Review` drafts. 
+Second, imported Nvoids rows can silently disappear from the UI because they are stored as `ExternalOpportunity`, but not always converted into visible `RecruiterEmail` candidates. The doc shows `created` means external rows created, not guaranteed `Needs Review` drafts.
 
 So the fix has two parts:
 
@@ -337,7 +337,7 @@ Priority:
 
 Never use footer location.
 
-The PDF has a footer `Location: Dallas, Texas` after `Time Taken`, but that is page/footer metadata, not the job location. 
+The PDF has a footer `Location: Dallas, Texas` after `Time Taken`, but that is page/footer metadata, not the job location.
 
 ---
 
@@ -661,7 +661,7 @@ Time Taken
 footer Location
 ```
 
-The diagnostic file `temp 3.md` should be used to cover the previous failure modes: missing recruiter email, silent queue drops, dirty/noisy body causing poor qualification, and misleading `created` count. 
+The diagnostic file `temp 3.md` should be used to cover the previous failure modes: missing recruiter email, silent queue drops, dirty/noisy body causing poor qualification, and misleading `created` count.
 
 ---
 
