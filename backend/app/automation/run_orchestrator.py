@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
 from app.models import RecruiterEmail, ResumeAsset, UserSettings
+from app.parsing import build_skills_json_payload
 from app.routing import RoutingDecision
 from .queue_preparation import (
     QueuePreparationDependencies,
@@ -124,6 +125,13 @@ class RunOrchestrator:
                 ai_extractor_enabled=request.user_settings.feature_ai_extractor_enabled,
             )
             parser_details_json = json.dumps(parser_details, separators=(",", ":"))
+            skills_json = json.dumps(
+                build_skills_json_payload(
+                    parser_details,
+                    fallback_skills_text=str(parsed_for_selection.get("skills_text", "")),
+                ),
+                separators=(",", ":"),
+            )
             resume_selection = request.deps.select_best_resume_match(
                 subject=subject,
                 body=body,
@@ -189,11 +197,12 @@ class RunOrchestrator:
                 if request.dry_run:
                     skipped_count += 1
                     continue
-                email = self._email_row(existing, request, item, parsed, parser_details_json)
+                email = self._email_row(existing, request, item, parsed, parser_details_json, skills_json)
                 def apply_skipped_state(target: RecruiterEmail) -> None:
                     target.external_rfc_message_id = target.external_rfc_message_id or item.get("external_rfc_message_id")
                     target.gmail_received_at = target.gmail_received_at or item.get("gmail_received_at")
                     target.parser_details_json = parser_details_json
+                    target.skills_json = skills_json
                     target.score = int(preparation.ai_score * 100)
                     target.ai_score = preparation.ai_score
                     target.ai_score_source = preparation.ai_score_source
@@ -242,7 +251,7 @@ class RunOrchestrator:
                 if request.dry_run:
                     failed_count += 1
                     continue
-                email = self._email_row(existing, request, item, parsed, parser_details_json)
+                email = self._email_row(existing, request, item, parsed, parser_details_json, skills_json)
                 def apply_failed_state(target: RecruiterEmail) -> None:
                     target.external_rfc_message_id = target.external_rfc_message_id or item.get("external_rfc_message_id")
                     target.gmail_received_at = target.gmail_received_at or item.get("gmail_received_at")
@@ -256,6 +265,7 @@ class RunOrchestrator:
                     target.resume_asset_id = selected_resume.id if selected_resume else None
                     target.resume_file_name = selected_resume.file_name if selected_resume else None
                     target.parser_details_json = parser_details_json
+                    target.skills_json = skills_json
 
                 apply_failed_state(email)
                 email = self._commit_email_phase(
@@ -291,7 +301,7 @@ class RunOrchestrator:
                 ai_last_draft_source = preparation.draft_source
             else:
                 ai_last_draft_source = preparation.draft_source
-            email = self._email_row(existing, request, item, parsed, parser_details_json)
+            email = self._email_row(existing, request, item, parsed, parser_details_json, skills_json)
             def apply_queued_state(target: RecruiterEmail) -> None:
                 target.external_rfc_message_id = target.external_rfc_message_id or item.get("external_rfc_message_id")
                 target.gmail_received_at = target.gmail_received_at or item.get("gmail_received_at")
@@ -322,6 +332,7 @@ class RunOrchestrator:
                 target.sent_at = None
                 target.gmail_sent_id = None
                 target.parser_details_json = parser_details_json
+                target.skills_json = skills_json
                 request.deps.apply_routing_decision(target, routing_decision)
                 target.routing_confirmed = False
                 target.resume_asset_id = selected_resume.id if selected_resume else None
@@ -375,6 +386,7 @@ class RunOrchestrator:
         item: CandidateItem,
         parsed: dict[str, str | int | bool],
         parser_details_json: str,
+        skills_json: str,
     ) -> RecruiterEmail:
         if existing:
             return existing
@@ -387,6 +399,7 @@ class RunOrchestrator:
             location=str(parsed["location"]),
             salary_text=str(parsed["salary_text"]),
             skills_text=str(parsed["skills_text"]),
+            skills_json=skills_json,
             source="gmail",
             external_message_id=str(item["external_message_id"]),
             external_thread_id=item.get("external_thread_id"),

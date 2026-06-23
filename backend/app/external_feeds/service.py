@@ -15,6 +15,7 @@ from app.automation.queue_preparation import (
     prepare_candidate_for_queue,
 )
 from app.models import EmployerNumber, NumberReviewQueue, RecruiterEmail, RecruiterNumber, RecruiterOpportunity, ResumeAsset, UserSettings
+from app.parsing import build_skills_json_payload
 from app.premium_numbers.phone_normalization import best_display_phone, canonicalize_phone
 from app.phase0 import (
     extract_email_address,
@@ -738,6 +739,13 @@ class ExternalFeedService:
             location=str(preparation.parsed.get("location", item.location or "")),
             salary_text=str(preparation.parsed.get("salary_text", item.rate or "")),
             skills_text=str(preparation.parsed.get("skills_text", item.skills_text or "")),
+            skills_json=json.dumps(
+                build_skills_json_payload(
+                    parser_details,
+                    fallback_skills_text=str(preparation.parsed.get("skills_text", item.skills_text or "")),
+                ),
+                separators=(",", ":"),
+            ),
             score=int(preparation.ai_score * 100),
             decision="Qualified",
             state="needs_review",

@@ -730,14 +730,15 @@ export function clamp100(value: number): number {
 type ParserDetailsPayload = {
   parser_version?: string
   source?: string
+  parser_mode?: string
   base_parser_result?: Record<string, unknown>
-  enrichment_result?: Record<string, unknown>
   ai_extractor_result?: Record<string, unknown> | null
+  skills_audit?: Record<string, unknown>
   approved_skills_text?: string
   unknown_skills?: unknown[]
   merged_result?: Record<string, unknown>
-  merge_notes?: string[]
-  ai_merge_notes?: string[]
+  parser_warning?: string | null
+  fallback_used?: boolean
   source_hints?: Record<string, unknown>
 }
 
@@ -780,106 +781,6 @@ function recordStringArray(record: Record<string, unknown> | null | undefined, k
   return value.map((item) => renderParserValue(item).trim()).filter(Boolean).filter((item) => item !== '-')
 }
 
-type ParserWinnerSummary = {
-  field: string
-  winner: string
-  value: string
-}
-
-type ParserConflictSummary = {
-  title: string
-  detail: string
-}
-
-function summarizeParserWinners(details: ParserDetailsPayload): ParserWinnerSummary[] {
-  const merged = details.merged_result ?? {}
-  const base = details.base_parser_result ?? {}
-  const enrichment = details.enrichment_result ?? {}
-  const ai = isRecord(details.ai_extractor_result) ? details.ai_extractor_result : {}
-  const hints = details.source_hints ?? {}
-
-  const role = recordStringValue(merged, 'role')
-  const location = recordStringValue(merged, 'location')
-  const skills = (details.approved_skills_text || recordStringValue(merged, 'skills_text')).trim()
-
-  const roleWinner =
-    role && role === recordStringValue(hints, 'canonical_title')
-      ? 'Source hints'
-      : role && recordStringArray(ai, 'role_candidates').includes(role)
-        ? 'AI extractor'
-        : role && recordStringArray(enrichment, 'role_candidates').includes(role)
-          ? 'Enrichment'
-          : role && role === recordStringValue(base, 'role')
-            ? 'Base parser'
-            : 'Merged parser'
-
-  const locationWinner =
-    location && location === recordStringValue(hints, 'canonical_location')
-      ? 'Source hints'
-      : location && location === recordStringValue(ai, 'primary_location')
-        ? 'AI extractor'
-        : location && location === recordStringValue(enrichment, 'primary_location')
-          ? 'Enrichment'
-          : location && location === recordStringValue(base, 'location')
-            ? 'Base parser'
-            : 'Merged parser'
-
-  const aiApprovedSkills = recordStringArray(ai, 'skills_approved').join(', ')
-  const enrichmentSkills = recordStringValue(enrichment, 'skills_text')
-  const baseSkills = recordStringValue(base, 'skills_text')
-  const skillsWinner =
-    skills && skills === aiApprovedSkills
-      ? 'AI extractor'
-      : skills && skills === enrichmentSkills
-        ? 'Enrichment'
-        : skills && skills === baseSkills
-          ? 'Base parser'
-          : 'Merged parser'
-
-  return [
-    { field: 'Role', winner: roleWinner, value: role || '-' },
-    { field: 'Location', winner: locationWinner, value: location || '-' },
-    { field: 'Approved skills', winner: skillsWinner, value: skills || '-' },
-  ]
-}
-
-function summarizeParserConflicts(details: ParserDetailsPayload): ParserConflictSummary[] {
-  const merged = details.merged_result ?? {}
-  const ai = isRecord(details.ai_extractor_result) ? details.ai_extractor_result : {}
-  const hints = details.source_hints ?? {}
-  const conflicts: ParserConflictSummary[] = []
-
-  const hintRole = recordStringValue(hints, 'canonical_title')
-  const mergedRole = recordStringValue(merged, 'role')
-  if (hintRole && mergedRole && hintRole !== mergedRole) {
-    conflicts.push({
-      title: 'Role source conflict',
-      detail: `Source hints suggested "${hintRole}" but the final merged role is "${mergedRole}".`,
-    })
-  }
-
-  const hintLocation = recordStringValue(hints, 'canonical_location')
-  const aiLocation = recordStringValue(ai, 'primary_location')
-  const mergedLocation = recordStringValue(merged, 'location')
-  if (hintLocation && aiLocation && hintLocation !== aiLocation) {
-    conflicts.push({
-      title: 'Location conflict',
-      detail: `Source hints suggested "${hintLocation}" while the AI extractor found "${aiLocation}". Final merged location: "${mergedLocation || '-'}".`,
-    })
-  }
-
-  const hintWorkMode = recordStringValue(hints, 'work_mode')
-  const aiWorkMode = recordStringValue(ai, 'work_mode')
-  if (hintWorkMode && aiWorkMode && hintWorkMode.toLowerCase() !== aiWorkMode.toLowerCase()) {
-    conflicts.push({
-      title: 'Work mode conflict',
-      detail: `Source hints suggested "${hintWorkMode}" while the AI extractor found "${aiWorkMode}".`,
-    })
-  }
-
-  return conflicts
-}
-
 type ParserDetailsPanelProps = {
   candidateId: number
   source: string
@@ -891,16 +792,33 @@ type ParserDetailsPanelProps = {
 export function ParserDetailsPanel({ candidateId, source, parserDetails, expanded, onToggle }: ParserDetailsPanelProps) {
   const normalized = normalizeParserDetails(parserDetails)
   if (!normalized) return null
-  const winners = summarizeParserWinners(normalized)
-  const conflicts = summarizeParserConflicts(normalized)
-  const approvedSkills = (normalized.approved_skills_text || '').trim()
-  const unknownSkills = Array.isArray(normalized.unknown_skills)
-    ? normalized.unknown_skills.map((item) => renderParserValue(item).trim()).filter(Boolean).filter((item) => item !== '-')
-    : []
+  const finalResult = normalized.merged_result ?? {}
+  const baseResult = normalized.base_parser_result ?? {}
+  const skillsAudit = isRecord(normalized.skills_audit) ? normalized.skills_audit : null
+  const approvedSkills = (() => {
+    const audited = skillsAudit ? recordStringArray(skillsAudit, 'known').join(', ') : ''
+    if (audited) return audited
+    return (normalized.approved_skills_text || recordStringValue(finalResult, 'skills_text')).trim()
+  })()
+  const unknownSkills = (() => {
+    if (skillsAudit) {
+      const audited = recordStringArray(skillsAudit, 'unknown')
+      if (audited.length > 0) return audited
+    }
+    return Array.isArray(normalized.unknown_skills)
+      ? normalized.unknown_skills.map((item) => renderParserValue(item).trim()).filter(Boolean).filter((item) => item !== '-')
+      : []
+  })()
   const aiExtractor = isRecord(normalized.ai_extractor_result) ? normalized.ai_extractor_result : null
-  const aiConfidence = aiExtractor ? aiExtractor.confidence : null
-  const aiEvidence = aiExtractor ? aiExtractor.evidence : null
-  const aiError = aiExtractor ? aiExtractor.error : null
+  const sourceHints = isRecord(normalized.source_hints) ? normalized.source_hints : null
+  const parserMode = normalized.parser_mode || (aiExtractor ? 'ai_primary' : 'base_only')
+  const parserWarning = renderParserValue(normalized.parser_warning)
+  const fallbackUsed = Boolean(normalized.fallback_used)
+  const parserStatus = {
+    mode: parserMode,
+    fallback_used: fallbackUsed,
+    warning: parserWarning === '-' ? null : parserWarning,
+  }
   return (
     <div className="parserDetailsSection">
       <button type="button" className="parserDetailsToggle" onClick={() => onToggle(candidateId)}>
@@ -911,8 +829,18 @@ export function ParserDetailsPanel({ candidateId, source, parserDetails, expande
           <div className="parserDetailsMeta">
             <span><strong>Parser Version:</strong> {normalized.parser_version ?? '-'}</span>
             <span><strong>Source:</strong> {normalized.source ?? source}</span>
+            <span><strong>Mode:</strong> {parserMode}</span>
+            <span><strong>Fallback Used:</strong> {fallbackUsed ? 'Yes' : 'No'}</span>
           </div>
           <div className="parserDetailsSummaryGrid">
+            <section className="parserDetailsBlock parserDetailsSummaryBlock">
+              <h3>Parser Status</h3>
+              <pre>{renderParserValue(parserStatus)}</pre>
+            </section>
+            <section className="parserDetailsBlock parserDetailsSummaryBlock">
+              <h3>Final Skills Text</h3>
+              <pre>{recordStringValue(finalResult, 'skills_text') || '-'}</pre>
+            </section>
             <section className="parserDetailsBlock parserDetailsSummaryBlock">
               <h3>Approved Skills</h3>
               <pre>{approvedSkills || '-'}</pre>
@@ -921,57 +849,31 @@ export function ParserDetailsPanel({ candidateId, source, parserDetails, expande
               <h3>Unknown Skills</h3>
               <pre>{unknownSkills.length > 0 ? unknownSkills.join(', ') : '-'}</pre>
             </section>
-            <section className="parserDetailsBlock parserDetailsSummaryBlock">
-              <h3>Winning Sources</h3>
-              <pre>{winners.map((item) => `${item.field}: ${item.winner} -> ${item.value}`).join('\n')}</pre>
-            </section>
-            <section className="parserDetailsBlock parserDetailsSummaryBlock">
-              <h3>Conflict Notes</h3>
-              <pre>
-                {conflicts.length > 0
-                  ? conflicts.map((item) => `${item.title}: ${item.detail}`).join('\n')
-                  : 'No source conflicts detected.'}
-              </pre>
-            </section>
           </div>
           <div className="parserDetailsGrid">
             <section className="parserDetailsBlock">
               <h3>Final Extracted Result</h3>
-              <pre>{renderParserValue(normalized.merged_result ?? {})}</pre>
+              <pre>{renderParserValue(finalResult)}</pre>
             </section>
             <section className="parserDetailsBlock">
-              <h3>Base Parser Result</h3>
-              <pre>{renderParserValue(normalized.base_parser_result ?? {})}</pre>
-            </section>
-            <section className="parserDetailsBlock">
-              <h3>Enrichment Result</h3>
-              <pre>{renderParserValue(normalized.enrichment_result ?? {})}</pre>
+              <h3>{fallbackUsed ? 'Base Fallback Result' : 'Base Parser Result'}</h3>
+              <pre>{renderParserValue(baseResult)}</pre>
             </section>
             <section className="parserDetailsBlock">
               <h3>AI Extractor Result</h3>
               <pre>{renderParserValue(aiExtractor ?? {})}</pre>
             </section>
             <section className="parserDetailsBlock">
-              <h3>Merge Notes</h3>
-              <pre>{renderParserValue(normalized.merge_notes ?? [])}</pre>
-            </section>
-            <section className="parserDetailsBlock">
-              <h3>AI Merge Notes</h3>
-              <pre>{renderParserValue(normalized.ai_merge_notes ?? [])}</pre>
+              <h3>Skills Audit</h3>
+              <pre>{renderParserValue(skillsAudit ?? {})}</pre>
             </section>
             <section className="parserDetailsBlock">
               <h3>Source Hints</h3>
-              <pre>{renderParserValue(normalized.source_hints ?? {})}</pre>
+              <pre>{renderParserValue(sourceHints ?? {})}</pre>
             </section>
             <section className="parserDetailsBlock">
-              <h3>AI Confidence And Evidence</h3>
-              <pre>
-                {renderParserValue({
-                  confidence: aiConfidence,
-                  evidence: aiEvidence,
-                  error: aiError,
-                })}
-              </pre>
+              <h3>AI Evidence</h3>
+              <pre>{renderParserValue(aiExtractor ? { confidence: aiExtractor.confidence, evidence: aiExtractor.evidence, error: aiExtractor.error } : {})}</pre>
             </section>
           </div>
         </div>

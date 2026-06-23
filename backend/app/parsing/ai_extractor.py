@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -14,8 +15,14 @@ class AIExtractorResult:
     primary_location: str = ""
     mentioned_locations: tuple[str, ...] = ()
     work_mode: str = ""
+    salary_text: str = ""
     visa_hints: tuple[str, ...] = ()
     experience_years_min: int | None = None
+    skills_text: str = ""
+    f2f_mentioned: bool = False
+    asks_contact_fields: bool = False
+    is_texas_role: bool = False
+    # Legacy compatibility fields; Phase 3 moves taxonomy audit out of the extractor.
     skills_approved: tuple[str, ...] = ()
     skills_unknown: tuple[str, ...] = ()
     confidence: float = 0.0
@@ -71,6 +78,17 @@ def _normalize_years(value: object) -> int | None:
     return max(0, years)
 
 
+def _normalize_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = _clean_text(value).lower()
+    if not text:
+        return False
+    return text in {"1", "true", "yes", "y", "mentioned", "present"}
+
+
 def _normalize_evidence(value: object) -> dict[str, list[str]]:
     if isinstance(value, dict):
         normalized: dict[str, list[str]] = {}
@@ -84,6 +102,41 @@ def _normalize_evidence(value: object) -> dict[str, list[str]]:
         return normalized
     values = _as_string_list(value)
     return {"raw": values} if values else {}
+
+
+_SKILL_SPLIT_RE = re.compile(r"[\n,;/|]+")
+
+
+def _split_free_skill_text(value: str) -> list[str]:
+    if not value:
+        return []
+    return [item.strip() for item in _SKILL_SPLIT_RE.split(value) if item.strip()]
+
+
+def _dedupe_skill_values(values: list[str]) -> tuple[str, ...]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for value in values:
+        cleaned = _clean_text(value)
+        if not cleaned:
+            continue
+        key = cleaned.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(cleaned)
+    return tuple(ordered)
+
+
+def _collect_free_skill_values(payload: dict[str, Any]) -> tuple[str, ...]:
+    values: list[str] = []
+    for key in ("skills_text", "skills", "must_have_skills", "nice_to_have_skills", "skills_approved", "skills_unknown"):
+        raw = payload.get(key)
+        if isinstance(raw, str):
+            values.extend(_split_free_skill_text(raw))
+        else:
+            values.extend(_as_string_list(raw))
+    return _dedupe_skill_values(values)
 
 
 def _split_skills(values: list[str]) -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -138,10 +191,13 @@ def _build_user_prompt(
         '  "primary_location": string,\n'
         '  "mentioned_locations": string[],\n'
         '  "work_mode": string,\n'
+        '  "salary_text": string,\n'
         '  "visa_hints": string[],\n'
         '  "experience_years_min": number|null,\n'
-        '  "skills_approved": string[],\n'
-        '  "skills_unknown": string[],\n'
+        '  "skills_text": string,\n'
+        '  "f2f_mentioned": boolean,\n'
+        '  "asks_contact_fields": boolean,\n'
+        '  "is_texas_role": boolean,\n'
         '  "confidence": number,\n'
         '  "evidence": object\n'
         "}\n\n"
@@ -191,9 +247,9 @@ def extract_ai_job_details(
     if primary_location and all(primary_location.casefold() != item.casefold() for item in mentioned_locations):
         mentioned_locations.insert(0, primary_location)
 
-    raw_skill_values: list[str] = []
-    for key in ("skills_approved", "skills_unknown", "skills", "must_have_skills", "nice_to_have_skills"):
-        raw_skill_values.extend(_as_string_list(payload.get(key)))
+    free_skill_values = list(_collect_free_skill_values(payload))
+    skills_text = ", ".join(free_skill_values)
+    raw_skill_values = free_skill_values[:]
     skills_approved, skills_unknown = _split_skills(raw_skill_values)
 
     return AIExtractorResult(
@@ -202,8 +258,13 @@ def extract_ai_job_details(
         primary_location=primary_location,
         mentioned_locations=_dedupe_strings(mentioned_locations),
         work_mode=_clean_text(payload.get("work_mode")),
+        salary_text=_clean_text(payload.get("salary_text")),
         visa_hints=_dedupe_strings(_as_string_list(payload.get("visa_hints"))),
         experience_years_min=_normalize_years(payload.get("experience_years_min")),
+        skills_text=skills_text,
+        f2f_mentioned=_normalize_bool(payload.get("f2f_mentioned")),
+        asks_contact_fields=_normalize_bool(payload.get("asks_contact_fields")),
+        is_texas_role=_normalize_bool(payload.get("is_texas_role")),
         skills_approved=skills_approved,
         skills_unknown=skills_unknown,
         confidence=_normalize_confidence(payload.get("confidence")),
@@ -218,8 +279,13 @@ def ai_extractor_result_to_payload(result: AIExtractorResult) -> dict[str, objec
         "primary_location": result.primary_location,
         "mentioned_locations": list(result.mentioned_locations),
         "work_mode": result.work_mode,
+        "salary_text": result.salary_text,
         "visa_hints": list(result.visa_hints),
         "experience_years_min": result.experience_years_min,
+        "skills_text": result.skills_text,
+        "f2f_mentioned": result.f2f_mentioned,
+        "asks_contact_fields": result.asks_contact_fields,
+        "is_texas_role": result.is_texas_role,
         "skills_approved": list(result.skills_approved),
         "skills_unknown": list(result.skills_unknown),
         "confidence": result.confidence,

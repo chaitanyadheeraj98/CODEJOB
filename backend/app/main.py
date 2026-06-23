@@ -65,6 +65,7 @@ from app.models import (
     UserSettings,
 )
 from app.models import RecipientRoutingFeedback
+from app.parsing import build_skills_json_payload
 from app.telegram_bot import TelegramBotService, TelegramReply
 from app.phase0 import (
     DEFAULT_FALLBACK_DRAFT_TEMPLATE,
@@ -985,26 +986,38 @@ def _list_pending_unknown_skills(db: Session) -> list[PendingSkillResponse]:
     suppressed = _known_or_suppressed_pending_skill_keys(db)
     aggregated: dict[str, dict[str, object]] = {}
     rows = (
-        db.query(RecruiterEmail.id, RecruiterEmail.parser_details_json)
+        db.query(RecruiterEmail.id, RecruiterEmail.skills_json, RecruiterEmail.parser_details_json)
         .filter(
             RecruiterEmail.owner_id == settings.owner_id,
-            RecruiterEmail.parser_details_json.is_not(None),
-            RecruiterEmail.parser_details_json != "",
+            or_(
+                RecruiterEmail.skills_json.is_not(None),
+                RecruiterEmail.parser_details_json.is_not(None),
+            ),
         )
         .order_by(RecruiterEmail.id.desc())
         .all()
     )
-    for email_id, parser_details_json in rows:
-        if not parser_details_json:
-            continue
-        try:
-            payload = json.loads(parser_details_json)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(payload, dict):
-            continue
-        unknown_skills = payload.get("unknown_skills", [])
-        if not isinstance(unknown_skills, list):
+    for email_id, skills_json, parser_details_json in rows:
+        unknown_skills: list[object] = []
+        if skills_json:
+            try:
+                skills_payload = json.loads(skills_json)
+            except json.JSONDecodeError:
+                skills_payload = None
+            if isinstance(skills_payload, dict):
+                raw_unknown = skills_payload.get("unknown", [])
+                if isinstance(raw_unknown, list):
+                    unknown_skills = raw_unknown
+        if not unknown_skills and parser_details_json:
+            try:
+                payload = json.loads(parser_details_json)
+            except json.JSONDecodeError:
+                payload = None
+            if isinstance(payload, dict):
+                raw_unknown = payload.get("unknown_skills", [])
+                if isinstance(raw_unknown, list):
+                    unknown_skills = raw_unknown
+        if not unknown_skills:
             continue
         seen_for_candidate: set[str] = set()
         for item in unknown_skills:
@@ -2056,6 +2069,10 @@ def ingest_email(payload: IngestEmailRequest, db: Session = Depends(get_db)) -> 
         location=str(parsed["location"]),
         salary_text=str(parsed["salary_text"]),
         skills_text=str(parsed["skills_text"]),
+        skills_json=json.dumps(
+            build_skills_json_payload(parser_details, fallback_skills_text=str(parsed["skills_text"])),
+            separators=(",", ":"),
+        ),
         score=int(ai_score * 100),
         decision=decision,
         state=state,

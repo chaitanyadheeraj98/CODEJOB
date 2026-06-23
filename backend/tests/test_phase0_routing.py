@@ -53,12 +53,44 @@ class RecipientRoutingTests(unittest.TestCase):
         self.assertEqual(set(parsed.keys()), {"role", "location", "job_location_text", "salary_text", "skills_text", "f2f_mentioned", "asks_contact_fields", "is_texas_role"})
         self.assertEqual(details["source"], "gmail")
         self.assertIn("base_parser_result", details)
-        self.assertIn("enrichment_result", details)
         self.assertIn("merged_result", details)
         self.assertEqual(details["approved_skills_text"], parsed["skills_text"])
         self.assertEqual(details["unknown_skills"], [])
         self.assertEqual(parsed["role"], "AI Engineer")
         self.assertIn("Python", str(parsed["skills_text"]))
+
+    def test_parse_email_with_details_freezes_current_details_shape(self) -> None:
+        _parsed, details = parse_email_with_details(
+            "Role: AI Engineer",
+            "Location: Alpharetta, GA\nRequired Qualifications:\nPython, Java, RAG, Embeddings",
+            source="gmail",
+        )
+
+        self.assertEqual(
+            set(details.keys()),
+            {
+                "parser_version",
+                "parser_mode",
+                "source",
+                "base_parser_result",
+                "ai_extractor_result",
+                "approved_skills_text",
+                "unknown_skills",
+                "skills_audit",
+                "merged_result",
+                "ai_merge_notes",
+                "parser_warning",
+                "fallback_used",
+                "source_hints",
+            },
+        )
+        self.assertEqual(details["parser_version"], "base_only_v2")
+        self.assertEqual(details["parser_mode"], "base_only")
+        self.assertIsNone(details["parser_warning"])
+        self.assertFalse(details["fallback_used"])
+        self.assertEqual(details["source_hints"], {})
+        self.assertIsInstance(details["ai_merge_notes"], list)
+        self.assertEqual(details["skills_audit"]["skills_text"], _parsed["skills_text"])
 
     def test_parse_email_with_details_keeps_ai_extractor_disabled_by_default(self) -> None:
         with patch("app.phase0.extract_ai_job_details") as mock_ai:
@@ -69,14 +101,17 @@ class RecipientRoutingTests(unittest.TestCase):
             )
 
         mock_ai.assert_not_called()
-        self.assertEqual(details["parser_version"], "spacy_enrichment_v1")
+        self.assertEqual(details["parser_version"], "base_only_v2")
+        self.assertEqual(details["parser_mode"], "base_only")
         self.assertIsNone(details["ai_extractor_result"])
         self.assertEqual(details["approved_skills_text"], parsed["skills_text"])
         self.assertEqual(details["unknown_skills"], [])
         self.assertEqual(details["ai_merge_notes"], [])
+        self.assertIsNone(details["parser_warning"])
+        self.assertFalse(details["fallback_used"])
         self.assertEqual(parsed["role"], "AI Engineer")
 
-    def test_parse_email_with_details_merges_ai_skills_when_enabled(self) -> None:
+    def test_parse_email_with_details_uses_ai_primary_result_when_enabled(self) -> None:
         ai_result = {
             "role_candidates": ["AI Engineer"],
             "company": "",
@@ -85,6 +120,11 @@ class RecipientRoutingTests(unittest.TestCase):
             "work_mode": "",
             "visa_hints": [],
             "experience_years_min": 2,
+            "salary_text": "$95/hr",
+            "skills_text": "Amazon ECS, Grafana, Temporal",
+            "f2f_mentioned": False,
+            "asks_contact_fields": True,
+            "is_texas_role": False,
             "skills_approved": ["Amazon ECS", "Grafana"],
             "skills_unknown": ["Temporal"],
             "confidence": 0.82,
@@ -106,6 +146,7 @@ class RecipientRoutingTests(unittest.TestCase):
                     "work_mode": "",
                     "visa_hints": (),
                     "experience_years_min": 2,
+                    "skills_text": "Amazon ECS, Grafana, Temporal",
                     "skills_approved": ("Amazon ECS", "Grafana"),
                     "skills_unknown": ("Temporal",),
                     "confidence": 0.82,
@@ -121,15 +162,25 @@ class RecipientRoutingTests(unittest.TestCase):
             )
 
         mock_ai.assert_called_once()
-        self.assertEqual(details["parser_version"], "spacy_ai_enrichment_v2")
+        self.assertEqual(details["parser_version"], "ai_primary_v2")
+        self.assertEqual(details["parser_mode"], "ai_primary")
         self.assertEqual(details["ai_extractor_result"]["skills_unknown"], ["Temporal"])
-        self.assertEqual(details["approved_skills_text"], parsed["skills_text"])
+        self.assertIn("Amazon ECS", details["approved_skills_text"])
+        self.assertIn("Grafana", details["approved_skills_text"])
         self.assertEqual(details["unknown_skills"], ["Temporal"])
+        self.assertEqual(parsed["role"], "AI Engineer")
+        self.assertEqual(parsed["location"], "Alpharetta, GA")
+        self.assertEqual(parsed["salary_text"], "$95/hr")
+        self.assertTrue(bool(parsed["asks_contact_fields"]))
         self.assertIn("Amazon ECS", str(parsed["skills_text"]))
         self.assertIn("Grafana", str(parsed["skills_text"]))
-        self.assertTrue(details["ai_merge_notes"])
+        self.assertIn("Temporal", str(parsed["skills_text"]))
+        self.assertEqual(details["ai_merge_notes"], [])
+        self.assertIsNone(details["parser_warning"])
+        self.assertFalse(details["fallback_used"])
+        self.assertEqual(details["skills_audit"]["unknown"], ["Temporal"])
 
-    def test_parse_email_with_details_does_not_let_weak_ai_overwrite_clean_role(self) -> None:
+    def test_parse_email_with_details_uses_ai_role_when_ai_mode_is_enabled(self) -> None:
         with patch("app.phase0.extract_ai_job_details") as mock_ai, patch(
             "app.phase0.ai_extractor_result_to_payload",
             return_value={
@@ -140,6 +191,11 @@ class RecipientRoutingTests(unittest.TestCase):
                 "work_mode": "",
                 "visa_hints": [],
                 "experience_years_min": None,
+                "salary_text": "not_specified",
+                "skills_text": "Java",
+                "f2f_mentioned": False,
+                "asks_contact_fields": False,
+                "is_texas_role": False,
                 "skills_approved": ["Java"],
                 "skills_unknown": [],
                 "confidence": 0.2,
@@ -157,6 +213,7 @@ class RecipientRoutingTests(unittest.TestCase):
                     "work_mode": "",
                     "visa_hints": (),
                     "experience_years_min": None,
+                    "skills_text": "Java",
                     "skills_approved": ("Java",),
                     "skills_unknown": (),
                     "confidence": 0.2,
@@ -171,11 +228,11 @@ class RecipientRoutingTests(unittest.TestCase):
                 ai_extractor_enabled=True,
             )
 
-        self.assertEqual(parsed["role"], "AI Engineer")
-        self.assertEqual(details["merged_result"]["role"], "AI Engineer")
-        self.assertEqual(details["approved_skills_text"], parsed["skills_text"])
-        self.assertEqual(details["unknown_skills"], [])
-        self.assertFalse(any("role candidate" in note for note in details["ai_merge_notes"]))
+        self.assertEqual(parsed["role"], "Software Engineer")
+        self.assertEqual(details["merged_result"]["role"], "Software Engineer")
+        self.assertEqual(details["parser_mode"], "ai_primary")
+        self.assertIsNone(details["parser_warning"])
+        self.assertFalse(details["fallback_used"])
 
     def test_parse_email_with_details_survives_ai_extractor_failure_without_contract_change(self) -> None:
         with patch("app.phase0.extract_ai_job_details", side_effect=RuntimeError("extractor timeout")):
@@ -187,11 +244,14 @@ class RecipientRoutingTests(unittest.TestCase):
             )
 
         self.assertEqual(parsed["role"], "AI Engineer")
-        self.assertEqual(details["parser_version"], "spacy_ai_enrichment_v2")
+        self.assertEqual(details["parser_version"], "ai_fallback_v2")
+        self.assertEqual(details["parser_mode"], "ai_fallback")
         self.assertEqual(details["ai_extractor_result"]["error"], "extractor timeout")
         self.assertEqual(details["approved_skills_text"], parsed["skills_text"])
         self.assertEqual(details["unknown_skills"], [])
-        self.assertEqual(details["ai_merge_notes"], [])
+        self.assertTrue(details["fallback_used"])
+        self.assertIn("base parser fallback used", str(details["parser_warning"]))
+        self.assertTrue(details["ai_merge_notes"])
 
     def test_classify_section_heading_maps_project_headings(self) -> None:
         self.assertEqual(classify_section_heading("Role Summary")[0], "summary")

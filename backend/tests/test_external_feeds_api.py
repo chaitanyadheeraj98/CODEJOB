@@ -533,6 +533,7 @@ class ExternalFeedsApiTests(unittest.TestCase):
                         location="Remote",
                         salary_text="",
                         skills_text="Java",
+                        skills_json='{"skills_text":"Java, Temporal Workflow, Graph Orchestration","known":["Java"],"unknown":["Temporal Workflow","Temporal Workflow","Graph Orchestration"],"evidence":{"Temporal Workflow":"ai_extractor","Graph Orchestration":"ai_extractor"}}',
                         score=0,
                         decision="qualified",
                         state="needs_review",
@@ -548,6 +549,7 @@ class ExternalFeedsApiTests(unittest.TestCase):
                         location="Remote",
                         salary_text="",
                         skills_text="Java",
+                        skills_json='{"skills_text":"Java, Temporal Workflow, Agent Studio","known":["Java"],"unknown":["Temporal Workflow","Agent Studio"],"evidence":{"Temporal Workflow":"ai_extractor","Agent Studio":"ai_extractor"}}',
                         score=0,
                         decision="qualified",
                         state="needs_review",
@@ -579,6 +581,57 @@ class ExternalFeedsApiTests(unittest.TestCase):
         pending_after = self.client.get("/settings/skills/pending")
         self.assertEqual(pending_after.status_code, 200, pending_after.text)
         self.assertEqual([item["skill_name"] for item in pending_after.json()], ["Agent Studio", "Graph Orchestration"])
+
+    def test_pending_skill_api_prefers_skills_json_unknown_over_legacy_parser_bucket(self) -> None:
+        with self.SessionLocal() as db:
+            db.add(
+                RecruiterEmail(
+                    owner_id=main.settings.owner_id,
+                    sender="skillsjson@example.com",
+                    subject="Structured",
+                    body="Body",
+                    role="Engineer",
+                    location="Remote",
+                    salary_text="",
+                    skills_text="Java, Temporal Workflow",
+                    skills_json='{"skills_text":"Java, Temporal Workflow","known":["Java"],"unknown":["Temporal Workflow"],"evidence":{"Temporal Workflow":"ai_extractor"}}',
+                    score=0,
+                    decision="qualified",
+                    state="needs_review",
+                    source="gmail",
+                    parser_details_json='{"unknown_skills":["Legacy Ghost Skill"]}',
+                )
+            )
+            db.commit()
+
+        pending = self.client.get("/settings/skills/pending")
+        self.assertEqual(pending.status_code, 200, pending.text)
+        self.assertEqual([item["skill_name"] for item in pending.json()], ["Temporal Workflow"])
+
+    def test_pending_skill_api_falls_back_to_legacy_unknown_skills_when_skills_json_missing(self) -> None:
+        with self.SessionLocal() as db:
+            db.add(
+                RecruiterEmail(
+                    owner_id=main.settings.owner_id,
+                    sender="legacy@example.com",
+                    subject="Legacy",
+                    body="Body",
+                    role="Engineer",
+                    location="Remote",
+                    salary_text="",
+                    skills_text="Java",
+                    score=0,
+                    decision="qualified",
+                    state="needs_review",
+                    source="gmail",
+                    parser_details_json='{"unknown_skills":["Legacy Graph Skill"]}',
+                )
+            )
+            db.commit()
+
+        pending = self.client.get("/settings/skills/pending")
+        self.assertEqual(pending.status_code, 200, pending.text)
+        self.assertEqual([item["skill_name"] for item in pending.json()], ["Legacy Graph Skill"])
 
     def test_dismissed_skill_is_suppressed_from_pending_results(self) -> None:
         with self.SessionLocal() as db:
@@ -953,17 +1006,17 @@ class ExternalFeedsApiTests(unittest.TestCase):
                 "is_texas_role": "texas" in canonical_location.lower(),
             }
             return parsed, {
-                "parser_version": "spacy_ai_enrichment_v2",
+                "parser_version": "base_ai_extractor_v1",
                 "source": "nvoids",
                 "base_parser_result": {"role": canonical_title},
-                "enrichment_result": {},
                 "ai_extractor_result": {
                     "skills_approved": ["Java", "Spring Boot"],
                     "skills_unknown": [],
                     "confidence": 0.84,
                 },
+                "approved_skills_text": "Java, Spring Boot",
+                "unknown_skills": [],
                 "merged_result": dict(parsed),
-                "merge_notes": [],
                 "ai_merge_notes": ["nvoids flow reused the merged parse with AI extractor enabled"],
                 "source_hints": source_hints,
             }
@@ -1007,9 +1060,13 @@ class ExternalFeedsApiTests(unittest.TestCase):
                 self.assertEqual(row.role, "Senior Python Developer")
                 self.assertIn("Subject: Application for Senior Python Developer", row.draft_reply or "")
                 self.assertIsNotNone(row.parser_details_json)
+                self.assertIsNotNone(row.skills_json)
                 payload = row.parser_details_json or ""
+                skills_payload = row.skills_json or ""
                 self.assertIn('"ai_extractor_result"', payload)
                 self.assertIn('"skills_text":"Java, Spring Boot"', payload)
+                self.assertIn('"skills_text":"Java, Spring Boot"', skills_payload)
+                self.assertIn('"known":["Java","Spring Boot"]', skills_payload)
                 self.assertIn('"canonical_title":"Senior Python Developer"', payload)
         finally:
             external_feed_service_module.parse_email_with_details = original_parse_email_with_details

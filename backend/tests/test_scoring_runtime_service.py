@@ -30,6 +30,17 @@ class ScoringRuntimeServiceTests(unittest.TestCase):
         self.assertIn("Spring Boot", text)
         self.assertIn("AWS", text)
 
+    def test_semantic_text_for_resume_can_skip_file_fallback_for_matching(self) -> None:
+        service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1], "hash")))
+
+        class Resume:
+            skills_text = ""
+            file_path = "missing.docx"
+            file_name = "missing.docx"
+
+        text = service.semantic_text_for_resume(Resume(), allow_file_fallback=False)
+        self.assertEqual(text, "")
+
     def test_extract_latest_message_block_prefers_newest_segment(self) -> None:
         service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1], "hash")))
         body = (
@@ -57,7 +68,7 @@ class ScoringRuntimeServiceTests(unittest.TestCase):
         self.assertTrue(payload is not None)
         self.assertGreaterEqual(len(calls), 2)
 
-    def test_neutral_semantic_fallback_not_keyword_only_drop(self) -> None:
+    def test_missing_resume_skills_skips_semantic_instead_of_file_extraction(self) -> None:
         def failing_embed(_text: str) -> tuple[list[float], str]:
             raise ValueError("No embedding data received")
 
@@ -87,10 +98,10 @@ class ScoringRuntimeServiceTests(unittest.TestCase):
             email_row=None,
             resume=Resume(),
         )
-        self.assertEqual(source, "v2_rules_plus_semantic_neutral_fallback")
-        self.assertIn("neutral semantic score applied", summary)
-        self.assertGreater(score, 0.45)
-        self.assertIsNotNone(diag.fallback_reason)
+        self.assertEqual(source, "v2_rules_plus_semantic")
+        self.assertIn("semantic skipped (resume text unavailable)", summary)
+        self.assertLessEqual(score, 0.18)
+        self.assertEqual(diag.fallback_reason, "resume_text_unavailable")
 
     def test_weak_skills_uses_rich_fallback_keyword_source(self) -> None:
         service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1], "hash")))
@@ -256,6 +267,93 @@ class ScoringRuntimeServiceTests(unittest.TestCase):
         )
         self.assertIsNotNone(selection.resume)
         self.assertEqual(selection.resume.file_name, "java_full_stack.docx")
+
+    def test_raw_skills_overlap_can_match_unknown_terms_directly(self) -> None:
+        service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1, 0.2], "hash")))
+        parsed = {
+            "role": "Workflow Engineer",
+            "skills_text": "Temporal Workflow, Java",
+            "salary_text": "",
+            "location": "Remote",
+        }
+
+        class Settings:
+            feature_semantic_enabled = False
+            role_keywords = ""
+            free_text_guidance = ""
+
+        class Resume:
+            def __init__(self, rid: int, name: str, skills: str):
+                self.id = rid
+                self.file_name = name
+                self.skills_text = skills
+                self.semantic_embedding = None
+                self.file_path = name
+                self.is_enabled = True
+                self.is_current = False
+
+        temporal_resume = Resume(1, "temporal_resume.docx", "Temporal Workflow, Java, Spring Boot")
+        plain_resume = Resume(2, "plain_java_resume.docx", "Java, Spring Boot")
+
+        selection = service.select_best_resume_match(
+            subject="",
+            body="Need Temporal Workflow and Java experience.",
+            parsed=parsed,
+            user_settings=Settings(),
+            email_row=None,
+            resumes=[temporal_resume, plain_resume],
+            fallback_resume=temporal_resume,
+        )
+        self.assertIsNotNone(selection.resume)
+        self.assertEqual(selection.resume.file_name, "temporal_resume.docx")
+        self.assertIn("raw_overlap=", selection.ai_summary)
+        self.assertIn("matched_raw_skills=temporal workflow, java", selection.ai_summary)
+
+    def test_resume_without_saved_skills_is_scored_weak_without_file_extraction(self) -> None:
+        service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1, 0.2], "hash")))
+        parsed = {
+            "role": "Java Developer",
+            "skills_text": "Java, Spring Boot",
+            "salary_text": "",
+            "location": "Dallas, TX",
+        }
+
+        class Settings:
+            feature_semantic_enabled = False
+            role_keywords = ""
+            free_text_guidance = ""
+
+        class Resume:
+            def __init__(self, rid: int, name: str, skills: str):
+                self.id = rid
+                self.file_name = name
+                self.skills_text = skills
+                self.semantic_embedding = None
+                self.file_path = name
+                self.is_enabled = True
+                self.is_current = False
+
+        weak_resume = Resume(1, "missing_skills.docx", "")
+        strong_resume = Resume(2, "strong_skills.docx", "Java, Spring Boot, Microservices")
+
+        selection = service.select_best_resume_match(
+            subject="",
+            body="Need Java and Spring Boot.",
+            parsed=parsed,
+            user_settings=Settings(),
+            email_row=None,
+            resumes=[weak_resume, strong_resume],
+            fallback_resume=weak_resume,
+        )
+        self.assertIsNotNone(selection.resume)
+        self.assertEqual(selection.resume.file_name, "strong_skills.docx")
+        weak_score, weak_summary = service._intent_weighted_keyword_score(
+            parsed=parsed,
+            user_settings=Settings(),
+            resume=weak_resume,
+        )
+        self.assertLessEqual(weak_score, 0.18)
+        self.assertIn("Resume skills unavailable", weak_summary)
 
 
 if __name__ == "__main__":

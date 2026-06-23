@@ -43,15 +43,18 @@ class AIExtractorTests(unittest.TestCase):
             "primary_location": "Dallas, TX",
             "mentioned_locations": ["Dallas, TX", "Remote"],
             "work_mode": "hybrid",
+            "salary_text": "$80/hr",
             "visa_hints": ["H1B"],
             "experience_years_min": 8,
-            "skills_approved": ["Java", "Amazon ECS", "Grafana"],
-            "skills_unknown": ["Temporal"],
+            "skills_text": "Java, Amazon ECS, Grafana, Temporal",
+            "f2f_mentioned": True,
+            "asks_contact_fields": True,
+            "is_texas_role": True,
             "confidence": 0.86,
             "evidence": {"role": ["Role: Senior Java Engineer"], "skills": ["Java, Amazon ECS, Grafana, Temporal"]},
         },
     )
-    def test_returns_structured_result_with_known_and_unknown_skills(self, _mock_completion) -> None:
+    def test_returns_structured_result_with_free_skills_and_compatibility_buckets(self, _mock_completion) -> None:
         result = extract_ai_job_details("Senior Java Engineer", "Role: Senior Java Engineer")
         payload = ai_extractor_result_to_payload(result)
 
@@ -59,8 +62,13 @@ class AIExtractorTests(unittest.TestCase):
         self.assertEqual(payload["company"], "Acme Corp")
         self.assertEqual(payload["primary_location"], "Dallas, TX")
         self.assertEqual(payload["work_mode"], "hybrid")
+        self.assertEqual(payload["salary_text"], "$80/hr")
         self.assertEqual(payload["visa_hints"], ["H1B"])
         self.assertEqual(payload["experience_years_min"], 8)
+        self.assertEqual(payload["skills_text"], "Java, Amazon ECS, Grafana, Temporal")
+        self.assertTrue(payload["f2f_mentioned"])
+        self.assertTrue(payload["asks_contact_fields"])
+        self.assertTrue(payload["is_texas_role"])
         self.assertEqual(payload["skills_approved"], ["Java", "Amazon ECS", "Grafana"])
         self.assertEqual(payload["skills_unknown"], ["Temporal"])
         self.assertEqual(payload["confidence"], 0.86)
@@ -72,11 +80,34 @@ class AIExtractorTests(unittest.TestCase):
         payload = ai_extractor_result_to_payload(result)
 
         self.assertEqual(payload["role_candidates"], [])
+        self.assertEqual(payload["skills_text"], "")
         self.assertEqual(payload["skills_approved"], [])
         self.assertEqual(payload["skills_unknown"], [])
+        self.assertFalse(payload["f2f_mentioned"])
+        self.assertFalse(payload["asks_contact_fields"])
+        self.assertFalse(payload["is_texas_role"])
         self.assertEqual(payload["confidence"], 0.0)
         self.assertEqual(payload["error"], "malformed response")
         self.assertEqual(payload["evidence"]["extractor_error"], ["malformed response"])
+
+    @patch(
+        "app.parsing.ai_extractor.deepseek_json_completion",
+        return_value={
+            "role": "Platform Engineer",
+            "skills": ["Python", "RAG"],
+            "must_have_skills": "Kubernetes, Python",
+            "skills_unknown": ["Temporal"],
+        },
+    )
+    def test_supports_mixed_skill_sources_while_returning_free_skills_text(self, _mock_completion) -> None:
+        result = extract_ai_job_details("Platform Engineer", "Body")
+        payload = ai_extractor_result_to_payload(result)
+
+        self.assertEqual(payload["role_candidates"], ["Platform Engineer"])
+        self.assertEqual(payload["skills_text"], "Python, RAG, Kubernetes, Temporal")
+        self.assertIn("Python", payload["skills_approved"])
+        self.assertIn("Kubernetes", payload["skills_approved"])
+        self.assertIn("Temporal", payload["skills_unknown"])
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ from app.automation import RunOrchestrator, RunOrchestratorDependencies, RunOrch
 from app.services.policy_service import EffectiveRunInputs
 from app.gmail_client import GmailMessageCandidate, MailAttachment
 from app.models import AttachmentAsset, DraftEditFeedback, RecipientRoutingFeedback, RecruiterEmail, ResumeAsset, SyncRun, UserSettings
+from app.parsing import build_skills_json_payload
 from app.phase0 import RoutingResult, parse_email_with_details
 from app.routing import RoutingDecision
 from app.schemas import ApproveSendRequest, AutomationRunRequest, AutomationRunResponse, GmailSyncResponse, RejectRequest, ResolveRecipientsRequest
@@ -191,6 +192,10 @@ class OrchestrationService:
                     location=str(parsed["location"]),
                     salary_text=str(parsed["salary_text"]),
                     skills_text=str(parsed["skills_text"]),
+                    skills_json=json.dumps(
+                        build_skills_json_payload(parser_details, fallback_skills_text=str(parsed["skills_text"])),
+                        separators=(",", ":"),
+                    ),
                     score=int(ai_score * 100),
                     decision=decision,
                     state=state,

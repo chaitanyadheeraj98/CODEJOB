@@ -24,6 +24,7 @@ class RecruiterEmail(Base):
     location: Mapped[str] = mapped_column(String(255), default="")
     salary_text: Mapped[str] = mapped_column(String(255), default="")
     skills_text: Mapped[str] = mapped_column(Text, default="")
+    skills_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     score: Mapped[int] = mapped_column(Integer, default=0)
     decision: Mapped[str] = mapped_column(String(50), index=True, default="auto_rejected")
     state: Mapped[str] = mapped_column(String(50), index=True, default="auto_rejected")

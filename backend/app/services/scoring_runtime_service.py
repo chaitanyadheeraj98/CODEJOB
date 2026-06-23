@@ -62,13 +62,15 @@ class ScoringRuntimeService:
             ]
         )
 
-    def semantic_text_for_resume(self, resume: ResumeAsset | None) -> str:
+    def semantic_text_for_resume(self, resume: ResumeAsset | None, *, allow_file_fallback: bool = True) -> str:
         if not resume:
             return ""
         skills_text = str(getattr(resume, "skills_text", "") or "").strip()
         if skills_text and skills_text.lower() != "none_detected":
             compact_skills = build_semantic_skill_summary(skills_text, limit=12) or skills_text
             return f"Skills: {compact_skills}"
+        if not allow_file_fallback:
+            return ""
         return extract_resume_context(resume.file_path, resume.file_name)
 
     def select_best_resume_match(
@@ -120,11 +122,6 @@ class ScoringRuntimeService:
                 ),
                 next_email_ctx,
             )
-
-        if not user_settings.feature_semantic_enabled:
-            selected_resume = fallback_resume or (enabled_resumes[0] if enabled_resumes else None)
-            selection, _ = _score_resume(selected_resume, email_row)
-            return selection
 
         if not enabled_resumes:
             selection, _ = _score_resume(fallback_resume, email_row)
@@ -216,6 +213,26 @@ class ScoringRuntimeService:
         skills = {s.strip().lower() for s in (skills_text or "").split(",") if s.strip() and s.strip().lower() != "none_detected"}
         return len(skills)
 
+    def _raw_skill_tokens(self, skills_text: str | None) -> list[str]:
+        tokens: list[str] = []
+        seen: set[str] = set()
+        for part in (skills_text or "").split(","):
+            token = re.sub(r"\s+", " ", part.strip().lower())
+            if not token or token == "none_detected" or token in seen:
+                continue
+            seen.add(token)
+            tokens.append(token)
+        return tokens
+
+    def _raw_skill_overlap(self, jd_skills_text: str | None, resume_skills_text: str | None) -> tuple[float, list[str], list[str]]:
+        jd_tokens = self._raw_skill_tokens(jd_skills_text)
+        resume_tokens = set(self._raw_skill_tokens(resume_skills_text))
+        if not jd_tokens or not resume_tokens:
+            return 0.0, [], jd_tokens
+        matched = [token for token in jd_tokens if token in resume_tokens]
+        missing = [token for token in jd_tokens if token not in resume_tokens]
+        return (len(matched) / len(jd_tokens)) if jd_tokens else 0.0, matched, missing
+
     def _keyword_score_from_text(self, parsed: dict[str, str | int], user_settings: UserSettings, text: str) -> tuple[float, str]:
         combined_text = text.lower()
         score = 0.45
@@ -239,26 +256,40 @@ class ScoringRuntimeService:
         if not resume:
             return base_score, f"AI fit score computed from role keywords and skill overlap ({base_score:.2f})"
 
+        resume_skills_text = str(getattr(resume, "skills_text", "") or "").strip()
+        if not resume_skills_text or resume_skills_text.lower() == "none_detected":
+            weak_score = clamp01(min(base_score, 0.18))
+            return weak_score, f"Resume skills unavailable ({weak_score:.2f}); scored weak because matching trusts saved resume skills_text"
+
         intent = compute_intent_weighted_match(
             jd_role=str(parsed.get("role", "")),
             jd_skills_text=str(parsed.get("skills_text", "")),
-            resume_skills_text=str(getattr(resume, "skills_text", "") or ""),
+            resume_skills_text=resume_skills_text,
+        )
+        raw_overlap_score, matched_raw, missing_raw = self._raw_skill_overlap(
+            str(parsed.get("skills_text", "")),
+            resume_skills_text,
         )
         jd_role_family = detect_role_family(str(parsed.get("role", "")), str(parsed.get("skills_text", "")))
         if jd_role_family == "ai":
-            final_score = (base_score * 0.35) + (intent.score * 0.65)
+            final_score = (raw_overlap_score * 0.5) + (intent.score * 0.35) + (base_score * 0.15)
         else:
-            final_score = (base_score * 0.7) + (intent.score * 0.3)
+            final_score = (raw_overlap_score * 0.55) + (base_score * 0.3) + (intent.score * 0.15)
         final_score = clamp01(final_score)
 
         summary_parts = [
             f"Intent-weighted fit ({final_score:.2f})",
+            f"raw_overlap={raw_overlap_score:.2f}",
             f"specialization={intent.specialization_score:.2f}",
             f"foundation={intent.foundation_score:.2f}",
             f"role_alignment={intent.role_alignment_score:.2f}",
             f"jd_role_family={intent.jd_role_family}",
             f"resume_role_family={intent.resume_role_family}",
         ]
+        if matched_raw:
+            summary_parts.append(f"matched_raw_skills={', '.join(matched_raw[:8])}")
+        if missing_raw:
+            summary_parts.append(f"missing_raw_skills={', '.join(missing_raw[:8])}")
         if intent.matched_clusters:
             summary_parts.append(f"matched_clusters={', '.join(intent.matched_clusters)}")
         if intent.matched_specialization_skills:
@@ -363,7 +394,7 @@ class ScoringRuntimeService:
                 str(parsed.get("role", "")),
                 str(parsed.get("skills_text", "")),
             )
-            resume_text = self.semantic_text_for_resume(resume)
+            resume_text = self.semantic_text_for_resume(resume, allow_file_fallback=False)
             if not resume_text.strip():
                 diag = SemanticDiagnostics(
                     input_source=source,

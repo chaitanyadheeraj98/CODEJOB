@@ -1,535 +1,388 @@
-# Section-Aware JD Extraction And Resume Scoring Build Plan
+# Parser Refactor Plan Aligned To Current `semantic-embeddings`
 
 ## Current Status
 
-- Completed Phases:
-  - `Phase 1: Footer And Recruiter Noise Suppression` completed on `2026-06-13`
-  - `Phase 2: Section Slicing And Bucket Classification` completed on `2026-06-13`
-  - `Phase 3: JD-Specific Skill Evidence Extraction` completed on `2026-06-13`
-  - `Phase 6: Wire Section-Aware Extraction Into parse_email()` completed on `2026-06-13`
-  - `Phase 4: Role-Family Consistency Filter` completed on `2026-06-13`
-  - `Phase 5: Noise Guards And Alias Collision Protection` completed on `2026-06-13`
-- Current Phase:
-  - `Phase 5` completed and verified
-- Next Phase:
-  - `Phase 7: Regression And Real-JD Validation`
-- Last Verification:
-  - Focused parser tests: `backend/tests/test_skill_taxonomy.py` and `backend/tests/test_phase0_routing.py` passed (`44 passed`, `9 subtests passed`)
-  - Core regressions: `backend/tests/test_scoring_runtime_service.py`, `backend/tests/test_external_feeds_api.py`, `backend/tests/test_run_orchestrator.py`, and `backend/tests/test_approve_cc_regression.py` passed (`45 passed`)
-  - AI Engineer JD sandbox validation:
-    - role remained `AI Engineer`
-    - location remained `Alpharetta, GA`
-    - final `skills_text` still included richer JD signals such as `Agentic Workflows`, `RAG`, `Prompt Engineering`, `Tool Calling`, `Secure SDLC`, `Embeddings`, and `Observability`
-    - alias-collision noise like `Angular Services` and `SAFe` no longer appeared in the structured AI JD output
-- Open Risks / Notes:
-  - Phase 6 still provides the section-aware default parser path for structured JDs, with legacy cleaned-body fallback for headingless or weakly structured JDs
-  - Phase 5 hardens risky alias matching, but Phase 7 still needs broader regression and real-JD validation across multiple JD shapes
-  - Domain headings are intentionally explicit-only to avoid treating values like `Payments` as headings
-  - The next Codex implementation turn should start from `Phase 7`
-
-## Goal
-
-Implement production-safe, section-aware JD skill extraction and then a follow-up AI-intent resume scoring upgrade on top of the current backend without breaking the existing queue, settings, resume pinning, or send flows.
-
-The current backend already has:
-
-- parser entrypoint in `backend/app/phase0.py`
-- taxonomy normalization in `backend/app/skill_taxonomy.py`
-- intent-weighted resume selection in `backend/app/services/scoring_runtime_service.py`
-- stable downstream dependence on `skills_text`
-
-So the safest strategy is:
-
-1. improve how JD text is prepared
-2. improve how JD skills are extracted and filtered
-3. keep the persisted/output contract unchanged
-4. keep scoring, queueing, and sending behavior compatible during extraction phases
-5. add a separate scoring phase only after parser/extraction quality is stable
-
----
-
-## Non-Breakage Rules
-
-- Do not change the public `parse_email()` response shape in this build.
-- Do not change the persisted `skills_text` contract.
-- Do not change `/settings/resume`, `/settings/resumes`, queue state transitions, `resume_asset_id`, or approval/send flows.
-- Prefer additive internal helpers and dataclasses over invasive rewrites.
-- Each phase must be testable on its own before moving to the next one.
-- Treat Phases 1-7 as parser/extraction infrastructure.
-- Treat Phase 8 as the scoring/ranking upgrade.
-- Do not merge parser cleanup and scoring redesign into one implementation step.
-
----
-
-## Current Architecture Baseline
-
-### Current parser path
-
-- `parse_email()` in `backend/app/phase0.py` extracts role, location, salary, and `skills_text`.
-- `_extract_skills()` currently delegates directly to taxonomy-driven extraction.
-- The parser is still too flat for recruiter-email JDs and can include footer noise or weak alias collisions.
-
-### Current taxonomy path
-
-- `backend/app/skill_taxonomy.py` already supports canonical normalization and intent-weighted helper logic.
-- This is the correct place for JD-specific evidence aggregation and noise guards.
-- The runtime artifact is `backend/app/data/skill_taxonomy.json`.
-
-### Current scoring path
-
-- `backend/app/services/scoring_runtime_service.py` already consumes `skills_text` and applies semantic plus intent-weighted resume scoring.
-- This means upstream cleanup should improve matching without changing queue orchestration contracts.
-
----
-
-## Phase 1: Footer And Recruiter Noise Suppression
-
-### Objective
-
-Remove obvious recruiter/signature/footer text before section splitting or skill extraction.
-
-### Why first
-
-This gives the biggest reduction in noise with the lowest risk. It does not change APIs or scoring formulas.
-
-### Additions
-
-- Add a conservative footer-trimming helper in `backend/app/phase0.py`, for example:
-  - `strip_forward_headers(...)`
-  - `strip_recruiter_footer(...)`
-- Use multi-signal footer detection, not single-word triggers.
-- Treat footer markers as strong only when paired with patterns like:
-  - recruiter titles
-  - phone/email/address lines
-  - sign-off phrases
-  - unsubscribe/contact boilerplate
-
-### Keep safe
-
-- Do not cut on the first occurrence of `recruiter`, `email`, or `contact` alone.
-- If footer detection is uncertain, preserve text instead of over-trimming.
-
-### Verification
-
-- Add tests showing recruiter footer lines do not contribute to extracted JD skills.
-- Add tests showing real JD lines are not accidentally removed.
-
----
-
-## Phase 2: Section Slicing And Bucket Classification
-
-### Objective
-
-Convert the cleaned JD body into weighted sections before skill extraction.
-
-### Additions
-
-- Add internal dataclasses in `backend/app/phase0.py`, for example:
-  - `JDSection`
-  - optional `ParsedJobMetadata` if helpful
-- Add a section-heading alias dictionary grouped into buckets:
-  - `required`
-  - `mandatory`
-  - `technical_skills`
-  - `essential`
-  - `responsibilities`
-  - `summary`
-  - `preferred`
-  - `domain`
-  - `ai_compliance`
-  - `hard_filter`
-  - `footer`
-  - `unknown`
-- Add `SECTION_WEIGHTS` in code, not only docs.
-- Add helpers such as:
-  - `classify_section_heading(...)`
-  - `slice_jd_sections(...)`
-  - `build_skill_source_sections(...)`
-
-### Detection strategy
-
-- Layer 1: heading-based split
-- Layer 2: requirement-line heuristics when headings are missing
-- Layer 3: cleaned-body fallback only if section detection is weak
-
-### Keep safe
-
-- Headings must be validated against the alias dictionary before being treated as real section breaks.
-- `hard_filter` and `footer` sections must not feed skill extraction.
-- `unknown` sections may still be used, but at low weight.
-
-### Verification
-
-- Tests for common headings seen in this project:
-  - `Role Summary`
-  - `Required Qualifications`
-  - `Preferred Qualifications`
-  - `Technical Skills`
-  - `Domain Skill`
-  - `What Success Looks Like`
-  - `Compliance & Responsible AI Expectations`
-- Tests for inline hard-filter fields:
-  - `Location`
-  - `Visa`
-  - `Duration`
-  - `Rate`
-
----
-
-## Phase 3: JD-Specific Skill Evidence Extraction
-
-### Objective
-
-Extract skills from useful JD sections only, with section-aware evidence and weights, while still returning compatibility-safe `skills_text`.
-
-### Additions
-
-- Keep generic taxonomy helpers intact.
-- Add JD-specific helpers in `backend/app/skill_taxonomy.py`, for example:
-  - `extract_jd_skill_evidence(...)`
-  - `aggregate_jd_skill_evidence(...)`
-  - `extract_jd_skills_text(...)`
-- Add internal evidence models, for example:
-  - `SkillEvidence`
-  - `AggregatedSkill`
-
-### Behavior
-
-- Extract candidate phrases first, then resolve through taxonomy.
-- Prefer evidence from:
-  - `required`
-  - `mandatory`
-  - `technical_skills`
-  - `essential`
-  - `domain`
-- Use medium influence for:
-  - `responsibilities`
-  - `summary`
-  - `ai_compliance`
-- Use lower influence for:
-  - `preferred`
-  - `additional_notes`
-- Ignore:
-  - `hard_filter`
-  - `footer`
-
-### Output contract
-
-- `parse_email()` still returns `skills_text` as one normalized comma-separated string.
-- Internal evidence remains in memory only for this phase.
-
-### Keep safe
-
-- Do not persist structured skill evidence yet.
-- Do not require database changes.
-- If section-aware extraction fails, fall back to current cleaned-body extraction rather than returning empty output unexpectedly.
-
-### Verification
-
-- AI JD should include:
-  - `Agentic Workflows`
-  - `Tool Calling`
-  - `Human-in-the-Loop`
-  - `RAG`
-  - `Prompt Engineering`
-  - `AI Evaluations`
-  - `Embeddings`
-  - `Observability`
-  - `Responsible AI`
-  - `Python`
-  - `Java`
-  - `TypeScript`
-  - `REST APIs`
-  - `Secure SDLC`
-- AI JD should exclude:
-  - recruiter footer content
-  - `Technical Recruiter`
-  - `Email`
-  - `Address`
-  - weak collision noise such as `SAFe` unless strongly supported
-
----
-
-## Phase 4: Role-Family Consistency Filter
-
-### Objective
-
-Downweight or suppress off-family noisy skills after extraction, without over-pruning legitimate cross-stack requirements.
-
-### Additions
-
-- Reuse and extend the existing role-family logic in `backend/app/skill_taxonomy.py`.
-- Add preferred and allowed cluster maps for role families such as:
-  - `ai`
-  - `java_fullstack`
-  - `java_backend`
-  - `frontend`
-  - `devops_cloud`
-  - `data`
-
-### Behavior
-
-- If a skill is off-family, keep it only when:
-  - it comes from a strong section
-  - it appears repeatedly
-  - or it has strong match confidence
-- Do not delete all off-family skills automatically; just require stronger evidence.
-
-### Keep safe
-
-- Strong required-section evidence must win over family heuristics.
-- This filter should be additive after extraction, not a replacement for extraction.
-
-### Verification
-
-- AI JD should keep Java, Python, TypeScript, REST APIs.
-- AI JD should suppress low-confidence off-family skills that appear once in weak contexts.
-- Java full-stack JD should still keep backend, frontend, database, devops, and domain skills together.
-
----
-
-## Phase 5: Noise Guards And Alias Collision Protection
-
-### Objective
-
-Prevent weak alias matches and broad-token collisions from polluting `skills_text`.
-
-### Additions
-
-- Add suppression rules in `backend/app/skill_taxonomy.py` for:
-  - weak singletons
-  - broad aliases
-  - low-confidence matches from weak sections
-  - footer-derived or hard-filter-derived tokens
-- Support additive taxonomy metadata when useful:
-  - `dangerous_aliases`
-  - `min_context_required`
-  - `jd_only`
-  - `resume_only`
-
-### Behavior
-
-- Broad tokens like `safe`, `services`, or similarly ambiguous aliases must not match aggressively without context.
-- Noisy skills should require:
-  - stronger section weights
-  - repeated evidence
-  - or exact canonical/alias phrase evidence
-
-### Keep safe
-
-- Additive JSON metadata only; do not break existing taxonomy loading.
-- Fallback taxonomy loading must still work if new metadata fields are absent.
-
-### Verification
-
-- Known noisy collisions must be suppressed in the AI JD case.
-- Exact strong phrases should still map correctly through taxonomy.
-
----
-
-## Phase 6: Wire Section-Aware Extraction Into `parse_email()`
-
-### Objective
-
-Make section-aware extraction the default parser path while preserving the existing output shape.
-
-### Final `parse_email()` behavior
-
-- extract metadata fields first
-- clean forwarded/header/footer noise
-- slice and classify sections
-- build skill-source sections
-- call JD-specific extraction
-- emit:
+- `docs/temp2.md` has been realigned to the current branch instead of the older greenfield assumptions.
+- The active parser hub is `backend/app/phase0.py::parse_email_with_details(...)`.
+- The current live parser flow is:
+  - base parser
+  - spaCy enrichment
+  - optional AI extractor
+  - merged final result
+- `feature_ai_extractor_enabled` already exists and is already wired through Gmail, Nvoids, orchestrator, and manual parser entry points.
+- Nvoids already has:
+  - canonical title extraction
+  - `source_hints`
+  - empty-detail guards
+  - row-level sync resilience
+- `parser_details_json` already exists and is already exposed in candidate review UI.
+
+## Completed Branch Reality
+
+- `parse_email()` still returns the stable downstream contract:
   - `role`
   - `location`
   - `job_location_text`
   - `salary_text`
   - `skills_text`
-  - existing hard-filter related booleans/flags
+  - `f2f_mentioned`
+  - `asks_contact_fields`
+  - `is_texas_role`
+- Current parser details shape is enrichment-centric and merge-centric:
+  - `base_parser_result`
+  - `enrichment_result`
+  - `ai_extractor_result`
+  - `approved_skills_text`
+  - `unknown_skills`
+  - `merged_result`
+  - `merge_notes`
+  - `ai_merge_notes`
+  - `source_hints`
 
-### Keep safe
+## Current Refactor Goal
 
-- Keep field names unchanged.
-- If no useful sections are detected, fall back to the current cleaned-body extraction path instead of breaking queue preparation.
+- Simplify the current parser architecture into two clean modes:
+  - AI extractor OFF -> base parser only
+  - AI extractor ON -> AI extractor only
+  - AI failure -> base parser emergency fallback with warning
+- Move taxonomy into a post-extraction audit role instead of using it as the hard gate for final JD `skills_text`.
+- Let resume matching compare the final JD `skills_text` directly against `ResumeAsset.skills_text`.
 
-### Verification
+## Current Phase
 
-- Existing callers in:
-  - `backend/app/main.py`
-  - `backend/app/automation/queue_preparation.py`
-  - `backend/app/automation/run_orchestrator.py`
-  - `backend/app/services/orchestration_service.py`
+- Planning only. No code changes from this document yet.
+
+## Next Phase
+
+- Phase 0: Freeze Current Branch Behavior
+
+## Last Verification
+
+- Verified against current branch code paths in:
+  - `backend/app/phase0.py`
+  - `backend/app/external_feeds/parser.py`
   - `backend/app/external_feeds/service.py`
-  continue to work without changes to their call contract.
+  - `backend/app/automation/queue_preparation.py`
+- Confirmed that the older `temp2.md` assumptions were out of sync with the branch and needed a branch-reality rewrite.
+
+## Open Risks / Notes
+
+- Current mismatch is architectural, not missing infrastructure:
+  - AI is additive, not authoritative
+  - taxonomy approval still narrows AI-extracted skill output
+  - final matching still depends too much on normalized/taxonomy-approved skill paths
+- This plan is a refactor-on-top-of-existing-parser-stack, not an initial feature build.
 
 ---
 
-## Phase 7: Regression And Real-JD Validation
+## Summary
 
-### Targeted parser tests
-
-- AI Engineer JD from this thread
-- Java FSD JD with technical/domain sections
-- Java backend/full-stack JD with mixed headings
-- JD with noisy recruiter footer
-- JD with weak heading structure and line-heuristic fallback
-
-### Scoring validation
-
-- Re-run the real AI Engineer scenario after each meaningful upstream phase.
-- Confirm:
-  - cleaner `skills_text`
-  - stable or improved resume selection
-  - fewer noisy extracted skills
-
-### Existing regression suites to keep green
-
-- `backend/tests/test_skill_taxonomy.py`
-- `backend/tests/test_scoring_runtime_service.py`
-- `backend/tests/test_external_feeds_api.py`
-- `backend/tests/test_run_orchestrator.py`
-- `backend/tests/test_approve_cc_regression.py`
+This branch is already far enough along that the safest path is to refactor the existing parser stack instead of replacing it blindly. The real work now is to simplify `parse_email_with_details(...)`, decouple AI extraction from taxonomy gating, persist a structured skill audit payload, and make resume matching trust the final parsed JD skill string against the saved resume skill string.
 
 ---
 
-## Suggested Execution Order For Codex
+## Phase Plan
 
-### Build order
+### Phase 0: Freeze Current Branch Behavior
 
-1. Phase 1: footer suppression
-2. Phase 2: section slicing and buckets
-3. Phase 3: JD-specific skill evidence extraction
-4. Phase 6: wire new extraction into `parse_email()`
-5. Phase 4: role-family consistency filter
-6. Phase 5: noise guards and alias collision protection
-7. Phase 7: regression plus real-JD validation
+Document and test the current live behavior before changing parser logic.
 
-### Why this order
+- Confirm Gmail path uses `parse_email_with_details(..., ai_extractor_enabled=...)`.
+- Confirm Nvoids path uses `parse_email_with_details(..., source_hints=...)`.
+- Lock the current parser details shape with focused tests.
+- Confirm resume selection currently receives merged parsed output, not raw AI-only output.
 
-- Early phases improve signal without touching downstream contracts.
-- Wiring happens before advanced filtering so the new parser path can be observed early.
-- Role-family filtering and noise guards come later because they are the most likely to over-prune if added too early.
+Expected result:
+
+- A stable baseline exists before removing enrichment or changing parser ownership.
+
+After completion, update this file with:
+
+- `Current Phase: Phase 0 complete`
+- `Next Phase: Phase 1: Remove spaCy Enrichment From Execution Path`
+- tests run and result
+
+### Phase 1: Remove spaCy Enrichment From Execution Path
+
+Refactor the parser flow so `backend/app/parsing/spacy_enrichment.py` is no longer part of live parse execution.
+
+- Stop calling `enrich_job_text(...)` inside `parse_email_with_details(...)`.
+- Keep file deletion optional at first; unused is acceptable.
+- Remove parser-details dependence on:
+  - `enrichment_result`
+  - `merge_notes`
+- Reduce the current 3-way merge toward a 2-mode parser contract.
+
+Expected result:
+
+- Live parser execution no longer depends on the enrichment layer.
+
+After completion, update this file with:
+
+- changed subsystems
+- behavior change verification
+- `Next Phase: Phase 2: Redesign AI Extractor To Return Free Skills`
+
+### Phase 2: Redesign AI Extractor To Return Free Skills
+
+Refactor `backend/app/parsing/ai_extractor.py` so AI extraction is no longer taxonomy-gated at extraction time.
+
+- Replace `skills_approved` / `skills_unknown` as the primary extraction interface with a freer result centered on:
+  - `skills_text`
+  - `role_candidates`
+  - `primary_location`
+  - `mentioned_locations`
+  - `work_mode`
+  - `salary_text`
+  - `company`
+  - `visa_hints`
+  - `experience_years_min`
+  - `f2f_mentioned`
+  - `asks_contact_fields`
+  - `is_texas_role`
+  - `confidence`
+  - `evidence`
+  - `error`
+- AI should return free skills text.
+- Backend should only clean and dedupe formatting at extraction time.
+- Taxonomy audit must happen after extraction, not during extraction.
+
+Expected result:
+
+- AI extractor can surface richer JD skills without collapsing them immediately into approved-only taxonomy values.
+
+After completion, update this file with:
+
+- payload shape changes
+- tests run
+- `Next Phase: Phase 3: Add Post-Extraction Skill Audit`
+
+### Phase 3: Add Post-Extraction Skill Audit
+
+Introduce a separate audit layer, for example `backend/app/parsing/skill_audit.py`.
+
+- Input:
+  - free comma-separated `skills_text`
+- Output:
+  - `skills_text`
+  - `known`
+  - `unknown`
+  - `evidence`
+- Unknown skills must stay in final `skills_text`.
+- Manual Upgrade should consume only `unknown`.
+- Taxonomy should audit, not suppress the final parsed skills text.
+
+Expected result:
+
+- JD skills can remain expressive while still supporting controlled custom-skill review.
+
+After completion, update this file with:
+
+- audit payload details
+- tests run
+- `Next Phase: Phase 4: Add Structured skills_json Persistence`
+
+### Phase 4: Add Structured `skills_json` Persistence
+
+Extend candidate persistence with a structured skills payload.
+
+- Add `RecruiterEmail.skills_json`.
+- Keep `RecruiterEmail.skills_text` unchanged for compatibility.
+- Keep `parser_details_json` for diagnostics.
+- `skills_json` should contain:
+  - `skills_text`
+  - `known`
+  - `unknown`
+  - `evidence`
+
+Expected result:
+
+- Candidate rows can store both the compatibility string field and the structured post-audit skill payload.
+
+After completion, update this file with:
+
+- schema/runtime patch notes
+- API/schema notes
+- `Next Phase: Phase 5: Rewrite parse_email_with_details(...) Into Clean Toggle Modes`
+
+### Phase 5: Rewrite `parse_email_with_details(...)` Into Clean Toggle Modes
+
+Rewrite parser control flow in `phase0.py` to match the intended architecture.
+
+- `feature_ai_extractor_enabled = false`
+  - base parser only
+- `feature_ai_extractor_enabled = true`
+  - AI extractor only
+- AI failure / malformed JSON / timeout
+  - base parser emergency fallback
+  - explicit parser warning in `parser_details_json`
+
+The returned parse contract must stay unchanged:
+
+- `role`
+- `location`
+- `job_location_text`
+- `salary_text`
+- `skills_text`
+- `f2f_mentioned`
+- `asks_contact_fields`
+- `is_texas_role`
+
+Expected result:
+
+- Parser ownership becomes clean and predictable.
+
+After completion, update this file with:
+
+- final parser mode behavior
+- warning/fallback behavior
+- `Next Phase: Phase 6: Make Resume Matching Use Raw skills_text`
+
+### Phase 6: Make Resume Matching Use Raw `skills_text`
+
+Update scoring so JD-vs-resume comparison uses the final comma-separated `skills_text` directly.
+
+- Compare parsed JD `skills_text` against `ResumeAsset.skills_text`.
+- Do not require all JD skills to exist in taxonomy before they can affect matching.
+- Keep taxonomy-based intent scoring as a secondary signal, not the only gate.
+- If a resume has no saved `skills_text`, score it as weak or missing instead of falling back to file extraction for matching.
+
+Expected result:
+
+- Matching can benefit from free-form AI-extracted JD skills without losing deterministic scoring support.
+
+After completion, update this file with:
+
+- scoring behavior notes
+- validation scenarios
+- `Next Phase: Phase 7: Narrow Manual Upgrade To Unknown Skills Only`
+
+### Phase 7: Narrow Manual Upgrade To Unknown Skills Only
+
+Update the pending-skill flow to prefer the structured audit output.
+
+- Read `skills_json.unknown` first.
+- Fall back to top-level `unknown_skills` for backward compatibility.
+- Do not treat known taxonomy skills as pending.
+- Do not auto-approve skills merely because AI returned them.
+
+Expected result:
+
+- The Upgrade Skills workflow becomes narrower and more trustworthy.
+
+After completion, update this file with:
+
+- API behavior notes
+- compatibility notes
+- `Next Phase: Phase 8: Simplify Candidate Parser Details UI`
+
+### Phase 8: Simplify Candidate Parser Details UI
+
+Update the Needs Review parser-details UI to match the new parser contract.
+
+The details view should show:
+
+- parser mode
+- final extracted result
+- AI extractor result
+- base fallback result when relevant
+- `skills_json`
+- known skills
+- unknown skills
+- parser warning
+- source hints
+- AI evidence
+
+It should explicitly stop depending on:
+
+- `enrichment_result`
+- `merge_notes`
+- `ai_merge_notes`
+- winning-source logic from a 3-way merge
+
+Expected result:
+
+- Candidate details explain the real parser path instead of the older merged-parser model.
+
+After completion, update this file with:
+
+- UI verification notes
+- test results
+- `Next Phase: Phase 9: Full Regression Validation`
+
+### Phase 9: Full Regression Validation
+
+Re-run Gmail and Nvoids flows against the refactored parser contract.
+
+Priority validations:
+
+- AI extractor OFF = base parser only
+- AI extractor ON = AI parser only
+- AI failure = base fallback with warning
+- unknown skills survive into final `skills_text`
+- Manual Upgrade shows only unknown skills
+- resume matching uses raw JD/resume skill strings
+- Nvoids source hints still influence AI extraction when enabled
+
+Expected result:
+
+- Refactor is complete without breaking queueing, review, or matching flows.
+
+After completion, update this file with:
+
+- final pass/fail summary
+- residual follow-up items
+- whether this plan is fully complete
 
 ---
 
-## Acceptance Criteria
+## Public Interfaces / Types To Record
 
-- `skills_text` is cleaner and better ordered for real recruiter JDs.
-- Hard-filter fields do not leak into semantic skills.
-- Recruiter footer/signature text does not leak into semantic skills.
-- AI-heavy JDs produce AI-heavy extracted skills.
-- Java full-stack JDs produce stable backend/frontend/devops/database/domain skills.
-- Existing queue, candidate pinning, and send flows keep working unchanged.
-- No API or DB contract changes are required for this build.
-
----
-
-## Phase 8: AI-Intent Resume Scoring Upgrade
-
-### Objective
-
-Fix the second half of the original problem: distinguishing hands-on AI implementation resumes from generic engineering resumes with light AI exposure.
-
-### Why this is separate
-
-Phases 1-7 improve JD extraction quality. They make `skills_text` cleaner and reduce parser noise, but they do not fully guarantee that the scorer will always prefer the stronger AI implementation resume when two resumes still share heavy generic overlap.
-
-### Scope
-
-- Update resume scoring only after section-aware JD extraction is stable.
-- Reuse the existing queue, `resume_asset_id`, and approval/send flow.
-- Keep existing route and DB contracts unchanged.
-
-### Additions
-
-- Extend `backend/app/services/scoring_runtime_service.py` scoring logic to separate:
-  - `specialization_score`
-  - `foundation_score`
-  - `role_alignment_score`
-- Add stronger AI-role weighting when JD role family is:
-  - `ai`
-  - `genai`
-  - `llm`
-  - `machine_learning`
-- Add resume-side wording heuristics:
-  - boost hands-on phrases like `implemented`, `built`, `designed`, `created`, `production`
-  - penalize weak phrases like `exposure`, `concepts`, `assisted`, `familiarity`
-- Generate higher-signal semantic text for resume scoring and embeddings from:
-  - role-defining AI skills
-  - top foundation skills
-  - core matched clusters
-- Improve match explanations so they show:
-  - why Resume A beat Resume B
-  - matched AI-core clusters
-  - missing role-defining signals
-  - exposure penalties or hands-on boosts when they applied
-
-### Keep safe
-
-- Do not redesign queue preparation or orchestration interfaces.
-- Do not change `select_best_resume_match()` or `compute_blended_ai_score()` signatures unless absolutely necessary.
-- Keep semantic-disabled mode compatibility-safe.
-
-### Verification
-
-- Re-run the known AI Engineer JD case from this thread and assert:
-  - Resume 1 wins over Resume 2
-- Add a generic Java full-stack regression case and assert:
-  - AI-specialist resumes do not overpower strong full-stack resumes for non-AI JDs
-- Keep existing run orchestrator and approve/send regressions green
+- Additive DB field:
+  - `RecruiterEmail.skills_json`
+- No change to `parse_email()` output shape.
+- `parser_details_json` shape will change:
+  - remove enrichment-centric fields
+  - add mode/fallback/skills-audit fields
+- Candidate API may later expose additive `skills_json`, but existing `skills_text` must remain intact.
 
 ---
 
-## Out Of Scope For Phases 1-7
+## Test Plan
 
-- database schema changes
-- dashboard/API response shape changes
-- replacing `skills_text` with persisted structured skill JSON
-- redesigning queue states or approval flow
-- full scorer redesign beyond cleaner upstream JD inputs
+### Parser unit tests
+
+- AI extractor OFF uses base parser only.
+- AI extractor ON uses AI extractor only.
+- AI failure falls back cleanly.
+- Unknown extracted skills remain in final `skills_text`.
+
+### Nvoids flow tests
+
+- Source hints still reach parser.
+- Canonical title remains preserved.
+- Row-level fallback behavior still works.
+
+### Resume matching tests
+
+- Raw JD skills compare directly with `ResumeAsset.skills_text`.
+- Unknown JD skills are not dropped before matching.
+- Resumes without saved skills are scored weak, not file-extracted.
+
+### UI tests
+
+- Needs Review parser details no longer expects enrichment fields.
+- Unknown/known skills display stays contained.
 
 ---
 
-## Out Of Scope For Phase 8
+## Assumptions And Defaults
 
-- new database columns unless scoring absolutely cannot remain runtime-only
-- changing resume upload/edit API shapes
-- per-candidate manual resume override UI changes
-- changing the send/approval contract beyond choosing a better pinned resume
-
----
-
-## Practical Note
-
-If a phase introduces too much regression risk, stop at the previous green phase and validate with the real JD test case before continuing. The safest success path in this repo is incremental parser improvement, not a one-shot parser rewrite.
-
----
-
-## Recommended Delivery Framing
-
-### Phases 1-7
-
-Label these as:
-
-`Phase 1: Section-aware JD extraction and cleaner skills_text`
-
-Expected outcome:
-
-- cleaner parser output
-- fewer noisy skills
-- better metadata separation
-- improved matching inputs
-
-Do not claim these phases alone fully solve resume ranking.
-
-### Phase 8
-
-Label this as:
-
-`Phase 2: AI-intent-aware resume scoring`
-
-Expected outcome:
-
-- stronger preference for hands-on AI implementation resumes over AI-exposure resumes
-- more stable best-resume selection for AI-heavy JDs
+- The current branch is already far enough along that this document should be a refactor plan, not an initial feature-build plan.
+- The safest architecture is:
+  - AI extractor OFF = base parser only
+  - AI extractor ON = AI extractor only
+  - AI failure = base fallback
+- Taxonomy should become a post-extraction audit layer, not the hard gate for final JD `skills_text`.
+- Resume matching should trust saved resume skills as the authoritative resume-side comparison input.
+- `docs/temp.md` is only supporting context; this file should stand alone as the actionable handoff plan.
