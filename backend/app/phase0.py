@@ -3,6 +3,7 @@ from dataclasses import asdict, dataclass
 from typing import Any, Mapping
 
 from app.models import UserSettings
+from app.parsing.ai_extractor import ai_extractor_result_to_payload, extract_ai_job_details
 from app.parsing.spacy_enrichment import enrich_job_text, enrichment_to_payload
 from app.skill_taxonomy import (
     display_skill_label,
@@ -1030,17 +1031,71 @@ def _should_use_enriched_role(
     return False
 
 
+def _should_run_ai_extractor(
+    subject: str,
+    body: str,
+    *,
+    source: str,
+    ai_extractor_enabled: bool,
+) -> bool:
+    if not ai_extractor_enabled:
+        return False
+    if source not in {"gmail", "manual", "nvoids"}:
+        return False
+    combined_text = " ".join(part.strip() for part in [subject, body] if part and str(part).strip()).strip()
+    return len(combined_text) >= 80 or len(str(body or "").strip()) >= 60
+
+
+def _should_use_ai_role(
+    base_role: str,
+    ai_role: str,
+    *,
+    confidence: float,
+    source: str,
+    source_hints: Mapping[str, Any] | None,
+) -> bool:
+    base_value = str(base_role or "").strip()
+    ai_value = str(ai_role or "").strip()
+    if not ai_value:
+        return False
+    if source == "nvoids":
+        canonical_title = str((source_hints or {}).get("canonical_title") or "").strip()
+        if canonical_title:
+            return ai_value == canonical_title and (not base_value or base_value == "Unknown Role")
+        return False
+    if not base_value or base_value == "Unknown Role":
+        return confidence >= 0.55
+    return False
+
+
+def _should_use_ai_location(
+    base_location: str,
+    ai_location: str,
+    *,
+    confidence: float,
+) -> bool:
+    base_value = str(base_location or "").strip()
+    ai_value = str(ai_location or "").strip()
+    if not ai_value:
+        return False
+    return (not base_value or base_value == "Unknown") and confidence >= 0.55
+
+
 def parse_email_with_details(
     subject: str,
     body: str,
     *,
     source: str = "gmail",
     source_hints: Mapping[str, Any] | None = None,
+    ai_extractor_enabled: bool = False,
 ) -> tuple[dict[str, str | int | bool], dict[str, Any]]:
     base = _base_parse_email(subject, body)
-    enrichment = enrich_job_text(subject, body, source=source, source_hints=source_hints)
+    cleaned_body = strip_recruiter_footer(strip_forward_headers(body))
+    enrichment = enrich_job_text(subject, cleaned_body or body, source=source, source_hints=source_hints)
     merged: dict[str, str | int | bool] = dict(base)
     merge_notes: list[str] = []
+    ai_merge_notes: list[str] = []
+    ai_payload: dict[str, Any] | None = None
 
     base_skills = normalize_skills_text(str(base.get("skills_text", "")), preserve_unknown=True)
     merged["skills_text"] = base_skills
@@ -1069,13 +1124,69 @@ def parse_email_with_details(
         merged["location"] = enrichment.primary_location
         merge_notes.append("used enrichment primary location because base location was weak")
 
+    if _should_run_ai_extractor(
+        subject,
+        body,
+        source=source,
+        ai_extractor_enabled=ai_extractor_enabled,
+    ):
+        try:
+            ai_result = extract_ai_job_details(
+                subject,
+                body,
+                source=source,
+                source_hints=dict(source_hints or {}),
+            )
+        except Exception as exc:
+            ai_result = None
+            ai_payload = {"error": str(exc), "evidence": {"extractor_error": [str(exc)]}}
+        else:
+            ai_payload = ai_extractor_result_to_payload(ai_result)
+
+            ai_skills_text = normalize_skills_text(", ".join(ai_result.skills_approved), preserve_unknown=False)
+            if ai_skills_text and ai_skills_text != "none_detected":
+                combined_skills = normalize_skills_text(
+                    ", ".join(
+                        part
+                        for part in [str(merged.get("skills_text", "")), ai_skills_text]
+                        if part and part != "none_detected"
+                    ),
+                    preserve_unknown=True,
+                )
+                if combined_skills and combined_skills != str(merged.get("skills_text", "")):
+                    merged["skills_text"] = combined_skills
+                    ai_merge_notes.append("merged approved AI extractor skills into taxonomy-normalized skills_text")
+
+            ai_role = ai_result.role_candidates[0] if ai_result.role_candidates else ""
+            if _should_use_ai_role(
+                str(merged.get("role", "")),
+                ai_role,
+                confidence=ai_result.confidence,
+                source=source,
+                source_hints=source_hints,
+            ):
+                merged["role"] = ai_role
+                ai_merge_notes.append("used AI extractor role candidate because current merged role was weak")
+
+            if _should_use_ai_location(
+                str(merged.get("location", "")),
+                ai_result.primary_location,
+                confidence=ai_result.confidence,
+            ):
+                merged["location"] = ai_result.primary_location
+                ai_merge_notes.append("used AI extractor primary location because current merged location was weak")
+
     parser_details = {
-        "parser_version": "spacy_enrichment_v1",
+        "parser_version": "spacy_ai_enrichment_v2" if ai_payload is not None else "spacy_enrichment_v1",
         "source": source,
         "base_parser_result": base,
         "enrichment_result": enrichment_to_payload(enrichment),
+        "ai_extractor_result": ai_payload,
+        "approved_skills_text": str(merged.get("skills_text", "")),
+        "unknown_skills": list(ai_payload.get("skills_unknown", [])) if isinstance(ai_payload, dict) else [],
         "merged_result": merged,
         "merge_notes": merge_notes,
+        "ai_merge_notes": ai_merge_notes,
         "source_hints": {key: value for key, value in dict(source_hints or {}).items() if value not in (None, "")},
     }
     return merged, parser_details

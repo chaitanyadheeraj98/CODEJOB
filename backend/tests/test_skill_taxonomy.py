@@ -10,11 +10,14 @@ from app.phase0 import (
 )
 from app.skill_taxonomy import (
     aggregate_jd_skill_evidence,
+    clear_skill_taxonomy_cache,
     compute_intent_weighted_match,
     extract_jd_skill_evidence,
     extract_jd_skills_text,
     extract_skills_text,
+    load_skill_taxonomy,
     normalize_skills_text,
+    normalize_skill_token,
 )
 
 
@@ -66,6 +69,9 @@ Banking, Agile, Production Support
 
 
 class SkillTaxonomyTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        clear_skill_taxonomy_cache()
+
     def test_strip_forward_headers_keeps_jd_body(self) -> None:
         cleaned = strip_forward_headers(
             "From: recruiter@example.com\nSent: today\nSubject: AI role\n\nRole: AI Engineer\nNeed RAG and tool calling."
@@ -306,6 +312,42 @@ Angular Services
         self.assertGreater(strong.score, weak.score)
         self.assertGreater(strong.specialization_score, weak.specialization_score)
         self.assertTrue(weak.weak_signal_hits)
+
+    def test_load_skill_taxonomy_merges_approved_custom_skills_additively(self) -> None:
+        from app import skill_taxonomy as taxonomy_module
+
+        original_loader = taxonomy_module._load_custom_skill_seeds
+        try:
+            taxonomy_module._load_custom_skill_seeds = lambda: (
+                taxonomy_module.CustomSkillSeed(
+                    canonical_name="Temporal",
+                    aliases=("Temporal.io",),
+                    category="backend",
+                    cluster_hint="custom_backend",
+                ),
+            )
+            clear_skill_taxonomy_cache()
+            taxonomy = load_skill_taxonomy()
+            self.assertEqual(normalize_skill_token("Temporal.io", preserve_unknown=False), "Temporal")
+            self.assertIsNotNone(taxonomy.exact_lookup.get("temporal io"))
+            self.assertIn("Temporal", [entry.canonical_name for entry in taxonomy.entries])
+        finally:
+            taxonomy_module._load_custom_skill_seeds = original_loader
+            clear_skill_taxonomy_cache()
+
+    def test_load_skill_taxonomy_falls_back_safely_when_custom_skill_loading_fails(self) -> None:
+        from app import skill_taxonomy as taxonomy_module
+
+        original_loader = taxonomy_module._load_custom_skill_seeds
+        try:
+            taxonomy_module._load_custom_skill_seeds = lambda: (_ for _ in ()).throw(RuntimeError("boom"))
+            clear_skill_taxonomy_cache()
+            taxonomy = load_skill_taxonomy()
+            self.assertEqual(normalize_skill_token("Java", preserve_unknown=False), "Java")
+            self.assertNotIn("Temporal", [entry.canonical_name for entry in taxonomy.entries])
+        finally:
+            taxonomy_module._load_custom_skill_seeds = original_loader
+            clear_skill_taxonomy_cache()
 
 
 if __name__ == "__main__":

@@ -18,7 +18,7 @@ from app.external_feeds.collector import CollectedPage
 from app.external_feeds import service as external_feed_service_module
 from app.external_feeds.service import ExternalFeedService
 from app.external_feeds.models import ExternalFeedSource, ExternalOpportunity
-from app.models import AttachmentAsset, EmployerNumber, NumberReviewQueue, RecruiterEmail, RecruiterNumber, RecruiterOpportunity, ResumeAsset, UserSettings
+from app.models import AttachmentAsset, CustomSkillTaxonomyEntry, EmployerNumber, NumberReviewQueue, RecruiterEmail, RecruiterNumber, RecruiterOpportunity, ResumeAsset, UserSettings
 
 
 class _FakeCollector:
@@ -341,6 +341,7 @@ class ExternalFeedsApiTests(unittest.TestCase):
                 "feature_auto_send": False,
                 "feature_retry_queue": False,
                 "feature_ai_enabled": False,
+                "feature_ai_extractor_enabled": True,
                 "feature_semantic_enabled": False,
                 "draft_text_size": "huge",
                 "fallback_draft_template": "",
@@ -353,6 +354,7 @@ class ExternalFeedsApiTests(unittest.TestCase):
         self.assertEqual(res.status_code, 200, res.text)
         payload = res.json()
         self.assertEqual(payload["nvoids_locations"], ["texas", "remote"])
+        self.assertTrue(payload["feature_ai_extractor_enabled"])
         self.assertEqual(payload["draft_text_size"], "huge")
 
     def test_settings_reject_invalid_draft_text_size(self) -> None:
@@ -384,6 +386,7 @@ class ExternalFeedsApiTests(unittest.TestCase):
                 "feature_auto_send": False,
                 "feature_retry_queue": False,
                 "feature_ai_enabled": False,
+                "feature_ai_extractor_enabled": False,
                 "feature_semantic_enabled": False,
                 "draft_text_size": "gigantic",
                 "fallback_draft_template": "",
@@ -516,6 +519,127 @@ class ExternalFeedsApiTests(unittest.TestCase):
                 os.unlink(first_path)
             if os.path.exists(second_path):
                 os.unlink(second_path)
+
+    def test_pending_skill_api_lists_unknown_parser_skills_until_approved(self) -> None:
+        with self.SessionLocal() as db:
+            db.add_all(
+                [
+                    RecruiterEmail(
+                        owner_id=main.settings.owner_id,
+                        sender="one@example.com",
+                        subject="First",
+                        body="Body",
+                        role="Engineer",
+                        location="Remote",
+                        salary_text="",
+                        skills_text="Java",
+                        score=0,
+                        decision="qualified",
+                        state="needs_review",
+                        source="gmail",
+                        parser_details_json='{"unknown_skills":["Temporal Workflow","Temporal Workflow","Graph Orchestration"]}',
+                    ),
+                    RecruiterEmail(
+                        owner_id=main.settings.owner_id,
+                        sender="two@example.com",
+                        subject="Second",
+                        body="Body",
+                        role="Engineer",
+                        location="Remote",
+                        salary_text="",
+                        skills_text="Java",
+                        score=0,
+                        decision="qualified",
+                        state="needs_review",
+                        source="nvoids",
+                        parser_details_json='{"unknown_skills":["Temporal Workflow","Agent Studio"]}',
+                    ),
+                ]
+            )
+            db.commit()
+
+        pending = self.client.get("/settings/skills/pending")
+        self.assertEqual(pending.status_code, 200, pending.text)
+        payload = pending.json()
+        self.assertEqual(payload[0]["skill_name"], "Temporal Workflow")
+        self.assertEqual(payload[0]["occurrence_count"], 2)
+        self.assertEqual(len(payload[0]["candidate_ids"]), 2)
+        self.assertEqual([item["skill_name"] for item in payload], ["Temporal Workflow", "Agent Studio", "Graph Orchestration"])
+
+        approved = self.client.post(
+            "/settings/skills/approve",
+            json={"skill_name": "Temporal Workflow", "aliases": ["Temporal"], "category": "workflow"},
+        )
+        self.assertEqual(approved.status_code, 200, approved.text)
+        approved_payload = approved.json()
+        self.assertEqual(approved_payload["canonical_name"], "Temporal Workflow")
+        self.assertEqual(approved_payload["aliases"], ["Temporal"])
+        self.assertEqual(approved_payload["status"], "approved")
+
+        pending_after = self.client.get("/settings/skills/pending")
+        self.assertEqual(pending_after.status_code, 200, pending_after.text)
+        self.assertEqual([item["skill_name"] for item in pending_after.json()], ["Agent Studio", "Graph Orchestration"])
+
+    def test_dismissed_skill_is_suppressed_from_pending_results(self) -> None:
+        with self.SessionLocal() as db:
+            db.add(
+                RecruiterEmail(
+                    owner_id=main.settings.owner_id,
+                    sender="dismiss@example.com",
+                    subject="Dismiss",
+                    body="Body",
+                    role="Engineer",
+                    location="Remote",
+                    salary_text="",
+                    skills_text="Java",
+                    score=0,
+                    decision="qualified",
+                    state="needs_review",
+                    source="gmail",
+                    parser_details_json='{"unknown_skills":["Resume Ghost Skill"]}',
+                )
+            )
+            db.commit()
+
+        dismissed = self.client.post("/settings/skills/dismiss", json={"skill_name": "Resume Ghost Skill"})
+        self.assertEqual(dismissed.status_code, 200, dismissed.text)
+        self.assertEqual(dismissed.json()["status"], "dismissed")
+
+        pending = self.client.get("/settings/skills/pending")
+        self.assertEqual(pending.status_code, 200, pending.text)
+        self.assertEqual(pending.json(), [])
+
+    def test_approved_skills_api_lists_only_approved_custom_entries(self) -> None:
+        with self.SessionLocal() as db:
+            db.add_all(
+                [
+                    CustomSkillTaxonomyEntry(
+                        owner_id=main.settings.owner_id,
+                        canonical_name="Temporal Workflow",
+                        aliases_json='["Temporal","Workflow Temporal"]',
+                        category="workflow",
+                        cluster_hint="custom_workflow",
+                        status="approved",
+                    ),
+                    CustomSkillTaxonomyEntry(
+                        owner_id=main.settings.owner_id,
+                        canonical_name="Dismissed Skill",
+                        aliases_json="[]",
+                        category="custom",
+                        cluster_hint=None,
+                        status="dismissed",
+                    ),
+                ]
+            )
+            db.commit()
+
+        listed = self.client.get("/settings/skills/approved")
+        self.assertEqual(listed.status_code, 200, listed.text)
+        payload = listed.json()
+        self.assertEqual(len(payload), 1)
+        self.assertEqual(payload[0]["canonical_name"], "Temporal Workflow")
+        self.assertEqual(payload[0]["aliases"], ["Temporal", "Workflow Temporal"])
+        self.assertEqual(payload[0]["status"], "approved")
 
     def test_sync_skips_rows_outside_nvoids_location_filter(self) -> None:
         with self.SessionLocal() as db:
@@ -801,6 +925,94 @@ class ExternalFeedsApiTests(unittest.TestCase):
                 self.assertNotIn("job_kill", row.draft_reply or "")
         finally:
             main.external_feed_service.collector = original_collector
+
+    def test_sync_passes_ai_extractor_flag_and_source_hints_for_nvoids_candidates(self) -> None:
+        parse_calls: list[dict[str, object]] = []
+
+        def _fake_parse_email_with_details(subject: str, body: str, **kwargs: object) -> tuple[dict[str, object], dict[str, object]]:
+            source_hints = dict(kwargs.get("source_hints") or {})
+            parse_calls.append(
+                {
+                    "subject": subject,
+                    "body": body,
+                    "source": kwargs.get("source"),
+                    "ai_extractor_enabled": kwargs.get("ai_extractor_enabled"),
+                    "source_hints": source_hints,
+                }
+            )
+            canonical_title = str(source_hints.get("canonical_title") or subject)
+            canonical_location = str(source_hints.get("canonical_location") or "")
+            parsed = {
+                "role": canonical_title,
+                "location": canonical_location or "Dallas, Texas, USA",
+                "job_location_text": canonical_location or "Dallas, Texas, USA",
+                "salary_text": "not_specified",
+                "skills_text": "Java, Spring Boot",
+                "f2f_mentioned": False,
+                "asks_contact_fields": False,
+                "is_texas_role": "texas" in canonical_location.lower(),
+            }
+            return parsed, {
+                "parser_version": "spacy_ai_enrichment_v2",
+                "source": "nvoids",
+                "base_parser_result": {"role": canonical_title},
+                "enrichment_result": {},
+                "ai_extractor_result": {
+                    "skills_approved": ["Java", "Spring Boot"],
+                    "skills_unknown": [],
+                    "confidence": 0.84,
+                },
+                "merged_result": dict(parsed),
+                "merge_notes": [],
+                "ai_merge_notes": ["nvoids flow reused the merged parse with AI extractor enabled"],
+                "source_hints": source_hints,
+            }
+
+        with self.SessionLocal() as db:
+            settings = db.query(UserSettings).filter(UserSettings.owner_id == main.settings.owner_id).first()
+            assert settings is not None
+            settings.feature_ai_extractor_enabled = True
+            db.commit()
+
+        original_parse_email_with_details = external_feed_service_module.parse_email_with_details
+        try:
+            external_feed_service_module.parse_email_with_details = _fake_parse_email_with_details
+            sync = self.client.post("/external-feeds/nvoids/sync")
+            self.assertEqual(sync.status_code, 200, sync.text)
+
+            self.assertGreaterEqual(len(parse_calls), 1)
+            first_call = parse_calls[0]
+            self.assertEqual(first_call["source"], "nvoids")
+            self.assertTrue(bool(first_call["ai_extractor_enabled"]))
+            self.assertEqual(first_call["source_hints"], {
+                "canonical_title": "Senior Python Developer",
+                "canonical_location": "Dallas, Texas, USA",
+                "company": "",
+                "work_mode": "",
+                "visa_hints": "",
+            })
+
+            with self.SessionLocal() as db:
+                row = (
+                    db.query(RecruiterEmail)
+                    .filter(
+                        RecruiterEmail.owner_id == main.settings.owner_id,
+                        RecruiterEmail.source == "nvoids",
+                        RecruiterEmail.role == "Senior Python Developer",
+                    )
+                    .first()
+                )
+                self.assertIsNotNone(row)
+                assert row is not None
+                self.assertEqual(row.role, "Senior Python Developer")
+                self.assertIn("Subject: Application for Senior Python Developer", row.draft_reply or "")
+                self.assertIsNotNone(row.parser_details_json)
+                payload = row.parser_details_json or ""
+                self.assertIn('"ai_extractor_result"', payload)
+                self.assertIn('"skills_text":"Java, Spring Boot"', payload)
+                self.assertIn('"canonical_title":"Senior Python Developer"', payload)
+        finally:
+            external_feed_service_module.parse_email_with_details = original_parse_email_with_details
 
     def test_sync_continues_when_detail_fetch_times_out(self) -> None:
         class _TimeoutCollector(_FakeCollector):

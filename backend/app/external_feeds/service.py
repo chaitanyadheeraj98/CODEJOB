@@ -641,6 +641,7 @@ class ExternalFeedService:
             subject,
             body,
             source="nvoids",
+            ai_extractor_enabled=settings.feature_ai_extractor_enabled,
             source_hints={
                 "canonical_title": item.role,
                 "canonical_location": item.location,
@@ -679,16 +680,7 @@ class ExternalFeedService:
                 existing_email=existing,
                 external_thread_id=item.source_url or external_message_id,
                 routing_decision=routing_decision,
-                parsed_overrides={
-                    "role": str(parsed.get("role", item.role or subject)),
-                    "location": str(parsed.get("location", item.location or "")),
-                    "job_location_text": str(parsed.get("job_location_text", item.location or "")),
-                    "salary_text": str(parsed.get("salary_text", item.rate or "")),
-                    "skills_text": str(parsed.get("skills_text", item.skills_text or "")),
-                    "f2f_mentioned": bool(parsed.get("f2f_mentioned", False)),
-                    "asks_contact_fields": bool(parsed.get("asks_contact_fields", False)),
-                    "is_texas_role": bool(parsed.get("is_texas_role", False)),
-                },
+                parsed_overrides=dict(parsed),
             ),
             QueuePreparationDependencies(
                 parse_email=parse_email,

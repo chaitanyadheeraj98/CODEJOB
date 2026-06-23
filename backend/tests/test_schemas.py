@@ -54,7 +54,7 @@ class EmailResponseRoutingTests(unittest.TestCase):
             routing_confirmed=False,
             resume_asset_id=None,
             resume_file_name=None,
-            parser_details_json='{"parser_version":"spacy_enrichment_v1","merged_result":{"role":"Java Developer"}}',
+            parser_details_json='{"parser_version":"spacy_enrichment_v1","approved_skills_text":"java","unknown_skills":[],"merged_result":{"role":"Java Developer"}}',
             sent_at=None,
             gmail_sent_id=None,
             last_error=None,
@@ -66,7 +66,15 @@ class EmailResponseRoutingTests(unittest.TestCase):
 
         self.assertEqual(response.routing_evidence[0].email, "recruiter@example.com")
         self.assertEqual(response.routing_candidates, [])
-        self.assertEqual(response.parser_details, {"parser_version": "spacy_enrichment_v1", "merged_result": {"role": "Java Developer"}})
+        self.assertEqual(
+            response.parser_details,
+            {
+                "parser_version": "spacy_enrichment_v1",
+                "approved_skills_text": "java",
+                "unknown_skills": [],
+                "merged_result": {"role": "Java Developer"},
+            },
+        )
 
     def test_settings_request_accepts_employer_domains(self) -> None:
         payload = SettingsRequest.model_validate({"employer_domains": ["horizonsofttech.net"]})
@@ -75,6 +83,10 @@ class EmailResponseRoutingTests(unittest.TestCase):
     def test_settings_request_accepts_saved_gmail_queries(self) -> None:
         payload = SettingsRequest.model_validate({"saved_gmail_queries": ["is:unread", "tx is:unread"]})
         self.assertEqual(payload.saved_gmail_queries, ["is:unread", "tx is:unread"])
+
+    def test_settings_request_accepts_ai_extractor_toggle(self) -> None:
+        payload = SettingsRequest.model_validate({"feature_ai_extractor_enabled": True})
+        self.assertTrue(payload.feature_ai_extractor_enabled)
 
 
 if __name__ == "__main__":

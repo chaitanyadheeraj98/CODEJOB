@@ -69,6 +69,7 @@ class SettingsRequest(BaseModel):
     feature_auto_send: bool = False
     feature_retry_queue: bool = False
     feature_ai_enabled: bool = False
+    feature_ai_extractor_enabled: bool = False
     feature_semantic_enabled: bool = False
     draft_text_size: str = "normal"
     fallback_draft_template: str = ""
@@ -164,6 +165,57 @@ class AttachmentAssetResponse(BaseModel):
 
 class AttachmentAssetUpdateRequest(BaseModel):
     is_enabled: bool
+
+
+class PendingSkillResponse(BaseModel):
+    skill_name: str
+    normalized_name: str
+    occurrence_count: int
+    candidate_ids: list[int] = Field(default_factory=list)
+
+
+class CustomSkillTaxonomyEntryResponse(BaseModel):
+    id: int
+    owner_id: str
+    canonical_name: str
+    aliases: list[str] = Field(default_factory=list, validation_alias=AliasChoices("aliases", "aliases_json"))
+    category: str
+    cluster_hint: str | None
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+    @field_validator("aliases", mode="before")
+    @classmethod
+    def parse_aliases(cls, value: Any) -> list[str]:
+        if value in (None, ""):
+            return []
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except json.JSONDecodeError:
+                return []
+            if isinstance(parsed, list):
+                return [str(item).strip() for item in parsed if str(item).strip()]
+            return []
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        return []
+
+
+class ApproveSkillRequest(BaseModel):
+    skill_name: str
+    canonical_name: str | None = None
+    aliases: list[str] = Field(default_factory=list)
+    category: str = "custom"
+    cluster_hint: str | None = None
+
+
+class DismissSkillRequest(BaseModel):
+    skill_name: str
+    canonical_name: str | None = None
 
 
 class DraftQualityResponse(BaseModel):

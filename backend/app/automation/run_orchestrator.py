@@ -10,7 +10,6 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
 from app.models import RecruiterEmail, ResumeAsset, UserSettings
-from app.phase0 import parse_email_with_details
 from app.routing import RoutingDecision
 from .queue_preparation import (
     QueuePreparationDependencies,
@@ -27,6 +26,7 @@ CandidateItem = Mapping[str, Any]
 @dataclass(frozen=True)
 class RunOrchestratorDependencies:
     parse_email: Callable[[str, str], dict[str, str | int | bool]]
+    parse_email_with_details: Callable[..., tuple[dict[str, str | int | bool], dict[str, Any]]]
     hard_filter_check: Callable[[dict[str, str | int | bool], UserSettings], tuple[bool, str]]
     compute_blended_ai_score: Callable[
         [str, str, dict[str, str | int | bool], UserSettings, RecruiterEmail | None, ResumeAsset | None],
@@ -117,7 +117,13 @@ class RunOrchestrator:
             body = str(item["body"])
             sender = str(item["sender"])
             snippet = str(item.get("snippet", ""))
-            parsed_for_selection = request.deps.parse_email(subject, body)
+            parsed_for_selection, parser_details = request.deps.parse_email_with_details(
+                subject,
+                body,
+                source="gmail",
+                ai_extractor_enabled=request.user_settings.feature_ai_extractor_enabled,
+            )
+            parser_details_json = json.dumps(parser_details, separators=(",", ":"))
             resume_selection = request.deps.select_best_resume_match(
                 subject=subject,
                 body=body,
@@ -154,6 +160,7 @@ class RunOrchestrator:
                         draft_resume=selected_resume,
                         existing_email=existing,
                         external_thread_id=str(item.get("external_thread_id") or ""),
+                        parsed_overrides=parsed_for_selection,
                     ),
                     QueuePreparationDependencies(
                         parse_email=request.deps.parse_email,
@@ -182,10 +189,11 @@ class RunOrchestrator:
                 if request.dry_run:
                     skipped_count += 1
                     continue
-                email = self._email_row(existing, request, item, parsed)
+                email = self._email_row(existing, request, item, parsed, parser_details_json)
                 def apply_skipped_state(target: RecruiterEmail) -> None:
                     target.external_rfc_message_id = target.external_rfc_message_id or item.get("external_rfc_message_id")
                     target.gmail_received_at = target.gmail_received_at or item.get("gmail_received_at")
+                    target.parser_details_json = parser_details_json
                     target.score = int(preparation.ai_score * 100)
                     target.ai_score = preparation.ai_score
                     target.ai_score_source = preparation.ai_score_source
@@ -234,7 +242,7 @@ class RunOrchestrator:
                 if request.dry_run:
                     failed_count += 1
                     continue
-                email = self._email_row(existing, request, item, parsed)
+                email = self._email_row(existing, request, item, parsed, parser_details_json)
                 def apply_failed_state(target: RecruiterEmail) -> None:
                     target.external_rfc_message_id = target.external_rfc_message_id or item.get("external_rfc_message_id")
                     target.gmail_received_at = target.gmail_received_at or item.get("gmail_received_at")
@@ -247,6 +255,7 @@ class RunOrchestrator:
                     target.routing_confirmed = False
                     target.resume_asset_id = selected_resume.id if selected_resume else None
                     target.resume_file_name = selected_resume.file_name if selected_resume else None
+                    target.parser_details_json = parser_details_json
 
                 apply_failed_state(email)
                 email = self._commit_email_phase(
@@ -282,7 +291,7 @@ class RunOrchestrator:
                 ai_last_draft_source = preparation.draft_source
             else:
                 ai_last_draft_source = preparation.draft_source
-            email = self._email_row(existing, request, item, parsed)
+            email = self._email_row(existing, request, item, parsed, parser_details_json)
             def apply_queued_state(target: RecruiterEmail) -> None:
                 target.external_rfc_message_id = target.external_rfc_message_id or item.get("external_rfc_message_id")
                 target.gmail_received_at = target.gmail_received_at or item.get("gmail_received_at")
@@ -312,6 +321,7 @@ class RunOrchestrator:
                 target.sent_status = "not_sent"
                 target.sent_at = None
                 target.gmail_sent_id = None
+                target.parser_details_json = parser_details_json
                 request.deps.apply_routing_decision(target, routing_decision)
                 target.routing_confirmed = False
                 target.resume_asset_id = selected_resume.id if selected_resume else None
@@ -364,30 +374,26 @@ class RunOrchestrator:
         request: RunOrchestratorRequest,
         item: CandidateItem,
         parsed: dict[str, str | int | bool],
+        parser_details_json: str,
     ) -> RecruiterEmail:
         if existing:
             return existing
-        parsed_with_details, parser_details = parse_email_with_details(
-            str(item["subject"]),
-            str(item["body"]),
-            source="gmail",
-        )
         return RecruiterEmail(
             owner_id=request.owner_id,
             sender=str(item["sender"]),
             subject=str(item["subject"]),
             body=str(item["body"]),
-            role=str(parsed["role"] or parsed_with_details["role"]),
-            location=str(parsed["location"] or parsed_with_details["location"]),
-            salary_text=str(parsed["salary_text"] or parsed_with_details["salary_text"]),
-            skills_text=str(parsed["skills_text"] or parsed_with_details["skills_text"]),
+            role=str(parsed["role"]),
+            location=str(parsed["location"]),
+            salary_text=str(parsed["salary_text"]),
+            skills_text=str(parsed["skills_text"]),
             source="gmail",
             external_message_id=str(item["external_message_id"]),
             external_thread_id=item.get("external_thread_id"),
             external_rfc_message_id=item.get("external_rfc_message_id"),
             gmail_received_at=item.get("gmail_received_at"),
             recipient_email=item.get("recipient_email"),
-            parser_details_json=json.dumps(parser_details, separators=(",", ":")),
+            parser_details_json=parser_details_json,
         )
 
     def _commit_email_phase(

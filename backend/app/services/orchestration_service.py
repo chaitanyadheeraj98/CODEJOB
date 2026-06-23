@@ -67,6 +67,7 @@ class OrchestrationDeps:
     list_unread_candidates_by_query: Callable[..., list[GmailMessageCandidate]]
     is_recruiter_like: Callable[[str, str, str], bool]
     parse_email: Callable[[str, str], dict[str, str | int | bool]]
+    parse_email_with_details: Callable[..., tuple[dict[str, str | int | bool], dict[str, Any]]]
     hard_filter_check: Callable[[dict[str, str | int | bool], UserSettings], tuple[bool, str]]
     should_block_f2f: Callable[[dict[str, str | int | bool]], tuple[bool, str | None]]
     greeting_from_to_contact: Callable[[str | None, str], str]
@@ -117,7 +118,12 @@ class OrchestrationService:
                     skipped_count += 1
                     continue
 
-                parsed, parser_details = parse_email_with_details(item["subject"], item["body"], source="gmail")
+                parsed, parser_details = self.deps.parse_email_with_details(
+                    item["subject"],
+                    item["body"],
+                    source="gmail",
+                    ai_extractor_enabled=user_settings.feature_ai_extractor_enabled,
+                )
                 hard_pass, hard_reason = self.deps.hard_filter_check(parsed, user_settings)
                 active_resume = self.deps.active_resume(db)
                 resume_selection = self.deps.select_best_resume_match(
@@ -332,6 +338,7 @@ class OrchestrationService:
                     model_name=self.deps.model_name,
                     deps=RunOrchestratorDependencies(
                         parse_email=self.deps.parse_email,
+                        parse_email_with_details=self.deps.parse_email_with_details,
                         hard_filter_check=self.deps.hard_filter_check,
                         compute_blended_ai_score=lambda subject, body, parsed, user_settings, email_row, resume, db_ctx=None, owner_id_ctx=None, thread_id_ctx=None: self.deps.compute_blended_ai_score(
                             subject=subject,

@@ -1,5 +1,7 @@
 import unittest
 
+from unittest.mock import patch
+
 from app.phase0 import (
     DEFAULT_FALLBACK_DRAFT_TEMPLATE,
     analyze_recipient_routing,
@@ -53,8 +55,143 @@ class RecipientRoutingTests(unittest.TestCase):
         self.assertIn("base_parser_result", details)
         self.assertIn("enrichment_result", details)
         self.assertIn("merged_result", details)
+        self.assertEqual(details["approved_skills_text"], parsed["skills_text"])
+        self.assertEqual(details["unknown_skills"], [])
         self.assertEqual(parsed["role"], "AI Engineer")
         self.assertIn("Python", str(parsed["skills_text"]))
+
+    def test_parse_email_with_details_keeps_ai_extractor_disabled_by_default(self) -> None:
+        with patch("app.phase0.extract_ai_job_details") as mock_ai:
+            parsed, details = parse_email_with_details(
+                "Role: AI Engineer",
+                "Location: Alpharetta, GA\nRequired Qualifications:\nPython, Java, RAG, Embeddings",
+                source="gmail",
+            )
+
+        mock_ai.assert_not_called()
+        self.assertEqual(details["parser_version"], "spacy_enrichment_v1")
+        self.assertIsNone(details["ai_extractor_result"])
+        self.assertEqual(details["approved_skills_text"], parsed["skills_text"])
+        self.assertEqual(details["unknown_skills"], [])
+        self.assertEqual(details["ai_merge_notes"], [])
+        self.assertEqual(parsed["role"], "AI Engineer")
+
+    def test_parse_email_with_details_merges_ai_skills_when_enabled(self) -> None:
+        ai_result = {
+            "role_candidates": ["AI Engineer"],
+            "company": "",
+            "primary_location": "Alpharetta, GA",
+            "mentioned_locations": ["Alpharetta, GA"],
+            "work_mode": "",
+            "visa_hints": [],
+            "experience_years_min": 2,
+            "skills_approved": ["Amazon ECS", "Grafana"],
+            "skills_unknown": ["Temporal"],
+            "confidence": 0.82,
+            "evidence": {"skills": ["Amazon ECS, Grafana, Temporal"]},
+        }
+
+        with patch("app.phase0.extract_ai_job_details") as mock_ai, patch(
+            "app.phase0.ai_extractor_result_to_payload",
+            return_value=ai_result,
+        ):
+            mock_ai.return_value = type(
+                "AIResult",
+                (),
+                {
+                    "role_candidates": ("AI Engineer",),
+                    "company": "",
+                    "primary_location": "Alpharetta, GA",
+                    "mentioned_locations": ("Alpharetta, GA",),
+                    "work_mode": "",
+                    "visa_hints": (),
+                    "experience_years_min": 2,
+                    "skills_approved": ("Amazon ECS", "Grafana"),
+                    "skills_unknown": ("Temporal",),
+                    "confidence": 0.82,
+                    "evidence": {"skills": ["Amazon ECS, Grafana, Temporal"]},
+                    "error": None,
+                },
+            )()
+            parsed, details = parse_email_with_details(
+                "Unknown Role",
+                "Role: AI platform\nRequired Qualifications:\nJava\nObservability",
+                source="gmail",
+                ai_extractor_enabled=True,
+            )
+
+        mock_ai.assert_called_once()
+        self.assertEqual(details["parser_version"], "spacy_ai_enrichment_v2")
+        self.assertEqual(details["ai_extractor_result"]["skills_unknown"], ["Temporal"])
+        self.assertEqual(details["approved_skills_text"], parsed["skills_text"])
+        self.assertEqual(details["unknown_skills"], ["Temporal"])
+        self.assertIn("Amazon ECS", str(parsed["skills_text"]))
+        self.assertIn("Grafana", str(parsed["skills_text"]))
+        self.assertTrue(details["ai_merge_notes"])
+
+    def test_parse_email_with_details_does_not_let_weak_ai_overwrite_clean_role(self) -> None:
+        with patch("app.phase0.extract_ai_job_details") as mock_ai, patch(
+            "app.phase0.ai_extractor_result_to_payload",
+            return_value={
+                "role_candidates": ["Software Engineer"],
+                "company": "",
+                "primary_location": "",
+                "mentioned_locations": [],
+                "work_mode": "",
+                "visa_hints": [],
+                "experience_years_min": None,
+                "skills_approved": ["Java"],
+                "skills_unknown": [],
+                "confidence": 0.2,
+                "evidence": {},
+            },
+        ):
+            mock_ai.return_value = type(
+                "AIResult",
+                (),
+                {
+                    "role_candidates": ("Software Engineer",),
+                    "company": "",
+                    "primary_location": "",
+                    "mentioned_locations": (),
+                    "work_mode": "",
+                    "visa_hints": (),
+                    "experience_years_min": None,
+                    "skills_approved": ("Java",),
+                    "skills_unknown": (),
+                    "confidence": 0.2,
+                    "evidence": {},
+                    "error": None,
+                },
+            )()
+            parsed, details = parse_email_with_details(
+                "Role: AI Engineer",
+                "Location: Alpharetta, GA\nRequired Qualifications:\nPython, Java, RAG",
+                source="gmail",
+                ai_extractor_enabled=True,
+            )
+
+        self.assertEqual(parsed["role"], "AI Engineer")
+        self.assertEqual(details["merged_result"]["role"], "AI Engineer")
+        self.assertEqual(details["approved_skills_text"], parsed["skills_text"])
+        self.assertEqual(details["unknown_skills"], [])
+        self.assertFalse(any("role candidate" in note for note in details["ai_merge_notes"]))
+
+    def test_parse_email_with_details_survives_ai_extractor_failure_without_contract_change(self) -> None:
+        with patch("app.phase0.extract_ai_job_details", side_effect=RuntimeError("extractor timeout")):
+            parsed, details = parse_email_with_details(
+                "Role: AI Engineer",
+                "Location: Alpharetta, GA\nRequired Qualifications:\nPython, Java, RAG",
+                source="gmail",
+                ai_extractor_enabled=True,
+            )
+
+        self.assertEqual(parsed["role"], "AI Engineer")
+        self.assertEqual(details["parser_version"], "spacy_ai_enrichment_v2")
+        self.assertEqual(details["ai_extractor_result"]["error"], "extractor timeout")
+        self.assertEqual(details["approved_skills_text"], parsed["skills_text"])
+        self.assertEqual(details["unknown_skills"], [])
+        self.assertEqual(details["ai_merge_notes"], [])
 
     def test_classify_section_heading_maps_project_headings(self) -> None:
         self.assertEqual(classify_section_heading("Role Summary")[0], "summary")

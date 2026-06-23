@@ -330,6 +330,7 @@ def ensure_sqlite_phase0_columns() -> None:
             ("saved_gmail_queries_json", "ALTER TABLE user_settings ADD COLUMN saved_gmail_queries_json TEXT DEFAULT '[]'"),
             ("default_date_mode", "ALTER TABLE user_settings ADD COLUMN default_date_mode VARCHAR(20) DEFAULT 'today'"),
             ("feature_ai_enabled", "ALTER TABLE user_settings ADD COLUMN feature_ai_enabled BOOLEAN DEFAULT 0"),
+            ("feature_ai_extractor_enabled", "ALTER TABLE user_settings ADD COLUMN feature_ai_extractor_enabled BOOLEAN DEFAULT 0"),
             ("feature_semantic_enabled", "ALTER TABLE user_settings ADD COLUMN feature_semantic_enabled BOOLEAN DEFAULT 0"),
             ("draft_text_size", "ALTER TABLE user_settings ADD COLUMN draft_text_size VARCHAR(20) DEFAULT 'normal'"),
             ("feature_auto_poll_interval_minutes", "ALTER TABLE user_settings ADD COLUMN feature_auto_poll_interval_minutes INTEGER DEFAULT 10"),
@@ -392,6 +393,45 @@ def ensure_sqlite_phase0_columns() -> None:
         ]
         for column_name, statement in attachment_assets_alter_statements:
             if column_name not in existing_attachment_assets:
+                conn.exec_driver_sql(statement)
+
+        conn.exec_driver_sql(
+            """
+            CREATE TABLE IF NOT EXISTS custom_skill_taxonomy_entries (
+                id INTEGER PRIMARY KEY,
+                owner_id VARCHAR(100),
+                canonical_name VARCHAR(255),
+                aliases_json TEXT DEFAULT '[]',
+                category VARCHAR(120) DEFAULT 'custom',
+                cluster_hint VARCHAR(120),
+                status VARCHAR(40) DEFAULT 'approved',
+                created_at DATETIME,
+                updated_at DATETIME
+            )
+            """
+        )
+        conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_custom_skill_taxonomy_entries_owner_id ON custom_skill_taxonomy_entries (owner_id)"
+        )
+        conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_custom_skill_taxonomy_entries_canonical_name ON custom_skill_taxonomy_entries (canonical_name)"
+        )
+        conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_custom_skill_taxonomy_entries_status ON custom_skill_taxonomy_entries (status)"
+        )
+        existing_custom_skill_taxonomy_entries = {
+            row[1] for row in conn.exec_driver_sql("PRAGMA table_info(custom_skill_taxonomy_entries)")
+        }
+        custom_skill_taxonomy_alter_statements = [
+            ("aliases_json", "ALTER TABLE custom_skill_taxonomy_entries ADD COLUMN aliases_json TEXT DEFAULT '[]'"),
+            ("category", "ALTER TABLE custom_skill_taxonomy_entries ADD COLUMN category VARCHAR(120) DEFAULT 'custom'"),
+            ("cluster_hint", "ALTER TABLE custom_skill_taxonomy_entries ADD COLUMN cluster_hint VARCHAR(120)"),
+            ("status", "ALTER TABLE custom_skill_taxonomy_entries ADD COLUMN status VARCHAR(40) DEFAULT 'approved'"),
+            ("created_at", "ALTER TABLE custom_skill_taxonomy_entries ADD COLUMN created_at DATETIME"),
+            ("updated_at", "ALTER TABLE custom_skill_taxonomy_entries ADD COLUMN updated_at DATETIME"),
+        ]
+        for column_name, statement in custom_skill_taxonomy_alter_statements:
+            if column_name not in existing_custom_skill_taxonomy_entries:
                 conn.exec_driver_sql(statement)
 
         conn.exec_driver_sql(

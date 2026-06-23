@@ -26,7 +26,13 @@ class RunOrchestratorTests(unittest.TestCase):
         Base.metadata.drop_all(bind=self.engine)
         self.engine.dispose()
 
-    def _seed_user_settings(self, db: Session, *, feature_ai_enabled: bool) -> UserSettings:
+    def _seed_user_settings(
+        self,
+        db: Session,
+        *,
+        feature_ai_enabled: bool,
+        feature_ai_extractor_enabled: bool = False,
+    ) -> UserSettings:
         user_settings = UserSettings(
             owner_id="default-owner",
             enabled=True,
@@ -35,6 +41,7 @@ class RunOrchestratorTests(unittest.TestCase):
             default_date_mode="off",
             qualification_threshold=0.6,
             feature_ai_enabled=feature_ai_enabled,
+            feature_ai_extractor_enabled=feature_ai_extractor_enabled,
             feature_semantic_enabled=False,
             fallback_draft_template="Hi",
             signature_name="Tester",
@@ -92,8 +99,26 @@ class RunOrchestratorTests(unittest.TestCase):
             return {
                 "role": "Java Developer",
                 "location": "hybrid",
+                "job_location_text": "hybrid",
                 "salary_text": "$60/hr",
                 "skills_text": "java",
+                "f2f_mentioned": False,
+                "asks_contact_fields": False,
+                "is_texas_role": False,
+            }
+
+        def parse_email_with_details(_subject: str, _body: str, **_kwargs: object) -> tuple[dict[str, str], dict[str, object]]:
+            parsed = parse_email(_subject, _body)
+            return parsed, {
+                "parser_version": "spacy_enrichment_v1",
+                "source": "gmail",
+                "base_parser_result": dict(parsed),
+                "enrichment_result": {},
+                "ai_extractor_result": None,
+                "merged_result": dict(parsed),
+                "merge_notes": [],
+                "ai_merge_notes": [],
+                "source_hints": {},
             }
 
         def hard_filter_check(_parsed: dict[str, str | int | bool], _user_settings: UserSettings) -> tuple[bool, str]:
@@ -176,6 +201,7 @@ class RunOrchestratorTests(unittest.TestCase):
 
         deps = RunOrchestratorDependencies(
             parse_email=parse_email,
+            parse_email_with_details=parse_email_with_details,
             hard_filter_check=hard_filter_check,
             compute_blended_ai_score=compute_blended,
             policy_f2f_block=policy_f2f_block,
@@ -386,6 +412,141 @@ class RunOrchestratorTests(unittest.TestCase):
             self.assertEqual(result.queued_count, 1)
             self.assertEqual(marked, ["m-5"])
             self.assertIn(("needs_review_marked", "state"), events)
+
+    def test_gmail_path_reuses_single_parse_with_details_when_ai_extractor_enabled(self) -> None:
+        with Session(self.engine) as db:
+            user_settings = self._seed_user_settings(
+                db,
+                feature_ai_enabled=False,
+                feature_ai_extractor_enabled=True,
+            )
+            resume = self._seed_resume(db)
+            marked: list[str] = []
+            events: list[tuple[str, str]] = []
+            parse_email_calls: list[tuple[str, str]] = []
+            parse_email_with_details_calls: list[tuple[str, str, bool]] = []
+
+            def parse_email(subject: str, body: str) -> dict[str, str | int | bool]:
+                parse_email_calls.append((subject, body))
+                return {
+                    "role": "Base Role",
+                    "location": "Base Location",
+                    "job_location_text": "Base Location",
+                    "salary_text": "$60/hr",
+                    "skills_text": "java",
+                    "f2f_mentioned": False,
+                    "asks_contact_fields": False,
+                    "is_texas_role": False,
+                }
+
+            def parse_email_with_details(subject: str, body: str, **kwargs: object) -> tuple[dict[str, str | int | bool], dict[str, object]]:
+                parse_email_with_details_calls.append((subject, body, bool(kwargs.get("ai_extractor_enabled"))))
+                parsed = {
+                    "role": "AI Enriched Role",
+                    "location": "Dallas, TX",
+                    "job_location_text": "Dallas, TX",
+                    "salary_text": "$60/hr",
+                    "skills_text": "Java, Amazon ECS",
+                    "f2f_mentioned": False,
+                    "asks_contact_fields": False,
+                    "is_texas_role": True,
+                }
+                return parsed, {
+                    "parser_version": "spacy_ai_enrichment_v2",
+                    "source": "gmail",
+                    "base_parser_result": {"role": "Base Role"},
+                    "enrichment_result": {},
+                    "ai_extractor_result": {"skills_approved": ["Java", "Amazon ECS"]},
+                    "merged_result": dict(parsed),
+                    "merge_notes": [],
+                    "ai_merge_notes": ["merged approved AI extractor skills into taxonomy-normalized skills_text"],
+                    "source_hints": {},
+                }
+
+            deps = RunOrchestratorDependencies(
+                parse_email=parse_email,
+                parse_email_with_details=parse_email_with_details,
+                hard_filter_check=lambda *_args, **_kwargs: (True, "pass"),
+                compute_blended_ai_score=lambda *_args, **_kwargs: (
+                    0.9,
+                    "summary",
+                    "v1",
+                    None,
+                    None,
+                    SimpleNamespace(input_source="latest_block", input_chars=120, chunks=1, fallback_reason=None),
+                ),
+                policy_f2f_block=lambda *_args, **_kwargs: (False, ""),
+                evaluate_routing_policy=lambda *_args, **_kwargs: SimpleNamespace(
+                    to_email="to@example.com",
+                    cc_email="cc@example.com",
+                    status="safe",
+                    confidence=0.9,
+                    reason="test",
+                    evidence=[],
+                    candidates=[],
+                    recommended_state="failed",
+                    recommended_skip_reason=None,
+                    should_mark_failed=False,
+                ),
+                greeting_from_to_contact=lambda _to, _body: "Hi Recruiter,",
+                build_user_fallback_draft=lambda *_args, **_kwargs: "fallback",
+                generate_reply_with_ai_or_fallback=lambda **_kwargs: SimpleNamespace(
+                    draft_text="ai draft",
+                    source="deepseek",
+                    ai_model="deepseek-chat",
+                    ai_error=None,
+                    resume_context_status="injected",
+                ),
+                apply_routing_decision=lambda email, routing: (
+                    setattr(email, "recipient_email", routing.to_email),
+                    setattr(email, "cc_email", routing.cc_email),
+                    setattr(email, "routing_status", routing.status),
+                    setattr(email, "routing_confidence", routing.confidence),
+                    setattr(email, "routing_reason", routing.reason),
+                    setattr(email, "routing_evidence", "[]"),
+                    setattr(email, "routing_candidates", "[]"),
+                ),
+                select_best_resume_match=lambda **kwargs: SimpleNamespace(
+                    resume=kwargs.get("fallback_resume"),
+                    ai_score=0.9,
+                    ai_summary="summary",
+                    ai_score_source="v1",
+                    email_embedding_json=None,
+                    resume_embedding_json=None,
+                    semantic_diag=SimpleNamespace(input_source="latest_block", input_chars=120, chunks=1, fallback_reason=None),
+                ),
+                capture_premium_numbers=lambda *_args, **_kwargs: None,
+                record_productivity_event=lambda _db, *, event_type, event_source, **_kwargs: events.append((event_type, event_source)),
+                apply_gmail_label=lambda *_args, **_kwargs: None,
+                mark_message_processed=lambda message_id: marked.append(message_id),
+            )
+
+            RunOrchestrator().execute(
+                RunOrchestratorRequest(
+                    db=db,
+                    owner_id="default-owner",
+                    items=[self._item("m-ai-1")],
+                    user_settings=user_settings,
+                    resume=resume,
+                    active_resume=resume,
+                    enabled_resumes=[resume],
+                    effective_policy={},
+                    threshold=0.6,
+                    dry_run=False,
+                    model_name="deepseek-chat",
+                    deps=deps,
+                )
+            )
+
+            row = db.query(RecruiterEmail).filter(RecruiterEmail.external_message_id == "m-ai-1").first()
+            self.assertIsNotNone(row)
+            assert row is not None
+            self.assertEqual(parse_email_calls, [])
+            self.assertEqual(parse_email_with_details_calls, [("Java role", "Body", True)])
+            self.assertEqual(row.role, "AI Enriched Role")
+            self.assertIn("Amazon ECS", row.skills_text)
+            self.assertIn("spacy_ai_enrichment_v2", row.parser_details_json or "")
+            self.assertEqual(marked, ["m-ai-1"])
 
 
 if __name__ == "__main__":

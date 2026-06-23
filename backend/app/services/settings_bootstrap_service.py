@@ -109,6 +109,7 @@ class SettingsBootstrapService:
                 feature_auto_send=settings.feature_auto_send,
                 feature_retry_queue=settings.feature_retry_queue,
                 feature_ai_enabled=False,
+                feature_ai_extractor_enabled=False,
                 feature_semantic_enabled=False,
                 draft_text_size="normal",
                 fallback_draft_template=DEFAULT_FALLBACK_DRAFT_TEMPLATE,

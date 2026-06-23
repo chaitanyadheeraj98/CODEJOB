@@ -204,6 +204,16 @@ class SkillTaxonomy:
 
 
 @dataclass(frozen=True)
+class CustomSkillSeed:
+    canonical_name: str
+    aliases: tuple[str, ...]
+    category: str
+    cluster_hint: str | None = None
+    owner_id: str = "default-owner"
+    status: str = "approved"
+
+
+@dataclass(frozen=True)
 class IntentMatchBreakdown:
     score: float
     specialization_score: float
@@ -441,6 +451,13 @@ def load_skill_taxonomy() -> SkillTaxonomy:
             if entry is not None:
                 entries.append(entry)
 
+    for raw in _custom_skill_payloads():
+        entry = _coerce_entry(raw)
+        if entry is None or entry.id in seen:
+            continue
+        seen.add(entry.id)
+        entries.append(entry)
+
     exact_lookup: dict[str, SkillTaxonomyEntry] = {}
     for entry in entries:
         for token in entry.normalized_forms:
@@ -457,6 +474,81 @@ def load_skill_taxonomy() -> SkillTaxonomy:
         )
     )
     return SkillTaxonomy(entries=tuple(entries), entries_for_search=entries_for_search, exact_lookup=exact_lookup)
+
+
+def clear_skill_taxonomy_cache() -> None:
+    load_skill_taxonomy.cache_clear()
+
+
+def _custom_skill_payloads() -> list[dict[str, object]]:
+    payloads: list[dict[str, object]] = []
+    try:
+        for seed in _load_custom_skill_seeds():
+            canonical_name = str(seed.canonical_name).strip()
+            if not canonical_name:
+                continue
+            category = str(seed.category or "custom").strip() or "custom"
+            cluster_hint = str(seed.cluster_hint or "").strip() or f"custom_{normalize_taxonomy_text(category).replace(' ', '_') or 'skills'}"
+            aliases = [str(alias).strip() for alias in seed.aliases if str(alias).strip()]
+            entry_id = f"custom::{normalize_taxonomy_text(str(seed.owner_id or 'default-owner'))}::{normalize_taxonomy_text(canonical_name).replace(' ', '_')}"
+            payloads.append(
+                {
+                    "id": entry_id,
+                    "canonical_name": canonical_name,
+                    "category": category,
+                    "weight": _FALLBACK_WEIGHTS.get(normalize_taxonomy_text(category), 1.0),
+                    "aliases": aliases,
+                    "normalized_forms": [canonical_name, *aliases],
+                    "cluster_id": cluster_hint,
+                    "related_skill_ids": [],
+                    "match_tier": _default_match_tier(category=category, canonical_name=canonical_name),
+                    "intent_clusters": [cluster_hint],
+                    "strength_signals": [],
+                    "weak_signals": [],
+                }
+            )
+    except Exception:
+        return []
+    return payloads
+
+
+def _load_custom_skill_seeds() -> tuple[CustomSkillSeed, ...]:
+    try:
+        import json as _json
+
+        from app.db import SessionLocal
+        from app.models import CustomSkillTaxonomyEntry
+
+        with SessionLocal() as db:
+            rows = (
+                db.query(CustomSkillTaxonomyEntry)
+                .filter(CustomSkillTaxonomyEntry.status == "approved")
+                .order_by(CustomSkillTaxonomyEntry.owner_id.asc(), CustomSkillTaxonomyEntry.canonical_name.asc(), CustomSkillTaxonomyEntry.id.asc())
+                .all()
+            )
+        seeds: list[CustomSkillSeed] = []
+        for row in rows:
+            raw_aliases = row.aliases_json or "[]"
+            aliases: list[str] = []
+            try:
+                loaded = _json.loads(raw_aliases)
+            except Exception:
+                loaded = []
+            if isinstance(loaded, list):
+                aliases = [str(item).strip() for item in loaded if str(item).strip()]
+            seeds.append(
+                CustomSkillSeed(
+                    canonical_name=row.canonical_name,
+                    aliases=tuple(aliases),
+                    category=row.category,
+                    cluster_hint=row.cluster_hint,
+                    owner_id=row.owner_id,
+                    status=row.status,
+                )
+            )
+        return tuple(seeds)
+    except Exception:
+        return ()
 
 
 def normalize_skill_token(token: str, *, preserve_unknown: bool = True) -> str | None:

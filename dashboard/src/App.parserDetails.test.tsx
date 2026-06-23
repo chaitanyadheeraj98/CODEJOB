@@ -33,12 +33,23 @@ describe('ParserDetailsPanel', () => {
           expanded={false}
           onToggle={onToggle}
           parserDetails={{
-            parser_version: 'spacy_enrichment_v1',
+            parser_version: 'spacy_ai_enrichment_v2',
             source: 'nvoids',
-            merged_result: { role: 'Full Stack Developer', skills_text: 'Java, Spring Boot, React' },
+            merged_result: { role: 'Full Stack Developer', location: 'Dallas, TX', skills_text: 'Java, Spring Boot, React' },
             base_parser_result: { role: 'Full Stack Developer' },
             enrichment_result: { company: 'Acme', confidence: 0.62 },
+            ai_extractor_result: {
+              role_candidates: ['Full Stack Developer'],
+              primary_location: 'Austin, TX',
+              confidence: 0.87,
+              evidence: { title: ['Full Stack Developer'] },
+              skills_unknown: ['Temporal Workflow'],
+            },
+            approved_skills_text: 'Java, Spring Boot, React',
+            unknown_skills: ['Temporal Workflow'],
             merge_notes: ['merged taxonomy-normalized skills from deterministic parser and enrichment'],
+            ai_merge_notes: ['used AI extractor primary location because current merged location was weak'],
+            source_hints: { canonical_title: 'Full Stack Developer', canonical_location: 'Remote, USA', work_mode: 'Remote' },
           }}
         />,
       )
@@ -61,12 +72,23 @@ describe('ParserDetailsPanel', () => {
           expanded={true}
           onToggle={onToggle}
           parserDetails={{
-            parser_version: 'spacy_enrichment_v1',
+            parser_version: 'spacy_ai_enrichment_v2',
             source: 'nvoids',
-            merged_result: { role: 'Full Stack Developer', skills_text: 'Java, Spring Boot, React' },
+            merged_result: { role: 'Full Stack Developer', location: 'Dallas, TX', skills_text: 'Java, Spring Boot, React' },
             base_parser_result: { role: 'Full Stack Developer' },
             enrichment_result: { company: 'Acme', confidence: 0.62 },
+            ai_extractor_result: {
+              role_candidates: ['Full Stack Developer'],
+              primary_location: 'Austin, TX',
+              confidence: 0.87,
+              evidence: { title: ['Full Stack Developer'] },
+              skills_unknown: ['Temporal Workflow'],
+            },
+            approved_skills_text: 'Java, Spring Boot, React',
+            unknown_skills: ['Temporal Workflow'],
             merge_notes: ['merged taxonomy-normalized skills from deterministic parser and enrichment'],
+            ai_merge_notes: ['used AI extractor primary location because current merged location was weak'],
+            source_hints: { canonical_title: 'Full Stack Developer', canonical_location: 'Remote, USA', work_mode: 'Remote' },
           }}
         />,
       )
@@ -76,5 +98,13 @@ describe('ParserDetailsPanel', () => {
     expect(container.textContent ?? '').toContain('Final Extracted Result')
     expect(container.textContent ?? '').toContain('Full Stack Developer')
     expect(container.textContent ?? '').toContain('merged taxonomy-normalized skills')
+    expect(container.textContent ?? '').toContain('Approved Skills')
+    expect(container.textContent ?? '').toContain('Unknown Skills')
+    expect(container.textContent ?? '').toContain('Temporal Workflow')
+    expect(container.textContent ?? '').toContain('Winning Sources')
+    expect(container.textContent ?? '').toContain('Location: Merged parser -> Dallas, TX')
+    expect(container.textContent ?? '').toContain('Conflict Notes')
+    expect(container.textContent ?? '').toContain('Location conflict')
+    expect(container.textContent ?? '').toContain('AI Confidence And Evidence')
   })
 })

@@ -131,6 +131,7 @@ class UserSettings(Base):
     feature_auto_send: Mapped[bool] = mapped_column(default=False)
     feature_retry_queue: Mapped[bool] = mapped_column(default=False)
     feature_ai_enabled: Mapped[bool] = mapped_column(default=False)
+    feature_ai_extractor_enabled: Mapped[bool] = mapped_column(default=False)
     feature_semantic_enabled: Mapped[bool] = mapped_column(default=False)
     draft_text_size: Mapped[str] = mapped_column(String(20), default="normal")
     fallback_draft_template: Mapped[str] = mapped_column(Text, default="")
@@ -171,6 +172,20 @@ class AttachmentAsset(Base):
     sha256: Mapped[str] = mapped_column(String(64), index=True)
     file_size: Mapped[int] = mapped_column(Integer, default=0)
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+
+class CustomSkillTaxonomyEntry(Base):
+    __tablename__ = "custom_skill_taxonomy_entries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    canonical_name: Mapped[str] = mapped_column(String(255), index=True)
+    aliases_json: Mapped[str] = mapped_column(Text, default="[]")
+    category: Mapped[str] = mapped_column(String(120), default="custom")
+    cluster_hint: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    status: Mapped[str] = mapped_column(String(40), default="approved", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 

@@ -96,9 +96,10 @@ def prepare_candidate_for_queue(
     request: QueuePreparationRequest,
     deps: QueuePreparationDependencies,
 ) -> QueuePreparationResult:
-    parsed = deps.parse_email(request.subject, request.body)
     if request.parsed_overrides:
-        parsed.update(dict(request.parsed_overrides))
+        parsed = dict(request.parsed_overrides)
+    else:
+        parsed = deps.parse_email(request.subject, request.body)
     hard_pass, hard_reason = deps.hard_filter_check(parsed, request.user_settings)
     ai_score, ai_summary, ai_score_source, email_embedding_json, resume_embedding_json, semantic_diag = deps.compute_blended_ai_score(
         request.subject,

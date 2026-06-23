@@ -51,6 +51,7 @@ from app.external_feeds.service import ExternalFeedService
 from app.external_feeds.models import ExternalScrapeRun
 from app.models import (
     AttachmentAsset,
+    CustomSkillTaxonomyEntry,
     DraftEditFeedback,
     EmployerNumber,
     NumberReviewQueue,
@@ -83,7 +84,13 @@ from app.phase0 import (
     should_block_f2f,
 )
 from app.routing import RoutingDecision
-from app.skill_taxonomy import normalize_skills_text
+from app.skill_taxonomy import (
+    clear_skill_taxonomy_cache,
+    load_skill_taxonomy,
+    normalize_skill_token,
+    normalize_skills_text,
+    normalize_taxonomy_text,
+)
 from app.premium_numbers.intelligence import OPPORTUNITY_STATUS_VALUES
 from app.premium_numbers.phone_normalization import best_display_phone, canonicalize_phone
 from app.query_bucket import sanitize_saved_queries
@@ -101,12 +108,15 @@ from app.services.telegram_runtime_service import TelegramRuntime, TelegramRunti
 from app.schemas import (
     AIStatusResponse,
     ApproveSendRequest,
+    ApproveSkillRequest,
     AttachmentAssetResponse,
     AttachmentAssetUpdateRequest,
     AutomationRunRequest,
     AutomationRunResponse,
     BulkRejectRequest,
     CandidateListResponse,
+    CustomSkillTaxonomyEntryResponse,
+    DismissSkillRequest,
     EmailResponse,
     GmailStatusResponse,
     GmailSyncResponse,
@@ -119,6 +129,7 @@ from app.schemas import (
     EmployerNumberListResponse,
     PremiumNumberListResponse,
     PremiumNumberResponse,
+    PendingSkillResponse,
     RecruiterNumberResponse,
     RecruiterNumberListResponse,
     RecruiterOpportunityDeleteResponse,
@@ -730,6 +741,7 @@ def _get_orchestration_service() -> OrchestrationService:
                 list_unread_candidates_by_query=lambda *args, **kwargs: list_unread_candidates_by_query(*args, **kwargs),
                 is_recruiter_like=lambda sender, subject, body: is_recruiter_like(sender, subject, body),
                 parse_email=lambda subject, body: parse_email(subject, body),
+                parse_email_with_details=lambda subject, body, **kwargs: parse_email_with_details(subject, body, **kwargs),
                 hard_filter_check=lambda parsed, user_settings: hard_filter_check(parsed, user_settings),
                 should_block_f2f=lambda parsed: should_block_f2f(parsed),
                 greeting_from_to_contact=lambda to_email, body: greeting_from_to_contact(to_email, body),
@@ -904,6 +916,177 @@ def _enabled_attachment_assets(db: Session) -> list[AttachmentAsset]:
 
 def _enabled_attachment_file_names(db: Session) -> list[str]:
     return [item.file_name for item in _enabled_attachment_assets(db)]
+
+
+def _clean_custom_skill_name(value: str | None) -> str:
+    return " ".join(str(value or "").strip().split())
+
+
+def _canonicalize_custom_skill_name(value: str | None) -> str:
+    cleaned = _clean_custom_skill_name(value)
+    if not cleaned:
+        return ""
+    return normalize_skill_token(cleaned, preserve_unknown=False) or cleaned
+
+
+def _normalize_custom_skill_aliases(aliases: list[str] | None, *, canonical_name: str) -> list[str]:
+    ordered: list[str] = []
+    seen: set[str] = {normalize_taxonomy_text(canonical_name)}
+    for item in aliases or []:
+        alias = _clean_custom_skill_name(item)
+        if not alias:
+            continue
+        normalized = normalize_taxonomy_text(alias)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        ordered.append(alias)
+    return ordered
+
+
+def _serialize_custom_skill_entry(entry: CustomSkillTaxonomyEntry) -> CustomSkillTaxonomyEntryResponse:
+    payload = CustomSkillTaxonomyEntryResponse.model_validate(entry).model_dump()
+    try:
+        aliases = json.loads(entry.aliases_json or "[]")
+    except json.JSONDecodeError:
+        aliases = []
+    payload["aliases"] = [str(item).strip() for item in aliases if str(item).strip()]
+    return CustomSkillTaxonomyEntryResponse.model_validate(payload)
+
+
+def _list_approved_custom_skill_entries(db: Session) -> list[CustomSkillTaxonomyEntry]:
+    return (
+        db.query(CustomSkillTaxonomyEntry)
+        .filter(
+            CustomSkillTaxonomyEntry.owner_id == settings.owner_id,
+            CustomSkillTaxonomyEntry.status == "approved",
+        )
+        .order_by(CustomSkillTaxonomyEntry.canonical_name.asc(), CustomSkillTaxonomyEntry.id.asc())
+        .all()
+    )
+
+
+def _known_or_suppressed_pending_skill_keys(db: Session) -> set[str]:
+    suppressed = {
+        normalize_taxonomy_text(row.canonical_name)
+        for row in db.query(CustomSkillTaxonomyEntry)
+        .filter(
+            CustomSkillTaxonomyEntry.owner_id == settings.owner_id,
+            CustomSkillTaxonomyEntry.status.in_(("approved", "dismissed")),
+        )
+        .all()
+        if normalize_taxonomy_text(row.canonical_name)
+    }
+    suppressed.update(load_skill_taxonomy().exact_lookup.keys())
+    return suppressed
+
+
+def _list_pending_unknown_skills(db: Session) -> list[PendingSkillResponse]:
+    suppressed = _known_or_suppressed_pending_skill_keys(db)
+    aggregated: dict[str, dict[str, object]] = {}
+    rows = (
+        db.query(RecruiterEmail.id, RecruiterEmail.parser_details_json)
+        .filter(
+            RecruiterEmail.owner_id == settings.owner_id,
+            RecruiterEmail.parser_details_json.is_not(None),
+            RecruiterEmail.parser_details_json != "",
+        )
+        .order_by(RecruiterEmail.id.desc())
+        .all()
+    )
+    for email_id, parser_details_json in rows:
+        if not parser_details_json:
+            continue
+        try:
+            payload = json.loads(parser_details_json)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        unknown_skills = payload.get("unknown_skills", [])
+        if not isinstance(unknown_skills, list):
+            continue
+        seen_for_candidate: set[str] = set()
+        for item in unknown_skills:
+            skill_name = _clean_custom_skill_name(str(item))
+            normalized = normalize_taxonomy_text(skill_name)
+            if not skill_name or not normalized or normalized in suppressed or normalized in seen_for_candidate:
+                continue
+            seen_for_candidate.add(normalized)
+            bucket = aggregated.setdefault(
+                normalized,
+                {
+                    "skill_name": skill_name,
+                    "normalized_name": normalized,
+                    "occurrence_count": 0,
+                    "candidate_ids": [],
+                },
+            )
+            bucket["occurrence_count"] = int(bucket["occurrence_count"]) + 1
+            candidate_ids = cast(list[int], bucket["candidate_ids"])
+            candidate_ids.append(int(email_id))
+    results: list[PendingSkillResponse] = []
+    for item in aggregated.values():
+        candidate_ids = sorted(set(cast(list[int], item["candidate_ids"])), reverse=True)
+        results.append(
+            PendingSkillResponse(
+                skill_name=str(item["skill_name"]),
+                normalized_name=str(item["normalized_name"]),
+                occurrence_count=int(item["occurrence_count"]),
+                candidate_ids=candidate_ids,
+            )
+        )
+    results.sort(key=lambda item: (-item.occurrence_count, item.skill_name.lower(), item.normalized_name))
+    return results
+
+
+def _upsert_custom_skill_entry(
+    db: Session,
+    *,
+    skill_name: str,
+    canonical_name: str | None = None,
+    aliases: list[str] | None = None,
+    category: str = "custom",
+    cluster_hint: str | None = None,
+    status: str,
+) -> CustomSkillTaxonomyEntry:
+    effective_canonical_name = _canonicalize_custom_skill_name(canonical_name or skill_name)
+    if not effective_canonical_name:
+        raise HTTPException(status_code=400, detail="Skill name required")
+    normalized_target = normalize_taxonomy_text(effective_canonical_name)
+    normalized_category = normalize_taxonomy_text(category) or "custom"
+    normalized_aliases = _normalize_custom_skill_aliases(aliases, canonical_name=effective_canonical_name)
+    existing = (
+        db.query(CustomSkillTaxonomyEntry)
+        .filter(CustomSkillTaxonomyEntry.owner_id == settings.owner_id)
+        .order_by(CustomSkillTaxonomyEntry.id.asc())
+        .all()
+    )
+    for row in existing:
+        if normalize_taxonomy_text(row.canonical_name) != normalized_target:
+            continue
+        row.canonical_name = effective_canonical_name
+        row.aliases_json = json.dumps(normalized_aliases, separators=(",", ":"))
+        row.category = normalized_category
+        row.cluster_hint = _clean_custom_skill_name(cluster_hint) or None
+        row.status = status
+        clear_skill_taxonomy_cache()
+        db.commit()
+        db.refresh(row)
+        return row
+    created = CustomSkillTaxonomyEntry(
+        owner_id=settings.owner_id,
+        canonical_name=effective_canonical_name,
+        aliases_json=json.dumps(normalized_aliases, separators=(",", ":")),
+        category=normalized_category,
+        cluster_hint=_clean_custom_skill_name(cluster_hint) or None,
+        status=status,
+    )
+    db.add(created)
+    clear_skill_taxonomy_cache()
+    db.commit()
+    db.refresh(created)
+    return created
 
 
 def _semantic_text_for_email(subject: str, body: str, role: str, skills_text: str) -> str:
@@ -1127,6 +1310,7 @@ def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
         feature_auto_send=s.feature_auto_send,
         feature_retry_queue=s.feature_retry_queue,
         feature_ai_enabled=s.feature_ai_enabled,
+        feature_ai_extractor_enabled=s.feature_ai_extractor_enabled,
         feature_semantic_enabled=s.feature_semantic_enabled,
         draft_text_size=normalize_draft_text_size(s.draft_text_size),
         fallback_draft_template=s.fallback_draft_template or DEFAULT_FALLBACK_DRAFT_TEMPLATE,
@@ -1220,6 +1404,7 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
     s.feature_auto_send = payload.feature_auto_send
     s.feature_retry_queue = payload.feature_retry_queue
     s.feature_ai_enabled = payload.feature_ai_enabled
+    s.feature_ai_extractor_enabled = payload.feature_ai_extractor_enabled
     s.feature_semantic_enabled = payload.feature_semantic_enabled
     s.draft_text_size = normalize_draft_text_size(payload.draft_text_size)
     s.fallback_draft_template = payload.fallback_draft_template.strip() if payload.fallback_draft_template.strip() else DEFAULT_FALLBACK_DRAFT_TEMPLATE
@@ -1422,6 +1607,44 @@ def delete_attachment_file(attachment_id: int, db: Session = Depends(get_db)) ->
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"Attachment deleted from database but not disk: {exc}") from exc
     return {"id": attachment_id, "deleted": True}
+
+
+@app.get("/settings/skills/pending", response_model=list[PendingSkillResponse])
+def list_pending_skills(db: Session = Depends(get_db)) -> list[PendingSkillResponse]:
+    return _list_pending_unknown_skills(db)
+
+
+@app.get("/settings/skills/approved", response_model=list[CustomSkillTaxonomyEntryResponse])
+def list_approved_skills(db: Session = Depends(get_db)) -> list[CustomSkillTaxonomyEntryResponse]:
+    return [_serialize_custom_skill_entry(item) for item in _list_approved_custom_skill_entries(db)]
+
+
+@app.post("/settings/skills/approve", response_model=CustomSkillTaxonomyEntryResponse)
+def approve_skill(payload: ApproveSkillRequest, db: Session = Depends(get_db)) -> CustomSkillTaxonomyEntryResponse:
+    entry = _upsert_custom_skill_entry(
+        db,
+        skill_name=payload.skill_name,
+        canonical_name=payload.canonical_name,
+        aliases=payload.aliases,
+        category=payload.category,
+        cluster_hint=payload.cluster_hint,
+        status="approved",
+    )
+    return _serialize_custom_skill_entry(entry)
+
+
+@app.post("/settings/skills/dismiss", response_model=CustomSkillTaxonomyEntryResponse)
+def dismiss_skill(payload: DismissSkillRequest, db: Session = Depends(get_db)) -> CustomSkillTaxonomyEntryResponse:
+    entry = _upsert_custom_skill_entry(
+        db,
+        skill_name=payload.skill_name,
+        canonical_name=payload.canonical_name,
+        aliases=[],
+        category="custom",
+        cluster_hint=None,
+        status="dismissed",
+    )
+    return _serialize_custom_skill_entry(entry)
 
 
 @app.get("/gmail/status", response_model=GmailStatusResponse)

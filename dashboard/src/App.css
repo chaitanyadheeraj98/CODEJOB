@@ -935,6 +935,101 @@
   flex: 0 0 auto;
 }
 
+.skillUpgradeCard,
+.skillUpgradeStack,
+.skillUpgradeColumns,
+.skillUpgradeColumn,
+.skillUpgradeList,
+.skillUpgradeItem,
+.skillUpgradeItemHeader,
+.skillUpgradeActions,
+.skillUpgradeMeta,
+.skillUpgradeName {
+  min-width: 0;
+}
+
+.skillUpgradeColumns {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.skillUpgradeColumn {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
+.skillUpgradeColumnHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.skillUpgradeColumnHeader h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.skillUpgradeCount,
+.skillUpgradeBadge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: #eef2f8;
+  color: #33405a;
+  font-size: 13px;
+}
+
+.skillUpgradeList {
+  display: grid;
+  gap: 12px;
+}
+
+.skillUpgradeItem {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+}
+
+.skillUpgradeItemHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.skillUpgradeName,
+.skillUpgradeMeta,
+.skillUpgradeIntro {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.skillUpgradeMeta {
+  margin: 0;
+}
+
+.skillUpgradeActions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.skillUpgradeActions button {
+  flex: 0 0 auto;
+}
+
 .verdictBadge {
   display: inline-flex;
   align-items: center;
@@ -1010,6 +1105,12 @@
   font-size: 13px;
 }
 
+.parserDetailsSummaryGrid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
 .parserDetailsGrid {
   display: grid;
   gap: 12px;
@@ -1022,6 +1123,10 @@
   border-radius: 8px;
   padding: 10px;
   background: #f9fbff;
+}
+
+.parserDetailsSummaryBlock {
+  background: #f5f8ff;
 }
 
 .parserDetailsBlock h3 {
