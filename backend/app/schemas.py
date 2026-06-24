@@ -76,6 +76,7 @@ class SettingsRequest(BaseModel):
     signature_name: str = ""
     signature_phone: str = ""
     signature_email: str = ""
+    resume_display_name: str = ""
     policy: PolicyDict | None = None
 
     @field_validator("mail_date")

@@ -98,7 +98,7 @@ from app.query_bucket import sanitize_saved_queries
 from app.runtime_state import runtime_state
 from app.services import analytics_service, policy_service
 from app.services.auto_runner_service import AutoRunnerService
-from app.services.candidate_runtime_service import CandidateRuntimeDeps, CandidateRuntimeService
+from app.services.candidate_runtime_service import CandidateRuntimeDeps, CandidateRuntimeService, resolve_resume_display_name
 from app.services.gmail_labeling_runtime_service import GmailLabelingRuntimeService
 from app.services.orchestration_service import OrchestrationDeps, OrchestrationService
 from app.services.routing_runtime_service import RoutingRuntimeDeps, RoutingRuntimeService
@@ -1330,6 +1330,7 @@ def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
         signature_name=(s.signature_name or "").strip() or DEFAULT_SIGNATURE_NAME,
         signature_phone=(s.signature_phone or "").strip() or DEFAULT_SIGNATURE_PHONE,
         signature_email=(s.signature_email or "").strip() or DEFAULT_SIGNATURE_EMAIL,
+        resume_display_name=(s.resume_display_name or "").strip(),
         policy=policy,
         policy_profile_options=list(policy_service.policy_profiles().keys()),
         policy_profile_selected=policy_service.selected_policy_profile(policy),
@@ -1424,6 +1425,7 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
     s.signature_name = payload.signature_name.strip() if payload.signature_name.strip() else DEFAULT_SIGNATURE_NAME
     s.signature_phone = payload.signature_phone.strip() if payload.signature_phone.strip() else DEFAULT_SIGNATURE_PHONE
     s.signature_email = payload.signature_email.strip() if payload.signature_email.strip() else DEFAULT_SIGNATURE_EMAIL
+    s.resume_display_name = payload.resume_display_name.strip()
     normalized_policy = policy_service.normalize_policy(
         payload.policy if payload.policy is not None else policy_service.read_policy_from_settings(s.policy_json)
     )
@@ -2057,7 +2059,7 @@ def ingest_email(payload: IngestEmailRequest, db: Session = Depends(get_db)) -> 
         role=str(parsed["role"]),
         parsed=parsed,
         greeting_line=greeting_from_to_contact(None, payload.body),
-        resume_file_name=selected_resume.file_name if selected_resume else None,
+        resume_file_name=resolve_resume_display_name(user_settings, selected_resume.file_name if selected_resume else None),
     )
 
     email = RecruiterEmail(

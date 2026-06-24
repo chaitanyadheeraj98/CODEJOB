@@ -20,6 +20,7 @@ from app.parsing import build_skills_json_payload
 from app.phase0 import RoutingResult, parse_email_with_details
 from app.routing import RoutingDecision
 from app.schemas import ApproveSendRequest, AutomationRunRequest, AutomationRunResponse, GmailSyncResponse, RejectRequest, ResolveRecipientsRequest
+from app.services.candidate_runtime_service import resolve_resume_display_name
 
 logger = logging.getLogger(__name__)
 
@@ -180,7 +181,10 @@ class OrchestrationService:
                             role=str(parsed["role"]),
                             parsed=parsed,
                             greeting_line=greeting_line,
-                            resume_file_name=selected_resume.file_name if selected_resume else None,
+                            resume_file_name=resolve_resume_display_name(
+                                user_settings,
+                                selected_resume.file_name if selected_resume else None,
+                            ),
                         )
 
                 email = RecruiterEmail(
@@ -604,7 +608,11 @@ class OrchestrationService:
                 detail=f"Attachment files missing on disk: {', '.join(missing_attachments)}",
             )
         attachments = [
-            MailAttachment(path=resume.file_path, display_name=resume.file_name, mime_type=resume.mime_type),
+            MailAttachment(
+                path=resume.file_path,
+                display_name=resolve_resume_display_name(user_settings, resume.file_name),
+                mime_type=resume.mime_type,
+            ),
             *[
                 MailAttachment(path=item.file_path, display_name=item.file_name, mime_type=item.mime_type)
                 for item in extra_attachments
@@ -780,7 +788,10 @@ class OrchestrationService:
             role=role,
             parsed=parsed,
             greeting_line=greeting_line,
-            resume_file_name=resume.file_name if resume else email.resume_file_name,
+            resume_file_name=resolve_resume_display_name(
+                user_settings,
+                resume.file_name if resume else email.resume_file_name,
+            ),
         )
         reply = fallback_reply
         draft_source = "rules_only"

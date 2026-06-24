@@ -384,6 +384,7 @@ class ExternalFeedsApiTests(unittest.TestCase):
                 "signature_name": "",
                 "signature_phone": "",
                 "signature_email": "",
+                "resume_display_name": "Chaithanya Dheeraj Resume",
                 "policy": None,
             },
         )
@@ -392,6 +393,7 @@ class ExternalFeedsApiTests(unittest.TestCase):
         self.assertEqual(payload["nvoids_locations"], ["texas", "remote"])
         self.assertTrue(payload["feature_ai_extractor_enabled"])
         self.assertEqual(payload["draft_text_size"], "huge")
+        self.assertEqual(payload["resume_display_name"], "Chaithanya Dheeraj Resume")
 
     def test_settings_reject_invalid_draft_text_size(self) -> None:
         res = self.client.put(
@@ -429,6 +431,7 @@ class ExternalFeedsApiTests(unittest.TestCase):
                 "signature_name": "",
                 "signature_phone": "",
                 "signature_email": "",
+                "resume_display_name": "",
                 "policy": None,
             },
         )

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 
 from sqlalchemy.orm import Session
@@ -13,6 +14,22 @@ from app.routing import RoutingDecision
 from app.services.phone_intelligence_workflow_service import PhoneIntelligenceWorkflowResult, PhoneIntelligenceWorkflowService
 
 logger = logging.getLogger(__name__)
+
+
+def resolve_resume_display_name(user_settings: UserSettings, resume_file_name: str | None) -> str | None:
+    raw_name = (resume_file_name or "").strip()
+    if not raw_name:
+        return None
+    configured_name = str(getattr(user_settings, "resume_display_name", "") or "").strip()
+    if not configured_name:
+        return raw_name
+    original_suffix = Path(raw_name).suffix
+    configured_suffix = Path(configured_name).suffix
+    base_name = configured_name[: -len(configured_suffix)] if configured_suffix else configured_name
+    base_name = base_name.rstrip(" .")
+    if not base_name:
+        return raw_name
+    return f"{base_name}{original_suffix}" if original_suffix else base_name
 
 
 @dataclass
@@ -98,7 +115,7 @@ class CandidateRuntimeService:
                     role=role,
                     parsed=parsed,
                     greeting_line=greeting_line,
-                    resume_file_name=email.resume_file_name,
+                    resume_file_name=resolve_resume_display_name(user_settings, email.resume_file_name),
                 )
                 email.draft_source = "rules_only"
                 email.draft_model = None

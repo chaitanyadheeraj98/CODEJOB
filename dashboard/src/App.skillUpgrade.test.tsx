@@ -14,7 +14,7 @@ describe('SkillUpgradeSection', () => {
     while (cleanups.length) cleanups.pop()?.()
   })
 
-  it('renders pending and approved skills and forwards approve/dismiss actions', () => {
+  it('renders pending skills only and forwards approve/dismiss actions', () => {
     const container = document.createElement('div')
     document.body.appendChild(container)
     const root: Root = createRoot(container)
@@ -36,19 +36,6 @@ describe('SkillUpgradeSection', () => {
       root.render(
         <SkillUpgradeSection
           pendingSkills={[pendingSkill]}
-          approvedSkills={[
-            {
-              id: 1,
-              owner_id: 'default-owner',
-              canonical_name: 'Agent Studio',
-              aliases: ['Agentic Studio'],
-              category: 'custom',
-              cluster_hint: 'custom_ai',
-              status: 'approved',
-              created_at: '2026-06-22T00:00:00Z',
-              updated_at: '2026-06-22T00:00:00Z',
-            },
-          ]}
           loading={false}
           busySkillKey={null}
           approveSkill={approveSkill}
@@ -61,9 +48,8 @@ describe('SkillUpgradeSection', () => {
     expect(container.textContent ?? '').toContain('Pending Unknown Skills')
     expect(container.textContent ?? '').toContain('Temporal Workflow')
     expect(container.textContent ?? '').toContain('Candidate IDs: 44, 12')
-    expect(container.textContent ?? '').toContain('Approved Custom Skills')
-    expect(container.textContent ?? '').toContain('Agent Studio')
-    expect(container.textContent ?? '').toContain('Aliases: Agentic Studio')
+    expect(container.textContent ?? '').toContain('Approve adds them to your custom taxonomy')
+    expect(container.textContent ?? '').not.toContain('Approved Custom Skills')
 
     const buttons = Array.from(container.querySelectorAll('button'))
     const approveButton = buttons.find((button) => button.textContent === 'Approve') as HTMLButtonElement | undefined

@@ -367,6 +367,44 @@ class ApproveCcRegressionTests(unittest.TestCase):
             main.mark_message_processed = original_mark_processed
             main.append_tracking_sheet_row = original_append_tracking
 
+    def test_approve_send_uses_configured_resume_display_name_but_keeps_selected_variant_record(self) -> None:
+        original_send_reply = main.send_reply_with_attachment
+        original_send_new = main.send_new_email_with_attachment
+        original_mark_processed = main.mark_message_processed
+        original_append_tracking = main.append_tracking_sheet_row
+        sent_reply_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+        try:
+            main.send_reply_with_attachment = lambda *args, **kwargs: (sent_reply_calls.append((args, kwargs)), "sent-789")[1]
+            main.send_new_email_with_attachment = lambda *_args, **_kwargs: "new-123"
+            main.mark_message_processed = lambda *_args, **_kwargs: None
+            main.append_tracking_sheet_row = lambda **_kwargs: None
+            email_id = None
+            with Session(self.engine) as db:
+                settings_row = db.query(UserSettings).filter(UserSettings.owner_id == main.settings.owner_id).first()
+                assert settings_row is not None
+                settings_row.resume_display_name = "Chaithanya Dheeraj Resume"
+                self._add_resume(db)
+                pinned_resume = self._add_secondary_resume(db, file_name="resume-best-match.pdf")
+                email = self._add_needs_review_email(db, cc_email="vaishnavi@horizonsoftech.net")
+                email.resume_asset_id = pinned_resume.id
+                email.resume_file_name = pinned_resume.file_name
+                db.commit()
+                email_id = email.id
+
+            response = self.client.post(f"/candidates/{email_id}/approve-send", json={"edited_reply": None})
+            self.assertEqual(response.status_code, 200, response.text)
+            attachments = sent_reply_calls[0][1].get("attachments")
+            self.assertIsInstance(attachments, list)
+            assert isinstance(attachments, list)
+            self.assertEqual(attachments[0].display_name, "Chaithanya Dheeraj Resume.pdf")
+            payload = response.json()
+            self.assertEqual(payload["resume_file_name"], "resume-best-match.pdf")
+        finally:
+            main.send_reply_with_attachment = original_send_reply
+            main.send_new_email_with_attachment = original_send_new
+            main.mark_message_processed = original_mark_processed
+            main.append_tracking_sheet_row = original_append_tracking
+
     def test_nvoids_approve_send_uses_new_email_send_and_marks_sent(self) -> None:
         original_send_reply = main.send_reply_with_attachment
         original_send_new = main.send_new_email_with_attachment

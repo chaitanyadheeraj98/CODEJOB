@@ -155,6 +155,7 @@ type SettingsPayload = {
   signature_name: string
   signature_phone: string
   signature_email: string
+  resume_display_name: string
   policy?: DynamicPolicy | null
   policy_profile_options?: string[] | null
   policy_profile_selected?: string | null
@@ -242,18 +243,6 @@ type PendingSkill = {
   normalized_name: string
   occurrence_count: number
   candidate_ids: number[]
-}
-
-type ApprovedCustomSkill = {
-  id: number
-  owner_id: string
-  canonical_name: string
-  aliases: string[]
-  category: string
-  cluster_hint: string | null
-  status: string
-  created_at: string
-  updated_at: string
 }
 
 type ResumeDatabaseSectionProps = {
@@ -415,7 +404,6 @@ export function ResumeDatabaseSection({
 
 type SkillUpgradeSectionProps = {
   pendingSkills: PendingSkill[]
-  approvedSkills: ApprovedCustomSkill[]
   loading: boolean
   busySkillKey: string | null
   approveSkill: (skill: PendingSkill) => void
@@ -424,7 +412,6 @@ type SkillUpgradeSectionProps = {
 
 export function SkillUpgradeSection({
   pendingSkills,
-  approvedSkills,
   loading,
   busySkillKey,
   approveSkill,
@@ -435,93 +422,59 @@ export function SkillUpgradeSection({
       <h2>Upgrade Skills</h2>
       <div className="stack skillUpgradeStack">
         <p className="subtle skillUpgradeIntro">
-          Review parser-extracted unknown skills here. Approved skills join your custom taxonomy; dismissed skills stay out of the pending queue.
+          Review parser-extracted unknown skills here. Approve adds them to your
+          custom taxonomy; dismiss removes them from this queue.
         </p>
 
-        <div className="skillUpgradeColumns">
-          <section className="skillUpgradeColumn">
-            <div className="skillUpgradeColumnHeader">
-              <h3>Pending Unknown Skills</h3>
-              <span className="skillUpgradeCount">{pendingSkills.length}</span>
-            </div>
-            {loading ? (
-              <p className="subtle">Loading skills...</p>
-            ) : pendingSkills.length === 0 ? (
-              <p className="subtle">No pending unknown skills right now.</p>
-            ) : (
-              <div className="skillUpgradeList">
-                {pendingSkills.map((skill) => {
-                  const approveKey = `approve:${skill.normalized_name}`
-                  const dismissKey = `dismiss:${skill.normalized_name}`
-                  return (
-                    <article key={skill.normalized_name} className="skillUpgradeItem">
-                      <div className="skillUpgradeItemHeader">
-                        <strong className="skillUpgradeName">{skill.skill_name}</strong>
-                        <span className="skillUpgradeBadge">{skill.occurrence_count} hit{skill.occurrence_count === 1 ? '' : 's'}</span>
-                      </div>
-                      <p className="subtle skillUpgradeMeta">
-                        Normalized key: {skill.normalized_name}
-                      </p>
-                      <p className="subtle skillUpgradeMeta">
-                        Candidate IDs: {skill.candidate_ids.length > 0 ? skill.candidate_ids.join(', ') : '-'}
-                      </p>
-                      <div className="skillUpgradeActions">
-                        <button
-                          type="button"
-                          className="primary"
-                          onClick={() => approveSkill(skill)}
-                          disabled={busySkillKey !== null}
-                        >
-                          {busySkillKey === approveKey ? 'Approving...' : 'Approve'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => dismissSkill(skill)}
-                          disabled={busySkillKey !== null}
-                        >
-                          {busySkillKey === dismissKey ? 'Dismissing...' : 'Dismiss'}
-                        </button>
-                      </div>
-                    </article>
-                  )
-                })}
-              </div>
-            )}
-          </section>
-
-          <section className="skillUpgradeColumn">
-            <div className="skillUpgradeColumnHeader">
-              <h3>Approved Custom Skills</h3>
-              <span className="skillUpgradeCount">{approvedSkills.length}</span>
-            </div>
-            {loading ? (
-              <p className="subtle">Loading skills...</p>
-            ) : approvedSkills.length === 0 ? (
-              <p className="subtle">No approved custom skills yet.</p>
-            ) : (
-              <div className="skillUpgradeList">
-                {approvedSkills.map((skill) => (
-                  <article key={skill.id} className="skillUpgradeItem">
+        <section className="skillUpgradeColumn">
+          <div className="skillUpgradeColumnHeader">
+            <h3>Pending Unknown Skills</h3>
+            <span className="skillUpgradeCount">{pendingSkills.length}</span>
+          </div>
+          {loading ? (
+            <p className="subtle">Loading skills...</p>
+          ) : pendingSkills.length === 0 ? (
+            <p className="subtle">No pending unknown skills right now.</p>
+          ) : (
+            <div className="skillUpgradeList">
+              {pendingSkills.map((skill) => {
+                const approveKey = `approve:${skill.normalized_name}`
+                const dismissKey = `dismiss:${skill.normalized_name}`
+                return (
+                  <article key={skill.normalized_name} className="skillUpgradeItem">
                     <div className="skillUpgradeItemHeader">
-                      <strong className="skillUpgradeName">{skill.canonical_name}</strong>
-                      <span className="skillUpgradeBadge">{skill.category || 'custom'}</span>
+                      <strong className="skillUpgradeName">{skill.skill_name}</strong>
+                      <span className="skillUpgradeBadge">{skill.occurrence_count} hit{skill.occurrence_count === 1 ? '' : 's'}</span>
                     </div>
                     <p className="subtle skillUpgradeMeta">
-                      Status: {skill.status}
-                      {skill.cluster_hint ? ` | Cluster: ${skill.cluster_hint}` : ''}
+                      Normalized key: {skill.normalized_name}
                     </p>
                     <p className="subtle skillUpgradeMeta">
-                      Aliases: {skill.aliases.length > 0 ? skill.aliases.join(', ') : 'None'}
+                      Candidate IDs: {skill.candidate_ids.length > 0 ? skill.candidate_ids.join(', ') : '-'}
                     </p>
-                    <p className="subtle skillUpgradeMeta">
-                      Approved: {formatSettingsDate(skill.created_at)}
-                    </p>
+                    <div className="skillUpgradeActions">
+                      <button
+                        type="button"
+                        className="primary"
+                        onClick={() => approveSkill(skill)}
+                        disabled={busySkillKey !== null}
+                      >
+                        {busySkillKey === approveKey ? 'Approving...' : 'Approve'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => dismissSkill(skill)}
+                        disabled={busySkillKey !== null}
+                      >
+                        {busySkillKey === dismissKey ? 'Dismissing...' : 'Dismiss'}
+                      </button>
+                    </div>
                   </article>
-                ))}
-              </div>
-            )}
-          </section>
-        </div>
+                )
+              })}
+            </div>
+          )}
+        </section>
       </div>
     </section>
   )
@@ -1030,6 +983,7 @@ function App() {
     signature_name: '',
     signature_phone: '',
     signature_email: '',
+    resume_display_name: '',
     policy: defaultPolicy,
   })
   const [resumeFile, setResumeFile] = useState<File | null>(null)
@@ -1039,7 +993,6 @@ function App() {
   const [resumeAssets, setResumeAssets] = useState<ResumeAsset[]>([])
   const [attachmentFiles, setAttachmentFiles] = useState<AttachmentAsset[]>([])
   const [pendingSkills, setPendingSkills] = useState<PendingSkill[]>([])
-  const [approvedSkills, setApprovedSkills] = useState<ApprovedCustomSkill[]>([])
   const [skillsLoading, setSkillsLoading] = useState(false)
   const [skillActionKey, setSkillActionKey] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
@@ -1200,6 +1153,7 @@ function App() {
       nvoids_locations: payload.nvoids_locations ?? [],
       employer_domains: payload.employer_domains ?? [],
       draft_text_size: normalizeDraftTextSize(payload.draft_text_size),
+      resume_display_name: payload.resume_display_name ?? '',
       policy: payload.policy ?? defaultPolicy,
     }
     setSettings(normalized)
@@ -1236,16 +1190,10 @@ function App() {
     setPendingSkills((await res.json()) as PendingSkill[])
   }
 
-  const loadApprovedSkills = async () => {
-    const res = await fetch(`${apiBase}/settings/skills/approved`)
-    if (!res.ok) throw new Error('Failed to load approved skills')
-    setApprovedSkills((await res.json()) as ApprovedCustomSkill[])
-  }
-
   const loadSkillUpgradeData = async () => {
     setSkillsLoading(true)
     try {
-      await Promise.all([loadPendingSkills(), loadApprovedSkills()])
+      await loadPendingSkills()
     } finally {
       setSkillsLoading(false)
     }
@@ -2498,7 +2446,6 @@ function App() {
 
               <SkillUpgradeSection
                 pendingSkills={pendingSkills}
-                approvedSkills={approvedSkills}
                 loading={skillsLoading}
                 busySkillKey={skillActionKey}
                 approveSkill={approvePendingSkill}
@@ -2718,6 +2665,15 @@ function App() {
                       placeholder="you@example.com"
                     />
                   </label>
+                  <label>
+                    Resume Name
+                    <input
+                      value={settings.resume_display_name}
+                      onChange={(e) => setSettings({ ...settings, resume_display_name: e.target.value })}
+                      placeholder="Chaithanya Dheeraj Resume"
+                    />
+                  </label>
+                  <p className="subtle">Used as the sent attachment name for resume variants. Review and database cards will still show the real selected variant file name.</p>
                   <p className="subtle">These defaults are shared with Telegram and used by <code>/run</code>. Auto-run settings are also synced to Telegram.</p>
                 </div>
               </section>
