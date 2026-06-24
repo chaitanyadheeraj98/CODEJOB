@@ -1,133 +1,253 @@
-# Nvoids Sync Recursion Fix - Status
+## 1. High-level overview of what is happening
 
-## Current Status
+Your Docker app is running and Nvoids sync completed successfully, but the **new row-3 AI input is not working correctly yet**.
 
-Completed. The Nvoids sync recursion fix has been implemented on the current `semantic-embeddings` branch.
-
-The recursive parser dependency is removed, empty Nvoids detail HTML is now safe, and row-level sync handling now falls back cleanly instead of crashing the whole `/external-feeds/nvoids/sync` flow.
-
-## Completed Phases
-
-### Phase 1: Parser recursion removal
-
-- Status: Complete
-- Date: 2026-06-21
-- Areas changed:
-  - `backend/app/external_feeds/parser.py`
-- What changed:
-  - `extract_nvoids_detail_title(...)` was rewritten into a leaf helper.
-  - It now extracts directly from `_extract_nvoids_table_rows(...)`.
-  - It no longer calls `parse_nvoids_detail(...)`.
-  - `parse_nvoids_detail(...)` title detection was tightened so URL rows are not treated as listing titles.
-- Nvoids behavior impact:
-  - removed the direct recursive title-recovery loop
-
-### Phase 2: Empty detail HTML safety
-
-- Status: Complete
-- Date: 2026-06-21
-- Areas changed:
-  - `backend/app/external_feeds/parser.py`
-- What changed:
-  - `parse_nvoids_detail(...)` now returns a safe fallback `ParsedNvoidsDetail` when `detail_html` is empty or whitespace.
-  - `parse_job_detail_contacts(...)` now returns `("", "", "")` immediately for empty detail HTML.
-  - added parser-side diagnostic logs for skipped empty-detail parsing paths.
-- Nvoids behavior impact:
-  - empty detail HTML no longer enters recursive recovery
-  - recursion is fully blocked on empty input
-
-### Phase 3: Row-level sync resilience
-
-- Status: Complete
-- Date: 2026-06-21
-- Areas changed:
-  - `backend/app/external_feeds/service.py`
-- What changed:
-  - `sync_nvoids()` no longer sends empty `detail_html` into structured contact parsing.
-  - detail fetch failures now keep row ingestion alive in fallback mode.
-  - parser work for each row is now guarded so one malformed row increments `failed_count`, logs the failure, and continues instead of aborting the whole sync.
-  - fallback parsing now uses empty `raw_html` when detail fetch failed, preventing search-page HTML from being misused as detail-page HTML.
-- Nvoids behavior impact:
-  - one bad or timed-out detail page no longer crashes the entire sync run
-
-### Phase 4: Diagnostics and regression validation
-
-- Status: Complete
-- Date: 2026-06-21
-- Areas changed:
-  - `backend/app/external_feeds/parser.py`
-  - `backend/app/external_feeds/service.py`
-  - `backend/tests/test_external_feeds_parser.py`
-  - `backend/tests/test_external_feeds_api.py`
-- What changed:
-  - added targeted logging for:
-    - `nvoids_parse_detail_skipped_empty_html`
-    - `nvoids_parse_contacts_skipped_empty_html`
-    - `nvoids_sync_row_detail_fetch_failed`
-    - `nvoids_sync_row_parse_failed`
-    - `nvoids_sync_row_fallback_used`
-  - added parser regressions for:
-    - fallback title on empty HTML
-    - safe structured fallback on empty HTML
-    - empty contact extraction
-    - malformed HTML non-recursive behavior
-  - added service/API regressions for:
-    - detail fetch timeout survival
-    - row parser failure survival
-- Nvoids behavior impact:
-  - failure classes are now separated more clearly in logs
-
-## Current Phase
-
-Completed and verified.
-
-## Next Phase
-
-None. This fix is implemented.
-
-If a follow-up pass is needed later, the next logical step would be:
+The biggest clue is in all three screenshots:
 
 ```text
-Docker/runtime verification against a live Nvoids sync run
+ai_input_chars: 0
 ```
 
-not additional code changes for the recursion bug itself.
+That means the new Nvoids row-3 extraction path is producing **empty AI input**.
 
-## Last Verification
-
-Targeted backend tests passed:
+So for these new Nvoids cards:
 
 ```text
-uv run pytest tests/test_external_feeds_parser.py
-15 passed
-
-uv run pytest tests/test_external_feeds_api.py
-26 passed
-
-uv --no-cache run pytest tests/test_run_orchestrator.py
-6 passed
-
-uv --no-cache run pytest tests/test_approve_cc_regression.py
-8 passed
+Email ID 3672 → base_only → Java only
+Email ID 3671 → base_only → Java only
+Email ID 3670 → ai_primary → Java, Node.js, Microservices, AWS
 ```
 
-Notes:
+The intended new behavior was:
 
-- `uv --no-cache` was used for part of verification because the local `uv` cache path had a Windows permission issue unrelated to the Nvoids fix.
-- pytest emitted `.pytest_cache` warnings in this environment, but the tests themselves passed.
+```text
+Nvoids detail table → extract 3rd meaningful JD row → send only that row to DeepSeek
+```
 
-## Open Risks / Notes
+But the UI says the extracted row-3 AI body length is `0`.
 
-- Code-level recursion and empty-detail crash behavior are fixed.
-- Focused regressions passed.
-- Live Docker verification of an actual Nvoids sync run was not executed from this Codex environment because Docker access is restricted here.
-- The untracked helper file `tmp_nvoids_run_inspect.py` was left untouched.
+## 2. What the screenshots prove
 
-## Final Outcome
+### Email ID 3672
 
-This fix now ensures:
+```text
+Parser Version: base_only_v2
+Mode: base_only
+Final Skills Text: Java
+Source Hints: ai_input_chars: 0
+```
 
-1. `/external-feeds/nvoids/sync` no longer crashes from the verified recursive parser path.
-2. Empty or timed-out detail pages are safe.
-3. One bad Nvoids row becomes a row failure, not a sync-ending failure.
-4. Existing clean Nvoids detail parsing behavior remains covered by regression tests.
+This means AI did **not** run. The system used the base parser only.
+
+### Email ID 3671
+
+```text
+Parser Version: base_only_v2
+Mode: base_only
+Final Skills Text: Java
+Source Hints: ai_input_chars: 0
+```
+
+Same issue. AI did not run because the AI input body appears empty.
+
+### Email ID 3670
+
+```text
+Parser Version: ai_primary_v2
+Mode: ai_primary
+Final Skills Text: Java, Node.js, Microservices, AWS
+Source Hints: ai_input_chars: 0
+```
+
+This one is strange. It says AI ran, but `ai_input_chars` is still `0`.
+
+That suggests one of these is happening:
+
+```text
+1. The metadata says row-3 input is empty, but AI still fell back to full body/title.
+2. The AI override is only passed when non-empty, so AI parsed the normal body.
+3. ai_input_chars metadata is being calculated incorrectly.
+```
+
+Either way, it is **not proving that DeepSeek studied row 3**.
+
+## 3. Docker logs meaning
+
+The logs show this:
+
+```text
+POST /external-feeds/nvoids/sync?batch_limit=10 HTTP/1.1" 200 OK
+```
+
+So the Nvoids sync completed.
+
+The long delay here:
+
+```text
+Embedding latency provider=sbert ... latency_ms=179331.62
+```
+
+is the local SBERT model loading/cold start. That is for semantic scoring/resume comparison, not DeepSeek skill extraction.
+
+After the first load, embeddings became much faster:
+
+```text
+655 ms
+1234 ms
+257 ms
+527 ms
+...
+```
+
+So Docker did not crash. The sync completed, but the parser quality is still weak.
+
+## 4. Actual flow happening now
+
+```mermaid
+flowchart TD
+    A[Click Sync Nvoids] --> B[Nvoids sync runs]
+    B --> C[Candidates created]
+    C --> D[Parser details shown in Needs Review]
+
+    D --> E{ai_input_chars > 0?}
+
+    E -->|No, 3671/3672| F[AI extractor does not run]
+    F --> G[Mode = base_only]
+    G --> H[Base parser extracts from title/body]
+    H --> I[Final skills = Java only]
+
+    E -->|No, but AI still ran for 3670| J[AI likely used normal body/title instead of row 3]
+    J --> K[Mode = ai_primary]
+    K --> L[Skills match title-level text: Java, Node.js, Microservices, AWS]
+```
+
+## 5. Why skills are still weak
+
+The intended row-3 extraction is failing or returning empty.
+
+Because `ai_input_chars: 0`, DeepSeek is not receiving the actual JD body row. That means the parser falls back to either:
+
+```text
+subject/title only
+full cleaned body without row-3 isolation
+base parser only
+```
+
+That is why you are seeing weak skills like:
+
+```text
+Java
+```
+
+or only title-level skills like:
+
+```text
+Java, Node.js, Microservices, AWS
+```
+
+Instead of the full JD skill set.
+
+## 6. The most likely root cause
+
+The new “third meaningful row” filter is probably too aggressive or selecting from the wrong table shape.
+
+It may be filtering out rows like:
+
+```text
+Email row
+From row
+Job Description row
+View All row
+Footer row
+```
+
+and after filtering, there may not be a valid third row left.
+
+So this part is failing:
+
+```mermaid
+flowchart TD
+    A[Nvoids detail HTML] --> B[Extract table rows]
+    B --> C[Filter decorative/contact/noise rows]
+    C --> D[Pick 3rd meaningful row]
+    D --> E{Row exists?}
+    E -->|No| F[jd_body = empty]
+    F --> G[ai_input_chars = 0]
+    G --> H[AI disabled or weak parse]
+```
+
+## 7. Important distinction
+
+Your **draft AI** and **parser AI** are separate.
+
+In the settings screenshot, “Enable AI Features” was OFF earlier. That controls draft generation, which is why you see:
+
+```text
+Draft source: Rules fallback
+Resume Context: Rules Only
+```
+
+But the parser uses:
+
+```text
+Enable AI Extractor
+```
+
+So `Rules fallback` does **not** necessarily mean parser AI is off.
+
+The important parser field is:
+
+```text
+Mode: base_only / ai_primary / ai_fallback
+```
+
+## 8. Final diagnosis
+
+The new implementation is **partially wired**, because the UI now shows:
+
+```text
+ai_input_chars
+```
+
+But it is **not working end to end yet**, because:
+
+```text
+ai_input_chars = 0
+```
+
+on these Nvoids cards.
+
+That means the app is not successfully extracting the 3rd meaningful Nvoids detail row for AI input.
+
+## What to check next
+
+Run these inside the backend container:
+
+```powershell
+docker compose exec backend python -c "from app.external_feeds.types import ParsedNvoidsDetail; print(ParsedNvoidsDetail.__annotations__)"
+```
+
+Confirm `jd_body` exists.
+
+Then:
+
+```powershell
+docker compose exec backend python -c "import inspect; from app.phase0 import parse_email_with_details; print(inspect.signature(parse_email_with_details))"
+```
+
+Confirm `ai_body_override` exists.
+
+Then inspect one failed candidate’s stored parser details/raw HTML. The key thing to verify is:
+
+```text
+Does item.raw_html contain the real Nvoids detail table?
+Does parse_nvoids_detail(item.raw_html, ...) return non-empty jd_body?
+```
+
+Right now, the UI already tells us the answer for these candidates:
+
+```text
+jd_body / AI input body is empty.
+```
+
+So the next Codex fix should focus specifically on **why row-3 extraction returns empty**, not on DeepSeek.

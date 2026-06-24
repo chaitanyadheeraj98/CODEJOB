@@ -34,7 +34,7 @@ from app.services.scoring_runtime_service import ScoringRuntimeDeps, ScoringRunt
 from .collector import NvoidsCollector
 from .dedupe import build_dedupe_hash
 from .models import ExternalFeedSource, ExternalOpportunity, ExternalScrapeRun
-from .parser import parse_external_post, parse_job_detail_contacts, parse_listing_rows
+from .parser import parse_external_post, parse_job_detail_contacts, parse_listing_rows, parse_nvoids_detail
 from .types import ExternalFeedSyncResult
 
 
@@ -616,6 +616,12 @@ class ExternalFeedService:
             return False
         body = item.raw_body or item.role or ""
         subject = item.role or "Nvoids Opportunity"
+        ai_parse_body = body
+        ai_input_source = ""
+        if item.source_type == "nvoids" and item.raw_html:
+            detail = parse_nvoids_detail(item.raw_html, item.role or subject, item.location or "")
+            ai_parse_body = detail.jd_body or ""
+            ai_input_source = detail.jd_body_source or ""
         settings = (
             db.query(UserSettings).filter(UserSettings.owner_id == owner_id).first()
             or UserSettings(owner_id=owner_id)
@@ -643,12 +649,15 @@ class ExternalFeedService:
             body,
             source="nvoids",
             ai_extractor_enabled=settings.feature_ai_extractor_enabled,
+            ai_body_override=ai_parse_body,
             source_hints={
                 "canonical_title": item.role,
                 "canonical_location": item.location,
                 "company": item.company,
                 "work_mode": item.work_mode,
                 "visa_hints": item.visa_hints,
+                "ai_input_source": ai_input_source,
+                "ai_input_chars": len(ai_parse_body or ""),
             },
         )
         resume_selection = self.scoring_runtime.select_best_resume_match(

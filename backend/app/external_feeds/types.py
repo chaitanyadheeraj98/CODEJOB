@@ -52,6 +52,8 @@ class ParsedNvoidsDetail:
     recruiter_phone: str
     recruiter_name: str
     body: str
+    jd_body: str
+    jd_body_source: str
     repeated_email: str
     posted_text: str
     role: str

@@ -1138,6 +1138,7 @@ def parse_email_with_details(
     source: str = "gmail",
     source_hints: Mapping[str, Any] | None = None,
     ai_extractor_enabled: bool = False,
+    ai_body_override: str | None = None,
 ) -> tuple[dict[str, str | int | bool], dict[str, Any]]:
     base = _base_parse_email(subject, body)
     base["skills_text"] = audit_skills_text(
@@ -1151,20 +1152,23 @@ def parse_email_with_details(
     parser_mode = "base_only"
     parser_warning: str | None = None
     fallback_used = False
+    ai_body = ai_body_override if ai_body_override is not None else body
 
     if _should_run_ai_extractor(
         subject,
-        body,
+        ai_body,
         source=source,
         ai_extractor_enabled=ai_extractor_enabled,
     ):
         try:
             ai_result = extract_ai_job_details(
                 subject,
-                body,
+                ai_body,
                 source=source,
                 source_hints=dict(source_hints or {}),
             )
+            if ai_result.error:
+                raise RuntimeError(ai_result.error)
         except Exception as exc:
             fallback_used = True
             parser_mode = "ai_fallback"
@@ -1200,6 +1204,8 @@ def parse_email_with_details(
         "parser_warning": parser_warning,
         "fallback_used": fallback_used,
         "source_hints": {key: value for key, value in dict(source_hints or {}).items() if value not in (None, "")},
+        "ai_input_source": str((source_hints or {}).get("ai_input_source") or ""),
+        "ai_input_chars": int((source_hints or {}).get("ai_input_chars") or 0),
     }
     return final_parsed, parser_details
 

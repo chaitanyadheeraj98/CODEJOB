@@ -82,6 +82,8 @@ class RecipientRoutingTests(unittest.TestCase):
                 "parser_warning",
                 "fallback_used",
                 "source_hints",
+                "ai_input_source",
+                "ai_input_chars",
             },
         )
         self.assertEqual(details["parser_version"], "base_only_v2")
@@ -89,6 +91,8 @@ class RecipientRoutingTests(unittest.TestCase):
         self.assertIsNone(details["parser_warning"])
         self.assertFalse(details["fallback_used"])
         self.assertEqual(details["source_hints"], {})
+        self.assertEqual(details["ai_input_source"], "")
+        self.assertEqual(details["ai_input_chars"], 0)
         self.assertIsInstance(details["ai_merge_notes"], list)
         self.assertEqual(details["skills_audit"]["skills_text"], _parsed["skills_text"])
 
@@ -109,6 +113,8 @@ class RecipientRoutingTests(unittest.TestCase):
         self.assertEqual(details["ai_merge_notes"], [])
         self.assertIsNone(details["parser_warning"])
         self.assertFalse(details["fallback_used"])
+        self.assertEqual(details["ai_input_source"], "")
+        self.assertEqual(details["ai_input_chars"], 0)
         self.assertEqual(parsed["role"], "AI Engineer")
 
     def test_parse_email_with_details_uses_ai_primary_result_when_enabled(self) -> None:
@@ -180,6 +186,71 @@ class RecipientRoutingTests(unittest.TestCase):
         self.assertFalse(details["fallback_used"])
         self.assertEqual(details["skills_audit"]["unknown"], ["Temporal"])
 
+    def test_parse_email_with_details_uses_ai_body_override_only_for_ai_input(self) -> None:
+        ai_override = (
+            "Python, Kubernetes, Terraform, AWS, observability, platform engineering, "
+            "container orchestration, infrastructure automation"
+        )
+        with patch("app.phase0.extract_ai_job_details") as mock_ai, patch(
+            "app.phase0.ai_extractor_result_to_payload",
+            return_value={
+                "role_candidates": ["Cloud Engineer"],
+                "company": "",
+                "primary_location": "Dallas, TX",
+                "mentioned_locations": ["Dallas, TX"],
+                "work_mode": "",
+                "visa_hints": [],
+                "experience_years_min": 5,
+                "salary_text": "",
+                "skills_text": "Python, Kubernetes, Terraform, AWS",
+                "f2f_mentioned": False,
+                "asks_contact_fields": False,
+                "is_texas_role": True,
+                "skills_approved": ["Python", "Kubernetes", "Terraform", "AWS"],
+                "skills_unknown": [],
+                "confidence": 0.88,
+                "evidence": {"skills": ["Python, Kubernetes, Terraform, AWS"]},
+            },
+        ):
+            mock_ai.return_value = type(
+                "AIResult",
+                (),
+                {
+                    "role_candidates": ("Cloud Engineer",),
+                    "company": "",
+                    "primary_location": "Dallas, TX",
+                    "mentioned_locations": ("Dallas, TX",),
+                    "work_mode": "",
+                    "visa_hints": (),
+                    "experience_years_min": 5,
+                    "skills_text": "Python, Kubernetes, Terraform, AWS",
+                    "skills_approved": ("Python", "Kubernetes", "Terraform", "AWS"),
+                    "skills_unknown": (),
+                    "confidence": 0.88,
+                    "evidence": {"skills": ["Python, Kubernetes, Terraform, AWS"]},
+                    "error": None,
+                },
+            )()
+            parsed, details = parse_email_with_details(
+                "Role: Base Engineer",
+                "Role: Base Engineer\nRequired Qualifications:\nJava\nFooter noise here",
+                source="nvoids",
+                ai_extractor_enabled=True,
+                ai_body_override=ai_override,
+                source_hints={"ai_input_source": "nvoids_detail_table_row_3", "ai_input_chars": len(ai_override)},
+            )
+
+        mock_ai.assert_called_once_with(
+            "Role: Base Engineer",
+            ai_override,
+            source="nvoids",
+            source_hints={"ai_input_source": "nvoids_detail_table_row_3", "ai_input_chars": len(ai_override)},
+        )
+        self.assertEqual(details["ai_input_source"], "nvoids_detail_table_row_3")
+        self.assertEqual(details["ai_input_chars"], len(ai_override))
+        self.assertEqual(parsed["role"], "Cloud Engineer")
+        self.assertEqual(details["base_parser_result"]["role"], "Base Engineer")
+
     def test_parse_email_with_details_uses_ai_role_when_ai_mode_is_enabled(self) -> None:
         with patch("app.phase0.extract_ai_job_details") as mock_ai, patch(
             "app.phase0.ai_extractor_result_to_payload",
@@ -233,6 +304,45 @@ class RecipientRoutingTests(unittest.TestCase):
         self.assertEqual(details["parser_mode"], "ai_primary")
         self.assertIsNone(details["parser_warning"])
         self.assertFalse(details["fallback_used"])
+
+    def test_parse_email_with_details_falls_back_when_extractor_returns_error_payload(self) -> None:
+        ai_override = (
+            "Python, Java, RAG, embeddings, retrieval pipelines, prompt evaluation, "
+            "observability, semantic search"
+        )
+        with patch("app.phase0.extract_ai_job_details") as mock_ai:
+            mock_ai.return_value = type(
+                "AIResult",
+                (),
+                {
+                    "role_candidates": (),
+                    "company": "",
+                    "primary_location": "",
+                    "mentioned_locations": (),
+                    "work_mode": "",
+                    "visa_hints": (),
+                    "experience_years_min": None,
+                    "skills_text": "",
+                    "skills_approved": (),
+                    "skills_unknown": (),
+                    "confidence": 0.0,
+                    "evidence": {"extractor_error": ["malformed response"]},
+                    "error": "malformed response",
+                },
+            )()
+            parsed, details = parse_email_with_details(
+                "Role: AI Engineer",
+                "Location: Alpharetta, GA\nRequired Qualifications:\nPython, Java, RAG",
+                source="nvoids",
+                ai_extractor_enabled=True,
+                ai_body_override=ai_override,
+            )
+
+        self.assertEqual(parsed["role"], "AI Engineer")
+        self.assertEqual(details["parser_mode"], "ai_fallback")
+        self.assertTrue(details["fallback_used"])
+        self.assertEqual(details["ai_extractor_result"]["error"], "malformed response")
+        self.assertIn("base parser fallback used", str(details["parser_warning"]))
 
     def test_parse_email_with_details_survives_ai_extractor_failure_without_contract_change(self) -> None:
         with patch("app.phase0.extract_ai_job_details", side_effect=RuntimeError("extractor timeout")):

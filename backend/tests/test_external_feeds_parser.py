@@ -151,8 +151,54 @@ class ExternalFeedsParserTests(unittest.TestCase):
         self.assertEqual(detail.posted_text, "04:49 AM 17-Jun-26")
         self.assertEqual(detail.role, "GCP AI Engineer")
         self.assertEqual(detail.location, "Irving, TX, or Charlotte NC - Onsite")
+        self.assertEqual(detail.jd_body, "Experience with Vertex AI, GKE, Python, and GenAI workflows.")
+        self.assertEqual(detail.jd_body_source, "nvoids_detail_table_row_fallback")
         self.assertIn("Vertex AI, GKE, Python, and GenAI workflows.", detail.body)
         self.assertNotIn("job_kill", detail.body)
+
+    def test_parse_nvoids_detail_uses_literal_third_row_for_full_jd_body(self) -> None:
+        html = """
+        <html><body>
+        <table border="1">
+          <tr><td>java Solution Architect :: Plano, TX :: Toyota at Plano, Texas, USA</td></tr>
+          <tr><td>Email: prashanth@americantsystems.com</td></tr>
+          <tr><td>
+            http://bit.ly/4ey8w48<br>
+            https://jobs.nvoids.com/job_details.jsp?id=3471874&uid=494b0d74577547d497857219800a595c<br><br>
+            Hello Professional,<br><br>
+            Role :: Solution Architect (java Solution Architect)<br>
+            Client :: Toyota<br>
+            Location : Plano, TX-5 days onsite ( Only Locals)<br>
+            Rate :: 75/hr on C2 max<br>
+            Must have skills.<br>
+            Java, Spring Boot, NodeJS, AWS, Kafka<br>
+            Responsibilities:<br>
+            Lead design and scaling of Java, Spring Boot, NodeJS, and microservices applications.
+          </td></tr>
+        </table>
+        </body></html>
+        """
+        detail = parse_nvoids_detail(html, "Fallback Title", "Fallback Location")
+        self.assertIn("Role :: Solution Architect", detail.jd_body)
+        self.assertIn("Client :: Toyota", detail.jd_body)
+        self.assertIn("Java, Spring Boot, NodeJS, AWS, Kafka", detail.jd_body)
+        self.assertEqual(detail.jd_body_source, "nvoids_detail_table_row_3")
+
+    def test_parse_nvoids_detail_falls_back_when_literal_row3_is_too_weak(self) -> None:
+        html = """
+        <html><body>
+        <table border="1">
+          <tr><td>Principal Software Engineer Java</td></tr>
+          <tr><td>Email: recruiter@example.com</td></tr>
+          <tr><td>Hi</td></tr>
+          <tr><td>Role: Principal Software Engineer Java<br>Client: Acme<br>Location: Dallas, TX<br>Must have skills<br>Java, Spring Boot, Kafka, AWS</td></tr>
+        </table>
+        </body></html>
+        """
+        detail = parse_nvoids_detail(html, "Fallback Title", "Fallback Location")
+        self.assertIn("Role: Principal Software Engineer Java", detail.jd_body)
+        self.assertIn("Java, Spring Boot, Kafka, AWS", detail.jd_body)
+        self.assertEqual(detail.jd_body_source, "nvoids_detail_table_row_fallback")
 
     def test_extract_nvoids_detail_title_prefers_first_meaningful_row_after_home(self) -> None:
         html = """

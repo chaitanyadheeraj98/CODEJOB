@@ -15,6 +15,7 @@ from app import main
 from app.automation.queue_preparation import prepend_nvoids_listing_line
 from app.db import Base
 from app.external_feeds.collector import CollectedPage
+from app.external_feeds.parser import parse_nvoids_detail
 from app.external_feeds import service as external_feed_service_module
 from app.external_feeds.service import ExternalFeedService
 from app.external_feeds.models import ExternalFeedSource, ExternalOpportunity
@@ -38,12 +39,25 @@ class _FakeCollector:
         return self.fetch_page("", page)
 
     def fetch_detail_page(self, *, url: str) -> CollectedPage:
+        title = "Senior Python Developer"
+        location = "Dallas, Texas, USA"
+        if "id=2" in url:
+            title = "React Developer"
+            location = "Remote, USA"
+        jd_body = (
+            f"Role: {title}<br>"
+            f"Client: ExampleCo<br>"
+            f"Location: {location}<br>"
+            "Must have skills<br>"
+            "Java, Spring Boot, Kafka, AWS"
+        )
         html = f"""
         <html><body>
         <table>
+          <tr><td>{title}</td></tr>
           <tr><td>Email: recruiter_{'1' if 'id=1' in url else '2'}@example.com</td></tr>
+          <tr><td>{jd_body}</td></tr>
           <tr><td>From: Sarika Singh</td></tr>
-          <tr><td>Job Description: Java Spring Boot role in Texas</td></tr>
         </table>
         </body></html>
         """
@@ -217,6 +231,28 @@ class ExternalFeedsApiTests(unittest.TestCase):
         main.app.dependency_overrides.clear()
         Base.metadata.drop_all(bind=self.engine)
         self.engine.dispose()
+
+    def test_parse_nvoids_detail_extracts_jd_body_from_literal_third_detail_row(self) -> None:
+        html = """
+        <html><body>
+        <a href="/home">Home</a>
+        <table border="1">
+          <tr><td>Principal Software Engineer Java</td></tr>
+          <tr><td>Email: recruiter@example.com</td></tr>
+          <tr><td>Role: Principal Software Engineer Java<br>Client: Acme<br>Location: Gwynn Oak, MD<br>Must have skills<br>Java, Spring Boot, Kafka, REST</td></tr>
+          <tr><td>recruiter@example.com | View All</td></tr>
+        </table>
+        </body></html>
+        """
+
+        detail = parse_nvoids_detail(html, "Fallback Title", "Fallback Location")
+
+        self.assertIn("Role: Principal Software Engineer Java", detail.jd_body)
+        self.assertIn("Client: Acme", detail.jd_body)
+        self.assertIn("Java, Spring Boot, Kafka, REST", detail.jd_body)
+        self.assertEqual(detail.jd_body_source, "nvoids_detail_table_row_3")
+        self.assertNotIn("Email:", detail.jd_body)
+        self.assertNotIn("View All", detail.jd_body)
 
     def test_manual_sync_returns_summary_and_runs(self) -> None:
         sync = self.client.post("/external-feeds/nvoids/sync")
@@ -988,6 +1024,7 @@ class ExternalFeedsApiTests(unittest.TestCase):
                 {
                     "subject": subject,
                     "body": body,
+                    "ai_body_override": kwargs.get("ai_body_override"),
                     "source": kwargs.get("source"),
                     "ai_extractor_enabled": kwargs.get("ai_extractor_enabled"),
                     "source_hints": source_hints,
@@ -1018,7 +1055,11 @@ class ExternalFeedsApiTests(unittest.TestCase):
                 "unknown_skills": [],
                 "merged_result": dict(parsed),
                 "ai_merge_notes": ["nvoids flow reused the merged parse with AI extractor enabled"],
+                "parser_warning": None,
+                "fallback_used": False,
                 "source_hints": source_hints,
+                "ai_input_source": str(source_hints.get("ai_input_source") or ""),
+                "ai_input_chars": int(source_hints.get("ai_input_chars") or 0),
             }
 
         with self.SessionLocal() as db:
@@ -1035,14 +1076,24 @@ class ExternalFeedsApiTests(unittest.TestCase):
 
             self.assertGreaterEqual(len(parse_calls), 1)
             first_call = parse_calls[0]
+            expected_ai_body = (
+                "Role: Senior Python Developer\n"
+                "Client: ExampleCo\n"
+                "Location: Dallas, Texas, USA\n"
+                "Must have skills\n"
+                "Java, Spring Boot, Kafka, AWS"
+            )
             self.assertEqual(first_call["source"], "nvoids")
             self.assertTrue(bool(first_call["ai_extractor_enabled"]))
+            self.assertEqual(first_call["ai_body_override"], expected_ai_body)
             self.assertEqual(first_call["source_hints"], {
                 "canonical_title": "Senior Python Developer",
                 "canonical_location": "Dallas, Texas, USA",
-                "company": "",
+                "company": "ExampleCo",
                 "work_mode": "",
                 "visa_hints": "",
+                "ai_input_source": "nvoids_detail_table_row_3",
+                "ai_input_chars": len(expected_ai_body),
             })
 
             with self.SessionLocal() as db:
@@ -1068,6 +1119,7 @@ class ExternalFeedsApiTests(unittest.TestCase):
                 self.assertIn('"skills_text":"Java, Spring Boot"', skills_payload)
                 self.assertIn('"known":["Java","Spring Boot"]', skills_payload)
                 self.assertIn('"canonical_title":"Senior Python Developer"', payload)
+                self.assertIn('"ai_input_source":"nvoids_detail_table_row_3"', payload)
         finally:
             external_feed_service_module.parse_email_with_details = original_parse_email_with_details
 

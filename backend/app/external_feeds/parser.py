@@ -224,6 +224,131 @@ def _build_clean_body_from_lines(lines: list[str], *, listing_subject: str, recr
     return "\n".join(cleaned).strip()
 
 
+def _is_nvoids_meaningful_jd_row(line: str) -> bool:
+    normalized = _normalize_line(line)
+    if not normalized:
+        return False
+    lower = normalized.lower()
+    if lower == "home":
+        return False
+    if lower.startswith("email:") or lower.startswith("from:") or lower.startswith("reply to"):
+        return False
+    if lower.startswith("http://") or lower.startswith("https://") or lower.startswith("www."):
+        return False
+    if _POSTED_TEXT_RE.search(normalized):
+        return False
+    if lower in {"job title", "job role", "role", "location"}:
+        return False
+    if lower.startswith("job title:") or lower.startswith("job role:") or lower.startswith("role:") or lower.startswith("location:"):
+        return False
+    if "view all" in lower or "posts from recruiter" in lower:
+        return False
+    if _GENERIC_ROW_NOISE_RE.search(normalized) or _NOISE_LINE_RE.search(normalized):
+        return False
+    return True
+
+
+_JD_ROW_MARKERS = (
+    "role",
+    "client",
+    "location",
+    "must have",
+    "responsibilities",
+    "required",
+    "skills",
+    "rate",
+)
+
+
+def _normalize_multiline_text(value: str) -> str:
+    lines = [re.sub(r"\s+", " ", part).strip(" |:-") for part in str(value or "").splitlines()]
+    cleaned = [line for line in lines if line]
+    return "\n".join(cleaned).strip()
+
+
+def _extract_row_text_with_linebreaks(row_html: str, row_text: str) -> str:
+    if row_html:
+        text = re.sub(r"(?i)<br\s*/?>", "\n", row_html)
+        text = re.sub(r"(?i)</(td|tr|div|p|li|ul|ol)>", "\n", text)
+        text = re.sub(r"<[^>]+>", "", text)
+        normalized = _normalize_multiline_text(text)
+        if normalized:
+            return normalized
+    return _normalize_multiline_text(row_text)
+
+
+def _is_nvoids_jd_candidate(text: str) -> bool:
+    normalized = _normalize_multiline_text(text)
+    if not normalized:
+        return False
+    lower = normalized.lower()
+    if lower == "home":
+        return False
+    if lower.startswith("email:") or lower.startswith("from:") or lower.startswith("reply to"):
+        return False
+    if "view all" in lower or "posts from recruiter" in lower:
+        return False
+    if _POSTED_TEXT_RE.search(normalized):
+        return False
+    if _GENERIC_ROW_NOISE_RE.search(normalized) or _NOISE_LINE_RE.search(normalized):
+        return False
+    return True
+
+
+def _looks_like_unusable_row3(text: str) -> bool:
+    normalized = _normalize_multiline_text(text)
+    if not normalized:
+        return True
+    if _is_nvoids_jd_candidate(normalized):
+        lower = normalized.lower()
+        if any(marker in lower for marker in _JD_ROW_MARKERS):
+            return False
+        if "\n" in normalized and len(normalized) >= 120:
+            return False
+    return True
+
+
+def _score_jd_fallback_row(text: str, *, row_index: int) -> int:
+    normalized = _normalize_multiline_text(text)
+    if not normalized:
+        return -999
+    if not _is_nvoids_jd_candidate(normalized):
+        return -999
+    lower = normalized.lower()
+    marker_hits = sum(1 for marker in _JD_ROW_MARKERS if marker in lower)
+    if marker_hits == 0 and "\n" not in normalized and len(normalized) < 40:
+        return -999
+    score = 0
+    score += min(len(normalized) // 40, 8)
+    score += marker_hits * 3
+    if "\n" in normalized:
+        score += 2
+    if marker_hits == 1 and "\n" not in normalized and lower.startswith(("location:", "client:", "role:", "rate:")):
+        score -= 4
+    if row_index == 0 and _looks_like_listing_title(normalized):
+        score -= 5
+    return score
+
+
+def _select_nvoids_jd_body(row_texts: list[str], row_htmls: list[str]) -> tuple[str, str]:
+    if len(row_texts) >= 3:
+        literal_row3 = _extract_row_text_with_linebreaks(row_htmls[2], row_texts[2])
+        if not _looks_like_unusable_row3(literal_row3):
+            return literal_row3, "nvoids_detail_table_row_3"
+
+    best_text = ""
+    best_score = -999
+    for index, (row_text, row_html) in enumerate(zip(row_texts, row_htmls)):
+        candidate = _extract_row_text_with_linebreaks(row_html, row_text)
+        score = _score_jd_fallback_row(candidate, row_index=index)
+        if score > best_score:
+            best_score = score
+            best_text = candidate
+    if best_score > 0:
+        return best_text, "nvoids_detail_table_row_fallback"
+    return "", ""
+
+
 def _extract_nvoids_table_rows(detail_html: str) -> tuple[list[str], list[str]]:
     if BeautifulSoup is not None:
         soup = BeautifulSoup(detail_html or "", "lxml")
@@ -289,6 +414,8 @@ def _fallback_nvoids_detail(fallback_title: str, fallback_location: str) -> Pars
         recruiter_phone="",
         recruiter_name="",
         body="",
+        jd_body="",
+        jd_body_source="",
         repeated_email="",
         posted_text="",
         role=normalized_title,
@@ -303,6 +430,11 @@ def parse_nvoids_detail(detail_html: str, fallback_title: str, fallback_location
         logger.info("nvoids_parse_detail_skipped_empty_html fallback_title=%r", fallback_title)
         return _fallback_nvoids_detail(fallback_title, fallback_location)
     row_texts, row_htmls = _extract_nvoids_table_rows(detail_html)
+    jd_body, jd_body_source = _select_nvoids_jd_body(row_texts, row_htmls)
+    row_detail_lines: list[str] = []
+    for row_text, row_html in zip(row_texts, row_htmls):
+        block = _extract_row_text_with_linebreaks(row_html, row_text)
+        row_detail_lines.extend(line for line in block.splitlines() if line.strip())
     listing_subject = ""
     posted_text = ""
     recruiter_email = ""
@@ -342,8 +474,8 @@ def parse_nvoids_detail(detail_html: str, fallback_title: str, fallback_location
     recruiter_name = _extract_recruiter_name_from_lines(row_texts)
     recruiter_phone = _extract_recruiter_phone_from_fragments(row_texts, row_htmls)
 
-    role = _extract_labeled_value(row_texts, _ROLE_LABEL_RE)
-    location = _extract_labeled_value(row_texts, _LOCATION_LABEL_RE)
+    role = _extract_labeled_value(row_detail_lines or row_texts, _ROLE_LABEL_RE)
+    location = _extract_labeled_value(row_detail_lines or row_texts, _LOCATION_LABEL_RE)
     _title_from_subject, location_from_subject = _extract_title_location_from_subject(listing_subject)
     if not role:
         role = listing_subject or _normalize_line(fallback_title)
@@ -382,6 +514,8 @@ def parse_nvoids_detail(detail_html: str, fallback_title: str, fallback_location
         recruiter_phone=recruiter_phone,
         recruiter_name=recruiter_name,
         body=body.strip(),
+        jd_body=jd_body.strip(),
+        jd_body_source=jd_body_source,
         repeated_email=repeated_email,
         posted_text=posted_text,
         role=role,
@@ -493,6 +627,7 @@ def _extract_external_post_id(source_url: str) -> str:
 
 def parse_external_post(*, source_type: str, source_url: str, title: str, location: str, posted_text: str, raw_body: str, raw_html: str) -> ParsedExternalPost:
     canonical_title = _normalize_line(title)
+    company = ""
     if source_type == "nvoids" and _has_meaningful_html_text(raw_html):
         detail = parse_nvoids_detail(raw_html, canonical_title, location)
         canonical_title = detail.role or detail.listing_subject or canonical_title
@@ -503,6 +638,8 @@ def parse_external_post(*, source_type: str, source_url: str, title: str, locati
         recruiter_phone = detail.recruiter_phone
         recruiter_name = detail.recruiter_name
         parse_confidence = detail.parse_confidence
+        company_match = re.search(r"(?im)^\s*(?:client|company)\s*[:\-]\s*([^\n,;]+)", detail.jd_body or detail.body)
+        company = company_match.group(1).strip() if company_match else ""
     else:
         body = f"{canonical_title}\n{location}\n{raw_body}".strip()
         emails = _EMAIL_RE.findall(body)
@@ -517,8 +654,9 @@ def parse_external_post(*, source_type: str, source_url: str, title: str, locati
     duration = duration_match.group(1).strip() if duration_match else ""
     rate_match = re.search(r"(?:rate|max rate)\s*[:\-]?\s*([^\n;]+)", body, flags=re.IGNORECASE)
     rate = rate_match.group(1).strip() if rate_match else ""
-    company_match = re.search(r"(?:client|company)\s*[:\-]\s*([^\n,;]+)", body, flags=re.IGNORECASE)
-    company = company_match.group(1).strip() if company_match else ""
+    if not company:
+        company_match = re.search(r"(?:client|company)\s*[:\-]\s*([^\n,;]+)", body, flags=re.IGNORECASE)
+        company = company_match.group(1).strip() if company_match else ""
     external_post_id = _extract_external_post_id(source_url)
     return ParsedExternalPost(
         source_type=source_type,

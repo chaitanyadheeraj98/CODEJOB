@@ -109,6 +109,35 @@ class AIExtractorTests(unittest.TestCase):
         self.assertIn("Kubernetes", payload["skills_approved"])
         self.assertIn("Temporal", payload["skills_unknown"])
 
+    @patch(
+        "app.parsing.ai_extractor.deepseek_json_completion",
+        return_value={
+            "role_candidates": ["Principal Software Engineer Java"],
+            "primary_location": "Gwynn Oak, MD",
+            "skills_text": "Java, Drools",
+            "confidence": 0.51,
+            "evidence": {},
+        },
+    )
+    def test_rejects_weak_valid_nvoids_json(self, _mock_completion) -> None:
+        body = (
+            "Principal Software Engineer Java\n"
+            "Design and build cloud-native Twelve-Factor applications.\n"
+            "Develop modern UIs using Angular, React, JavaScript, TypeScript.\n"
+            "Create microservices with Java, Spring Boot, REST.\n"
+            "Implement enterprise integrations using Kafka, SOAP/REST, Web Services."
+        )
+
+        result = extract_ai_job_details(
+            "Principal Software Engineer Java",
+            body,
+            source="nvoids",
+        )
+        payload = ai_extractor_result_to_payload(result)
+
+        self.assertEqual(payload["error"], "weak_ai_extraction: expected at least 4 skills from Nvoids JD row, got 2")
+        self.assertEqual(payload["evidence"]["extractor_error"], [payload["error"]])
+
 
 if __name__ == "__main__":
     unittest.main()
