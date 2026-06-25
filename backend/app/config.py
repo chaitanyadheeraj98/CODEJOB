@@ -55,6 +55,12 @@ class Settings(BaseSettings):
     semantic_embedding_fallback_model: str = "openai/text-embedding-3-small"
     semantic_embedding_sbert_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     semantic_embedding_sbert_device: str = "cpu"
+    nvoids_detail_connect_timeout_seconds: float = 10.0
+    nvoids_detail_read_timeout_seconds: float = 45.0
+    nvoids_detail_write_timeout_seconds: float = 10.0
+    nvoids_detail_pool_timeout_seconds: float = 10.0
+    nvoids_detail_retry_attempts: int = 3
+    nvoids_detail_retry_backoff_seconds: str = "2,5,10"
     hf_token: str = Field(
         default="",
         validation_alias=AliasChoices("HF_TOKEN", "HUGGINGFACE_HUB_TOKEN"),

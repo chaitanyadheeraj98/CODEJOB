@@ -142,6 +142,10 @@ class ExternalFeedService:
         consecutive_duplicate_pages = 0
         enqueue_attempts = 0
         enqueue_successes = 0
+        detail_fetch_fallback_rows = 0
+
+        if hasattr(self.collector, "reset_detail_fetch_metrics"):
+            self.collector.reset_detail_fetch_metrics()
 
         logger.info(
             "nvoids_sync_start owner_id=%r max_pages=%s max_items=%s query=%r locations=%s semantic_enabled=%s ai_enabled=%s threshold=%s",
@@ -191,15 +195,18 @@ class ExternalFeedService:
                         detail_page = self.collector.fetch_detail_page(url=row.href)
                         detail_html = detail_page.html
                         detail_url = detail_page.url
-                    except Exception:
+                    except Exception as exc:
                         # Keep ingestion resilient: listing row still ingests even if one detail page fails.
                         failed_count += 1
                         fallback_used = True
+                        detail_fetch_fallback_rows += 1
                         logger.warning(
-                            "nvoids_sync_row_detail_fetch_failed page=%s title=%r href=%r",
+                            "nvoids_sync_row_detail_fetch_failed page=%s title=%r href=%r error_type=%s error=%s",
                             page,
                             row.title,
                             row.href,
+                            type(exc).__name__,
+                            exc,
                         )
                     try:
                         if detail_html.strip():
@@ -334,8 +341,19 @@ class ExternalFeedService:
             run.created_count = created_count
             run.deduped_count = deduped_count
             run.failed_count = failed_count
-            if skipped_location_count:
-                run.notes = f"skipped_location_count={skipped_location_count}"
+            collector_metrics = (
+                self.collector.get_detail_fetch_metrics()
+                if hasattr(self.collector, "get_detail_fetch_metrics")
+                else {"retry_count": 0, "failure_count": 0}
+            )
+            run.notes = ",".join(
+                [
+                    f"detail_fetch_failures={int(collector_metrics.get('failure_count', 0))}",
+                    f"detail_fetch_retries={int(collector_metrics.get('retry_count', 0))}",
+                    f"detail_fetch_fallback_rows={detail_fetch_fallback_rows}",
+                    f"skipped_location_count={skipped_location_count}",
+                ]
+            )
             db.commit()
             db.refresh(run)
             logger.info(
@@ -536,6 +554,16 @@ class ExternalFeedService:
         return None
 
     @staticmethod
+    def _preferred_employer_cc(settings: UserSettings, *, recruiter_to: str) -> str | None:
+        preferred = extract_email_address(getattr(settings, "preferred_employer_cc_email", "") or "")
+        recruiter_normalized = extract_email_address(recruiter_to or "")
+        if not preferred:
+            return None
+        if recruiter_normalized and preferred == recruiter_normalized:
+            return None
+        return preferred
+
+    @staticmethod
     def _fallback_routing_decision() -> RoutingDecision:
         return RoutingDecision(
             to_email=None,
@@ -607,7 +635,12 @@ class ExternalFeedService:
                 existing.id,
             )
             return False
-        cc_email = self._pick_cc_from_employer_pool(db, owner_id=owner_id, exclude=recruiter_to)
+        settings = (
+            db.query(UserSettings).filter(UserSettings.owner_id == owner_id).first()
+            or UserSettings(owner_id=owner_id)
+        )
+        preferred_cc_email = self._preferred_employer_cc(settings, recruiter_to=recruiter_to)
+        cc_email = preferred_cc_email or self._pick_cc_from_employer_pool(db, owner_id=owner_id, exclude=recruiter_to)
         if not cc_email:
             logger.info(
                 "nvoids_enqueue_skip reason=no_cc_pool_match external_post_id=%r recruiter_to=%r",
@@ -623,20 +656,21 @@ class ExternalFeedService:
             detail = parse_nvoids_detail(item.raw_html, item.role or subject, item.location or "")
             ai_parse_body = detail.jd_body or ""
             ai_input_source = detail.jd_body_source or ""
-        settings = (
-            db.query(UserSettings).filter(UserSettings.owner_id == owner_id).first()
-            or UserSettings(owner_id=owner_id)
-        )
         active_resume = self._active_resume(db, owner_id=owner_id)
         enabled_resumes = self._enabled_resumes(db, owner_id=owner_id)
         effective_policy = policy_service.read_policy_from_settings(settings.policy_json)
         threshold = policy_service.policy_threshold(settings.qualification_threshold, effective_policy)
+        routing_reason = (
+            "External feed recruiter import with preferred employer CC from Execution Control."
+            if preferred_cc_email
+            else "External feed recruiter import with employer pool cc."
+        )
         routing_decision = RoutingDecision(
             to_email=recruiter_to,
             cc_email=cc_email,
             status="safe",
             confidence=0.85,
-            reason="External feed recruiter import with employer pool cc.",
+            reason=routing_reason,
             evidence=[],
             candidates=[],
             recommended_state="needs_review",

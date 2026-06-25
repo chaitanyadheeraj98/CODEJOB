@@ -63,6 +63,8 @@ class SettingsBootstrapService:
                     existing.signature_phone = DEFAULT_SIGNATURE_PHONE
                 if not existing.signature_email:
                     existing.signature_email = DEFAULT_SIGNATURE_EMAIL
+                if existing.preferred_employer_cc_email is None:
+                    existing.preferred_employer_cc_email = ""
                 if not (existing.default_gmail_query or "").strip():
                     existing.default_gmail_query = (existing.gmail_query or "").strip() or "is:unread in:inbox recruiter"
                 existing.default_date_mode = policy_service.normalize_default_date_mode(existing.default_date_mode)
@@ -76,6 +78,7 @@ class SettingsBootstrapService:
                     or not existing.signature_name
                     or not existing.signature_phone
                     or not existing.signature_email
+                    or existing.preferred_employer_cc_email is None
                     or not (existing.default_gmail_query or "").strip()
                     or existing.saved_gmail_queries_json != normalized_saved_queries_json
                 ):
@@ -116,6 +119,7 @@ class SettingsBootstrapService:
                 signature_name=DEFAULT_SIGNATURE_NAME,
                 signature_phone=DEFAULT_SIGNATURE_PHONE,
                 signature_email=DEFAULT_SIGNATURE_EMAIL,
+                preferred_employer_cc_email="",
                 policy_json=json.dumps(policy_service.default_policy()),
             )
             db.add(default_settings)

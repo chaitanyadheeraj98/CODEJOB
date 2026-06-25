@@ -1330,6 +1330,7 @@ def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
         signature_name=(s.signature_name or "").strip() or DEFAULT_SIGNATURE_NAME,
         signature_phone=(s.signature_phone or "").strip() or DEFAULT_SIGNATURE_PHONE,
         signature_email=(s.signature_email or "").strip() or DEFAULT_SIGNATURE_EMAIL,
+        preferred_employer_cc_email=(s.preferred_employer_cc_email or "").strip().lower(),
         resume_display_name=(s.resume_display_name or "").strip(),
         policy=policy,
         policy_profile_options=list(policy_service.policy_profiles().keys()),
@@ -1425,6 +1426,7 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
     s.signature_name = payload.signature_name.strip() if payload.signature_name.strip() else DEFAULT_SIGNATURE_NAME
     s.signature_phone = payload.signature_phone.strip() if payload.signature_phone.strip() else DEFAULT_SIGNATURE_PHONE
     s.signature_email = payload.signature_email.strip() if payload.signature_email.strip() else DEFAULT_SIGNATURE_EMAIL
+    s.preferred_employer_cc_email = (payload.preferred_employer_cc_email or "").strip().lower()
     s.resume_display_name = payload.resume_display_name.strip()
     normalized_policy = policy_service.normalize_policy(
         payload.policy if payload.policy is not None else policy_service.read_policy_from_settings(s.policy_json)

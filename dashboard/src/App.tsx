@@ -155,6 +155,7 @@ type SettingsPayload = {
   signature_name: string
   signature_phone: string
   signature_email: string
+  preferred_employer_cc_email: string
   resume_display_name: string
   policy?: DynamicPolicy | null
   policy_profile_options?: string[] | null
@@ -1025,6 +1026,7 @@ function App() {
     signature_name: '',
     signature_phone: '',
     signature_email: '',
+    preferred_employer_cc_email: '',
     resume_display_name: '',
     policy: defaultPolicy,
   })
@@ -1195,6 +1197,7 @@ function App() {
       nvoids_locations: payload.nvoids_locations ?? [],
       employer_domains: payload.employer_domains ?? [],
       draft_text_size: normalizeDraftTextSize(payload.draft_text_size),
+      preferred_employer_cc_email: payload.preferred_employer_cc_email ?? '',
       resume_display_name: payload.resume_display_name ?? '',
       policy: payload.policy ?? defaultPolicy,
     }
@@ -2814,6 +2817,16 @@ function App() {
                       <option value="huge">Huge</option>
                     </select>
                   </label>
+                  <label>
+                    Preferred Employer CC
+                    <input
+                      type="email"
+                      value={settings.preferred_employer_cc_email}
+                      onChange={(e) => setSettings({ ...settings, preferred_employer_cc_email: e.target.value })}
+                      placeholder="sheshwika@horizonsoftech.net"
+                    />
+                  </label>
+                  <p className="subtle">Used as the employer CC for Nvoids/external-feed drafts. Manual per-candidate recipient fixes still win.</p>
                   <label>
                     Fallback Draft Template
                     <textarea

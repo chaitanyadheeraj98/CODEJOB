@@ -283,6 +283,79 @@ class ExternalFeedsApiTests(unittest.TestCase):
         self.assertGreaterEqual(len(run_items), 1)
         self.assertEqual(run_items[0]["source_type"], "nvoids")
 
+    def test_manual_sync_uses_preferred_employer_cc_when_configured(self) -> None:
+        with self.SessionLocal() as db:
+            settings = db.query(UserSettings).filter(UserSettings.owner_id == main.settings.owner_id).first()
+            assert settings is not None
+            settings.preferred_employer_cc_email = "Sheshwika@HorizonsOfTech.net"
+            db.commit()
+
+        sync = self.client.post("/external-feeds/nvoids/sync")
+        self.assertEqual(sync.status_code, 200, sync.text)
+
+        with self.SessionLocal() as db:
+            rows = (
+                db.query(RecruiterEmail)
+                .filter(
+                    RecruiterEmail.owner_id == main.settings.owner_id,
+                    RecruiterEmail.state == "needs_review",
+                    RecruiterEmail.source == "nvoids",
+                )
+                .all()
+            )
+            self.assertGreaterEqual(len(rows), 1)
+            self.assertEqual(rows[0].cc_email, "sheshwika@horizonsoftech.net")
+            self.assertEqual(rows[0].routing_reason, "External feed recruiter import with preferred employer CC from Execution Control.")
+
+    def test_manual_sync_falls_back_to_employer_pool_when_preferred_cc_blank(self) -> None:
+        with self.SessionLocal() as db:
+            settings = db.query(UserSettings).filter(UserSettings.owner_id == main.settings.owner_id).first()
+            assert settings is not None
+            settings.preferred_employer_cc_email = ""
+            db.commit()
+
+        sync = self.client.post("/external-feeds/nvoids/sync")
+        self.assertEqual(sync.status_code, 200, sync.text)
+
+        with self.SessionLocal() as db:
+            row = (
+                db.query(RecruiterEmail)
+                .filter(
+                    RecruiterEmail.owner_id == main.settings.owner_id,
+                    RecruiterEmail.state == "needs_review",
+                    RecruiterEmail.source == "nvoids",
+                )
+                .first()
+            )
+            assert row is not None
+            self.assertEqual(row.cc_email, "employer.cc@example.com")
+            self.assertEqual(row.routing_reason, "External feed recruiter import with employer pool cc.")
+
+    def test_manual_sync_ignores_preferred_cc_when_it_matches_recruiter_to(self) -> None:
+        with self.SessionLocal() as db:
+            settings = db.query(UserSettings).filter(UserSettings.owner_id == main.settings.owner_id).first()
+            assert settings is not None
+            settings.preferred_employer_cc_email = "recruiter_1@example.com"
+            db.commit()
+
+        sync = self.client.post("/external-feeds/nvoids/sync")
+        self.assertEqual(sync.status_code, 200, sync.text)
+
+        with self.SessionLocal() as db:
+            row = (
+                db.query(RecruiterEmail)
+                .filter(
+                    RecruiterEmail.owner_id == main.settings.owner_id,
+                    RecruiterEmail.state == "needs_review",
+                    RecruiterEmail.source == "nvoids",
+                    RecruiterEmail.recipient_email == "recruiter_1@example.com",
+                )
+                .first()
+            )
+            assert row is not None
+            self.assertEqual(row.cc_email, "employer.cc@example.com")
+            self.assertEqual(row.routing_reason, "External feed recruiter import with employer pool cc.")
+
     def test_manual_sync_standardizes_nvoids_recruiter_phone_display(self) -> None:
         class _PhoneCollector(_FakeCollector):
             def fetch_detail_page(self, *, url: str) -> CollectedPage:
@@ -348,7 +421,7 @@ class ExternalFeedsApiTests(unittest.TestCase):
             self.assertEqual(recruiter_numbers, [])
             self.assertEqual(recruiter_opportunities, [])
 
-    def test_settings_round_trip_includes_nvoids_locations(self) -> None:
+    def test_settings_round_trip_includes_nvoids_locations_and_preferred_employer_cc(self) -> None:
         res = self.client.put(
             "/settings",
             json={
@@ -384,6 +457,7 @@ class ExternalFeedsApiTests(unittest.TestCase):
                 "signature_name": "",
                 "signature_phone": "",
                 "signature_email": "",
+                "preferred_employer_cc_email": "Sheshwika@HorizonsOfTech.net",
                 "resume_display_name": "Chaithanya Dheeraj Resume",
                 "policy": None,
             },
@@ -393,7 +467,51 @@ class ExternalFeedsApiTests(unittest.TestCase):
         self.assertEqual(payload["nvoids_locations"], ["texas", "remote"])
         self.assertTrue(payload["feature_ai_extractor_enabled"])
         self.assertEqual(payload["draft_text_size"], "huge")
+        self.assertEqual(payload["preferred_employer_cc_email"], "sheshwika@horizonsoftech.net")
         self.assertEqual(payload["resume_display_name"], "Chaithanya Dheeraj Resume")
+
+    def test_settings_reject_invalid_preferred_employer_cc_email(self) -> None:
+        res = self.client.put(
+            "/settings",
+            json={
+                "enabled": True,
+                "gmail_query": "is:unread",
+                "default_gmail_query": "is:unread",
+                "saved_gmail_queries": [],
+                "mail_date": None,
+                "default_date_mode": "today",
+                "min_salary": None,
+                "accepted_locations": [],
+                "visa_required_allowed": False,
+                "remote_preference": "any",
+                "role_keywords": [],
+                "must_have_skills": [],
+                "employer_domains": [],
+                "free_text_guidance": "",
+                "qualification_threshold": 0.6,
+                "feature_auto_polling": False,
+                "feature_auto_poll_interval_minutes": 10,
+                "feature_nvoids_enabled": True,
+                "feature_nvoids_auto_sync": False,
+                "feature_nvoids_poll_interval_minutes": 30,
+                "nvoids_batch_limit": 10,
+                "nvoids_locations": [],
+                "feature_auto_send": False,
+                "feature_retry_queue": False,
+                "feature_ai_enabled": False,
+                "feature_ai_extractor_enabled": False,
+                "feature_semantic_enabled": False,
+                "draft_text_size": "normal",
+                "fallback_draft_template": "",
+                "signature_name": "",
+                "signature_phone": "",
+                "signature_email": "",
+                "preferred_employer_cc_email": "not-an-email",
+                "resume_display_name": "",
+                "policy": None,
+            },
+        )
+        self.assertEqual(res.status_code, 422, res.text)
 
     def test_settings_reject_invalid_draft_text_size(self) -> None:
         res = self.client.put(
@@ -1132,6 +1250,12 @@ class ExternalFeedsApiTests(unittest.TestCase):
 
     def test_sync_continues_when_detail_fetch_times_out(self) -> None:
         class _TimeoutCollector(_FakeCollector):
+            def reset_detail_fetch_metrics(self) -> None:
+                return None
+
+            def get_detail_fetch_metrics(self) -> dict[str, int]:
+                return {"retry_count": 2, "failure_count": 1}
+
             def fetch_detail_page(self, *, url: str) -> CollectedPage:
                 if "id=1" in url:
                     raise httpx.ReadTimeout("The read operation timed out")
@@ -1155,6 +1279,47 @@ class ExternalFeedsApiTests(unittest.TestCase):
                 self.assertEqual(timed_out_row.recruiter_email, "")
                 self.assertEqual(timed_out_row.role, "Senior Python Developer")
                 self.assertEqual(timed_out_row.location, "Dallas, Texas, USA")
+                latest_run = db.query(external_feed_service_module.ExternalScrapeRun).order_by(external_feed_service_module.ExternalScrapeRun.id.desc()).first()
+                self.assertIsNotNone(latest_run)
+                assert latest_run is not None
+                self.assertIn("detail_fetch_failures=1", latest_run.notes or "")
+                self.assertIn("detail_fetch_retries=2", latest_run.notes or "")
+                self.assertIn("detail_fetch_fallback_rows=1", latest_run.notes or "")
+        finally:
+            main.external_feed_service.collector = original_collector
+
+    def test_sync_continues_when_detail_fetch_returns_non_retriable_http_status_error(self) -> None:
+        class _StatusErrorCollector(_FakeCollector):
+            def reset_detail_fetch_metrics(self) -> None:
+                return None
+
+            def get_detail_fetch_metrics(self) -> dict[str, int]:
+                return {"retry_count": 0, "failure_count": 1}
+
+            def fetch_detail_page(self, *, url: str) -> CollectedPage:
+                if "id=1" in url:
+                    request = httpx.Request("GET", url)
+                    response = httpx.Response(503, request=request)
+                    raise httpx.HTTPStatusError("service unavailable", request=request, response=response)
+                return super().fetch_detail_page(url=url)
+
+        original_collector = main.external_feed_service.collector
+        try:
+            main.external_feed_service.collector = _StatusErrorCollector()
+            sync = self.client.post("/external-feeds/nvoids/sync")
+            self.assertEqual(sync.status_code, 200, sync.text)
+
+            with self.SessionLocal() as db:
+                ext_rows = (
+                    db.query(ExternalOpportunity)
+                    .filter(ExternalOpportunity.owner_id == main.settings.owner_id, ExternalOpportunity.source_type == "nvoids")
+                    .order_by(ExternalOpportunity.external_post_id.asc())
+                    .all()
+                )
+                self.assertEqual(len(ext_rows), 2)
+                errored_row = next(row for row in ext_rows if row.external_post_id == "nvoids:1")
+                self.assertEqual(errored_row.recruiter_email, "")
+                self.assertEqual(errored_row.role, "Senior Python Developer")
         finally:
             main.external_feed_service.collector = original_collector
 

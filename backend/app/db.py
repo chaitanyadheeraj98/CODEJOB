@@ -344,6 +344,7 @@ def ensure_sqlite_phase0_columns() -> None:
             ("signature_name", "ALTER TABLE user_settings ADD COLUMN signature_name VARCHAR(255) DEFAULT ''"),
             ("signature_phone", "ALTER TABLE user_settings ADD COLUMN signature_phone VARCHAR(80) DEFAULT ''"),
             ("signature_email", "ALTER TABLE user_settings ADD COLUMN signature_email VARCHAR(255) DEFAULT ''"),
+            ("preferred_employer_cc_email", "ALTER TABLE user_settings ADD COLUMN preferred_employer_cc_email VARCHAR(255) DEFAULT ''"),
             ("policy_json", "ALTER TABLE user_settings ADD COLUMN policy_json TEXT DEFAULT ''"),
             ("employer_domains", "ALTER TABLE user_settings ADD COLUMN employer_domains TEXT DEFAULT ''"),
         ]

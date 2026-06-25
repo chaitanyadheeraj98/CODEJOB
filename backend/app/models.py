@@ -143,6 +143,7 @@ class UserSettings(Base):
     signature_name: Mapped[str] = mapped_column(String(255), default="")
     signature_phone: Mapped[str] = mapped_column(String(80), default="")
     signature_email: Mapped[str] = mapped_column(String(255), default="")
+    preferred_employer_cc_email: Mapped[str] = mapped_column(String(255), default="")
     resume_display_name: Mapped[str] = mapped_column(String(255), default="")
     policy_json: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)

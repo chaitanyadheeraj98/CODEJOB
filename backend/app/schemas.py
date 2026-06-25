@@ -1,5 +1,6 @@
 from datetime import datetime
 import json
+import re
 from typing import Any, cast
 
 from pydantic import AliasChoices, BaseModel, Field, field_validator
@@ -76,6 +77,7 @@ class SettingsRequest(BaseModel):
     signature_name: str = ""
     signature_phone: str = ""
     signature_email: str = ""
+    preferred_employer_cc_email: str = ""
     resume_display_name: str = ""
     policy: PolicyDict | None = None
 
@@ -117,6 +119,16 @@ class SettingsRequest(BaseModel):
         if normalized not in DRAFT_TEXT_SIZE_VALUES:
             raise ValueError("draft_text_size must be one of: small, normal, large, huge")
         return normalize_draft_text_size(normalized)
+
+    @field_validator("preferred_employer_cc_email")
+    @classmethod
+    def validate_preferred_employer_cc_email(cls, value: str) -> str:
+        normalized = (value or "").strip().lower()
+        if not normalized:
+            return ""
+        if not re.fullmatch(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", normalized):
+            raise ValueError("preferred_employer_cc_email must be a valid email address")
+        return normalized
 
 
 class SettingsResponse(SettingsRequest):
