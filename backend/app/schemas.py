@@ -248,6 +248,13 @@ class EmailResponse(BaseModel):
     ai_score: float | None
     ai_score_source: str | None
     ai_summary: str | None
+    ats_score: float | None = None
+    ats_score_source: str | None = None
+    ats_summary: str | None = None
+    ats_breakdown: dict[str, object] | None = Field(
+        default=None,
+        validation_alias=AliasChoices("ats_breakdown", "ats_breakdown_json"),
+    )
     semantic_input_source: str | None = None
     semantic_input_chars: int | None = None
     semantic_chunks: int | None = None
@@ -318,6 +325,21 @@ class EmailResponse(BaseModel):
     @field_validator("parser_details", mode="before")
     @classmethod
     def parse_parser_details(cls, value: Any) -> dict[str, object] | None:
+        if value in (None, ""):
+            return None
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except json.JSONDecodeError:
+                return None
+            return cast(dict[str, object], parsed) if isinstance(parsed, dict) else None
+        if isinstance(value, dict):
+            return cast(dict[str, object], value)
+        return None
+
+    @field_validator("ats_breakdown", mode="before")
+    @classmethod
+    def parse_ats_breakdown(cls, value: Any) -> dict[str, object] | None:
         if value in (None, ""):
             return None
         if isinstance(value, str):

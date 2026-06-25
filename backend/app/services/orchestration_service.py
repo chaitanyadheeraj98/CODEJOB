@@ -142,6 +142,10 @@ class OrchestrationService:
                 ai_score = float(getattr(resume_selection, "ai_score", 0.0))
                 ai_summary = str(getattr(resume_selection, "ai_summary", ""))
                 ai_score_source = str(getattr(resume_selection, "ai_score_source", ""))
+                ats_score = cast(float | None, getattr(resume_selection, "ats_score", None))
+                ats_summary = cast(str | None, getattr(resume_selection, "ats_summary", None))
+                ats_score_source = cast(str | None, getattr(resume_selection, "ats_score_source", None))
+                ats_breakdown_json = cast(str | None, getattr(resume_selection, "ats_breakdown_json", None))
                 email_embedding_json = cast(str | None, getattr(resume_selection, "email_embedding_json", None))
                 resume_embedding_json = cast(str | None, getattr(resume_selection, "resume_embedding_json", None))
                 semantic_diag = getattr(resume_selection, "semantic_diag", None)
@@ -209,6 +213,10 @@ class OrchestrationService:
                     ai_score=ai_score,
                     ai_score_source=ai_score_source,
                     ai_summary=ai_summary,
+                    ats_score=ats_score,
+                    ats_score_source=ats_score_source,
+                    ats_summary=ats_summary,
+                    ats_breakdown_json=ats_breakdown_json,
                     semantic_input_source=getattr(semantic_diag, "input_source", None),
                     semantic_input_chars=getattr(semantic_diag, "input_chars", None),
                     semantic_chunks=getattr(semantic_diag, "chunks", None),
@@ -781,6 +789,10 @@ class OrchestrationService:
             external_thread_id=email.external_thread_id,
         )
         resume = getattr(resume_selection, "resume", None) or self.deps.active_resume(db)
+        email.ats_score = cast(float | None, getattr(resume_selection, "ats_score", None))
+        email.ats_score_source = cast(str | None, getattr(resume_selection, "ats_score_source", None))
+        email.ats_summary = cast(str | None, getattr(resume_selection, "ats_summary", None))
+        email.ats_breakdown_json = cast(str | None, getattr(resume_selection, "ats_breakdown_json", None))
         fallback_reply = self.deps.build_user_fallback_draft(
             db,
             user_settings,

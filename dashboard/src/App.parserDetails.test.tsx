@@ -30,6 +30,10 @@ describe('ParserDetailsPanel', () => {
         <ParserDetailsPanel
           candidateId={42}
           source="nvoids"
+          atsScore={84}
+          atsSource="hybrid_structured_only"
+          atsSummary="ATS hybrid score 84/100; raw_overlap=0.75; intent_match=0.82"
+          atsBreakdown={{ raw_overlap: 0.75, matched_raw_skills: ['Java', 'Spring Boot'], selected_resume_file_name: 'resume.docx' }}
           expanded={false}
           onToggle={onToggle}
           parserDetails={{
@@ -75,6 +79,10 @@ describe('ParserDetailsPanel', () => {
         <ParserDetailsPanel
           candidateId={42}
           source="nvoids"
+          atsScore={84}
+          atsSource="hybrid_structured_only"
+          atsSummary="ATS hybrid score 84/100; raw_overlap=0.75; intent_match=0.82"
+          atsBreakdown={{ raw_overlap: 0.75, matched_raw_skills: ['Java', 'Spring Boot'], selected_resume_file_name: 'resume.docx' }}
           expanded={true}
           onToggle={onToggle}
           parserDetails={{
@@ -115,6 +123,10 @@ describe('ParserDetailsPanel', () => {
     expect(container.textContent ?? '').toContain('Approved Skills')
     expect(container.textContent ?? '').toContain('Unknown Skills')
     expect(container.textContent ?? '').toContain('Temporal Workflow')
+    expect(container.textContent ?? '').toContain('ATS Summary')
+    expect(container.textContent ?? '').toContain('ATS Breakdown')
+    expect(container.textContent ?? '').toContain('ATS hybrid score 84/100')
+    expect(container.textContent ?? '').toContain('selected_resume_file_name')
     expect(container.textContent ?? '').toContain('Final Skills Text')
     expect(container.textContent ?? '').toContain('Skills Audit')
     expect(container.textContent ?? '').toContain('Source Hints')

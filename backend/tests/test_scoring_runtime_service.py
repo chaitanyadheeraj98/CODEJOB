@@ -1,4 +1,5 @@
 import unittest
+import json
 
 from app.services.scoring_runtime_service import ScoringRuntimeDeps, ScoringRuntimeService
 
@@ -102,6 +103,78 @@ class ScoringRuntimeServiceTests(unittest.TestCase):
         self.assertIn("semantic skipped (resume text unavailable)", summary)
         self.assertLessEqual(score, 0.18)
         self.assertEqual(diag.fallback_reason, "resume_text_unavailable")
+
+    def test_compute_ats_score_rewards_exact_overlap(self) -> None:
+        service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1, 0.2], "hash")))
+        parsed = {
+            "role": "Java Developer",
+            "skills_text": "Java, Spring Boot, AWS, Microservices",
+            "salary_text": "",
+            "location": "Remote",
+        }
+
+        class Settings:
+            feature_semantic_enabled = False
+
+        class Resume:
+            def __init__(self, file_name: str, skills_text: str):
+                self.file_name = file_name
+                self.skills_text = skills_text
+
+        weak_resume = Resume("weak.docx", "Java")
+        strong_resume = Resume("strong.docx", "Java, Spring Boot, AWS, Microservices")
+        weak_score, weak_source, weak_summary, weak_breakdown = service.compute_ats_score(
+            subject="Java Developer",
+            body="Need Java, Spring Boot, AWS, and Microservices",
+            parsed=parsed,
+            user_settings=Settings(),
+            resume=weak_resume,
+        )
+        strong_score, strong_source, strong_summary, strong_breakdown = service.compute_ats_score(
+            subject="Java Developer",
+            body="Need Java, Spring Boot, AWS, and Microservices",
+            parsed=parsed,
+            user_settings=Settings(),
+            resume=strong_resume,
+        )
+
+        self.assertIsNotNone(weak_score)
+        self.assertIsNotNone(strong_score)
+        assert weak_score is not None and strong_score is not None
+        self.assertLess(weak_score, strong_score)
+        self.assertEqual(weak_source, "hybrid_structured_only")
+        self.assertEqual(strong_source, "hybrid_structured_only")
+        self.assertIn("ATS hybrid score", strong_summary or "")
+        self.assertEqual(json.loads(strong_breakdown or "{}")["selected_resume_file_name"], "strong.docx")
+
+    def test_compute_ats_score_penalizes_vague_ai_wording(self) -> None:
+        service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1, 0.2], "hash")))
+        parsed = {
+            "role": "AI Engineer",
+            "skills_text": "RAG, Tool Calling, Embeddings, Observability",
+            "salary_text": "",
+            "location": "Remote",
+        }
+
+        class Settings:
+            feature_semantic_enabled = False
+
+        class Resume:
+            file_name = "ai_resume.docx"
+            skills_text = "Generative AI, AI exposure, AI-assisted engineering, Observability"
+
+        score, _source, summary, breakdown = service.compute_ats_score(
+            subject="AI Engineer",
+            body="Need RAG, tool calling, embeddings, and observability",
+            parsed=parsed,
+            user_settings=Settings(),
+            resume=Resume(),
+        )
+        self.assertIsNotNone(score)
+        assert score is not None
+        self.assertLess(score, 45.0)
+        self.assertIn("weak_signals=", summary or "")
+        self.assertIn("weak_signal_hits", json.loads(breakdown or "{}"))
 
     def test_weak_skills_uses_rich_fallback_keyword_source(self) -> None:
         service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1], "hash")))

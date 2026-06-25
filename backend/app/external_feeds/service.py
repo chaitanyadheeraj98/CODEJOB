@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 import json
 import logging
 import re
+from typing import cast
 
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -673,6 +674,10 @@ class ExternalFeedService:
             external_thread_id=item.source_url or external_message_id,
         )
         selected_resume = resume_selection.resume or active_resume
+        ats_score = cast(float | None, getattr(resume_selection, "ats_score", None))
+        ats_score_source = cast(str | None, getattr(resume_selection, "ats_score_source", None))
+        ats_summary = cast(str | None, getattr(resume_selection, "ats_summary", None))
+        ats_breakdown_json = cast(str | None, getattr(resume_selection, "ats_breakdown_json", None))
         preparation = prepare_candidate_for_queue(
             QueuePreparationRequest(
                 db=db,
@@ -764,6 +769,10 @@ class ExternalFeedService:
             ai_score=preparation.ai_score,
             ai_score_source=preparation.ai_score_source,
             ai_summary=preparation.ai_summary,
+            ats_score=ats_score,
+            ats_score_source=ats_score_source,
+            ats_summary=ats_summary,
+            ats_breakdown_json=ats_breakdown_json,
             semantic_input_source=getattr(preparation.semantic_diag, "input_source", None),
             semantic_input_chars=getattr(preparation.semantic_diag, "input_chars", None),
             semantic_chunks=getattr(preparation.semantic_diag, "chunks", None),

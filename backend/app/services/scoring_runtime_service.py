@@ -42,6 +42,10 @@ class ResumeMatchSelection:
     ai_score: float
     ai_summary: str
     ai_score_source: str
+    ats_score: float | None
+    ats_score_source: str | None
+    ats_summary: str | None
+    ats_breakdown_json: str | None
     email_embedding_json: str | None
     resume_embedding_json: str | None
     semantic_diag: SemanticDiagnostics
@@ -101,6 +105,15 @@ class ScoringRuntimeService:
                 owner_id=owner_id,
                 external_thread_id=external_thread_id,
             )
+            ats_score, ats_score_source, ats_summary, ats_breakdown_json = self.compute_ats_score(
+                subject=subject,
+                body=body,
+                parsed=parsed,
+                user_settings=user_settings,
+                resume=resume,
+                email_embedding_json=email_embedding_json,
+                resume_embedding_json=resume_embedding_json,
+            )
             if resume and resume_embedding_json and resume.semantic_embedding != resume_embedding_json:
                 resume.semantic_embedding = resume_embedding_json
             next_email_ctx = email_ctx
@@ -116,6 +129,10 @@ class ScoringRuntimeService:
                     ai_score=ai_score,
                     ai_summary=ai_summary,
                     ai_score_source=ai_score_source,
+                    ats_score=ats_score,
+                    ats_score_source=ats_score_source,
+                    ats_summary=ats_summary,
+                    ats_breakdown_json=ats_breakdown_json,
                     email_embedding_json=email_embedding_json,
                     resume_embedding_json=resume_embedding_json,
                     semantic_diag=semantic_diag,
@@ -245,6 +262,11 @@ class ScoringRuntimeService:
         score = max(0.0, min(score, 1.0))
         return score, f"AI fit score computed from role keywords and skill overlap ({score:.2f})"
 
+    def _json_payload(self, payload: dict[str, object]) -> str:
+        import json
+
+        return json.dumps(payload, separators=(",", ":"))
+
     def _intent_weighted_keyword_score(
         self,
         *,
@@ -299,6 +321,81 @@ class ScoringRuntimeService:
         if intent.weak_signal_hits:
             summary_parts.append(f"weak_signals={', '.join(intent.weak_signal_hits)}")
         return final_score, "; ".join(summary_parts)
+
+    def compute_ats_score(
+        self,
+        *,
+        subject: str,
+        body: str,
+        parsed: dict[str, str | int],
+        user_settings: UserSettings,
+        resume: ResumeAsset | None,
+        email_embedding_json: str | None = None,
+        resume_embedding_json: str | None = None,
+    ) -> tuple[float | None, str | None, str | None, str | None]:
+        _ = subject, body
+        if not resume:
+            return None, None, None, None
+
+        resume_skills_text = str(getattr(resume, "skills_text", "") or "").strip()
+        jd_skills_text = str(parsed.get("skills_text", "") or "")
+        intent = compute_intent_weighted_match(
+            jd_role=str(parsed.get("role", "")),
+            jd_skills_text=jd_skills_text,
+            resume_skills_text=resume_skills_text,
+        )
+        raw_overlap, matched_raw, missing_raw = self._raw_skill_overlap(jd_skills_text, resume_skills_text)
+        role_foundation_score = clamp01((intent.foundation_score * 0.55) + (intent.role_alignment_score * 0.45))
+        weak_penalty = min(0.12, 0.04 * len(intent.weak_signal_hits)) if intent.jd_role_family == "ai" else 0.0
+
+        semantic_similarity_score = 0.0
+        semantic_used = False
+        if user_settings.feature_semantic_enabled:
+            email_embedding = embedding_from_json(email_embedding_json)
+            resume_embedding = embedding_from_json(resume_embedding_json)
+            if email_embedding and resume_embedding:
+                semantic_similarity_score = semantic_similarity(email_embedding, resume_embedding)
+                semantic_used = True
+
+        weighted_sum = (
+            (raw_overlap * 0.45)
+            + (intent.score * 0.30)
+            + (role_foundation_score * 0.15)
+            + ((semantic_similarity_score if semantic_used else 0.0) * 0.10)
+        )
+        total_weight = 1.0 if semantic_used else 0.90
+        final_score_01 = clamp01((weighted_sum / total_weight) - weak_penalty)
+        final_score = round(final_score_01 * 100.0, 2)
+
+        breakdown_payload: dict[str, object] = {
+            "raw_overlap": round(raw_overlap, 4),
+            "intent_match": round(intent.score, 4),
+            "role_alignment": round(intent.role_alignment_score, 4),
+            "foundation_coverage": round(intent.foundation_score, 4),
+            "semantic_similarity": round(semantic_similarity_score, 4) if semantic_used else None,
+            "matched_raw_skills": matched_raw,
+            "missing_raw_skills": missing_raw,
+            "matched_clusters": list(intent.matched_clusters),
+            "matched_specialization_skills": list(intent.matched_specialization_skills),
+            "missing_specialization_skills": list(intent.missing_specialization_skills),
+            "weak_signal_hits": list(intent.weak_signal_hits),
+            "selected_resume_file_name": getattr(resume, "file_name", None),
+        }
+        summary_parts = [
+            f"ATS hybrid score {int(round(final_score))}/100",
+            f"raw_overlap={raw_overlap:.2f}",
+            f"intent_match={intent.score:.2f}",
+            f"role_alignment={intent.role_alignment_score:.2f}",
+        ]
+        if semantic_used:
+            summary_parts.append(f"semantic_similarity={semantic_similarity_score:.2f}")
+        else:
+            summary_parts.append("semantic_similarity=unavailable")
+        if intent.weak_signal_hits:
+            summary_parts.append(f"weak_signals={', '.join(intent.weak_signal_hits)}")
+
+        source = "hybrid_structured_plus_semantic" if semantic_used else "hybrid_structured_only"
+        return final_score, source, "; ".join(summary_parts), self._json_payload(breakdown_payload)
 
     def _best_thread_snapshot(
         self,

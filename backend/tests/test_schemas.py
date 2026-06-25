@@ -28,6 +28,10 @@ class EmailResponseRoutingTests(unittest.TestCase):
             ai_score=0.8,
             ai_score_source="test",
             ai_summary=None,
+            ats_score=84.5,
+            ats_score_source="hybrid_structured_only",
+            ats_summary="ATS hybrid score 84/100",
+            ats_breakdown_json='{"raw_overlap":0.75,"selected_resume_file_name":"resume.docx"}',
             skip_reason=None,
             sync_batch_id=None,
             draft_reply="draft",
@@ -74,6 +78,11 @@ class EmailResponseRoutingTests(unittest.TestCase):
                 "unknown_skills": [],
                 "merged_result": {"role": "Java Developer"},
             },
+        )
+        self.assertEqual(response.ats_score, 84.5)
+        self.assertEqual(
+            response.ats_breakdown,
+            {"raw_overlap": 0.75, "selected_resume_file_name": "resume.docx"},
         )
 
     def test_settings_request_accepts_employer_domains(self) -> None:

@@ -496,6 +496,10 @@ type Candidate = {
   routing_candidates: RoutingEvidence[]
   routing_confirmed: boolean
   ai_score?: number | null
+  ats_score?: number | null
+  ats_score_source?: string | null
+  ats_summary?: string | null
+  ats_breakdown?: Record<string, unknown> | null
   draft_reply: string
   draft_source: string | null
   draft_model: string | null
@@ -680,6 +684,18 @@ export function clamp100(value: number): number {
   return Math.max(0, Math.min(Math.round(value), 100))
 }
 
+function formatAtsScore(value: number | null | undefined): string {
+  if (typeof value !== 'number' || Number.isNaN(value)) return '-'
+  return String(Math.round(value))
+}
+
+function getAtsStrengthLabel(value: number | null | undefined): string {
+  if (typeof value !== 'number' || Number.isNaN(value)) return 'Unknown'
+  if (value >= 80) return 'Strong'
+  if (value >= 60) return 'Moderate'
+  return 'Weak'
+}
+
 type ParserDetailsPayload = {
   parser_version?: string
   source?: string
@@ -738,11 +754,25 @@ type ParserDetailsPanelProps = {
   candidateId: number
   source: string
   parserDetails: Record<string, unknown> | null
+  atsScore?: number | null
+  atsSource?: string | null
+  atsSummary?: string | null
+  atsBreakdown?: Record<string, unknown> | null
   expanded: boolean
   onToggle: (candidateId: number) => void
 }
 
-export function ParserDetailsPanel({ candidateId, source, parserDetails, expanded, onToggle }: ParserDetailsPanelProps) {
+export function ParserDetailsPanel({
+  candidateId,
+  source,
+  parserDetails,
+  atsScore,
+  atsSource,
+  atsSummary,
+  atsBreakdown,
+  expanded,
+  onToggle,
+}: ParserDetailsPanelProps) {
   const normalized = normalizeParserDetails(parserDetails)
   if (!normalized) return null
   const finalResult = normalized.merged_result ?? {}
@@ -802,6 +832,10 @@ export function ParserDetailsPanel({ candidateId, source, parserDetails, expande
               <h3>Unknown Skills</h3>
               <pre>{unknownSkills.length > 0 ? unknownSkills.join(', ') : '-'}</pre>
             </section>
+            <section className="parserDetailsBlock parserDetailsSummaryBlock">
+              <h3>ATS Summary</h3>
+              <pre>{atsSummary || `ATS Score: ${formatAtsScore(atsScore)} (${getAtsStrengthLabel(atsScore)})`}</pre>
+            </section>
           </div>
           <div className="parserDetailsGrid">
             <section className="parserDetailsBlock">
@@ -819,6 +853,14 @@ export function ParserDetailsPanel({ candidateId, source, parserDetails, expande
             <section className="parserDetailsBlock">
               <h3>Skills Audit</h3>
               <pre>{renderParserValue(skillsAudit ?? {})}</pre>
+            </section>
+            <section className="parserDetailsBlock">
+              <h3>ATS Breakdown</h3>
+              <pre>{renderParserValue({
+                score: atsScore == null ? '-' : `${formatAtsScore(atsScore)} (${getAtsStrengthLabel(atsScore)})`,
+                source: atsSource ?? '-',
+                ...(atsBreakdown ?? {}),
+              })}</pre>
             </section>
             <section className="parserDetailsBlock">
               <h3>Source Hints</h3>
@@ -2987,6 +3029,7 @@ function App() {
                 ) : null}
                 <p><strong>To:</strong> {item.recipient_email ?? '-'}</p>
                 <p><strong>CC:</strong> {item.cc_email ?? '-'}</p>
+                <p><strong>ATS Score:</strong> {formatAtsScore(item.ats_score)} {item.ats_score != null ? `(${getAtsStrengthLabel(item.ats_score)})` : ''}</p>
                 {renderRoutingPanel(item)}
                 <p><strong>Resume:</strong> {item.resume_file_name ?? '-'}</p>
                 <p><strong>Attachment files:</strong> {(enabledAttachmentNames.length > 0 ? enabledAttachmentNames : item.attachment_file_names ?? []).join(', ') || '-'}</p>
@@ -2999,6 +3042,10 @@ function App() {
                   candidateId={item.id}
                   source={item.source}
                   parserDetails={parserDetails}
+                  atsScore={item.ats_score}
+                  atsSource={item.ats_score_source}
+                  atsSummary={item.ats_summary}
+                  atsBreakdown={item.ats_breakdown}
                   expanded={parserExpanded}
                   onToggle={(candidateId) =>
                     setExpandedParserDetailIds((prev) => ({
