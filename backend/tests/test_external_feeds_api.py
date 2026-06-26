@@ -41,9 +41,11 @@ class _FakeCollector:
     def fetch_detail_page(self, *, url: str) -> CollectedPage:
         title = "Senior Python Developer"
         location = "Dallas, Texas, USA"
+        posted = "11:00 PM 07-May-26"
         if "id=2" in url:
             title = "React Developer"
             location = "Remote, USA"
+            posted = "10:00 PM 07-May-26"
         jd_body = (
             f"Role: {title}<br>"
             f"Client: ExampleCo<br>"
@@ -54,10 +56,11 @@ class _FakeCollector:
         html = f"""
         <html><body>
         <table>
-          <tr><td>{title}</td></tr>
+          <tr><td>{title} at {location}</td></tr>
           <tr><td>Email: recruiter_{'1' if 'id=1' in url else '2'}@example.com</td></tr>
           <tr><td>{jd_body}</td></tr>
-          <tr><td>From: Sarika Singh</td></tr>
+          <tr><td>recruiter_{'1' if 'id=1' in url else '2'}@example.com | View All</td></tr>
+          <tr><td>{posted}</td></tr>
         </table>
         </body></html>
         """
@@ -241,6 +244,7 @@ class ExternalFeedsApiTests(unittest.TestCase):
           <tr><td>Email: recruiter@example.com</td></tr>
           <tr><td>Role: Principal Software Engineer Java<br>Client: Acme<br>Location: Gwynn Oak, MD<br>Must have skills<br>Java, Spring Boot, Kafka, REST</td></tr>
           <tr><td>recruiter@example.com | View All</td></tr>
+          <tr><td>04:49 AM 17-Jun-26</td></tr>
         </table>
         </body></html>
         """
@@ -356,18 +360,22 @@ class ExternalFeedsApiTests(unittest.TestCase):
             self.assertEqual(row.cc_email, "employer.cc@example.com")
             self.assertEqual(row.routing_reason, "External feed recruiter import with employer pool cc.")
 
-    def test_manual_sync_standardizes_nvoids_recruiter_phone_display(self) -> None:
+    def test_manual_sync_bridges_recruiter_when_row_3_contains_phone_and_name(self) -> None:
         class _PhoneCollector(_FakeCollector):
             def fetch_detail_page(self, *, url: str) -> CollectedPage:
                 phone = "240-657-1540"
+                name = "Shivam Singh"
                 if "id=2" in url:
                     phone = "+1 (201) 277-2419"
+                    name = "Nupur Kumari"
                 html = f"""
                 <html><body>
                 <table>
+                  <tr><td>Senior Python Developer at Dallas, Texas, USA</td></tr>
                   <tr><td>Email: recruiter@example.com</td></tr>
-                  <tr><td>From: Sarika Singh</td></tr>
-                  <tr><td>Phone: {phone}</td></tr>
+                  <tr><td>From: {name}<br>Phone: {phone}<br>Java, Spring Boot</td></tr>
+                  <tr><td>recruiter@example.com | View All</td></tr>
+                  <tr><td>11:00 PM 07-May-26</td></tr>
                 </table>
                 </body></html>
                 """
@@ -385,7 +393,28 @@ class ExternalFeedsApiTests(unittest.TestCase):
                 .order_by(RecruiterNumber.id.asc())
                 .all()
             )
-            self.assertEqual([row.display_phone_number for row in rows], ["(240) 657-1540", "(201) 277-2419"])
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(rows[0].recruiter_name, "Shivam Singh")
+            self.assertEqual(rows[1].recruiter_name, "Nupur Kumari")
+            self.assertEqual(rows[0].display_phone_number, "(240) 657-1540")
+            self.assertEqual(rows[1].display_phone_number, "(201) 277-2419")
+
+            ext_rows = (
+                db.query(ExternalOpportunity)
+                .filter(ExternalOpportunity.owner_id == main.settings.owner_id, ExternalOpportunity.source_type == "nvoids")
+                .order_by(ExternalOpportunity.id.asc())
+                .all()
+            )
+            self.assertEqual(len(ext_rows), 2)
+            self.assertTrue(all((row.bridge_status or "") == "bridged" for row in ext_rows))
+
+            recruiter_opportunities = (
+                db.query(RecruiterOpportunity)
+                .filter(RecruiterOpportunity.owner_id == main.settings.owner_id, RecruiterOpportunity.source_type == "nvoids")
+                .order_by(RecruiterOpportunity.id.asc())
+                .all()
+            )
+            self.assertEqual(len(recruiter_opportunities), 2)
 
     def test_manual_sync_keeps_nvoids_candidate_but_skips_unknown_phone_bridge(self) -> None:
         sync = self.client.post("/external-feeds/nvoids/sync")
@@ -1036,14 +1065,11 @@ class ExternalFeedsApiTests(unittest.TestCase):
                 <table>
                   <tr><td>Full Stack Developer (Java, Microservices, Spring Boot, API, ReactJS) -- Charlotte, NC, Islin, NJ & Irving, TX at Charlotte, North Carolina, USA</td></tr>
                   <tr><td>Email: saurabhampstek@gmail.com</td></tr>
-                  <tr><td>http://bit.ly/4ey8w48</td></tr>
-                  <tr><td>https://jobs.nvoids.com/job_details.jsp?id=3445247&uid=115e12ace9214a28804a59d7aa3da1ba</td></tr>
-                  <tr><td>Hi,</td></tr>
-                  <tr><td>Job description</td></tr>
                   <tr><td>Backend Development Design, develop, and maintain scalable backend services using Java, Spring Boot, and Microservices architecture.</td></tr>
-                  <tr><td>Thanks and Regards</td></tr>
-                  <tr><td>data-cfemail protected</td></tr>
+                  <tr><td>saurabhampstek@gmail.com | View All</td></tr>
+                  <tr><td>11:00 PM 07-May-26</td></tr>
                 </table>
+                <div>http://bit.ly/4ey8w48 Thanks and Regards data-cfemail protected</div>
                 </body></html>
                 """
                 return CollectedPage(url=url, html=html)
@@ -1063,7 +1089,7 @@ class ExternalFeedsApiTests(unittest.TestCase):
                 )
                 self.assertIsNotNone(row)
                 assert row is not None
-                expected_role = "Full Stack Developer (Java, Microservices, Spring Boot, API, ReactJS) -- Charlotte, NC, Islin, NJ & Irving, TX at Charlotte, North Carolina, USA"
+                expected_role = "Full Stack Developer (Java, Microservices, Spring Boot, API, ReactJS) -- Charlotte, NC, Islin, NJ & Irving, TX"
                 self.assertEqual(row.role, expected_role)
                 self.assertIn(f"Subject: Application for {expected_role}", row.draft_reply or "")
                 self.assertNotIn("<br", row.draft_reply or "")
@@ -1092,9 +1118,6 @@ class ExternalFeedsApiTests(unittest.TestCase):
                 <table border="1">
                   <tr><td>Looking for GCP AI Engineer in Irving, TX, or Charlotte NC - Onsite at Irving, Texas, USA</td></tr>
                   <tr><td>Email: <a href='mailto:tanuja@digitaldhara.com'>tanuja@digitaldhara.com</a></td></tr>
-                  <tr><td>Job Title:</td></tr>
-                  <tr><td>GCP AI Engineer</td></tr>
-                  <tr><td>Location: Irving, TX, or Charlotte NC - Onsite</td></tr>
                   <tr><td>Experience with Vertex AI, GKE, Python, and GenAI workflows.</td></tr>
                   <tr><td>tanuja@digitaldhara.com | View All</td></tr>
                   <tr><td>04:49 AM 17-Jun-26</td></tr>
@@ -1119,8 +1142,8 @@ class ExternalFeedsApiTests(unittest.TestCase):
                 self.assertIsNotNone(ext)
                 assert ext is not None
                 self.assertEqual(ext.recruiter_email, "tanuja@digitaldhara.com")
-                self.assertEqual(ext.role, "GCP AI Engineer")
-                self.assertEqual(ext.location, "Irving, TX, or Charlotte NC - Onsite")
+                self.assertEqual(ext.role, "Looking for GCP AI Engineer in Irving, TX, or Charlotte NC - Onsite")
+                self.assertEqual(ext.location, "Irving, Texas, USA")
                 self.assertIn("Vertex AI, GKE, Python, and GenAI workflows.", ext.raw_body)
                 self.assertNotIn("job_kill", ext.raw_body)
                 self.assertNotIn("View All", ext.raw_body)
@@ -1134,8 +1157,8 @@ class ExternalFeedsApiTests(unittest.TestCase):
                 self.assertIsNotNone(row)
                 assert row is not None
                 self.assertEqual(row.recipient_email, "tanuja@digitaldhara.com")
-                self.assertEqual(row.role, "GCP AI Engineer")
-                self.assertIn("Subject: Application for GCP AI Engineer", row.draft_reply or "")
+                self.assertEqual(row.role, "Looking for GCP AI Engineer in Irving, TX, or Charlotte NC - Onsite")
+                self.assertIn("Subject: Application for Looking for GCP AI Engineer in Irving, TX, or Charlotte NC - Onsite", row.draft_reply or "")
                 self.assertNotIn("job_kill", row.draft_reply or "")
         finally:
             main.external_feed_service.collector = original_collector
@@ -1520,13 +1543,13 @@ class ExternalFeedsApiTests(unittest.TestCase):
             self.assertIsNotNone(updated_ext)
             assert updated_ext is not None
             self.assertEqual(updated_ext.recruiter_phone, "")
-            self.assertEqual(updated_ext.recruiter_name, "Nitin Tehriya")
+            self.assertEqual(updated_ext.recruiter_name, "Unknown")
             updated_recruiter = db.query(RecruiterNumber).filter(RecruiterNumber.id == 1).first()
             self.assertIsNone(updated_recruiter)
             recruiter_opp = db.query(RecruiterOpportunity).filter(RecruiterOpportunity.recruiter_number_id == 1).first()
             self.assertIsNone(recruiter_opp)
 
-    def test_backfill_keeps_valid_nvoids_recruiter_bucket_with_real_phone(self) -> None:
+    def test_backfill_clears_seeded_nvoids_phone_when_detail_rows_do_not_allow_phone_parsing(self) -> None:
         recruiter_id, opportunity_id, ext_id = self._seed_nvoids_placeholder_recruiter(
             normalized_phone_number="12145550125",
             display_phone_number="+1 214 555 0125",
@@ -1539,13 +1562,95 @@ class ExternalFeedsApiTests(unittest.TestCase):
         res = self.client.post("/external-feeds/nvoids/backfill-phones?limit=100")
         self.assertEqual(res.status_code, 200, res.text)
         payload = res.json()
-        self.assertEqual(payload["deleted_placeholder_opportunities"], 0)
-        self.assertEqual(payload["deleted_placeholder_recruiters"], 0)
+        self.assertEqual(payload["deleted_placeholder_opportunities"], 1)
+        self.assertEqual(payload["deleted_placeholder_recruiters"], 1)
 
         with self.SessionLocal() as db:
-            self.assertIsNotNone(db.query(RecruiterNumber).filter(RecruiterNumber.id == recruiter_id).first())
-            self.assertIsNotNone(db.query(RecruiterOpportunity).filter(RecruiterOpportunity.id == opportunity_id).first())
-            self.assertIsNotNone(db.query(ExternalOpportunity).filter(ExternalOpportunity.id == ext_id).first())
+            ext = db.query(ExternalOpportunity).filter(ExternalOpportunity.id == ext_id).first()
+            self.assertIsNotNone(ext)
+            assert ext is not None
+            self.assertEqual(ext.recruiter_phone, "")
+            self.assertIsNone(db.query(RecruiterNumber).filter(RecruiterNumber.id == recruiter_id).first())
+            self.assertIsNone(db.query(RecruiterOpportunity).filter(RecruiterOpportunity.id == opportunity_id).first())
+
+    def test_backfill_recovers_row_3_phone_and_name_and_rebridges(self) -> None:
+        recruiter_id, opportunity_id, ext_id = self._seed_nvoids_placeholder_recruiter(
+            normalized_phone_number="nvoids-seed-bridge",
+            display_phone_number="Unknown",
+            recruiter_email="bridge@example.com",
+            recruiter_name="Unknown",
+            company="Unknown",
+            external_phone="",
+        )
+
+        with self.SessionLocal() as db:
+            ext = db.query(ExternalOpportunity).filter(ExternalOpportunity.id == ext_id).first()
+            assert ext is not None
+            ext.raw_html = (
+                "<html><body><table>"
+                "<tr><td>Kafka software Developer at Remote, Remote, USA</td></tr>"
+                "<tr><td>Email: bridge@example.com</td></tr>"
+                "<tr><td>Hello Professional,<br>From: Shivam Singh<br>Contact: +1 240-657-1540<br>Java/Kafka software Developer - Dallas/onsite 5 days - CTH</td></tr>"
+                "<tr><td>bridge@example.com | View All</td></tr>"
+                "<tr><td>11:00 PM 07-May-26</td></tr>"
+                "</table><div>Outside junk 9999999999</div></body></html>"
+            )
+            ext.recruiter_phone = ""
+            ext.recruiter_name = "Unknown"
+            ext.bridge_status = "ignored_no_phone"
+            db.commit()
+
+        res = self.client.post("/external-feeds/nvoids/backfill-phones?limit=100")
+        self.assertEqual(res.status_code, 200, res.text)
+        payload = res.json()
+        self.assertGreaterEqual(payload["corrected"], 1)
+        self.assertGreaterEqual(payload["bridged"], 1)
+        self.assertEqual(payload["deleted_placeholder_opportunities"], 1)
+        self.assertEqual(payload["deleted_placeholder_recruiters"], 1)
+
+        with self.SessionLocal() as db:
+            ext = db.query(ExternalOpportunity).filter(ExternalOpportunity.id == ext_id).first()
+            self.assertIsNotNone(ext)
+            assert ext is not None
+            self.assertIn("240", ext.recruiter_phone or "")
+            self.assertEqual(ext.recruiter_name, "Shivam Singh")
+            self.assertEqual(ext.bridge_status, "bridged")
+
+            old_placeholder = db.query(RecruiterNumber).filter(RecruiterNumber.id == recruiter_id).first()
+            if old_placeholder is not None:
+                self.assertEqual(old_placeholder.normalized_phone_number, "12406571540")
+                self.assertEqual(old_placeholder.recruiter_name, "Shivam Singh")
+
+            bridged_recruiter = (
+                db.query(RecruiterNumber)
+                .filter(RecruiterNumber.owner_id == main.settings.owner_id, RecruiterNumber.recruiter_email == "bridge@example.com")
+                .first()
+            )
+            self.assertIsNotNone(bridged_recruiter)
+            assert bridged_recruiter is not None
+            self.assertEqual(bridged_recruiter.recruiter_name, "Shivam Singh")
+            self.assertEqual(bridged_recruiter.display_phone_number, "(240) 657-1540")
+
+            bridged_opportunity = (
+                db.query(RecruiterOpportunity)
+                .filter(
+                    RecruiterOpportunity.owner_id == main.settings.owner_id,
+                    RecruiterOpportunity.external_opportunity_id == ext_id,
+                    RecruiterOpportunity.recruiter_number_id == bridged_recruiter.id,
+                )
+                .first()
+            )
+            self.assertIsNotNone(bridged_opportunity)
+            linked_nvoids_opps = (
+                db.query(RecruiterOpportunity)
+                .filter(
+                    RecruiterOpportunity.owner_id == main.settings.owner_id,
+                    RecruiterOpportunity.source_type == "nvoids",
+                    RecruiterOpportunity.external_opportunity_id == ext_id,
+                )
+                .all()
+            )
+            self.assertEqual(len(linked_nvoids_opps), 1)
 
     def test_backfill_standardizes_existing_stored_phone_displays(self) -> None:
         with self.SessionLocal() as db:

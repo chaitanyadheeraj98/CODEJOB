@@ -400,6 +400,7 @@ class ExternalFeedService:
         unchanged = 0
         deleted_placeholder_opportunities = 0
         deleted_placeholder_recruiters = 0
+        bridged = 0
         recruiter_numbers_reformatted = 0
         employer_numbers_reformatted = 0
         review_numbers_reformatted = 0
@@ -419,6 +420,52 @@ class ExternalFeedService:
                     corrected += 1
                 else:
                     unchanged += 1
+
+                canonical_phone = canonicalize_phone(strict_phone)
+                if canonical_phone:
+                    existing_links = (
+                        db.query(RecruiterOpportunity)
+                        .filter(
+                            RecruiterOpportunity.owner_id == owner_id,
+                            RecruiterOpportunity.source_type == "nvoids",
+                            RecruiterOpportunity.external_opportunity_id == row.id,
+                        )
+                        .all()
+                    )
+                    for existing_link in existing_links:
+                        linked_recruiter = (
+                            db.query(RecruiterNumber)
+                            .filter(
+                                RecruiterNumber.owner_id == owner_id,
+                                RecruiterNumber.id == existing_link.recruiter_number_id,
+                            )
+                            .first()
+                        )
+                        if linked_recruiter is None:
+                            continue
+                        if linked_recruiter.normalized_phone_number == canonical_phone:
+                            continue
+                        if linked_recruiter.first_detected_email_id is not None:
+                            continue
+                        db.delete(existing_link)
+                        deleted_placeholder_opportunities += 1
+                        db.flush()
+                        remaining_opportunities = (
+                            db.query(RecruiterOpportunity.id)
+                            .filter(
+                                RecruiterOpportunity.owner_id == owner_id,
+                                RecruiterOpportunity.recruiter_number_id == linked_recruiter.id,
+                            )
+                            .first()
+                        )
+                        if remaining_opportunities is None:
+                            db.delete(linked_recruiter)
+                            deleted_placeholder_recruiters += 1
+                            db.flush()
+
+                    if self._bridge_to_recruiter_opportunity(db, owner_id=owner_id, item=row):
+                        row.bridge_status = "bridged"
+                        bridged += 1
             except Exception:
                 errors += 1
 
@@ -517,6 +564,7 @@ class ExternalFeedService:
             "unchanged": unchanged,
             "deleted_placeholder_opportunities": deleted_placeholder_opportunities,
             "deleted_placeholder_recruiters": deleted_placeholder_recruiters,
+            "bridged": bridged,
             "recruiter_numbers_reformatted": recruiter_numbers_reformatted,
             "employer_numbers_reformatted": employer_numbers_reformatted,
             "review_numbers_reformatted": review_numbers_reformatted,
