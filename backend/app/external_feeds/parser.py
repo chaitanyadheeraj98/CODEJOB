@@ -24,6 +24,11 @@ _PHONE_LABEL_RE = re.compile(
     r"((?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}))",
     re.IGNORECASE,
 )
+_ROW3_PHONE_LABEL_RE = re.compile(
+    r"(?:phone(?:\s*no\.?)?|ph(?:\s*no\.?)?|mobile|contact|call|reach(?:\s+me)?(?:\s+at)?|cell(?:\s*no\.?)?)\s*[:\-]?\s*"
+    r"((?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}))",
+    re.IGNORECASE,
+)
 _FROM_LINE_RE = re.compile(r"^\s*from\s*:\s*(.+)$", re.IGNORECASE)
 _NOISE_LINE_RE = re.compile(
     r"(?:job_kill|time taken|cloudflare|googletagmanager|server timeout|page[s]? not loading|cf-beacon|data-cfemail)",
@@ -45,6 +50,17 @@ _GENERIC_ROW_NOISE_RE = re.compile(
     re.IGNORECASE,
 )
 _DETAIL_LINK_RE = re.compile(r"job_details\.jsp\?id=", re.IGNORECASE)
+_ROW3_VALIDICTION_RE = re.compile(r"^(?:best regards|regards|thanks(?: and regards)?|thank you|sincerely)[,!\s]*$", re.IGNORECASE)
+_ROW3_CONTEXT_RE = re.compile(
+    r"(?:\bfrom\s*:|\b(?:phone(?:\s*no\.?)?|ph(?:\s*no\.?)?|mobile|contact|call|reach|cell(?:\s*no\.?)?)\b|"
+    r"\bemail\s*:|@[A-Z0-9.-]+\.[A-Z]{2,}|\bbest regards\b|\bthanks(?: and regards)?\b|\bsincerely\b)",
+    re.IGNORECASE,
+)
+_ROW3_NON_NAME_RE = re.compile(
+    r"(?:\b(?:role|skills?|client|company|location|address|web|website|email|phone|mobile|contact|call|reach|ext|extension|keywords|responsibilities|job description)\b|"
+    r"https?://|www\.|\d)",
+    re.IGNORECASE,
+)
 
 
 def _normalize_line(value: str) -> str:
@@ -226,19 +242,70 @@ def _extract_recruiter_name_from_row3(row3_text: str) -> str:
             if re.fullmatch(r"[A-Z][A-Za-z.'-]*(?: [A-Z][A-Za-z.'-]*){1,3}", first):
                 return first.strip(" ,.-:")
     for index, line in enumerate(lines):
+        if not _ROW3_VALIDICTION_RE.match(line):
+            continue
+        for follower in lines[index + 1 : index + 4]:
+            candidate = _normalize_line(follower)
+            if _looks_like_row3_person_name(candidate):
+                return candidate.strip(" ,.-:")
+    for index, line in enumerate(lines):
         lower = line.lower()
         if lower.startswith("reply to") or lower.startswith("email:"):
             if index > 0:
                 prev = _normalize_line(lines[index - 1])
                 if prev and not _EMAIL_RE.search(prev) and not _PHONE_RE.search(prev):
-                    if re.fullmatch(r"[A-Za-z][A-Za-z ,.'-]{1,80}", prev):
+                    if _looks_like_row3_person_name(prev):
                         return prev.strip(" ,.-:")
         if _EMAIL_RE.search(line):
-            if index > 0:
-                prev = _normalize_line(lines[index - 1])
-                if prev and not _EMAIL_RE.search(prev) and not _PHONE_RE.search(prev):
-                    if re.fullmatch(r"[A-Za-z][A-Za-z ,.'-]{1,80}", prev):
-                        return prev.strip(" ,.-:")
+            for prev in reversed(lines[max(0, index - 3) : index]):
+                candidate = _normalize_line(prev)
+                if _looks_like_row3_person_name(candidate):
+                    return candidate.strip(" ,.-:")
+    return ""
+
+
+def _looks_like_row3_person_name(value: str) -> bool:
+    candidate = _normalize_line(value)
+    if not candidate:
+        return False
+    if _EMAIL_RE.search(candidate) or _PHONE_RE.search(candidate):
+        return False
+    if _ROW3_NON_NAME_RE.search(candidate):
+        return False
+    return bool(re.fullmatch(r"[A-Z][A-Za-z.'-]*(?: [A-Z][A-Za-z.'-]*){1,3}", candidate))
+
+
+def _extract_row3_recruiter_phone(row3_text: str) -> str:
+    normalized = _normalize_multiline_text(row3_text)
+    if not normalized:
+        return ""
+
+    label_match = _ROW3_PHONE_LABEL_RE.search(normalized)
+    if label_match:
+        return re.sub(r"\s+", " ", label_match.group(1)).strip()
+
+    lines = [line.strip() for line in normalized.splitlines() if line.strip()]
+    if not lines:
+        return ""
+    if not any(_ROW3_CONTEXT_RE.search(line) for line in lines):
+        return ""
+
+    for index, line in enumerate(lines):
+        if _NOISE_LINE_RE.search(line):
+            continue
+        candidate_match = _PHONE_RE.search(line)
+        if not candidate_match:
+            continue
+        window_lines = lines[max(0, index - 3) : min(len(lines), index + 2)]
+        window_text = "\n".join(window_lines)
+        if _NOISE_LINE_RE.search(window_text):
+            continue
+        if any(_ROW3_CONTEXT_RE.search(window_line) for window_line in window_lines if window_line != line):
+            return re.sub(r"\s+", " ", candidate_match.group(0)).strip()
+        if any(_ROW3_VALIDICTION_RE.match(window_line) for window_line in window_lines):
+            return re.sub(r"\s+", " ", candidate_match.group(0)).strip()
+        if any(_looks_like_row3_person_name(window_line) for window_line in window_lines if window_line != line):
+            return re.sub(r"\s+", " ", candidate_match.group(0)).strip()
     return ""
 
 
@@ -275,7 +342,7 @@ def parse_nvoids_detail(detail_html: str, fallback_title: str, fallback_location
     role, location = _split_role_location_from_row1(row_texts[0])
     recruiter_email = _extract_row_email(row_htmls[1], row_texts[1])
     jd_body = _extract_row_text_with_linebreaks(row_htmls[2], row_texts[2]).strip()
-    recruiter_phone = _extract_recruiter_phone(jd_body)
+    recruiter_phone = _extract_row3_recruiter_phone(jd_body)
     recruiter_name = _extract_recruiter_name_from_row3(jd_body)
     jd_body_source = "nvoids_detail_table_row_3" if jd_body else ""
     repeated_email = _extract_row_email(row_htmls[3], row_texts[3])

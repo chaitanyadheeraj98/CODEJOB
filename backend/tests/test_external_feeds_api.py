@@ -363,17 +363,15 @@ class ExternalFeedsApiTests(unittest.TestCase):
     def test_manual_sync_bridges_recruiter_when_row_3_contains_phone_and_name(self) -> None:
         class _PhoneCollector(_FakeCollector):
             def fetch_detail_page(self, *, url: str) -> CollectedPage:
-                phone = "240-657-1540"
-                name = "Shivam Singh"
+                phone_line = "From: Shivam Singh<br>Phone: 240-657-1540"
                 if "id=2" in url:
-                    phone = "+1 (201) 277-2419"
-                    name = "Nupur Kumari"
+                    phone_line = "Regards,<br>Nupur Kumari<br>Phone No: +1 (201) 277-2419"
                 html = f"""
                 <html><body>
                 <table>
                   <tr><td>Senior Python Developer at Dallas, Texas, USA</td></tr>
                   <tr><td>Email: recruiter@example.com</td></tr>
-                  <tr><td>From: {name}<br>Phone: {phone}<br>Java, Spring Boot</td></tr>
+                  <tr><td>{phone_line}<br>Java, Spring Boot</td></tr>
                   <tr><td>recruiter@example.com | View All</td></tr>
                   <tr><td>11:00 PM 07-May-26</td></tr>
                 </table>
@@ -415,6 +413,45 @@ class ExternalFeedsApiTests(unittest.TestCase):
                 .all()
             )
             self.assertEqual(len(recruiter_opportunities), 2)
+
+    def test_manual_sync_bridges_recruiter_when_row_3_uses_ph_no_signature_variant(self) -> None:
+        class _PhNoCollector(_FakeCollector):
+            def fetch_detail_page(self, *, url: str) -> CollectedPage:
+                html = """
+                <html><body>
+                <table>
+                  <tr><td>Java AWS Developer at Plano, Texas, USA</td></tr>
+                  <tr><td>Email: sharma.gopal@net2source.com</td></tr>
+                  <tr><td>Best Regards,<br>Gopal Sharma<br>Senior Talent Acquisition - USA<br>Email:<br>sharma.gopal@net2source.com<br>Ph no. (551) 303-0028</td></tr>
+                  <tr><td>sharma.gopal@net2source.com | View All</td></tr>
+                  <tr><td>02:27 AM 26-Jun-26</td></tr>
+                </table>
+                </body></html>
+                """
+                return CollectedPage(url=url, html=html)
+
+        main.external_feed_service.collector = _PhNoCollector()
+
+        sync = self.client.post("/external-feeds/nvoids/sync")
+        self.assertEqual(sync.status_code, 200, sync.text)
+
+        with self.SessionLocal() as db:
+            recruiter = (
+                db.query(RecruiterNumber)
+                .filter(RecruiterNumber.owner_id == main.settings.owner_id, RecruiterNumber.recruiter_email == "sharma.gopal@net2source.com")
+                .first()
+            )
+            self.assertIsNotNone(recruiter)
+            assert recruiter is not None
+            self.assertEqual(recruiter.recruiter_name, "Gopal Sharma")
+            self.assertEqual(recruiter.display_phone_number, "(551) 303-0028")
+
+            ext_rows = (
+                db.query(ExternalOpportunity)
+                .filter(ExternalOpportunity.owner_id == main.settings.owner_id, ExternalOpportunity.source_type == "nvoids")
+                .all()
+            )
+            self.assertTrue(all((row.bridge_status or "") == "bridged" for row in ext_rows))
 
     def test_manual_sync_keeps_nvoids_candidate_but_skips_unknown_phone_bridge(self) -> None:
         sync = self.client.post("/external-feeds/nvoids/sync")
@@ -1651,6 +1688,61 @@ class ExternalFeedsApiTests(unittest.TestCase):
                 .all()
             )
             self.assertEqual(len(linked_nvoids_opps), 1)
+
+    def test_backfill_recovers_ph_no_signature_variant_from_row_3(self) -> None:
+        recruiter_id, _opportunity_id, ext_id = self._seed_nvoids_placeholder_recruiter(
+            normalized_phone_number="nvoids-seed-phno",
+            display_phone_number="Unknown",
+            recruiter_email="sharma.gopal@net2source.com",
+            recruiter_name="Unknown",
+            company="Unknown",
+            external_phone="",
+        )
+
+        with self.SessionLocal() as db:
+            ext = db.query(ExternalOpportunity).filter(ExternalOpportunity.id == ext_id).first()
+            assert ext is not None
+            ext.raw_html = (
+                "<html><body><table>"
+                "<tr><td>Java AWS Developer at Plano, Texas, USA</td></tr>"
+                "<tr><td>Email: sharma.gopal@net2source.com</td></tr>"
+                "<tr><td>Best Regards,<br>Gopal Sharma<br>Senior Talent Acquisition - USA<br>Email:<br>sharma.gopal@net2source.com<br>Ph no. (551) 303-0028</td></tr>"
+                "<tr><td>sharma.gopal@net2source.com | View All</td></tr>"
+                "<tr><td>02:27 AM 26-Jun-26</td></tr>"
+                "</table></body></html>"
+            )
+            ext.recruiter_phone = ""
+            ext.recruiter_name = "Unknown"
+            ext.bridge_status = "ignored_no_phone"
+            db.commit()
+
+        res = self.client.post("/external-feeds/nvoids/backfill-phones?limit=100")
+        self.assertEqual(res.status_code, 200, res.text)
+        payload = res.json()
+        self.assertGreaterEqual(payload["corrected"], 1)
+        self.assertGreaterEqual(payload["bridged"], 1)
+
+        with self.SessionLocal() as db:
+            ext = db.query(ExternalOpportunity).filter(ExternalOpportunity.id == ext_id).first()
+            self.assertIsNotNone(ext)
+            assert ext is not None
+            self.assertEqual(ext.recruiter_name, "Gopal Sharma")
+            self.assertIn("551", ext.recruiter_phone or "")
+            self.assertEqual(ext.bridge_status, "bridged")
+
+            recruiter = (
+                db.query(RecruiterNumber)
+                .filter(RecruiterNumber.owner_id == main.settings.owner_id, RecruiterNumber.recruiter_email == "sharma.gopal@net2source.com")
+                .first()
+            )
+            self.assertIsNotNone(recruiter)
+            assert recruiter is not None
+            self.assertEqual(recruiter.display_phone_number, "(551) 303-0028")
+            self.assertEqual(recruiter.recruiter_name, "Gopal Sharma")
+
+            placeholder = db.query(RecruiterNumber).filter(RecruiterNumber.id == recruiter_id).first()
+            if placeholder is not None:
+                self.assertEqual(placeholder.normalized_phone_number, "15513030028")
 
     def test_backfill_standardizes_existing_stored_phone_displays(self) -> None:
         with self.SessionLocal() as db:

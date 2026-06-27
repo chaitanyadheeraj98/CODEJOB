@@ -126,6 +126,57 @@ class ExternalFeedsParserTests(unittest.TestCase):
         self.assertEqual(name, "Nupur Kumari")
         self.assertIn("214", phone)
 
+    def test_parse_job_detail_contacts_accepts_ph_no_variant_from_row_3(self) -> None:
+        html = """
+        <html><body>
+        <table>
+          <tr><td>Java AWS Developer at Plano, Texas, USA</td></tr>
+          <tr><td>Email: sharma.gopal@net2source.com</td></tr>
+          <tr><td>Best Regards,<br>Gopal Sharma<br>Senior Talent Acquisition - USA<br>Email:<br>sharma.gopal@net2source.com<br>Ph no. (551) 303-0028</td></tr>
+          <tr><td>sharma.gopal@net2source.com | View All</td></tr>
+          <tr><td>02:27 AM 26-Jun-26</td></tr>
+        </table>
+        </body></html>
+        """
+        email, phone, name = parse_job_detail_contacts(html)
+        self.assertEqual(email, "sharma.gopal@net2source.com")
+        self.assertEqual(name, "Gopal Sharma")
+        self.assertIn("551", phone)
+
+    def test_parse_job_detail_contacts_accepts_phone_no_variant_from_row_3(self) -> None:
+        html = """
+        <html><body>
+        <table>
+          <tr><td>Data Engineer at Remote, USA</td></tr>
+          <tr><td>Email: recruiter@example.com</td></tr>
+          <tr><td>Regards,<br>Jane Recruiter<br>Phone No: +1 551 303 0028<br>Snowflake, Kafka</td></tr>
+          <tr><td>recruiter@example.com | View All</td></tr>
+          <tr><td>04:49 AM 17-Jun-26</td></tr>
+        </table>
+        </body></html>
+        """
+        email, phone, name = parse_job_detail_contacts(html)
+        self.assertEqual(email, "recruiter@example.com")
+        self.assertEqual(name, "Jane Recruiter")
+        self.assertIn("551", phone)
+
+    def test_parse_job_detail_contacts_ignores_plain_numeric_jd_without_contact_context(self) -> None:
+        html = """
+        <html><body>
+        <table>
+          <tr><td>Backend Engineer at Remote, USA</td></tr>
+          <tr><td>Email: recruiter@example.com</td></tr>
+          <tr><td>Need 5513030028 records processed daily with 2145567788 transactions and Java support.</td></tr>
+          <tr><td>recruiter@example.com | View All</td></tr>
+          <tr><td>04:49 AM 17-Jun-26</td></tr>
+        </table>
+        </body></html>
+        """
+        email, phone, name = parse_job_detail_contacts(html)
+        self.assertEqual(email, "recruiter@example.com")
+        self.assertEqual(phone, "")
+        self.assertEqual(name, "")
+
     def test_parse_nvoids_detail_extracts_strict_five_rows(self) -> None:
         html = """
         <html><body>
@@ -170,6 +221,22 @@ class ExternalFeedsParserTests(unittest.TestCase):
         detail = parse_nvoids_detail(html, "Fallback Title", "Fallback Location")
         self.assertEqual(detail.recruiter_name, "Shivam Singh")
         self.assertIn("240", detail.recruiter_phone)
+
+    def test_parse_nvoids_detail_extracts_signature_style_identity_from_row_3(self) -> None:
+        html = """
+        <html><body>
+        <table border="1">
+          <tr><td>Java AWS Developer at Plano, Texas, USA</td></tr>
+          <tr><td>Email: sharma.gopal@net2source.com</td></tr>
+          <tr><td>Best Regards,<br>Gopal Sharma<br>Senior Talent Acquisition - USA<br>Email:<br>sharma.gopal@net2source.com<br>Ph no. (551) 303-0028</td></tr>
+          <tr><td>sharma.gopal@net2source.com | View All</td></tr>
+          <tr><td>02:27 AM 26-Jun-26</td></tr>
+        </table>
+        </body></html>
+        """
+        detail = parse_nvoids_detail(html, "Fallback Title", "Fallback Location")
+        self.assertEqual(detail.recruiter_name, "Gopal Sharma")
+        self.assertIn("551", detail.recruiter_phone)
 
     def test_parse_nvoids_detail_uses_literal_third_row_for_full_jd_body(self) -> None:
         html = """
