@@ -1080,6 +1080,55 @@
   background: var(--surface-soft);
 }
 
+.sentItemCard {
+  display: grid;
+  gap: 12px;
+}
+
+.sentItemHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.sentItemHeaderText {
+  min-width: 0;
+}
+
+.sentItemHeaderActions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.sourceBadge {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #b8c8ea;
+  background: #eef4ff;
+  color: #1f4dbd;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.sentItemDetailsPanel {
+  margin-top: 0;
+}
+
+.sentItemLinkList {
+  display: grid;
+  gap: 8px;
+}
+
+.sentItemLinkList p {
+  margin: 0;
+}
+
 .parserDetailsSection {
   margin: 12px 0;
 }

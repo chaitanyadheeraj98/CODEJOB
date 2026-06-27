@@ -486,6 +486,10 @@ type Candidate = {
   subject: string
   sender: string
   body: string
+  role: string
+  location: string
+  salary_text: string
+  skills_text: string
   sent_at?: string | null
   gmail_message_url: string | null
   recipient_email: string | null
@@ -515,6 +519,33 @@ type Candidate = {
   source: string
   external_message_id: string | null
   external_thread_id: string | null
+  gmail_sent_id?: string | null
+}
+
+type SentItemDetails = {
+  email_id: number
+  source_type: string
+  source_label: string
+  requirement_received_link: string | null
+  sent_gmail_message_link: string | null
+  resume_variant_sent: string | null
+  attached_files: string[]
+  company: string | null
+  recruiter_name: string | null
+  recruiter_email: string | null
+  recruiter_phone: string | null
+  end_client: string | null
+  implementation_partner: string | null
+  vendor: string | null
+  domain_mentioned: string | null
+  experience_required: string | null
+  mandatory_skills: string[]
+  missing_skills: string[]
+  ats_score: number | null
+  ats_summary: string | null
+  to_email: string | null
+  cc_email: string | null
+  sent_at: string | null
 }
 
 export const sourceListingUrl = (item: Candidate): string | null => {
@@ -527,6 +558,24 @@ export const sourceListingUrl = (item: Candidate): string | null => {
     return `https://nvoids.com/job_details.jsp?id=${nvoidsIdMatch[1]}`
   }
   return null
+}
+
+function getSourceLabel(source: string | null | undefined): string {
+  const normalized = (source ?? '').trim().toLowerCase()
+  if (normalized === 'gmail') return 'Gmail'
+  if (normalized === 'nvoids') return 'Nvoids'
+  if (normalized === 'manual') return 'Manual'
+  return normalized || 'Unknown'
+}
+
+function renderTextOrDash(value: string | null | undefined): string {
+  const text = (value ?? '').trim()
+  return text || '-'
+}
+
+function renderListOrDash(values: string[] | null | undefined): string {
+  const items = (values ?? []).map((value) => value.trim()).filter(Boolean)
+  return items.length > 0 ? items.join(', ') : '-'
 }
 
 type PremiumNumberConfidence = 'high' | 'medium' | 'low'
@@ -1051,6 +1100,10 @@ function App() {
   const [movingToFailedId, setMovingToFailedId] = useState<number | null>(null)
   const [draftEdits, setDraftEdits] = useState<Record<number, string>>({})
   const [expandedParserDetailIds, setExpandedParserDetailIds] = useState<Record<number, boolean>>({})
+  const [expandedSentDetailIds, setExpandedSentDetailIds] = useState<Record<number, boolean>>({})
+  const [sentDetailsById, setSentDetailsById] = useState<Record<number, SentItemDetails | undefined>>({})
+  const [sentDetailLoadingIds, setSentDetailLoadingIds] = useState<Record<number, boolean>>({})
+  const [sentDetailErrors, setSentDetailErrors] = useState<Record<number, string | undefined>>({})
   const [routingFixes, setRoutingFixes] = useState<Record<number, { to: string; cc: string }>>({})
   const [fixingId, setFixingId] = useState<number | null>(null)
   const [activePage, setActivePage] = useState<'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'premium_numbers'>('run_queue')
@@ -1968,6 +2021,35 @@ function App() {
   const canTrustRouting = (candidate: Candidate) =>
     candidate.routing_confirmed ||
     (['safe', 'confirmed'].includes(candidate.routing_status) && candidate.routing_confidence >= 0.8)
+
+  const fetchSentDetails = async (candidateId: number): Promise<SentItemDetails> => {
+    const res = await fetch(`${apiBase}/candidates/${candidateId}/sent-details`)
+    if (!res.ok) {
+      const details = await res.json().catch(() => null)
+      throw new Error(details?.detail ?? 'Failed to load sent item details')
+    }
+    return (await res.json()) as SentItemDetails
+  }
+
+  const toggleSentDetails = async (candidateId: number) => {
+    const isExpanded = Boolean(expandedSentDetailIds[candidateId])
+    if (isExpanded) {
+      setExpandedSentDetailIds((prev) => ({ ...prev, [candidateId]: false }))
+      return
+    }
+    setExpandedSentDetailIds((prev) => ({ ...prev, [candidateId]: true }))
+    if (sentDetailsById[candidateId] || sentDetailLoadingIds[candidateId]) return
+    setSentDetailLoadingIds((prev) => ({ ...prev, [candidateId]: true }))
+    setSentDetailErrors((prev) => ({ ...prev, [candidateId]: undefined }))
+    try {
+      const payload = await fetchSentDetails(candidateId)
+      setSentDetailsById((prev) => ({ ...prev, [candidateId]: payload }))
+    } catch (e) {
+      setSentDetailErrors((prev) => ({ ...prev, [candidateId]: (e as Error).message }))
+    } finally {
+      setSentDetailLoadingIds((prev) => ({ ...prev, [candidateId]: false }))
+    }
+  }
 
   const sourceLabel = (source: string) =>
     source
@@ -3515,22 +3597,134 @@ function App() {
             <section className="card pageSection">
           <h2>Sent Items</h2>
           {sentQueue.length === 0 ? <p className="subtle">No approved and sent emails yet.</p> : null}
-          {sentQueue.map((item) => (
-            <article key={`sent-${item.id}`} className="emailItem">
-              <p><strong>Email ID:</strong> {item.id}</p>
-              <p><strong>From:</strong> {item.sender}</p>
-              <p><strong>Subject:</strong> {item.subject}</p>
-              <p><strong>Sent at:</strong> {item.sent_at ? new Date(item.sent_at).toLocaleString() : '-'}</p>
-              {item.gmail_message_url ? (
-                <p>
-                  <strong>Open:</strong>{' '}
-                  <a href={item.gmail_message_url} target="_blank" rel="noreferrer">
-                    Open exact email in Gmail
-                  </a>
-                </p>
-              ) : null}
-            </article>
-          ))}
+          {sentQueue.map((item) => {
+            const isExpanded = Boolean(expandedSentDetailIds[item.id])
+            const sentDetails = sentDetailsById[item.id]
+            const sentDetailError = sentDetailErrors[item.id]
+            const sentDetailLoading = Boolean(sentDetailLoadingIds[item.id])
+            const parserExpanded = Boolean(expandedParserDetailIds[item.id])
+            const listingUrl = sourceListingUrl(item)
+            return (
+              <article key={`sent-${item.id}`} className="emailItem sentItemCard">
+                <div className="sentItemHeader">
+                  <div className="sentItemHeaderText">
+                    <p><strong>Email ID:</strong> {item.id}</p>
+                    <p><strong>From:</strong> {item.sender}</p>
+                    <p><strong>Subject:</strong> {item.subject}</p>
+                    <p><strong>Sent at:</strong> {item.sent_at ? new Date(item.sent_at).toLocaleString() : '-'}</p>
+                  </div>
+                  <div className="sentItemHeaderActions">
+                    <span className="sourceBadge">{getSourceLabel(item.source)}</span>
+                    <button type="button" onClick={() => void toggleSentDetails(item.id)}>
+                      {isExpanded ? 'Hide Details' : 'View Details'}
+                    </button>
+                  </div>
+                </div>
+                {isExpanded ? (
+                  <div className="parserDetailsPanel sentItemDetailsPanel">
+                    {sentDetailLoading ? <p className="subtle">Loading sent item details...</p> : null}
+                    {sentDetailError ? <p className="errorMessage">{sentDetailError}</p> : null}
+                    {sentDetails ? (
+                      <>
+                        <div className="parserDetailsSummaryGrid">
+                          <section className="parserDetailsBlock parserDetailsSummaryBlock">
+                            <h3>Source</h3>
+                            <div className="sentItemLinkList">
+                              <p><strong>Source:</strong> {renderTextOrDash(sentDetails.source_label)}</p>
+                              <p>
+                                <strong>Requirement Link:</strong>{' '}
+                                {sentDetails.requirement_received_link ? (
+                                  <a href={sentDetails.requirement_received_link} target="_blank" rel="noreferrer">
+                                    Open requirement
+                                  </a>
+                                ) : '-'}
+                              </p>
+                              <p>
+                                <strong>Original Gmail Link:</strong>{' '}
+                                {item.gmail_message_url ? (
+                                  <a href={item.gmail_message_url} target="_blank" rel="noreferrer">
+                                    Open original email
+                                  </a>
+                                ) : '-'}
+                              </p>
+                              <p>
+                                <strong>Source Listing Link:</strong>{' '}
+                                {listingUrl ? (
+                                  <a href={listingUrl} target="_blank" rel="noreferrer">
+                                    Open source listing
+                                  </a>
+                                ) : '-'}
+                              </p>
+                              <p>
+                                <strong>Sent Gmail Link:</strong>{' '}
+                                {sentDetails.sent_gmail_message_link ? (
+                                  <a href={sentDetails.sent_gmail_message_link} target="_blank" rel="noreferrer">
+                                    Open sent message
+                                  </a>
+                                ) : '-'}
+                              </p>
+                            </div>
+                          </section>
+                          <section className="parserDetailsBlock parserDetailsSummaryBlock">
+                            <h3>Requirement</h3>
+                            <pre>{[
+                              `Role: ${renderTextOrDash(item.role)}`,
+                              `Location: ${renderTextOrDash(item.location)}`,
+                              `Salary: ${renderTextOrDash(item.salary_text)}`,
+                              `Skills: ${renderTextOrDash(item.skills_text)}`,
+                              `Company: ${renderTextOrDash(sentDetails.company)}`,
+                              `End Client: ${renderTextOrDash(sentDetails.end_client)}`,
+                              `Implementation Partner: ${renderTextOrDash(sentDetails.implementation_partner)}`,
+                              `Vendor: ${renderTextOrDash(sentDetails.vendor)}`,
+                              `Domain Mentioned: ${renderTextOrDash(sentDetails.domain_mentioned)}`,
+                              `Experience Required: ${renderTextOrDash(sentDetails.experience_required)}`,
+                              `Mandatory Skills: ${renderListOrDash(sentDetails.mandatory_skills)}`,
+                              `Missing Skills: ${renderListOrDash(sentDetails.missing_skills)}`,
+                            ].join('\n')}</pre>
+                          </section>
+                          <section className="parserDetailsBlock parserDetailsSummaryBlock">
+                            <h3>Resume / Send Audit</h3>
+                            <pre>{[
+                              `Resume Variant Sent: ${renderTextOrDash(sentDetails.resume_variant_sent ?? item.resume_file_name)}`,
+                              `Attached Files: ${renderListOrDash(sentDetails.attached_files)}`,
+                              `To: ${renderTextOrDash(sentDetails.to_email ?? item.recipient_email)}`,
+                              `CC: ${renderTextOrDash(sentDetails.cc_email ?? item.cc_email)}`,
+                              `ATS Score: ${formatAtsScore(sentDetails.ats_score ?? item.ats_score)}${(sentDetails.ats_score ?? item.ats_score) != null ? ` (${getAtsStrengthLabel(sentDetails.ats_score ?? item.ats_score)})` : ''}`,
+                              `ATS Summary: ${renderTextOrDash(sentDetails.ats_summary ?? item.ats_summary)}`,
+                            ].join('\n')}</pre>
+                          </section>
+                          <section className="parserDetailsBlock parserDetailsSummaryBlock">
+                            <h3>Recruiter</h3>
+                            <pre>{[
+                              `Recruiter Name: ${renderTextOrDash(sentDetails.recruiter_name)}`,
+                              `Recruiter Email: ${renderTextOrDash(sentDetails.recruiter_email)}`,
+                              `Recruiter Phone: ${renderTextOrDash(sentDetails.recruiter_phone)}`,
+                            ].join('\n')}</pre>
+                          </section>
+                        </div>
+                        <ParserDetailsPanel
+                          candidateId={item.id}
+                          source={item.source}
+                          parserDetails={item.parser_details}
+                          atsScore={item.ats_score}
+                          atsSource={item.ats_score_source}
+                          atsSummary={item.ats_summary}
+                          atsBreakdown={item.ats_breakdown}
+                          expanded={parserExpanded}
+                          onToggle={(candidateId) =>
+                            setExpandedParserDetailIds((prev) => ({
+                              ...prev,
+                              [candidateId]: !prev[candidateId],
+                            }))
+                          }
+                        />
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
+              </article>
+            )
+          })}
           {bucketMeta.approved_sent.hasNext ? (
             <button
               type="button"

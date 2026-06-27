@@ -226,6 +226,27 @@ class CandidateDateFilteringTests(unittest.TestCase):
 
         self.assertEqual(self.candidate_subjects("approved_sent"), ["sent-at-start-boundary"])
 
+    def test_approved_sent_list_orders_by_sent_at_desc_then_created_at_desc(self) -> None:
+        self.add_email(
+            "older-created-but-most-recently-sent",
+            "approved_sent",
+            gmail_received_at=datetime(2026, 5, 10, 15, 0, tzinfo=UTC),
+            sent_at=datetime(2026, 5, 12, 18, 0, tzinfo=UTC),
+            created_at=datetime(2026, 5, 10, 15, 0, tzinfo=UTC),
+        )
+        self.add_email(
+            "newer-created-but-earlier-sent",
+            "approved_sent",
+            gmail_received_at=datetime(2026, 5, 12, 16, 0, tzinfo=UTC),
+            sent_at=datetime(2026, 5, 12, 17, 0, tzinfo=UTC),
+            created_at=datetime(2026, 5, 12, 16, 0, tzinfo=UTC),
+        )
+
+        self.assertEqual(
+            self.candidate_subjects("approved_sent"),
+            ["older-created-but-most-recently-sent", "newer-created-but-earlier-sent"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,11 +1,13 @@
 import hashlib
 import json
 import logging
+import re
 import uuid
 from collections.abc import Generator
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from dataclasses import dataclass
+from email.utils import parseaddr
 from pathlib import Path
 from typing import Mapping, TypedDict, TypeVar, cast
 import threading
@@ -48,7 +50,7 @@ from app.gmail_client import (
 )
 from app.gmail_labeling import GmailLabelingService, LabelRuleInput
 from app.external_feeds.service import ExternalFeedService
-from app.external_feeds.models import ExternalScrapeRun
+from app.external_feeds.models import ExternalOpportunity, ExternalScrapeRun
 from app.models import (
     AttachmentAsset,
     CustomSkillTaxonomyEntry,
@@ -141,6 +143,7 @@ from app.schemas import (
     ResolveRecipientsRequest,
     ResumeResponse,
     ResumeUpdateRequest,
+    SentItemDetailsResponse,
     SettingsRequest,
     SettingsResponse,
     UnknownNumberReviewCardListResponse,
@@ -447,6 +450,301 @@ def _mail_date_filter_field(states: list[str]) -> str:
     if normalized == {"approved_sent"}:
         return "sent_at"
     return "gmail_received_at"
+
+
+def _is_approved_sent_only(states: list[str]) -> bool:
+    normalized = {s.strip().lower() for s in states if s.strip()}
+    return normalized == {"approved_sent"}
+
+
+def _source_label(source: str | None) -> str:
+    normalized = (source or "").strip().lower()
+    if normalized == "gmail":
+        return "Gmail"
+    if normalized == "nvoids":
+        return "Nvoids"
+    if normalized == "manual":
+        return "Manual"
+    return normalized or "Unknown"
+
+
+def _clean_optional_text(value: object) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.lower() == "unknown":
+        return None
+    return text
+
+
+def _json_object(value: str | None) -> dict[str, object]:
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    return cast(dict[str, object], parsed) if isinstance(parsed, dict) else {}
+
+
+def _json_string_list(value: str | None) -> list[str]:
+    if not value:
+        return []
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    items: list[str] = []
+    for item in parsed:
+        text = _clean_optional_text(item)
+        if text and text not in items:
+            items.append(text)
+    return items
+
+
+def _record_string_value(record: Mapping[str, object] | None, key: str) -> str | None:
+    if not record:
+        return None
+    return _clean_optional_text(record.get(key))
+
+
+def _record_string_list(record: Mapping[str, object] | None, key: str) -> list[str]:
+    if not record:
+        return []
+    value = record.get(key)
+    if not isinstance(value, list):
+        return []
+    items: list[str] = []
+    for item in value:
+        text = _clean_optional_text(item)
+        if text and text not in items:
+            items.append(text)
+    return items
+
+
+def _unique_strings(*groups: list[str]) -> list[str]:
+    result: list[str] = []
+    for group in groups:
+        for item in group:
+            text = _clean_optional_text(item)
+            if text and text not in result:
+                result.append(text)
+    return result
+
+
+def _parse_sender_contact(sender: str) -> tuple[str | None, str | None]:
+    name, email_address = parseaddr(sender or "")
+    clean_email = _clean_optional_text(email_address)
+    clean_name = _clean_optional_text(name)
+    return clean_name, clean_email
+
+
+def _extract_external_post_id(external_message_id: str | None) -> str | None:
+    message_id = (external_message_id or "").strip()
+    match = re.match(r"^nvoids:(?:nvoids:)?(.+)$", message_id, re.IGNORECASE)
+    if not match:
+        return None
+    return _clean_optional_text(match.group(1))
+
+
+def _extract_labeled_value(text: str, *labels: str) -> str | None:
+    if not text.strip():
+        return None
+    for label in labels:
+        pattern = rf"(?im)^\s*{re.escape(label)}\s*[:\-]\s*(.+?)\s*$"
+        match = re.search(pattern, text)
+        if match:
+            return _clean_optional_text(match.group(1))
+    return None
+
+
+def _extract_experience_required(text: str) -> str | None:
+    labeled = _extract_labeled_value(text, "experience", "experience required", "required experience")
+    if labeled:
+        return labeled
+    match = re.search(r"(?i)\b(\d{1,2}\+?\s*(?:years?|yrs?)\s+(?:of\s+)?experience)\b", text)
+    if match:
+        return _clean_optional_text(match.group(1))
+    return None
+
+
+def _load_external_opportunity_for_sent_details(db: Session, email: RecruiterEmail) -> ExternalOpportunity | None:
+    external_post_id = _extract_external_post_id(email.external_message_id)
+    if not external_post_id:
+        return None
+    return (
+        db.query(ExternalOpportunity)
+        .filter(
+            ExternalOpportunity.owner_id == settings.owner_id,
+            ExternalOpportunity.external_post_id == external_post_id,
+        )
+        .first()
+    )
+
+
+def _load_recruiter_opportunity_for_sent_details(db: Session, email: RecruiterEmail) -> RecruiterOpportunity | None:
+    row = (
+        db.query(RecruiterOpportunity)
+        .filter(
+            RecruiterOpportunity.owner_id == settings.owner_id,
+            RecruiterOpportunity.source_email_id == email.id,
+        )
+        .first()
+    )
+    if row:
+        return row
+    if not email.external_message_id:
+        return None
+    return (
+        db.query(RecruiterOpportunity)
+        .filter(
+            RecruiterOpportunity.owner_id == settings.owner_id,
+            RecruiterOpportunity.gmail_message_id == email.external_message_id,
+        )
+        .first()
+    )
+
+
+def _load_recruiter_number_for_sent_details(db: Session, email: RecruiterEmail, recruiter_email: str | None) -> RecruiterNumber | None:
+    row = (
+        db.query(RecruiterNumber)
+        .filter(
+            RecruiterNumber.owner_id == settings.owner_id,
+            RecruiterNumber.first_detected_email_id == email.id,
+        )
+        .first()
+    )
+    if row:
+        return row
+    if not recruiter_email:
+        return None
+    return (
+        db.query(RecruiterNumber)
+        .filter(
+            RecruiterNumber.owner_id == settings.owner_id,
+            RecruiterNumber.recruiter_email == recruiter_email,
+        )
+        .order_by(RecruiterNumber.updated_at.desc(), RecruiterNumber.id.desc())
+        .first()
+    )
+
+
+def _load_premium_lead_for_sent_details(db: Session, email: RecruiterEmail) -> PremiumNumberLead | None:
+    return (
+        db.query(PremiumNumberLead)
+        .filter(
+            PremiumNumberLead.owner_id == settings.owner_id,
+            PremiumNumberLead.recruiter_email_id == email.id,
+        )
+        .order_by(
+            PremiumNumberLead.is_recruiter_relevant.desc(),
+            PremiumNumberLead.recruiter_relevance_score.desc(),
+            PremiumNumberLead.id.desc(),
+        )
+        .first()
+    )
+
+
+def _sent_item_requirement_link(email: RecruiterEmail, external: ExternalOpportunity | None) -> str | None:
+    if email.source == "nvoids":
+        return _clean_optional_text((external.source_url if external else None) or email.external_thread_id)
+    return email.gmail_message_url
+
+
+def _sent_item_mandatory_skills(
+    parser_details: Mapping[str, object] | None,
+    ats_breakdown: Mapping[str, object] | None,
+) -> list[str]:
+    matched_raw = _record_string_list(ats_breakdown, "matched_raw_skills")
+    missing_raw = _record_string_list(ats_breakdown, "missing_raw_skills")
+    if matched_raw or missing_raw:
+        return _unique_strings(matched_raw, missing_raw)
+    skills_audit = parser_details.get("skills_audit") if parser_details else None
+    if isinstance(skills_audit, Mapping):
+        return _unique_strings(_record_string_list(skills_audit, "known"), _record_string_list(skills_audit, "unknown"))
+    return []
+
+
+def _sent_item_missing_skills(
+    parser_details: Mapping[str, object] | None,
+    ats_breakdown: Mapping[str, object] | None,
+) -> list[str]:
+    missing_raw = _record_string_list(ats_breakdown, "missing_raw_skills")
+    if missing_raw:
+        return missing_raw
+    skills_audit = parser_details.get("skills_audit") if parser_details else None
+    if isinstance(skills_audit, Mapping):
+        unknown = _record_string_list(skills_audit, "unknown")
+        if unknown:
+            return unknown
+    unknown_skills = parser_details.get("unknown_skills") if parser_details else None
+    if isinstance(unknown_skills, list):
+        return _unique_strings([str(item) for item in unknown_skills])
+    return []
+
+
+def _build_sent_item_details(db: Session, email: RecruiterEmail) -> SentItemDetailsResponse:
+    parser_details = _json_object(email.parser_details_json)
+    ats_breakdown = _json_object(email.ats_breakdown_json)
+    body_text = email.body or ""
+    sender_name, sender_email = _parse_sender_contact(email.sender)
+    external = _load_external_opportunity_for_sent_details(db, email) if email.source == "nvoids" else None
+    recruiter_opportunity = _load_recruiter_opportunity_for_sent_details(db, email)
+    premium_lead = _load_premium_lead_for_sent_details(db, email)
+    recruiter_email = (
+        _clean_optional_text(external.recruiter_email if external else None)
+        or _clean_optional_text(email.recipient_email)
+        or sender_email
+    )
+    recruiter_number = _load_recruiter_number_for_sent_details(db, email, recruiter_email)
+    company = (
+        _clean_optional_text(external.company if external else None)
+        or _clean_optional_text(recruiter_opportunity.client if recruiter_opportunity else None)
+        or _clean_optional_text(recruiter_number.company if recruiter_number else None)
+        or _clean_optional_text(premium_lead.company if premium_lead else None)
+    )
+    return SentItemDetailsResponse(
+        email_id=email.id,
+        source_type=email.source,
+        source_label=_source_label(email.source),
+        requirement_received_link=_sent_item_requirement_link(email, external),
+        sent_gmail_message_link=email.gmail_sent_message_url,
+        resume_variant_sent=_clean_optional_text(email.resume_file_name),
+        attached_files=_json_string_list(email.sent_attachment_file_names_json),
+        company=company,
+        recruiter_name=(
+            _clean_optional_text(external.recruiter_name if external else None)
+            or _clean_optional_text(recruiter_number.recruiter_name if recruiter_number else None)
+            or _clean_optional_text(premium_lead.owner_name if premium_lead else None)
+            or sender_name
+        ),
+        recruiter_email=recruiter_email,
+        recruiter_phone=(
+            _clean_optional_text(external.recruiter_phone if external else None)
+            or _clean_optional_text(recruiter_number.display_phone_number if recruiter_number else None)
+            or _clean_optional_text(premium_lead.phone_number_display if premium_lead else None)
+        ),
+        end_client=(
+            _extract_labeled_value(body_text, "end client", "end-client")
+            or _extract_labeled_value(body_text, "client")
+        ),
+        implementation_partner=_extract_labeled_value(body_text, "implementation partner", "implementor"),
+        vendor=_extract_labeled_value(body_text, "vendor"),
+        domain_mentioned=(
+            _extract_labeled_value(body_text, "domain", "domain mentioned")
+            or _extract_labeled_value(body_text, "industry")
+        ),
+        experience_required=_extract_experience_required(body_text),
+        mandatory_skills=_sent_item_mandatory_skills(parser_details, ats_breakdown),
+        missing_skills=_sent_item_missing_skills(parser_details, ats_breakdown),
+        ats_score=email.ats_score,
+        ats_summary=_clean_optional_text(email.ats_summary),
+        to_email=_clean_optional_text(email.recipient_email),
+        cc_email=_clean_optional_text(email.cc_email),
+        sent_at=email.sent_at,
+    )
 
 
 def _build_telegram_digest(prefix: str, result: AutomationRunResponse) -> str:
@@ -2171,6 +2469,12 @@ def list_candidates(
 
     if sort == "highest_score":
         query = query.order_by(RecruiterEmail.score.desc(), RecruiterEmail.created_at.desc())
+    elif _is_approved_sent_only(states):
+        query = query.order_by(
+            RecruiterEmail.sent_at.is_(None),
+            RecruiterEmail.sent_at.desc(),
+            RecruiterEmail.created_at.desc(),
+        )
     else:
         query = query.order_by(RecruiterEmail.created_at.desc())
 
@@ -2950,6 +3254,14 @@ def generate_recruiter_opportunity_cold_call_script(
 @app.get("/candidates/{email_id}", response_model=EmailResponse)
 def get_candidate(email_id: int, db: Session = Depends(get_db)) -> EmailResponse:
     return _get_candidate_review(email_id, db)
+
+
+@app.get("/candidates/{email_id}/sent-details", response_model=SentItemDetailsResponse)
+def get_sent_item_details(email_id: int, db: Session = Depends(get_db)) -> SentItemDetailsResponse:
+    email = _get_candidate_for_review(db, email_id)
+    if email.state != "approved_sent":
+        raise HTTPException(status_code=400, detail="Sent item details are only available for approved_sent candidates")
+    return _build_sent_item_details(db, email)
 
 
 @app.post("/candidates/{email_id}/approve-send", response_model=EmailResponse)

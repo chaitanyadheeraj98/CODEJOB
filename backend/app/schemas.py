@@ -429,6 +429,32 @@ class CandidateListResponse(BaseModel):
     has_next: bool
 
 
+class SentItemDetailsResponse(BaseModel):
+    email_id: int
+    source_type: str
+    source_label: str
+    requirement_received_link: str | None = None
+    sent_gmail_message_link: str | None = None
+    resume_variant_sent: str | None = None
+    attached_files: list[str] = Field(default_factory=list)
+    company: str | None = None
+    recruiter_name: str | None = None
+    recruiter_email: str | None = None
+    recruiter_phone: str | None = None
+    end_client: str | None = None
+    implementation_partner: str | None = None
+    vendor: str | None = None
+    domain_mentioned: str | None = None
+    experience_required: str | None = None
+    mandatory_skills: list[str] = Field(default_factory=list)
+    missing_skills: list[str] = Field(default_factory=list)
+    ats_score: float | None = None
+    ats_summary: str | None = None
+    to_email: str | None = None
+    cc_email: str | None = None
+    sent_at: datetime | None = None
+
+
 class PremiumNumberResponse(BaseModel):
     id: int
     recruiter_email_id: int

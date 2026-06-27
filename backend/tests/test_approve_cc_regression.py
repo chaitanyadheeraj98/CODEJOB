@@ -2,6 +2,7 @@ import os
 import tempfile
 import unittest
 from datetime import UTC, datetime
+import json
 from types import SimpleNamespace
 
 os.environ["DEBUG"] = "false"
@@ -328,6 +329,10 @@ class ApproveCcRegressionTests(unittest.TestCase):
             self.assertIsInstance(attachments, list)
             assert isinstance(attachments, list)
             self.assertEqual(len(attachments), 2)
+            with Session(self.engine) as db:
+                refreshed = db.get(RecruiterEmail, email.id)
+                assert refreshed is not None
+                self.assertEqual(json.loads(refreshed.sent_attachment_file_names_json or "[]"), ["cover-letter.pdf"])
         finally:
             main.send_reply_with_attachment = original_send_reply
             main.send_new_email_with_attachment = original_send_new
@@ -432,6 +437,10 @@ class ApproveCcRegressionTests(unittest.TestCase):
             self.assertIsInstance(attachments, list)
             assert isinstance(attachments, list)
             self.assertEqual(len(attachments), 2)
+            with Session(self.engine) as db:
+                refreshed = db.get(RecruiterEmail, email.id)
+                assert refreshed is not None
+                self.assertEqual(json.loads(refreshed.sent_attachment_file_names_json or "[]"), ["portfolio.zip"])
         finally:
             main.send_reply_with_attachment = original_send_reply
             main.send_new_email_with_attachment = original_send_new

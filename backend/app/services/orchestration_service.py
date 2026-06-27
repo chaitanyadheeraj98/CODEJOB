@@ -671,6 +671,10 @@ class OrchestrationService:
         email.sent_status = "sent"
         email.sent_at = datetime.now(UTC)
         email.gmail_sent_id = sent_message_id
+        email.sent_attachment_file_names_json = json.dumps(
+            [item.file_name for item in extra_attachments],
+            separators=(",", ":"),
+        )
         if payload.edited_reply and payload.edited_reply.strip() != original_draft.strip():
             db.add(DraftEditFeedback(owner_id=self.deps.owner_id, recruiter_email_id=email.id, original_draft=original_draft, edited_draft=payload.edited_reply))
         db.commit()

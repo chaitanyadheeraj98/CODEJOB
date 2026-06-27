@@ -76,6 +76,7 @@ class RecruiterEmail(Base):
     parser_details_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     gmail_sent_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    sent_attachment_file_names_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
@@ -92,6 +93,13 @@ class RecruiterEmail(Base):
         if not token:
             return None
         return f"https://mail.google.com/mail/u/0/#all/{token}"
+
+    @property
+    def gmail_sent_message_url(self) -> str | None:
+        token = (self.gmail_sent_id or "").strip()
+        if not token:
+            return None
+        return f"https://mail.google.com/mail/u/0/#all/{quote(token, safe='')}"
 
     @property
     def draft_quality(self) -> dict[str, object]:
