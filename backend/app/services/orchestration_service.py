@@ -771,6 +771,31 @@ class OrchestrationService:
         self.deps.record_productivity_event(db, event_type="failed_mapping_marked", event_source="action", entity_id=email.id, metadata={"source": "manual_move_to_failed_mapping"})
         return email
 
+    def dismiss_failed_candidate(self, email_id: int, db: Session) -> dict[str, int | bool | str]:
+        email = (
+            db.query(RecruiterEmail)
+            .filter(RecruiterEmail.owner_id == self.deps.owner_id, RecruiterEmail.id == email_id)
+            .first()
+        )
+        if not email:
+            raise HTTPException(status_code=404, detail="Candidate not found")
+        if email.state != "failed":
+            raise HTTPException(status_code=400, detail="Only failed candidates can be dismissed")
+
+        email.state = "dismissed"
+        email.decision_reason = "Dismissed from failed mapping by user"
+        email.skip_reason = "failed_mapping_dismissed"
+        email.last_error = "Failed mapping card dismissed by user"
+        db.commit()
+        self.deps.record_productivity_event(
+            db,
+            event_type="failed_mapping_dismissed",
+            event_source="action",
+            entity_id=email.id,
+            metadata={"source": "failed_mapping_delete_button"},
+        )
+        return {"id": email.id, "deleted": True, "state": email.state}
+
     def resolve_recipients(self, email_id: int, payload: ResolveRecipientsRequest, db: Session) -> RecruiterEmail:
         email = (
             db.query(RecruiterEmail)

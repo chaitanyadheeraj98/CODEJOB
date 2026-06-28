@@ -248,7 +248,7 @@ class ApproveCcRegressionTests(unittest.TestCase):
                 "salary_text": "$60/hr",
                 "skills_text": "java,angular,microservices",
             }
-            main.hard_filter_check = lambda _p, _u: (True, "pass")
+            main.hard_filter_check = lambda *_args, **_kwargs: (True, "pass")
             main._compute_blended_ai_score = lambda **kwargs: (
                 0.95,
                 "ok",
@@ -498,6 +498,46 @@ class ApproveCcRegressionTests(unittest.TestCase):
         self.assertEqual(payload["state"], "failed")
         self.assertFalse(payload["routing_confirmed"])
         self.assertEqual(payload["routing_status"], "ambiguous")
+
+    def test_delete_failed_candidate_soft_dismisses_card(self) -> None:
+        with Session(self.engine) as db:
+            email = self._add_needs_review_email(db, cc_email="vaishnavi@horizonsoftech.net")
+            email.state = "failed"
+            email.last_error = "Could not resolve recruiter To and employer CC"
+            db.commit()
+            db.refresh(email)
+
+        response = self.client.delete(f"/candidates/{email.id}")
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertTrue(payload["deleted"])
+        self.assertEqual(payload["state"], "dismissed")
+
+        with Session(self.engine) as db:
+            refreshed = db.query(RecruiterEmail).filter(RecruiterEmail.id == email.id).first()
+            assert refreshed is not None
+            self.assertEqual(refreshed.state, "dismissed")
+            self.assertEqual(refreshed.skip_reason, "failed_mapping_dismissed")
+            self.assertEqual(refreshed.decision_reason, "Dismissed from failed mapping by user")
+            self.assertEqual(refreshed.last_error, "Failed mapping card dismissed by user")
+
+        failed_list = self.client.get("/candidates?state=failed")
+        self.assertEqual(failed_list.status_code, 200, failed_list.text)
+        failed_ids = [item["id"] for item in failed_list.json()["items"]]
+        self.assertNotIn(email.id, failed_ids)
+
+    def test_delete_failed_candidate_rejects_non_failed_state(self) -> None:
+        with Session(self.engine) as db:
+            email = self._add_needs_review_email(db, cc_email="vaishnavi@horizonsoftech.net")
+
+        response = self.client.delete(f"/candidates/{email.id}")
+        self.assertEqual(response.status_code, 400, response.text)
+        self.assertEqual(response.json()["detail"], "Only failed candidates can be dismissed")
+
+    def test_delete_failed_candidate_returns_404_when_missing(self) -> None:
+        response = self.client.delete("/candidates/999999")
+        self.assertEqual(response.status_code, 404, response.text)
+        self.assertEqual(response.json()["detail"], "Candidate not found")
 
 
 if __name__ == "__main__":

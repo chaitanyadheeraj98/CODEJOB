@@ -791,6 +791,12 @@ type RecruiterOpportunityDeleteResponse = {
   recruiter_number_deleted: boolean
 }
 
+type CandidateDeleteResponse = {
+  id: number
+  deleted: boolean
+  state: string
+}
+
 type RoutingEvidence = {
   role: string
   email: string
@@ -1257,6 +1263,7 @@ function App() {
   const [sentDetailErrors, setSentDetailErrors] = useState<Record<number, string | undefined>>({})
   const [routingFixes, setRoutingFixes] = useState<Record<number, { to: string; cc: string }>>({})
   const [fixingId, setFixingId] = useState<number | null>(null)
+  const [deletingFailedId, setDeletingFailedId] = useState<number | null>(null)
   const [activePage, setActivePage] = useState<'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'premium_numbers'>('run_queue')
   const [dynamicPolicyBeta, setDynamicPolicyBeta] = useState(false)
   const [selectedProfileToApply, setSelectedProfileToApply] = useState<PolicyProfileName>('Balanced')
@@ -2280,6 +2287,35 @@ function App() {
       setError((e as Error).message)
     } finally {
       setFixingId(null)
+    }
+  }
+
+  const deleteFailedMapping = async (candidateId: number) => {
+    const confirmed = window.confirm(
+      'Delete this failed mapping card from the dashboard? This will hide it from Failed Mapping without deleting the original Gmail or Nvoids source item.',
+    )
+    if (!confirmed) return
+    setDeletingFailedId(candidateId)
+    setError('')
+    try {
+      const res = await fetch(`${apiBase}/candidates/${candidateId}`, {
+        method: 'DELETE',
+      })
+      if (!res.ok) {
+        const details = await res.json().catch(() => null)
+        throw new Error(details?.detail ?? 'Failed to delete failed mapping card')
+      }
+      await res.json() as CandidateDeleteResponse
+      setRoutingFixes((prev) => {
+        const next = { ...prev }
+        delete next[candidateId]
+        return next
+      })
+      schedulePostMutationRefresh()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setDeletingFailedId(null)
     }
   }
 
@@ -3698,13 +3734,23 @@ function App() {
                     }
                   />
                 </label>
-                <button
-                  type="button"
-                  onClick={() => saveRoutingAndRequeue(item.id)}
-                  disabled={fixingId === item.id || !fix.to || !fix.cc}
-                >
-                  {fixingId === item.id ? 'Saving...' : 'Save Mapping & Move to Review'}
-                </button>
+                <div className="rowBtns">
+                  <button
+                    type="button"
+                    onClick={() => saveRoutingAndRequeue(item.id)}
+                    disabled={fixingId === item.id || deletingFailedId === item.id || !fix.to || !fix.cc}
+                  >
+                    {fixingId === item.id ? 'Saving...' : 'Save Mapping & Move to Review'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => deleteFailedMapping(item.id)}
+                    disabled={deletingFailedId === item.id || fixingId === item.id}
+                    title="Delete this failed mapping card from the dashboard"
+                  >
+                    {deletingFailedId === item.id ? 'Deleting...' : 'Delete'}
+                  </button>
+                </div>
               </article>
             )
           })}

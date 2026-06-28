@@ -3297,6 +3297,11 @@ def send_to_failed_mapping(email_id: int, db: Session = Depends(get_db)) -> Recr
     return _get_orchestration_service().send_to_failed_mapping(email_id, db)
 
 
+@app.delete("/candidates/{email_id}", response_model=dict[str, int | bool | str])
+def dismiss_failed_candidate(email_id: int, db: Session = Depends(get_db)) -> dict[str, int | bool | str]:
+    return _get_orchestration_service().dismiss_failed_candidate(email_id, db)
+
+
 @app.post("/candidates/reject-bulk")
 def reject_bulk(payload: BulkRejectRequest, db: Session = Depends(get_db)) -> dict[str, int]:
     if not payload.ids:
