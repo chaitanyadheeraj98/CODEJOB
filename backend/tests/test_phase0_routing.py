@@ -2,9 +2,11 @@ import unittest
 
 from unittest.mock import patch
 
+from app.models import UserSettings
 from app.phase0 import (
     DEFAULT_FALLBACK_DRAFT_TEMPLATE,
     analyze_recipient_routing,
+    hard_filter_check,
     build_skill_source_sections,
     classify_section_heading,
     draft_reply,
@@ -18,6 +20,7 @@ from app.phase0 import (
     slice_jd_sections,
     should_block_f2f,
 )
+from app.services import policy_service
 
 
 EMAIL_30_BODY = """
@@ -43,6 +46,26 @@ www.horizonsoftech.net
 
 
 class RecipientRoutingTests(unittest.TestCase):
+    def _user_settings(self) -> UserSettings:
+        return UserSettings(
+            owner_id="default-owner",
+            accepted_locations="texas,remote",
+            min_salary=60,
+            must_have_skills="java,spring",
+        )
+
+    def _parsed_candidate(self) -> dict[str, str | int | bool]:
+        return {
+            "role": "Java Developer",
+            "location": "florida",
+            "job_location_text": "unknown",
+            "salary_text": "$55/hr",
+            "skills_text": "java",
+            "f2f_mentioned": False,
+            "asks_contact_fields": False,
+            "is_texas_role": False,
+        }
+
     def test_parse_email_with_details_preserves_contract_and_adds_metadata(self) -> None:
         parsed, details = parse_email_with_details(
             "Role: AI Engineer",
@@ -343,6 +366,85 @@ class RecipientRoutingTests(unittest.TestCase):
         self.assertTrue(details["fallback_used"])
         self.assertEqual(details["ai_extractor_result"]["error"], "malformed response")
         self.assertIn("base parser fallback used", str(details["parser_warning"]))
+
+    def test_policy_normalization_backfills_missing_draft_rules(self) -> None:
+        normalized = policy_service.normalize_policy(
+            {
+                "version": 1,
+                "qualification": {
+                    "location_strictness": "balanced",
+                    "score_threshold_override_enabled": False,
+                    "score_threshold_override_value": 0.6,
+                },
+            }
+        )
+        rules = normalized["qualification"]["draft_rules"]
+        self.assertEqual(normalized["version"], 2)
+        self.assertEqual(rules["accepted_location"]["mode"], "block")
+        self.assertEqual(rules["minimum_salary"]["mode"], "block")
+        self.assertEqual(rules["must_have_skills"]["mode"], "block")
+        self.assertEqual(rules["score_threshold"]["mode"], "block")
+        self.assertEqual(rules["recipient_mapping"]["mode"], "block")
+
+    def test_policy_normalization_migrates_legacy_draft_filters_to_warn(self) -> None:
+        normalized = policy_service.normalize_policy(
+            {
+                "version": 1,
+                "qualification": {
+                    "draft_filters": {
+                        "accepted_location_filter_enabled": False,
+                        "minimum_salary_filter_enabled": False,
+                        "must_have_skills_filter_enabled": False,
+                    }
+                },
+            }
+        )
+
+        rules = normalized["qualification"]["draft_rules"]
+        self.assertEqual(rules["accepted_location"]["mode"], "warn")
+        self.assertEqual(rules["minimum_salary"]["mode"], "warn")
+        self.assertEqual(rules["must_have_skills"]["mode"], "warn")
+
+    def test_hard_filter_check_respects_location_rule_mode(self) -> None:
+        settings = self._user_settings()
+        parsed = self._parsed_candidate()
+        enabled_policy = policy_service.default_policy()
+        disabled_policy = policy_service.default_policy()
+        disabled_policy["qualification"]["draft_rules"]["accepted_location"]["mode"] = "warn"
+
+        self.assertEqual(
+            hard_filter_check(parsed, settings, enabled_policy),
+            (False, "blocked: location_mismatch, salary_below_min, missing_skills:spring"),
+        )
+        self.assertEqual(
+            hard_filter_check(parsed, settings, disabled_policy),
+            (False, "blocked: salary_below_min, missing_skills:spring"),
+        )
+
+    def test_hard_filter_check_respects_salary_and_skills_rule_modes(self) -> None:
+        settings = self._user_settings()
+        parsed = self._parsed_candidate()
+        policy = policy_service.default_policy()
+        policy["qualification"]["draft_rules"]["minimum_salary"]["mode"] = "warn"
+        policy["qualification"]["draft_rules"]["must_have_skills"]["mode"] = "warn"
+
+        self.assertEqual(
+            hard_filter_check(parsed, settings, policy),
+            (False, "blocked: location_mismatch"),
+        )
+
+    def test_hard_filter_check_returns_warnings_when_rules_warn_instead_of_block(self) -> None:
+        settings = self._user_settings()
+        parsed = self._parsed_candidate()
+        policy = policy_service.default_policy()
+        policy["qualification"]["draft_rules"]["accepted_location"]["mode"] = "warn"
+        policy["qualification"]["draft_rules"]["minimum_salary"]["mode"] = "warn"
+        policy["qualification"]["draft_rules"]["must_have_skills"]["mode"] = "warn"
+
+        self.assertEqual(
+            hard_filter_check(parsed, settings, policy),
+            (True, "warnings: location_mismatch, salary_below_min, missing_skills:spring"),
+        )
 
     def test_parse_email_with_details_survives_ai_extractor_failure_without_contract_change(self) -> None:
         with patch("app.phase0.extract_ai_job_details", side_effect=RuntimeError("extractor timeout")):

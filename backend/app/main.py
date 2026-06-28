@@ -1041,8 +1041,7 @@ def _get_orchestration_service() -> OrchestrationService:
                 is_recruiter_like=lambda sender, subject, body: is_recruiter_like(sender, subject, body),
                 parse_email=lambda subject, body: parse_email(subject, body),
                 parse_email_with_details=lambda subject, body, **kwargs: parse_email_with_details(subject, body, **kwargs),
-                hard_filter_check=lambda parsed, user_settings: hard_filter_check(parsed, user_settings),
-                should_block_f2f=lambda parsed: should_block_f2f(parsed),
+                hard_filter_check=lambda parsed, user_settings, effective_policy: hard_filter_check(parsed, user_settings, effective_policy),
                 greeting_from_to_contact=lambda to_email, body: greeting_from_to_contact(to_email, body),
                 generate_reply_with_ai_or_fallback=lambda **kwargs: generate_reply_with_ai_or_fallback(**kwargs),
                 send_reply_with_attachment=lambda *args, **kwargs: send_reply_with_attachment(*args, **kwargs),
@@ -1074,16 +1073,19 @@ def _policy_f2f_block(parsed: dict[str, str | int | bool], policy: PolicyConfig)
     normalized = policy_service.normalize_policy(policy)
     qualification = normalized["qualification"]
     strictness = policy_service.as_str(qualification.get("location_strictness", "balanced"), "balanced")
+    f2f_blocked, f2f_reason = should_block_f2f(parsed)
     if strictness == "lenient":
-        return False, ""
-    blocked, reason = should_block_f2f(parsed)
+        f2f_blocked = False
+        f2f_reason = ""
+    blocked, reason = policy_service.should_block_non_texas_f2f(
+        parsed,
+        normalized,
+        f2f_blocked=f2f_blocked,
+        f2f_reason=f2f_reason,
+    )
     if blocked:
         return True, reason
-    if strictness == "strict":
-        location_text = str(parsed.get("job_location_text", "")).strip().lower()
-        if not location_text or location_text == "unknown":
-            return True, "Location is unclear under strict location policy"
-    return False, ""
+    return policy_service.should_block_unknown_location_under_strict(parsed, normalized)
 
 def _active_resume(db: Session) -> ResumeAsset | None:
     return (
@@ -2330,7 +2332,8 @@ def automation_run_once(payload: AutomationRunRequest | None = None, db: Session
 def ingest_email(payload: IngestEmailRequest, db: Session = Depends(get_db)) -> RecruiterEmail:
     user_settings = _get_settings(db)
     parsed, parser_details = parse_email_with_details(payload.subject, payload.body, source="manual")
-    hard_pass, hard_reason = hard_filter_check(parsed, user_settings)
+    effective_policy = policy_service.read_policy_from_settings(user_settings.policy_json)
+    hard_pass, hard_reason = hard_filter_check(parsed, user_settings, effective_policy)
     active_resume = _active_resume(db)
     resume_selection = _select_best_resume_match(
         subject=payload.subject,
@@ -2353,8 +2356,15 @@ def ingest_email(payload: IngestEmailRequest, db: Session = Depends(get_db)) -> 
     email_embedding_json = cast(str | None, getattr(resume_selection, "email_embedding_json"))
     resume_embedding_json = cast(str | None, getattr(resume_selection, "resume_embedding_json"))
     semantic_diag = getattr(resume_selection, "semantic_diag")
-    threshold = user_settings.qualification_threshold
-    state = "needs_review" if hard_pass and ai_score >= threshold else "auto_rejected"
+    threshold = policy_service.policy_threshold(user_settings.qualification_threshold, effective_policy)
+    score_mode = policy_service.draft_rule_mode(effective_policy, "score_threshold")
+    score_blocked = score_mode == "block" and ai_score < threshold
+    warnings: list[str] = []
+    if hard_pass and hard_reason.startswith("warnings: "):
+        warnings.append(hard_reason.removeprefix("warnings: ").strip())
+    if score_mode == "warn" and ai_score < threshold:
+        warnings.append(f"score_below_threshold:{ai_score:.2f}<{threshold:.2f}")
+    state = "needs_review" if hard_pass and not score_blocked else "auto_rejected"
     decision = "Qualified" if state == "needs_review" else "Reject"
     fallback_draft = _build_user_fallback_draft(
         db,
@@ -2382,8 +2392,8 @@ def ingest_email(payload: IngestEmailRequest, db: Session = Depends(get_db)) -> 
         score=int(ai_score * 100),
         decision=decision,
         state=state,
-        decision_reason="manual_ingest",
-        hard_filter_result=hard_reason,
+        decision_reason="manual_ingest_with_warnings" if state == "needs_review" and warnings else "manual_ingest",
+        hard_filter_result=policy_service.combine_rule_messages(warnings) if state == "needs_review" else hard_reason,
         auto_reject_reason=None if state == "needs_review" else "manual_ingest_not_qualified",
         ai_score=ai_score,
         ai_score_source=ai_score_source,

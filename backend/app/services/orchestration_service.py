@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.ai.resume_context_attribution import RESUME_CONTEXT_MISSING, RESUME_CONTEXT_RULES_ONLY
 from app.automation import RunOrchestrator, RunOrchestratorDependencies, RunOrchestratorRequest
+from app.services import policy_service
 from app.services.policy_service import EffectiveRunInputs
 from app.gmail_client import GmailMessageCandidate, MailAttachment
 from app.models import AttachmentAsset, DraftEditFeedback, RecipientRoutingFeedback, RecruiterEmail, ResumeAsset, SyncRun, UserSettings
@@ -70,8 +71,7 @@ class OrchestrationDeps:
     is_recruiter_like: Callable[[str, str, str], bool]
     parse_email: Callable[[str, str], dict[str, str | int | bool]]
     parse_email_with_details: Callable[..., tuple[dict[str, str | int | bool], dict[str, Any]]]
-    hard_filter_check: Callable[[dict[str, str | int | bool], UserSettings], tuple[bool, str]]
-    should_block_f2f: Callable[[dict[str, str | int | bool]], tuple[bool, str | None]]
+    hard_filter_check: Callable[[dict[str, str | int | bool], UserSettings, Any], tuple[bool, str]]
     greeting_from_to_contact: Callable[[str | None, str], str]
     generate_reply_with_ai_or_fallback: Callable[..., Any]
     send_reply_with_attachment: Callable[..., str]
@@ -103,6 +103,8 @@ class OrchestrationService:
         try:
             resolved = self.deps.effective_run_inputs(user_settings, None)
             effective_query = resolved.effective_query
+            effective_policy = resolved.policy
+            threshold = self.deps.policy_threshold(user_settings, effective_policy)
             candidates = self.deps.list_unread_candidates_by_query(effective_query)
             for item in candidates:
                 existing = (
@@ -116,9 +118,14 @@ class OrchestrationService:
                     skipped_count += 1
                     continue
 
-                if not self.deps.is_recruiter_like(item["sender"], item["subject"], item["body"]):
+                recruiter_like_warning: str | None = None
+                recruiter_like_mode = policy_service.recruiter_like_rule_mode(effective_policy)
+                is_recruiter_like = self.deps.is_recruiter_like(item["sender"], item["subject"], item["body"])
+                if recruiter_like_mode == "block" and not is_recruiter_like:
                     skipped_count += 1
                     continue
+                if recruiter_like_mode == "warn" and not is_recruiter_like:
+                    recruiter_like_warning = "non_recruiter_like_gmail"
 
                 parsed, parser_details = self.deps.parse_email_with_details(
                     item["subject"],
@@ -126,7 +133,7 @@ class OrchestrationService:
                     source="gmail",
                     ai_extractor_enabled=user_settings.feature_ai_extractor_enabled,
                 )
-                hard_pass, hard_reason = self.deps.hard_filter_check(parsed, user_settings)
+                hard_pass, hard_reason = self.deps.hard_filter_check(parsed, user_settings, effective_policy)
                 active_resume = self.deps.active_resume(db)
                 resume_selection = self.deps.select_best_resume_match(
                     subject=item["subject"],
@@ -149,32 +156,42 @@ class OrchestrationService:
                 email_embedding_json = cast(str | None, getattr(resume_selection, "email_embedding_json", None))
                 resume_embedding_json = cast(str | None, getattr(resume_selection, "resume_embedding_json", None))
                 semantic_diag = getattr(resume_selection, "semantic_diag", None)
-                threshold = user_settings.qualification_threshold
-
                 state = "needs_review"
                 decision = "Qualified"
                 decision_reason = "Qualified by hard filters + AI score"
                 auto_reject_reason = None
                 draft = ""
                 routed: RoutingResult | None = None
+                warnings: list[str] = []
+                if hard_pass and hard_reason.startswith("warnings: "):
+                    warnings.append(hard_reason.removeprefix("warnings: ").strip())
+                if recruiter_like_warning:
+                    warnings.append(recruiter_like_warning)
 
                 if not hard_pass:
                     state = "auto_rejected"
                     decision = "Reject"
                     decision_reason = "Hard filters failed"
-                    auto_reject_reason = hard_reason
-                elif ai_score < threshold:
+                    auto_reject_reason = hard_reason.removeprefix("blocked: ").strip()
+                elif (
+                    policy_service.draft_rule_mode(effective_policy, "score_threshold") == "block"
+                    and ai_score < threshold
+                ):
                     state = "auto_rejected"
                     decision = "Reject"
                     decision_reason = f"AI score below threshold ({threshold:.2f})"
                     auto_reject_reason = "ai_score_too_low"
                 else:
-                    blocked, block_reason = self.deps.should_block_f2f(parsed)
+                    if policy_service.draft_rule_mode(effective_policy, "score_threshold") == "warn" and ai_score < threshold:
+                        warnings.append(f"score_below_threshold:{ai_score:.2f}<{threshold:.2f}")
+                    blocked, block_reason = self.deps.policy_f2f_block(parsed, effective_policy)
                     if blocked:
                         state = "auto_rejected"
                         decision = "Reject"
                         decision_reason = block_reason
                         auto_reject_reason = "f2f_non_texas"
+                    elif block_reason:
+                        warnings.append(block_reason)
                     else:
                         routed = self.deps.analyze_email_routing(db, item["sender"], item["subject"], item["body"], item.get("snippet", ""))
                         greeting_line = self.deps.greeting_from_to_contact(routed.to_email, item["body"])
@@ -190,6 +207,8 @@ class OrchestrationService:
                                 selected_resume.file_name if selected_resume else None,
                             ),
                         )
+                        if warnings:
+                            decision_reason = "Qualified by hard filters + AI score with warnings"
 
                 email = RecruiterEmail(
                     owner_id=self.deps.owner_id,
@@ -208,7 +227,7 @@ class OrchestrationService:
                     decision=decision,
                     state=state,
                     decision_reason=decision_reason,
-                    hard_filter_result=hard_reason,
+                    hard_filter_result=policy_service.combine_rule_messages(warnings),
                     auto_reject_reason=auto_reject_reason,
                     ai_score=ai_score,
                     ai_score_source=ai_score_source,
@@ -381,6 +400,7 @@ class OrchestrationService:
                         record_productivity_event=self.deps.record_productivity_event,
                         apply_gmail_label=lambda _db, email, item: self.deps.apply_gmail_label_for_email(email=email, candidate_item=item),
                         mark_message_processed=self.deps.mark_message_processed,
+                        is_recruiter_like=self.deps.is_recruiter_like,
                     ),
                 )
             )

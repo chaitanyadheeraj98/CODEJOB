@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from app.models import RecruiterEmail, ResumeAsset, UserSettings
 from app.parsing import build_skills_json_payload
 from app.routing import RoutingDecision
+from app.services import policy_service
 from .queue_preparation import (
     QueuePreparationDependencies,
     QueuePreparationRequest,
@@ -28,7 +29,7 @@ CandidateItem = Mapping[str, Any]
 class RunOrchestratorDependencies:
     parse_email: Callable[[str, str], dict[str, str | int | bool]]
     parse_email_with_details: Callable[..., tuple[dict[str, str | int | bool], dict[str, Any]]]
-    hard_filter_check: Callable[[dict[str, str | int | bool], UserSettings], tuple[bool, str]]
+    hard_filter_check: Callable[[dict[str, str | int | bool], UserSettings, Mapping[str, Any]], tuple[bool, str]]
     compute_blended_ai_score: Callable[
         [str, str, dict[str, str | int | bool], UserSettings, RecruiterEmail | None, ResumeAsset | None],
         tuple[float, str, str, str | None, str | None, Any],
@@ -47,6 +48,7 @@ class RunOrchestratorDependencies:
     record_productivity_event: Callable[..., Any]
     apply_gmail_label: Callable[[Session, RecruiterEmail, CandidateItem], None]
     mark_message_processed: Callable[[str], None]
+    is_recruiter_like: Callable[[str, str, str], bool]
 
 
 @dataclass(frozen=True)
@@ -118,6 +120,16 @@ class RunOrchestrator:
             body = str(item["body"])
             sender = str(item["sender"])
             snippet = str(item.get("snippet", ""))
+            recruiter_like_warning: str | None = None
+            recruiter_like_mode = policy_service.recruiter_like_rule_mode(request.effective_policy)
+            if (
+                recruiter_like_mode == "block"
+                and not request.deps.is_recruiter_like(sender, subject, body)
+            ):
+                skipped_count += 1
+                continue
+            if recruiter_like_mode == "warn" and not request.deps.is_recruiter_like(sender, subject, body):
+                recruiter_like_warning = "non_recruiter_like_gmail"
             parsed_for_selection, parser_details = request.deps.parse_email_with_details(
                 subject,
                 body,
@@ -215,7 +227,12 @@ class RunOrchestrator:
                     target.thread_snapshot_used = getattr(preparation.semantic_diag, "thread_snapshot_used", None)
                     target.thread_snapshot_email_id = getattr(preparation.semantic_diag, "thread_snapshot_email_id", None)
                     target.semantic_embedding = preparation.email_embedding_json or target.semantic_embedding
-                    target.hard_filter_result = preparation.hard_filter_reason
+                    warnings: list[str] = []
+                    if preparation.hard_filter_reason not in {"", "hard_filters_passed"}:
+                        warnings.append(preparation.hard_filter_reason.removeprefix("warnings: ").strip())
+                    if recruiter_like_warning:
+                        warnings.append(recruiter_like_warning)
+                    target.hard_filter_result = policy_service.combine_rule_messages(warnings)
                     target.state = "processed_skipped"
                     target.decision = "Reject"
                     target.auto_reject_reason = preparation.auto_reject_reason
@@ -260,6 +277,10 @@ class RunOrchestrator:
                     target.last_error = "Could not resolve recruiter To and employer CC"
                     target.skip_reason = preparation.skip_reason
                     target.decision_reason = preparation.decision_reason
+                    warnings: list[str] = []
+                    if recruiter_like_warning:
+                        warnings.append(recruiter_like_warning)
+                    target.hard_filter_result = policy_service.combine_rule_messages(warnings)
                     request.deps.apply_routing_decision(target, routing_decision)
                     target.routing_confirmed = False
                     target.resume_asset_id = selected_resume.id if selected_resume else None
@@ -317,7 +338,12 @@ class RunOrchestrator:
                 target.thread_snapshot_used = getattr(preparation.semantic_diag, "thread_snapshot_used", None)
                 target.thread_snapshot_email_id = getattr(preparation.semantic_diag, "thread_snapshot_email_id", None)
                 target.semantic_embedding = preparation.email_embedding_json or target.semantic_embedding
-                target.hard_filter_result = preparation.hard_filter_reason
+                warnings: list[str] = []
+                if preparation.hard_filter_reason not in {"", "hard_filters_passed"}:
+                    warnings.append(preparation.hard_filter_reason.removeprefix("warnings: ").strip())
+                if recruiter_like_warning:
+                    warnings.append(recruiter_like_warning)
+                target.hard_filter_result = policy_service.combine_rule_messages(warnings)
                 target.draft_reply = preparation.draft_reply or ""
                 target.draft_source = preparation.draft_source
                 target.draft_model = preparation.draft_model

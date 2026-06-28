@@ -10,6 +10,7 @@ from app.automation import RunOrchestrator, RunOrchestratorDependencies, RunOrch
 from app.db import Base
 from app.models import RecruiterEmail, ResumeAsset, UserSettings
 from app.phase0 import RoutingEvidence, RoutingResult
+from app.services import policy_service
 
 
 class RunOrchestratorTests(unittest.TestCase):
@@ -91,6 +92,7 @@ class RunOrchestratorTests(unittest.TestCase):
         blocked: bool = False,
         to_email: str | None = "to@example.com",
         cc_email: str | None = "cc@example.com",
+        recruiter_like: bool = True,
     ) -> tuple[RunOrchestratorDependencies, list[str], list[tuple[str, str]]]:
         marked: list[str] = []
         events: list[tuple[str, str]] = []
@@ -121,7 +123,11 @@ class RunOrchestratorTests(unittest.TestCase):
                 "source_hints": {},
             }
 
-        def hard_filter_check(_parsed: dict[str, str | int | bool], _user_settings: UserSettings) -> tuple[bool, str]:
+        def hard_filter_check(
+            _parsed: dict[str, str | int | bool],
+            _user_settings: UserSettings,
+            _policy: dict[str, object],
+        ) -> tuple[bool, str]:
             return hard_pass, "hard_fail" if not hard_pass else "pass"
 
         def compute_blended(
@@ -221,6 +227,7 @@ class RunOrchestratorTests(unittest.TestCase):
             record_productivity_event=record_productivity_event,
             apply_gmail_label=lambda *_args, **_kwargs: None,
             mark_message_processed=lambda message_id: marked.append(message_id),
+            is_recruiter_like=lambda *_args, **_kwargs: recruiter_like,
         )
         return deps, marked, events
 
@@ -413,6 +420,98 @@ class RunOrchestratorTests(unittest.TestCase):
             self.assertEqual(marked, ["m-5"])
             self.assertIn(("needs_review_marked", "state"), events)
 
+    def test_missing_to_and_cc_can_still_queue_when_recipient_mapping_rule_warns(self) -> None:
+        with Session(self.engine) as db:
+            user_settings = self._seed_user_settings(db, feature_ai_enabled=False)
+            resume = self._seed_resume(db)
+            deps, marked, events = self._deps(to_email=None, cc_email=None)
+            policy = policy_service.default_policy()
+            policy["qualification"]["draft_rules"]["recipient_mapping"]["mode"] = "warn"
+            result = RunOrchestrator().execute(
+                RunOrchestratorRequest(
+                    db=db,
+                    owner_id="default-owner",
+                    items=[self._item("m-5b")],
+                    user_settings=user_settings,
+                    resume=resume,
+                    active_resume=resume,
+                    enabled_resumes=[resume],
+                    effective_policy=policy,
+                    threshold=0.6,
+                    dry_run=False,
+                    model_name="deepseek-chat",
+                    deps=deps,
+                )
+            )
+            row = db.query(RecruiterEmail).filter(RecruiterEmail.external_message_id == "m-5b").first()
+            self.assertIsNotNone(row)
+            assert row is not None
+            self.assertEqual(row.state, "needs_review")
+            self.assertEqual(row.recipient_email, None)
+            self.assertEqual(row.cc_email, None)
+            self.assertEqual(row.hard_filter_result, "warnings: missing_to_or_cc")
+            self.assertEqual(result.queued_count, 1)
+            self.assertEqual(marked, ["m-5b"])
+            self.assertIn(("needs_review_marked", "state"), events)
+
+    def test_non_recruiter_message_is_skipped_when_toggle_is_on(self) -> None:
+        with Session(self.engine) as db:
+            user_settings = self._seed_user_settings(db, feature_ai_enabled=False)
+            resume = self._seed_resume(db)
+            deps, marked, _events = self._deps(recruiter_like=False)
+            policy = policy_service.default_policy()
+            result = RunOrchestrator().execute(
+                RunOrchestratorRequest(
+                    db=db,
+                    owner_id="default-owner",
+                    items=[self._item("m-5c")],
+                    user_settings=user_settings,
+                    resume=resume,
+                    active_resume=resume,
+                    enabled_resumes=[resume],
+                    effective_policy=policy,
+                    threshold=0.6,
+                    dry_run=False,
+                    model_name="deepseek-chat",
+                    deps=deps,
+                )
+            )
+            row = db.query(RecruiterEmail).filter(RecruiterEmail.external_message_id == "m-5c").first()
+            self.assertIsNone(row)
+            self.assertEqual(result.skipped_count, 1)
+            self.assertEqual(marked, [])
+
+    def test_non_recruiter_message_still_processes_when_rule_warns(self) -> None:
+        with Session(self.engine) as db:
+            user_settings = self._seed_user_settings(db, feature_ai_enabled=False)
+            resume = self._seed_resume(db)
+            deps, marked, _events = self._deps(recruiter_like=False)
+            policy = policy_service.default_policy()
+            policy["qualification"]["draft_rules"]["recruiter_like_gmail"]["mode"] = "warn"
+            result = RunOrchestrator().execute(
+                RunOrchestratorRequest(
+                    db=db,
+                    owner_id="default-owner",
+                    items=[self._item("m-5d")],
+                    user_settings=user_settings,
+                    resume=resume,
+                    active_resume=resume,
+                    enabled_resumes=[resume],
+                    effective_policy=policy,
+                    threshold=0.6,
+                    dry_run=False,
+                    model_name="deepseek-chat",
+                    deps=deps,
+                )
+            )
+            row = db.query(RecruiterEmail).filter(RecruiterEmail.external_message_id == "m-5d").first()
+            self.assertIsNotNone(row)
+            assert row is not None
+            self.assertEqual(row.state, "needs_review")
+            self.assertEqual(row.hard_filter_result, "warnings: non_recruiter_like_gmail")
+            self.assertEqual(result.queued_count, 1)
+            self.assertEqual(marked, ["m-5d"])
+
     def test_gmail_path_reuses_single_parse_with_details_when_ai_extractor_enabled(self) -> None:
         with Session(self.engine) as db:
             user_settings = self._seed_user_settings(
@@ -519,6 +618,7 @@ class RunOrchestratorTests(unittest.TestCase):
                 record_productivity_event=lambda _db, *, event_type, event_source, **_kwargs: events.append((event_type, event_source)),
                 apply_gmail_label=lambda *_args, **_kwargs: None,
                 mark_message_processed=lambda message_id: marked.append(message_id),
+                is_recruiter_like=lambda *_args, **_kwargs: True,
             )
 
             RunOrchestrator().execute(
@@ -656,6 +756,7 @@ class RunOrchestratorTests(unittest.TestCase):
                 record_productivity_event=lambda *_args, **_kwargs: None,
                 apply_gmail_label=lambda *_args, **_kwargs: None,
                 mark_message_processed=lambda *_args, **_kwargs: None,
+                is_recruiter_like=lambda *_args, **_kwargs: True,
             )
 
             RunOrchestrator().execute(

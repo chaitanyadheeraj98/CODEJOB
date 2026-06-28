@@ -3,6 +3,7 @@ from dataclasses import asdict, dataclass
 from typing import Any, Mapping
 
 from app.models import UserSettings
+from app.services import policy_service
 from app.parsing.ai_extractor import ai_extractor_result_to_payload, extract_ai_job_details
 from app.parsing.skill_audit import audit_skills_text, skill_audit_result_to_payload
 from app.skill_taxonomy import (
@@ -761,27 +762,57 @@ def _parse_salary_floor(salary_text: str) -> int | None:
         return None
 
 
-def hard_filter_check(parsed: dict[str, str | int], settings: UserSettings) -> tuple[bool, str]:
-    reasons: list[str] = []
+def hard_filter_check(
+    parsed: dict[str, str | int | bool],
+    settings: UserSettings,
+    policy: policy_service.PolicyConfig | None = None,
+) -> tuple[bool, str]:
+    blocked_reasons: list[str] = []
+    warning_reasons: list[str] = []
+    rules = policy_service.draft_rules(policy)
 
-    if settings.accepted_locations:
-        accepted = [loc.strip().lower() for loc in settings.accepted_locations.split(",") if loc.strip()]
+    accepted_rule = rules["accepted_location"]
+    accepted_mode = policy_service.draft_rule_mode(policy, "accepted_location")
+    accepted_from_rule = [loc.strip().lower() for loc in accepted_rule.get("locations", []) if loc.strip()]
+    accepted = accepted_from_rule or [loc.strip().lower() for loc in settings.accepted_locations.split(",") if loc.strip()]
+    if accepted_mode != "ignore" and accepted:
         if accepted and str(parsed["location"]).lower() not in accepted and "any" not in accepted:
-            reasons.append("location_mismatch")
+            if accepted_mode == "block":
+                blocked_reasons.append("location_mismatch")
+            else:
+                warning_reasons.append("location_mismatch")
 
-    if settings.min_salary is not None:
+    minimum_salary_rule = rules["minimum_salary"]
+    minimum_salary_mode = policy_service.draft_rule_mode(policy, "minimum_salary")
+    minimum_salary = minimum_salary_rule.get("value")
+    if minimum_salary is None:
+        minimum_salary = settings.min_salary
+    if minimum_salary_mode != "ignore" and minimum_salary is not None:
         salary_floor = _parse_salary_floor(str(parsed["salary_text"]))
-        if salary_floor is not None and salary_floor < settings.min_salary:
-            reasons.append("salary_below_min")
+        if salary_floor is not None and salary_floor < minimum_salary:
+            if minimum_salary_mode == "block":
+                blocked_reasons.append("salary_below_min")
+            else:
+                warning_reasons.append("salary_below_min")
 
-    combined = f"{parsed['role']} {parsed['skills_text']}".lower()
-    must_have_skills = [s.strip().lower() for s in settings.must_have_skills.split(",") if s.strip()]
-    missing = [skill for skill in must_have_skills if skill not in combined]
-    if missing:
-        reasons.append(f"missing_skills:{'|'.join(missing)}")
+    must_have_rule = rules["must_have_skills"]
+    must_have_mode = policy_service.draft_rule_mode(policy, "must_have_skills")
+    if must_have_mode != "ignore":
+        combined = f"{parsed['role']} {parsed['skills_text']}".lower()
+        must_have_from_rule = [s.strip().lower() for s in must_have_rule.get("skills", []) if s.strip()]
+        must_have_skills = must_have_from_rule or [s.strip().lower() for s in settings.must_have_skills.split(",") if s.strip()]
+        missing = [skill for skill in must_have_skills if skill not in combined]
+        if missing:
+            reason = f"missing_skills:{'|'.join(missing)}"
+            if must_have_mode == "block":
+                blocked_reasons.append(reason)
+            else:
+                warning_reasons.append(reason)
 
-    if reasons:
-        return False, ", ".join(reasons)
+    if blocked_reasons:
+        return False, f"blocked: {', '.join(blocked_reasons)}"
+    if warning_reasons:
+        return True, policy_service.combine_rule_messages(warning_reasons)
     return True, "hard_filters_passed"
 
 

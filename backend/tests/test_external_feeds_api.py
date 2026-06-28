@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import httpx
 os.environ["DEBUG"] = "false"
+import json
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -1081,6 +1082,103 @@ class ExternalFeedsApiTests(unittest.TestCase):
                 self.assertEqual(rows, [])
         finally:
             main.external_feed_service.scoring_runtime.compute_blended_ai_score = original_compute
+
+    def test_sync_skips_missing_cc_when_routing_toggle_is_on(self) -> None:
+        with self.SessionLocal() as db:
+            settings = db.query(UserSettings).filter(UserSettings.owner_id == main.settings.owner_id).first()
+            assert settings is not None
+            settings.preferred_employer_cc_email = ""
+            db.query(EmployerNumber).delete()
+            db.commit()
+
+        sync = self.client.post("/external-feeds/nvoids/sync")
+        self.assertEqual(sync.status_code, 200, sync.text)
+
+        with self.SessionLocal() as db:
+            rows = (
+                db.query(RecruiterEmail)
+                .filter(RecruiterEmail.owner_id == main.settings.owner_id, RecruiterEmail.source == "nvoids")
+                .all()
+            )
+            self.assertEqual(rows, [])
+
+    def test_sync_allows_missing_cc_when_routing_toggle_is_off(self) -> None:
+        with self.SessionLocal() as db:
+            settings = db.query(UserSettings).filter(UserSettings.owner_id == main.settings.owner_id).first()
+            assert settings is not None
+            settings.preferred_employer_cc_email = ""
+            settings.policy_json = json.dumps(
+                {
+                    "qualification": {
+                        "draft_rules": {
+                            "recipient_mapping": {"mode": "warn"},
+                        }
+                    }
+                }
+            )
+            db.query(EmployerNumber).delete()
+            db.commit()
+
+        sync = self.client.post("/external-feeds/nvoids/sync")
+        self.assertEqual(sync.status_code, 200, sync.text)
+
+        with self.SessionLocal() as db:
+            row = (
+                db.query(RecruiterEmail)
+                .filter(RecruiterEmail.owner_id == main.settings.owner_id, RecruiterEmail.source == "nvoids")
+                .order_by(RecruiterEmail.id.asc())
+                .first()
+            )
+            self.assertIsNotNone(row)
+            assert row is not None
+            self.assertEqual(row.state, "needs_review")
+            self.assertEqual(row.cc_email, None)
+            self.assertEqual(row.routing_status, "missing")
+
+    def test_sync_allows_missing_recruiter_email_when_routing_toggle_is_off(self) -> None:
+        class _MissingEmailCollector(_FakeCollector):
+            def fetch_detail_page(self, *, url: str) -> CollectedPage:
+                page = super().fetch_detail_page(url=url)
+                html = page.html.replace("Email: recruiter_1@example.com", "Contact us soon").replace(
+                    "recruiter_1@example.com | View All",
+                    "View All",
+                )
+                return CollectedPage(url=page.url, html=html)
+
+        original_collector = main.external_feed_service.collector
+        try:
+            main.external_feed_service.collector = _MissingEmailCollector()
+            with self.SessionLocal() as db:
+                settings = db.query(UserSettings).filter(UserSettings.owner_id == main.settings.owner_id).first()
+                assert settings is not None
+                settings.policy_json = json.dumps(
+                    {
+                        "qualification": {
+                            "draft_rules": {
+                                "recipient_mapping": {"mode": "warn"},
+                            }
+                        }
+                    }
+                )
+                db.commit()
+
+            sync = self.client.post("/external-feeds/nvoids/sync")
+            self.assertEqual(sync.status_code, 200, sync.text)
+
+            with self.SessionLocal() as db:
+                row = (
+                    db.query(RecruiterEmail)
+                    .filter(RecruiterEmail.owner_id == main.settings.owner_id, RecruiterEmail.source == "nvoids")
+                    .order_by(RecruiterEmail.id.asc())
+                    .first()
+                )
+                self.assertIsNotNone(row)
+                assert row is not None
+                self.assertEqual(row.state, "needs_review")
+                self.assertEqual(row.recipient_email, None)
+                self.assertEqual(row.routing_status, "missing")
+        finally:
+            main.external_feed_service.collector = original_collector
 
     def test_sync_uses_canonical_nvoids_title_and_clean_body_for_rules_fallback(self) -> None:
         class _UglyNvoidsCollector(_FakeCollector):

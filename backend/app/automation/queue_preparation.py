@@ -7,12 +7,13 @@ from urllib.parse import urlparse
 from app.ai.resume_context_attribution import RESUME_CONTEXT_MISSING, RESUME_CONTEXT_RULES_ONLY
 from app.models import RecruiterEmail, ResumeAsset, UserSettings
 from app.routing import RoutingDecision
+from app.services import policy_service
 
 
 @dataclass(frozen=True)
 class QueuePreparationDependencies:
     parse_email: Callable[[str, str], dict[str, str | int | bool]]
-    hard_filter_check: Callable[[dict[str, str | int | bool], UserSettings], tuple[bool, str]]
+    hard_filter_check: Callable[[dict[str, str | int | bool], UserSettings, Mapping[str, Any]], tuple[bool, str]]
     compute_blended_ai_score: Callable[..., tuple[float, str, str, str | None, str | None, Any]]
     policy_f2f_block: Callable[[dict[str, str | int | bool], Mapping[str, Any]], tuple[bool, str]]
     evaluate_routing_policy: Callable[..., RoutingDecision]
@@ -100,7 +101,10 @@ def prepare_candidate_for_queue(
         parsed = dict(request.parsed_overrides)
     else:
         parsed = deps.parse_email(request.subject, request.body)
-    hard_pass, hard_reason = deps.hard_filter_check(parsed, request.user_settings)
+    hard_pass, hard_reason = deps.hard_filter_check(parsed, request.user_settings, request.effective_policy)
+    warning_messages: list[str] = []
+    if hard_pass and hard_reason.startswith("warnings: "):
+        warning_messages.extend([part.strip() for part in hard_reason.removeprefix("warnings: ").split(",") if part.strip()])
     ai_score, ai_summary, ai_score_source, email_embedding_json, resume_embedding_json, semantic_diag = deps.compute_blended_ai_score(
         request.subject,
         request.body,
@@ -113,8 +117,14 @@ def prepare_candidate_for_queue(
         str(request.external_thread_id or ""),
     )
     blocked, block_reason = deps.policy_f2f_block(parsed, request.effective_policy)
-    if not hard_pass or ai_score < request.threshold or blocked:
-        auto_reject_reason = "f2f_non_texas" if blocked else (hard_reason if not hard_pass else "ai_score_too_low")
+    if not blocked and block_reason:
+        warning_messages.append(block_reason)
+    score_mode = policy_service.draft_rule_mode(request.effective_policy, "score_threshold")
+    score_blocked = score_mode == "block" and ai_score < request.threshold
+    if score_mode == "warn" and ai_score < request.threshold:
+        warning_messages.append(f"score_below_threshold:{ai_score:.2f}<{request.threshold:.2f}")
+    if not hard_pass or score_blocked or blocked:
+        auto_reject_reason = "f2f_non_texas" if blocked else (hard_reason.removeprefix("blocked: ").strip() if not hard_pass else "ai_score_too_low")
         decision_reason = block_reason if blocked else "Not qualified for auto-reply"
         skip_reason = "f2f_non_texas_blocked" if blocked else "not_qualified"
         return QueuePreparationResult(
@@ -146,7 +156,8 @@ def prepare_candidate_for_queue(
         request.snippet,
         bool(request.existing_email.routing_confirmed) if request.existing_email else False,
     )
-    if routing_decision.should_mark_failed:
+    recipient_mapping_mode = policy_service.recipient_mapping_rule_mode(request.effective_policy)
+    if routing_decision.should_mark_failed and recipient_mapping_mode == "block":
         return QueuePreparationResult(
             outcome="routing_failed",
             parsed=parsed,
@@ -167,6 +178,8 @@ def prepare_candidate_for_queue(
             draft_ai_error=None,
             draft_resume_context_status=None,
         )
+    if routing_decision.should_mark_failed and recipient_mapping_mode == "warn":
+        warning_messages.append(routing_decision.recommended_skip_reason or "missing_to_or_cc")
 
     greeting_line = deps.greeting_from_to_contact(routing_decision.to_email, request.body)
     fallback_reply = deps.build_user_fallback_draft(
@@ -214,11 +227,12 @@ def prepare_candidate_for_queue(
         draft_resume_context_status = RESUME_CONTEXT_RULES_ONLY
 
     draft_reply = prepend_nvoids_listing_line(draft_reply, request.external_thread_id)
+    hard_filter_reason = policy_service.combine_rule_messages(warning_messages)
 
     return QueuePreparationResult(
         outcome="needs_review",
         parsed=parsed,
-        hard_filter_reason=hard_reason,
+        hard_filter_reason=hard_filter_reason,
         ai_score=ai_score,
         ai_summary=ai_summary,
         ai_score_source=ai_score_source,
@@ -226,7 +240,7 @@ def prepare_candidate_for_queue(
         resume_embedding_json=resume_embedding_json,
         semantic_diag=semantic_diag,
         routing_decision=routing_decision,
-        decision_reason="Qualified and queued for manual approval",
+        decision_reason="Qualified and queued for manual approval with warnings" if warning_messages else "Qualified and queued for manual approval",
         auto_reject_reason=None,
         skip_reason=None,
         draft_reply=draft_reply,

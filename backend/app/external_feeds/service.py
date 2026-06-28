@@ -633,16 +633,19 @@ class ExternalFeedService:
         normalized = policy_service.normalize_policy(policy)
         qualification = normalized["qualification"]
         strictness = policy_service.as_str(qualification.get("location_strictness", "balanced"), "balanced")
+        f2f_blocked, f2f_reason = should_block_f2f(parsed)
         if strictness == "lenient":
-            return False, ""
-        blocked, reason = should_block_f2f(parsed)
+            f2f_blocked = False
+            f2f_reason = ""
+        blocked, reason = policy_service.should_block_non_texas_f2f(
+            parsed,
+            normalized,
+            f2f_blocked=f2f_blocked,
+            f2f_reason=f2f_reason or "",
+        )
         if blocked:
-            return True, reason or ""
-        if strictness == "strict":
-            location_text = str(parsed.get("job_location_text", "")).strip().lower()
-            if not location_text or location_text == "unknown":
-                return True, "Location is unclear under strict location policy"
-        return False, ""
+            return True, reason
+        return policy_service.should_block_unknown_location_under_strict(parsed, normalized)
 
     def _active_resume(self, db: Session, *, owner_id: str) -> ResumeAsset | None:
         return (
@@ -662,14 +665,6 @@ class ExternalFeedService:
 
     def _enqueue_needs_review_candidate(self, db: Session, *, owner_id: str, item: ExternalOpportunity) -> bool:
         recruiter_to = extract_email_address(item.recruiter_email or "")
-        if not recruiter_to:
-            logger.info(
-                "nvoids_enqueue_skip reason=no_recruiter_email external_post_id=%r role=%r raw_recruiter_email=%r",
-                item.external_post_id,
-                item.role,
-                item.recruiter_email,
-            )
-            return False
         external_message_id = f"nvoids:{item.external_post_id}"
         existing = (
             db.query(RecruiterEmail)
@@ -687,9 +682,19 @@ class ExternalFeedService:
             db.query(UserSettings).filter(UserSettings.owner_id == owner_id).first()
             or UserSettings(owner_id=owner_id)
         )
+        effective_policy = policy_service.read_policy_from_settings(settings.policy_json)
+        recipient_mapping_mode = policy_service.recipient_mapping_rule_mode(effective_policy)
+        if not recruiter_to and recipient_mapping_mode == "block":
+            logger.info(
+                "nvoids_enqueue_skip reason=no_recruiter_email external_post_id=%r role=%r raw_recruiter_email=%r",
+                item.external_post_id,
+                item.role,
+                item.recruiter_email,
+            )
+            return False
         preferred_cc_email = self._preferred_employer_cc(settings, recruiter_to=recruiter_to)
         cc_email = preferred_cc_email or self._pick_cc_from_employer_pool(db, owner_id=owner_id, exclude=recruiter_to)
-        if not cc_email:
+        if not cc_email and recipient_mapping_mode == "block":
             logger.info(
                 "nvoids_enqueue_skip reason=no_cc_pool_match external_post_id=%r recruiter_to=%r",
                 item.external_post_id,
@@ -706,26 +711,30 @@ class ExternalFeedService:
             ai_input_source = detail.jd_body_source or ""
         active_resume = self._active_resume(db, owner_id=owner_id)
         enabled_resumes = self._enabled_resumes(db, owner_id=owner_id)
-        effective_policy = policy_service.read_policy_from_settings(settings.policy_json)
         threshold = policy_service.policy_threshold(settings.qualification_threshold, effective_policy)
-        routing_reason = (
-            "External feed recruiter import with preferred employer CC from Execution Control."
-            if preferred_cc_email
-            else "External feed recruiter import with employer pool cc."
-        )
+        routing_safe = bool(recruiter_to and cc_email)
+        if routing_safe:
+            routing_reason = (
+                "External feed recruiter import with preferred employer CC from Execution Control."
+                if preferred_cc_email
+                else "External feed recruiter import with employer pool cc."
+            )
+        else:
+            routing_reason = "Missing recruiter To or employer CC from external feed import."
+        sender_identity = recruiter_to or extract_email_address(item.recruiter_email or "") or item.recruiter_name or "Nvoids Recruiter"
         routing_decision = RoutingDecision(
-            to_email=recruiter_to,
+            to_email=recruiter_to or None,
             cc_email=cc_email,
-            status="safe",
-            confidence=0.85,
+            status="safe" if routing_safe else "missing",
+            confidence=0.85 if routing_safe else 0.0,
             reason=routing_reason,
             evidence=[],
             candidates=[],
-            recommended_state="needs_review",
-            recommended_skip_reason=None,
-            should_mark_failed=False,
-            is_sendable_candidate=True,
-            needs_manual_confirmation=False,
+            recommended_state="failed" if not routing_safe else "needs_review",
+            recommended_skip_reason="missing_to_or_cc" if not routing_safe else None,
+            should_mark_failed=not routing_safe,
+            is_sendable_candidate=routing_safe,
+            needs_manual_confirmation=not routing_safe,
         )
         parsed, parser_details = parse_email_with_details(
             subject,
@@ -764,7 +773,7 @@ class ExternalFeedService:
             QueuePreparationRequest(
                 db=db,
                 owner_id=owner_id,
-                sender=recruiter_to,
+                sender=sender_identity,
                 subject=subject,
                 body=body,
                 snippet=body,
@@ -828,7 +837,7 @@ class ExternalFeedService:
             return False
         email = RecruiterEmail(
             owner_id=owner_id,
-            sender=recruiter_to,
+            sender=sender_identity,
             subject=subject,
             body=body,
             role=str(item.role or preparation.parsed.get("role", subject)),
@@ -876,7 +885,7 @@ class ExternalFeedService:
             external_message_id=external_message_id,
             external_thread_id=item.source_url or external_message_id,
             gmail_received_at=item.posted_at or datetime.now(UTC),
-            recipient_email=recruiter_to,
+            recipient_email=recruiter_to or None,
             cc_email=cc_email,
             routing_status=routing_decision.status,
             routing_confidence=routing_decision.confidence,

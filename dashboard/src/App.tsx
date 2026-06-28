@@ -179,10 +179,140 @@ type DynamicPolicy = {
     location_strictness: 'lenient' | 'balanced' | 'strict'
     score_threshold_override_enabled: boolean
     score_threshold_override_value: number
+    draft_rules: DraftRules
   }
 }
 
-type PolicyProfileName = 'Aggressive' | 'Balanced' | 'Strict'
+export type RuleMode = 'ignore' | 'warn' | 'block'
+
+export type DraftRule = {
+  mode: RuleMode
+}
+
+export type AcceptedLocationRule = DraftRule & {
+  locations?: string[]
+}
+
+export type MinimumSalaryRule = DraftRule & {
+  value?: number | null
+}
+
+export type MustHaveSkillsRule = DraftRule & {
+  skills?: string[]
+}
+
+export type ScoreThresholdRule = DraftRule & {
+  value?: number | null
+}
+
+export type DraftRules = {
+  recruiter_like_gmail: DraftRule
+  accepted_location: AcceptedLocationRule
+  minimum_salary: MinimumSalaryRule
+  must_have_skills: MustHaveSkillsRule
+  score_threshold: ScoreThresholdRule
+  f2f_non_texas: DraftRule
+  unknown_location: DraftRule
+  recipient_mapping: DraftRule
+}
+
+type PolicyProfileName = 'Flexible Drafting' | 'Balanced' | 'Strict'
+
+export const defaultDraftRules = (): DraftRules => ({
+  recruiter_like_gmail: { mode: 'block' },
+  accepted_location: { mode: 'block', locations: [] },
+  minimum_salary: { mode: 'block', value: null },
+  must_have_skills: { mode: 'block', skills: [] },
+  score_threshold: { mode: 'block', value: null },
+  f2f_non_texas: { mode: 'block' },
+  unknown_location: { mode: 'block' },
+  recipient_mapping: { mode: 'block' },
+})
+
+export const buildDefaultPolicy = (): DynamicPolicy => ({
+  version: 1,
+  query: {
+    force_unread: true,
+    include_labels: [],
+    exclude_labels: [],
+    date_mode: 'custom',
+  },
+  run: {
+    run_mode: 'all',
+    batch_limit: 20,
+    dry_run: false,
+  },
+  qualification: {
+    location_strictness: 'balanced',
+    score_threshold_override_enabled: false,
+    score_threshold_override_value: 0.6,
+    draft_rules: defaultDraftRules(),
+  },
+})
+
+type PolicySeed = Pick<SettingsPayload, 'accepted_locations' | 'min_salary' | 'must_have_skills' | 'qualification_threshold'> | undefined
+
+export function normalizeDynamicPolicy(policy?: DynamicPolicy | null, seed?: PolicySeed): DynamicPolicy {
+  const defaultPolicy = buildDefaultPolicy()
+  const qualification = policy?.qualification
+  const ruleSeed = seed ?? {
+    accepted_locations: [],
+    min_salary: null,
+    must_have_skills: [],
+    qualification_threshold: 0.6,
+  }
+  const rawQualification = (qualification ?? {}) as Record<string, unknown>
+  const legacyDraftFilters = (rawQualification.draft_filters ?? {}) as Record<string, boolean>
+  const rawDraftRules = (rawQualification.draft_rules ?? {}) as Record<string, unknown>
+  const legacyMode = (key: string): RuleMode => (legacyDraftFilters[key] === false ? 'warn' : 'block')
+  const normalizedDraftRules: DraftRules = {
+    recruiter_like_gmail: {
+      mode: ((rawDraftRules.recruiter_like_gmail as DraftRule | undefined)?.mode ?? legacyMode('recruiter_like_filter_enabled')) as RuleMode,
+    },
+    accepted_location: {
+      mode: ((rawDraftRules.accepted_location as AcceptedLocationRule | undefined)?.mode ?? legacyMode('accepted_location_filter_enabled')) as RuleMode,
+      locations: (rawDraftRules.accepted_location as AcceptedLocationRule | undefined)?.locations ?? ruleSeed.accepted_locations ?? [],
+    },
+    minimum_salary: {
+      mode: ((rawDraftRules.minimum_salary as MinimumSalaryRule | undefined)?.mode ?? legacyMode('minimum_salary_filter_enabled')) as RuleMode,
+      value: (rawDraftRules.minimum_salary as MinimumSalaryRule | undefined)?.value ?? ruleSeed.min_salary ?? null,
+    },
+    must_have_skills: {
+      mode: ((rawDraftRules.must_have_skills as MustHaveSkillsRule | undefined)?.mode ?? legacyMode('must_have_skills_filter_enabled')) as RuleMode,
+      skills: (rawDraftRules.must_have_skills as MustHaveSkillsRule | undefined)?.skills ?? ruleSeed.must_have_skills ?? [],
+    },
+    score_threshold: {
+      mode: ((rawDraftRules.score_threshold as ScoreThresholdRule | undefined)?.mode ?? legacyMode('score_threshold_filter_enabled')) as RuleMode,
+      value: (rawDraftRules.score_threshold as ScoreThresholdRule | undefined)?.value ?? ruleSeed.qualification_threshold ?? 0.6,
+    },
+    f2f_non_texas: {
+      mode: ((rawDraftRules.f2f_non_texas as DraftRule | undefined)?.mode ?? legacyMode('f2f_non_texas_filter_enabled')) as RuleMode,
+    },
+    unknown_location: {
+      mode: ((rawDraftRules.unknown_location as DraftRule | undefined)?.mode ?? legacyMode('strict_unknown_location_filter_enabled')) as RuleMode,
+    },
+    recipient_mapping: {
+      mode: ((rawDraftRules.recipient_mapping as DraftRule | undefined)?.mode ?? legacyMode('require_to_and_cc_before_draft_enabled')) as RuleMode,
+    },
+  }
+  return {
+    ...defaultPolicy,
+    ...(policy ?? {}),
+    query: {
+      ...defaultPolicy.query,
+      ...(policy?.query ?? {}),
+    },
+    run: {
+      ...defaultPolicy.run,
+      ...(policy?.run ?? {}),
+    },
+    qualification: {
+      ...defaultPolicy.qualification,
+      ...(qualification ?? {}),
+      draft_rules: normalizedDraftRules,
+    },
+  }
+}
 
 type AutomationRunResponse = {
   status: string
@@ -996,49 +1126,70 @@ function App() {
   const PAGE_BUCKET_LIMIT = 25
   const RECENT_RUNS_LIMIT = 100
   const apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
-  const defaultPolicy: DynamicPolicy = {
-    version: 1,
-    query: {
-      force_unread: true,
-      include_labels: [],
-      exclude_labels: [],
-      date_mode: 'custom',
-    },
-    run: {
-      run_mode: 'all',
-      batch_limit: 20,
-      dry_run: false,
-    },
-    qualification: {
-      location_strictness: 'balanced',
-      score_threshold_override_enabled: false,
-      score_threshold_override_value: 0.6,
-    },
-  }
+  const defaultPolicy: DynamicPolicy = buildDefaultPolicy()
   const policyProfiles: Record<PolicyProfileName, DynamicPolicy> = {
-    Aggressive: {
-      version: 1,
+    'Flexible Drafting': {
+      version: 2,
       query: { force_unread: true, include_labels: [], exclude_labels: [], date_mode: 'any' },
       run: { run_mode: 'all', batch_limit: 100, dry_run: false },
       qualification: {
         location_strictness: 'lenient',
         score_threshold_override_enabled: true,
         score_threshold_override_value: 0.5,
+        draft_rules: {
+          recruiter_like_gmail: { mode: 'warn' },
+          accepted_location: { mode: 'warn', locations: [] },
+          minimum_salary: { mode: 'ignore', value: null },
+          must_have_skills: { mode: 'warn', skills: [] },
+          score_threshold: { mode: 'warn', value: 0.5 },
+          f2f_non_texas: { mode: 'warn' },
+          unknown_location: { mode: 'warn' },
+          recipient_mapping: { mode: 'warn' },
+        },
       },
     },
-    Balanced: defaultPolicy,
+    Balanced: {
+      version: 2,
+      query: { force_unread: true, include_labels: [], exclude_labels: [], date_mode: 'custom' },
+      run: { run_mode: 'all', batch_limit: 20, dry_run: false },
+      qualification: {
+        location_strictness: 'balanced',
+        score_threshold_override_enabled: false,
+        score_threshold_override_value: 0.6,
+        draft_rules: {
+          recruiter_like_gmail: { mode: 'block' },
+          accepted_location: { mode: 'warn', locations: [] },
+          minimum_salary: { mode: 'warn', value: null },
+          must_have_skills: { mode: 'warn', skills: [] },
+          score_threshold: { mode: 'warn', value: 0.6 },
+          f2f_non_texas: { mode: 'block' },
+          unknown_location: { mode: 'warn' },
+          recipient_mapping: { mode: 'block' },
+        },
+      },
+    },
     Strict: {
-      version: 1,
+      version: 2,
       query: { force_unread: true, include_labels: [], exclude_labels: [], date_mode: 'custom' },
       run: { run_mode: 'all', batch_limit: 10, dry_run: false },
       qualification: {
         location_strictness: 'strict',
         score_threshold_override_enabled: true,
         score_threshold_override_value: 0.75,
+        draft_rules: {
+          recruiter_like_gmail: { mode: 'block' },
+          accepted_location: { mode: 'block', locations: [] },
+          minimum_salary: { mode: 'block', value: null },
+          must_have_skills: { mode: 'block', skills: [] },
+          score_threshold: { mode: 'block', value: 0.75 },
+          f2f_non_texas: { mode: 'block' },
+          unknown_location: { mode: 'block' },
+          recipient_mapping: { mode: 'block' },
+        },
       },
     },
   }
-  const profileNames: PolicyProfileName[] = ['Aggressive', 'Balanced', 'Strict']
+  const profileNames: PolicyProfileName[] = ['Flexible Drafting', 'Balanced', 'Strict']
   const [status, setStatus] = useState<GmailStatus | null>(null)
   const [aiStatus, setAiStatus] = useState<AiStatus | null>(null)
   const [telegramStatus, setTelegramStatus] = useState<TelegramStatus | null>(null)
@@ -1180,7 +1331,121 @@ function App() {
     },
   })
 
-  const currentPolicy: DynamicPolicy = settings.policy ?? defaultPolicy
+  const currentPolicy: DynamicPolicy = normalizeDynamicPolicy(settings.policy ?? defaultPolicy, settings)
+  const draftRules = currentPolicy.qualification.draft_rules
+  const applyPolicyProfile = (profileName: PolicyProfileName) => {
+    const profilePolicy = normalizeDynamicPolicy(policyProfiles[profileName], settings)
+    setSettings({
+      ...settings,
+      accepted_locations: profilePolicy.qualification.draft_rules.accepted_location.locations ?? [],
+      min_salary: profilePolicy.qualification.draft_rules.minimum_salary.value ?? null,
+      must_have_skills: profilePolicy.qualification.draft_rules.must_have_skills.skills ?? [],
+      qualification_threshold: profilePolicy.qualification.draft_rules.score_threshold.value ?? 0.6,
+      policy: profilePolicy,
+    })
+    setLastAppliedProfile(profileName)
+  }
+  const updateRuleMode = (key: keyof DraftRules, mode: RuleMode) => {
+    setSettings({
+      ...settings,
+      policy: {
+        ...currentPolicy,
+        qualification: {
+          ...currentPolicy.qualification,
+          draft_rules: {
+            ...draftRules,
+            [key]: {
+              ...draftRules[key],
+              mode,
+            },
+          },
+        },
+      },
+    })
+  }
+  const updateRuleValue = (key: 'accepted_location' | 'minimum_salary' | 'must_have_skills' | 'score_threshold', value: string) => {
+    if (key === 'accepted_location') {
+      const locations = value.split(',').map((part) => part.trim()).filter(Boolean)
+      setSettings({
+        ...settings,
+        accepted_locations: locations,
+        policy: {
+          ...currentPolicy,
+          qualification: {
+            ...currentPolicy.qualification,
+            draft_rules: {
+              ...draftRules,
+              accepted_location: {
+                ...draftRules.accepted_location,
+                locations,
+              },
+            },
+          },
+        },
+      })
+      return
+    }
+    if (key === 'minimum_salary') {
+      const nextValue = value.trim() === '' ? null : Number(value)
+      setSettings({
+        ...settings,
+        min_salary: Number.isNaN(nextValue as number) ? null : nextValue,
+        policy: {
+          ...currentPolicy,
+          qualification: {
+            ...currentPolicy.qualification,
+            draft_rules: {
+              ...draftRules,
+              minimum_salary: {
+                ...draftRules.minimum_salary,
+                value: Number.isNaN(nextValue as number) ? null : nextValue,
+              },
+            },
+          },
+        },
+      })
+      return
+    }
+    if (key === 'must_have_skills') {
+      const skills = value.split(',').map((part) => part.trim()).filter(Boolean)
+      setSettings({
+        ...settings,
+        must_have_skills: skills,
+        policy: {
+          ...currentPolicy,
+          qualification: {
+            ...currentPolicy.qualification,
+            draft_rules: {
+              ...draftRules,
+              must_have_skills: {
+                ...draftRules.must_have_skills,
+                skills,
+              },
+            },
+          },
+        },
+      })
+      return
+    }
+    const nextValue = value.trim() === '' ? null : Number(value)
+    setSettings({
+      ...settings,
+      qualification_threshold: Number.isNaN(nextValue as number) || nextValue == null ? settings.qualification_threshold : nextValue,
+      policy: {
+        ...currentPolicy,
+        qualification: {
+          ...currentPolicy.qualification,
+          draft_rules: {
+            ...draftRules,
+            score_threshold: {
+              ...draftRules.score_threshold,
+              value: Number.isNaN(nextValue as number) ? null : nextValue,
+            },
+          },
+        },
+      },
+    })
+  }
   const detectProfileFromPolicy = (policy: DynamicPolicy): PolicyProfileName | null => {
     for (const profileName of profileNames) {
       if (JSON.stringify(policyProfiles[profileName]) === JSON.stringify(policy)) return profileName
@@ -1252,7 +1517,7 @@ function App() {
       draft_text_size: normalizeDraftTextSize(payload.draft_text_size),
       preferred_employer_cc_email: payload.preferred_employer_cc_email ?? '',
       resume_display_name: payload.resume_display_name ?? '',
-      policy: payload.policy ?? defaultPolicy,
+      policy: normalizeDynamicPolicy(payload.policy ?? defaultPolicy, payload),
     }
     setSettings(normalized)
     if (payload.policy_profile_selected && profileNames.includes(payload.policy_profile_selected as PolicyProfileName)) {
@@ -2158,14 +2423,45 @@ function App() {
       setSkillDraft('')
       return
     }
-    setSettings({ ...settings, must_have_skills: [...settings.must_have_skills, skill] })
+    const nextSkills = [...settings.must_have_skills, skill]
+    setSettings({
+      ...settings,
+      must_have_skills: nextSkills,
+      policy: {
+        ...currentPolicy,
+        qualification: {
+          ...currentPolicy.qualification,
+          draft_rules: {
+            ...draftRules,
+            must_have_skills: {
+              ...draftRules.must_have_skills,
+              skills: nextSkills,
+            },
+          },
+        },
+      },
+    })
     setSkillDraft('')
   }
 
   const removeMustHaveSkill = (skillToRemove: string) => {
+    const nextSkills = settings.must_have_skills.filter((s) => s.toLowerCase() !== skillToRemove.toLowerCase())
     setSettings({
       ...settings,
-      must_have_skills: settings.must_have_skills.filter((s) => s.toLowerCase() !== skillToRemove.toLowerCase()),
+      must_have_skills: nextSkills,
+      policy: {
+        ...currentPolicy,
+        qualification: {
+          ...currentPolicy.qualification,
+          draft_rules: {
+            ...draftRules,
+            must_have_skills: {
+              ...draftRules.must_have_skills,
+              skills: nextSkills,
+            },
+          },
+        },
+      },
     })
   }
 
@@ -2531,7 +2827,7 @@ function App() {
                       max={1}
                       step={0.01}
                       value={settings.qualification_threshold}
-                      onChange={(e) => setSettings({ ...settings, qualification_threshold: Number(e.target.value) })}
+                      onChange={(e) => updateRuleValue('score_threshold', e.target.value)}
                     />
                   </label>
                   <label>
@@ -2650,11 +2946,7 @@ function App() {
                   </label>
                   <button
                     type="button"
-                    onClick={() => {
-                      const profilePolicy = policyProfiles[selectedProfileToApply]
-                      setSettings({ ...settings, policy: profilePolicy })
-                      setLastAppliedProfile(selectedProfileToApply)
-                    }}
+                    onClick={() => applyPolicyProfile(selectedProfileToApply)}
                   >
                     Apply Profile
                   </button>
@@ -2718,6 +3010,151 @@ function App() {
                       </label>
                     </>
                   ) : null}
+                </div>
+              </section>
+
+              <section className="card">
+                <h2>Draft Qualification Rules</h2>
+                <div className="stack">
+                  <label>
+                    Recruiter-like Gmail rule
+                    <select
+                      value={draftRules.recruiter_like_gmail.mode}
+                      onChange={(e) => updateRuleMode('recruiter_like_gmail', e.target.value as RuleMode)}
+                    >
+                      <option value="ignore">Ignore</option>
+                      <option value="warn">Warn Only</option>
+                      <option value="block">Block Draft</option>
+                    </select>
+                  </label>
+                  <p className="subtle">Controls what happens when a Gmail message does not look recruiter or staffing related.</p>
+
+                  <label>
+                    Accepted location rule
+                    <select
+                      value={draftRules.accepted_location.mode}
+                      onChange={(e) => updateRuleMode('accepted_location', e.target.value as RuleMode)}
+                    >
+                      <option value="ignore">Ignore</option>
+                      <option value="warn">Warn Only</option>
+                      <option value="block">Block Draft</option>
+                    </select>
+                  </label>
+                  <label>
+                    Accepted locations
+                    <input
+                      value={(draftRules.accepted_location.locations ?? settings.accepted_locations).join(', ')}
+                      onChange={(e) => updateRuleValue('accepted_location', e.target.value)}
+                      placeholder="texas, remote"
+                    />
+                  </label>
+                  <p className="subtle">Uses your accepted location list and can ignore, warn, or block when parsed locations do not match.</p>
+
+                  <label>
+                    Minimum salary rule
+                    <select
+                      value={draftRules.minimum_salary.mode}
+                      onChange={(e) => updateRuleMode('minimum_salary', e.target.value as RuleMode)}
+                    >
+                      <option value="ignore">Ignore</option>
+                      <option value="warn">Warn Only</option>
+                      <option value="block">Block Draft</option>
+                    </select>
+                  </label>
+                  <label>
+                    Minimum salary or rate
+                    <input
+                      type="number"
+                      value={draftRules.minimum_salary.value ?? settings.min_salary ?? ''}
+                      onChange={(e) => updateRuleValue('minimum_salary', e.target.value)}
+                      placeholder="60"
+                    />
+                  </label>
+                  <p className="subtle">Controls whether low rates are ignored, surfaced as warnings, or block draft creation.</p>
+
+                  <label>
+                    Must-have skills rule
+                    <select
+                      value={draftRules.must_have_skills.mode}
+                      onChange={(e) => updateRuleMode('must_have_skills', e.target.value as RuleMode)}
+                    >
+                      <option value="ignore">Ignore</option>
+                      <option value="warn">Warn Only</option>
+                      <option value="block">Block Draft</option>
+                    </select>
+                  </label>
+                  <label>
+                    Must-have skills
+                    <input
+                      value={(draftRules.must_have_skills.skills ?? settings.must_have_skills).join(', ')}
+                      onChange={(e) => updateRuleValue('must_have_skills', e.target.value)}
+                      placeholder="java, spring"
+                    />
+                  </label>
+                  <p className="subtle">Controls whether missing required skills are ignored, shown as warnings, or block drafting.</p>
+
+                  <label>
+                    Score threshold rule
+                    <select
+                      value={draftRules.score_threshold.mode}
+                      onChange={(e) => updateRuleMode('score_threshold', e.target.value as RuleMode)}
+                    >
+                      <option value="ignore">Ignore</option>
+                      <option value="warn">Warn Only</option>
+                      <option value="block">Block Draft</option>
+                    </select>
+                  </label>
+                  <label>
+                    Score threshold value
+                    <input
+                      type="number"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      value={draftRules.score_threshold.value ?? settings.qualification_threshold}
+                      onChange={(e) => updateRuleValue('score_threshold', e.target.value)}
+                    />
+                  </label>
+                  <p className="subtle">Low scores can be ignored, surfaced as warnings, or block drafting.</p>
+
+                  <label>
+                    F2F non-Texas rule
+                    <select
+                      value={draftRules.f2f_non_texas.mode}
+                      onChange={(e) => updateRuleMode('f2f_non_texas', e.target.value as RuleMode)}
+                    >
+                      <option value="ignore">Ignore</option>
+                      <option value="warn">Warn Only</option>
+                      <option value="block">Block Draft</option>
+                    </select>
+                  </label>
+                  <p className="subtle">Controls how face-to-face roles outside Texas are handled.</p>
+
+                  <label>
+                    Unknown location rule
+                    <select
+                      value={draftRules.unknown_location.mode}
+                      onChange={(e) => updateRuleMode('unknown_location', e.target.value as RuleMode)}
+                    >
+                      <option value="ignore">Ignore</option>
+                      <option value="warn">Warn Only</option>
+                      <option value="block">Block Draft</option>
+                    </select>
+                  </label>
+                  <p className="subtle">When strict location policy is active, unclear locations can be ignored, warned, or blocked.</p>
+
+                  <label>
+                    Recipient mapping rule
+                    <select
+                      value={draftRules.recipient_mapping.mode}
+                      onChange={(e) => updateRuleMode('recipient_mapping', e.target.value as RuleMode)}
+                    >
+                      <option value="ignore">Ignore</option>
+                      <option value="warn">Warn Only</option>
+                      <option value="block">Block Draft</option>
+                    </select>
+                  </label>
+                  <p className="subtle">If set to Warn Only or Ignore, drafts can still reach Needs Review with missing recipients, but approval-time send safety still blocks sending.</p>
                 </div>
               </section>
 
