@@ -51,13 +51,13 @@ def _parse_json_object(content: str) -> dict[str, object]:
     raise RuntimeError("DeepSeek returned malformed JSON content")
 
 
-def deepseek_chat_completion(system_prompt: str, user_prompt: str) -> str:
+def deepseek_chat_completion(system_prompt: str, user_prompt: str, *, model_name: str | None = None) -> str:
     if not settings.deepseek_api_key:
         raise RuntimeError("DeepSeek API key is missing")
 
     client = _build_client()
     response = client.chat.completions.create(
-        model=settings.deepseek_model_fast or "deepseek-chat",
+        model=model_name or settings.deepseek_model_fast or "deepseek-chat",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},

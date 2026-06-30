@@ -27,7 +27,7 @@ from app.ai.resume_context_attribution import (
     RESUME_CONTEXT_RULES_ONLY,
 )
 from app.ai.resume_context import extract_resume_context
-from app.cold_call import ColdCallContext, generate_cold_call_script
+from app.cold_call import ColdCallContext, find_allowed_cold_call_skills, generate_cold_call_script
 from app.automation import (
     RunOrchestrator,
     RunOrchestratorDependencies,
@@ -89,6 +89,7 @@ from app.phase0 import (
 from app.routing import RoutingDecision
 from app.skill_taxonomy import (
     clear_skill_taxonomy_cache,
+    extract_skills_text,
     load_skill_taxonomy,
     normalize_skill_token,
     normalize_skills_text,
@@ -1144,6 +1145,14 @@ def _set_legacy_current_resume(
 
 def _normalize_resume_skills_text(raw: str | None) -> str:
     return normalize_skills_text(raw, preserve_unknown=True)
+
+
+def _resume_skills_text_for_cold_call(resume: ResumeAsset | None, resume_text: str) -> str:
+    stored = str(getattr(resume, "skills_text", "") or "").strip()
+    if stored and stored.lower() != "none_detected":
+        return stored
+    derived = extract_skills_text(resume_text)
+    return "" if derived == "none_detected" else derived
 
 
 def _refresh_resume_embedding(resume: ResumeAsset) -> None:
@@ -3216,6 +3225,29 @@ def delete_recruiter_opportunity(
     )
 
 
+def _requirement_text_for_opportunity(db: Session, row: RecruiterOpportunity) -> str:
+    parts: list[str] = []
+    if row.source_email_id:
+        email = (
+            db.query(RecruiterEmail)
+            .filter(RecruiterEmail.owner_id == settings.owner_id, RecruiterEmail.id == row.source_email_id)
+            .first()
+        )
+        if email:
+            parts.extend([email.subject or "", email.body or "", email.skills_text or ""])
+    elif row.external_opportunity_id:
+        external = (
+            db.query(ExternalOpportunity)
+            .filter(ExternalOpportunity.owner_id == settings.owner_id, ExternalOpportunity.id == row.external_opportunity_id)
+            .first()
+        )
+        if external:
+            parts.extend([external.role or "", external.skills_text or "", external.raw_body or ""])
+    if not any(part.strip() for part in parts):
+        parts.extend([row.job_title or "", row.email_subject or "", row.extracted_skills or "", row.evidence or ""])
+    return "\n".join(part for part in parts if part and part.strip())
+
+
 @app.post("/recruiter-opportunities/{opportunity_id}/generate-cold-call-script", response_model=RecruiterOpportunityResponse)
 def generate_recruiter_opportunity_cold_call_script(
     opportunity_id: int,
@@ -3236,6 +3268,14 @@ def generate_recruiter_opportunity_cold_call_script(
             resume_text = extract_resume_context(resume.file_path, resume.file_name)
         except Exception:
             resume_text = ""
+    resume_skills_text = _resume_skills_text_for_cold_call(resume, resume_text)
+    requirement_text = _requirement_text_for_opportunity(db, row)
+    allowed_matches = find_allowed_cold_call_skills(
+        requirement_text=requirement_text,
+        resume_skills_text=resume_skills_text,
+        resume_text=resume_text,
+        max_skills=2,
+    )
     recruiter = (
         db.query(RecruiterNumber)
         .filter(RecruiterNumber.owner_id == settings.owner_id, RecruiterNumber.id == row.recruiter_number_id)
@@ -3247,7 +3287,8 @@ def generate_recruiter_opportunity_cold_call_script(
         recruiter_email=((recruiter.recruiter_email if recruiter else "") or row.email_sender or ""),
         job_title=row.job_title or row.email_subject or "this role",
         location=row.location or "unknown",
-        skills=row.extracted_skills or "",
+        allowed_skill_highlights=", ".join(match.display for match in allowed_matches),
+        allowed_skill_canonicals=tuple(match.canonical for match in allowed_matches),
         evidence=row.evidence or "",
     )
     row.cold_call_script = generate_cold_call_script(
