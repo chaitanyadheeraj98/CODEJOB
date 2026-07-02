@@ -463,6 +463,69 @@ def ensure_sqlite_phase0_columns() -> None:
         )
         conn.exec_driver_sql(
             """
+            CREATE TABLE IF NOT EXISTS recent_runs (
+                id INTEGER PRIMARY KEY,
+                owner_id VARCHAR(100),
+                run_source VARCHAR(40),
+                run_key VARCHAR(160),
+                sync_batch_id VARCHAR(100),
+                external_scrape_run_id INTEGER,
+                status VARCHAR(40) DEFAULT 'ok',
+                detail TEXT DEFAULT '',
+                matched_count INTEGER,
+                queued_count INTEGER,
+                skipped_count INTEGER DEFAULT 0,
+                failed_count INTEGER DEFAULT 0,
+                skipped_item_count INTEGER DEFAULT 0,
+                created_at DATETIME,
+                updated_at DATETIME
+            )
+            """
+        )
+        conn.exec_driver_sql(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_recent_runs_run_key ON recent_runs (run_key)"
+        )
+        conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_recent_runs_owner_id ON recent_runs (owner_id)"
+        )
+        conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_recent_runs_run_source ON recent_runs (run_source)"
+        )
+        conn.exec_driver_sql(
+            """
+            CREATE TABLE IF NOT EXISTS recent_run_skipped_items (
+                id INTEGER PRIMARY KEY,
+                owner_id VARCHAR(100),
+                run_source VARCHAR(40),
+                run_key VARCHAR(160),
+                source_type VARCHAR(40) DEFAULT 'gmail',
+                outcome VARCHAR(40) DEFAULT 'skipped',
+                reason_code VARCHAR(120) DEFAULT '',
+                reason_detail TEXT DEFAULT '',
+                external_message_id VARCHAR(255),
+                external_thread_id VARCHAR(1200),
+                candidate_email_id INTEGER,
+                external_opportunity_id INTEGER,
+                title_or_subject VARCHAR(500) DEFAULT '',
+                sender VARCHAR(255) DEFAULT '',
+                location VARCHAR(255),
+                source_url VARCHAR(1200),
+                gmail_message_url VARCHAR(1200),
+                created_at DATETIME
+            )
+            """
+        )
+        conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_recent_run_skipped_items_owner_id ON recent_run_skipped_items (owner_id)"
+        )
+        conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_recent_run_skipped_items_run_key ON recent_run_skipped_items (run_key)"
+        )
+        conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_recent_run_skipped_items_reason_code ON recent_run_skipped_items (reason_code)"
+        )
+        conn.exec_driver_sql(
+            """
             CREATE TABLE IF NOT EXISTS premium_number_leads (
                 id INTEGER PRIMARY KEY,
                 owner_id VARCHAR(100),

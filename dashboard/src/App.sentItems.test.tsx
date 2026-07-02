@@ -69,6 +69,8 @@ function stubAppFetch(candidate: Record<string, unknown>, sentDetails: Record<st
       if (url.endsWith('/settings/resumes')) return makeResponse([])
       if (url.endsWith('/settings/attachments')) return makeResponse([])
       if (url.endsWith('/settings/skills/pending')) return makeResponse([])
+      if (url.includes('/recent-runs/')) return makeResponse({ items: [], next_cursor: null, has_next: false })
+      if (url.includes('/recent-runs')) return makeResponse({ items: [], next_cursor: null, has_next: false })
       if (url.includes('/candidates/99/sent-details')) return makeResponse(sentDetails)
       if (url.includes('/candidates?')) {
         if (url.includes('state=approved_sent')) return makeResponse({ items: [candidate], next_cursor: null, has_next: false })

@@ -406,6 +406,7 @@ class AIStatusResponse(BaseModel):
 
 class GmailSyncResponse(BaseModel):
     sync_batch_id: str
+    run_key: str | None = None
     imported_count: int
     skipped_count: int
     error_count: int
@@ -604,6 +605,7 @@ class RecruiterOpportunityDeleteResponse(BaseModel):
 
 class ExternalFeedSyncResponse(BaseModel):
     source_type: str
+    run_key: str | None = None
     fetched_count: int
     created_count: int
     deduped_count: int
@@ -627,6 +629,7 @@ class ExternalScrapeRunResponse(BaseModel):
 class AutomationRunResponse(BaseModel):
     status: str
     detail: str
+    run_key: str | None = None
     email_id: int | None = None
     gmail_message_url: str | None = None
     decision_reason: str | None = None
@@ -643,6 +646,53 @@ class AutomationRunResponse(BaseModel):
     auto_send_failed_count: int | None = None
     retry_promoted_count: int | None = None
     retry_skipped_count: int | None = None
+
+
+class RecentRunItemResponse(BaseModel):
+    id: int
+    run_key: str
+    run_source: str
+    source_type: str
+    outcome: str
+    reason_code: str
+    reason_detail: str
+    external_message_id: str | None = None
+    external_thread_id: str | None = None
+    candidate_email_id: int | None = None
+    external_opportunity_id: int | None = None
+    title_or_subject: str
+    sender: str
+    location: str | None = None
+    source_url: str | None = None
+    gmail_message_url: str | None = None
+    created_at: datetime
+
+
+class RecentRunItemListResponse(BaseModel):
+    items: list[RecentRunItemResponse]
+    next_cursor: int | None
+    has_next: bool
+
+
+class RecentRunResponse(BaseModel):
+    run_key: str
+    run_source: str
+    status: str
+    detail: str
+    matched_count: int | None = None
+    queued_count: int | None = None
+    skipped_count: int | None = None
+    failed_count: int | None = None
+    skipped_item_count: int = 0
+    sync_batch_id: str | None = None
+    external_scrape_run_id: int | None = None
+    created_at: datetime
+
+
+class RecentRunListResponse(BaseModel):
+    items: list[RecentRunResponse]
+    next_cursor: int | None = None
+    has_next: bool = False
 
 
 class AutomationRunRequest(BaseModel):

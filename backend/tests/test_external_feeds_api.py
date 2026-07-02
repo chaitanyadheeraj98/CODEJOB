@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+from datetime import datetime
 from types import SimpleNamespace
 
 import httpx
@@ -20,7 +21,7 @@ from app.external_feeds.parser import parse_nvoids_detail
 from app.external_feeds import service as external_feed_service_module
 from app.external_feeds.service import ExternalFeedService
 from app.external_feeds.models import ExternalFeedSource, ExternalOpportunity
-from app.models import AttachmentAsset, CustomSkillTaxonomyEntry, EmployerNumber, NumberReviewQueue, RecruiterEmail, RecruiterNumber, RecruiterOpportunity, ResumeAsset, UserSettings
+from app.models import AttachmentAsset, CustomSkillTaxonomyEntry, EmployerNumber, NumberReviewQueue, RecentRun, RecentRunSkippedItem, RecruiterEmail, RecruiterNumber, RecruiterOpportunity, ResumeAsset, UserSettings
 
 
 class _FakeCollector:
@@ -264,6 +265,7 @@ class ExternalFeedsApiTests(unittest.TestCase):
         self.assertEqual(sync.status_code, 200, sync.text)
         payload = sync.json()
         self.assertEqual(payload["source_type"], "nvoids")
+        self.assertTrue(str(payload["run_key"]).startswith("nvoids_sync:"))
         self.assertGreaterEqual(payload["fetched_count"], 2)
         self.assertEqual(payload["skipped_location_count"], 0)
         with self.SessionLocal() as db:
@@ -287,6 +289,99 @@ class ExternalFeedsApiTests(unittest.TestCase):
         run_items = runs.json()
         self.assertGreaterEqual(len(run_items), 1)
         self.assertEqual(run_items[0]["source_type"], "nvoids")
+
+    def test_recent_runs_list_returns_gmail_and_nvoids_runs_in_descending_order(self) -> None:
+        with self.SessionLocal() as db:
+            older = RecentRun(
+                owner_id=main.settings.owner_id,
+                run_source="gmail_sync",
+                run_key="gmail_sync:older-batch",
+                status="skipped",
+                detail="Older Gmail run",
+                skipped_count=1,
+                created_at=datetime.fromisoformat("2026-06-30T20:00:00+00:00"),
+            )
+            newer = RecentRun(
+                owner_id=main.settings.owner_id,
+                run_source="nvoids_sync",
+                run_key="nvoids_sync:77",
+                status="ok",
+                detail="Newer Nvoids run",
+                skipped_count=0,
+                created_at=datetime.fromisoformat("2026-06-30T21:00:00+00:00"),
+            )
+            db.add_all([older, newer])
+            db.commit()
+
+        res = self.client.get("/recent-runs?limit=10")
+        self.assertEqual(res.status_code, 200, res.text)
+        payload = res.json()
+        self.assertEqual([item["run_key"] for item in payload["items"][:2]], ["nvoids_sync:77", "gmail_sync:older-batch"])
+        self.assertEqual([item["run_source"] for item in payload["items"][:2]], ["nvoids_sync", "gmail_sync"])
+        self.assertFalse(payload["has_next"])
+
+    def test_recent_run_items_endpoint_paginates_skipped_items(self) -> None:
+        with self.SessionLocal() as db:
+            db.add_all(
+                [
+                    RecentRunSkippedItem(
+                        owner_id=main.settings.owner_id,
+                        run_source="gmail_sync",
+                        run_key="gmail_sync:batch-1",
+                        source_type="gmail",
+                        outcome="skipped",
+                        reason_code="duplicate_existing_email",
+                        reason_detail="first",
+                        external_message_id="msg-first",
+                        title_or_subject="First",
+                        sender="Recruiter",
+                        created_at=datetime.fromisoformat("2026-06-30T20:00:00+00:00"),
+                    ),
+                    RecentRunSkippedItem(
+                        owner_id=main.settings.owner_id,
+                        run_source="gmail_sync",
+                        run_key="gmail_sync:batch-1",
+                        source_type="gmail",
+                        outcome="skipped",
+                        reason_code="non_recruiter_like_gmail",
+                        reason_detail="second",
+                        external_message_id="msg-second",
+                        title_or_subject="Second",
+                        sender="Recruiter",
+                        created_at=datetime.fromisoformat("2026-06-30T20:01:00+00:00"),
+                    ),
+                    RecentRunSkippedItem(
+                        owner_id=main.settings.owner_id,
+                        run_source="gmail_sync",
+                        run_key="gmail_sync:batch-1",
+                        source_type="gmail",
+                        outcome="skipped",
+                        reason_code="processed_skipped",
+                        reason_detail="third",
+                        external_message_id="msg-third",
+                        title_or_subject="Third",
+                        sender="Recruiter",
+                        created_at=datetime.fromisoformat("2026-06-30T20:02:00+00:00"),
+                    ),
+                ]
+            )
+            db.commit()
+
+        first_page = self.client.get("/recent-runs/gmail_sync:batch-1/items?outcome=skipped&limit=2")
+        self.assertEqual(first_page.status_code, 200, first_page.text)
+        first_payload = first_page.json()
+        self.assertEqual([item["title_or_subject"] for item in first_payload["items"]], ["Third", "Second"])
+        self.assertEqual(first_payload["items"][0]["gmail_message_url"], "https://mail.google.com/mail/u/0/#all/msg-third")
+        self.assertEqual(first_payload["items"][1]["gmail_message_url"], "https://mail.google.com/mail/u/0/#all/msg-second")
+        self.assertEqual(first_payload["next_cursor"], 2)
+        self.assertTrue(first_payload["has_next"])
+
+        second_page = self.client.get("/recent-runs/gmail_sync:batch-1/items?outcome=skipped&limit=2&cursor=2")
+        self.assertEqual(second_page.status_code, 200, second_page.text)
+        second_payload = second_page.json()
+        self.assertEqual([item["title_or_subject"] for item in second_payload["items"]], ["First"])
+        self.assertIsNone(second_payload["next_cursor"])
+        self.assertFalse(second_payload["has_next"])
 
     def test_manual_sync_uses_preferred_employer_cc_when_configured(self) -> None:
         with self.SessionLocal() as db:
@@ -931,11 +1026,54 @@ class ExternalFeedsApiTests(unittest.TestCase):
         self.assertEqual(payload["fetched_count"], 2)
         self.assertEqual(payload["created_count"], 1)
         self.assertEqual(payload["skipped_location_count"], 1)
+        self.assertTrue(str(payload["run_key"]).startswith("nvoids_sync:"))
 
         with self.SessionLocal() as db:
             rows = db.query(ExternalOpportunity).filter(ExternalOpportunity.owner_id == main.settings.owner_id).all()
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0].location, "Remote, USA")
+
+        items = self.client.get(f"/recent-runs/{payload['run_key']}/items?outcome=skipped&limit=10")
+        self.assertEqual(items.status_code, 200, items.text)
+        item_payload = items.json()
+        self.assertEqual(len(item_payload["items"]), 1)
+        self.assertEqual(item_payload["items"][0]["reason_code"], "skipped_location")
+        self.assertEqual(item_payload["items"][0]["source_type"], "nvoids")
+        self.assertTrue(str(item_payload["items"][0]["source_url"]).startswith("https://"))
+
+    def test_sync_records_duplicate_candidate_skip_item_for_recent_runs(self) -> None:
+        with self.SessionLocal() as db:
+            db.add(
+                RecruiterEmail(
+                    owner_id=main.settings.owner_id,
+                    sender="Recruiter <recruiter_1@example.com>",
+                    subject="Existing Nvoids Candidate",
+                    body="Body",
+                    role="Senior Python Developer",
+                    location="Dallas, Texas, USA",
+                    salary_text="",
+                    skills_text="Java",
+                    score=80,
+                    decision="Qualified",
+                    state="needs_review",
+                    source="nvoids",
+                    external_message_id="nvoids:nvoids:1",
+                    external_thread_id="https://www.nvoids.com/job1.jsp?id=1",
+                )
+            )
+            db.commit()
+
+        sync = self.client.post("/external-feeds/nvoids/sync")
+        self.assertEqual(sync.status_code, 200, sync.text)
+        payload = sync.json()
+        items = self.client.get(f"/recent-runs/{payload['run_key']}/items?outcome=skipped&limit=20")
+        self.assertEqual(items.status_code, 200, items.text)
+        skipped_items = items.json()["items"]
+        duplicate_item = next((row for row in skipped_items if row["reason_code"] == "duplicate_candidate"), None)
+        self.assertIsNotNone(duplicate_item)
+        assert duplicate_item is not None
+        self.assertEqual(duplicate_item["source_type"], "nvoids")
+        self.assertTrue(str(duplicate_item["source_url"]).startswith("https://"))
 
     def test_sync_uses_ai_draft_and_semantic_metadata_when_enabled(self) -> None:
         self._add_resume()

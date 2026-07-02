@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 import json
 import logging
 import re
+from dataclasses import dataclass
 from typing import cast
 
 from sqlalchemy import or_
@@ -26,6 +27,14 @@ from app.phase0 import (
     parse_email_with_details,
     should_block_f2f,
 )
+from app.recent_runs import (
+    RUN_SOURCE_NVOIDS_SYNC,
+    SkippedItemRecord,
+    create_recent_run,
+    nvoids_run_key,
+    record_skipped_item,
+    update_recent_run,
+)
 from app.routing import RoutingDecision
 from app.semantic.embeddings_service import generate_embedding
 from app.services import policy_service
@@ -40,6 +49,14 @@ from .types import ExternalFeedSyncResult
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class EnqueueResult:
+    enqueued: bool
+    reason_code: str | None = None
+    reason_detail: str | None = None
+    candidate_email_id: int | None = None
 
 
 class ExternalFeedService:
@@ -133,12 +150,28 @@ class ExternalFeedService:
         db.add(run)
         db.commit()
         db.refresh(run)
+        run_key = nvoids_run_key(run.id)
+        recent_run = create_recent_run(
+            db,
+            owner_id=owner_id,
+            run_source=RUN_SOURCE_NVOIDS_SYNC,
+            run_key=run_key,
+            status="running",
+            detail="Nvoids sync started.",
+            skipped_count=0,
+            failed_count=0,
+            skipped_item_count=0,
+            external_scrape_run_id=run.id,
+        )
+        db.commit()
+        db.refresh(recent_run)
 
         fetched_count = 0
         created_count = 0
         deduped_count = 0
         failed_count = 0
         skipped_location_count = 0
+        skipped_item_count = 0
         consecutive_duplicate_pages = 0
         enqueue_attempts = 0
         enqueue_successes = 0
@@ -177,6 +210,23 @@ class ExternalFeedService:
                     fetched_count += 1
                     if not self.row_matches_locations(row.location, location_filters):
                         skipped_location_count += 1
+                        skipped_item_count += 1
+                        record_skipped_item(
+                            db,
+                            SkippedItemRecord(
+                                owner_id=owner_id,
+                                run_source=RUN_SOURCE_NVOIDS_SYNC,
+                                run_key=run_key,
+                                source_type="nvoids",
+                                reason_code="skipped_location",
+                                reason_detail=f"Skipped because listing location '{row.location}' did not match the saved Nvoids location filters.",
+                                external_thread_id=row.href,
+                                title_or_subject=row.title,
+                                sender="Nvoids",
+                                location=row.location,
+                                source_url=row.href,
+                            ),
+                        )
                         logger.info(
                             "nvoids_sync_skip_location page=%s title=%r location=%r allowed_locations=%s",
                             page,
@@ -320,9 +370,30 @@ class ExternalFeedService:
                     if self._bridge_to_recruiter_opportunity(db, owner_id=owner_id, item=record):
                         record.bridge_status = "bridged"
                     enqueue_attempts += 1
-                    enqueued = self._enqueue_needs_review_candidate(db, owner_id=owner_id, item=record)
-                    if enqueued:
+                    enqueue_result = self._enqueue_needs_review_candidate(db, owner_id=owner_id, item=record)
+                    if enqueue_result.enqueued:
                         enqueue_successes += 1
+                    else:
+                        skipped_item_count += 1
+                        record_skipped_item(
+                            db,
+                            SkippedItemRecord(
+                                owner_id=owner_id,
+                                run_source=RUN_SOURCE_NVOIDS_SYNC,
+                                run_key=run_key,
+                                source_type="nvoids",
+                                reason_code=enqueue_result.reason_code or "nvoids_enqueue_skipped",
+                                reason_detail=enqueue_result.reason_detail or "Skipped during Nvoids enqueue.",
+                                external_message_id=f"nvoids:{record.external_post_id}",
+                                external_thread_id=record.source_url,
+                                candidate_email_id=enqueue_result.candidate_email_id,
+                                external_opportunity_id=record.id,
+                                title_or_subject=record.role or row.title,
+                                sender=record.recruiter_email or record.recruiter_name or "Nvoids",
+                                location=record.location,
+                                source_url=record.source_url,
+                            ),
+                        )
                     created_count += 1
 
                 db.commit()
@@ -368,8 +439,18 @@ class ExternalFeedService:
                 enqueue_successes,
                 run.id,
             )
+            update_recent_run(
+                recent_run,
+                status="ok",
+                detail=f"nvoids sync complete: fetched={fetched_count} created={created_count} deduped={deduped_count} skipped_location={skipped_location_count} failed={failed_count}",
+                skipped_count=skipped_location_count,
+                failed_count=failed_count,
+                skipped_item_count=skipped_item_count,
+            )
+            db.commit()
             return ExternalFeedSyncResult(
                 source_type="nvoids",
+                run_key=run_key,
                 fetched_count=fetched_count,
                 created_count=created_count,
                 deduped_count=deduped_count,
@@ -384,6 +465,14 @@ class ExternalFeedService:
             run.failed_count = failed_count
             run.notes = str(exc)
             db.add(run)
+            update_recent_run(
+                recent_run,
+                status="failed",
+                detail=f"nvoids_sync_failed: {exc}",
+                skipped_count=skipped_location_count,
+                failed_count=failed_count,
+                skipped_item_count=skipped_item_count,
+            )
             db.commit()
             raise
 
@@ -663,7 +752,7 @@ class ExternalFeedService:
             .all()
         )
 
-    def _enqueue_needs_review_candidate(self, db: Session, *, owner_id: str, item: ExternalOpportunity) -> bool:
+    def _enqueue_needs_review_candidate(self, db: Session, *, owner_id: str, item: ExternalOpportunity) -> EnqueueResult:
         recruiter_to = extract_email_address(item.recruiter_email or "")
         external_message_id = f"nvoids:{item.external_post_id}"
         existing = (
@@ -677,7 +766,12 @@ class ExternalFeedService:
                 item.external_post_id,
                 existing.id,
             )
-            return False
+            return EnqueueResult(
+                enqueued=False,
+                reason_code="duplicate_candidate",
+                reason_detail="Skipped because this Nvoids listing already exists as a candidate.",
+                candidate_email_id=existing.id,
+            )
         settings = (
             db.query(UserSettings).filter(UserSettings.owner_id == owner_id).first()
             or UserSettings(owner_id=owner_id)
@@ -691,7 +785,11 @@ class ExternalFeedService:
                 item.role,
                 item.recruiter_email,
             )
-            return False
+            return EnqueueResult(
+                enqueued=False,
+                reason_code="no_recruiter_email",
+                reason_detail="Skipped because no recruiter To email could be extracted from the Nvoids listing.",
+            )
         preferred_cc_email = self._preferred_employer_cc(settings, recruiter_to=recruiter_to)
         cc_email = preferred_cc_email or self._pick_cc_from_employer_pool(db, owner_id=owner_id, exclude=recruiter_to)
         if not cc_email and recipient_mapping_mode == "block":
@@ -700,7 +798,11 @@ class ExternalFeedService:
                 item.external_post_id,
                 recruiter_to,
             )
-            return False
+            return EnqueueResult(
+                enqueued=False,
+                reason_code="no_cc_pool_match",
+                reason_detail="Skipped because no employer CC email could be resolved for the Nvoids listing.",
+            )
         body = item.raw_body or item.role or ""
         subject = item.role or "Nvoids Opportunity"
         ai_parse_body = body
@@ -834,7 +936,11 @@ class ExternalFeedService:
                 preparation.draft_source,
                 getattr(preparation.semantic_diag, "input_source", None),
             )
-            return False
+            return EnqueueResult(
+                enqueued=False,
+                reason_code=preparation.skip_reason or "queue_preparation_outcome",
+                reason_detail=preparation.decision_reason or f"Skipped because queue preparation ended with outcome '{preparation.outcome}'.",
+            )
         email = RecruiterEmail(
             owner_id=owner_id,
             sender=sender_identity,
@@ -909,7 +1015,8 @@ class ExternalFeedService:
             email.draft_source,
         )
         db.add(email)
-        return True
+        db.flush()
+        return EnqueueResult(enqueued=True, candidate_email_id=email.id)
 
     def _bridge_to_recruiter_opportunity(self, db: Session, *, owner_id: str, item: ExternalOpportunity) -> bool:
         canonical = canonicalize_phone(item.recruiter_phone or "")

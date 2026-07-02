@@ -59,6 +59,8 @@ from app.models import (
     NumberReviewQueue,
     PremiumNumberLead,
     ProductivityEvent,
+    RecentRun,
+    RecentRunSkippedItem,
     RecruiterEmail,
     RecruiterNumber,
     RecruiterOpportunity,
@@ -87,6 +89,7 @@ from app.phase0 import (
     should_block_f2f,
 )
 from app.routing import RoutingDecision
+from app.recent_runs import build_gmail_message_url, row_to_recent_run_dict
 from app.skill_taxonomy import (
     clear_skill_taxonomy_cache,
     extract_skills_text,
@@ -153,6 +156,10 @@ from app.schemas import (
     ProductivityEventResponse,
     ProductivityBarPoint,
     ProductivityTrendResponse,
+    RecentRunItemListResponse,
+    RecentRunItemResponse,
+    RecentRunListResponse,
+    RecentRunResponse,
     TelegramStatusResponse,
     ExternalFeedSyncResponse,
     ExternalScrapeRunResponse,
@@ -1558,6 +1565,7 @@ def _build_run_response(
     detail: str,
     email: RecruiterEmail | None = None,
     *,
+    run_key: str | None = None,
     effective_query: str | None = None,
     matched_count: int | None = None,
     queued_count: int | None = None,
@@ -1572,6 +1580,7 @@ def _build_run_response(
         return AutomationRunResponse(
             status=status,
             detail=detail,
+            run_key=run_key,
             effective_query=effective_query,
             matched_count=matched_count,
             queued_count=queued_count,
@@ -1585,6 +1594,7 @@ def _build_run_response(
     return AutomationRunResponse(
         status=status,
         detail=detail,
+        run_key=run_key,
         email_id=email.id,
         gmail_message_url=email.gmail_message_url,
         decision_reason=email.decision_reason,
@@ -1601,6 +1611,38 @@ def _build_run_response(
         auto_send_failed_count=auto_send_failed_count,
         retry_promoted_count=retry_promoted_count,
         retry_skipped_count=retry_skipped_count,
+    )
+
+
+def _recent_run_response(row: RecentRun) -> RecentRunResponse:
+    return RecentRunResponse.model_validate(row_to_recent_run_dict(row))
+
+
+def _recent_run_item_response(row: RecentRunSkippedItem) -> RecentRunItemResponse:
+    gmail_message_url = row.gmail_message_url
+    if row.source_type == "gmail" and not gmail_message_url:
+        gmail_message_url = build_gmail_message_url(
+            external_message_id=row.external_message_id,
+            external_thread_id=row.external_thread_id,
+        )
+    return RecentRunItemResponse(
+        id=row.id,
+        run_key=row.run_key,
+        run_source=row.run_source,
+        source_type=row.source_type,
+        outcome=row.outcome,
+        reason_code=row.reason_code,
+        reason_detail=row.reason_detail,
+        external_message_id=row.external_message_id,
+        external_thread_id=row.external_thread_id,
+        candidate_email_id=row.candidate_email_id,
+        external_opportunity_id=row.external_opportunity_id,
+        title_or_subject=row.title_or_subject,
+        sender=row.sender,
+        location=row.location,
+        source_url=row.source_url,
+        gmail_message_url=gmail_message_url,
+        created_at=row.created_at,
     )
 
 
@@ -3104,6 +3146,7 @@ def sync_external_nvoids(
         telegram_action_lock.release()
     return ExternalFeedSyncResponse(
         source_type=result.source_type,
+        run_key=result.run_key,
         fetched_count=result.fetched_count,
         created_count=result.created_count,
         deduped_count=result.deduped_count,
@@ -3145,6 +3188,47 @@ def list_external_feed_runs(limit: int = Query(default=20, ge=1, le=200), db: Se
         )
         for row in rows
     ]
+
+
+@app.get("/recent-runs", response_model=RecentRunListResponse)
+def list_recent_runs(
+    cursor: int = Query(0, ge=0),
+    limit: int = Query(25, ge=1, le=100),
+    db: Session = Depends(get_db),
+) -> RecentRunListResponse:
+    rows = (
+        db.query(RecentRun)
+        .filter(RecentRun.owner_id == settings.owner_id)
+        .order_by(RecentRun.created_at.desc(), RecentRun.id.desc())
+        .all()
+    )
+    items = [_recent_run_response(row) for row in rows]
+    visible, next_cursor, has_next = _paginate_items(items, cursor=cursor, limit=limit)
+    return RecentRunListResponse(items=visible, next_cursor=next_cursor, has_next=has_next)
+
+
+@app.get("/recent-runs/{run_key}/items", response_model=RecentRunItemListResponse)
+def list_recent_run_items(
+    run_key: str,
+    cursor: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    outcome: str = Query(default="skipped"),
+    db: Session = Depends(get_db),
+) -> RecentRunItemListResponse:
+    query = (
+        db.query(RecentRunSkippedItem)
+        .filter(
+            RecentRunSkippedItem.owner_id == settings.owner_id,
+            RecentRunSkippedItem.run_key == run_key,
+        )
+        .order_by(RecentRunSkippedItem.created_at.desc(), RecentRunSkippedItem.id.desc())
+    )
+    if outcome:
+        query = query.filter(RecentRunSkippedItem.outcome == outcome)
+    rows = query.all()
+    items = [_recent_run_item_response(row) for row in rows]
+    visible, next_cursor, has_next = _paginate_items(items, cursor=cursor, limit=limit)
+    return RecentRunItemListResponse(items=visible, next_cursor=next_cursor, has_next=has_next)
 
 
 @app.patch("/recruiter-opportunities/{opportunity_id}", response_model=RecruiterOpportunityResponse)

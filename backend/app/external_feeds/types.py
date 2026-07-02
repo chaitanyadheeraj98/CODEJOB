@@ -29,6 +29,7 @@ class ParsedExternalPost:
 @dataclass(frozen=True)
 class ExternalFeedSyncResult:
     source_type: str
+    run_key: str
     fetched_count: int
     created_count: int
     deduped_count: int

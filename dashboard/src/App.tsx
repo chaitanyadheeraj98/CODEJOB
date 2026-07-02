@@ -317,6 +317,10 @@ export function normalizeDynamicPolicy(policy?: DynamicPolicy | null, seed?: Pol
 type AutomationRunResponse = {
   status: string
   detail: string
+  run_key?: string | null
+  run_source?: string | null
+  skipped_item_count?: number | null
+  created_at?: string | null
   email_id: number | null
   gmail_message_url?: string | null
   decision_reason?: string | null
@@ -331,6 +335,49 @@ type AutomationRunResponse = {
   auto_send_failed_count?: number | null
   retry_promoted_count?: number | null
   retry_skipped_count?: number | null
+}
+
+type RecentRunItem = {
+  id: number
+  run_key: string
+  run_source: string
+  source_type: string
+  outcome: string
+  reason_code: string
+  reason_detail: string
+  external_message_id?: string | null
+  external_thread_id?: string | null
+  candidate_email_id?: number | null
+  external_opportunity_id?: number | null
+  title_or_subject: string
+  sender: string
+  location?: string | null
+  source_url?: string | null
+  gmail_message_url?: string | null
+  created_at: string
+}
+
+type RecentRunCard = AutomationRunResponse & {
+  run_key?: string | null
+  run_source?: string | null
+  skipped_item_count?: number | null
+  created_at?: string | null
+  skipped_items?: RecentRunItem[]
+  skipped_items_loaded?: boolean
+  skipped_items_loading?: boolean
+  skipped_items_error?: string | null
+}
+
+type RecentRunListResponse = {
+  items: RecentRunCard[]
+  next_cursor?: number | null
+  has_next?: boolean
+}
+
+type RecentRunItemListResponse = {
+  items: RecentRunItem[]
+  next_cursor: number | null
+  has_next: boolean
 }
 
 type OAuthStartResponse = {
@@ -1251,7 +1298,7 @@ function App() {
   const [oauthAuthorizationUrl, setOauthAuthorizationUrl] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
-  const [logs, setLogs] = useState<AutomationRunResponse[]>([])
+  const [logs, setLogs] = useState<RecentRunCard[]>([])
   const [sendingId, setSendingId] = useState<number | null>(null)
   const [rejectingId, setRejectingId] = useState<number | null>(null)
   const [movingToFailedId, setMovingToFailedId] = useState<number | null>(null)
@@ -1766,6 +1813,74 @@ function App() {
     setProductivityTrend((await trendRes.json()) as ProductivityTrendResponse)
   }
 
+  const loadRecentRuns = async () => {
+    const res = await fetch(`${apiBase}/recent-runs?limit=${RECENT_RUNS_LIMIT}`)
+    if (!res.ok) throw new Error('Failed to load recent runs')
+    const payload = (await res.json()) as RecentRunListResponse
+    setLogs(
+      (payload.items ?? []).map((item) => ({
+        ...item,
+        email_id: item.email_id ?? null,
+        skipped_items: item.skipped_items ?? [],
+        skipped_items_loaded: false,
+        skipped_items_loading: false,
+        skipped_items_error: null,
+      })),
+    )
+  }
+
+  const toggleRecentRunItems = async (runKey: string | null | undefined) => {
+    if (!runKey) return
+    const current = logs.find((item) => item.run_key === runKey)
+    if (current?.skipped_items_loaded) {
+      setLogs((prev) =>
+        prev.map((item) =>
+          item.run_key === runKey
+            ? { ...item, skipped_items_loaded: false }
+            : item,
+        ),
+      )
+      return
+    }
+    setLogs((prev) =>
+      prev.map((item) =>
+        item.run_key === runKey
+          ? { ...item, skipped_items_loading: true, skipped_items_error: null }
+          : item,
+      ),
+    )
+    try {
+      const res = await fetch(`${apiBase}/recent-runs/${encodeURIComponent(runKey)}/items?outcome=skipped&limit=50`)
+      if (!res.ok) throw new Error('Failed to load skipped run items')
+      const payload = (await res.json()) as RecentRunItemListResponse
+      setLogs((prev) =>
+        prev.map((item) =>
+          item.run_key === runKey
+            ? {
+                ...item,
+                skipped_items: payload.items ?? [],
+                skipped_items_loaded: true,
+                skipped_items_loading: false,
+                skipped_items_error: null,
+              }
+            : item,
+        ),
+      )
+    } catch (e) {
+      setLogs((prev) =>
+        prev.map((item) =>
+          item.run_key === runKey
+            ? {
+                ...item,
+                skipped_items_loading: false,
+                skipped_items_error: (e as Error).message,
+              }
+            : item,
+        ),
+      )
+    }
+  }
+
   const trackViewEvent = async (page: typeof activePage) => {
     const eventMap: Record<typeof activePage, string> = {
       run_queue: 'view_run_queue',
@@ -1823,6 +1938,7 @@ function App() {
           loadSkillUpgradeData(),
           loadAiStatus(),
           loadTelegramStatus(),
+          loadRecentRuns(),
         ])
         const normalizedSettings = await loadSettings()
         await refreshVisibleCandidates(normalizedSettings.mail_date ?? null, { activeOnly: true, initialLoad: true })
@@ -2121,7 +2237,18 @@ function App() {
         throw new Error(details?.detail ?? 'Automation run failed')
       }
       const data = (await res.json()) as AutomationRunResponse
-      setLogs((prev) => [data, ...prev].slice(0, RECENT_RUNS_LIMIT))
+      setLogs((prev) => [
+        {
+          ...data,
+          run_source: data.run_source ?? 'automation_run',
+          skipped_item_count: data.skipped_item_count ?? data.skipped_count ?? 0,
+          skipped_items: [],
+          skipped_items_loaded: false,
+          skipped_items_loading: false,
+          skipped_items_error: null,
+        },
+        ...prev.filter((item) => item.run_key !== data.run_key),
+      ].slice(0, RECENT_RUNS_LIMIT))
       if (data.status === 'oauth_required' || data.status === 'oauth_in_progress') {
         setError(data.detail)
       }
@@ -2130,6 +2257,7 @@ function App() {
       await loadTelegramStatus()
       await refreshVisibleCandidates(settings.mail_date ?? null, { activeOnly: false })
       await loadProductivityAnalytics(timeRange)
+      await loadRecentRuns()
     } catch (e) {
       if ((e as Error).name === 'AbortError') {
         if (!status?.authenticated) {
@@ -2162,17 +2290,27 @@ function App() {
         const details = await res.json().catch(() => null)
         throw new Error(details?.detail ?? 'Nvoids sync failed')
       }
-      const data = (await res.json()) as { source_type: string; fetched_count: number; created_count: number; deduped_count: number; failed_count: number; skipped_location_count: number }
+      const data = (await res.json()) as { source_type: string; run_key?: string | null; fetched_count: number; created_count: number; deduped_count: number; failed_count: number; skipped_location_count: number }
       setLogs((prev) => [
         {
+          run_key: data.run_key ?? null,
+          run_source: 'nvoids_sync',
           status: 'ok',
           detail: `nvoids sync complete: fetched=${data.fetched_count} created=${data.created_count} deduped=${data.deduped_count} skipped_location=${data.skipped_location_count} failed=${data.failed_count}`,
+          skipped_count: data.skipped_location_count,
+          failed_count: data.failed_count,
+          skipped_item_count: data.skipped_location_count,
           email_id: null,
+          skipped_items: [],
+          skipped_items_loaded: false,
+          skipped_items_loading: false,
+          skipped_items_error: null,
         },
-        ...prev,
+        ...prev.filter((item) => item.run_key !== data.run_key),
       ].slice(0, RECENT_RUNS_LIMIT))
       await refreshVisibleCandidates(settings.mail_date ?? null, { activeOnly: false })
       await loadPremiumNumbers()
+      await loadRecentRuns()
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -3771,9 +3909,10 @@ function App() {
           <h2>Recent Runs</h2>
           {logs.length === 0 ? <p className="subtle">No runs yet.</p> : null}
           {logs.map((item, index) => (
-            <article key={`${item.email_id ?? 'none'}-${index}`} className="emailItem">
+            <article key={item.run_key ?? `${item.email_id ?? 'none'}-${index}`} className="emailItem">
               <p><strong>Status:</strong> {item.status}</p>
               <p><strong>Detail:</strong> {item.detail}</p>
+              {item.run_source ? <p><strong>Run Source:</strong> {item.run_source}</p> : null}
               <p><strong>Email ID:</strong> {item.email_id ?? '-'}</p>
               {item.gmail_message_url ? (
                 <p>
@@ -3816,6 +3955,38 @@ function App() {
                   {item.auto_send_failed_count != null ? <span className="tag">Auto Send Failed: {item.auto_send_failed_count}</span> : null}
                   {item.retry_promoted_count != null ? <span className="tag">Retry Promoted: {item.retry_promoted_count}</span> : null}
                   {item.retry_skipped_count != null ? <span className="tag">Retry Skipped: {item.retry_skipped_count}</span> : null}
+                </div>
+              ) : null}
+              {((item.skipped_item_count ?? 0) > 0 || (item.skipped_items?.length ?? 0) > 0) ? (
+                <div className="stack">
+                  <button type="button" onClick={() => void toggleRecentRunItems(item.run_key)}>
+                    {item.skipped_items_loaded ? `Hide Skipped Items (${item.skipped_item_count ?? item.skipped_items?.length ?? 0})` : `Skipped Items (${item.skipped_item_count ?? 0})`}
+                  </button>
+                  {item.skipped_items_loading ? <p className="subtle">Loading skipped items...</p> : null}
+                  {item.skipped_items_error ? <p className="errorMessage">{item.skipped_items_error}</p> : null}
+                  {item.skipped_items_loaded ? (
+                    item.skipped_items && item.skipped_items.length > 0 ? (
+                      <div className="stack">
+                        {item.skipped_items.map((skipped) => (
+                          <article key={`${item.run_key}-${skipped.id}`} className="emailItem">
+                            <p><strong>Source:</strong> {getSourceLabel(skipped.source_type)}</p>
+                            <p><strong>Title:</strong> {renderTextOrDash(skipped.title_or_subject)}</p>
+                            <p><strong>Why:</strong> {renderTextOrDash(skipped.reason_detail || skipped.reason_code)}</p>
+                            {skipped.source_url || skipped.gmail_message_url ? (
+                              <p>
+                                <strong>Open:</strong>{' '}
+                                <a href={skipped.source_url || skipped.gmail_message_url} target="_blank" rel="noreferrer">
+                                  {skipped.source_type === 'nvoids' ? 'Open Original Post' : 'Open exact email in Gmail'}
+                                </a>
+                              </p>
+                            ) : null}
+                          </article>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="subtle">No skipped items found for this run.</p>
+                    )
+                  ) : null}
                 </div>
               ) : null}
             </article>

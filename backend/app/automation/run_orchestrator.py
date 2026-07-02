@@ -11,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.models import RecruiterEmail, ResumeAsset, UserSettings
 from app.parsing import build_skills_json_payload
+from app.recent_runs import SkippedItemRecord
 from app.routing import RoutingDecision
 from app.services import policy_service
 from .queue_preparation import (
@@ -49,6 +50,7 @@ class RunOrchestratorDependencies:
     apply_gmail_label: Callable[[Session, RecruiterEmail, CandidateItem], None]
     mark_message_processed: Callable[[str], None]
     is_recruiter_like: Callable[[str, str, str], bool]
+    record_skipped_item: Callable[[Session, SkippedItemRecord], None]
 
 
 @dataclass(frozen=True)
@@ -64,6 +66,8 @@ class RunOrchestratorRequest:
     threshold: float
     dry_run: bool
     model_name: str
+    run_source: str
+    run_key: str
     deps: RunOrchestratorDependencies
 
 
@@ -108,6 +112,14 @@ class RunOrchestrator:
                 if not request.dry_run:
                     request.deps.capture_premium_numbers(request.db, existing)
                 skipped_count += 1
+                self._record_skipped_item(
+                    request=request,
+                    item=item,
+                    reason_code="approved_sent_duplicate",
+                    reason_detail="Skipped because this Gmail message was already approved and sent.",
+                    candidate_email_id=existing.id,
+                    gmail_message_url=existing.gmail_message_url,
+                )
                 last_email = existing
                 if not request.dry_run:
                     request.deps.apply_gmail_label(request.db, existing, item)
@@ -127,6 +139,12 @@ class RunOrchestrator:
                 and not request.deps.is_recruiter_like(sender, subject, body)
             ):
                 skipped_count += 1
+                self._record_skipped_item(
+                    request=request,
+                    item=item,
+                    reason_code="non_recruiter_like_gmail",
+                    reason_detail="Skipped because the message did not look recruiter or staffing related.",
+                )
                 continue
             if recruiter_like_mode == "warn" and not request.deps.is_recruiter_like(sender, subject, body):
                 recruiter_like_warning = "non_recruiter_like_gmail"
@@ -208,6 +226,12 @@ class RunOrchestrator:
             if preparation.outcome == "not_qualified":
                 if request.dry_run:
                     skipped_count += 1
+                    self._record_skipped_item(
+                        request=request,
+                        item=item,
+                        reason_code=preparation.skip_reason or "not_qualified",
+                        reason_detail=preparation.decision_reason or "Skipped because the candidate was not qualified for queueing.",
+                    )
                     continue
                 email = self._email_row(existing, request, item, parsed, parser_details_json, skills_json)
                 def apply_skipped_state(target: RecruiterEmail) -> None:
@@ -260,6 +284,14 @@ class RunOrchestrator:
                 request.db.refresh(email)
                 request.deps.mark_message_processed(external_message_id)
                 skipped_count += 1
+                self._record_skipped_item(
+                    request=request,
+                    item=item,
+                    reason_code=email.skip_reason or "not_qualified",
+                    reason_detail=email.decision_reason or "Skipped because the candidate was not qualified for queueing.",
+                    candidate_email_id=email.id,
+                    gmail_message_url=email.gmail_message_url,
+                )
                 last_email = email
                 continue
 
@@ -476,3 +508,32 @@ class RunOrchestrator:
     def _is_external_message_unique_conflict(exc: IntegrityError) -> bool:
         text = str(exc).lower()
         return "unique constraint failed" in text and "recruiter_emails.external_message_id" in text
+
+    def _record_skipped_item(
+        self,
+        *,
+        request: RunOrchestratorRequest,
+        item: CandidateItem,
+        reason_code: str,
+        reason_detail: str,
+        candidate_email_id: int | None = None,
+        gmail_message_url: str | None = None,
+    ) -> None:
+        request.deps.record_skipped_item(
+            request.db,
+            SkippedItemRecord(
+                owner_id=request.owner_id,
+                run_source=request.run_source,
+                run_key=request.run_key,
+                source_type="gmail",
+                reason_code=reason_code,
+                reason_detail=reason_detail,
+                external_message_id=str(item.get("external_message_id") or ""),
+                external_thread_id=str(item.get("external_thread_id") or "") or None,
+                candidate_email_id=candidate_email_id,
+                title_or_subject=str(item.get("subject") or ""),
+                sender=str(item.get("sender") or ""),
+                source_url=None,
+                gmail_message_url=gmail_message_url,
+            ),
+        )

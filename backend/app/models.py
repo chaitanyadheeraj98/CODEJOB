@@ -220,6 +220,49 @@ class SyncRun(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
 
+class RecentRun(Base):
+    __tablename__ = "recent_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    run_source: Mapped[str] = mapped_column(String(40), index=True)
+    run_key: Mapped[str] = mapped_column(String(160), unique=True, index=True)
+    sync_batch_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    external_scrape_run_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(40), default="ok")
+    detail: Mapped[str] = mapped_column(Text, default="")
+    matched_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    queued_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    skipped_count: Mapped[int] = mapped_column(Integer, default=0)
+    failed_count: Mapped[int] = mapped_column(Integer, default=0)
+    skipped_item_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+
+class RecentRunSkippedItem(Base):
+    __tablename__ = "recent_run_skipped_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    run_source: Mapped[str] = mapped_column(String(40), index=True)
+    run_key: Mapped[str] = mapped_column(String(160), index=True)
+    source_type: Mapped[str] = mapped_column(String(40), default="gmail", index=True)
+    outcome: Mapped[str] = mapped_column(String(40), default="skipped", index=True)
+    reason_code: Mapped[str] = mapped_column(String(120), default="", index=True)
+    reason_detail: Mapped[str] = mapped_column(Text, default="")
+    external_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    external_thread_id: Mapped[str | None] = mapped_column(String(1200), nullable=True)
+    candidate_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    external_opportunity_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    title_or_subject: Mapped[str] = mapped_column(String(500), default="")
+    sender: Mapped[str] = mapped_column(String(255), default="")
+    location: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    source_url: Mapped[str | None] = mapped_column(String(1200), nullable=True)
+    gmail_message_url: Mapped[str | None] = mapped_column(String(1200), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+
 class DraftEditFeedback(Base):
     __tablename__ = "draft_edit_feedback"
 

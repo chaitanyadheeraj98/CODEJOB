@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from typing import Any, Callable, cast
 
 from fastapi import HTTPException
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.ai.resume_context_attribution import RESUME_CONTEXT_MISSING, RESUME_CONTEXT_RULES_ONLY
@@ -16,9 +17,19 @@ from app.automation import RunOrchestrator, RunOrchestratorDependencies, RunOrch
 from app.services import policy_service
 from app.services.policy_service import EffectiveRunInputs
 from app.gmail_client import GmailMessageCandidate, MailAttachment
-from app.models import AttachmentAsset, DraftEditFeedback, RecipientRoutingFeedback, RecruiterEmail, ResumeAsset, SyncRun, UserSettings
+from app.models import AttachmentAsset, DraftEditFeedback, RecipientRoutingFeedback, RecentRunSkippedItem, RecruiterEmail, ResumeAsset, SyncRun, UserSettings
 from app.parsing import build_skills_json_payload
 from app.phase0 import RoutingResult, parse_email_with_details
+from app.recent_runs import (
+    RUN_SOURCE_AUTOMATION,
+    RUN_SOURCE_GMAIL_SYNC,
+    SkippedItemRecord,
+    automation_run_key,
+    create_recent_run,
+    gmail_sync_run_key,
+    record_skipped_item,
+    update_recent_run,
+)
 from app.routing import RoutingDecision
 from app.schemas import ApproveSendRequest, AutomationRunRequest, AutomationRunResponse, GmailSyncResponse, RejectRequest, ResolveRecipientsRequest
 from app.services.candidate_runtime_service import resolve_resume_display_name
@@ -96,10 +107,22 @@ class OrchestrationService:
         sync_run = SyncRun(owner_id=self.deps.owner_id, sync_batch_id=sync_batch_id, started_at=datetime.now(UTC))
         db.add(sync_run)
         db.commit()
+        run_key = gmail_sync_run_key(sync_batch_id)
+        recent_run = create_recent_run(
+            db,
+            owner_id=self.deps.owner_id,
+            run_source=RUN_SOURCE_GMAIL_SYNC,
+            run_key=run_key,
+            sync_batch_id=sync_batch_id,
+            status="running",
+            detail="Gmail sync started.",
+        )
+        db.commit()
 
         imported_count = 0
         skipped_count = 0
         error_count = 0
+        skipped_item_count = 0
         try:
             resolved = self.deps.effective_run_inputs(user_settings, None)
             effective_query = resolved.effective_query
@@ -116,6 +139,24 @@ class OrchestrationService:
                 if existing:
                     self.deps.apply_gmail_label_for_email(email=existing, candidate_item=item)
                     skipped_count += 1
+                    skipped_item_count += 1
+                    record_skipped_item(
+                        db,
+                        SkippedItemRecord(
+                            owner_id=self.deps.owner_id,
+                            run_source=RUN_SOURCE_GMAIL_SYNC,
+                            run_key=run_key,
+                            source_type="gmail",
+                            reason_code="duplicate_existing_email",
+                            reason_detail="Skipped because this Gmail message already exists in the candidate database.",
+                            external_message_id=item["external_message_id"],
+                            external_thread_id=item["external_thread_id"],
+                            candidate_email_id=existing.id,
+                            title_or_subject=item["subject"],
+                            sender=item["sender"],
+                            gmail_message_url=existing.gmail_message_url,
+                        ),
+                    )
                     continue
 
                 recruiter_like_warning: str | None = None
@@ -123,6 +164,22 @@ class OrchestrationService:
                 is_recruiter_like = self.deps.is_recruiter_like(item["sender"], item["subject"], item["body"])
                 if recruiter_like_mode == "block" and not is_recruiter_like:
                     skipped_count += 1
+                    skipped_item_count += 1
+                    record_skipped_item(
+                        db,
+                        SkippedItemRecord(
+                            owner_id=self.deps.owner_id,
+                            run_source=RUN_SOURCE_GMAIL_SYNC,
+                            run_key=run_key,
+                            source_type="gmail",
+                            reason_code="non_recruiter_like_gmail",
+                            reason_detail="Skipped because the message did not look recruiter or staffing related.",
+                            external_message_id=item["external_message_id"],
+                            external_thread_id=item["external_thread_id"],
+                            title_or_subject=item["subject"],
+                            sender=item["sender"],
+                        ),
+                    )
                     continue
                 if recruiter_like_mode == "warn" and not is_recruiter_like:
                     recruiter_like_warning = "non_recruiter_like_gmail"
@@ -275,11 +332,27 @@ class OrchestrationService:
             sync_run.skipped_count = skipped_count
             sync_run.error_count = error_count
             sync_run.ended_at = datetime.now(UTC)
+            update_recent_run(
+                recent_run,
+                status="ok",
+                detail=f"Imported: {imported_count} | Skipped: {skipped_count} | Errors: {error_count}",
+                skipped_count=skipped_count,
+                failed_count=error_count,
+                skipped_item_count=skipped_item_count,
+            )
             db.commit()
         except Exception:
             error_count += 1
             sync_run.error_count = error_count
             sync_run.ended_at = datetime.now(UTC)
+            update_recent_run(
+                recent_run,
+                status="failed",
+                detail="Gmail sync failed.",
+                skipped_count=skipped_count,
+                failed_count=error_count,
+                skipped_item_count=skipped_item_count,
+            )
             db.commit()
             raise
 
@@ -287,6 +360,7 @@ class OrchestrationService:
         self.deps.log_gmail_labeling_stats()
         response = GmailSyncResponse(
             sync_batch_id=sync_batch_id,
+            run_key=run_key,
             imported_count=imported_count,
             skipped_count=skipped_count,
             error_count=error_count,
@@ -299,22 +373,39 @@ class OrchestrationService:
         return response
 
     def run_once(self, payload: AutomationRunRequest | None, db: Session) -> AutomationRunResponse:
+        raw_run_id = str(uuid.uuid4())
+        run_key = automation_run_key(raw_run_id)
+        recent_run = create_recent_run(
+            db,
+            owner_id=self.deps.owner_id,
+            run_source=RUN_SOURCE_AUTOMATION,
+            run_key=run_key,
+            status="running",
+            detail="Automation run started.",
+        )
+        db.commit()
         if not self.deps.is_gmail_configured():
             raise HTTPException(status_code=400, detail="Gmail OAuth is not configured")
         configured, authenticated, detail = self.deps.gmail_auth_status()
         if configured and not authenticated:
             in_progress, last_error = self.deps.oauth_bootstrap_status()
             if in_progress:
-                response = AutomationRunResponse(status="oauth_in_progress", detail="OAuth is in progress. Complete sign-in from backend logs, then retry Sync + Queue.")
+                response = AutomationRunResponse(status="oauth_in_progress", detail="OAuth is in progress. Complete sign-in from backend logs, then retry Sync + Queue.", run_key=run_key)
+                update_recent_run(recent_run, status=response.status, detail=response.detail)
+                db.commit()
                 self.deps.record_productivity_event(db, event_type="recent_run_recorded", event_source="run_once", metadata={"status": response.status})
                 self.deps.telegram_notify(self.deps.build_telegram_digest("Run Digest", response))
                 return response
             if last_error:
-                response = AutomationRunResponse(status="oauth_required", detail=f"OAuth required. Trigger Connect Gmail and complete sign-in. Last OAuth error: {last_error}")
+                response = AutomationRunResponse(status="oauth_required", detail=f"OAuth required. Trigger Connect Gmail and complete sign-in. Last OAuth error: {last_error}", run_key=run_key)
+                update_recent_run(recent_run, status=response.status, detail=response.detail)
+                db.commit()
                 self.deps.record_productivity_event(db, event_type="recent_run_recorded", event_source="run_once", metadata={"status": response.status})
                 self.deps.telegram_notify(self.deps.build_telegram_digest("Run Digest", response))
                 return response
-            response = AutomationRunResponse(status="oauth_required", detail=f"{detail} Click Connect Gmail, open the auth URL from backend logs, complete sign-in, then retry.")
+            response = AutomationRunResponse(status="oauth_required", detail=f"{detail} Click Connect Gmail, open the auth URL from backend logs, complete sign-in, then retry.", run_key=run_key)
+            update_recent_run(recent_run, status=response.status, detail=response.detail)
+            db.commit()
             self.deps.record_productivity_event(db, event_type="recent_run_recorded", event_source="run_once", metadata={"status": response.status})
             self.deps.telegram_notify(self.deps.build_telegram_digest("Run Digest", response))
             self.deps.log_gmail_labeling_stats()
@@ -337,12 +428,24 @@ class OrchestrationService:
             response = self.deps.build_run_response(
                 "idle",
                 f"No unread matching emails found for query: {effective_query}",
+                run_key=run_key,
                 effective_query=effective_query,
                 matched_count=0,
                 queued_count=0,
                 skipped_count=0,
                 failed_count=0,
             )
+            update_recent_run(
+                recent_run,
+                status=response.status,
+                detail=response.detail,
+                matched_count=0,
+                queued_count=0,
+                skipped_count=0,
+                failed_count=0,
+                skipped_item_count=0,
+            )
+            db.commit()
             self.deps.record_productivity_event(db, event_type="recent_run_recorded", event_source="run_once", metadata={"status": response.status, "matched_count": 0, "queued_count": 0, "skipped_count": 0, "failed_count": 0})
             self.deps.telegram_notify(self.deps.build_telegram_digest("Run Digest", response))
             self.deps.log_gmail_labeling_stats()
@@ -372,6 +475,8 @@ class OrchestrationService:
                     threshold=threshold,
                     dry_run=dry_run,
                     model_name=self.deps.model_name,
+                    run_source=RUN_SOURCE_AUTOMATION,
+                    run_key=run_key,
                     deps=RunOrchestratorDependencies(
                         parse_email=self.deps.parse_email,
                         parse_email_with_details=self.deps.parse_email_with_details,
@@ -401,6 +506,7 @@ class OrchestrationService:
                         apply_gmail_label=lambda _db, email, item: self.deps.apply_gmail_label_for_email(email=email, candidate_item=item),
                         mark_message_processed=self.deps.mark_message_processed,
                         is_recruiter_like=self.deps.is_recruiter_like,
+                        record_skipped_item=lambda db_ctx, payload: record_skipped_item(db_ctx, payload),
                     ),
                 )
             )
@@ -462,6 +568,7 @@ class OrchestrationService:
                 status,
                 detail,
                 result.last_email,
+                run_key=run_key,
                 effective_query=effective_query,
                 matched_count=result.matched_count,
                 queued_count=result.queued_count,
@@ -472,6 +579,27 @@ class OrchestrationService:
                 retry_promoted_count=retry_promoted_count if user_settings.feature_retry_queue else None,
                 retry_skipped_count=retry_skipped_count if user_settings.feature_retry_queue else None,
             )
+            skipped_item_count = (
+                db.query(func.count())
+                .select_from(RecentRunSkippedItem)
+                .filter(
+                    RecentRunSkippedItem.owner_id == self.deps.owner_id,
+                    RecentRunSkippedItem.run_key == run_key,
+                )
+                .scalar()
+                or 0
+            )
+            update_recent_run(
+                recent_run,
+                status=response.status,
+                detail=response.detail,
+                matched_count=response.matched_count,
+                queued_count=response.queued_count,
+                skipped_count=response.skipped_count or 0,
+                failed_count=response.failed_count or 0,
+                skipped_item_count=int(skipped_item_count),
+            )
+            db.commit()
             self.deps.record_productivity_event(
                 db,
                 event_type="recent_run_recorded",
@@ -491,6 +619,25 @@ class OrchestrationService:
             )
             self.deps.telegram_notify(self.deps.build_telegram_digest("Run Digest", response))
             return response
+        except Exception:
+            skipped_item_count = (
+                db.query(func.count())
+                .select_from(RecentRunSkippedItem)
+                .filter(
+                    RecentRunSkippedItem.owner_id == self.deps.owner_id,
+                    RecentRunSkippedItem.run_key == run_key,
+                )
+                .scalar()
+                or 0
+            )
+            update_recent_run(
+                recent_run,
+                status="failed",
+                detail="Automation run failed.",
+                skipped_item_count=int(skipped_item_count),
+            )
+            db.commit()
+            raise
         finally:
             if capture_started:
                 latency_samples = self.deps.end_embedding_latency_capture()

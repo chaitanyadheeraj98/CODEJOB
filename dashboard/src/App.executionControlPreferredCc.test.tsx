@@ -84,6 +84,8 @@ describe('Execution Control preferred employer CC', () => {
         if (url.endsWith('/settings/resumes')) return makeResponse([])
         if (url.endsWith('/settings/attachments')) return makeResponse([])
         if (url.endsWith('/settings/skills/pending')) return makeResponse([])
+        if (url.includes('/recent-runs/')) return makeResponse({ items: [], next_cursor: null, has_next: false })
+        if (url.includes('/recent-runs')) return makeResponse({ items: [], next_cursor: null, has_next: false })
         if (url.includes('/candidates?')) return makeResponse({ items: [], next_cursor: null, has_next: false })
         if (url.includes('/analytics/events?')) return makeResponse([])
         if (url.includes('/analytics/trend?')) return makeResponse({ range: '7d', bucket: 'day', trend_direction: 'flat', trend_delta_pct: 0, kpi_total_sent: 0, previous_period_total_sent: 0, bars: [] })

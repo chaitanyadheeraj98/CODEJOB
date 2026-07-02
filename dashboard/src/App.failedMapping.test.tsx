@@ -159,6 +159,8 @@ describe('Failed Mapping delete flow', () => {
         if (url.endsWith('/settings/resumes')) return makeResponse([])
         if (url.endsWith('/settings/attachments')) return makeResponse([])
         if (url.endsWith('/settings/skills/pending')) return makeResponse([])
+        if (url.includes('/recent-runs/')) return makeResponse({ items: [], next_cursor: null, has_next: false })
+        if (url.includes('/recent-runs')) return makeResponse({ items: [], next_cursor: null, has_next: false })
         if (url.includes('/candidates?')) {
           if (url.includes('state=failed')) return makeResponse({ items: failedItems, next_cursor: null, has_next: false })
           return makeResponse({ items: [], next_cursor: null, has_next: false })

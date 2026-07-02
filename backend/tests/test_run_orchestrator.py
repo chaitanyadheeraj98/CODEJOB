@@ -8,8 +8,9 @@ from sqlalchemy.pool import StaticPool
 
 from app.automation import RunOrchestrator, RunOrchestratorDependencies, RunOrchestratorRequest
 from app.db import Base
-from app.models import RecruiterEmail, ResumeAsset, UserSettings
+from app.models import RecentRunSkippedItem, RecruiterEmail, ResumeAsset, UserSettings
 from app.phase0 import RoutingEvidence, RoutingResult
+from app.recent_runs import record_skipped_item
 from app.services import policy_service
 
 
@@ -228,6 +229,7 @@ class RunOrchestratorTests(unittest.TestCase):
             apply_gmail_label=lambda *_args, **_kwargs: None,
             mark_message_processed=lambda message_id: marked.append(message_id),
             is_recruiter_like=lambda *_args, **_kwargs: recruiter_like,
+            record_skipped_item=lambda db_ctx, payload: record_skipped_item(db_ctx, payload),
         )
         return deps, marked, events
 
@@ -269,11 +271,18 @@ class RunOrchestratorTests(unittest.TestCase):
                     threshold=0.6,
                     dry_run=False,
                     model_name="deepseek-chat",
+                    run_source="automation_run",
+                    run_key="automation_run:test-1",
                     deps=deps,
                 )
             )
             self.assertEqual(result.skipped_count, 1)
             self.assertEqual(marked, ["m-1"])
+            skipped_item = db.query(RecentRunSkippedItem).filter(RecentRunSkippedItem.run_key == "automation_run:test-1").first()
+            self.assertIsNotNone(skipped_item)
+            assert skipped_item is not None
+            self.assertEqual(skipped_item.reason_code, "approved_sent_duplicate")
+            self.assertEqual(skipped_item.gmail_message_url, "https://mail.google.com/mail/u/0/#all/m-1")
 
     def test_dry_run_does_not_mutate_database_or_mark_processed(self) -> None:
         with Session(self.engine) as db:
@@ -293,6 +302,8 @@ class RunOrchestratorTests(unittest.TestCase):
                     threshold=0.6,
                     dry_run=True,
                     model_name="deepseek-chat",
+                    run_source="automation_run",
+                    run_key="automation_run:test-2",
                     deps=deps,
                 )
             )
@@ -319,6 +330,8 @@ class RunOrchestratorTests(unittest.TestCase):
                     threshold=0.6,
                     dry_run=False,
                     model_name="deepseek-chat",
+                    run_source="automation_run",
+                    run_key="automation_run:test-3",
                     deps=deps,
                 )
             )
@@ -327,6 +340,10 @@ class RunOrchestratorTests(unittest.TestCase):
             assert row is not None
             self.assertEqual(row.state, "processed_skipped")
             self.assertEqual(marked, ["m-3"])
+            skipped_item = db.query(RecentRunSkippedItem).filter(RecentRunSkippedItem.run_key == "automation_run:test-3").first()
+            self.assertIsNotNone(skipped_item)
+            assert skipped_item is not None
+            self.assertEqual(skipped_item.candidate_email_id, row.id)
 
     def test_explicit_interview_block_skips_before_draft_generation(self) -> None:
         with Session(self.engine) as db:
@@ -346,6 +363,8 @@ class RunOrchestratorTests(unittest.TestCase):
                     threshold=0.6,
                     dry_run=False,
                     model_name="deepseek-chat",
+                    run_source="automation_run",
+                    run_key="automation_run:test-4",
                     deps=deps,
                 )
             )
@@ -379,6 +398,8 @@ class RunOrchestratorTests(unittest.TestCase):
                     threshold=0.6,
                     dry_run=False,
                     model_name="deepseek-chat",
+                    run_source="automation_run",
+                    run_key="automation_run:test-5",
                     deps=deps,
                 )
             )
@@ -408,6 +429,8 @@ class RunOrchestratorTests(unittest.TestCase):
                     threshold=0.6,
                     dry_run=False,
                     model_name="deepseek-chat",
+                    run_source="automation_run",
+                    run_key="automation_run:test-6",
                     deps=deps,
                 )
             )
@@ -440,6 +463,8 @@ class RunOrchestratorTests(unittest.TestCase):
                     threshold=0.6,
                     dry_run=False,
                     model_name="deepseek-chat",
+                    run_source="automation_run",
+                    run_key="automation_run:test-7",
                     deps=deps,
                 )
             )
@@ -473,6 +498,8 @@ class RunOrchestratorTests(unittest.TestCase):
                     threshold=0.6,
                     dry_run=False,
                     model_name="deepseek-chat",
+                    run_source="automation_run",
+                    run_key="automation_run:test-8",
                     deps=deps,
                 )
             )
@@ -480,6 +507,11 @@ class RunOrchestratorTests(unittest.TestCase):
             self.assertIsNone(row)
             self.assertEqual(result.skipped_count, 1)
             self.assertEqual(marked, [])
+            skipped_item = db.query(RecentRunSkippedItem).filter(RecentRunSkippedItem.run_key == "automation_run:test-8").first()
+            self.assertIsNotNone(skipped_item)
+            assert skipped_item is not None
+            self.assertEqual(skipped_item.reason_code, "non_recruiter_like_gmail")
+            self.assertEqual(skipped_item.gmail_message_url, "https://mail.google.com/mail/u/0/#all/m-5c")
 
     def test_non_recruiter_message_still_processes_when_rule_warns(self) -> None:
         with Session(self.engine) as db:
@@ -501,6 +533,8 @@ class RunOrchestratorTests(unittest.TestCase):
                     threshold=0.6,
                     dry_run=False,
                     model_name="deepseek-chat",
+                    run_source="automation_run",
+                    run_key="automation_run:test-9",
                     deps=deps,
                 )
             )
@@ -619,6 +653,7 @@ class RunOrchestratorTests(unittest.TestCase):
                 apply_gmail_label=lambda *_args, **_kwargs: None,
                 mark_message_processed=lambda message_id: marked.append(message_id),
                 is_recruiter_like=lambda *_args, **_kwargs: True,
+                record_skipped_item=lambda db_ctx, payload: record_skipped_item(db_ctx, payload),
             )
 
             RunOrchestrator().execute(
@@ -634,6 +669,8 @@ class RunOrchestratorTests(unittest.TestCase):
                     threshold=0.6,
                     dry_run=False,
                     model_name="deepseek-chat",
+                    run_source="automation_run",
+                    run_key="automation_run:test-10",
                     deps=deps,
                 )
             )
@@ -757,6 +794,7 @@ class RunOrchestratorTests(unittest.TestCase):
                 apply_gmail_label=lambda *_args, **_kwargs: None,
                 mark_message_processed=lambda *_args, **_kwargs: None,
                 is_recruiter_like=lambda *_args, **_kwargs: True,
+                record_skipped_item=lambda db_ctx, payload: record_skipped_item(db_ctx, payload),
             )
 
             RunOrchestrator().execute(
@@ -772,6 +810,8 @@ class RunOrchestratorTests(unittest.TestCase):
                     threshold=0.6,
                     dry_run=False,
                     model_name="deepseek-chat",
+                    run_source="automation_run",
+                    run_key="automation_run:test-11",
                     deps=deps,
                 )
             )
