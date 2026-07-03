@@ -21,6 +21,12 @@ class AppRuntimeState:
     embedding_last_attempted_at: datetime | None = None
     embedding_last_success_at: datetime | None = None
     embedding_last_duration_ms: int | None = None
+    groq_last_error: str | None = None
+    groq_last_attempted_at: datetime | None = None
+    groq_last_success_at: datetime | None = None
+    groq_last_duration_ms: int | None = None
+    groq_last_provider_result: str | None = None
+    groq_request_mode: str = ""
     telegram_service: TelegramBotService | None = None
     telegram_action_lock: threading.Lock = field(default_factory=threading.Lock)
     telegram_auth_sessions: dict[int, datetime] = field(default_factory=dict)

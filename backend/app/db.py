@@ -296,6 +296,13 @@ def ensure_sqlite_phase0_columns() -> None:
             ("thread_snapshot_used", "ALTER TABLE recruiter_emails ADD COLUMN thread_snapshot_used BOOLEAN"),
             ("thread_snapshot_email_id", "ALTER TABLE recruiter_emails ADD COLUMN thread_snapshot_email_id INTEGER"),
             ("skip_reason", "ALTER TABLE recruiter_emails ADD COLUMN skip_reason VARCHAR(120)"),
+            ("intent_type", "ALTER TABLE recruiter_emails ADD COLUMN intent_type VARCHAR(80)"),
+            ("intent_confidence", "ALTER TABLE recruiter_emails ADD COLUMN intent_confidence FLOAT"),
+            ("intent_reason", "ALTER TABLE recruiter_emails ADD COLUMN intent_reason TEXT"),
+            ("intent_evidence_json", "ALTER TABLE recruiter_emails ADD COLUMN intent_evidence_json TEXT"),
+            ("intent_negative_evidence_json", "ALTER TABLE recruiter_emails ADD COLUMN intent_negative_evidence_json TEXT"),
+            ("gate_action", "ALTER TABLE recruiter_emails ADD COLUMN gate_action VARCHAR(40)"),
+            ("gate_provider", "ALTER TABLE recruiter_emails ADD COLUMN gate_provider VARCHAR(80)"),
             ("sync_batch_id", "ALTER TABLE recruiter_emails ADD COLUMN sync_batch_id VARCHAR(100)"),
             ("gmail_sent_id", "ALTER TABLE recruiter_emails ADD COLUMN gmail_sent_id VARCHAR(255)"),
             ("sent_attachment_file_names_json", "ALTER TABLE recruiter_emails ADD COLUMN sent_attachment_file_names_json TEXT"),
@@ -334,6 +341,7 @@ def ensure_sqlite_phase0_columns() -> None:
             ("feature_ai_enabled", "ALTER TABLE user_settings ADD COLUMN feature_ai_enabled BOOLEAN DEFAULT 0"),
             ("feature_ai_extractor_enabled", "ALTER TABLE user_settings ADD COLUMN feature_ai_extractor_enabled BOOLEAN DEFAULT 0"),
             ("feature_semantic_enabled", "ALTER TABLE user_settings ADD COLUMN feature_semantic_enabled BOOLEAN DEFAULT 0"),
+            ("feature_groq_job_parser_enabled", "ALTER TABLE user_settings ADD COLUMN feature_groq_job_parser_enabled BOOLEAN DEFAULT 0"),
             ("draft_text_size", "ALTER TABLE user_settings ADD COLUMN draft_text_size VARCHAR(20) DEFAULT 'normal'"),
             ("feature_auto_poll_interval_minutes", "ALTER TABLE user_settings ADD COLUMN feature_auto_poll_interval_minutes INTEGER DEFAULT 10"),
             ("feature_nvoids_enabled", "ALTER TABLE user_settings ADD COLUMN feature_nvoids_enabled BOOLEAN DEFAULT 1"),
@@ -439,6 +447,57 @@ def ensure_sqlite_phase0_columns() -> None:
 
         conn.exec_driver_sql(
             """
+            CREATE TABLE IF NOT EXISTS job_intent_taxonomy_entries (
+                id INTEGER PRIMARY KEY,
+                owner_id VARCHAR(100),
+                phrase VARCHAR(255),
+                normalized_phrase VARCHAR(255),
+                polarity VARCHAR(80),
+                source_examples_count INTEGER DEFAULT 0,
+                sample_evidence_json TEXT DEFAULT '[]',
+                confidence_aggregate FLOAT DEFAULT 0.0,
+                last_intent_type VARCHAR(80),
+                status VARCHAR(40) DEFAULT 'pending',
+                created_at DATETIME,
+                updated_at DATETIME
+            )
+            """
+        )
+        conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_job_intent_taxonomy_entries_owner_id ON job_intent_taxonomy_entries (owner_id)"
+        )
+        conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_job_intent_taxonomy_entries_phrase ON job_intent_taxonomy_entries (phrase)"
+        )
+        conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_job_intent_taxonomy_entries_normalized_phrase ON job_intent_taxonomy_entries (normalized_phrase)"
+        )
+        conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_job_intent_taxonomy_entries_polarity ON job_intent_taxonomy_entries (polarity)"
+        )
+        conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_job_intent_taxonomy_entries_status ON job_intent_taxonomy_entries (status)"
+        )
+        existing_job_intent_taxonomy_entries = {
+            row[1] for row in conn.exec_driver_sql("PRAGMA table_info(job_intent_taxonomy_entries)")
+        }
+        job_intent_taxonomy_alter_statements = [
+            ("normalized_phrase", "ALTER TABLE job_intent_taxonomy_entries ADD COLUMN normalized_phrase VARCHAR(255)"),
+            ("polarity", "ALTER TABLE job_intent_taxonomy_entries ADD COLUMN polarity VARCHAR(80)"),
+            ("source_examples_count", "ALTER TABLE job_intent_taxonomy_entries ADD COLUMN source_examples_count INTEGER DEFAULT 0"),
+            ("sample_evidence_json", "ALTER TABLE job_intent_taxonomy_entries ADD COLUMN sample_evidence_json TEXT DEFAULT '[]'"),
+            ("confidence_aggregate", "ALTER TABLE job_intent_taxonomy_entries ADD COLUMN confidence_aggregate FLOAT DEFAULT 0.0"),
+            ("last_intent_type", "ALTER TABLE job_intent_taxonomy_entries ADD COLUMN last_intent_type VARCHAR(80)"),
+            ("status", "ALTER TABLE job_intent_taxonomy_entries ADD COLUMN status VARCHAR(40) DEFAULT 'pending'"),
+            ("created_at", "ALTER TABLE job_intent_taxonomy_entries ADD COLUMN created_at DATETIME"),
+            ("updated_at", "ALTER TABLE job_intent_taxonomy_entries ADD COLUMN updated_at DATETIME"),
+        ]
+        for column_name, statement in job_intent_taxonomy_alter_statements:
+            if column_name not in existing_job_intent_taxonomy_entries:
+                conn.exec_driver_sql(statement)
+
+        conn.exec_driver_sql(
+            """
             CREATE TABLE IF NOT EXISTS productivity_events (
                 id INTEGER PRIMARY KEY,
                 owner_id VARCHAR(100),
@@ -524,6 +583,21 @@ def ensure_sqlite_phase0_columns() -> None:
         conn.exec_driver_sql(
             "CREATE INDEX IF NOT EXISTS ix_recent_run_skipped_items_reason_code ON recent_run_skipped_items (reason_code)"
         )
+        existing_recent_run_skipped_items = {
+            row[1] for row in conn.exec_driver_sql("PRAGMA table_info(recent_run_skipped_items)")
+        }
+        recent_run_skipped_alter_statements = [
+            ("intent_type", "ALTER TABLE recent_run_skipped_items ADD COLUMN intent_type VARCHAR(80)"),
+            ("intent_confidence", "ALTER TABLE recent_run_skipped_items ADD COLUMN intent_confidence FLOAT"),
+            ("intent_reason", "ALTER TABLE recent_run_skipped_items ADD COLUMN intent_reason TEXT"),
+            ("intent_evidence_json", "ALTER TABLE recent_run_skipped_items ADD COLUMN intent_evidence_json TEXT"),
+            ("intent_negative_evidence_json", "ALTER TABLE recent_run_skipped_items ADD COLUMN intent_negative_evidence_json TEXT"),
+            ("gate_action", "ALTER TABLE recent_run_skipped_items ADD COLUMN gate_action VARCHAR(40)"),
+            ("gate_provider", "ALTER TABLE recent_run_skipped_items ADD COLUMN gate_provider VARCHAR(80)"),
+        ]
+        for column_name, statement in recent_run_skipped_alter_statements:
+            if column_name not in existing_recent_run_skipped_items:
+                conn.exec_driver_sql(statement)
         conn.exec_driver_sql(
             """
             CREATE TABLE IF NOT EXISTS premium_number_leads (

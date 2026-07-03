@@ -107,6 +107,17 @@ type AiStatus = {
   embedding_last_attempted_at?: string | null
   embedding_last_success_at?: string | null
   embedding_last_duration_ms?: number | null
+  groq_configured?: boolean
+  groq_enabled_in_settings?: boolean
+  groq_model?: string
+  groq_base_url_present?: boolean
+  groq_runtime_healthy?: boolean | null
+  groq_last_error?: string | null
+  groq_detail?: string
+  groq_request_mode?: string
+  groq_last_attempted_at?: string | null
+  groq_last_success_at?: string | null
+  groq_last_duration_ms?: number | null
   last_error: string | null
   last_started_at: string | null
   last_finished_at: string | null
@@ -150,6 +161,7 @@ type SettingsPayload = {
   feature_ai_enabled: boolean
   feature_ai_extractor_enabled: boolean
   feature_semantic_enabled: boolean
+  feature_groq_job_parser_enabled: boolean
   draft_text_size: DraftTextSize
   fallback_draft_template: string
   signature_name: string
@@ -354,6 +366,13 @@ type RecentRunItem = {
   location?: string | null
   source_url?: string | null
   gmail_message_url?: string | null
+  intent_type?: string | null
+  intent_confidence?: number | null
+  intent_reason?: string | null
+  intent_evidence: string[]
+  intent_negative_evidence: string[]
+  gate_action?: string | null
+  gate_provider?: string | null
   created_at: string
 }
 
@@ -421,6 +440,21 @@ type PendingSkill = {
   normalized_name: string
   occurrence_count: number
   candidate_ids: number[]
+}
+
+type JobIntentLearningSignal = {
+  id: number
+  owner_id: string
+  phrase: string
+  normalized_phrase: string
+  polarity: string
+  source_examples_count: number
+  sample_evidence: string[]
+  confidence_aggregate: number
+  last_intent_type?: string | null
+  status: string
+  created_at: string
+  updated_at: string
 }
 
 type ResumeDatabaseSectionProps = {
@@ -650,6 +684,115 @@ export function SkillUpgradeSection({
                   </article>
                 )
               })}
+            </div>
+          )}
+        </section>
+      </div>
+    </section>
+  )
+}
+
+type JobIntentLearningSectionProps = {
+  pendingSignals: JobIntentLearningSignal[]
+  approvedSignals: JobIntentLearningSignal[]
+  loading: boolean
+  busySignalKey: string | null
+  approveSignal: (signal: JobIntentLearningSignal) => void
+  dismissSignal: (signal: JobIntentLearningSignal) => void
+}
+
+export function JobIntentLearningSection({
+  pendingSignals,
+  approvedSignals,
+  loading,
+  busySignalKey,
+  approveSignal,
+  dismissSignal,
+}: JobIntentLearningSectionProps) {
+  return (
+    <section className="card skillUpgradeCard">
+      <h2>Job Intent Learning</h2>
+      <div className="stack skillUpgradeStack">
+        <p className="subtle skillUpgradeIntro">
+          Groq-suggested Gmail intent phrases land here for review. Approve lets fallback mode use them later; dismiss keeps them suppressed.
+        </p>
+
+        <section className="skillUpgradeColumn">
+          <div className="skillUpgradeColumnHeader">
+            <h3>Pending Intent Signals</h3>
+            <span className="skillUpgradeCount">{pendingSignals.length}</span>
+          </div>
+          {loading ? (
+            <p className="subtle">Loading intent signals...</p>
+          ) : pendingSignals.length === 0 ? (
+            <p className="subtle">No pending job-intent learning right now.</p>
+          ) : (
+            <div className="skillUpgradeList">
+              {pendingSignals.map((signal) => {
+                const approveKey = `approve-intent:${signal.id}`
+                const dismissKey = `dismiss-intent:${signal.id}`
+                return (
+                  <article key={`${signal.id}-${signal.normalized_phrase}-${signal.polarity}`} className="skillUpgradeItem">
+                    <div className="skillUpgradeItemHeader">
+                      <strong className="skillUpgradeName">{signal.phrase}</strong>
+                      <span className="skillUpgradeBadge">{signal.source_examples_count} hit{signal.source_examples_count === 1 ? '' : 's'}</span>
+                    </div>
+                    <p className="subtle skillUpgradeMeta">Polarity: {signal.polarity}</p>
+                    <p className="subtle skillUpgradeMeta">Fallback confidence: {signal.confidence_aggregate.toFixed(2)}</p>
+                    {signal.last_intent_type ? <p className="subtle skillUpgradeMeta">Last intent: {signal.last_intent_type}</p> : null}
+                    {signal.sample_evidence.length > 0 ? (
+                      <div className="automationMetrics">
+                        <strong>Samples:</strong>
+                        {signal.sample_evidence.map((entry) => (
+                          <span key={`${signal.id}-${entry}`} className="tag">{entry}</span>
+                        ))}
+                      </div>
+                    ) : null}
+                    <div className="skillUpgradeActions">
+                      <button
+                        type="button"
+                        className="primary"
+                        onClick={() => approveSignal(signal)}
+                        disabled={busySignalKey !== null}
+                      >
+                        {busySignalKey === approveKey ? 'Approving...' : 'Approve'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => dismissSignal(signal)}
+                        disabled={busySignalKey !== null}
+                      >
+                        {busySignalKey === dismissKey ? 'Dismissing...' : 'Dismiss'}
+                      </button>
+                    </div>
+                  </article>
+                )
+              })}
+            </div>
+          )}
+        </section>
+
+        <section className="skillUpgradeColumn">
+          <div className="skillUpgradeColumnHeader">
+            <h3>Approved Intent Signals</h3>
+            <span className="skillUpgradeCount">{approvedSignals.length}</span>
+          </div>
+          {loading ? (
+            <p className="subtle">Loading approved intent signals...</p>
+          ) : approvedSignals.length === 0 ? (
+            <p className="subtle">No approved intent signals yet.</p>
+          ) : (
+            <div className="skillUpgradeList">
+              {approvedSignals.map((signal) => (
+                <article key={`approved-${signal.id}`} className="skillUpgradeItem">
+                  <div className="skillUpgradeItemHeader">
+                    <strong className="skillUpgradeName">{signal.phrase}</strong>
+                    <span className="skillUpgradeBadge">{signal.polarity}</span>
+                  </div>
+                  <p className="subtle skillUpgradeMeta">Examples: {signal.source_examples_count}</p>
+                  <p className="subtle skillUpgradeMeta">Confidence: {signal.confidence_aggregate.toFixed(2)}</p>
+                </article>
+              ))}
             </div>
           )}
         </section>
@@ -1274,6 +1417,7 @@ function App() {
     feature_ai_enabled: false,
     feature_ai_extractor_enabled: false,
     feature_semantic_enabled: false,
+    feature_groq_job_parser_enabled: false,
     draft_text_size: 'normal',
     fallback_draft_template: '',
     signature_name: '',
@@ -1292,6 +1436,10 @@ function App() {
   const [pendingSkills, setPendingSkills] = useState<PendingSkill[]>([])
   const [skillsLoading, setSkillsLoading] = useState(false)
   const [skillActionKey, setSkillActionKey] = useState<string | null>(null)
+  const [pendingJobIntentSignals, setPendingJobIntentSignals] = useState<JobIntentLearningSignal[]>([])
+  const [approvedJobIntentSignals, setApprovedJobIntentSignals] = useState<JobIntentLearningSignal[]>([])
+  const [jobIntentLoading, setJobIntentLoading] = useState(false)
+  const [jobIntentActionKey, setJobIntentActionKey] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
   const [nvoidsRunning, setNvoidsRunning] = useState(false)
   const [oauthInProgress, setOauthInProgress] = useState(false)
@@ -1558,6 +1706,7 @@ function App() {
       ...payload,
       feature_ai_extractor_enabled: Boolean(payload.feature_ai_extractor_enabled),
       feature_semantic_enabled: Boolean(payload.feature_semantic_enabled),
+      feature_groq_job_parser_enabled: Boolean(payload.feature_groq_job_parser_enabled),
       default_gmail_query: payload.default_gmail_query || payload.gmail_query || 'is:unread',
       saved_gmail_queries: payload.saved_gmail_queries ?? [],
       default_date_mode: payload.default_date_mode === 'off' ? 'off' : 'today',
@@ -1607,12 +1756,33 @@ function App() {
     setPendingSkills((await res.json()) as PendingSkill[])
   }
 
+  const loadPendingJobIntentSignals = async () => {
+    const res = await fetch(`${apiBase}/settings/job-intent-learning/pending`)
+    if (!res.ok) throw new Error('Failed to load pending job-intent learning')
+    setPendingJobIntentSignals((await res.json()) as JobIntentLearningSignal[])
+  }
+
+  const loadApprovedJobIntentSignals = async () => {
+    const res = await fetch(`${apiBase}/settings/job-intent-learning/approved`)
+    if (!res.ok) throw new Error('Failed to load approved job-intent learning')
+    setApprovedJobIntentSignals((await res.json()) as JobIntentLearningSignal[])
+  }
+
   const loadSkillUpgradeData = async () => {
     setSkillsLoading(true)
     try {
       await loadPendingSkills()
     } finally {
       setSkillsLoading(false)
+    }
+  }
+
+  const loadJobIntentLearningData = async () => {
+    setJobIntentLoading(true)
+    try {
+      await Promise.all([loadPendingJobIntentSignals(), loadApprovedJobIntentSignals()])
+    } finally {
+      setJobIntentLoading(false)
     }
   }
 
@@ -1936,6 +2106,7 @@ function App() {
           loadResumes(),
           loadAttachmentFiles(),
           loadSkillUpgradeData(),
+          loadJobIntentLearningData(),
           loadAiStatus(),
           loadTelegramStatus(),
           loadRecentRuns(),
@@ -2218,6 +2389,42 @@ function App() {
     }
   }
 
+  const approvePendingJobIntentSignal = async (signal: JobIntentLearningSignal) => {
+    setJobIntentActionKey(`approve-intent:${signal.id}`)
+    setError('')
+    try {
+      const res = await fetch(`${apiBase}/settings/job-intent-learning/approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phrase: signal.phrase, polarity: signal.polarity }),
+      })
+      if (!res.ok) throw new Error('Failed to approve job-intent signal')
+      await loadJobIntentLearningData()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setJobIntentActionKey(null)
+    }
+  }
+
+  const dismissPendingJobIntentSignal = async (signal: JobIntentLearningSignal) => {
+    setJobIntentActionKey(`dismiss-intent:${signal.id}`)
+    setError('')
+    try {
+      const res = await fetch(`${apiBase}/settings/job-intent-learning/dismiss`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phrase: signal.phrase, polarity: signal.polarity }),
+      })
+      if (!res.ok) throw new Error('Failed to dismiss job-intent signal')
+      await loadJobIntentLearningData()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setJobIntentActionKey(null)
+    }
+  }
+
   const runAutomation = async () => {
     setRunning(true)
     setError('')
@@ -2258,6 +2465,7 @@ function App() {
       await refreshVisibleCandidates(settings.mail_date ?? null, { activeOnly: false })
       await loadProductivityAnalytics(timeRange)
       await loadRecentRuns()
+      await loadJobIntentLearningData()
     } catch (e) {
       if ((e as Error).name === 'AbortError') {
         if (!status?.authenticated) {
@@ -2519,6 +2727,9 @@ function App() {
     : null
   const embeddingLastDuration = aiStatus?.embedding_last_duration_ms
     ? `${(aiStatus.embedding_last_duration_ms / 1000).toFixed(1)}s`
+    : null
+  const groqLastDuration = aiStatus?.groq_last_duration_ms
+    ? `${(aiStatus.groq_last_duration_ms / 1000).toFixed(1)}s`
     : null
   const trendBars = useMemo<ProductivityBarPoint[]>(
     () => (productivityTrend?.bars ?? []),
@@ -2947,6 +3158,15 @@ function App() {
                   <div className="row"><span className="label">Provider</span><span>{aiStatus?.provider ?? 'DeepSeek'}</span></div>
                   <div className="row"><span className="label">Model</span><span className="tag">{aiStatus?.model ?? 'deepseek-chat'}</span></div>
                   <div className="row"><span className="label">Connection</span><span className="dotOk">{aiStatus?.connected ? 'Healthy' : 'Disconnected'}</span></div>
+                  <div className="row"><span className="label">Groq Enabled</span><span>{aiStatus?.groq_enabled_in_settings ? 'On' : 'Off'}</span></div>
+                  <div className="row"><span className="label">Groq Config</span><span>{typeof aiStatus?.groq_configured === 'boolean' ? (aiStatus.groq_configured ? 'Configured' : 'Missing setup') : 'Unknown'}</span></div>
+                  <div className="row"><span className="label">Groq Model</span><span className="tag">{aiStatus?.groq_model ?? 'llama-3.1-8b-instant'}</span></div>
+                  <div className="row"><span className="label">Groq Request Mode</span><span>{aiStatus?.groq_request_mode || 'Unknown'}</span></div>
+                  <div className="row"><span className="label">Groq Runtime</span><span>{typeof aiStatus?.groq_runtime_healthy === 'boolean' ? (aiStatus.groq_runtime_healthy ? 'Healthy' : 'Fallback') : 'Unknown'}</span></div>
+                  {aiStatus?.groq_last_error ? <div className="row"><span className="label">Groq Error</span><span>{aiStatus.groq_last_error}</span></div> : null}
+                  {aiStatus?.groq_detail ? <div className="row"><span className="label">Groq Detail</span><span>{aiStatus.groq_detail}</span></div> : null}
+                  {aiStatus?.groq_last_success_at ? <div className="row"><span className="label">Groq Last Success</span><span>{aiStatus.groq_last_success_at}</span></div> : null}
+                  {groqLastDuration ? <div className="row"><span className="label">Groq Duration</span><span>{groqLastDuration}</span></div> : null}
                   <div className="row"><span className="label">Embedding</span><span className="dotOk">{typeof aiStatus?.embedding_runtime_healthy === 'boolean' ? (aiStatus.embedding_runtime_healthy ? 'Healthy' : 'Disconnected') : typeof aiStatus?.embedding_connected === 'boolean' ? (aiStatus.embedding_connected ? 'Healthy' : 'Unknown') : 'Unknown'}{aiStatus?.embedding_provider ? ` (${aiStatus.embedding_provider}${aiStatus.embedding_model ? ` / ${aiStatus.embedding_model}` : ''})` : ''}</span></div>
                   <div className="row"><span className="label">Embedding Config</span><span>{typeof aiStatus?.embedding_configured === 'boolean' ? (aiStatus.embedding_configured ? 'Configured' : 'Missing setup') : 'Unknown'}</span></div>
                   {aiStatus?.embedding_last_error ? <div className="row"><span className="label">Embedding Error</span><span>{aiStatus.embedding_last_error}</span></div> : null}
@@ -2989,6 +3209,17 @@ function App() {
                         type="checkbox"
                         checked={settings.feature_semantic_enabled}
                         onChange={(e) => setSettings({ ...settings, feature_semantic_enabled: e.target.checked })}
+                      />
+                      <span className="toggleTrack" />
+                    </span>
+                  </label>
+                  <label className="toggleRow">
+                    <span>Enable Groq Smart Job Parser</span>
+                    <span className="toggleSwitch">
+                      <input
+                        type="checkbox"
+                        checked={settings.feature_groq_job_parser_enabled}
+                        onChange={(e) => setSettings({ ...settings, feature_groq_job_parser_enabled: e.target.checked })}
                       />
                       <span className="toggleTrack" />
                     </span>
@@ -3047,6 +3278,15 @@ function App() {
                 busySkillKey={skillActionKey}
                 approveSkill={approvePendingSkill}
                 dismissSkill={dismissPendingSkill}
+              />
+
+              <JobIntentLearningSection
+                pendingSignals={pendingJobIntentSignals}
+                approvedSignals={approvedJobIntentSignals}
+                loading={jobIntentLoading}
+                busySignalKey={jobIntentActionKey}
+                approveSignal={approvePendingJobIntentSignal}
+                dismissSignal={dismissPendingJobIntentSignal}
               />
 
               <section className="card">
@@ -3972,6 +4212,34 @@ function App() {
                             <p><strong>Source:</strong> {getSourceLabel(skipped.source_type)}</p>
                             <p><strong>Title:</strong> {renderTextOrDash(skipped.title_or_subject)}</p>
                             <p><strong>Why:</strong> {renderTextOrDash(skipped.reason_detail || skipped.reason_code)}</p>
+                            {skipped.intent_type || skipped.gate_action || skipped.gate_provider ? (
+                              <p>
+                                <strong>Gate:</strong>{' '}
+                                {[skipped.intent_type, skipped.gate_action, skipped.gate_provider].filter(Boolean).join(' | ')}
+                              </p>
+                            ) : null}
+                            {skipped.intent_confidence != null ? (
+                              <p><strong>Confidence:</strong> {skipped.intent_confidence.toFixed(2)}</p>
+                            ) : null}
+                            {skipped.intent_reason && skipped.intent_reason !== skipped.reason_detail ? (
+                              <p><strong>Intent Reason:</strong> {skipped.intent_reason}</p>
+                            ) : null}
+                            {skipped.intent_evidence.length > 0 ? (
+                              <div className="automationMetrics">
+                                <strong>Evidence:</strong>
+                                {skipped.intent_evidence.map((entry) => (
+                                  <span key={`${skipped.id}-${entry}`} className="tag">{entry}</span>
+                                ))}
+                              </div>
+                            ) : null}
+                            {skipped.intent_negative_evidence.length > 0 ? (
+                              <div className="automationMetrics">
+                                <strong>Negative Evidence:</strong>
+                                {skipped.intent_negative_evidence.map((entry) => (
+                                  <span key={`${skipped.id}-neg-${entry}`} className="tag">{entry}</span>
+                                ))}
+                              </div>
+                            ) : null}
                             {skipped.source_url || skipped.gmail_message_url ? (
                               <p>
                                 <strong>Open:</strong>{' '}

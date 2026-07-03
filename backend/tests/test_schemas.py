@@ -97,6 +97,10 @@ class EmailResponseRoutingTests(unittest.TestCase):
         payload = SettingsRequest.model_validate({"feature_ai_extractor_enabled": True})
         self.assertTrue(payload.feature_ai_extractor_enabled)
 
+    def test_settings_request_accepts_groq_job_parser_toggle(self) -> None:
+        payload = SettingsRequest.model_validate({"feature_groq_job_parser_enabled": True})
+        self.assertTrue(payload.feature_groq_job_parser_enabled)
+
 
 if __name__ == "__main__":
     unittest.main()

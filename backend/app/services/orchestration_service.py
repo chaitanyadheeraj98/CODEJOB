@@ -12,8 +12,10 @@ from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.gates import EmailIntentDecision
 from app.ai.resume_context_attribution import RESUME_CONTEXT_MISSING, RESUME_CONTEXT_RULES_ONLY
 from app.automation import RunOrchestrator, RunOrchestratorDependencies, RunOrchestratorRequest
+from app.job_intent_learning import approved_learning_signals_for_owner, record_pending_job_intent_learning
 from app.services import policy_service
 from app.services.policy_service import EffectiveRunInputs
 from app.gmail_client import GmailMessageCandidate, MailAttachment
@@ -80,6 +82,7 @@ class OrchestrationDeps:
     oauth_bootstrap_status: Callable[[], tuple[bool, str | None]]
     list_unread_candidates_by_query: Callable[..., list[GmailMessageCandidate]]
     is_recruiter_like: Callable[[str, str, str], bool]
+    classify_email_intent: Callable[..., EmailIntentDecision]
     parse_email: Callable[[str, str], dict[str, str | int | bool]]
     parse_email_with_details: Callable[..., tuple[dict[str, str | int | bool], dict[str, Any]]]
     hard_filter_check: Callable[[dict[str, str | int | bool], UserSettings, Any], tuple[bool, str]]
@@ -162,7 +165,27 @@ class OrchestrationService:
                 recruiter_like_warning: str | None = None
                 recruiter_like_mode = policy_service.recruiter_like_rule_mode(effective_policy)
                 is_recruiter_like = self.deps.is_recruiter_like(item["sender"], item["subject"], item["body"])
-                if recruiter_like_mode == "block" and not is_recruiter_like:
+                approved_learning_signals = approved_learning_signals_for_owner(db, self.deps.owner_id)
+                intent_decision = self.deps.classify_email_intent(
+                    sender=item["sender"],
+                    subject=item["subject"],
+                    body=item["body"],
+                    snippet=item.get("snippet", ""),
+                    recruiter_like=is_recruiter_like,
+                    groq_enabled=bool(user_settings.feature_groq_job_parser_enabled),
+                    approved_learning_signals=approved_learning_signals,
+                )
+                if intent_decision.provider == "groq":
+                    record_pending_job_intent_learning(
+                        db,
+                        owner_id=self.deps.owner_id,
+                        intent_type=intent_decision.intent_type,
+                        confidence=intent_decision.confidence,
+                        evidence=intent_decision.evidence,
+                        negative_evidence=intent_decision.negative_evidence,
+                        learned_signals=intent_decision.learned_signals,
+                    )
+                if intent_decision.action == "skip":
                     skipped_count += 1
                     skipped_item_count += 1
                     record_skipped_item(
@@ -172,16 +195,23 @@ class OrchestrationService:
                             run_source=RUN_SOURCE_GMAIL_SYNC,
                             run_key=run_key,
                             source_type="gmail",
-                            reason_code="non_recruiter_like_gmail",
-                            reason_detail="Skipped because the message did not look recruiter or staffing related.",
+                            reason_code=intent_decision.intent_type or "skip",
+                            reason_detail=intent_decision.reason,
                             external_message_id=item["external_message_id"],
                             external_thread_id=item["external_thread_id"],
                             title_or_subject=item["subject"],
                             sender=item["sender"],
+                            intent_type=intent_decision.intent_type,
+                            intent_confidence=intent_decision.confidence,
+                            intent_reason=intent_decision.reason,
+                            intent_evidence=intent_decision.evidence,
+                            intent_negative_evidence=intent_decision.negative_evidence,
+                            gate_action=intent_decision.action,
+                            gate_provider=intent_decision.provider,
                         ),
                     )
                     continue
-                if recruiter_like_mode == "warn" and not is_recruiter_like:
+                if recruiter_like_mode in {"block", "warn"} and not is_recruiter_like:
                     recruiter_like_warning = "non_recruiter_like_gmail"
 
                 parsed, parser_details = self.deps.parse_email_with_details(
@@ -301,6 +331,13 @@ class OrchestrationService:
                     thread_snapshot_used=getattr(semantic_diag, "thread_snapshot_used", None),
                     thread_snapshot_email_id=getattr(semantic_diag, "thread_snapshot_email_id", None),
                     semantic_embedding=email_embedding_json,
+                    intent_type=intent_decision.intent_type,
+                    intent_confidence=intent_decision.confidence,
+                    intent_reason=intent_decision.reason,
+                    intent_evidence_json=json.dumps(intent_decision.evidence, separators=(",", ":")),
+                    intent_negative_evidence_json=json.dumps(intent_decision.negative_evidence, separators=(",", ":")),
+                    gate_action=intent_decision.action,
+                    gate_provider=intent_decision.provider,
                     sync_batch_id=sync_batch_id,
                     draft_reply=draft,
                     draft_source="rules_only" if draft else None,
@@ -506,6 +543,7 @@ class OrchestrationService:
                         apply_gmail_label=lambda _db, email, item: self.deps.apply_gmail_label_for_email(email=email, candidate_item=item),
                         mark_message_processed=self.deps.mark_message_processed,
                         is_recruiter_like=self.deps.is_recruiter_like,
+                        classify_email_intent=self.deps.classify_email_intent,
                         record_skipped_item=lambda db_ctx, payload: record_skipped_item(db_ctx, payload),
                     ),
                 )

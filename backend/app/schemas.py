@@ -72,6 +72,7 @@ class SettingsRequest(BaseModel):
     feature_ai_enabled: bool = False
     feature_ai_extractor_enabled: bool = False
     feature_semantic_enabled: bool = False
+    feature_groq_job_parser_enabled: bool = False
     draft_text_size: str = "normal"
     fallback_draft_template: str = ""
     signature_name: str = ""
@@ -231,6 +232,50 @@ class DismissSkillRequest(BaseModel):
     canonical_name: str | None = None
 
 
+class JobIntentTaxonomyEntryResponse(BaseModel):
+    id: int
+    owner_id: str
+    phrase: str
+    normalized_phrase: str
+    polarity: str
+    source_examples_count: int
+    sample_evidence: list[str] = Field(default_factory=list, validation_alias=AliasChoices("sample_evidence", "sample_evidence_json"))
+    confidence_aggregate: float
+    last_intent_type: str | None = None
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+    @field_validator("sample_evidence", mode="before")
+    @classmethod
+    def parse_sample_evidence(cls, value: Any) -> list[str]:
+        if value in (None, ""):
+            return []
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except json.JSONDecodeError:
+                return []
+            if isinstance(parsed, list):
+                return [str(item).strip() for item in parsed if str(item).strip()]
+            return []
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        return []
+
+
+class ApproveJobIntentSignalRequest(BaseModel):
+    phrase: str
+    polarity: str
+
+
+class DismissJobIntentSignalRequest(BaseModel):
+    phrase: str
+    polarity: str
+
+
 class DraftQualityResponse(BaseModel):
     content_valid: bool
     greeting_compliance: str
@@ -275,6 +320,13 @@ class EmailResponse(BaseModel):
     thread_snapshot_used: bool | None = None
     thread_snapshot_email_id: int | None = None
     skip_reason: str | None
+    intent_type: str | None = None
+    intent_confidence: float | None = None
+    intent_reason: str | None = None
+    intent_evidence: list[str] = Field(default_factory=list, validation_alias=AliasChoices("intent_evidence", "intent_evidence_json"))
+    intent_negative_evidence: list[str] = Field(default_factory=list, validation_alias=AliasChoices("intent_negative_evidence", "intent_negative_evidence_json"))
+    gate_action: str | None = None
+    gate_provider: str | None = None
     sync_batch_id: str | None
     draft_reply: str
     draft_source: str | None = None
@@ -334,6 +386,23 @@ class EmailResponse(BaseModel):
             return cast(RoutingListInput, value)
         return empty_list
 
+    @field_validator("intent_evidence", "intent_negative_evidence", mode="before")
+    @classmethod
+    def parse_intent_lists(cls, value: Any) -> list[str]:
+        if value in (None, ""):
+            return []
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except json.JSONDecodeError:
+                return []
+            if isinstance(parsed, list):
+                return [str(item).strip() for item in parsed if str(item).strip()]
+            return []
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        return []
+
     @field_validator("parser_details", mode="before")
     @classmethod
     def parse_parser_details(cls, value: Any) -> dict[str, object] | None:
@@ -390,6 +459,17 @@ class AIStatusResponse(BaseModel):
     embedding_last_attempted_at: datetime | None = None
     embedding_last_success_at: datetime | None = None
     embedding_last_duration_ms: int | None = None
+    groq_configured: bool = False
+    groq_enabled_in_settings: bool = False
+    groq_model: str = ""
+    groq_base_url_present: bool = False
+    groq_runtime_healthy: bool | None = None
+    groq_last_error: str | None = None
+    groq_detail: str = ""
+    groq_request_mode: str = ""
+    groq_last_attempted_at: datetime | None = None
+    groq_last_success_at: datetime | None = None
+    groq_last_duration_ms: int | None = None
     semantic_input_source: str | None = None
     semantic_input_chars: int | None = None
     semantic_chunks: int | None = None
@@ -665,6 +745,13 @@ class RecentRunItemResponse(BaseModel):
     location: str | None = None
     source_url: str | None = None
     gmail_message_url: str | None = None
+    intent_type: str | None = None
+    intent_confidence: float | None = None
+    intent_reason: str | None = None
+    intent_evidence: list[str] = Field(default_factory=list)
+    intent_negative_evidence: list[str] = Field(default_factory=list)
+    gate_action: str | None = None
+    gate_provider: str | None = None
     created_at: datetime
 
 

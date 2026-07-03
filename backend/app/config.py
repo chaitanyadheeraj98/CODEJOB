@@ -15,6 +15,20 @@ class Settings(BaseSettings):
     deepseek_model_fast: str = "deepseek-chat"
     deepseek_timeout_seconds: float = 20.0
     feature_deepseek_enabled: bool = False
+    groq_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("CodeJobGroq", "GROQ_API_KEY", "Groq_API_KEY"),
+    )
+    groq_base_url: str = "https://api.groq.com/openai/v1"
+    groq_gate_model: str = Field(
+        default="llama-3.1-8b-instant",
+        validation_alias=AliasChoices("CodeJobGroq_Model", "GROQ_GATE_MODEL"),
+    )
+    groq_gate_timeout_seconds: float = 20.0
+    groq_gate_strict_json: bool = True
+    groq_gate_body_char_limit: int = 6000
+    groq_gate_max_retries: int = 2
+    groq_gate_redact_contact_info: bool = True
     google_client_id: str = ""
     google_client_secret: str = ""
     google_redirect_uri: str = "http://localhost:8080/"

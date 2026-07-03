@@ -6,6 +6,8 @@ from datetime import UTC, datetime
 import logging
 from typing import Any, Callable, Mapping
 
+from app.gates import EmailIntentDecision
+from app.job_intent_learning import approved_learning_signals_for_owner, record_pending_job_intent_learning
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
@@ -50,6 +52,7 @@ class RunOrchestratorDependencies:
     apply_gmail_label: Callable[[Session, RecruiterEmail, CandidateItem], None]
     mark_message_processed: Callable[[str], None]
     is_recruiter_like: Callable[[str, str, str], bool]
+    classify_email_intent: Callable[..., EmailIntentDecision]
     record_skipped_item: Callable[[Session, SkippedItemRecord], None]
 
 
@@ -134,19 +137,38 @@ class RunOrchestrator:
             snippet = str(item.get("snippet", ""))
             recruiter_like_warning: str | None = None
             recruiter_like_mode = policy_service.recruiter_like_rule_mode(request.effective_policy)
-            if (
-                recruiter_like_mode == "block"
-                and not request.deps.is_recruiter_like(sender, subject, body)
-            ):
+            recruiter_like = request.deps.is_recruiter_like(sender, subject, body)
+            approved_learning_signals = approved_learning_signals_for_owner(request.db, request.owner_id)
+            intent_decision = request.deps.classify_email_intent(
+                sender=sender,
+                subject=subject,
+                body=body,
+                snippet=snippet,
+                recruiter_like=recruiter_like,
+                groq_enabled=bool(request.user_settings.feature_groq_job_parser_enabled),
+                approved_learning_signals=approved_learning_signals,
+            )
+            if intent_decision.provider == "groq":
+                record_pending_job_intent_learning(
+                    request.db,
+                    owner_id=request.owner_id,
+                    intent_type=intent_decision.intent_type,
+                    confidence=intent_decision.confidence,
+                    evidence=intent_decision.evidence,
+                    negative_evidence=intent_decision.negative_evidence,
+                    learned_signals=intent_decision.learned_signals,
+                )
+            if intent_decision.action == "skip":
                 skipped_count += 1
                 self._record_skipped_item(
                     request=request,
                     item=item,
-                    reason_code="non_recruiter_like_gmail",
-                    reason_detail="Skipped because the message did not look recruiter or staffing related.",
+                    reason_code=intent_decision.intent_type or "skip",
+                    reason_detail=intent_decision.reason,
+                    intent_decision=intent_decision,
                 )
                 continue
-            if recruiter_like_mode == "warn" and not request.deps.is_recruiter_like(sender, subject, body):
+            if recruiter_like_mode in {"block", "warn"} and not recruiter_like:
                 recruiter_like_warning = "non_recruiter_like_gmail"
             parsed_for_selection, parser_details = request.deps.parse_email_with_details(
                 subject,
@@ -231,6 +253,7 @@ class RunOrchestrator:
                         item=item,
                         reason_code=preparation.skip_reason or "not_qualified",
                         reason_detail=preparation.decision_reason or "Skipped because the candidate was not qualified for queueing.",
+                        intent_decision=intent_decision,
                     )
                     continue
                 email = self._email_row(existing, request, item, parsed, parser_details_json, skills_json)
@@ -262,6 +285,13 @@ class RunOrchestrator:
                     target.auto_reject_reason = preparation.auto_reject_reason
                     target.decision_reason = preparation.decision_reason
                     target.skip_reason = preparation.skip_reason
+                    target.intent_type = intent_decision.intent_type
+                    target.intent_confidence = intent_decision.confidence
+                    target.intent_reason = intent_decision.reason
+                    target.intent_evidence_json = json.dumps(intent_decision.evidence, separators=(",", ":"))
+                    target.intent_negative_evidence_json = json.dumps(intent_decision.negative_evidence, separators=(",", ":"))
+                    target.gate_action = intent_decision.action
+                    target.gate_provider = intent_decision.provider
                     target.last_error = None
                     target.draft_source = None
                     target.draft_model = None
@@ -291,6 +321,7 @@ class RunOrchestrator:
                     reason_detail=email.decision_reason or "Skipped because the candidate was not qualified for queueing.",
                     candidate_email_id=email.id,
                     gmail_message_url=email.gmail_message_url,
+                    intent_decision=intent_decision,
                 )
                 last_email = email
                 continue
@@ -309,6 +340,13 @@ class RunOrchestrator:
                     target.last_error = "Could not resolve recruiter To and employer CC"
                     target.skip_reason = preparation.skip_reason
                     target.decision_reason = preparation.decision_reason
+                    target.intent_type = intent_decision.intent_type
+                    target.intent_confidence = intent_decision.confidence
+                    target.intent_reason = intent_decision.reason
+                    target.intent_evidence_json = json.dumps(intent_decision.evidence, separators=(",", ":"))
+                    target.intent_negative_evidence_json = json.dumps(intent_decision.negative_evidence, separators=(",", ":"))
+                    target.gate_action = intent_decision.action
+                    target.gate_provider = intent_decision.provider
                     warnings: list[str] = []
                     if recruiter_like_warning:
                         warnings.append(recruiter_like_warning)
@@ -370,6 +408,13 @@ class RunOrchestrator:
                 target.thread_snapshot_used = getattr(preparation.semantic_diag, "thread_snapshot_used", None)
                 target.thread_snapshot_email_id = getattr(preparation.semantic_diag, "thread_snapshot_email_id", None)
                 target.semantic_embedding = preparation.email_embedding_json or target.semantic_embedding
+                target.intent_type = intent_decision.intent_type
+                target.intent_confidence = intent_decision.confidence
+                target.intent_reason = intent_decision.reason
+                target.intent_evidence_json = json.dumps(intent_decision.evidence, separators=(",", ":"))
+                target.intent_negative_evidence_json = json.dumps(intent_decision.negative_evidence, separators=(",", ":"))
+                target.gate_action = intent_decision.action
+                target.gate_provider = intent_decision.provider
                 warnings: list[str] = []
                 if preparation.hard_filter_reason not in {"", "hard_filters_passed"}:
                     warnings.append(preparation.hard_filter_reason.removeprefix("warnings: ").strip())
@@ -518,6 +563,7 @@ class RunOrchestrator:
         reason_detail: str,
         candidate_email_id: int | None = None,
         gmail_message_url: str | None = None,
+        intent_decision: EmailIntentDecision | None = None,
     ) -> None:
         request.deps.record_skipped_item(
             request.db,
@@ -535,5 +581,12 @@ class RunOrchestrator:
                 sender=str(item.get("sender") or ""),
                 source_url=None,
                 gmail_message_url=gmail_message_url,
+                intent_type=intent_decision.intent_type if intent_decision else None,
+                intent_confidence=intent_decision.confidence if intent_decision else None,
+                intent_reason=intent_decision.reason if intent_decision else None,
+                intent_evidence=intent_decision.evidence if intent_decision else None,
+                intent_negative_evidence=intent_decision.negative_evidence if intent_decision else None,
+                gate_action=intent_decision.action if intent_decision else None,
+                gate_provider=intent_decision.provider if intent_decision else None,
             ),
         )

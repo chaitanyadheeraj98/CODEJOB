@@ -34,6 +34,8 @@ from app.automation import (
     RunOrchestratorRequest,
 )
 from app.db import Base, SessionLocal, engine, ensure_sqlite_phase0_columns
+from app.gates import classify_email_intent
+from app.ai.groq_client import groq_request_mode_for_model
 from app.gmail_client import (
     GmailMessageCandidate,
     get_message_rfc_message_id,
@@ -56,6 +58,7 @@ from app.models import (
     CustomSkillTaxonomyEntry,
     DraftEditFeedback,
     EmployerNumber,
+    JobIntentTaxonomyEntry,
     NumberReviewQueue,
     PremiumNumberLead,
     ProductivityEvent,
@@ -102,6 +105,7 @@ from app.premium_numbers.intelligence import OPPORTUNITY_STATUS_VALUES
 from app.premium_numbers.phone_normalization import best_display_phone, canonicalize_phone
 from app.query_bucket import sanitize_saved_queries
 from app.runtime_state import runtime_state
+from app.job_intent_learning import normalize_job_intent_phrase
 from app.services import analytics_service, policy_service
 from app.services.auto_runner_service import AutoRunnerService
 from app.services.candidate_runtime_service import CandidateRuntimeDeps, CandidateRuntimeService, resolve_resume_display_name
@@ -114,6 +118,7 @@ from app.services.startup_service import StartupService
 from app.services.telegram_runtime_service import TelegramRuntime, TelegramRuntimeDeps
 from app.schemas import (
     AIStatusResponse,
+    ApproveJobIntentSignalRequest,
     ApproveSendRequest,
     ApproveSkillRequest,
     AttachmentAssetResponse,
@@ -123,6 +128,7 @@ from app.schemas import (
     BulkRejectRequest,
     CandidateListResponse,
     CustomSkillTaxonomyEntryResponse,
+    DismissJobIntentSignalRequest,
     DismissSkillRequest,
     EmailResponse,
     GmailStatusResponse,
@@ -130,6 +136,7 @@ from app.schemas import (
     GmailLabelingPreviewRequest,
     GmailLabelingPreviewResponse,
     IngestEmailRequest,
+    JobIntentTaxonomyEntryResponse,
     OAuthStartResponse,
     OAuthUrlResponse,
     EmployerNumberResponse,
@@ -208,6 +215,11 @@ embedding_last_error: str | None = None
 embedding_last_attempted_at: datetime | None = None
 embedding_last_success_at: datetime | None = None
 embedding_last_duration_ms: int | None = None
+groq_last_error: str | None = None
+groq_last_attempted_at: datetime | None = None
+groq_last_success_at: datetime | None = None
+groq_last_duration_ms: int | None = None
+groq_last_provider_result: str | None = None
 semantic_input_source: str | None = None
 semantic_input_chars: int | None = None
 semantic_chunks: int | None = None
@@ -1047,6 +1059,7 @@ def _get_orchestration_service() -> OrchestrationService:
                 oauth_bootstrap_status=lambda: oauth_bootstrap_status(),
                 list_unread_candidates_by_query=lambda *args, **kwargs: list_unread_candidates_by_query(*args, **kwargs),
                 is_recruiter_like=lambda sender, subject, body: is_recruiter_like(sender, subject, body),
+                classify_email_intent=lambda **kwargs: classify_email_intent(**kwargs),
                 parse_email=lambda subject, body: parse_email(subject, body),
                 parse_email_with_details=lambda subject, body, **kwargs: parse_email_with_details(subject, body, **kwargs),
                 hard_filter_check=lambda parsed, user_settings, effective_policy: hard_filter_check(parsed, user_settings, effective_policy),
@@ -1418,6 +1431,80 @@ def _upsert_custom_skill_entry(
     return created
 
 
+def _serialize_job_intent_entry(entry: JobIntentTaxonomyEntry) -> JobIntentTaxonomyEntryResponse:
+    payload = JobIntentTaxonomyEntryResponse.model_validate(entry).model_dump()
+    try:
+        sample_evidence = json.loads(entry.sample_evidence_json or "[]")
+    except json.JSONDecodeError:
+        sample_evidence = []
+    payload["sample_evidence"] = [str(item).strip() for item in sample_evidence if str(item).strip()]
+    return JobIntentTaxonomyEntryResponse.model_validate(payload)
+
+
+def _list_job_intent_entries(db: Session, *, status: str) -> list[JobIntentTaxonomyEntry]:
+    return (
+        db.query(JobIntentTaxonomyEntry)
+        .filter(
+            JobIntentTaxonomyEntry.owner_id == settings.owner_id,
+            JobIntentTaxonomyEntry.status == status,
+        )
+        .order_by(
+            JobIntentTaxonomyEntry.source_examples_count.desc(),
+            JobIntentTaxonomyEntry.confidence_aggregate.desc(),
+            JobIntentTaxonomyEntry.phrase.asc(),
+            JobIntentTaxonomyEntry.id.asc(),
+        )
+        .all()
+    )
+
+
+def _upsert_job_intent_entry(
+    db: Session,
+    *,
+    phrase: str,
+    polarity: str,
+    status: str,
+) -> JobIntentTaxonomyEntry:
+    cleaned_phrase = str(phrase or "").strip()
+    normalized_phrase = normalize_job_intent_phrase(cleaned_phrase)
+    cleaned_polarity = str(polarity or "").strip().lower()
+    if not normalized_phrase:
+        raise HTTPException(status_code=400, detail="Intent-learning phrase required")
+    if not cleaned_polarity:
+        raise HTTPException(status_code=400, detail="Intent-learning polarity required")
+    existing = (
+        db.query(JobIntentTaxonomyEntry)
+        .filter(
+            JobIntentTaxonomyEntry.owner_id == settings.owner_id,
+            JobIntentTaxonomyEntry.normalized_phrase == normalized_phrase,
+            JobIntentTaxonomyEntry.polarity == cleaned_polarity,
+        )
+        .order_by(JobIntentTaxonomyEntry.id.asc())
+        .first()
+    )
+    if existing:
+        existing.phrase = cleaned_phrase or existing.phrase
+        existing.status = status
+        db.commit()
+        db.refresh(existing)
+        return existing
+    created = JobIntentTaxonomyEntry(
+        owner_id=settings.owner_id,
+        phrase=cleaned_phrase,
+        normalized_phrase=normalized_phrase,
+        polarity=cleaned_polarity,
+        source_examples_count=0,
+        sample_evidence_json="[]",
+        confidence_aggregate=0.0,
+        last_intent_type=None,
+        status=status,
+    )
+    db.add(created)
+    db.commit()
+    db.refresh(created)
+    return created
+
+
 def _semantic_text_for_email(subject: str, body: str, role: str, skills_text: str) -> str:
     return _get_scoring_runtime_service().semantic_text_for_email(subject, body, role, skills_text)
 
@@ -1642,6 +1729,13 @@ def _recent_run_item_response(row: RecentRunSkippedItem) -> RecentRunItemRespons
         location=row.location,
         source_url=row.source_url,
         gmail_message_url=gmail_message_url,
+        intent_type=row.intent_type,
+        intent_confidence=row.intent_confidence,
+        intent_reason=row.intent_reason,
+        intent_evidence=_json_string_list(row.intent_evidence_json),
+        intent_negative_evidence=_json_string_list(row.intent_negative_evidence_json),
+        gate_action=row.gate_action,
+        gate_provider=row.gate_provider,
         created_at=row.created_at,
     )
 
@@ -1676,6 +1770,7 @@ def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
         feature_ai_enabled=s.feature_ai_enabled,
         feature_ai_extractor_enabled=s.feature_ai_extractor_enabled,
         feature_semantic_enabled=s.feature_semantic_enabled,
+        feature_groq_job_parser_enabled=s.feature_groq_job_parser_enabled,
         draft_text_size=normalize_draft_text_size(s.draft_text_size),
         fallback_draft_template=s.fallback_draft_template or DEFAULT_FALLBACK_DRAFT_TEMPLATE,
         signature_name=(s.signature_name or "").strip() or DEFAULT_SIGNATURE_NAME,
@@ -1772,6 +1867,7 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
     s.feature_ai_enabled = payload.feature_ai_enabled
     s.feature_ai_extractor_enabled = payload.feature_ai_extractor_enabled
     s.feature_semantic_enabled = payload.feature_semantic_enabled
+    s.feature_groq_job_parser_enabled = payload.feature_groq_job_parser_enabled
     s.draft_text_size = normalize_draft_text_size(payload.draft_text_size)
     s.fallback_draft_template = payload.fallback_draft_template.strip() if payload.fallback_draft_template.strip() else DEFAULT_FALLBACK_DRAFT_TEMPLATE
     s.signature_name = payload.signature_name.strip() if payload.signature_name.strip() else DEFAULT_SIGNATURE_NAME
@@ -2015,6 +2111,44 @@ def dismiss_skill(payload: DismissSkillRequest, db: Session = Depends(get_db)) -
     return _serialize_custom_skill_entry(entry)
 
 
+@app.get("/settings/job-intent-learning/pending", response_model=list[JobIntentTaxonomyEntryResponse])
+def list_pending_job_intent_learning(db: Session = Depends(get_db)) -> list[JobIntentTaxonomyEntryResponse]:
+    return [_serialize_job_intent_entry(item) for item in _list_job_intent_entries(db, status="pending")]
+
+
+@app.get("/settings/job-intent-learning/approved", response_model=list[JobIntentTaxonomyEntryResponse])
+def list_approved_job_intent_learning(db: Session = Depends(get_db)) -> list[JobIntentTaxonomyEntryResponse]:
+    return [_serialize_job_intent_entry(item) for item in _list_job_intent_entries(db, status="approved")]
+
+
+@app.post("/settings/job-intent-learning/approve", response_model=JobIntentTaxonomyEntryResponse)
+def approve_job_intent_learning(
+    payload: ApproveJobIntentSignalRequest,
+    db: Session = Depends(get_db),
+) -> JobIntentTaxonomyEntryResponse:
+    entry = _upsert_job_intent_entry(
+        db,
+        phrase=payload.phrase,
+        polarity=payload.polarity,
+        status="approved",
+    )
+    return _serialize_job_intent_entry(entry)
+
+
+@app.post("/settings/job-intent-learning/dismiss", response_model=JobIntentTaxonomyEntryResponse)
+def dismiss_job_intent_learning(
+    payload: DismissJobIntentSignalRequest,
+    db: Session = Depends(get_db),
+) -> JobIntentTaxonomyEntryResponse:
+    entry = _upsert_job_intent_entry(
+        db,
+        phrase=payload.phrase,
+        polarity=payload.polarity,
+        status="dismissed",
+    )
+    return _serialize_job_intent_entry(entry)
+
+
 @app.get("/gmail/status", response_model=GmailStatusResponse)
 def gmail_status() -> GmailStatusResponse:
     configured, authenticated, detail = gmail_auth_status()
@@ -2028,7 +2162,8 @@ def gmail_status() -> GmailStatusResponse:
 
 
 @app.get("/ai/status", response_model=AIStatusResponse)
-def ai_status() -> AIStatusResponse:
+def ai_status(db: Session = Depends(get_db)) -> AIStatusResponse:
+    user_settings = _get_settings(db)
     connected = bool(settings.deepseek_api_key)
     configured = connected and bool(settings.deepseek_base_url) and bool(settings.deepseek_model_fast)
     detail = "Ready" if connected else "DeepSeek API key missing (set Deepseek_API_KEY)."
@@ -2075,6 +2210,37 @@ def ai_status() -> AIStatusResponse:
         embedding_connected = False
         embedding_detail = f"No runtime signal yet (no embedding attempts in this process). {embedding_detail}"
 
+    groq_configured = bool(settings.groq_api_key) and bool(settings.groq_base_url) and bool(settings.groq_gate_model)
+    groq_enabled_in_settings = bool(user_settings.feature_groq_job_parser_enabled)
+    groq_request_mode = runtime_state.groq_request_mode or groq_request_mode_for_model(settings.groq_gate_model)
+    groq_runtime_healthy: bool | None
+    if runtime_state.groq_last_success_at and (
+        runtime_state.groq_last_attempted_at is None
+        or runtime_state.groq_last_success_at >= runtime_state.groq_last_attempted_at
+    ) and not runtime_state.groq_last_error:
+        groq_runtime_healthy = True
+    elif runtime_state.groq_last_error:
+        groq_runtime_healthy = False
+    else:
+        groq_runtime_healthy = None
+
+    if not groq_enabled_in_settings:
+        groq_detail = "Groq smart job parser is turned off in settings."
+    elif not groq_configured:
+        groq_detail = "Groq is enabled in settings, but backend config is missing API key, model, or base URL."
+    elif groq_runtime_healthy is True:
+        groq_detail = f"Groq runtime healthy for recent Gmail intent-gate calls (mode: {groq_request_mode})."
+    elif groq_runtime_healthy is False:
+        groq_detail = (
+            f"Groq fallback active due to recent runtime failure: {runtime_state.groq_last_error} (mode: {groq_request_mode})."
+            if runtime_state.groq_last_error
+            else f"Groq fallback active due to a recent runtime failure (mode: {groq_request_mode})."
+        )
+    elif groq_request_mode == "json_object":
+        groq_detail = "Groq is configured in json_object compatibility mode for the current model."
+    else:
+        groq_detail = "Groq is configured in structured json_schema mode, but no Groq attempt has been recorded in this process yet."
+
     return AIStatusResponse(
         configured=configured,
         connected=connected,
@@ -2092,6 +2258,17 @@ def ai_status() -> AIStatusResponse:
         embedding_last_attempted_at=embedding_last_attempted_at,
         embedding_last_success_at=embedding_last_success_at,
         embedding_last_duration_ms=embedding_last_duration_ms,
+        groq_configured=groq_configured,
+        groq_enabled_in_settings=groq_enabled_in_settings,
+        groq_model=(settings.groq_gate_model or "llama-3.1-8b-instant"),
+        groq_base_url_present=bool(settings.groq_base_url),
+        groq_runtime_healthy=groq_runtime_healthy,
+        groq_last_error=runtime_state.groq_last_error,
+        groq_detail=groq_detail,
+        groq_request_mode=groq_request_mode,
+        groq_last_attempted_at=runtime_state.groq_last_attempted_at,
+        groq_last_success_at=runtime_state.groq_last_success_at,
+        groq_last_duration_ms=runtime_state.groq_last_duration_ms,
         semantic_input_source=semantic_input_source,
         semantic_input_chars=semantic_input_chars,
         semantic_chunks=semantic_chunks,

@@ -8,6 +8,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.automation import RunOrchestrator, RunOrchestratorDependencies, RunOrchestratorRequest
 from app.db import Base
+from app.gates import EmailIntentDecision
 from app.models import RecentRunSkippedItem, RecruiterEmail, ResumeAsset, UserSettings
 from app.phase0 import RoutingEvidence, RoutingResult
 from app.recent_runs import record_skipped_item
@@ -45,6 +46,7 @@ class RunOrchestratorTests(unittest.TestCase):
             feature_ai_enabled=feature_ai_enabled,
             feature_ai_extractor_enabled=feature_ai_extractor_enabled,
             feature_semantic_enabled=False,
+            feature_groq_job_parser_enabled=False,
             fallback_draft_template="Hi",
             signature_name="Tester",
             signature_phone="+1",
@@ -94,6 +96,7 @@ class RunOrchestratorTests(unittest.TestCase):
         to_email: str | None = "to@example.com",
         cc_email: str | None = "cc@example.com",
         recruiter_like: bool = True,
+        intent_decision: EmailIntentDecision | None = None,
     ) -> tuple[RunOrchestratorDependencies, list[str], list[tuple[str, str]]]:
         marked: list[str] = []
         events: list[tuple[str, str]] = []
@@ -229,6 +232,15 @@ class RunOrchestratorTests(unittest.TestCase):
             apply_gmail_label=lambda *_args, **_kwargs: None,
             mark_message_processed=lambda message_id: marked.append(message_id),
             is_recruiter_like=lambda *_args, **_kwargs: recruiter_like,
+            classify_email_intent=lambda **_kwargs: intent_decision or EmailIntentDecision(
+                intent_type="recruiter_job_requirement",
+                action="process_for_queue",
+                confidence=0.91,
+                reason="Matched direct job-description structure.",
+                evidence=["role_keyword", "location"],
+                negative_evidence=[],
+                provider="taxonomy",
+            ),
             record_skipped_item=lambda db_ctx, payload: record_skipped_item(db_ctx, payload),
         )
         return deps, marked, events
@@ -479,11 +491,22 @@ class RunOrchestratorTests(unittest.TestCase):
             self.assertEqual(marked, ["m-5b"])
             self.assertIn(("needs_review_marked", "state"), events)
 
-    def test_non_recruiter_message_is_skipped_when_toggle_is_on(self) -> None:
+    def test_non_job_message_is_skipped_by_intent_gate(self) -> None:
         with Session(self.engine) as db:
             user_settings = self._seed_user_settings(db, feature_ai_enabled=False)
             resume = self._seed_resume(db)
-            deps, marked, _events = self._deps(recruiter_like=False)
+            deps, marked, _events = self._deps(
+                recruiter_like=False,
+                intent_decision=EmailIntentDecision(
+                    intent_type="security_alert",
+                    action="skip",
+                    confidence=0.97,
+                    reason="Matched account-security language rather than a job requirement.",
+                    evidence=[],
+                    negative_evidence=["security_alert:security alert"],
+                    provider="taxonomy",
+                ),
+            )
             policy = policy_service.default_policy()
             result = RunOrchestrator().execute(
                 RunOrchestratorRequest(
@@ -510,16 +533,16 @@ class RunOrchestratorTests(unittest.TestCase):
             skipped_item = db.query(RecentRunSkippedItem).filter(RecentRunSkippedItem.run_key == "automation_run:test-8").first()
             self.assertIsNotNone(skipped_item)
             assert skipped_item is not None
-            self.assertEqual(skipped_item.reason_code, "non_recruiter_like_gmail")
+            self.assertEqual(skipped_item.reason_code, "security_alert")
+            self.assertEqual(skipped_item.intent_type, "security_alert")
             self.assertEqual(skipped_item.gmail_message_url, "https://mail.google.com/mail/u/0/#all/m-5c")
 
-    def test_non_recruiter_message_still_processes_when_rule_warns(self) -> None:
+    def test_real_job_message_still_processes_without_recruiter_words(self) -> None:
         with Session(self.engine) as db:
             user_settings = self._seed_user_settings(db, feature_ai_enabled=False)
             resume = self._seed_resume(db)
             deps, marked, _events = self._deps(recruiter_like=False)
             policy = policy_service.default_policy()
-            policy["qualification"]["draft_rules"]["recruiter_like_gmail"]["mode"] = "warn"
             result = RunOrchestrator().execute(
                 RunOrchestratorRequest(
                     db=db,
@@ -543,6 +566,7 @@ class RunOrchestratorTests(unittest.TestCase):
             assert row is not None
             self.assertEqual(row.state, "needs_review")
             self.assertEqual(row.hard_filter_result, "warnings: non_recruiter_like_gmail")
+            self.assertEqual(row.intent_type, "recruiter_job_requirement")
             self.assertEqual(result.queued_count, 1)
             self.assertEqual(marked, ["m-5d"])
 
@@ -653,6 +677,15 @@ class RunOrchestratorTests(unittest.TestCase):
                 apply_gmail_label=lambda *_args, **_kwargs: None,
                 mark_message_processed=lambda message_id: marked.append(message_id),
                 is_recruiter_like=lambda *_args, **_kwargs: True,
+                classify_email_intent=lambda **_kwargs: EmailIntentDecision(
+                    intent_type="recruiter_job_requirement",
+                    action="process_for_queue",
+                    confidence=0.92,
+                    reason="Matched direct job-description structure.",
+                    evidence=["job description"],
+                    negative_evidence=[],
+                    provider="taxonomy",
+                ),
                 record_skipped_item=lambda db_ctx, payload: record_skipped_item(db_ctx, payload),
             )
 
@@ -794,6 +827,15 @@ class RunOrchestratorTests(unittest.TestCase):
                 apply_gmail_label=lambda *_args, **_kwargs: None,
                 mark_message_processed=lambda *_args, **_kwargs: None,
                 is_recruiter_like=lambda *_args, **_kwargs: True,
+                classify_email_intent=lambda **_kwargs: EmailIntentDecision(
+                    intent_type="recruiter_job_requirement",
+                    action="process_for_queue",
+                    confidence=0.92,
+                    reason="Matched direct job-description structure.",
+                    evidence=["job description"],
+                    negative_evidence=[],
+                    provider="taxonomy",
+                ),
                 record_skipped_item=lambda db_ctx, payload: record_skipped_item(db_ctx, payload),
             )
 

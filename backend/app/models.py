@@ -46,6 +46,13 @@ class RecruiterEmail(Base):
     thread_snapshot_used: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     thread_snapshot_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     skip_reason: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    intent_type: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    intent_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    intent_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    intent_evidence_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    intent_negative_evidence_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    gate_action: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    gate_provider: Mapped[str | None] = mapped_column(String(80), nullable=True)
     sync_batch_id: Mapped[str | None] = mapped_column(String(100), index=True, nullable=True)
     draft_reply: Mapped[str] = mapped_column(Text, default="")
     draft_source: Mapped[str | None] = mapped_column(String(50), nullable=True)
@@ -146,6 +153,7 @@ class UserSettings(Base):
     feature_ai_enabled: Mapped[bool] = mapped_column(default=False)
     feature_ai_extractor_enabled: Mapped[bool] = mapped_column(default=False)
     feature_semantic_enabled: Mapped[bool] = mapped_column(default=False)
+    feature_groq_job_parser_enabled: Mapped[bool] = mapped_column(default=False)
     draft_text_size: Mapped[str] = mapped_column(String(20), default="normal")
     fallback_draft_template: Mapped[str] = mapped_column(Text, default="")
     signature_name: Mapped[str] = mapped_column(String(255), default="")
@@ -205,6 +213,23 @@ class CustomSkillTaxonomyEntry(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
 
+class JobIntentTaxonomyEntry(Base):
+    __tablename__ = "job_intent_taxonomy_entries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    phrase: Mapped[str] = mapped_column(String(255), index=True)
+    normalized_phrase: Mapped[str] = mapped_column(String(255), index=True)
+    polarity: Mapped[str] = mapped_column(String(80), index=True)
+    source_examples_count: Mapped[int] = mapped_column(Integer, default=0)
+    sample_evidence_json: Mapped[str] = mapped_column(Text, default="[]")
+    confidence_aggregate: Mapped[float] = mapped_column(Float, default=0.0)
+    last_intent_type: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    status: Mapped[str] = mapped_column(String(40), default="pending", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+
 class SyncRun(Base):
     __tablename__ = "sync_runs"
 
@@ -260,6 +285,13 @@ class RecentRunSkippedItem(Base):
     location: Mapped[str | None] = mapped_column(String(255), nullable=True)
     source_url: Mapped[str | None] = mapped_column(String(1200), nullable=True)
     gmail_message_url: Mapped[str | None] = mapped_column(String(1200), nullable=True)
+    intent_type: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    intent_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    intent_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    intent_evidence_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    intent_negative_evidence_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    gate_action: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    gate_provider: Mapped[str | None] = mapped_column(String(80), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
 

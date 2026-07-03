@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote
@@ -57,6 +58,13 @@ class SkippedItemRecord:
     location: str | None = None
     source_url: str | None = None
     gmail_message_url: str | None = None
+    intent_type: str | None = None
+    intent_confidence: float | None = None
+    intent_reason: str | None = None
+    intent_evidence: list[str] | None = None
+    intent_negative_evidence: list[str] | None = None
+    gate_action: str | None = None
+    gate_provider: str | None = None
 
 
 def create_recent_run(
@@ -139,6 +147,13 @@ def record_skipped_item(db: Session, payload: SkippedItemRecord) -> RecentRunSki
         location=payload.location,
         source_url=payload.source_url,
         gmail_message_url=gmail_message_url,
+        intent_type=payload.intent_type,
+        intent_confidence=payload.intent_confidence,
+        intent_reason=payload.intent_reason,
+        intent_evidence_json=json.dumps(payload.intent_evidence or [], separators=(",", ":")),
+        intent_negative_evidence_json=json.dumps(payload.intent_negative_evidence or [], separators=(",", ":")),
+        gate_action=payload.gate_action,
+        gate_provider=payload.gate_provider,
     )
     db.add(row)
     db.flush()
