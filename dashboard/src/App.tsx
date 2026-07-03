@@ -3139,7 +3139,7 @@ function App() {
           ) : null}
 
           {activePage === 'run_queue' ? (
-            <form className="configGrid" onSubmit={saveSettings}>
+            <form className="configGrid runQueueGrid" onSubmit={saveSettings}>
               <section className="card">
                 <h2>Gmail Access</h2>
                 <div className="stack">

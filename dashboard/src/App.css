@@ -624,6 +624,47 @@
   margin-top: 18px;
 }
 
+.runQueueGrid {
+  align-items: stretch;
+}
+
+.runQueueGrid > .card {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 30rem;
+  overflow: hidden;
+}
+
+.runQueueGrid > .card > :not(h2) {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 6px;
+  scrollbar-gutter: stable;
+}
+
+.runQueueGrid > .card > :not(h2)::-webkit-scrollbar {
+  width: 10px;
+}
+
+.runQueueGrid > .card > :not(h2)::-webkit-scrollbar-thumb {
+  background: #cdd5e5;
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+.runQueueGrid > .card > :not(h2)::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.runQueueGrid .skillBox {
+  max-height: 100%;
+  overflow-y: auto;
+}
+
 .card {
   background: var(--surface);
   border: 1px solid var(--line-strong);
@@ -1291,6 +1332,10 @@
   .configGrid {
     grid-template-columns: 1fr 1fr;
   }
+
+  .runQueueGrid > .card {
+    height: 28rem;
+  }
 }
 
 @media (max-width: 900px) {
@@ -1323,6 +1368,17 @@
   .statsGrid,
   .configGrid {
     grid-template-columns: 1fr;
+  }
+
+  .runQueueGrid > .card {
+    height: auto;
+    overflow: visible;
+  }
+
+  .runQueueGrid > .card > :not(h2) {
+    overflow: visible;
+    padding-right: 0;
+    scrollbar-gutter: auto;
   }
 
   .actionBar {

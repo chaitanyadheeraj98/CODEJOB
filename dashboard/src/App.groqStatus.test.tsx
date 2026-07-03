@@ -110,11 +110,14 @@ describe('Groq status UI', () => {
       await new Promise((resolve) => window.setTimeout(resolve, 50))
     })
 
-    return container.textContent ?? ''
+    return {
+      container,
+      text: container.textContent ?? '',
+    }
   }
 
   it('renders groq fallback status in the AI Access card', async () => {
-    const text = await renderWithAiStatus({
+    const { text } = await renderWithAiStatus({
       configured: true,
       connected: true,
       running: false,
@@ -148,6 +151,36 @@ describe('Groq status UI', () => {
     expect(text).toContain('Groq Runtime')
     expect(text).toContain('Fallback')
     expect(text).toContain('missing_groq_api_key')
+  })
+
+  it('applies the standardized run queue grid layout hook', async () => {
+    const { container } = await renderWithAiStatus({
+      configured: true,
+      connected: true,
+      running: false,
+      provider: 'deepseek',
+      model: 'deepseek-chat',
+      detail: 'ok',
+      groq_configured: true,
+      groq_enabled_in_settings: true,
+      groq_model: 'llama-3.1-8b-instant',
+      groq_base_url_present: true,
+      groq_request_mode: 'json_object',
+      groq_runtime_healthy: true,
+      groq_last_error: null,
+      groq_detail: 'Groq runtime healthy.',
+      groq_last_attempted_at: null,
+      groq_last_success_at: null,
+      groq_last_duration_ms: 250,
+      last_error: null,
+      last_started_at: null,
+      last_finished_at: null,
+      last_duration_ms: null,
+      last_draft_source: null,
+    })
+
+    const runQueueGrid = container.querySelector('form.configGrid.runQueueGrid')
+    expect(runQueueGrid).not.toBeNull()
   })
 
 })
