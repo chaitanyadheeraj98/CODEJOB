@@ -12,9 +12,16 @@ from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.automation.queue_preparation import (
+    QueuePreparationDependencies,
+    QueuePreparationRequest,
+    prepare_candidate_for_queue,
+)
 from app.gates import EmailIntentDecision
 from app.ai.resume_context_attribution import RESUME_CONTEXT_MISSING, RESUME_CONTEXT_RULES_ONLY
 from app.automation import RunOrchestrator, RunOrchestratorDependencies, RunOrchestratorRequest
+from app.external_feeds.models import ExternalOpportunity
+from app.external_feeds.parser import parse_nvoids_detail
 from app.job_intent_learning import approved_learning_signals_for_owner, record_pending_job_intent_learning
 from app.services import policy_service
 from app.services.policy_service import EffectiveRunInputs
@@ -33,7 +40,7 @@ from app.recent_runs import (
     update_recent_run,
 )
 from app.routing import RoutingDecision
-from app.schemas import ApproveSendRequest, AutomationRunRequest, AutomationRunResponse, GmailSyncResponse, RejectRequest, ResolveRecipientsRequest
+from app.schemas import ApproveSendRequest, AutomationRunRequest, AutomationRunResponse, GmailSyncResponse, RegenerateCandidateRequest, RejectRequest, ResolveRecipientsRequest
 from app.services.candidate_runtime_service import resolve_resume_display_name
 
 logger = logging.getLogger(__name__)
@@ -97,6 +104,47 @@ class OrchestrationDeps:
 class OrchestrationService:
     def __init__(self, deps: OrchestrationDeps):
         self.deps = deps
+
+    @staticmethod
+    def _extract_external_post_id(external_message_id: str | None) -> str | None:
+        message_id = (external_message_id or "").strip()
+        if not message_id.lower().startswith("nvoids:"):
+            return None
+        external_post_id = message_id.split(":", 1)[1].strip()
+        return external_post_id or None
+
+    def _load_external_opportunity(self, db: Session, email: RecruiterEmail) -> ExternalOpportunity | None:
+        external_post_id = self._extract_external_post_id(email.external_message_id)
+        if not external_post_id:
+            return None
+        return (
+            db.query(ExternalOpportunity)
+            .filter(
+                ExternalOpportunity.owner_id == self.deps.owner_id,
+                ExternalOpportunity.external_post_id == external_post_id,
+            )
+            .first()
+        )
+
+    @staticmethod
+    def _manual_routing_decision(email: RecruiterEmail) -> RoutingDecision:
+        to_email = (email.recipient_email or "").strip() or None
+        cc_email = (email.cc_email or "").strip() or None
+        has_pair = bool(to_email and cc_email)
+        return RoutingDecision(
+            to_email=to_email,
+            cc_email=cc_email,
+            status="confirmed" if has_pair else "missing",
+            confidence=1.0 if has_pair else 0.0,
+            reason="Recipient routing manually confirmed; preserved during regenerate.",
+            evidence=[],
+            candidates=[],
+            recommended_state="needs_review" if has_pair else "failed",
+            recommended_skip_reason=None if has_pair else "missing_to_or_cc",
+            should_mark_failed=not has_pair,
+            is_sendable_candidate=has_pair,
+            needs_manual_confirmation=False,
+        )
 
     def sync_gmail(self, db: Session) -> GmailSyncResponse:
         if not self.deps.is_gmail_configured():
@@ -954,6 +1002,204 @@ class OrchestrationService:
         db.commit()
         db.refresh(email)
         self.deps.record_productivity_event(db, event_type="failed_mapping_marked", event_source="action", entity_id=email.id, metadata={"source": "manual_move_to_failed_mapping"})
+        return email
+
+    def regenerate_candidate(self, email_id: int, payload: RegenerateCandidateRequest, db: Session) -> RecruiterEmail:
+        email = (
+            db.query(RecruiterEmail)
+            .filter(RecruiterEmail.owner_id == self.deps.owner_id, RecruiterEmail.id == email_id)
+            .first()
+        )
+        if not email:
+            raise HTTPException(status_code=404, detail="Candidate not found")
+        if self.deps.is_terminal_state(email):
+            raise HTTPException(status_code=400, detail="Candidate is in terminal state")
+        if email.state not in {"needs_review", "failed"}:
+            raise HTTPException(status_code=400, detail="Only needs_review or failed candidates can be regenerated")
+
+        user_settings = self.deps.get_settings(db)
+        resolved = self.deps.effective_run_inputs(user_settings, None)
+        effective_policy = resolved.policy
+        threshold = self.deps.policy_threshold(user_settings, effective_policy)
+        active_resume = self.deps.active_resume(db)
+        enabled_resumes = self.deps.enabled_resumes(db)
+
+        parse_subject = email.subject
+        parse_body = email.body
+        parser_source = "gmail" if email.source == "gmail" else email.source
+        parse_kwargs: dict[str, Any] = {
+            "source": parser_source,
+            "ai_extractor_enabled": user_settings.feature_ai_extractor_enabled,
+        }
+        external = None
+        external_context_warning: str | None = None
+        if email.source == "nvoids":
+            external = self._load_external_opportunity(db, email)
+            if external and external.raw_html:
+                detail = parse_nvoids_detail(external.raw_html, external.role or parse_subject, external.location or "")
+                parse_kwargs["ai_body_override"] = detail.jd_body or ""
+                parse_kwargs["source_hints"] = {
+                    "canonical_title": external.role,
+                    "canonical_location": external.location,
+                    "company": external.company,
+                    "work_mode": external.work_mode,
+                    "visa_hints": external.visa_hints,
+                    "ai_input_source": detail.jd_body_source or "",
+                    "ai_input_chars": len(detail.jd_body or ""),
+                }
+                parse_body = external.raw_body or email.body
+                parse_subject = external.role or email.subject
+            else:
+                external_context_warning = "Nvoids source context unavailable during regenerate; used stored candidate content."
+
+        parsed, parser_details = self.deps.parse_email_with_details(parse_subject, parse_body, **parse_kwargs)
+        resume_selection = self.deps.select_best_resume_match(
+            subject=parse_subject,
+            body=parse_body,
+            parsed=parsed,
+            user_settings=user_settings,
+            email_row=email,
+            resumes=enabled_resumes,
+            fallback_resume=active_resume,
+            db=db,
+            owner_id=self.deps.owner_id,
+            external_thread_id=email.external_thread_id,
+        )
+        selected_resume = getattr(resume_selection, "resume", None) or active_resume
+        ats_score = cast(float | None, getattr(resume_selection, "ats_score", None))
+        ats_score_source = cast(str | None, getattr(resume_selection, "ats_score_source", None))
+        ats_summary = cast(str | None, getattr(resume_selection, "ats_summary", None))
+        ats_breakdown_json = cast(str | None, getattr(resume_selection, "ats_breakdown_json", None))
+
+        routing_decision = None
+        if payload.preserve_manual_routing and email.routing_confirmed:
+            routing_decision = self._manual_routing_decision(email)
+
+        preparation = prepare_candidate_for_queue(
+            QueuePreparationRequest(
+                db=db,
+                owner_id=self.deps.owner_id,
+                sender=email.sender,
+                subject=parse_subject,
+                body=parse_body,
+                snippet=parse_body,
+                user_settings=user_settings,
+                effective_policy=effective_policy,
+                threshold=threshold,
+                model_name=self.deps.model_name,
+                scoring_resume=selected_resume,
+                draft_resume=selected_resume,
+                existing_email=email,
+                external_thread_id=email.external_thread_id,
+                routing_decision=routing_decision,
+                parsed_overrides=dict(parsed),
+            ),
+            QueuePreparationDependencies(
+                parse_email=self.deps.parse_email,
+                hard_filter_check=self.deps.hard_filter_check,
+                compute_blended_ai_score=lambda subject, body, parsed, user_settings, email_row, resume, db_ctx=None, owner_id_ctx=None, thread_id_ctx=None: self.deps.compute_blended_ai_score(
+                    subject=subject,
+                    body=body,
+                    parsed=parsed,
+                    user_settings=user_settings,
+                    email_row=email_row,
+                    resume=resume,
+                    db=db_ctx,
+                    owner_id=owner_id_ctx,
+                    external_thread_id=str(thread_id_ctx or ""),
+                ),
+                policy_f2f_block=self.deps.policy_f2f_block,
+                evaluate_routing_policy=self.deps.evaluate_routing_policy,
+                greeting_from_to_contact=self.deps.greeting_from_to_contact,
+                build_user_fallback_draft=lambda db_ctx, settings_ctx, sender, role, parsed_ctx, greeting_line, resume_file_name: self.deps.build_user_fallback_draft(
+                    db_ctx,
+                    settings_ctx,
+                    sender=sender,
+                    role=role,
+                    parsed=parsed_ctx,
+                    greeting_line=greeting_line,
+                    resume_file_name=resume_file_name,
+                ),
+                generate_reply_with_ai_or_fallback=lambda **kwargs: self.deps.generate_reply_with_ai_or_fallback(**kwargs),
+            ),
+        )
+
+        email.role = str(preparation.parsed.get("role", email.role or parse_subject))
+        email.location = str(preparation.parsed.get("location", email.location or ""))
+        email.salary_text = str(preparation.parsed.get("salary_text", email.salary_text or ""))
+        email.skills_text = str(preparation.parsed.get("skills_text", email.skills_text or ""))
+        email.skills_json = json.dumps(
+            build_skills_json_payload(parser_details, fallback_skills_text=email.skills_text),
+            separators=(",", ":"),
+        )
+        email.parser_details_json = json.dumps(parser_details, separators=(",", ":"))
+        email.score = int(preparation.ai_score * 100)
+        email.ai_score = preparation.ai_score
+        email.ai_score_source = preparation.ai_score_source
+        email.ai_summary = preparation.ai_summary
+        email.ats_score = ats_score
+        email.ats_score_source = ats_score_source
+        email.ats_summary = ats_summary
+        email.ats_breakdown_json = ats_breakdown_json
+        email.semantic_embedding = preparation.email_embedding_json
+        email.semantic_input_source = getattr(preparation.semantic_diag, "input_source", None)
+        email.semantic_input_chars = getattr(preparation.semantic_diag, "input_chars", None)
+        email.semantic_chunks = getattr(preparation.semantic_diag, "chunks", None)
+        email.semantic_fallback_reason = getattr(preparation.semantic_diag, "fallback_reason", None)
+        email.keyword_source = getattr(preparation.semantic_diag, "keyword_source", None)
+        email.thread_snapshot_used = getattr(preparation.semantic_diag, "thread_snapshot_used", None)
+        email.thread_snapshot_email_id = getattr(preparation.semantic_diag, "thread_snapshot_email_id", None)
+        email.draft_reply = preparation.draft_reply or ""
+        email.draft_source = preparation.draft_source
+        email.draft_model = preparation.draft_model
+        email.draft_ai_error = preparation.draft_ai_error
+        email.draft_resume_context_status = preparation.draft_resume_context_status
+        email.resume_asset_id = selected_resume.id if selected_resume else None
+        email.resume_file_name = selected_resume.file_name if selected_resume else None
+        email.hard_filter_result = preparation.hard_filter_reason
+        email.skip_reason = preparation.skip_reason
+        email.auto_reject_reason = preparation.auto_reject_reason
+
+        if selected_resume and preparation.resume_embedding_json and selected_resume.semantic_embedding != preparation.resume_embedding_json:
+            selected_resume.semantic_embedding = preparation.resume_embedding_json
+
+        if preparation.routing_decision is not None:
+            self.deps.apply_routing_decision(email, preparation.routing_decision)
+        email.routing_confirmed = bool(routing_decision is not None and payload.preserve_manual_routing and not routing_decision.should_mark_failed)
+
+        if preparation.outcome == "routing_failed":
+            email.state = "failed"
+            email.decision = "Qualified"
+            email.decision_reason = preparation.decision_reason
+            email.last_error = external_context_warning or "Recipient routing unresolved during regenerate."
+        elif preparation.outcome == "not_qualified" and payload.preserve_review_visibility:
+            email.state = "needs_review"
+            email.decision = "Reject"
+            email.decision_reason = preparation.decision_reason
+            email.last_error = external_context_warning or "Regenerated candidate is no longer qualified for auto-reply."
+        elif preparation.outcome == "not_qualified":
+            email.state = "auto_rejected"
+            email.decision = "Reject"
+            email.decision_reason = preparation.decision_reason
+            email.last_error = external_context_warning
+        else:
+            email.state = "needs_review"
+            email.decision = "Qualified"
+            email.decision_reason = preparation.decision_reason
+            email.last_error = external_context_warning
+
+        email.approval_status = "pending"
+        email.sent_status = "not_sent"
+
+        db.commit()
+        db.refresh(email)
+        self.deps.record_productivity_event(
+            db,
+            event_type="needs_review_marked" if email.state == "needs_review" else "failed_mapping_marked",
+            event_source="action",
+            entity_id=email.id,
+            metadata={"source": "regenerate_candidate", "outcome": preparation.outcome},
+        )
         return email
 
     def dismiss_failed_candidate(self, email_id: int, db: Session) -> dict[str, int | bool | str]:

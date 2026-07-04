@@ -1449,6 +1449,7 @@ function App() {
   const [logs, setLogs] = useState<RecentRunCard[]>([])
   const [sendingId, setSendingId] = useState<number | null>(null)
   const [rejectingId, setRejectingId] = useState<number | null>(null)
+  const [regeneratingId, setRegeneratingId] = useState<number | null>(null)
   const [movingToFailedId, setMovingToFailedId] = useState<number | null>(null)
   const [draftEdits, setDraftEdits] = useState<Record<number, string>>({})
   const [expandedParserDetailIds, setExpandedParserDetailIds] = useState<Record<number, boolean>>({})
@@ -2610,6 +2611,32 @@ function App() {
       setError((e as Error).message)
     } finally {
       setRejectingId(null)
+    }
+  }
+
+  const regenerateCandidate = async (candidateId: number) => {
+    setRegeneratingId(candidateId)
+    setError('')
+    try {
+      const res = await fetch(`${apiBase}/candidates/${candidateId}/regenerate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          preserve_manual_routing: true,
+          preserve_review_visibility: true,
+        }),
+      })
+      if (!res.ok) {
+        const details = await res.json().catch(() => null)
+        throw new Error(details?.detail ?? 'Regenerate failed')
+      }
+      const updated = (await res.json()) as Candidate
+      setDraftEdits((prev) => ({ ...prev, [updated.id]: updated.draft_reply ?? '' }))
+      schedulePostMutationRefresh()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setRegeneratingId(null)
     }
   }
 
@@ -4033,6 +4060,14 @@ function App() {
                     }
                   >
                     {sendingId === item.id ? 'Sending...' : requiresResumeForApproval ? 'Approve & Send' : 'Approve'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => regenerateCandidate(item.id)}
+                    disabled={regeneratingId === item.id || sendingId === item.id || rejectingId === item.id || movingToFailedId === item.id}
+                    title="Re-run parser, resume match, ATS and semantic scoring, routing, and draft generation with current settings"
+                  >
+                    {regeneratingId === item.id ? 'Regenerating...' : 'Regenerate'}
                   </button>
                   <button
                     type="button"

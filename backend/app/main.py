@@ -167,6 +167,7 @@ from app.schemas import (
     RecentRunItemResponse,
     RecentRunListResponse,
     RecentRunResponse,
+    RegenerateCandidateRequest,
     TelegramStatusResponse,
     ExternalFeedSyncResponse,
     ExternalScrapeRunResponse,
@@ -3597,6 +3598,15 @@ def reject_candidate(
 @app.post("/candidates/{email_id}/send-to-failed-mapping", response_model=EmailResponse)
 def send_to_failed_mapping(email_id: int, db: Session = Depends(get_db)) -> RecruiterEmail:
     return _get_orchestration_service().send_to_failed_mapping(email_id, db)
+
+
+@app.post("/candidates/{email_id}/regenerate", response_model=EmailResponse)
+def regenerate_candidate(
+    email_id: int,
+    payload: RegenerateCandidateRequest,
+    db: Session = Depends(get_db),
+) -> RecruiterEmail:
+    return _get_orchestration_service().regenerate_candidate(email_id, payload, db)
 
 
 @app.delete("/candidates/{email_id}", response_model=dict[str, int | bool | str])

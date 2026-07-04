@@ -32,6 +32,11 @@ class ResolveRecipientsRequest(BaseModel):
     cc_email: str
 
 
+class RegenerateCandidateRequest(BaseModel):
+    preserve_manual_routing: bool = True
+    preserve_review_visibility: bool = True
+
+
 class RoutingEvidenceResponse(BaseModel):
     role: str
     email: str
