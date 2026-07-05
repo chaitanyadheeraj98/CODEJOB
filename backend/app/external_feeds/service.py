@@ -858,6 +858,7 @@ class ExternalFeedService:
             subject=subject,
             body=body,
             parsed=parsed,
+            parser_details=parser_details,
             user_settings=settings,
             email_row=existing,
             resumes=enabled_resumes,
@@ -871,6 +872,10 @@ class ExternalFeedService:
         ats_score_source = cast(str | None, getattr(resume_selection, "ats_score_source", None))
         ats_summary = cast(str | None, getattr(resume_selection, "ats_summary", None))
         ats_breakdown_json = cast(str | None, getattr(resume_selection, "ats_breakdown_json", None))
+        resume_picker_score = cast(float | None, getattr(resume_selection, "final_resume_score", None))
+        resume_picker_reason = cast(str | None, getattr(resume_selection, "selection_reason", None))
+        resume_picker_candidates_json = cast(str | None, getattr(resume_selection, "candidate_rankings_json", None))
+        resume_picker_breakdown_json = cast(str | None, getattr(resume_selection, "picker_breakdown_json", None))
         preparation = prepare_candidate_for_queue(
             QueuePreparationRequest(
                 db=db,
@@ -970,6 +975,10 @@ class ExternalFeedService:
             ats_score_source=ats_score_source,
             ats_summary=ats_summary,
             ats_breakdown_json=ats_breakdown_json,
+            resume_picker_score=resume_picker_score,
+            resume_picker_reason=resume_picker_reason,
+            resume_picker_candidates_json=resume_picker_candidates_json,
+            resume_picker_breakdown_json=resume_picker_breakdown_json,
             semantic_input_source=getattr(preparation.semantic_diag, "input_source", None),
             semantic_input_chars=getattr(preparation.semantic_diag, "input_chars", None),
             semantic_chunks=getattr(preparation.semantic_diag, "chunks", None),

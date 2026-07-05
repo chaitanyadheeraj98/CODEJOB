@@ -193,6 +193,13 @@ class PendingSkillResponse(BaseModel):
     candidate_ids: list[int] = Field(default_factory=list)
 
 
+class BulkApproveSkillsResponse(BaseModel):
+    processed_count: int
+    approved_count: int
+    skipped_count: int
+    approved_skill_names: list[str] = Field(default_factory=list)
+
+
 class CustomSkillTaxonomyEntryResponse(BaseModel):
     id: int
     owner_id: str
@@ -317,6 +324,16 @@ class EmailResponse(BaseModel):
         default=None,
         validation_alias=AliasChoices("ats_breakdown", "ats_breakdown_json"),
     )
+    resume_picker_score: float | None = None
+    resume_picker_reason: str | None = None
+    resume_picker_candidates: dict[str, object] | None = Field(
+        default=None,
+        validation_alias=AliasChoices("resume_picker_candidates", "resume_picker_candidates_json"),
+    )
+    resume_picker_breakdown: dict[str, object] | None = Field(
+        default=None,
+        validation_alias=AliasChoices("resume_picker_breakdown", "resume_picker_breakdown_json"),
+    )
     semantic_input_source: str | None = None
     semantic_input_chars: int | None = None
     semantic_chunks: int | None = None
@@ -408,24 +425,9 @@ class EmailResponse(BaseModel):
             return [str(item).strip() for item in value if str(item).strip()]
         return []
 
-    @field_validator("parser_details", mode="before")
+    @field_validator("parser_details", "ats_breakdown", "resume_picker_candidates", "resume_picker_breakdown", mode="before")
     @classmethod
-    def parse_parser_details(cls, value: Any) -> dict[str, object] | None:
-        if value in (None, ""):
-            return None
-        if isinstance(value, str):
-            try:
-                parsed = json.loads(value)
-            except json.JSONDecodeError:
-                return None
-            return cast(dict[str, object], parsed) if isinstance(parsed, dict) else None
-        if isinstance(value, dict):
-            return cast(dict[str, object], value)
-        return None
-
-    @field_validator("ats_breakdown", mode="before")
-    @classmethod
-    def parse_ats_breakdown(cls, value: Any) -> dict[str, object] | None:
+    def parse_json_object(cls, value: Any) -> dict[str, object] | None:
         if value in (None, ""):
             return None
         if isinstance(value, str):

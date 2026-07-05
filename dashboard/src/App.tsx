@@ -618,6 +618,7 @@ type SkillUpgradeSectionProps = {
   pendingSkills: PendingSkill[]
   loading: boolean
   busySkillKey: string | null
+  approveAllSkills: () => void
   approveSkill: (skill: PendingSkill) => void
   dismissSkill: (skill: PendingSkill) => void
 }
@@ -626,6 +627,7 @@ export function SkillUpgradeSection({
   pendingSkills,
   loading,
   busySkillKey,
+  approveAllSkills,
   approveSkill,
   dismissSkill,
 }: SkillUpgradeSectionProps) {
@@ -641,7 +643,19 @@ export function SkillUpgradeSection({
         <section className="skillUpgradeColumn">
           <div className="skillUpgradeColumnHeader">
             <h3>Pending Unknown Skills</h3>
-            <span className="skillUpgradeCount">{pendingSkills.length}</span>
+            <div className="rowBtns">
+              {!loading && pendingSkills.length > 0 ? (
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={approveAllSkills}
+                  disabled={busySkillKey !== null}
+                >
+                  {busySkillKey === 'approve-all-skills' ? 'Approving all...' : 'Approve all'}
+                </button>
+              ) : null}
+              <span className="skillUpgradeCount">{pendingSkills.length}</span>
+            </div>
           </div>
           {loading ? (
             <p className="subtle">Loading skills...</p>
@@ -825,6 +839,10 @@ type Candidate = {
   ats_score_source?: string | null
   ats_summary?: string | null
   ats_breakdown?: Record<string, unknown> | null
+  resume_picker_score?: number | null
+  resume_picker_reason?: string | null
+  resume_picker_candidates?: Record<string, unknown> | null
+  resume_picker_breakdown?: Record<string, unknown> | null
   draft_reply: string
   draft_source: string | null
   draft_model: string | null
@@ -896,6 +914,58 @@ function renderTextOrDash(value: string | null | undefined): string {
 function renderListOrDash(values: string[] | null | undefined): string {
   const items = (values ?? []).map((value) => value.trim()).filter(Boolean)
   return items.length > 0 ? items.join(', ') : '-'
+}
+
+function formatPickerScore(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) return '-'
+  return `${Math.round(value * 100)}`
+}
+
+type ResumePickerPanelProps = {
+  candidate: Candidate
+}
+
+export function ResumePickerPanel({ candidate }: ResumePickerPanelProps) {
+  const breakdown = candidate.resume_picker_breakdown ?? {}
+  const candidatesPayload = candidate.resume_picker_candidates ?? {}
+  const matchedPriority = Array.isArray(breakdown.matched_priority_skills) ? breakdown.matched_priority_skills.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : []
+  const missingPriority = Array.isArray(breakdown.missing_priority_skills) ? breakdown.missing_priority_skills.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : []
+  const rankingsRaw = Array.isArray(candidatesPayload.rankings) ? candidatesPayload.rankings : []
+  const alternatives = rankingsRaw
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+    .filter((item) => (item.resume_file_name as string | undefined) !== candidate.resume_file_name)
+    .slice(0, 2)
+
+  if (
+    candidate.resume_picker_score == null &&
+    !candidate.resume_picker_reason &&
+    matchedPriority.length === 0 &&
+    missingPriority.length === 0 &&
+    alternatives.length === 0
+  ) {
+    return null
+  }
+
+  return (
+    <div className="parserDetailsPanel">
+      <p><strong>Resume Picker:</strong> {candidate.resume_file_name ?? '-'}</p>
+      <p><strong>Final Score:</strong> {formatPickerScore(candidate.resume_picker_score)}</p>
+      <p><strong>Why:</strong> {candidate.resume_picker_reason ?? '-'}</p>
+      <p><strong>Matched Priority Skills:</strong> {matchedPriority.join(', ') || '-'}</p>
+      <p><strong>Missing Priority Skills:</strong> {missingPriority.join(', ') || '-'}</p>
+      <p><strong>Top Alternatives:</strong></p>
+      {alternatives.length === 0 ? <p className="subtle">No alternatives logged.</p> : null}
+      {alternatives.length > 0 ? (
+        <ul>
+          {alternatives.map((item, index) => (
+            <li key={`${String(item.resume_file_name ?? index)}-${index}`}>
+              {String(item.resume_file_name ?? '-')} ({formatPickerScore(typeof item.final_resume_score === 'number' ? item.final_resume_score : null)}): {String(item.selection_reason ?? '-')}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  )
 }
 
 type PremiumNumberConfidence = 'high' | 'medium' | 'low'
@@ -2372,6 +2442,23 @@ function App() {
     }
   }
 
+  const approveAllPendingSkills = async () => {
+    setSkillActionKey('approve-all-skills')
+    setError('')
+    try {
+      const res = await fetch(`${apiBase}/settings/skills/approve-all`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      })
+      if (!res.ok) throw new Error('Failed to approve all skills')
+      await loadSkillUpgradeData()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setSkillActionKey(null)
+    }
+  }
+
   const dismissPendingSkill = async (skill: PendingSkill) => {
     setSkillActionKey(`dismiss:${skill.normalized_name}`)
     setError('')
@@ -3303,6 +3390,7 @@ function App() {
                 pendingSkills={pendingSkills}
                 loading={skillsLoading}
                 busySkillKey={skillActionKey}
+                approveAllSkills={approveAllPendingSkills}
                 approveSkill={approvePendingSkill}
                 dismissSkill={dismissPendingSkill}
               />
@@ -4005,6 +4093,7 @@ function App() {
                 <p><strong>ATS Score:</strong> {formatAtsScore(item.ats_score)} {item.ats_score != null ? `(${getAtsStrengthLabel(item.ats_score)})` : ''}</p>
                 {renderRoutingPanel(item)}
                 <p><strong>Resume:</strong> {item.resume_file_name ?? '-'}</p>
+                <ResumePickerPanel candidate={item} />
                 <p><strong>Attachment files:</strong> {(enabledAttachmentNames.length > 0 ? enabledAttachmentNames : item.attachment_file_names ?? []).join(', ') || '-'}</p>
                 <p>
                   <strong>Draft source:</strong> {getDraftSourceLabel(item.draft_source)}
@@ -4278,7 +4367,7 @@ function App() {
                             {skipped.source_url || skipped.gmail_message_url ? (
                               <p>
                                 <strong>Open:</strong>{' '}
-                                <a href={skipped.source_url || skipped.gmail_message_url} target="_blank" rel="noreferrer">
+                                <a href={skipped.source_url ?? skipped.gmail_message_url ?? undefined} target="_blank" rel="noreferrer">
                                   {skipped.source_type === 'nvoids' ? 'Open Original Post' : 'Open exact email in Gmail'}
                                 </a>
                               </p>

@@ -981,6 +981,87 @@ class ExternalFeedsApiTests(unittest.TestCase):
         self.assertEqual(pending.status_code, 200, pending.text)
         self.assertEqual(pending.json(), [])
 
+    def test_bulk_approve_pending_skills_empties_queue_and_lists_approved_entries(self) -> None:
+        with self.SessionLocal() as db:
+            db.add_all(
+                [
+                    RecruiterEmail(
+                        owner_id=main.settings.owner_id,
+                        sender="bulk-one@example.com",
+                        subject="Bulk One",
+                        body="Body",
+                        role="Engineer",
+                        location="Remote",
+                        salary_text="",
+                        skills_text="Java",
+                        score=0,
+                        decision="qualified",
+                        state="needs_review",
+                        source="gmail",
+                        skills_json='{"skills_text":"Java, Nebula Workflow Grid","known":["Java"],"unknown":["Nebula Workflow Grid"],"evidence":{"Nebula Workflow Grid":"ai_extractor"}}',
+                    ),
+                    RecruiterEmail(
+                        owner_id=main.settings.owner_id,
+                        sender="bulk-two@example.com",
+                        subject="Bulk Two",
+                        body="Body",
+                        role="Engineer",
+                        location="Remote",
+                        salary_text="",
+                        skills_text="Java",
+                        score=0,
+                        decision="qualified",
+                        state="needs_review",
+                        source="gmail",
+                        parser_details_json='{"unknown_skills":["Adaptive Prompt Forge"]}',
+                    ),
+                ]
+            )
+            db.commit()
+
+        pending_before = self.client.get("/settings/skills/pending")
+        self.assertEqual(pending_before.status_code, 200, pending_before.text)
+        self.assertEqual(
+            [item["skill_name"] for item in pending_before.json()],
+            ["Adaptive Prompt Forge", "Nebula Workflow Grid"],
+        )
+
+        approved = self.client.post("/settings/skills/approve-all")
+        self.assertEqual(approved.status_code, 200, approved.text)
+        self.assertEqual(
+            approved.json(),
+            {
+                "processed_count": 2,
+                "approved_count": 2,
+                "skipped_count": 0,
+                "approved_skill_names": ["Adaptive Prompt Forge", "Nebula Workflow Grid"],
+            },
+        )
+
+        pending_after = self.client.get("/settings/skills/pending")
+        self.assertEqual(pending_after.status_code, 200, pending_after.text)
+        self.assertEqual(pending_after.json(), [])
+
+        listed = self.client.get("/settings/skills/approved")
+        self.assertEqual(listed.status_code, 200, listed.text)
+        self.assertEqual(
+            [item["canonical_name"] for item in listed.json()],
+            ["Adaptive Prompt Forge", "Nebula Workflow Grid"],
+        )
+
+    def test_bulk_approve_pending_skills_returns_zero_counts_when_empty(self) -> None:
+        approved = self.client.post("/settings/skills/approve-all")
+        self.assertEqual(approved.status_code, 200, approved.text)
+        self.assertEqual(
+            approved.json(),
+            {
+                "processed_count": 0,
+                "approved_count": 0,
+                "skipped_count": 0,
+                "approved_skill_names": [],
+            },
+        )
+
     def test_approved_skills_api_lists_only_approved_custom_entries(self) -> None:
         with self.SessionLocal() as db:
             db.add_all(
@@ -1134,6 +1215,10 @@ class ExternalFeedsApiTests(unittest.TestCase):
                 self.assertEqual(row.ats_score_source, "hybrid_structured_plus_semantic")
                 self.assertIsNotNone(row.ats_summary)
                 self.assertIsNotNone(row.ats_breakdown_json)
+                self.assertIsNotNone(row.resume_picker_score)
+                self.assertIsNotNone(row.resume_picker_reason)
+                self.assertIsNotNone(row.resume_picker_candidates_json)
+                self.assertIsNotNone(row.resume_picker_breakdown_json)
                 self.assertEqual(row.semantic_input_source, "latest_block")
                 self.assertEqual(row.semantic_chunks, 2)
                 self.assertEqual(row.semantic_embedding, "[0.1,0.2]")

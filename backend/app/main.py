@@ -125,6 +125,7 @@ from app.schemas import (
     AttachmentAssetUpdateRequest,
     AutomationRunRequest,
     AutomationRunResponse,
+    BulkApproveSkillsResponse,
     BulkRejectRequest,
     CandidateListResponse,
     CustomSkillTaxonomyEntryResponse,
@@ -1205,6 +1206,7 @@ def _select_best_resume_match(
     subject: str,
     body: str,
     parsed: dict[str, str | int],
+    parser_details: dict[str, object] | None = None,
     user_settings: UserSettings,
     email_row: RecruiterEmail | None,
     resumes: list[ResumeAsset] | None = None,
@@ -1217,6 +1219,7 @@ def _select_best_resume_match(
         subject=subject,
         body=body,
         parsed=parsed,
+        parser_details=parser_details,
         user_settings=user_settings,
         email_row=email_row,
         resumes=resumes if resumes is not None else _enabled_resumes(db),
@@ -1392,6 +1395,7 @@ def _upsert_custom_skill_entry(
     category: str = "custom",
     cluster_hint: str | None = None,
     status: str,
+    auto_commit: bool = True,
 ) -> CustomSkillTaxonomyEntry:
     effective_canonical_name = _canonicalize_custom_skill_name(canonical_name or skill_name)
     if not effective_canonical_name:
@@ -1413,9 +1417,10 @@ def _upsert_custom_skill_entry(
         row.category = normalized_category
         row.cluster_hint = _clean_custom_skill_name(cluster_hint) or None
         row.status = status
-        clear_skill_taxonomy_cache()
-        db.commit()
-        db.refresh(row)
+        if auto_commit:
+            clear_skill_taxonomy_cache()
+            db.commit()
+            db.refresh(row)
         return row
     created = CustomSkillTaxonomyEntry(
         owner_id=settings.owner_id,
@@ -1426,9 +1431,10 @@ def _upsert_custom_skill_entry(
         status=status,
     )
     db.add(created)
-    clear_skill_taxonomy_cache()
-    db.commit()
-    db.refresh(created)
+    if auto_commit:
+        clear_skill_taxonomy_cache()
+        db.commit()
+        db.refresh(created)
     return created
 
 
@@ -2098,6 +2104,40 @@ def approve_skill(payload: ApproveSkillRequest, db: Session = Depends(get_db)) -
     return _serialize_custom_skill_entry(entry)
 
 
+@app.post("/settings/skills/approve-all", response_model=BulkApproveSkillsResponse)
+def approve_all_skills(db: Session = Depends(get_db)) -> BulkApproveSkillsResponse:
+    pending = _list_pending_unknown_skills(db)
+    approved_names: list[str] = []
+    suppressed = _known_or_suppressed_pending_skill_keys(db)
+    for item in pending:
+        normalized = normalize_taxonomy_text(item.skill_name)
+        if not normalized or normalized in suppressed:
+            continue
+        _upsert_custom_skill_entry(
+            db,
+            skill_name=item.skill_name,
+            canonical_name=item.skill_name,
+            aliases=[],
+            category="custom",
+            cluster_hint=None,
+            status="approved",
+            auto_commit=False,
+        )
+        approved_names.append(item.skill_name)
+        suppressed.add(normalized)
+    if approved_names:
+        clear_skill_taxonomy_cache()
+        db.commit()
+    processed_count = len(pending)
+    approved_count = len(approved_names)
+    return BulkApproveSkillsResponse(
+        processed_count=processed_count,
+        approved_count=approved_count,
+        skipped_count=max(0, processed_count - approved_count),
+        approved_skill_names=approved_names,
+    )
+
+
 @app.post("/settings/skills/dismiss", response_model=CustomSkillTaxonomyEntryResponse)
 def dismiss_skill(payload: DismissSkillRequest, db: Session = Depends(get_db)) -> CustomSkillTaxonomyEntryResponse:
     entry = _upsert_custom_skill_entry(
@@ -2568,6 +2608,7 @@ def ingest_email(payload: IngestEmailRequest, db: Session = Depends(get_db)) -> 
         subject=payload.subject,
         body=payload.body,
         parsed=parsed,
+        parser_details=parser_details,
         user_settings=user_settings,
         email_row=None,
         db=db,
@@ -2582,6 +2623,10 @@ def ingest_email(payload: IngestEmailRequest, db: Session = Depends(get_db)) -> 
     ats_summary = cast(str | None, getattr(resume_selection, "ats_summary", None))
     ats_score_source = cast(str | None, getattr(resume_selection, "ats_score_source", None))
     ats_breakdown_json = cast(str | None, getattr(resume_selection, "ats_breakdown_json", None))
+    resume_picker_score = cast(float | None, getattr(resume_selection, "final_resume_score", None))
+    resume_picker_reason = cast(str | None, getattr(resume_selection, "selection_reason", None))
+    resume_picker_candidates_json = cast(str | None, getattr(resume_selection, "candidate_rankings_json", None))
+    resume_picker_breakdown_json = cast(str | None, getattr(resume_selection, "picker_breakdown_json", None))
     email_embedding_json = cast(str | None, getattr(resume_selection, "email_embedding_json"))
     resume_embedding_json = cast(str | None, getattr(resume_selection, "resume_embedding_json"))
     semantic_diag = getattr(resume_selection, "semantic_diag")
@@ -2631,6 +2676,10 @@ def ingest_email(payload: IngestEmailRequest, db: Session = Depends(get_db)) -> 
         ats_score_source=ats_score_source,
         ats_summary=ats_summary,
         ats_breakdown_json=ats_breakdown_json,
+        resume_picker_score=resume_picker_score,
+        resume_picker_reason=resume_picker_reason,
+        resume_picker_candidates_json=resume_picker_candidates_json,
+        resume_picker_breakdown_json=resume_picker_breakdown_json,
         semantic_input_source=getattr(semantic_diag, "input_source", None),
         semantic_input_chars=getattr(semantic_diag, "input_chars", None),
         semantic_chunks=getattr(semantic_diag, "chunks", None),

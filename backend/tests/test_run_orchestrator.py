@@ -773,6 +773,14 @@ class RunOrchestratorTests(unittest.TestCase):
                     ai_score=0.9,
                     ai_summary="summary",
                     ai_score_source="v1",
+                    final_resume_score=0.83,
+                    selection_reason="Final 0.83; ai=0.90; ats=78.00",
+                    candidate_rankings_json='{"rankings":[{"resume_file_name":"resume.pdf","final_resume_score":0.83}]}',
+                    picker_breakdown_json='{"matched_priority_skills":["Java"],"missing_priority_skills":["Oracle"]}',
+                    ats_score=78.0,
+                    ats_score_source="hybrid_structured_only",
+                    ats_summary="ATS hybrid score 78/100",
+                    ats_breakdown_json='{"matched_raw_skills":["Java"],"missing_raw_skills":["Oracle"]}',
                     email_embedding_json=None,
                     resume_embedding_json=None,
                     semantic_diag=SimpleNamespace(input_source="latest_block", input_chars=120, chunks=1, fallback_reason=None),
@@ -862,6 +870,13 @@ class RunOrchestratorTests(unittest.TestCase):
             self.assertEqual(selection_kwargs["parsed"]["location"], "Dallas, TX")
             self.assertEqual(selection_kwargs["parsed"]["skills_text"], "Java, Amazon ECS")
             self.assertTrue(bool(selection_kwargs["user_settings"].feature_ai_extractor_enabled))
+            row = db.query(RecruiterEmail).filter(RecruiterEmail.external_message_id == "m-ai-2").first()
+            self.assertIsNotNone(row)
+            assert row is not None
+            self.assertEqual(row.resume_picker_score, 0.83)
+            self.assertEqual(row.resume_picker_reason, "Final 0.83; ai=0.90; ats=78.00")
+            self.assertEqual(row.resume_picker_candidates_json, '{"rankings":[{"resume_file_name":"resume.pdf","final_resume_score":0.83}]}')
+            self.assertEqual(row.resume_picker_breakdown_json, '{"matched_priority_skills":["Java"],"missing_priority_skills":["Oracle"]}')
 
 
 if __name__ == "__main__":

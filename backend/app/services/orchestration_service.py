@@ -274,6 +274,7 @@ class OrchestrationService:
                     subject=item["subject"],
                     body=item["body"],
                     parsed=parsed,
+                    parser_details=parser_details,
                     user_settings=user_settings,
                     email_row=None,
                     db=db,
@@ -288,6 +289,10 @@ class OrchestrationService:
                 ats_summary = cast(str | None, getattr(resume_selection, "ats_summary", None))
                 ats_score_source = cast(str | None, getattr(resume_selection, "ats_score_source", None))
                 ats_breakdown_json = cast(str | None, getattr(resume_selection, "ats_breakdown_json", None))
+                resume_picker_score = cast(float | None, getattr(resume_selection, "final_resume_score", None))
+                resume_picker_reason = cast(str | None, getattr(resume_selection, "selection_reason", None))
+                resume_picker_candidates_json = cast(str | None, getattr(resume_selection, "candidate_rankings_json", None))
+                resume_picker_breakdown_json = cast(str | None, getattr(resume_selection, "picker_breakdown_json", None))
                 email_embedding_json = cast(str | None, getattr(resume_selection, "email_embedding_json", None))
                 resume_embedding_json = cast(str | None, getattr(resume_selection, "resume_embedding_json", None))
                 semantic_diag = getattr(resume_selection, "semantic_diag", None)
@@ -371,6 +376,10 @@ class OrchestrationService:
                     ats_score_source=ats_score_source,
                     ats_summary=ats_summary,
                     ats_breakdown_json=ats_breakdown_json,
+                    resume_picker_score=resume_picker_score,
+                    resume_picker_reason=resume_picker_reason,
+                    resume_picker_candidates_json=resume_picker_candidates_json,
+                    resume_picker_breakdown_json=resume_picker_breakdown_json,
                     semantic_input_source=getattr(semantic_diag, "input_source", None),
                     semantic_input_chars=getattr(semantic_diag, "input_chars", None),
                     semantic_chunks=getattr(semantic_diag, "chunks", None),
@@ -1057,6 +1066,7 @@ class OrchestrationService:
             subject=parse_subject,
             body=parse_body,
             parsed=parsed,
+            parser_details=parser_details,
             user_settings=user_settings,
             email_row=email,
             resumes=enabled_resumes,
@@ -1070,6 +1080,10 @@ class OrchestrationService:
         ats_score_source = cast(str | None, getattr(resume_selection, "ats_score_source", None))
         ats_summary = cast(str | None, getattr(resume_selection, "ats_summary", None))
         ats_breakdown_json = cast(str | None, getattr(resume_selection, "ats_breakdown_json", None))
+        resume_picker_score = cast(float | None, getattr(resume_selection, "final_resume_score", None))
+        resume_picker_reason = cast(str | None, getattr(resume_selection, "selection_reason", None))
+        resume_picker_candidates_json = cast(str | None, getattr(resume_selection, "candidate_rankings_json", None))
+        resume_picker_breakdown_json = cast(str | None, getattr(resume_selection, "picker_breakdown_json", None))
 
         routing_decision = None
         if payload.preserve_manual_routing and email.routing_confirmed:
@@ -1141,6 +1155,10 @@ class OrchestrationService:
         email.ats_score_source = ats_score_source
         email.ats_summary = ats_summary
         email.ats_breakdown_json = ats_breakdown_json
+        email.resume_picker_score = resume_picker_score
+        email.resume_picker_reason = resume_picker_reason
+        email.resume_picker_candidates_json = resume_picker_candidates_json
+        email.resume_picker_breakdown_json = resume_picker_breakdown_json
         email.semantic_embedding = preparation.email_embedding_json
         email.semantic_input_source = getattr(preparation.semantic_diag, "input_source", None)
         email.semantic_input_chars = getattr(preparation.semantic_diag, "input_chars", None)
@@ -1262,6 +1280,7 @@ class OrchestrationService:
             subject=email.subject,
             body=email.body,
             parsed=parsed,
+            parser_details=email.parser_details_json and json.loads(email.parser_details_json),
             user_settings=user_settings,
             email_row=email,
             db=db,
@@ -1273,6 +1292,10 @@ class OrchestrationService:
         email.ats_score_source = cast(str | None, getattr(resume_selection, "ats_score_source", None))
         email.ats_summary = cast(str | None, getattr(resume_selection, "ats_summary", None))
         email.ats_breakdown_json = cast(str | None, getattr(resume_selection, "ats_breakdown_json", None))
+        email.resume_picker_score = cast(float | None, getattr(resume_selection, "final_resume_score", None))
+        email.resume_picker_reason = cast(str | None, getattr(resume_selection, "selection_reason", None))
+        email.resume_picker_candidates_json = cast(str | None, getattr(resume_selection, "candidate_rankings_json", None))
+        email.resume_picker_breakdown_json = cast(str | None, getattr(resume_selection, "picker_breakdown_json", None))
         fallback_reply = self.deps.build_user_fallback_draft(
             db,
             user_settings,

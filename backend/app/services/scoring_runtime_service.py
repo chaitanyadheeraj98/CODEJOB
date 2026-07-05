@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import re
 from dataclasses import dataclass
@@ -42,6 +43,10 @@ class ResumeMatchSelection:
     ai_score: float
     ai_summary: str
     ai_score_source: str
+    final_resume_score: float
+    selection_reason: str | None
+    picker_breakdown_json: str | None
+    candidate_rankings_json: str | None
     ats_score: float | None
     ats_score_source: str | None
     ats_summary: str | None
@@ -49,6 +54,33 @@ class ResumeMatchSelection:
     email_embedding_json: str | None
     resume_embedding_json: str | None
     semantic_diag: SemanticDiagnostics
+
+
+@dataclass(frozen=True)
+class PrioritySkillRule:
+    canonical_name: str
+    aliases: tuple[str, ...]
+    weight: float
+
+
+_PRIORITY_SKILL_RULES: tuple[PrioritySkillRule, ...] = (
+    PrioritySkillRule("Oracle", ("oracle", "oracle database", "oracle db"), 1.15),
+    PrioritySkillRule("PL/SQL", ("pl/sql", "plsql", "pl sql"), 1.15),
+    PrioritySkillRule("AI tools", ("ai tools", "artificial intelligence tools", "genai tools", "github copilot", "chatgpt"), 1.0),
+    PrioritySkillRule("Cloud-native development", ("cloud native", "cloud-native", "cloud native development", "cloud-native development"), 0.95),
+    PrioritySkillRule("OpenShift", ("openshift", "open shift"), 1.0),
+    PrioritySkillRule("Testing automation", ("testing automation", "test automation", "automation testing"), 0.9),
+    PrioritySkillRule("GitHub Enterprise", ("github enterprise", "github enterprise server", "ghe"), 0.85),
+    PrioritySkillRule("Java", ("java",), 0.9),
+    PrioritySkillRule("Spring Boot", ("spring boot", "springboot"), 0.9),
+    PrioritySkillRule("Architecture", ("architecture",), 0.75),
+    PrioritySkillRule("React", ("react", "react.js", "reactjs"), 0.8),
+    PrioritySkillRule("Angular", ("angular", "angularjs"), 0.8),
+    PrioritySkillRule("Microservices", ("microservices", "microservice"), 0.8),
+)
+
+_PROJECT_CONTEXT_TERMS = ("project", "projects", "platform", "solution", "support", "context", "integration", "delivery")
+_WEAK_PARTIAL_TERMS = ("awareness", "familiarity", "exposure")
 
 
 class ScoringRuntimeService:
@@ -83,6 +115,7 @@ class ScoringRuntimeService:
         subject: str,
         body: str,
         parsed: dict[str, str | int],
+        parser_details: dict[str, object] | None = None,
         user_settings: UserSettings,
         email_row: RecruiterEmail | None,
         resumes: list[ResumeAsset],
@@ -124,7 +157,7 @@ class ScoringRuntimeService:
                     external_thread_id=external_thread_id,
                 )
             return (
-                ResumeMatchSelection(
+                self._build_picker_selection(
                     resume=resume,
                     ai_score=ai_score,
                     ai_summary=ai_summary,
@@ -136,6 +169,8 @@ class ScoringRuntimeService:
                     email_embedding_json=email_embedding_json,
                     resume_embedding_json=resume_embedding_json,
                     semantic_diag=semantic_diag,
+                    parsed=parsed,
+                    parser_details=parser_details,
                 ),
                 next_email_ctx,
             )
@@ -145,13 +180,32 @@ class ScoringRuntimeService:
             return selection
 
         best_selection: ResumeMatchSelection | None = None
+        scored_selections: list[ResumeMatchSelection] = []
         email_ctx: RecruiterEmail | Any | None = email_row
         for resume in enabled_resumes:
             selection, email_ctx = _score_resume(resume, email_ctx)
-            if best_selection is None or selection.ai_score > best_selection.ai_score:
+            scored_selections.append(selection)
+            if best_selection is None or selection.final_resume_score > best_selection.final_resume_score:
                 best_selection = selection
 
         assert best_selection is not None
+        scored_selections.sort(key=lambda item: item.final_resume_score, reverse=True)
+        best_selection.candidate_rankings_json = self._json_payload(
+            {
+                "selected_resume_file_name": getattr(best_selection.resume, "file_name", None),
+                "rankings": [
+                    {
+                        "resume_file_name": getattr(item.resume, "file_name", None),
+                        "final_resume_score": round(item.final_resume_score, 4),
+                        "ai_score": round(item.ai_score, 4),
+                        "ats_score": round(item.ats_score or 0.0, 2) if item.ats_score is not None else None,
+                        "selection_reason": item.selection_reason,
+                        "picker_breakdown": json.loads(item.picker_breakdown_json or "{}"),
+                    }
+                    for item in scored_selections
+                ],
+            }
+        )
         return best_selection
 
     def ensure_embedding_cached(self, current_payload: str | None, text: str) -> tuple[list[float], str | None, str]:
@@ -263,9 +317,229 @@ class ScoringRuntimeService:
         return score, f"AI fit score computed from role keywords and skill overlap ({score:.2f})"
 
     def _json_payload(self, payload: dict[str, object]) -> str:
-        import json
-
         return json.dumps(payload, separators=(",", ":"))
+
+    def _normalize_skill_phrase(self, value: str | None) -> str:
+        return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+    def _jd_priority_pool(self, parsed: dict[str, str | int], parser_details: dict[str, object] | None) -> str:
+        parts = [str(parsed.get("role", "")), str(parsed.get("skills_text", ""))]
+        if parser_details:
+            skills_audit = parser_details.get("skills_audit")
+            if isinstance(skills_audit, dict):
+                parts.extend(str(item) for item in (skills_audit.get("known") or []) if str(item).strip())
+                parts.extend(str(item) for item in (skills_audit.get("unknown") or []) if str(item).strip())
+            approved_skills_text = parser_details.get("approved_skills_text")
+            if isinstance(approved_skills_text, str):
+                parts.append(approved_skills_text)
+        return " ".join(parts)
+
+    def _extract_priority_rules(
+        self,
+        *,
+        parsed: dict[str, str | int],
+        parser_details: dict[str, object] | None,
+    ) -> list[PrioritySkillRule]:
+        normalized_pool = self._normalize_skill_phrase(self._jd_priority_pool(parsed, parser_details))
+        found: list[PrioritySkillRule] = []
+        seen: set[str] = set()
+        for rule in _PRIORITY_SKILL_RULES:
+            if rule.canonical_name in seen:
+                continue
+            for alias in rule.aliases:
+                normalized_alias = self._normalize_skill_phrase(alias)
+                if normalized_alias and f" {normalized_alias} " in f" {normalized_pool} ":
+                    found.append(rule)
+                    seen.add(rule.canonical_name)
+                    break
+        return found
+
+    def _match_resume_evidence(
+        self,
+        *,
+        resume_skills_text: str,
+        rule: PrioritySkillRule,
+    ) -> tuple[float, str | None]:
+        resume_chunks = [chunk.strip() for chunk in resume_skills_text.split(",") if chunk.strip()]
+        best_score = 0.0
+        best_label: str | None = None
+        for chunk in resume_chunks:
+            normalized_chunk = self._normalize_skill_phrase(chunk)
+            if not normalized_chunk:
+                continue
+            if not any(f" {self._normalize_skill_phrase(alias)} " in f" {normalized_chunk} " for alias in rule.aliases):
+                continue
+            score = 1.0
+            label = "direct"
+            if "concepts" in normalized_chunk:
+                score = 0.60
+                label = "concepts"
+            elif any(term in normalized_chunk for term in _WEAK_PARTIAL_TERMS):
+                score = 0.40
+                label = "awareness"
+            elif any(term in normalized_chunk for term in _PROJECT_CONTEXT_TERMS):
+                score = 0.85
+                label = "project_context"
+            if score > best_score:
+                best_score = score
+                best_label = label
+        return best_score, best_label
+
+    def _compute_jd_priority_scores(
+        self,
+        *,
+        parsed: dict[str, str | int],
+        parser_details: dict[str, object] | None,
+        resume: ResumeAsset | None,
+    ) -> dict[str, object]:
+        resume_skills_text = str(getattr(resume, "skills_text", "") or "")
+        rules = self._extract_priority_rules(parsed=parsed, parser_details=parser_details)
+        if not rules:
+            return {
+                "priority_rules": [],
+                "jd_priority_score": 0.0,
+                "partial_credit_score": 0.0,
+                "matched_priority_skills": [],
+                "missing_priority_skills": [],
+                "priority_evidence": {},
+            }
+
+        total_weight = sum(rule.weight for rule in rules) or 1.0
+        matched_weight = 0.0
+        partial_weight = 0.0
+        matched_priority_skills: list[str] = []
+        missing_priority_skills: list[str] = []
+        priority_evidence: dict[str, object] = {}
+        for rule in rules:
+            evidence_score, evidence_label = self._match_resume_evidence(resume_skills_text=resume_skills_text, rule=rule)
+            if evidence_score > 0:
+                matched_weight += rule.weight
+                partial_weight += rule.weight * evidence_score
+                matched_priority_skills.append(rule.canonical_name)
+            else:
+                missing_priority_skills.append(rule.canonical_name)
+            priority_evidence[rule.canonical_name] = {
+                "weight": round(rule.weight, 3),
+                "evidence_score": round(evidence_score, 3),
+                "evidence_type": evidence_label,
+            }
+        return {
+            "priority_rules": [rule.canonical_name for rule in rules],
+            "jd_priority_score": clamp01(matched_weight / total_weight),
+            "partial_credit_score": clamp01(partial_weight / total_weight),
+            "matched_priority_skills": matched_priority_skills,
+            "missing_priority_skills": missing_priority_skills,
+            "priority_evidence": priority_evidence,
+        }
+
+    def _role_family_fit_score(
+        self,
+        *,
+        jd_role_family: str,
+        resume_role_family: str,
+        role_alignment_score: float,
+        foundation_score: float,
+        jd_priority_score: float,
+    ) -> tuple[float, str]:
+        adjusted = role_alignment_score
+        if jd_role_family == resume_role_family:
+            return clamp01(adjusted), "direct_family_alignment"
+        if jd_role_family == "general":
+            return clamp01(max(adjusted, 0.7)), "general_family_fallback"
+        if jd_role_family != "ai" and resume_role_family == "ai":
+            if foundation_score >= 0.60 and jd_priority_score >= 0.50:
+                return clamp01(max(adjusted, 0.72)), "ai_enabled_fullstack_override"
+            if foundation_score < 0.55 and jd_priority_score < 0.50:
+                return clamp01(min(adjusted, 0.25)), "generic_ai_guardrail"
+        if foundation_score >= 0.65 and jd_priority_score >= 0.45:
+            return clamp01(max(adjusted, 0.68)), "foundation_priority_override"
+        return clamp01(adjusted), "role_alignment_only"
+
+    def _build_picker_selection(
+        self,
+        *,
+        resume: ResumeAsset | None,
+        ai_score: float,
+        ai_summary: str,
+        ai_score_source: str,
+        ats_score: float | None,
+        ats_score_source: str | None,
+        ats_summary: str | None,
+        ats_breakdown_json: str | None,
+        email_embedding_json: str | None,
+        resume_embedding_json: str | None,
+        semantic_diag: SemanticDiagnostics,
+        parsed: dict[str, str | int],
+        parser_details: dict[str, object] | None,
+    ) -> ResumeMatchSelection:
+        ats_score_01 = clamp01((ats_score or 0.0) / 100.0)
+        resume_skills_text = str(getattr(resume, "skills_text", "") or "").strip()
+        intent = compute_intent_weighted_match(
+            jd_role=str(parsed.get("role", "")),
+            jd_skills_text=str(parsed.get("skills_text", "")),
+            resume_skills_text=resume_skills_text,
+        )
+        priority_data = self._compute_jd_priority_scores(parsed=parsed, parser_details=parser_details, resume=resume)
+        jd_priority_score = float(priority_data["jd_priority_score"])
+        partial_credit_score = float(priority_data["partial_credit_score"])
+        role_family_fit_score, role_family_reason = self._role_family_fit_score(
+            jd_role_family=intent.jd_role_family,
+            resume_role_family=intent.resume_role_family,
+            role_alignment_score=intent.role_alignment_score,
+            foundation_score=intent.foundation_score,
+            jd_priority_score=jd_priority_score,
+        )
+        final_resume_score = clamp01(
+            (ai_score * 0.45)
+            + (ats_score_01 * 0.20)
+            + (jd_priority_score * 0.20)
+            + (role_family_fit_score * 0.10)
+            + (partial_credit_score * 0.05)
+        )
+        matched_priority = list(priority_data["matched_priority_skills"])
+        missing_priority = list(priority_data["missing_priority_skills"])
+        selected_resume_file_name = getattr(resume, "file_name", None)
+        picker_breakdown = {
+            "selected_resume_file_name": selected_resume_file_name,
+            "final_resume_score": round(final_resume_score, 4),
+            "ai_score": round(ai_score, 4),
+            "ats_score": round(ats_score or 0.0, 2) if ats_score is not None else None,
+            "ats_score_01": round(ats_score_01, 4),
+            "jd_priority_score": round(jd_priority_score, 4),
+            "role_family_fit_score": round(role_family_fit_score, 4),
+            "partial_credit_score": round(partial_credit_score, 4),
+            "jd_role_family": intent.jd_role_family,
+            "resume_role_family": intent.resume_role_family,
+            "foundation_score": round(intent.foundation_score, 4),
+            "role_alignment_score": round(intent.role_alignment_score, 4),
+            "role_family_reason": role_family_reason,
+            "matched_priority_skills": matched_priority,
+            "missing_priority_skills": missing_priority,
+            "priority_evidence": priority_data["priority_evidence"],
+            "weak_signal_hits": list(intent.weak_signal_hits),
+        }
+        selection_reason = (
+            f"Final {final_resume_score:.2f}; ai={ai_score:.2f}; ats={(ats_score or 0.0):.2f}; "
+            f"priority={jd_priority_score:.2f}; role_fit={role_family_fit_score:.2f}; "
+            f"matched={', '.join(matched_priority[:4]) or 'none'}"
+        )
+        return ResumeMatchSelection(
+            resume=resume,
+            ai_score=ai_score,
+            ai_summary=ai_summary,
+            ai_score_source=ai_score_source,
+            final_resume_score=final_resume_score,
+            selection_reason=selection_reason,
+            picker_breakdown_json=self._json_payload(picker_breakdown),
+            candidate_rankings_json=None,
+            ats_score=ats_score,
+            ats_score_source=ats_score_source,
+            ats_summary=ats_summary,
+            ats_breakdown_json=ats_breakdown_json,
+            email_embedding_json=email_embedding_json,
+            resume_embedding_json=resume_embedding_json,
+            semantic_diag=semantic_diag,
+        )
 
     def _intent_weighted_keyword_score(
         self,

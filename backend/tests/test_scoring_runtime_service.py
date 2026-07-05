@@ -301,6 +301,9 @@ class ScoringRuntimeServiceTests(unittest.TestCase):
         self.assertIsNotNone(selection.resume)
         self.assertEqual(selection.resume.file_name, "Chaithanya_Dheeraj_Full_Stack_Engineer_Java_Python_GenAI.docx")
         self.assertIn("matched_ai_core", selection.ai_summary)
+        self.assertGreater(selection.final_resume_score, 0.0)
+        self.assertIsNotNone(selection.picker_breakdown_json)
+        self.assertIsNotNone(selection.candidate_rankings_json)
 
     def test_non_ai_jd_keeps_foundation_bias_stable(self) -> None:
         service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1, 0.2], "hash")))
@@ -340,6 +343,79 @@ class ScoringRuntimeServiceTests(unittest.TestCase):
         )
         self.assertIsNotNone(selection.resume)
         self.assertEqual(selection.resume.file_name, "java_full_stack.docx")
+
+    def test_resume_picker_prefers_priority_coverage_for_email_3988_style_jd(self) -> None:
+        service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1, 0.2], "hash")))
+        parsed = {
+            "role": "Java Full Stack Developer",
+            "skills_text": "Java, Spring Boot, Oracle, PL/SQL, Artificial Intelligence tools, Cloud-native development, OpenShift, Testing Automation, GitHub Enterprise, Microservices",
+            "salary_text": "",
+            "location": "Irving, TX",
+        }
+        parser_details = {
+            "skills_audit": {
+                "known": ["Java", "Spring Boot", "Oracle", "PL/SQL", "OpenShift", "GitHub Enterprise", "Microservices"],
+                "unknown": ["Artificial Intelligence tools", "Cloud-native development", "Testing Automation"],
+            }
+        }
+
+        class Settings:
+            feature_semantic_enabled = False
+            role_keywords = ""
+            free_text_guidance = ""
+
+        class Resume:
+            def __init__(self, rid: int, name: str, skills: str):
+                self.id = rid
+                self.file_name = name
+                self.skills_text = skills
+                self.semantic_embedding = None
+                self.file_path = name
+                self.is_enabled = True
+                self.is_current = False
+
+        role_clean = Resume(1, "RCR.docx", "Java, Spring Boot, React, SQL, REST APIs, Microservices, AWS, Jenkins")
+        priority_rich = Resume(2, "ARP.docx", "Java, Spring Boot, Oracle Concepts, PL/SQL Concepts, GitHub Enterprise, OpenShift, AI tools, Cloud-native development, Microservices")
+
+        selection = service.select_best_resume_match(
+            subject="",
+            body="Need Oracle, PL/SQL, AI tools, OpenShift and cloud-native Java full stack experience.",
+            parsed=parsed,
+            parser_details=parser_details,
+            user_settings=Settings(),
+            email_row=None,
+            resumes=[role_clean, priority_rich],
+            fallback_resume=role_clean,
+        )
+
+        self.assertIsNotNone(selection.resume)
+        self.assertEqual(selection.resume.file_name, "ARP.docx")
+        breakdown = json.loads(selection.picker_breakdown_json or "{}")
+        self.assertIn("Oracle", breakdown.get("matched_priority_skills", []))
+        self.assertGreater(float(breakdown.get("partial_credit_score", 0.0)), 0.0)
+
+    def test_partial_credit_scores_concepts_and_awareness_below_direct(self) -> None:
+        service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1], "hash")))
+        parsed = {
+            "role": "Java Full Stack Developer",
+            "skills_text": "Oracle, PL/SQL, Architecture, Java",
+            "salary_text": "",
+            "location": "Remote",
+        }
+        parser_details = {"skills_audit": {"known": ["Oracle", "PL/SQL", "Architecture", "Java"], "unknown": []}}
+
+        class Resume:
+            file_name = "credit.docx"
+            skills_text = "Oracle Concepts, PL/SQL Concepts, Architecture Awareness, Java"
+
+        scores = service._compute_jd_priority_scores(parsed=parsed, parser_details=parser_details, resume=Resume())
+        evidence = scores["priority_evidence"]
+        assert isinstance(evidence, dict)
+        self.assertEqual(evidence["Oracle"]["evidence_score"], 0.6)
+        self.assertEqual(evidence["PL/SQL"]["evidence_score"], 0.6)
+        self.assertEqual(evidence["Architecture"]["evidence_score"], 0.4)
+        self.assertEqual(evidence["Java"]["evidence_score"], 1.0)
+        self.assertGreater(scores["partial_credit_score"], 0.0)
 
     def test_raw_skills_overlap_can_match_unknown_terms_directly(self) -> None:
         service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1, 0.2], "hash")))

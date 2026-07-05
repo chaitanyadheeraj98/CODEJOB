@@ -33,7 +33,7 @@ describe('Needs Review regenerate flow', () => {
   })
 
   it('renders Regenerate, posts to the endpoint, shows the pending label, and refreshes the draft', async () => {
-    const initialCandidate = {
+    const initialCandidate: any = {
       id: 42,
       owner_id: 'default-owner',
       sender: 'Recruiter <recruiter@example.com>',
@@ -105,7 +105,7 @@ describe('Needs Review regenerate flow', () => {
       role: 'Senior Java Developer',
       draft_reply: 'Fresh AI draft',
       draft_source: 'ai_primary',
-      draft_ai_error: null,
+      draft_ai_error: null as string | null,
       parser_details: { parser_version: 'regen-v1' },
       updated_at: '2026-07-03T10:00:00Z',
     }

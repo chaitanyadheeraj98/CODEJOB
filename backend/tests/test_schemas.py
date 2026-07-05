@@ -32,6 +32,10 @@ class EmailResponseRoutingTests(unittest.TestCase):
             ats_score_source="hybrid_structured_only",
             ats_summary="ATS hybrid score 84/100",
             ats_breakdown_json='{"raw_overlap":0.75,"selected_resume_file_name":"resume.docx"}',
+            resume_picker_score=0.81,
+            resume_picker_reason="Final 0.81; ai=0.80; ats=84.50",
+            resume_picker_candidates_json='{"rankings":[{"resume_file_name":"resume.docx","final_resume_score":0.81}]}',
+            resume_picker_breakdown_json='{"matched_priority_skills":["Java"],"missing_priority_skills":["Oracle"]}',
             skip_reason=None,
             sync_batch_id=None,
             draft_reply="draft",
@@ -83,6 +87,16 @@ class EmailResponseRoutingTests(unittest.TestCase):
         self.assertEqual(
             response.ats_breakdown,
             {"raw_overlap": 0.75, "selected_resume_file_name": "resume.docx"},
+        )
+        self.assertEqual(response.resume_picker_score, 0.81)
+        self.assertEqual(response.resume_picker_reason, "Final 0.81; ai=0.80; ats=84.50")
+        self.assertEqual(
+            response.resume_picker_candidates,
+            {"rankings": [{"resume_file_name": "resume.docx", "final_resume_score": 0.81}]},
+        )
+        self.assertEqual(
+            response.resume_picker_breakdown,
+            {"matched_priority_skills": ["Java"], "missing_priority_skills": ["Oracle"]},
         )
 
     def test_settings_request_accepts_employer_domains(self) -> None:

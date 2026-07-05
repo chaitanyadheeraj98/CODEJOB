@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import logging
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, cast
 
 from app.gates import EmailIntentDecision
 from app.job_intent_learning import approved_learning_signals_for_owner, record_pending_job_intent_learning
@@ -188,6 +188,7 @@ class RunOrchestrator:
                 subject=subject,
                 body=body,
                 parsed=parsed_for_selection,
+                parser_details=parser_details,
                 user_settings=request.user_settings,
                 email_row=existing,
                 resumes=request.enabled_resumes,
@@ -266,6 +267,10 @@ class RunOrchestrator:
                     target.ai_score = preparation.ai_score
                     target.ai_score_source = preparation.ai_score_source
                     target.ai_summary = preparation.ai_summary
+                    target.resume_picker_score = cast(float | None, getattr(resume_selection, "final_resume_score", None))
+                    target.resume_picker_reason = cast(str | None, getattr(resume_selection, "selection_reason", None))
+                    target.resume_picker_candidates_json = cast(str | None, getattr(resume_selection, "candidate_rankings_json", None))
+                    target.resume_picker_breakdown_json = cast(str | None, getattr(resume_selection, "picker_breakdown_json", None))
                     target.semantic_input_source = getattr(preparation.semantic_diag, "input_source", None)
                     target.semantic_input_chars = getattr(preparation.semantic_diag, "input_chars", None)
                     target.semantic_chunks = getattr(preparation.semantic_diag, "chunks", None)
@@ -355,6 +360,10 @@ class RunOrchestrator:
                     target.routing_confirmed = False
                     target.resume_asset_id = selected_resume.id if selected_resume else None
                     target.resume_file_name = selected_resume.file_name if selected_resume else None
+                    target.resume_picker_score = cast(float | None, getattr(resume_selection, "final_resume_score", None))
+                    target.resume_picker_reason = cast(str | None, getattr(resume_selection, "selection_reason", None))
+                    target.resume_picker_candidates_json = cast(str | None, getattr(resume_selection, "candidate_rankings_json", None))
+                    target.resume_picker_breakdown_json = cast(str | None, getattr(resume_selection, "picker_breakdown_json", None))
                     target.parser_details_json = parser_details_json
                     target.skills_json = skills_json
 
@@ -400,6 +409,14 @@ class RunOrchestrator:
                 target.ai_score = preparation.ai_score
                 target.ai_score_source = preparation.ai_score_source
                 target.ai_summary = preparation.ai_summary
+                target.ats_score = cast(float | None, getattr(resume_selection, "ats_score", None))
+                target.ats_score_source = cast(str | None, getattr(resume_selection, "ats_score_source", None))
+                target.ats_summary = cast(str | None, getattr(resume_selection, "ats_summary", None))
+                target.ats_breakdown_json = cast(str | None, getattr(resume_selection, "ats_breakdown_json", None))
+                target.resume_picker_score = cast(float | None, getattr(resume_selection, "final_resume_score", None))
+                target.resume_picker_reason = cast(str | None, getattr(resume_selection, "selection_reason", None))
+                target.resume_picker_candidates_json = cast(str | None, getattr(resume_selection, "candidate_rankings_json", None))
+                target.resume_picker_breakdown_json = cast(str | None, getattr(resume_selection, "picker_breakdown_json", None))
                 target.semantic_input_source = getattr(preparation.semantic_diag, "input_source", None)
                 target.semantic_input_chars = getattr(preparation.semantic_diag, "input_chars", None)
                 target.semantic_chunks = getattr(preparation.semantic_diag, "chunks", None)

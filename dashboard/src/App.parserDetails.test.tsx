@@ -3,7 +3,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { ParserDetailsPanel } from './App'
+import { ParserDetailsPanel, ResumePickerPanel } from './App'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -136,5 +136,98 @@ describe('ParserDetailsPanel', () => {
     expect(container.textContent ?? '').not.toContain('AI Merge Notes')
     expect(container.textContent ?? '').not.toContain('Winning Sources')
     expect(container.textContent ?? '').not.toContain('Conflict Notes')
+  })
+
+  it('renders resume picker diagnostics and top alternatives', () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+    })
+
+    act(() => {
+      root.render(
+        <ResumePickerPanel
+          candidate={{
+            id: 3988,
+            subject: 'Java Full Stack Developer',
+            sender: 'recruiter@example.com',
+            body: 'body',
+            role: 'Java Full Stack Developer',
+            location: 'Irving, TX',
+            salary_text: '',
+            skills_text: 'Java, Oracle, PL/SQL',
+            gmail_message_url: null,
+            recipient_email: 'to@example.com',
+            cc_email: 'cc@example.com',
+            routing_status: 'safe',
+            routing_confidence: 0.9,
+            routing_reason: 'safe',
+            routing_evidence: [],
+            routing_candidates: [],
+            routing_confirmed: false,
+            ai_score: 0.64,
+            ats_score: 56.13,
+            ats_score_source: 'hybrid_structured_plus_semantic',
+            ats_summary: 'ATS hybrid score 56/100',
+            ats_breakdown: {},
+            resume_picker_score: 0.81,
+            resume_picker_reason: 'Final 0.81; ai=0.64; ats=56.13; priority=0.90; role_fit=0.72; matched=Oracle, PL/SQL',
+            resume_picker_breakdown: {
+              matched_priority_skills: ['Oracle', 'PL/SQL', 'AI tools'],
+              missing_priority_skills: ['OpenShift'],
+            },
+            resume_picker_candidates: {
+              rankings: [
+                {
+                  resume_file_name: 'selected.docx',
+                  final_resume_score: 0.81,
+                  selection_reason: 'winner',
+                },
+                {
+                  resume_file_name: 'alternative-1.docx',
+                  final_resume_score: 0.77,
+                  selection_reason: 'close second',
+                },
+                {
+                  resume_file_name: 'alternative-2.docx',
+                  final_resume_score: 0.74,
+                  selection_reason: 'third',
+                },
+              ],
+            },
+            draft_reply: 'draft',
+            draft_source: 'rules_only',
+            draft_model: null,
+            draft_ai_error: null,
+            draft_resume_context_status: 'rules_only',
+            draft_quality: null,
+            resume_file_name: 'selected.docx',
+            parser_details: null,
+            attachment_file_names: [],
+            state: 'needs_review',
+            last_error: null,
+            source: 'gmail',
+            external_message_id: 'm-3988',
+            external_thread_id: 't-3988',
+            gmail_sent_id: null,
+          }}
+        />,
+      )
+    })
+
+    expect(container.textContent ?? '').toContain('Resume Picker:')
+    expect(container.textContent ?? '').toContain('selected.docx')
+    expect(container.textContent ?? '').toContain('Final Score:')
+    expect(container.textContent ?? '').toContain('81')
+    expect(container.textContent ?? '').toContain('Matched Priority Skills:')
+    expect(container.textContent ?? '').toContain('Oracle, PL/SQL, AI tools')
+    expect(container.textContent ?? '').toContain('Missing Priority Skills:')
+    expect(container.textContent ?? '').toContain('OpenShift')
+    expect(container.textContent ?? '').toContain('Top Alternatives:')
+    expect(container.textContent ?? '').toContain('alternative-1.docx')
+    expect(container.textContent ?? '').toContain('alternative-2.docx')
   })
 })
