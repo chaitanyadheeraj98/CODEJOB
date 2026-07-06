@@ -1179,11 +1179,20 @@
 }
 
 .parserDetailsPanel {
+  --parser-card-height: 23rem;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fff;
   padding: 12px;
   display: grid;
+  gap: 12px;
+}
+
+.parserDetailsHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
   gap: 12px;
 }
 
@@ -1195,28 +1204,67 @@
   font-size: 13px;
 }
 
+.parserViewToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #f5f8ff;
+}
+
+.parserViewToggleButton {
+  height: 34px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #33405a;
+  padding: 0 12px;
+  font-size: 13px;
+}
+
+.parserViewToggleButtonActive {
+  border-color: #b8c8ea;
+  background: #fff;
+  color: #1f4dbd;
+  font-weight: 700;
+}
+
 .parserDetailsSummaryGrid {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  align-items: stretch;
 }
 
 .parserDetailsGrid {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  align-items: stretch;
 }
 
 .parserDetailsBlock {
   min-width: 0;
   border: 1px solid var(--line);
   border-radius: 8px;
-  padding: 10px;
+  padding: 12px;
   background: #f9fbff;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 10px;
+  height: var(--parser-card-height);
+  min-height: var(--parser-card-height);
+  overflow: hidden;
 }
 
 .parserDetailsSummaryBlock {
   background: #f5f8ff;
+}
+
+.parserDetailsBlockWide {
+  grid-column: 1 / -1;
 }
 
 .parserDetailsBlock h3 {
@@ -1224,7 +1272,180 @@
   font-size: 14px;
 }
 
-.parserDetailsBlock pre {
+.parserDetailsCardBody {
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  padding-right: 4px;
+  scrollbar-gutter: stable;
+}
+
+.parserDetailsCardBody::-webkit-scrollbar,
+.parserTextBlock::-webkit-scrollbar,
+.parserRawBlock::-webkit-scrollbar,
+.parserCardPre::-webkit-scrollbar {
+  width: 10px;
+}
+
+.parserDetailsCardBody::-webkit-scrollbar-thumb,
+.parserTextBlock::-webkit-scrollbar-thumb,
+.parserRawBlock::-webkit-scrollbar-thumb,
+.parserCardPre::-webkit-scrollbar-thumb {
+  background: #cdd5e5;
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+.parserDetailsCardBody::-webkit-scrollbar-track,
+.parserTextBlock::-webkit-scrollbar-track,
+.parserRawBlock::-webkit-scrollbar-track,
+.parserCardPre::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.parserStatusBadges,
+.parserChipList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.parserStatusBadge,
+.parserChip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid #cfd8ea;
+  background: #eef4ff;
+  color: #2f3a50;
+  font-size: 13px;
+}
+
+.parserStatusBadgeWarning {
+  background: #fff4dd;
+  border-color: #e3b968;
+  color: #7a4a00;
+}
+
+.parserKeyValueList {
+  display: grid;
+  gap: 10px;
+}
+
+.parserKeyValueRow {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid #dde5f2;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.parserLabel,
+.parserSectionLabel {
+  font-size: 12px;
+  font-weight: 700;
+  color: #52627c;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.parserValue {
+  color: #172132;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.parserMetricGrid {
+  display: grid;
+  gap: 8px;
+}
+
+.parserMetricRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px;
+  border: 1px solid #dde5f2;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.parserMetricRow .parserValue {
+  text-align: right;
+}
+
+.parserTextBlock,
+.parserRawBlock {
+  margin: 0;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid #dde5f2;
+  background: #fff;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.5;
+  max-height: 12rem;
+  overflow-y: auto;
+}
+
+.parserRawDebug {
+  margin-top: 2px;
+}
+
+.parserRawDebug summary {
+  cursor: pointer;
+  color: #45546f;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.parserRawBlock {
+  margin-top: 8px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 12px;
+  background: #f4f7fc;
+}
+
+.parserNestedBlock {
+  display: grid;
+  gap: 8px;
+}
+
+.parserSectionGroup {
+  display: grid;
+  gap: 12px;
+}
+
+.parserSectionGroup > div {
+  display: grid;
+  gap: 8px;
+}
+
+.parserCardPre {
+  margin: 0;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid #dde5f2;
+  background: #fff;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.parserLegacyPre {
   margin: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -1336,6 +1557,10 @@
   .runQueueGrid > .card {
     height: 28rem;
   }
+
+  .parserDetailsPanel {
+    --parser-card-height: 20rem;
+  }
 }
 
 @media (max-width: 900px) {
@@ -1379,6 +1604,23 @@
     overflow: visible;
     padding-right: 0;
     scrollbar-gutter: auto;
+  }
+
+  .parserDetailsPanel {
+    --parser-card-height: 16rem;
+  }
+
+  .parserDetailsHeader {
+    align-items: stretch;
+  }
+
+  .parserViewToggle {
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .parserViewToggleButton {
+    flex: 1 1 0;
   }
 
   .actionBar {

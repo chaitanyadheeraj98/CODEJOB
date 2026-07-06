@@ -131,11 +131,32 @@ describe('ParserDetailsPanel', () => {
     expect(container.textContent ?? '').toContain('Skills Audit')
     expect(container.textContent ?? '').toContain('Source Hints')
     expect(container.textContent ?? '').toContain('AI Evidence')
+    expect(container.querySelectorAll('.parserDetailsCardBody').length).toBeGreaterThanOrEqual(5)
+    expect(container.querySelectorAll('.parserChip').length).toBeGreaterThanOrEqual(4)
+    expect(container.querySelectorAll('.parserMetricRow').length).toBeGreaterThanOrEqual(4)
+    expect(container.querySelectorAll('.parserStatusBadge').length).toBeGreaterThanOrEqual(2)
+    expect(container.textContent ?? '').toContain('Raw Debug')
+    expect(container.textContent ?? '').toContain('Readable v3')
+    expect(container.textContent ?? '').toContain('Raw v1')
     expect(container.textContent ?? '').not.toContain('Enrichment Result')
     expect(container.textContent ?? '').not.toContain('Merge Notes')
     expect(container.textContent ?? '').not.toContain('AI Merge Notes')
     expect(container.textContent ?? '').not.toContain('Winning Sources')
     expect(container.textContent ?? '').not.toContain('Conflict Notes')
+
+    const rawToggle = Array.from(container.querySelectorAll('button')).find((node) => node.textContent === 'Raw v1') as HTMLButtonElement | undefined
+    expect(rawToggle).toBeDefined()
+
+    act(() => {
+      rawToggle?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(container.querySelectorAll('.parserLegacyPre').length).toBeGreaterThanOrEqual(5)
+    expect(container.textContent ?? '').toContain('fallback_used: false')
+    expect(container.textContent ?? '').toContain('selected_resume_file_name: resume.docx')
+    expect(container.textContent ?? '').toContain('canonical_title: Full Stack Developer')
+    expect(container.textContent ?? '').toContain('confidence: 0.87')
+    expect(container.textContent ?? '').toContain('evidence: title: Full Stack Developer')
   })
 
   it('renders resume picker diagnostics and top alternatives', () => {

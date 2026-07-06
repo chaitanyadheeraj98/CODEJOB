@@ -1196,6 +1196,223 @@ function recordStringArray(record: Record<string, unknown> | null | undefined, k
   return value.map((item) => renderParserValue(item).trim()).filter(Boolean).filter((item) => item !== '-')
 }
 
+function parserTitleCase(value: string): string {
+  return value
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(' ')
+    .map((part) => {
+      const lowered = part.toLowerCase()
+      if (lowered === 'ai') return 'AI'
+      if (lowered === 'ats') return 'ATS'
+      if (lowered === 'api') return 'API'
+      if (lowered === 'id') return 'ID'
+      if (lowered === 'jd') return 'JD'
+      return part.charAt(0).toUpperCase() + part.slice(1)
+    })
+    .join(' ')
+}
+
+function parserTokensFromValue(value: unknown): string[] {
+  const seen = new Set<string>()
+  const items: string[] = []
+
+  const push = (raw: string) => {
+    const text = raw.trim()
+    if (!text || text === '-') return
+    const key = text.toLowerCase()
+    if (seen.has(key)) return
+    seen.add(key)
+    items.push(text)
+  }
+
+  const visit = (current: unknown) => {
+    if (current == null) return
+    if (Array.isArray(current)) {
+      current.forEach(visit)
+      return
+    }
+    if (typeof current === 'string') {
+      current
+        .split(/[,;\n]+/)
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .forEach(push)
+      return
+    }
+    if (typeof current === 'number' || typeof current === 'boolean') {
+      push(String(current))
+      return
+    }
+    if (isRecord(current)) {
+      Object.values(current).forEach(visit)
+    }
+  }
+
+  visit(value)
+  return items
+}
+
+function formatParserMetricValue(value: unknown, options?: { percent?: boolean }): string {
+  const percent = options?.percent ?? false
+  if (value == null) return '-'
+  if (typeof value === 'number') {
+    if (Number.isNaN(value)) return '-'
+    if (percent) return `${Math.round(value * 100)}%`
+    if (Number.isInteger(value)) return String(value)
+    return value.toFixed(2)
+  }
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No'
+  const text = renderParserValue(value).trim()
+  return text || '-'
+}
+
+function parserMetricRowsFromAts(
+  atsScore: number | null | undefined,
+  atsSource: string | null | undefined,
+  atsSummary: string | null | undefined,
+  atsBreakdown: Record<string, unknown> | null | undefined,
+): Array<{ label: string; value: string }> {
+  return [
+    { label: 'Score', value: atsScore == null ? '-' : `${formatAtsScore(atsScore)} (${getAtsStrengthLabel(atsScore)})` },
+    { label: 'Source', value: renderTextOrDash(atsSource) },
+    { label: 'Raw Overlap', value: formatParserMetricValue(atsBreakdown?.raw_overlap, { percent: true }) },
+    { label: 'Intent Match', value: formatParserMetricValue(atsBreakdown?.intent_match, { percent: true }) },
+    { label: 'Role Alignment', value: formatParserMetricValue(atsBreakdown?.role_alignment, { percent: true }) },
+    { label: 'Semantic Similarity', value: formatParserMetricValue(atsBreakdown?.semantic_similarity, { percent: true }) },
+    { label: 'Foundation Coverage', value: formatParserMetricValue(atsBreakdown?.foundation_coverage, { percent: true }) },
+    { label: 'Summary', value: renderTextOrDash(atsSummary) },
+  ]
+}
+
+function parserDisplayValue(value: unknown): string {
+  if (value == null) return '-'
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No'
+  return renderParserValue(value)
+}
+
+function ParserChipList({ items, empty = '-' }: { items: string[]; empty?: string }) {
+  if (items.length === 0) return <p className="subtle">{empty}</p>
+  return (
+    <div className="parserChipList">
+      {items.map((item) => (
+        <span key={item} className="parserChip">{item}</span>
+      ))}
+    </div>
+  )
+}
+
+function ParserMetricGrid({ rows }: { rows: Array<{ label: string; value: string }> }) {
+  const filtered = rows.filter((row) => row.value.trim() && row.value.trim() !== '-')
+  const effective = filtered.length > 0 ? filtered : rows
+  return (
+    <div className="parserMetricGrid">
+      {effective.map((row) => (
+        <div key={row.label} className="parserMetricRow">
+          <span className="parserLabel">{row.label}</span>
+          <span className="parserValue">{row.value}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function ParserFieldValue({ value }: { value: unknown }) {
+  if (value == null || value === '') return <span className="parserValue">-</span>
+
+  if (Array.isArray(value)) {
+    const items = parserTokensFromValue(value)
+    if (items.length > 0) return <ParserChipList items={items} />
+    return <span className="parserValue">{renderParserValue(value)}</span>
+  }
+
+  if (isRecord(value)) {
+    const entries = Object.entries(value)
+    if (entries.length === 0) return <span className="parserValue">-</span>
+    return (
+      <div className="parserNestedBlock">
+        <ParserKeyValueList record={value} />
+      </div>
+    )
+  }
+
+  if (typeof value === 'string') {
+    const text = value.trim()
+    if (!text) return <span className="parserValue">-</span>
+    if (text.includes('\n') || text.length > 120) {
+      return <div className="parserTextBlock">{text}</div>
+    }
+    return <span className="parserValue">{text}</span>
+  }
+
+  return <span className="parserValue">{parserDisplayValue(value)}</span>
+}
+
+function ParserKeyValueList({ record }: { record: Record<string, unknown> }) {
+  const entries = Object.entries(record)
+  if (entries.length === 0) return <p className="subtle">-</p>
+  return (
+    <div className="parserKeyValueList">
+      {entries.map(([key, value]) => (
+        <div key={key} className="parserKeyValueRow">
+          <span className="parserLabel">{parserTitleCase(key)}</span>
+          <ParserFieldValue value={value} />
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function ParserRawDebug({ value }: { value: unknown }) {
+  return (
+    <details className="parserRawDebug">
+      <summary>Raw Debug</summary>
+      <pre className="parserRawBlock">{renderParserValue(value)}</pre>
+    </details>
+  )
+}
+
+function ParserDetailsCard({
+  title,
+  className,
+  bodyClassName,
+  children,
+}: {
+  title: string
+  className?: string
+  bodyClassName?: string
+  children: React.ReactNode
+}) {
+  const classes = ['parserDetailsBlock', className].filter(Boolean).join(' ')
+  const bodyClasses = ['parserDetailsCardBody', bodyClassName].filter(Boolean).join(' ')
+  return (
+    <section className={classes}>
+      <h3>{title}</h3>
+      <div className={bodyClasses}>{children}</div>
+    </section>
+  )
+}
+
+function ParserStructuredSection({
+  title,
+  data,
+  rawData,
+}: {
+  title: string
+  data: Record<string, unknown> | null | undefined
+  rawData?: unknown
+}) {
+  const effectiveData = data ?? {}
+  return (
+    <ParserDetailsCard title={title}>
+      <ParserKeyValueList record={effectiveData} />
+      <ParserRawDebug value={rawData ?? effectiveData} />
+    </ParserDetailsCard>
+  )
+}
+
 type ParserDetailsPanelProps = {
   candidateId: number
   source: string
@@ -1219,15 +1436,57 @@ export function ParserDetailsPanel({
   expanded,
   onToggle,
 }: ParserDetailsPanelProps) {
+  const [viewMode, setViewMode] = useState<'v3' | 'v1'>('v3')
   const normalized = normalizeParserDetails(parserDetails)
   if (!normalized) return null
-  const finalResult = normalized.merged_result ?? {}
-  const baseResult = normalized.base_parser_result ?? {}
+  const legacyFinalResult = normalized.merged_result ?? {}
+  const legacyBaseResult = normalized.base_parser_result ?? {}
+  const legacySkillsAudit = isRecord(normalized.skills_audit) ? normalized.skills_audit : null
+  const legacyApprovedSkillsText = (() => {
+    const audited = legacySkillsAudit ? recordStringArray(legacySkillsAudit, 'known').join(', ') : ''
+    if (audited) return audited
+    return (normalized.approved_skills_text || recordStringValue(isRecord(legacyFinalResult) ? legacyFinalResult : null, 'skills_text')).trim()
+  })()
+  const legacyUnknownSkills = (() => {
+    if (legacySkillsAudit) {
+      const audited = recordStringArray(legacySkillsAudit, 'unknown')
+      if (audited.length > 0) return audited
+    }
+    return Array.isArray(normalized.unknown_skills)
+      ? normalized.unknown_skills.map((item) => renderParserValue(item).trim()).filter(Boolean).filter((item) => item !== '-')
+      : []
+  })()
+  const legacyAiExtractor = isRecord(normalized.ai_extractor_result) ? normalized.ai_extractor_result : null
+  const legacySourceHints = isRecord(normalized.source_hints) ? normalized.source_hints : null
+  const legacyParserMode = normalized.parser_mode || (legacyAiExtractor ? 'ai_primary' : 'base_only')
+  const legacyParserWarning = renderParserValue(normalized.parser_warning)
+  const legacyFallbackUsed = Boolean(normalized.fallback_used)
+  const legacyParserStatus = {
+    mode: legacyParserMode,
+    fallback_used: legacyFallbackUsed,
+    warning: legacyParserWarning === '-' ? null : legacyParserWarning,
+  }
+  const legacyAtsSummary = atsSummary || `ATS Score: ${formatAtsScore(atsScore)} (${getAtsStrengthLabel(atsScore)})`
+  const legacyAtsBreakdown = {
+    score: atsScore == null ? '-' : `${formatAtsScore(atsScore)} (${getAtsStrengthLabel(atsScore)})`,
+    source: atsSource ?? '-',
+    ...(atsBreakdown ?? {}),
+  }
+  const legacyAiEvidence = legacyAiExtractor
+    ? {
+        confidence: legacyAiExtractor.confidence,
+        evidence: legacyAiExtractor.evidence,
+        error: legacyAiExtractor.error,
+      }
+    : {}
+
+  const finalResult = isRecord(normalized.merged_result) ? normalized.merged_result : {}
+  const baseResult = isRecord(normalized.base_parser_result) ? normalized.base_parser_result : {}
   const skillsAudit = isRecord(normalized.skills_audit) ? normalized.skills_audit : null
   const approvedSkills = (() => {
-    const audited = skillsAudit ? recordStringArray(skillsAudit, 'known').join(', ') : ''
-    if (audited) return audited
-    return (normalized.approved_skills_text || recordStringValue(finalResult, 'skills_text')).trim()
+    const audited = skillsAudit ? recordStringArray(skillsAudit, 'known') : []
+    if (audited.length > 0) return audited
+    return parserTokensFromValue(normalized.approved_skills_text || recordStringValue(finalResult, 'skills_text'))
   })()
   const unknownSkills = (() => {
     if (skillsAudit) {
@@ -1248,6 +1507,23 @@ export function ParserDetailsPanel({
     fallback_used: fallbackUsed,
     warning: parserWarning === '-' ? null : parserWarning,
   }
+  const finalSkills = parserTokensFromValue(recordStringValue(finalResult, 'skills_text'))
+  const atsMetricRows = parserMetricRowsFromAts(atsScore, atsSource, atsSummary, atsBreakdown)
+  const atsBreakdownRecord = {
+    score: atsScore == null ? '-' : `${formatAtsScore(atsScore)} (${getAtsStrengthLabel(atsScore)})`,
+    source: atsSource ?? '-',
+    ...(atsBreakdown ?? {}),
+  }
+  const aiEvidenceRecord = aiExtractor
+    ? {
+        confidence: aiExtractor.confidence,
+        evidence: aiExtractor.evidence,
+        error: aiExtractor.error,
+      }
+    : {}
+  const matchedRawSkills = isRecord(atsBreakdown) ? recordStringArray(atsBreakdown, 'matched_raw_skills') : []
+  const missingRawSkills = isRecord(atsBreakdown) ? recordStringArray(atsBreakdown, 'missing_raw_skills') : []
+  const isRawView = viewMode === 'v1'
   return (
     <div className="parserDetailsSection">
       <button type="button" className="parserDetailsToggle" onClick={() => onToggle(candidateId)}>
@@ -1255,68 +1531,131 @@ export function ParserDetailsPanel({
       </button>
       {expanded ? (
         <div className="parserDetailsPanel">
-          <div className="parserDetailsMeta">
-            <span><strong>Parser Version:</strong> {normalized.parser_version ?? '-'}</span>
-            <span><strong>Source:</strong> {normalized.source ?? source}</span>
-            <span><strong>Mode:</strong> {parserMode}</span>
-            <span><strong>Fallback Used:</strong> {fallbackUsed ? 'Yes' : 'No'}</span>
+          <div className="parserDetailsHeader">
+            <div className="parserDetailsMeta">
+              <span><strong>Parser Version:</strong> {normalized.parser_version ?? '-'}</span>
+              <span><strong>Source:</strong> {normalized.source ?? source}</span>
+              <span><strong>Mode:</strong> {parserMode}</span>
+              <span><strong>Fallback Used:</strong> {fallbackUsed ? 'Yes' : 'No'}</span>
+            </div>
+            <div className="parserViewToggle" role="tablist" aria-label="Details view mode">
+              <button
+                type="button"
+                className={!isRawView ? 'parserViewToggleButton parserViewToggleButtonActive' : 'parserViewToggleButton'}
+                aria-pressed={!isRawView}
+                onClick={() => setViewMode('v3')}
+              >
+                Readable v3
+              </button>
+              <button
+                type="button"
+                className={isRawView ? 'parserViewToggleButton parserViewToggleButtonActive' : 'parserViewToggleButton'}
+                aria-pressed={isRawView}
+                onClick={() => setViewMode('v1')}
+              >
+                Raw v1
+              </button>
+            </div>
           </div>
-          <div className="parserDetailsSummaryGrid">
-            <section className="parserDetailsBlock parserDetailsSummaryBlock">
-              <h3>Parser Status</h3>
-              <pre>{renderParserValue(parserStatus)}</pre>
-            </section>
-            <section className="parserDetailsBlock parserDetailsSummaryBlock">
-              <h3>Final Skills Text</h3>
-              <pre>{recordStringValue(finalResult, 'skills_text') || '-'}</pre>
-            </section>
-            <section className="parserDetailsBlock parserDetailsSummaryBlock">
-              <h3>Approved Skills</h3>
-              <pre>{approvedSkills || '-'}</pre>
-            </section>
-            <section className="parserDetailsBlock parserDetailsSummaryBlock">
-              <h3>Unknown Skills</h3>
-              <pre>{unknownSkills.length > 0 ? unknownSkills.join(', ') : '-'}</pre>
-            </section>
-            <section className="parserDetailsBlock parserDetailsSummaryBlock">
-              <h3>ATS Summary</h3>
-              <pre>{atsSummary || `ATS Score: ${formatAtsScore(atsScore)} (${getAtsStrengthLabel(atsScore)})`}</pre>
-            </section>
-          </div>
-          <div className="parserDetailsGrid">
-            <section className="parserDetailsBlock">
-              <h3>Final Extracted Result</h3>
-              <pre>{renderParserValue(finalResult)}</pre>
-            </section>
-            <section className="parserDetailsBlock">
-              <h3>{fallbackUsed ? 'Base Fallback Result' : 'Base Parser Result'}</h3>
-              <pre>{renderParserValue(baseResult)}</pre>
-            </section>
-            <section className="parserDetailsBlock">
-              <h3>AI Extractor Result</h3>
-              <pre>{renderParserValue(aiExtractor ?? {})}</pre>
-            </section>
-            <section className="parserDetailsBlock">
-              <h3>Skills Audit</h3>
-              <pre>{renderParserValue(skillsAudit ?? {})}</pre>
-            </section>
-            <section className="parserDetailsBlock">
-              <h3>ATS Breakdown</h3>
-              <pre>{renderParserValue({
-                score: atsScore == null ? '-' : `${formatAtsScore(atsScore)} (${getAtsStrengthLabel(atsScore)})`,
-                source: atsSource ?? '-',
-                ...(atsBreakdown ?? {}),
-              })}</pre>
-            </section>
-            <section className="parserDetailsBlock">
-              <h3>Source Hints</h3>
-              <pre>{renderParserValue(sourceHints ?? {})}</pre>
-            </section>
-            <section className="parserDetailsBlock">
-              <h3>AI Evidence</h3>
-              <pre>{renderParserValue(aiExtractor ? { confidence: aiExtractor.confidence, evidence: aiExtractor.evidence, error: aiExtractor.error } : {})}</pre>
-            </section>
-          </div>
+          {isRawView ? (
+            <>
+              <div className="parserDetailsSummaryGrid">
+                <ParserDetailsCard title="Parser Status" className="parserDetailsSummaryBlock">
+                  <pre className="parserLegacyPre">{renderParserValue(legacyParserStatus)}</pre>
+                </ParserDetailsCard>
+                <ParserDetailsCard title="Final Skills Text" className="parserDetailsSummaryBlock">
+                  <pre className="parserLegacyPre">{recordStringValue(isRecord(legacyFinalResult) ? legacyFinalResult : null, 'skills_text') || '-'}</pre>
+                </ParserDetailsCard>
+                <ParserDetailsCard title="Approved Skills" className="parserDetailsSummaryBlock">
+                  <pre className="parserLegacyPre">{legacyApprovedSkillsText || '-'}</pre>
+                </ParserDetailsCard>
+                <ParserDetailsCard title="Unknown Skills" className="parserDetailsSummaryBlock">
+                  <pre className="parserLegacyPre">{legacyUnknownSkills.length > 0 ? legacyUnknownSkills.join(', ') : '-'}</pre>
+                </ParserDetailsCard>
+                <ParserDetailsCard title="ATS Summary" className="parserDetailsSummaryBlock">
+                  <pre className="parserLegacyPre">{legacyAtsSummary}</pre>
+                </ParserDetailsCard>
+              </div>
+              <div className="parserDetailsGrid">
+                <ParserDetailsCard title="Final Extracted Result">
+                  <pre className="parserLegacyPre">{renderParserValue(legacyFinalResult)}</pre>
+                </ParserDetailsCard>
+                <ParserDetailsCard title={legacyFallbackUsed ? 'Base Fallback Result' : 'Base Parser Result'}>
+                  <pre className="parserLegacyPre">{renderParserValue(legacyBaseResult)}</pre>
+                </ParserDetailsCard>
+                <ParserDetailsCard title="AI Extractor Result">
+                  <pre className="parserLegacyPre">{renderParserValue(legacyAiExtractor ?? {})}</pre>
+                </ParserDetailsCard>
+                <ParserDetailsCard title="Skills Audit">
+                  <pre className="parserLegacyPre">{renderParserValue(legacySkillsAudit ?? {})}</pre>
+                </ParserDetailsCard>
+                <ParserDetailsCard title="ATS Breakdown">
+                  <pre className="parserLegacyPre">{renderParserValue(legacyAtsBreakdown)}</pre>
+                </ParserDetailsCard>
+                <ParserDetailsCard title="Source Hints">
+                  <pre className="parserLegacyPre">{renderParserValue(legacySourceHints ?? {})}</pre>
+                </ParserDetailsCard>
+                <ParserDetailsCard title="AI Evidence" className="parserDetailsBlockWide">
+                  <pre className="parserLegacyPre">{renderParserValue(legacyAiEvidence)}</pre>
+                </ParserDetailsCard>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="parserDetailsSummaryGrid">
+                <ParserDetailsCard title="Parser Status" className="parserDetailsSummaryBlock">
+                  <div className="parserStatusBadges">
+                    <span className="parserStatusBadge">{`Mode: ${parserMode}`}</span>
+                    <span className="parserStatusBadge">{`Fallback: ${fallbackUsed ? 'Yes' : 'No'}`}</span>
+                    {parserStatus.warning ? <span className="parserStatusBadge parserStatusBadgeWarning">{`Warning: ${parserStatus.warning}`}</span> : null}
+                  </div>
+                  <ParserRawDebug value={parserStatus} />
+                </ParserDetailsCard>
+                <ParserDetailsCard title="Final Skills Text" className="parserDetailsSummaryBlock">
+                  <ParserChipList items={finalSkills} />
+                </ParserDetailsCard>
+                <ParserDetailsCard title="Approved Skills" className="parserDetailsSummaryBlock">
+                  <ParserChipList items={approvedSkills} />
+                </ParserDetailsCard>
+                <ParserDetailsCard title="Unknown Skills" className="parserDetailsSummaryBlock">
+                  <ParserChipList items={unknownSkills} />
+                </ParserDetailsCard>
+                <ParserDetailsCard title="ATS Summary" className="parserDetailsSummaryBlock">
+                  <ParserMetricGrid rows={atsMetricRows} />
+                </ParserDetailsCard>
+              </div>
+              <div className="parserDetailsGrid">
+                <ParserStructuredSection title="Final Extracted Result" data={finalResult} />
+                <ParserStructuredSection title={fallbackUsed ? 'Base Fallback Result' : 'Base Parser Result'} data={baseResult} />
+                <ParserStructuredSection title="AI Extractor Result" data={aiExtractor ?? {}} />
+                <ParserStructuredSection title="Skills Audit" data={skillsAudit ?? {}} />
+                <ParserDetailsCard title="ATS Breakdown">
+                  <ParserMetricGrid rows={atsMetricRows.slice(0, 7)} />
+                  <div className="parserSectionGroup">
+                    <div>
+                      <p className="parserSectionLabel">Matched Raw Skills</p>
+                      <ParserChipList items={matchedRawSkills} />
+                    </div>
+                    <div>
+                      <p className="parserSectionLabel">Missing Raw Skills</p>
+                      <ParserChipList items={missingRawSkills} />
+                    </div>
+                  </div>
+                  <ParserKeyValueList
+                    record={Object.fromEntries(
+                      Object.entries(atsBreakdownRecord).filter(([key]) => !['matched_raw_skills', 'missing_raw_skills', 'raw_overlap', 'intent_match', 'role_alignment', 'semantic_similarity', 'foundation_coverage'].includes(key)),
+                    )}
+                  />
+                  <ParserRawDebug value={atsBreakdownRecord} />
+                </ParserDetailsCard>
+                <ParserStructuredSection title="Source Hints" data={sourceHints ?? {}} />
+                <ParserDetailsCard title="AI Evidence" className="parserDetailsBlockWide">
+                  <ParserKeyValueList record={aiEvidenceRecord} />
+                  <ParserRawDebug value={aiEvidenceRecord} />
+                </ParserDetailsCard>
+              </div>
+            </>
+          )}
         </div>
       ) : null}
     </div>
@@ -4673,8 +5012,7 @@ function App() {
                     {sentDetails ? (
                       <>
                         <div className="parserDetailsSummaryGrid">
-                          <section className="parserDetailsBlock parserDetailsSummaryBlock">
-                            <h3>Source</h3>
+                          <ParserDetailsCard title="Source" className="parserDetailsSummaryBlock">
                             <div className="sentItemLinkList">
                               <p><strong>Source:</strong> {renderTextOrDash(sentDetails.source_label)}</p>
                               <p>
@@ -4705,15 +5043,14 @@ function App() {
                                 <strong>Sent Gmail Link:</strong>{' '}
                                 {sentDetails.sent_gmail_message_link ? (
                                   <a href={sentDetails.sent_gmail_message_link} target="_blank" rel="noreferrer">
-                                    Open sent message
-                                  </a>
-                                ) : '-'}
+                                  Open sent message
+                                </a>
+                              ) : '-'}
                               </p>
                             </div>
-                          </section>
-                          <section className="parserDetailsBlock parserDetailsSummaryBlock">
-                            <h3>Requirement</h3>
-                            <pre>{[
+                          </ParserDetailsCard>
+                          <ParserDetailsCard title="Requirement" className="parserDetailsSummaryBlock">
+                            <pre className="parserCardPre">{[
                               `Role: ${renderTextOrDash(item.role)}`,
                               `Location: ${renderTextOrDash(item.location)}`,
                               `Salary: ${renderTextOrDash(item.salary_text)}`,
@@ -4727,10 +5064,9 @@ function App() {
                               `Mandatory Skills: ${renderListOrDash(sentDetails.mandatory_skills)}`,
                               `Missing Skills: ${renderListOrDash(sentDetails.missing_skills)}`,
                             ].join('\n')}</pre>
-                          </section>
-                          <section className="parserDetailsBlock parserDetailsSummaryBlock">
-                            <h3>Resume / Send Audit</h3>
-                            <pre>{[
+                          </ParserDetailsCard>
+                          <ParserDetailsCard title="Resume / Send Audit" className="parserDetailsSummaryBlock">
+                            <pre className="parserCardPre">{[
                               `Resume Variant Sent: ${renderTextOrDash(sentDetails.resume_variant_sent ?? item.resume_file_name)}`,
                               `Attached Files: ${renderListOrDash(sentDetails.attached_files)}`,
                               `To: ${renderTextOrDash(sentDetails.to_email ?? item.recipient_email)}`,
@@ -4738,15 +5074,14 @@ function App() {
                               `ATS Score: ${formatAtsScore(sentDetails.ats_score ?? item.ats_score)}${(sentDetails.ats_score ?? item.ats_score) != null ? ` (${getAtsStrengthLabel(sentDetails.ats_score ?? item.ats_score)})` : ''}`,
                               `ATS Summary: ${renderTextOrDash(sentDetails.ats_summary ?? item.ats_summary)}`,
                             ].join('\n')}</pre>
-                          </section>
-                          <section className="parserDetailsBlock parserDetailsSummaryBlock">
-                            <h3>Recruiter</h3>
-                            <pre>{[
+                          </ParserDetailsCard>
+                          <ParserDetailsCard title="Recruiter" className="parserDetailsSummaryBlock">
+                            <pre className="parserCardPre">{[
                               `Recruiter Name: ${renderTextOrDash(sentDetails.recruiter_name)}`,
                               `Recruiter Email: ${renderTextOrDash(sentDetails.recruiter_email)}`,
                               `Recruiter Phone: ${renderTextOrDash(sentDetails.recruiter_phone)}`,
                             ].join('\n')}</pre>
-                          </section>
+                          </ParserDetailsCard>
                         </div>
                         <ParserDetailsPanel
                           candidateId={item.id}
