@@ -16,6 +16,7 @@ const PREMIUM_PAGE_LIMIT = 25
 let hasBootstrappedAppOnce = false
 export const DRAFT_TEXT_SIZE_OPTIONS = ['small', 'normal', 'large', 'huge'] as const
 export type DraftTextSize = (typeof DRAFT_TEXT_SIZE_OPTIONS)[number]
+type NvoidsDetailTitleMode = 'job_details' | 'hotlist_details' | 'all'
 const DRAFT_TEXT_SIZE_STYLES: Record<DraftTextSize, { fontSize: string; lineHeight: string }> = {
   small: { fontSize: '12px', lineHeight: '1.5' },
   normal: { fontSize: '16px', lineHeight: '1.5' },
@@ -51,6 +52,11 @@ function renderInline(text: string): string {
 export function normalizeDraftTextSize(value: string | null | undefined): DraftTextSize {
   const normalized = (value ?? '').trim().toLowerCase()
   return (DRAFT_TEXT_SIZE_OPTIONS as readonly string[]).includes(normalized) ? (normalized as DraftTextSize) : 'normal'
+}
+
+function normalizeNvoidsDetailTitleMode(value: string | null | undefined): NvoidsDetailTitleMode {
+  const normalized = (value ?? '').trim().toLowerCase()
+  return normalized === 'hotlist_details' || normalized === 'all' ? normalized : 'job_details'
 }
 
 export function draftTextSizeToPreviewStyle(draftTextSize: string | null | undefined): { fontSize: string; lineHeight: string } {
@@ -155,6 +161,7 @@ type SettingsPayload = {
   feature_nvoids_auto_sync: boolean
   feature_nvoids_poll_interval_minutes: number
   nvoids_batch_limit: number
+  nvoids_detail_title_mode: NvoidsDetailTitleMode
   nvoids_locations: string[]
   feature_auto_send: boolean
   feature_retry_queue: boolean
@@ -1820,6 +1827,7 @@ function App() {
     feature_nvoids_auto_sync: false,
     feature_nvoids_poll_interval_minutes: 30,
     nvoids_batch_limit: 10,
+    nvoids_detail_title_mode: 'job_details',
     nvoids_locations: [],
     feature_auto_send: false,
     feature_retry_queue: false,
@@ -2125,6 +2133,7 @@ function App() {
       feature_nvoids_auto_sync: Boolean(payload.feature_nvoids_auto_sync ?? false),
       feature_nvoids_poll_interval_minutes: Math.max(1, Math.min(payload.feature_nvoids_poll_interval_minutes || 30, 1440)),
       nvoids_batch_limit: Math.max(1, Math.min(payload.nvoids_batch_limit || 10, 50)),
+      nvoids_detail_title_mode: normalizeNvoidsDetailTitleMode(payload.nvoids_detail_title_mode),
       nvoids_locations: payload.nvoids_locations ?? [],
       employer_domains: payload.employer_domains ?? [],
       draft_text_size: normalizeDraftTextSize(payload.draft_text_size),
@@ -4309,6 +4318,22 @@ function App() {
                     </span>
                   </label>
                   <label>
+                    Nvoids Detail Page Type
+                    <select
+                      value={settings.nvoids_detail_title_mode}
+                      onChange={(e) =>
+                        setSettings({
+                          ...settings,
+                          nvoids_detail_title_mode: normalizeNvoidsDetailTitleMode(e.target.value),
+                        })
+                      }
+                    >
+                      <option value="job_details">Job Details</option>
+                      <option value="hotlist_details">Hotlist Details</option>
+                      <option value="all">All</option>
+                    </select>
+                  </label>
+                  <label>
                     Preferred Nvoids Locations
                     <div className="skillBox">
                       {settings.nvoids_locations.map((location) => (
@@ -4380,7 +4405,7 @@ function App() {
                     {nvoidsRunning ? 'Running Nvoids Sync...' : 'Run Nvoids Sync Now'}
                   </button>
                   <p className="subtle">
-                    Nvoids sync is isolated from Gmail run queue, filters by the saved Nvoids locations, and is serialized to avoid concurrent DB load.
+                    Nvoids sync is isolated from Gmail run queue, filters by the saved Nvoids locations and detail-page title type, and is serialized to avoid concurrent DB load.
                   </p>
                 </div>
               </section>

@@ -1210,13 +1210,13 @@
   gap: 6px;
   padding: 4px;
   border: 1px solid var(--line);
-  border-radius: 999px;
+  border-radius: 8px;
   background: #f5f8ff;
 }
 
 .parserViewToggleButton {
   height: 34px;
-  border-radius: 999px;
+  border-radius: 6px;
   border: 1px solid transparent;
   background: transparent;
   color: #33405a;

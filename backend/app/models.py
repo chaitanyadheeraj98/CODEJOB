@@ -151,6 +151,7 @@ class UserSettings(Base):
     feature_nvoids_auto_sync: Mapped[bool] = mapped_column(default=False)
     feature_nvoids_poll_interval_minutes: Mapped[int] = mapped_column(Integer, default=30)
     nvoids_batch_limit: Mapped[int] = mapped_column(Integer, default=10)
+    nvoids_detail_title_mode: Mapped[str] = mapped_column(String(40), default="job_details")
     nvoids_locations: Mapped[str] = mapped_column(Text, default="")
     feature_auto_send: Mapped[bool] = mapped_column(default=False)
     feature_retry_queue: Mapped[bool] = mapped_column(default=False)

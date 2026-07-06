@@ -1,8 +1,10 @@
 import unittest
 
 from app.external_feeds.parser import (
+    classify_nvoids_page_title,
     extract_nvoids_clean_body,
     extract_nvoids_detail_title,
+    extract_nvoids_page_title,
     parse_nvoids_detail,
     parse_external_post,
     parse_job_detail_contacts,
@@ -11,6 +13,15 @@ from app.external_feeds.parser import (
 
 
 class ExternalFeedsParserTests(unittest.TestCase):
+    def test_extract_nvoids_page_title_reads_html_title(self) -> None:
+        html = "<html><head><title>Job Details</title></head><body></body></html>"
+        self.assertEqual(extract_nvoids_page_title(html), "Job Details")
+
+    def test_classify_nvoids_page_title_accepts_hotlists_variant(self) -> None:
+        self.assertEqual(classify_nvoids_page_title("Hotlist Details"), "hotlist_details")
+        self.assertEqual(classify_nvoids_page_title("Hotlists Details"), "hotlist_details")
+        self.assertEqual(classify_nvoids_page_title("Job Details"), "job_details")
+
     def test_parse_listing_rows_extracts_title_location_time(self) -> None:
         html = """
         <table>

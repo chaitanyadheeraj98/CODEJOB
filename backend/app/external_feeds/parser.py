@@ -389,6 +389,30 @@ def extract_nvoids_detail_title(detail_html: str, fallback_title: str) -> str:
     return _normalize_line(fallback_title) or fallback_title
 
 
+def extract_nvoids_page_title(detail_html: str) -> str:
+    if not detail_html:
+        return ""
+    if BeautifulSoup is not None:
+        soup = BeautifulSoup(detail_html, "lxml")
+        title = _normalize_line(soup.title.get_text(" ", strip=True) if soup.title else "")
+        if title:
+            return title
+    match = re.search(r"<title[^>]*>(.*?)</title>", detail_html, re.IGNORECASE | re.DOTALL)
+    if not match:
+        return ""
+    title_text = re.sub(r"<[^>]+>", " ", match.group(1))
+    return _normalize_line(title_text)
+
+
+def classify_nvoids_page_title(title: str) -> str:
+    normalized = re.sub(r"\s+", " ", str(title or "")).strip().lower()
+    if normalized == "job details":
+        return "job_details"
+    if normalized in {"hotlist details", "hotlists details"}:
+        return "hotlist_details"
+    return "unknown"
+
+
 def extract_nvoids_clean_body(detail_html: str, fallback_title: str, location: str) -> str:
     detail = parse_nvoids_detail(detail_html, fallback_title, location)
     parts = [detail.role]

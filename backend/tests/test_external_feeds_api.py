@@ -25,6 +25,9 @@ from app.models import AttachmentAsset, CustomSkillTaxonomyEntry, EmployerNumber
 
 
 class _FakeCollector:
+    def __init__(self) -> None:
+        self.last_hotlist_mode = "Exclude Hotlists"
+
     def fetch_page(self, _base_url: str, page: int) -> CollectedPage:
         if page > 0:
             return CollectedPage(url="https://www.nvoids.com/index.jsp?p=1", html="<html><body></body></html>")
@@ -37,13 +40,15 @@ class _FakeCollector:
         return CollectedPage(url="https://www.nvoids.com/index.jsp", html=html)
 
     def fetch_search_page(self, *, query: str, hotlist_mode: str = "Exclude Hotlists", page: int = 0) -> CollectedPage:
-        _ = query, hotlist_mode
+        _ = query
+        self.last_hotlist_mode = hotlist_mode
         return self.fetch_page("", page)
 
     def fetch_detail_page(self, *, url: str) -> CollectedPage:
         title = "Senior Python Developer"
         location = "Dallas, Texas, USA"
         posted = "11:00 PM 07-May-26"
+        page_title = "Job Details"
         if "id=2" in url:
             title = "React Developer"
             location = "Remote, USA"
@@ -56,7 +61,7 @@ class _FakeCollector:
             "Java, Spring Boot, Kafka, AWS"
         )
         html = f"""
-        <html><body>
+        <html><head><title>{page_title}</title></head><body>
         <table>
           <tr><td>{title} at {location}</td></tr>
           <tr><td>Email: recruiter_{'1' if 'id=1' in url else '2'}@example.com</td></tr>
@@ -101,6 +106,7 @@ class ExternalFeedsApiTests(unittest.TestCase):
                     feature_nvoids_auto_sync=False,
                     feature_nvoids_poll_interval_minutes=30,
                     nvoids_batch_limit=10,
+                    nvoids_detail_title_mode="job_details",
                     nvoids_locations="",
                     qualification_threshold=0.0,
                 )
@@ -608,6 +614,7 @@ class ExternalFeedsApiTests(unittest.TestCase):
                 "feature_nvoids_auto_sync": False,
                 "feature_nvoids_poll_interval_minutes": 30,
                 "nvoids_batch_limit": 10,
+                "nvoids_detail_title_mode": "hotlist_details",
                 "nvoids_locations": ["texas", "remote"],
                 "feature_auto_send": False,
                 "feature_retry_queue": False,
@@ -626,11 +633,17 @@ class ExternalFeedsApiTests(unittest.TestCase):
         )
         self.assertEqual(res.status_code, 200, res.text)
         payload = res.json()
+        self.assertEqual(payload["nvoids_detail_title_mode"], "hotlist_details")
         self.assertEqual(payload["nvoids_locations"], ["texas", "remote"])
         self.assertTrue(payload["feature_ai_extractor_enabled"])
         self.assertEqual(payload["draft_text_size"], "huge")
         self.assertEqual(payload["preferred_employer_cc_email"], "sheshwika@horizonsoftech.net")
         self.assertEqual(payload["resume_display_name"], "Chaithanya Dheeraj Resume")
+
+    def test_settings_default_includes_nvoids_detail_title_mode(self) -> None:
+        res = self.client.get("/settings")
+        self.assertEqual(res.status_code, 200, res.text)
+        self.assertEqual(res.json()["nvoids_detail_title_mode"], "job_details")
 
     def test_settings_reject_invalid_preferred_employer_cc_email(self) -> None:
         res = self.client.put(
@@ -657,6 +670,7 @@ class ExternalFeedsApiTests(unittest.TestCase):
                 "feature_nvoids_auto_sync": False,
                 "feature_nvoids_poll_interval_minutes": 30,
                 "nvoids_batch_limit": 10,
+                "nvoids_detail_title_mode": "job_details",
                 "nvoids_locations": [],
                 "feature_auto_send": False,
                 "feature_retry_queue": False,
@@ -669,6 +683,50 @@ class ExternalFeedsApiTests(unittest.TestCase):
                 "signature_phone": "",
                 "signature_email": "",
                 "preferred_employer_cc_email": "not-an-email",
+                "resume_display_name": "",
+                "policy": None,
+            },
+        )
+        self.assertEqual(res.status_code, 422, res.text)
+
+    def test_settings_reject_invalid_nvoids_detail_title_mode(self) -> None:
+        res = self.client.put(
+            "/settings",
+            json={
+                "enabled": True,
+                "gmail_query": "is:unread",
+                "default_gmail_query": "is:unread",
+                "saved_gmail_queries": [],
+                "mail_date": None,
+                "default_date_mode": "today",
+                "min_salary": None,
+                "accepted_locations": [],
+                "visa_required_allowed": False,
+                "remote_preference": "any",
+                "role_keywords": [],
+                "must_have_skills": [],
+                "employer_domains": [],
+                "free_text_guidance": "",
+                "qualification_threshold": 0.6,
+                "feature_auto_polling": False,
+                "feature_auto_poll_interval_minutes": 10,
+                "feature_nvoids_enabled": True,
+                "feature_nvoids_auto_sync": False,
+                "feature_nvoids_poll_interval_minutes": 30,
+                "nvoids_batch_limit": 10,
+                "nvoids_detail_title_mode": "wrong",
+                "nvoids_locations": [],
+                "feature_auto_send": False,
+                "feature_retry_queue": False,
+                "feature_ai_enabled": False,
+                "feature_ai_extractor_enabled": False,
+                "feature_semantic_enabled": False,
+                "draft_text_size": "normal",
+                "fallback_draft_template": "",
+                "signature_name": "",
+                "signature_phone": "",
+                "signature_email": "",
+                "preferred_employer_cc_email": "",
                 "resume_display_name": "",
                 "policy": None,
             },
@@ -1121,6 +1179,94 @@ class ExternalFeedsApiTests(unittest.TestCase):
         self.assertEqual(item_payload["items"][0]["reason_code"], "skipped_location")
         self.assertEqual(item_payload["items"][0]["source_type"], "nvoids")
         self.assertTrue(str(item_payload["items"][0]["source_url"]).startswith("https://"))
+
+    def test_sync_job_details_mode_skips_hotlist_detail_pages(self) -> None:
+        class _MixedTitleCollector(_FakeCollector):
+            def fetch_detail_page(self, *, url: str) -> CollectedPage:
+                page = super().fetch_detail_page(url=url)
+                if "id=2" not in url:
+                    return page
+                return CollectedPage(
+                    url=page.url,
+                    html=page.html.replace("<title>Job Details</title>", "<title>Hotlist Details</title>", 1),
+                )
+
+        main.external_feed_service.collector = _MixedTitleCollector()
+        sync = self.client.post("/external-feeds/nvoids/sync")
+        self.assertEqual(sync.status_code, 200, sync.text)
+        payload = sync.json()
+        self.assertEqual(main.external_feed_service.collector.last_hotlist_mode, "Exclude Hotlists")
+        self.assertEqual(payload["created_count"], 1)
+
+        with self.SessionLocal() as db:
+            rows = db.query(ExternalOpportunity).filter(ExternalOpportunity.owner_id == main.settings.owner_id).all()
+            self.assertEqual(len(rows), 1)
+            self.assertIn("Senior Python Developer", rows[0].role)
+
+        items = self.client.get(f"/recent-runs/{payload['run_key']}/items?outcome=skipped&limit=10")
+        self.assertEqual(items.status_code, 200, items.text)
+        skipped_items = items.json()["items"]
+        title_skip = next((row for row in skipped_items if row["reason_code"] == "skipped_nvoids_page_title"), None)
+        self.assertIsNotNone(title_skip)
+        assert title_skip is not None
+        self.assertIn("Hotlist Details", title_skip["reason_detail"])
+
+    def test_sync_hotlist_details_mode_uses_only_hotlists_and_skips_job_details_pages(self) -> None:
+        class _MixedTitleCollector(_FakeCollector):
+            def fetch_detail_page(self, *, url: str) -> CollectedPage:
+                page = super().fetch_detail_page(url=url)
+                if "id=2" not in url:
+                    return page
+                return CollectedPage(
+                    url=page.url,
+                    html=page.html.replace("<title>Job Details</title>", "<title>Hotlist Details</title>", 1),
+                )
+
+        main.external_feed_service.collector = _MixedTitleCollector()
+        with self.SessionLocal() as db:
+            settings = db.query(UserSettings).filter(UserSettings.owner_id == main.settings.owner_id).first()
+            assert settings is not None
+            settings.nvoids_detail_title_mode = "hotlist_details"
+            db.commit()
+
+        sync = self.client.post("/external-feeds/nvoids/sync")
+        self.assertEqual(sync.status_code, 200, sync.text)
+        payload = sync.json()
+        self.assertEqual(main.external_feed_service.collector.last_hotlist_mode, "Only Hotlists")
+        self.assertEqual(payload["created_count"], 1)
+
+        with self.SessionLocal() as db:
+            rows = db.query(ExternalOpportunity).filter(ExternalOpportunity.owner_id == main.settings.owner_id).all()
+            self.assertEqual(len(rows), 1)
+            self.assertIn("React Developer", rows[0].role)
+
+    def test_sync_all_mode_uses_include_hotlists_and_allows_both_titles(self) -> None:
+        class _MixedTitleCollector(_FakeCollector):
+            def fetch_detail_page(self, *, url: str) -> CollectedPage:
+                page = super().fetch_detail_page(url=url)
+                if "id=2" not in url:
+                    return page
+                return CollectedPage(
+                    url=page.url,
+                    html=page.html.replace("<title>Job Details</title>", "<title>Hotlist Details</title>", 1),
+                )
+
+        main.external_feed_service.collector = _MixedTitleCollector()
+        with self.SessionLocal() as db:
+            settings = db.query(UserSettings).filter(UserSettings.owner_id == main.settings.owner_id).first()
+            assert settings is not None
+            settings.nvoids_detail_title_mode = "all"
+            db.commit()
+
+        sync = self.client.post("/external-feeds/nvoids/sync")
+        self.assertEqual(sync.status_code, 200, sync.text)
+        payload = sync.json()
+        self.assertEqual(main.external_feed_service.collector.last_hotlist_mode, "Include Hotlists")
+        self.assertEqual(payload["created_count"], 2)
+
+        with self.SessionLocal() as db:
+            rows = db.query(ExternalOpportunity).filter(ExternalOpportunity.owner_id == main.settings.owner_id).all()
+            self.assertEqual(len(rows), 2)
 
     def test_sync_records_duplicate_candidate_skip_item_for_recent_runs(self) -> None:
         with self.SessionLocal() as db:

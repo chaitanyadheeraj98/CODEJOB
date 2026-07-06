@@ -44,7 +44,14 @@ from app.services.scoring_runtime_service import ScoringRuntimeDeps, ScoringRunt
 from .collector import NvoidsCollector
 from .dedupe import build_dedupe_hash
 from .models import ExternalFeedSource, ExternalOpportunity, ExternalScrapeRun
-from .parser import parse_external_post, parse_job_detail_contacts, parse_listing_rows, parse_nvoids_detail
+from .parser import (
+    classify_nvoids_page_title,
+    extract_nvoids_page_title,
+    parse_external_post,
+    parse_job_detail_contacts,
+    parse_listing_rows,
+    parse_nvoids_detail,
+)
 from .types import ExternalFeedSyncResult
 
 
@@ -110,6 +117,33 @@ class ExternalFeedService:
                 return True
         return False
 
+    @staticmethod
+    def normalize_nvoids_detail_title_mode(raw_mode: str | None) -> str:
+        normalized = str(raw_mode or "").strip().lower()
+        if normalized in {"job_details", "hotlist_details", "all"}:
+            return normalized
+        return "job_details"
+
+    def nvoids_hotlist_mode_for_title_mode(self, raw_mode: str | None) -> str:
+        mode = self.normalize_nvoids_detail_title_mode(raw_mode)
+        if mode == "hotlist_details":
+            return "Only Hotlists"
+        if mode == "all":
+            return "Include Hotlists"
+        return "Exclude Hotlists"
+
+    def nvoids_page_title_allowed(self, raw_mode: str | None, page_kind: str) -> bool:
+        mode = self.normalize_nvoids_detail_title_mode(raw_mode)
+        if page_kind == "unknown":
+            return True
+        if mode == "all":
+            return page_kind in {"job_details", "hotlist_details"}
+        if mode == "job_details":
+            return page_kind == "job_details"
+        if mode == "hotlist_details":
+            return page_kind == "hotlist_details"
+        return False
+
     def ensure_nvoids_source(self, db: Session, *, owner_id: str) -> ExternalFeedSource:
         row = (
             db.query(ExternalFeedSource)
@@ -145,6 +179,7 @@ class ExternalFeedService:
             or UserSettings(owner_id=owner_id)
         )
         location_filters = self._normalize_location_tokens((user_settings.nvoids_locations or "").split(","))
+        detail_title_mode = self.normalize_nvoids_detail_title_mode(getattr(user_settings, "nvoids_detail_title_mode", None))
         query = self.build_nvoids_query(location_filters)
         run = ExternalScrapeRun(owner_id=owner_id, source_type="nvoids", started_at=datetime.now(UTC), notes="")
         db.add(run)
@@ -196,7 +231,7 @@ class ExternalFeedService:
             for page in range(max_pages):
                 collected = self.collector.fetch_search_page(
                     query=query,
-                    hotlist_mode=self.default_hotlist_mode,
+                    hotlist_mode=self.nvoids_hotlist_mode_for_title_mode(detail_title_mode),
                     page=page,
                 )
                 rows = parse_listing_rows(collected.html, collected.url)
@@ -258,6 +293,39 @@ class ExternalFeedService:
                             type(exc).__name__,
                             exc,
                         )
+                    page_title = extract_nvoids_page_title(detail_html)
+                    page_kind = classify_nvoids_page_title(page_title)
+                    if detail_html.strip() and not self.nvoids_page_title_allowed(detail_title_mode, page_kind):
+                        skipped_item_count += 1
+                        record_skipped_item(
+                            db,
+                            SkippedItemRecord(
+                                owner_id=owner_id,
+                                run_source=RUN_SOURCE_NVOIDS_SYNC,
+                                run_key=run_key,
+                                source_type="nvoids",
+                                reason_code="skipped_nvoids_page_title",
+                                reason_detail=(
+                                    f"Skipped because detail page title '{page_title or 'Unknown'}' "
+                                    f"did not match the saved Nvoids title filter '{detail_title_mode}'."
+                                ),
+                                external_thread_id=detail_url,
+                                title_or_subject=row.title,
+                                sender="Nvoids",
+                                location=row.location,
+                                source_url=detail_url,
+                            ),
+                        )
+                        logger.info(
+                            "nvoids_sync_skip_page_title page=%s title=%r page_title=%r page_kind=%r mode=%r url=%r",
+                            page,
+                            row.title,
+                            page_title,
+                            page_kind,
+                            detail_title_mode,
+                            detail_url,
+                        )
+                        continue
                     try:
                         if detail_html.strip():
                             recruiter_email, recruiter_phone, recruiter_name = parse_job_detail_contacts(detail_html)

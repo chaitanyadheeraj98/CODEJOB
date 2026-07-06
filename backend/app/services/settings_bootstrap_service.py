@@ -31,6 +31,13 @@ class SettingsBootstrapService:
         return max(1, min(int(user_settings.nvoids_batch_limit or 10), 50))
 
     @staticmethod
+    def _nvoids_detail_title_mode(user_settings: UserSettings) -> str:
+        normalized = str(user_settings.nvoids_detail_title_mode or "").strip().lower()
+        if normalized in {"job_details", "hotlist_details", "all"}:
+            return normalized
+        return "job_details"
+
+    @staticmethod
     def _read_saved_gmail_queries(raw: str | None) -> list[str]:
         if not raw:
             return []
@@ -53,6 +60,8 @@ class SettingsBootstrapService:
                 if not existing.policy_json:
                     existing.policy_json = json.dumps(policy_service.default_policy(), separators=(",", ":"))
                 normalized_draft_text_size = normalize_draft_text_size(existing.draft_text_size)
+                raw_nvoids_detail_title_mode = existing.nvoids_detail_title_mode
+                normalized_nvoids_detail_title_mode = self._nvoids_detail_title_mode(existing)
                 if existing.draft_text_size != normalized_draft_text_size:
                     existing.draft_text_size = normalized_draft_text_size
                 if not existing.fallback_draft_template:
@@ -71,9 +80,11 @@ class SettingsBootstrapService:
                 existing.feature_auto_poll_interval_minutes = self._poll_interval_minutes(existing)
                 existing.feature_nvoids_poll_interval_minutes = self._nvoids_poll_interval_minutes(existing)
                 existing.nvoids_batch_limit = self._nvoids_batch_limit(existing)
+                existing.nvoids_detail_title_mode = normalized_nvoids_detail_title_mode
                 if (
                     not existing.policy_json
                     or existing.draft_text_size != normalized_draft_text_size
+                    or raw_nvoids_detail_title_mode != normalized_nvoids_detail_title_mode
                     or not existing.fallback_draft_template
                     or not existing.signature_name
                     or not existing.signature_phone
@@ -108,6 +119,7 @@ class SettingsBootstrapService:
                 feature_nvoids_auto_sync=False,
                 feature_nvoids_poll_interval_minutes=30,
                 nvoids_batch_limit=10,
+                nvoids_detail_title_mode="job_details",
                 nvoids_locations="",
                 feature_auto_send=settings.feature_auto_send,
                 feature_retry_queue=settings.feature_retry_queue,

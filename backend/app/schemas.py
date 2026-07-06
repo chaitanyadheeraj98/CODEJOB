@@ -71,6 +71,7 @@ class SettingsRequest(BaseModel):
     feature_nvoids_auto_sync: bool = False
     feature_nvoids_poll_interval_minutes: int = 30
     nvoids_batch_limit: int = 10
+    nvoids_detail_title_mode: str = "job_details"
     nvoids_locations: list[str] = Field(default_factory=list)
     feature_auto_send: bool = False
     feature_retry_queue: bool = False
@@ -117,6 +118,14 @@ class SettingsRequest(BaseModel):
     @classmethod
     def validate_nvoids_batch_limit(cls, value: int) -> int:
         return max(1, min(int(value), 50))
+
+    @field_validator("nvoids_detail_title_mode")
+    @classmethod
+    def validate_nvoids_detail_title_mode(cls, value: str) -> str:
+        normalized = (value or "").strip().lower()
+        if normalized not in {"job_details", "hotlist_details", "all"}:
+            raise ValueError("nvoids_detail_title_mode must be one of: job_details, hotlist_details, all")
+        return normalized
 
     @field_validator("draft_text_size")
     @classmethod
