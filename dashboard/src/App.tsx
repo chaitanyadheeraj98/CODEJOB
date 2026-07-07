@@ -59,6 +59,13 @@ function normalizeNvoidsDetailTitleMode(value: string | null | undefined): Nvoid
   return normalized === 'hotlist_details' || normalized === 'all' ? normalized : 'job_details'
 }
 
+function isSuspiciousPendingSkillName(value: string | null | undefined): boolean {
+  const text = (value ?? '').trim()
+  if (!text) return false
+  const words = text.split(/\s+/).filter(Boolean)
+  return words.length >= 7 || text.length >= 80
+}
+
 export function draftTextSizeToPreviewStyle(draftTextSize: string | null | undefined): { fontSize: string; lineHeight: string } {
   return DRAFT_TEXT_SIZE_STYLES[normalizeDraftTextSize(draftTextSize)]
 }
@@ -638,6 +645,7 @@ export function SkillUpgradeSection({
   approveSkill,
   dismissSkill,
 }: SkillUpgradeSectionProps) {
+  const actionablePendingSkills = pendingSkills.filter((skill) => !isSuspiciousPendingSkillName(skill.skill_name))
   return (
     <section className="card skillUpgradeCard">
       <h2>Upgrade Skills</h2>
@@ -651,7 +659,7 @@ export function SkillUpgradeSection({
           <div className="skillUpgradeColumnHeader">
             <h3>Pending Unknown Skills</h3>
             <div className="rowBtns">
-              {!loading && pendingSkills.length > 0 ? (
+              {!loading && actionablePendingSkills.length > 0 ? (
                 <button
                   type="button"
                   className="primary"
@@ -673,6 +681,7 @@ export function SkillUpgradeSection({
               {pendingSkills.map((skill) => {
                 const approveKey = `approve:${skill.normalized_name}`
                 const dismissKey = `dismiss:${skill.normalized_name}`
+                const isSuspicious = isSuspiciousPendingSkillName(skill.skill_name)
                 return (
                   <article key={skill.normalized_name} className="skillUpgradeItem">
                     <div className="skillUpgradeItemHeader">
@@ -685,12 +694,17 @@ export function SkillUpgradeSection({
                     <p className="subtle skillUpgradeMeta">
                       Candidate IDs: {skill.candidate_ids.length > 0 ? skill.candidate_ids.join(', ') : '-'}
                     </p>
+                    {isSuspicious ? (
+                      <p className="skillUpgradeWarning">
+                        This looks like a malformed multi-skill blob. Approve is disabled; use Dismiss to remove it.
+                      </p>
+                    ) : null}
                     <div className="skillUpgradeActions">
                       <button
                         type="button"
                         className="primary"
                         onClick={() => approveSkill(skill)}
-                        disabled={busySkillKey !== null}
+                        disabled={busySkillKey !== null || isSuspicious}
                       >
                         {busySkillKey === approveKey ? 'Approving...' : 'Approve'}
                       </button>
@@ -718,6 +732,7 @@ type JobIntentLearningSectionProps = {
   approvedSignals: JobIntentLearningSignal[]
   loading: boolean
   busySignalKey: string | null
+  approveAllSignals: () => void
   approveSignal: (signal: JobIntentLearningSignal) => void
   dismissSignal: (signal: JobIntentLearningSignal) => void
 }
@@ -727,6 +742,7 @@ export function JobIntentLearningSection({
   approvedSignals,
   loading,
   busySignalKey,
+  approveAllSignals,
   approveSignal,
   dismissSignal,
 }: JobIntentLearningSectionProps) {
@@ -741,7 +757,19 @@ export function JobIntentLearningSection({
         <section className="skillUpgradeColumn">
           <div className="skillUpgradeColumnHeader">
             <h3>Pending Intent Signals</h3>
-            <span className="skillUpgradeCount">{pendingSignals.length}</span>
+            <div className="rowBtns">
+              {!loading && pendingSignals.length > 0 ? (
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={approveAllSignals}
+                  disabled={busySignalKey !== null}
+                >
+                  {busySignalKey === 'approve-all-intents' ? 'Approving all...' : 'Approve all'}
+                </button>
+              ) : null}
+              <span className="skillUpgradeCount">{pendingSignals.length}</span>
+            </div>
           </div>
           {loading ? (
             <p className="subtle">Loading intent signals...</p>
@@ -2861,6 +2889,23 @@ function App() {
     }
   }
 
+  const approveAllPendingJobIntentSignals = async () => {
+    setJobIntentActionKey('approve-all-intents')
+    setError('')
+    try {
+      const res = await fetch(`${apiBase}/settings/job-intent-learning/approve-all`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      })
+      if (!res.ok) throw new Error('Failed to approve all job-intent signals')
+      await loadJobIntentLearningData()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setJobIntentActionKey(null)
+    }
+  }
+
   const runAutomation = async () => {
     setRunning(true)
     setError('')
@@ -3748,6 +3793,7 @@ function App() {
                 approvedSignals={approvedJobIntentSignals}
                 loading={jobIntentLoading}
                 busySignalKey={jobIntentActionKey}
+                approveAllSignals={approveAllPendingJobIntentSignals}
                 approveSignal={approvePendingJobIntentSignal}
                 dismissSignal={dismissPendingJobIntentSignal}
               />
@@ -4695,7 +4741,10 @@ function App() {
                   {item.skipped_items_loaded ? (
                     item.skipped_items && item.skipped_items.length > 0 ? (
                       <div className="stack">
-                        {item.skipped_items.map((skipped) => (
+                        {item.skipped_items.map((skipped) => {
+                          const intentEvidence = skipped.intent_evidence ?? []
+                          const intentNegativeEvidence = skipped.intent_negative_evidence ?? []
+                          return (
                           <article key={`${item.run_key}-${skipped.id}`} className="emailItem">
                             <p><strong>Source:</strong> {getSourceLabel(skipped.source_type)}</p>
                             <p><strong>Title:</strong> {renderTextOrDash(skipped.title_or_subject)}</p>
@@ -4712,18 +4761,18 @@ function App() {
                             {skipped.intent_reason && skipped.intent_reason !== skipped.reason_detail ? (
                               <p><strong>Intent Reason:</strong> {skipped.intent_reason}</p>
                             ) : null}
-                            {skipped.intent_evidence.length > 0 ? (
+                            {intentEvidence.length > 0 ? (
                               <div className="automationMetrics">
                                 <strong>Evidence:</strong>
-                                {skipped.intent_evidence.map((entry) => (
+                                {intentEvidence.map((entry) => (
                                   <span key={`${skipped.id}-${entry}`} className="tag">{entry}</span>
                                 ))}
                               </div>
                             ) : null}
-                            {skipped.intent_negative_evidence.length > 0 ? (
+                            {intentNegativeEvidence.length > 0 ? (
                               <div className="automationMetrics">
                                 <strong>Negative Evidence:</strong>
-                                {skipped.intent_negative_evidence.map((entry) => (
+                                {intentNegativeEvidence.map((entry) => (
                                   <span key={`${skipped.id}-neg-${entry}`} className="tag">{entry}</span>
                                 ))}
                               </div>
@@ -4737,7 +4786,8 @@ function App() {
                               </p>
                             ) : null}
                           </article>
-                        ))}
+                          )
+                        })}
                       </div>
                     ) : (
                       <p className="subtle">No skipped items found for this run.</p>

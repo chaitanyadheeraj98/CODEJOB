@@ -209,6 +209,18 @@ class BulkApproveSkillsResponse(BaseModel):
     approved_skill_names: list[str] = Field(default_factory=list)
 
 
+class BulkApproveJobIntentSignalItemResponse(BaseModel):
+    phrase: str
+    polarity: str
+
+
+class BulkApproveJobIntentSignalsResponse(BaseModel):
+    processed_count: int
+    approved_count: int
+    skipped_count: int
+    approved_signals: list[BulkApproveJobIntentSignalItemResponse] = Field(default_factory=list)
+
+
 class CustomSkillTaxonomyEntryResponse(BaseModel):
     id: int
     owner_id: str

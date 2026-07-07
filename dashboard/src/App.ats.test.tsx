@@ -145,6 +145,8 @@ describe('ATS review UI', () => {
         if (url.endsWith('/settings/resumes')) return makeResponse([])
         if (url.endsWith('/settings/attachments')) return makeResponse([])
         if (url.endsWith('/settings/skills/pending')) return makeResponse([])
+        if (url.endsWith('/settings/job-intent-learning/pending')) return makeResponse([])
+        if (url.endsWith('/settings/job-intent-learning/approved')) return makeResponse([])
         if (url.includes('/recent-runs/')) return makeResponse({ items: [], next_cursor: null, has_next: false })
         if (url.includes('/recent-runs')) return makeResponse({ items: [], next_cursor: null, has_next: false })
         if (url.includes('/candidates?')) {

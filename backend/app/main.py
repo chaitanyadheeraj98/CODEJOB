@@ -73,6 +73,7 @@ from app.models import (
 )
 from app.models import RecipientRoutingFeedback
 from app.parsing import build_skills_json_payload
+from app.parsing.skill_audit import is_suspicious_skill_blob
 from app.telegram_bot import TelegramBotService, TelegramReply
 from app.phase0 import (
     DEFAULT_FALLBACK_DRAFT_TEMPLATE,
@@ -125,6 +126,7 @@ from app.schemas import (
     AttachmentAssetUpdateRequest,
     AutomationRunRequest,
     AutomationRunResponse,
+    BulkApproveJobIntentSignalsResponse,
     BulkApproveSkillsResponse,
     BulkRejectRequest,
     CandidateListResponse,
@@ -1356,7 +1358,13 @@ def _list_pending_unknown_skills(db: Session) -> list[PendingSkillResponse]:
         for item in unknown_skills:
             skill_name = _clean_custom_skill_name(str(item))
             normalized = normalize_taxonomy_text(skill_name)
-            if not skill_name or not normalized or normalized in suppressed or normalized in seen_for_candidate:
+            if (
+                not skill_name
+                or not normalized
+                or is_suspicious_skill_blob(skill_name)
+                or normalized in suppressed
+                or normalized in seen_for_candidate
+            ):
                 continue
             seen_for_candidate.add(normalized)
             bucket = aggregated.setdefault(
@@ -1471,6 +1479,7 @@ def _upsert_job_intent_entry(
     phrase: str,
     polarity: str,
     status: str,
+    auto_commit: bool = True,
 ) -> JobIntentTaxonomyEntry:
     cleaned_phrase = str(phrase or "").strip()
     normalized_phrase = normalize_job_intent_phrase(cleaned_phrase)
@@ -1492,8 +1501,11 @@ def _upsert_job_intent_entry(
     if existing:
         existing.phrase = cleaned_phrase or existing.phrase
         existing.status = status
-        db.commit()
-        db.refresh(existing)
+        if auto_commit:
+            db.commit()
+            db.refresh(existing)
+        else:
+            db.flush()
         return existing
     created = JobIntentTaxonomyEntry(
         owner_id=settings.owner_id,
@@ -1507,8 +1519,11 @@ def _upsert_job_intent_entry(
         status=status,
     )
     db.add(created)
-    db.commit()
-    db.refresh(created)
+    if auto_commit:
+        db.commit()
+        db.refresh(created)
+    else:
+        db.flush()
     return created
 
 
@@ -2176,6 +2191,36 @@ def approve_job_intent_learning(
         status="approved",
     )
     return _serialize_job_intent_entry(entry)
+
+
+@app.post("/settings/job-intent-learning/approve-all", response_model=BulkApproveJobIntentSignalsResponse)
+def approve_all_job_intent_learning(db: Session = Depends(get_db)) -> BulkApproveJobIntentSignalsResponse:
+    pending = _list_job_intent_entries(db, status="pending")
+    approved_signals: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in pending:
+        key = (item.normalized_phrase or normalize_job_intent_phrase(item.phrase), item.polarity)
+        if not key[0] or not key[1] or key in seen:
+            continue
+        entry = _upsert_job_intent_entry(
+            db,
+            phrase=item.phrase,
+            polarity=item.polarity,
+            status="approved",
+            auto_commit=False,
+        )
+        approved_signals.append({"phrase": entry.phrase, "polarity": entry.polarity})
+        seen.add(key)
+    if approved_signals:
+        db.commit()
+    processed_count = len(pending)
+    approved_count = len(approved_signals)
+    return BulkApproveJobIntentSignalsResponse(
+        processed_count=processed_count,
+        approved_count=approved_count,
+        skipped_count=max(0, processed_count - approved_count),
+        approved_signals=approved_signals,
+    )
 
 
 @app.post("/settings/job-intent-learning/dismiss", response_model=JobIntentTaxonomyEntryResponse)

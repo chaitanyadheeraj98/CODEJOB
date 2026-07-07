@@ -4,9 +4,11 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
-from app.skill_taxonomy import normalize_skill_token, normalize_taxonomy_text
+from app.skill_taxonomy import extract_taxonomy_skills, normalize_skill_token, normalize_taxonomy_text
 
 _SKILL_SPLIT_RE = re.compile(r"[,;\n]+")
+_SUSPICIOUS_SKILL_BLOB_MIN_WORDS = 7
+_SUSPICIOUS_SKILL_BLOB_MIN_CHARS = 80
 
 
 @dataclass(frozen=True)
@@ -19,6 +21,31 @@ class SkillAuditResult:
 
 def _split_skill_tokens(skills_text: str | None) -> list[str]:
     return [part.strip() for part in _SKILL_SPLIT_RE.split(str(skills_text or "")) if part.strip()]
+
+
+def is_suspicious_skill_blob(value: str | None) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    words = [part for part in re.split(r"\s+", text) if part]
+    if len(words) >= _SUSPICIOUS_SKILL_BLOB_MIN_WORDS:
+        return True
+    return len(text) >= _SUSPICIOUS_SKILL_BLOB_MIN_CHARS
+
+
+def recover_known_skills_from_blob(value: str | None) -> tuple[str, ...]:
+    text = str(value or "").strip()
+    if not text or not is_suspicious_skill_blob(text):
+        return ()
+    recovered: list[str] = []
+    seen: set[str] = set()
+    for entry in extract_taxonomy_skills(text):
+        key = normalize_taxonomy_text(entry.canonical_name)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        recovered.append(entry.canonical_name)
+    return tuple(recovered)
 
 
 def audit_skills_text(skills_text: str | None) -> SkillAuditResult:
@@ -42,6 +69,22 @@ def audit_skills_text(skills_text: str | None) -> SkillAuditResult:
                 seen_known.add(key)
                 known.append(normalized_known)
                 evidence_known.append(f"{token} -> {normalized_known}")
+            continue
+
+        recovered_known = recover_known_skills_from_blob(token)
+        if len(recovered_known) >= 2:
+            for recovered in recovered_known:
+                key = normalize_taxonomy_text(recovered)
+                if key and key not in seen_all:
+                    seen_all.add(key)
+                    ordered.append(recovered)
+                if key and key not in seen_known:
+                    seen_known.add(key)
+                    known.append(recovered)
+                    evidence_known.append(f"{token} -> {recovered} (recovered)")
+            continue
+
+        if is_suspicious_skill_blob(token):
             continue
 
         preserved = str(token or "").strip()

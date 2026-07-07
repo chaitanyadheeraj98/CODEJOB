@@ -105,6 +105,103 @@ class JobIntentLearningApiTests(unittest.TestCase):
         self.assertEqual(approved.status_code, 200, approved.text)
         self.assertEqual(approved.json(), [])
 
+    def test_bulk_approve_pending_learning_signals_moves_all_to_approved(self) -> None:
+        with self.SessionLocal() as db:
+            db.add_all(
+                [
+                    JobIntentTaxonomyEntry(
+                        owner_id=main.settings.owner_id,
+                        phrase="share updated resume",
+                        normalized_phrase="share updated resume",
+                        polarity="positive_recruiter_jd",
+                        source_examples_count=2,
+                        sample_evidence_json='["share updated resume"]',
+                        confidence_aggregate=0.77,
+                        last_intent_type="recruiter_job_requirement",
+                        status="pending",
+                    ),
+                    JobIntentTaxonomyEntry(
+                        owner_id=main.settings.owner_id,
+                        phrase="consultant hotlist",
+                        normalized_phrase="consultant hotlist",
+                        polarity="negative_candidate_hotlist",
+                        source_examples_count=3,
+                        sample_evidence_json='["consultant hotlist"]',
+                        confidence_aggregate=0.86,
+                        last_intent_type="candidate_marketing_or_hotlist",
+                        status="pending",
+                    ),
+                ]
+            )
+            db.commit()
+
+        approved = self.client.post("/settings/job-intent-learning/approve-all")
+        self.assertEqual(approved.status_code, 200, approved.text)
+        self.assertEqual(
+            approved.json(),
+            {
+                "processed_count": 2,
+                "approved_count": 2,
+                "skipped_count": 0,
+                "approved_signals": [
+                    {"phrase": "consultant hotlist", "polarity": "negative_candidate_hotlist"},
+                    {"phrase": "share updated resume", "polarity": "positive_recruiter_jd"},
+                ],
+            },
+        )
+
+        pending = self.client.get("/settings/job-intent-learning/pending")
+        self.assertEqual(pending.status_code, 200, pending.text)
+        self.assertEqual(pending.json(), [])
+
+        listed = self.client.get("/settings/job-intent-learning/approved")
+        self.assertEqual(listed.status_code, 200, listed.text)
+        self.assertEqual(
+            [(item["phrase"], item["polarity"]) for item in listed.json()],
+            [
+                ("consultant hotlist", "negative_candidate_hotlist"),
+                ("share updated resume", "positive_recruiter_jd"),
+            ],
+        )
+
+    def test_bulk_approve_pending_learning_signals_returns_zero_counts_when_empty(self) -> None:
+        approved = self.client.post("/settings/job-intent-learning/approve-all")
+        self.assertEqual(approved.status_code, 200, approved.text)
+        self.assertEqual(
+            approved.json(),
+            {
+                "processed_count": 0,
+                "approved_count": 0,
+                "skipped_count": 0,
+                "approved_signals": [],
+            },
+        )
+
+    def test_bulk_approve_does_not_reintroduce_dismissed_learning_signal(self) -> None:
+        with self.SessionLocal() as db:
+            db.add(
+                JobIntentTaxonomyEntry(
+                    owner_id=main.settings.owner_id,
+                    phrase="dismissed phrase",
+                    normalized_phrase="dismissed phrase",
+                    polarity="negative_newsletter",
+                    source_examples_count=1,
+                    sample_evidence_json='["dismissed phrase"]',
+                    confidence_aggregate=0.5,
+                    last_intent_type="newsletter",
+                    status="dismissed",
+                )
+            )
+            db.commit()
+
+        approved = self.client.post("/settings/job-intent-learning/approve-all")
+        self.assertEqual(approved.status_code, 200, approved.text)
+        self.assertEqual(approved.json()["approved_signals"], [])
+
+        pending = self.client.get("/settings/job-intent-learning/pending")
+        self.assertEqual(pending.status_code, 200, pending.text)
+        self.assertEqual(pending.json(), [])
+
 
 if __name__ == "__main__":
     unittest.main()

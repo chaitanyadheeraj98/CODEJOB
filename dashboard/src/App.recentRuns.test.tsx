@@ -78,6 +78,8 @@ describe('Recent Runs skipped-item drill-down', () => {
         if (url.endsWith('/settings/resumes')) return makeResponse([])
         if (url.endsWith('/settings/attachments')) return makeResponse([])
         if (url.endsWith('/settings/skills/pending')) return makeResponse([])
+        if (url.endsWith('/settings/job-intent-learning/pending')) return makeResponse([])
+        if (url.endsWith('/settings/job-intent-learning/approved')) return makeResponse([])
         if (url.includes('/recent-runs/gmail_sync%3Abatch-1/items')) {
           return makeResponse({
             items: [

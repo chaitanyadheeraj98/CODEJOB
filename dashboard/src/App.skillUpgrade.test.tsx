@@ -96,4 +96,56 @@ describe('SkillUpgradeSection', () => {
     expect(approveAllButton).toBeDefined()
     expect(approveAllButton?.disabled).toBe(true)
   })
+
+  it('disables approve for suspicious skill blobs while keeping dismiss available', () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+    })
+
+    const approveSkill = vi.fn()
+    const dismissSkill = vi.fn()
+
+    act(() => {
+      root.render(
+        <SkillUpgradeSection
+          pendingSkills={[
+            {
+              skill_name:
+                'javascript typescript java sql react react js angular angularjs next js jquery redux bootstrap material ui sass html node js express express js spring spring boot postgresql mysql mongodb redis',
+              normalized_name: 'javascript typescript java sql react react js angular angularjs next js jquery redux bootstrap material ui sass html node js express express js spring spring boot postgresql mysql mongodb redis',
+              occurrence_count: 2,
+              candidate_ids: [4045, 4044],
+            },
+          ]}
+          loading={false}
+          busySkillKey={null}
+          approveAllSkills={() => {}}
+          approveSkill={approveSkill}
+          dismissSkill={dismissSkill}
+        />,
+      )
+    })
+
+    expect(container.textContent ?? '').toContain('Approve is disabled')
+    expect(container.textContent ?? '').not.toContain('Approve all')
+
+    const buttons = Array.from(container.querySelectorAll('button'))
+    const approveButton = buttons.find((button) => button.textContent === 'Approve') as HTMLButtonElement | undefined
+    const dismissButton = buttons.find((button) => button.textContent === 'Dismiss') as HTMLButtonElement | undefined
+
+    expect(approveButton?.disabled).toBe(true)
+    expect(dismissButton?.disabled).toBe(false)
+
+    act(() => {
+      approveButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      dismissButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(approveSkill).not.toHaveBeenCalled()
+    expect(dismissSkill).toHaveBeenCalledTimes(1)
+  })
 })

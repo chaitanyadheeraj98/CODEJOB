@@ -3,7 +3,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import App, { buildDefaultPolicy, defaultDraftRules, normalizeDynamicPolicy } from './App'
+import App, { JobIntentLearningSection, buildDefaultPolicy, defaultDraftRules, normalizeDynamicPolicy } from './App'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -29,6 +29,13 @@ function setInputValue(element: HTMLInputElement, value: string) {
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
   setter?.call(element, value)
   element.dispatchEvent(new Event('input', { bubbles: true }))
+}
+
+async function clickButton(button: HTMLButtonElement | undefined) {
+  await act(async () => {
+    button?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await Promise.resolve()
+  })
 }
 
 function findSelect(container: HTMLDivElement, labelText: string): HTMLSelectElement | undefined {
@@ -140,6 +147,8 @@ describe('Draft Qualification Rules settings UI', () => {
         if (url.endsWith('/settings/resumes')) return makeResponse([])
         if (url.endsWith('/settings/attachments')) return makeResponse([])
         if (url.endsWith('/settings/skills/pending')) return makeResponse([])
+        if (url.endsWith('/settings/job-intent-learning/pending')) return makeResponse([])
+        if (url.endsWith('/settings/job-intent-learning/approved')) return makeResponse([])
         if (url.includes('/recent-runs/')) return makeResponse({ items: [], next_cursor: null, has_next: false })
         if (url.includes('/recent-runs')) return makeResponse({ items: [], next_cursor: null, has_next: false })
         if (url.includes('/candidates?')) return makeResponse({ items: [], next_cursor: null, has_next: false })
@@ -179,10 +188,7 @@ describe('Draft Qualification Rules settings UI', () => {
       button.textContent?.includes('Settings'),
     ) as HTMLButtonElement | undefined
 
-    await act(async () => {
-      settingsButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-      await Promise.resolve()
-    })
+    await clickButton(settingsButton)
 
     return { container, putBodies }
   }
@@ -272,5 +278,113 @@ describe('Draft Qualification Rules settings UI', () => {
     expect(savedBody.policy.qualification.draft_rules.score_threshold.mode).toBe('warn')
     expect(savedBody.policy.qualification.draft_rules.score_threshold.value).toBe(0.5)
     expect(savedBody.qualification_threshold).toBe(0.5)
+  })
+
+  it('bulk-approves pending job intent learning signals from the settings card', async () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+    })
+
+    await act(async () => {
+      root.render(
+        <JobIntentLearningSection
+          pendingSignals={[
+            {
+              id: 101,
+              owner_id: 'default-owner',
+              phrase: 'share updated resume',
+              normalized_phrase: 'share updated resume',
+              polarity: 'positive_recruiter_jd',
+              source_examples_count: 2,
+              sample_evidence: ['share updated resume'],
+              confidence_aggregate: 0.77,
+              last_intent_type: 'recruiter_job_requirement',
+              status: 'pending',
+              created_at: '2026-07-06T00:00:00Z',
+              updated_at: '2026-07-06T00:00:00Z',
+            },
+          ]}
+          approvedSignals={[]}
+          loading={false}
+          busySignalKey={null}
+          approveAllSignals={vi.fn()}
+          approveSignal={vi.fn()}
+          dismissSignal={vi.fn()}
+        />,
+      )
+    })
+
+    const approveAllButton = Array.from(container.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('Approve all'),
+    ) as HTMLButtonElement | undefined
+
+    expect(approveAllButton).toBeDefined()
+    expect(approveAllButton?.textContent).toContain('Approve all')
+
+    const approveAllSignals = vi.fn()
+    await act(async () => {
+      root.render(
+        <JobIntentLearningSection
+          pendingSignals={[
+            {
+              id: 101,
+              owner_id: 'default-owner',
+              phrase: 'share updated resume',
+              normalized_phrase: 'share updated resume',
+              polarity: 'positive_recruiter_jd',
+              source_examples_count: 2,
+              sample_evidence: ['share updated resume'],
+              confidence_aggregate: 0.77,
+              last_intent_type: 'recruiter_job_requirement',
+              status: 'pending',
+              created_at: '2026-07-06T00:00:00Z',
+              updated_at: '2026-07-06T00:00:00Z',
+            },
+          ]}
+          approvedSignals={[]}
+          loading={false}
+          busySignalKey={null}
+          approveAllSignals={approveAllSignals}
+          approveSignal={vi.fn()}
+          dismissSignal={vi.fn()}
+        />,
+      )
+    })
+    await clickButton(Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.includes('Approve all')) as HTMLButtonElement | undefined)
+    expect(approveAllSignals).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      root.render(
+        <JobIntentLearningSection
+          pendingSignals={[
+            {
+              id: 101,
+              owner_id: 'default-owner',
+              phrase: 'share updated resume',
+              normalized_phrase: 'share updated resume',
+              polarity: 'positive_recruiter_jd',
+              source_examples_count: 2,
+              sample_evidence: ['share updated resume'],
+              confidence_aggregate: 0.77,
+              last_intent_type: 'recruiter_job_requirement',
+              status: 'pending',
+              created_at: '2026-07-06T00:00:00Z',
+              updated_at: '2026-07-06T00:00:00Z',
+            },
+          ]}
+          approvedSignals={[]}
+          loading={false}
+          busySignalKey="approve-all-intents"
+          approveAllSignals={vi.fn()}
+          approveSignal={vi.fn()}
+          dismissSignal={vi.fn()}
+        />,
+      )
+    })
+    expect(container.textContent ?? '').toContain('Approving all...')
   })
 })

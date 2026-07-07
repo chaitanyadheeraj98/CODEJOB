@@ -7,6 +7,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from app.ai.deepseek_client import deepseek_json_completion
+from app.parsing.skill_audit import is_suspicious_skill_blob, recover_known_skills_from_blob
 from app.skill_taxonomy import normalize_skill_token
 
 
@@ -175,7 +176,16 @@ _SKILL_SPLIT_RE = re.compile(r"[\n,;/|]+")
 def _split_free_skill_text(value: str) -> list[str]:
     if not value:
         return []
-    return [item.strip() for item in _SKILL_SPLIT_RE.split(value) if item.strip()]
+    parts = [item.strip() for item in _SKILL_SPLIT_RE.split(value) if item.strip()]
+    if len(parts) != 1:
+        return parts
+    token = parts[0]
+    recovered = recover_known_skills_from_blob(token)
+    if len(recovered) >= 2:
+        return list(recovered)
+    if is_suspicious_skill_blob(token):
+        return []
+    return parts
 
 
 def _dedupe_skill_values(values: list[str]) -> tuple[str, ...]:

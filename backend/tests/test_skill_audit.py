@@ -4,6 +4,20 @@ from app.parsing.skill_audit import audit_skills_text, build_skills_json_payload
 
 
 class SkillAuditTests(unittest.TestCase):
+    def test_audit_keeps_normal_comma_separated_skills_unchanged(self) -> None:
+        result = audit_skills_text("Java, Spring Boot, Temporal Workflow")
+
+        self.assertEqual(result.skills_text, "Java, Spring Boot, Temporal Workflow")
+        self.assertEqual(result.known, ("Java", "Spring Boot"))
+        self.assertEqual(result.unknown, ("Temporal Workflow",))
+
+    def test_audit_keeps_normal_newline_separated_skills_unchanged(self) -> None:
+        result = audit_skills_text("Java\nSpring Boot\nTemporal Workflow")
+
+        self.assertEqual(result.skills_text, "Java, Spring Boot, Temporal Workflow")
+        self.assertEqual(result.known, ("Java", "Spring Boot"))
+        self.assertEqual(result.unknown, ("Temporal Workflow",))
+
     def test_audit_preserves_unknown_skills_in_final_skills_text(self) -> None:
         result = audit_skills_text("Java, Temporal Workflow, Spring Boot, Temporal Workflow")
         payload = skill_audit_result_to_payload(result)
@@ -46,6 +60,33 @@ class SkillAuditTests(unittest.TestCase):
         self.assertEqual(payload["skills_text"], "Java, Temporal Workflow")
         self.assertEqual(payload["known"], ["Java"])
         self.assertEqual(payload["unknown"], ["Temporal Workflow"])
+
+    def test_audit_recovers_multiple_known_skills_from_space_separated_blob(self) -> None:
+        result = audit_skills_text(
+            "JavaScript TypeScript Java SQL React Angular Docker Kubernetes AWS Azure Jenkins GitHub Actions"
+        )
+
+        self.assertIn("Java", result.known)
+        self.assertIn("SQL", result.known)
+        self.assertTrue("React" in result.known or "React.js" in result.known)
+        self.assertIn("Angular", result.known)
+        self.assertIn("Docker", result.known)
+        self.assertIn("Kubernetes", result.known)
+        self.assertEqual(result.unknown, ())
+        self.assertNotIn("JavaScript TypeScript Java SQL React Angular Docker Kubernetes AWS Azure Jenkins GitHub Actions", result.skills_text)
+
+    def test_audit_suppresses_giant_malformed_phrase_when_recovery_fails(self) -> None:
+        result = audit_skills_text("florb snazzle quentor zibble marnix ploonet dravik strallop")
+
+        self.assertEqual(result.skills_text, "none_detected")
+        self.assertEqual(result.known, ())
+        self.assertEqual(result.unknown, ())
+
+    def test_audit_keeps_short_unknown_skill_candidates(self) -> None:
+        result = audit_skills_text("Java, PromptForge")
+
+        self.assertEqual(result.known, ("Java",))
+        self.assertEqual(result.unknown, ("PromptForge",))
 
 
 if __name__ == "__main__":

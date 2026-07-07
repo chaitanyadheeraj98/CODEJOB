@@ -1010,6 +1010,65 @@ class ExternalFeedsApiTests(unittest.TestCase):
         self.assertEqual(pending.status_code, 200, pending.text)
         self.assertEqual([item["skill_name"] for item in pending.json()], ["Legacy Graph Skill"])
 
+    def test_pending_skill_api_suppresses_suspicious_unknown_skill_blobs_from_skills_json(self) -> None:
+        suspicious_blob = "angularjs next js jquery redux bootstrap material ui sass html node js express express js spring spring boot postgresql mysql mongodb redis dynamodb cassandra oracle aws azure gcp docker kubernetes terraform ansible jenkins github actions gitlab ci"
+        with self.SessionLocal() as db:
+            db.add(
+                RecruiterEmail(
+                    owner_id=main.settings.owner_id,
+                    sender="blob@example.com",
+                    subject="Blob",
+                    body="Body",
+                    role="Engineer",
+                    location="Remote",
+                    salary_text="",
+                    skills_text="Java",
+                    score=0,
+                    decision="qualified",
+                    state="needs_review",
+                    source="gmail",
+                    skills_json=json.dumps(
+                        {
+                            "skills_text": "Java, PromptForge",
+                            "known": ["Java"],
+                            "unknown": [suspicious_blob, "PromptForge"],
+                            "evidence": {"unknown": [suspicious_blob, "PromptForge"]},
+                        }
+                    ),
+                )
+            )
+            db.commit()
+
+        pending = self.client.get("/settings/skills/pending")
+        self.assertEqual(pending.status_code, 200, pending.text)
+        self.assertEqual([item["skill_name"] for item in pending.json()], ["PromptForge"])
+
+    def test_pending_skill_api_suppresses_suspicious_legacy_unknown_skill_blobs(self) -> None:
+        suspicious_blob = "javascript typescript java sql react react js angular angularjs next js jquery redux bootstrap material ui sass html node js express express js spring spring boot postgresql mysql mongodb redis"
+        with self.SessionLocal() as db:
+            db.add(
+                RecruiterEmail(
+                    owner_id=main.settings.owner_id,
+                    sender="legacy-blob@example.com",
+                    subject="Legacy Blob",
+                    body="Body",
+                    role="Engineer",
+                    location="Remote",
+                    salary_text="",
+                    skills_text="Java",
+                    score=0,
+                    decision="qualified",
+                    state="needs_review",
+                    source="gmail",
+                    parser_details_json=json.dumps({"unknown_skills": [suspicious_blob, "PromptForge"]}),
+                )
+            )
+            db.commit()
+
+        pending = self.client.get("/settings/skills/pending")
+        self.assertEqual(pending.status_code, 200, pending.text)
+        self.assertEqual([item["skill_name"] for item in pending.json()], ["PromptForge"])
+
     def test_dismissed_skill_is_suppressed_from_pending_results(self) -> None:
         with self.SessionLocal() as db:
             db.add(
