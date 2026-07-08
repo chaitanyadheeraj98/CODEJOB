@@ -2430,8 +2430,11 @@ function App() {
     setProductivityTrend((await trendRes.json()) as ProductivityTrendResponse)
   }
 
-  const loadRecentRuns = async () => {
-    const res = await fetch(`${apiBase}/recent-runs?limit=${RECENT_RUNS_LIMIT}`)
+  const loadRecentRuns = async (mailDate: string | null = settings.mail_date ?? null) => {
+    const params = new URLSearchParams()
+    params.set('limit', String(RECENT_RUNS_LIMIT))
+    if (mailDate) params.set('mail_date', mailDate)
+    const res = await fetch(`${apiBase}/recent-runs?${params.toString()}`)
     if (!res.ok) throw new Error('Failed to load recent runs')
     const payload = (await res.json()) as RecentRunListResponse
     setLogs(
@@ -2556,9 +2559,9 @@ function App() {
           loadJobIntentLearningData(),
           loadAiStatus(),
           loadTelegramStatus(),
-          loadRecentRuns(),
         ])
         const normalizedSettings = await loadSettings()
+        await loadRecentRuns(normalizedSettings.mail_date ?? null)
         await refreshVisibleCandidates(normalizedSettings.mail_date ?? null, { activeOnly: true, initialLoad: true })
         await loadPremiumNumbers({ append: false, cursor: 0 })
         hasBootstrappedCandidatesRef.current = true
@@ -2572,6 +2575,7 @@ function App() {
   useEffect(() => {
     if (!hasBootstrappedCandidatesRef.current) return
     refreshVisibleCandidates(settings.mail_date ?? null, { activeOnly: true, includeLoaded: true }).catch((e) => setError((e as Error).message))
+    loadRecentRuns(settings.mail_date ?? null).catch((e) => setError((e as Error).message))
   }, [settings.mail_date])
 
   useEffect(() => {
@@ -2945,7 +2949,7 @@ function App() {
       await loadTelegramStatus()
       await refreshVisibleCandidates(settings.mail_date ?? null, { activeOnly: false })
       await loadProductivityAnalytics(timeRange)
-      await loadRecentRuns()
+      await loadRecentRuns(settings.mail_date ?? null)
       await loadJobIntentLearningData()
     } catch (e) {
       if ((e as Error).name === 'AbortError') {
@@ -2999,7 +3003,7 @@ function App() {
       ].slice(0, RECENT_RUNS_LIMIT))
       await refreshVisibleCandidates(settings.mail_date ?? null, { activeOnly: false })
       await loadPremiumNumbers()
-      await loadRecentRuns()
+      await loadRecentRuns(settings.mail_date ?? null)
     } catch (e) {
       setError((e as Error).message)
     } finally {

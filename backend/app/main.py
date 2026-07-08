@@ -3468,14 +3468,21 @@ def list_external_feed_runs(limit: int = Query(default=20, ge=1, le=200), db: Se
 def list_recent_runs(
     cursor: int = Query(0, ge=0),
     limit: int = Query(25, ge=1, le=100),
+    mail_date: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
     db: Session = Depends(get_db),
 ) -> RecentRunListResponse:
-    rows = (
+    query = (
         db.query(RecentRun)
         .filter(RecentRun.owner_id == settings.owner_id)
-        .order_by(RecentRun.created_at.desc(), RecentRun.id.desc())
-        .all()
     )
+    if mail_date:
+        try:
+            selected = date.fromisoformat(mail_date)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="mail_date must be a valid YYYY-MM-DD date") from exc
+        start, end = _mail_date_utc_window(selected)
+        query = query.filter(RecentRun.created_at >= start, RecentRun.created_at < end)
+    rows = query.order_by(RecentRun.created_at.desc(), RecentRun.id.desc()).all()
     items = [_recent_run_response(row) for row in rows]
     visible, next_cursor, has_next = _paginate_items(items, cursor=cursor, limit=limit)
     return RecentRunListResponse(items=visible, next_cursor=next_cursor, has_next=has_next)

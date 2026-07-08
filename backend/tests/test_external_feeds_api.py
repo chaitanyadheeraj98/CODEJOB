@@ -1,7 +1,7 @@
 import os
 import tempfile
 import unittest
-from datetime import datetime
+from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 
 import httpx
@@ -325,6 +325,81 @@ class ExternalFeedsApiTests(unittest.TestCase):
         self.assertEqual([item["run_key"] for item in payload["items"][:2]], ["nvoids_sync:77", "gmail_sync:older-batch"])
         self.assertEqual([item["run_source"] for item in payload["items"][:2]], ["nvoids_sync", "gmail_sync"])
         self.assertFalse(payload["has_next"])
+
+    def test_recent_runs_list_filters_by_mail_date_local_day(self) -> None:
+        selected_day = date(2026, 7, 8)
+        start_utc, end_utc = main._mail_date_utc_window(selected_day)
+        with self.SessionLocal() as db:
+            db.add_all(
+                [
+                    RecentRun(
+                        owner_id=main.settings.owner_id,
+                        run_source="gmail_sync",
+                        run_key="gmail_sync:inside-window",
+                        status="ok",
+                        detail="Inside selected day",
+                        created_at=start_utc,
+                    ),
+                    RecentRun(
+                        owner_id=main.settings.owner_id,
+                        run_source="nvoids_sync",
+                        run_key="nvoids_sync:before-window",
+                        status="ok",
+                        detail="Before selected day",
+                        created_at=start_utc - timedelta(seconds=1),
+                    ),
+                    RecentRun(
+                        owner_id=main.settings.owner_id,
+                        run_source="automation_run",
+                        run_key="automation_run:after-window",
+                        status="ok",
+                        detail="After selected day",
+                        created_at=end_utc,
+                    ),
+                ]
+            )
+            db.commit()
+
+        res = self.client.get("/recent-runs?limit=10&mail_date=2026-07-08")
+        self.assertEqual(res.status_code, 200, res.text)
+        payload = res.json()
+        self.assertEqual([item["run_key"] for item in payload["items"]], ["gmail_sync:inside-window"])
+
+    def test_recent_runs_list_mail_date_boundary_uses_business_timezone_window(self) -> None:
+        selected_day = date(2026, 11, 1)
+        start_utc, end_utc = main._mail_date_utc_window(selected_day)
+        with self.SessionLocal() as db:
+            db.add_all(
+                [
+                    RecentRun(
+                        owner_id=main.settings.owner_id,
+                        run_source="gmail_sync",
+                        run_key="gmail_sync:start-boundary",
+                        status="ok",
+                        detail="Included at start boundary",
+                        created_at=start_utc,
+                    ),
+                    RecentRun(
+                        owner_id=main.settings.owner_id,
+                        run_source="gmail_sync",
+                        run_key="gmail_sync:end-excluded",
+                        status="ok",
+                        detail="Excluded at end boundary",
+                        created_at=end_utc,
+                    ),
+                ]
+            )
+            db.commit()
+
+        res = self.client.get("/recent-runs?limit=10&mail_date=2026-11-01")
+        self.assertEqual(res.status_code, 200, res.text)
+        payload = res.json()
+        self.assertEqual([item["run_key"] for item in payload["items"]], ["gmail_sync:start-boundary"])
+
+    def test_recent_runs_list_rejects_impossible_mail_date(self) -> None:
+        res = self.client.get("/recent-runs?limit=10&mail_date=2026-02-30")
+        self.assertEqual(res.status_code, 422, res.text)
+        self.assertEqual(res.json()["detail"], "mail_date must be a valid YYYY-MM-DD date")
 
     def test_recent_run_items_endpoint_paginates_skipped_items(self) -> None:
         with self.SessionLocal() as db:
