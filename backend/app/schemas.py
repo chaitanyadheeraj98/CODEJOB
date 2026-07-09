@@ -299,6 +299,17 @@ class JobIntentTaxonomyEntryResponse(BaseModel):
         return []
 
 
+class SettingsBootstrapResponse(BaseModel):
+    settings: SettingsResponse
+    resumes: list[ResumeResponse] = Field(default_factory=list)
+    attachments: list[AttachmentAssetResponse] = Field(default_factory=list)
+    pending_skills: list[PendingSkillResponse] = Field(default_factory=list)
+    pending_job_intent_signals: list[JobIntentTaxonomyEntryResponse] = Field(default_factory=list)
+    approved_job_intent_signals: list[JobIntentTaxonomyEntryResponse] = Field(default_factory=list)
+    loaded_at: datetime
+    owner_id: str
+
+
 class ApproveJobIntentSignalRequest(BaseModel):
     phrase: str
     polarity: str

@@ -60,6 +60,19 @@ function makeSettings() {
   }
 }
 
+function makeBootstrapPayload() {
+  return {
+    settings: makeSettings(),
+    resumes: [],
+    attachments: [],
+    pending_skills: [],
+    pending_job_intent_signals: [],
+    approved_job_intent_signals: [],
+    loaded_at: '2026-07-09T00:00:00Z',
+    owner_id: 'default-owner',
+  }
+}
+
 describe('Groq status UI', () => {
   const cleanups: Array<() => void> = []
 
@@ -77,12 +90,7 @@ describe('Groq status UI', () => {
         if (url.endsWith('/ai/status')) return makeResponse(aiStatus)
         if (url.endsWith('/telegram/status')) return makeResponse({ enabled: false, polling: false, alerts_enabled: false, authorized_chats: 0, detail: 'off' })
         if (url.endsWith('/gmail/oauth/url')) return makeResponse({ authorization_url: null })
-        if (url.endsWith('/settings')) return makeResponse(makeSettings())
-        if (url.endsWith('/settings/resumes')) return makeResponse([])
-        if (url.endsWith('/settings/attachments')) return makeResponse([])
-        if (url.endsWith('/settings/skills/pending')) return makeResponse([])
-        if (url.endsWith('/settings/job-intent-learning/pending')) return makeResponse([])
-        if (url.endsWith('/settings/job-intent-learning/approved')) return makeResponse([])
+        if (url.endsWith('/settings/bootstrap')) return makeResponse(makeBootstrapPayload())
         if (url.includes('/recent-runs')) return makeResponse({ items: [], next_cursor: null, has_next: false })
         if (url.includes('/analytics/trend')) return makeResponse({ range: 'current_day', bucket: 'hour', trend_direction: 'flat', trend_delta_pct: 0, kpi_total_sent: 0, previous_period_total_sent: 0, bars: [] })
         if (url.includes('/analytics/events')) return makeResponse([])

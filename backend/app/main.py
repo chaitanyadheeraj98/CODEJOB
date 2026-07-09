@@ -158,6 +158,7 @@ from app.schemas import (
     ResumeResponse,
     ResumeUpdateRequest,
     SentItemDetailsResponse,
+    SettingsBootstrapResponse,
     SettingsRequest,
     SettingsResponse,
     UnknownNumberReviewCardListResponse,
@@ -1858,6 +1859,25 @@ def health() -> dict[str, str]:
 def get_settings(db: Session = Depends(get_db)) -> SettingsResponse:
     s = _get_settings(db)
     return _settings_response_from_model(s)
+
+
+@app.get("/settings/bootstrap", response_model=SettingsBootstrapResponse)
+def get_settings_bootstrap(db: Session = Depends(get_db)) -> SettingsBootstrapResponse:
+    user_settings = _get_settings(db)
+    return SettingsBootstrapResponse(
+        settings=_settings_response_from_model(user_settings),
+        resumes=[ResumeResponse.model_validate(item) for item in _list_resumes(db)],
+        attachments=[AttachmentAssetResponse.model_validate(item) for item in _list_attachment_assets(db)],
+        pending_skills=_list_pending_unknown_skills(db),
+        pending_job_intent_signals=[
+            _serialize_job_intent_entry(item) for item in _list_job_intent_entries(db, status="pending")
+        ],
+        approved_job_intent_signals=[
+            _serialize_job_intent_entry(item) for item in _list_job_intent_entries(db, status="approved")
+        ],
+        loaded_at=datetime.now(UTC),
+        owner_id=user_settings.owner_id,
+    )
 
 
 @app.put("/settings", response_model=SettingsResponse)

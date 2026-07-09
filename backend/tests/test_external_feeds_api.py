@@ -720,6 +720,23 @@ class ExternalFeedsApiTests(unittest.TestCase):
         self.assertEqual(res.status_code, 200, res.text)
         self.assertEqual(res.json()["nvoids_detail_title_mode"], "job_details")
 
+    def test_settings_bootstrap_returns_atomic_settings_domain_payload(self) -> None:
+        settings_res = self.client.get("/settings")
+        self.assertEqual(settings_res.status_code, 200, settings_res.text)
+
+        bootstrap_res = self.client.get("/settings/bootstrap")
+        self.assertEqual(bootstrap_res.status_code, 200, bootstrap_res.text)
+        payload = bootstrap_res.json()
+
+        self.assertEqual(payload["settings"], settings_res.json())
+        self.assertEqual(payload["owner_id"], settings_res.json()["owner_id"])
+        self.assertIn("loaded_at", payload)
+        self.assertIsInstance(payload["resumes"], list)
+        self.assertIsInstance(payload["attachments"], list)
+        self.assertIsInstance(payload["pending_skills"], list)
+        self.assertIsInstance(payload["pending_job_intent_signals"], list)
+        self.assertIsInstance(payload["approved_job_intent_signals"], list)
+
     def test_settings_reject_invalid_preferred_employer_cc_email(self) -> None:
         res = self.client.put(
             "/settings",

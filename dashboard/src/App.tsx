@@ -13,7 +13,6 @@ const GMAIL_OAUTH_POLL_INTERVAL_MS = 2000
 const GMAIL_OAUTH_POLL_TIMEOUT_MS = 180000
 const VIEW_EVENT_THROTTLE_MS = 60000
 const PREMIUM_PAGE_LIMIT = 25
-let hasBootstrappedAppOnce = false
 export const DRAFT_TEXT_SIZE_OPTIONS = ['small', 'normal', 'large', 'huge'] as const
 export type DraftTextSize = (typeof DRAFT_TEXT_SIZE_OPTIONS)[number]
 type NvoidsDetailTitleMode = 'job_details' | 'hotlist_details' | 'all'
@@ -470,6 +469,19 @@ type JobIntentLearningSignal = {
   created_at: string
   updated_at: string
 }
+
+type SettingsBootstrapPayload = {
+  settings: SettingsPayload
+  resumes: ResumeAsset[]
+  attachments: AttachmentAsset[]
+  pending_skills: PendingSkill[]
+  pending_job_intent_signals: JobIntentLearningSignal[]
+  approved_job_intent_signals: JobIntentLearningSignal[]
+  loaded_at: string
+  owner_id: string
+}
+
+type BootstrapStatus = 'idle' | 'loading' | 'ready' | 'error'
 
 type ResumeDatabaseSectionProps = {
   activeResume: ResumeAsset | null
@@ -1909,6 +1921,9 @@ function App() {
   const [dynamicPolicyBeta, setDynamicPolicyBeta] = useState(false)
   const [selectedProfileToApply, setSelectedProfileToApply] = useState<PolicyProfileName>('Balanced')
   const [lastAppliedProfile, setLastAppliedProfile] = useState<PolicyProfileName | null>(null)
+  const [settingsBootstrapStatus, setSettingsBootstrapStatus] = useState<BootstrapStatus>('idle')
+  const [settingsBootstrapError, setSettingsBootstrapError] = useState('')
+  const [hasLoadedSettingsBootstrap, setHasLoadedSettingsBootstrap] = useState(false)
   const [skillDraft, setSkillDraft] = useState('')
   const [nvoidsLocationDraft, setNvoidsLocationDraft] = useState('')
   const [employerDomainDraft, setEmployerDomainDraft] = useState('')
@@ -2103,9 +2118,10 @@ function App() {
   const exactSelectedProfile = detectProfileFromPolicy(currentPolicy)
   const profileStatusLabel = exactSelectedProfile
     ? exactSelectedProfile
-    : lastAppliedProfile
-      ? `Custom (from ${lastAppliedProfile})`
-      : 'Custom'
+      : lastAppliedProfile
+        ? `Custom (from ${lastAppliedProfile})`
+        : 'Custom'
+  const settingsBootstrapReady = settingsBootstrapStatus === 'ready'
 
   const loadStatus = async (): Promise<GmailStatus> => {
     const res = await fetch(`${apiBase}/gmail/status`)
@@ -2144,11 +2160,8 @@ function App() {
     window.open(url, '_blank', 'noopener,noreferrer')
   }
 
-  const loadSettings = async (): Promise<SettingsPayload> => {
-    const res = await fetch(`${apiBase}/settings`)
-    if (!res.ok) throw new Error('Failed to load settings')
-    const payload = (await res.json()) as SettingsPayload
-    const normalized: SettingsPayload = {
+  const normalizeSettingsPayload = (payload: SettingsPayload): SettingsPayload => {
+    return {
       ...payload,
       feature_ai_extractor_enabled: Boolean(payload.feature_ai_extractor_enabled),
       feature_semantic_enabled: Boolean(payload.feature_semantic_enabled),
@@ -2169,10 +2182,22 @@ function App() {
       resume_display_name: payload.resume_display_name ?? '',
       policy: normalizeDynamicPolicy(payload.policy ?? defaultPolicy, payload),
     }
+  }
+
+  const applySettingsBootstrapPayload = (payload: SettingsBootstrapPayload): SettingsPayload => {
+    const normalized = normalizeSettingsPayload(payload.settings)
     setSettings(normalized)
-    if (payload.policy_profile_selected && profileNames.includes(payload.policy_profile_selected as PolicyProfileName)) {
-      setSelectedProfileToApply(payload.policy_profile_selected as PolicyProfileName)
-      setLastAppliedProfile(payload.policy_profile_selected as PolicyProfileName)
+    setResumeAssets(payload.resumes ?? [])
+    setResumeSkillEdits(Object.fromEntries((payload.resumes ?? []).map((resume) => [resume.id, resume.skills_text ?? ''])))
+    setAttachmentFiles(payload.attachments ?? [])
+    setPendingSkills(payload.pending_skills ?? [])
+    setPendingJobIntentSignals(payload.pending_job_intent_signals ?? [])
+    setApprovedJobIntentSignals(payload.approved_job_intent_signals ?? [])
+    setSkillsLoading(false)
+    setJobIntentLoading(false)
+    if (payload.settings.policy_profile_selected && profileNames.includes(payload.settings.policy_profile_selected as PolicyProfileName)) {
+      setSelectedProfileToApply(payload.settings.policy_profile_selected as PolicyProfileName)
+      setLastAppliedProfile(payload.settings.policy_profile_selected as PolicyProfileName)
       return normalized
     }
     const detected = detectProfileFromPolicy(normalized.policy ?? defaultPolicy)
@@ -2183,61 +2208,33 @@ function App() {
     return normalized
   }
 
-  const loadResumes = async () => {
-    const res = await fetch(`${apiBase}/settings/resumes`)
-    if (!res.ok) throw new Error('Failed to load resumes')
-    const payload = (await res.json()) as ResumeAsset[]
-    setResumeAssets(payload)
-    setResumeSkillEdits(Object.fromEntries(payload.map((resume) => [resume.id, resume.skills_text ?? ''])))
-  }
-
-  const loadAttachmentFiles = async () => {
-    const res = await fetch(`${apiBase}/settings/attachments`)
-    if (!res.ok) throw new Error('Failed to load attachment files')
-    setAttachmentFiles((await res.json()) as AttachmentAsset[])
-  }
-
-  const loadPendingSkills = async () => {
-    const res = await fetch(`${apiBase}/settings/skills/pending`)
-    if (!res.ok) throw new Error('Failed to load pending skills')
-    setPendingSkills((await res.json()) as PendingSkill[])
-  }
-
-  const loadPendingJobIntentSignals = async () => {
-    const res = await fetch(`${apiBase}/settings/job-intent-learning/pending`)
-    if (!res.ok) throw new Error('Failed to load pending job-intent learning')
-    setPendingJobIntentSignals((await res.json()) as JobIntentLearningSignal[])
-  }
-
-  const loadApprovedJobIntentSignals = async () => {
-    const res = await fetch(`${apiBase}/settings/job-intent-learning/approved`)
-    if (!res.ok) throw new Error('Failed to load approved job-intent learning')
-    setApprovedJobIntentSignals((await res.json()) as JobIntentLearningSignal[])
-  }
-
-  const loadSkillUpgradeData = async () => {
+  const loadSettingsBootstrap = async (): Promise<SettingsPayload> => {
+    setSettingsBootstrapStatus('loading')
+    setSettingsBootstrapError('')
     setSkillsLoading(true)
-    try {
-      await loadPendingSkills()
-    } finally {
-      setSkillsLoading(false)
-    }
-  }
-
-  const loadJobIntentLearningData = async () => {
     setJobIntentLoading(true)
-    try {
-      await Promise.all([loadPendingJobIntentSignals(), loadApprovedJobIntentSignals()])
-    } finally {
+    const res = await fetch(`${apiBase}/settings/bootstrap`)
+    if (!res.ok) {
+      const message = 'Failed to load saved settings'
+      setSettingsBootstrapStatus('error')
+      setSettingsBootstrapError(message)
+      setSkillsLoading(false)
       setJobIntentLoading(false)
+      throw new Error(message)
     }
+    const payload = (await res.json()) as SettingsBootstrapPayload
+    const normalized = applySettingsBootstrapPayload(payload)
+    setSettingsBootstrapStatus('ready')
+    setHasLoadedSettingsBootstrap(true)
+    return normalized
   }
 
   const activeResume = resumeAssets.find((item) => item.is_current) ?? null
 
-  const loadPremiumNumbers = async (opts?: { append?: boolean; cursor?: number | null }) => {
+  const loadPremiumNumbers = async (opts?: { append?: boolean; cursor?: number | null; mailDate?: string | null }) => {
     const append = Boolean(opts?.append)
     const cursor = opts?.cursor ?? 0
+    const mailDate = opts?.mailDate ?? settings.mail_date
     const scope = premiumScopeFilter
     const requestId = premiumRequestTrackerRef.current + 1
     premiumRequestTrackerRef.current = requestId
@@ -2250,7 +2247,7 @@ function App() {
         cursor,
         limit: PREMIUM_PAGE_LIMIT,
         q: premiumSearch,
-        mailDate: settings.mail_date,
+        mailDate,
         opportunityStatus: opportunityStatusFilter,
         opportunitySource: opportunitySourceFilter,
       })
@@ -2545,25 +2542,31 @@ function App() {
     }, 200)
   }
 
-  useEffect(() => {
-    if (hasBootstrappedAppOnce) return
-    hasBootstrappedAppOnce = true
+  const retrySettingsBootstrap = async () => {
+    setError('')
+    try {
+      const normalizedSettings = await loadSettingsBootstrap()
+      await loadRecentRuns(normalizedSettings.mail_date ?? null)
+      await refreshVisibleCandidates(normalizedSettings.mail_date ?? null, { activeOnly: true, initialLoad: true })
+      await loadPremiumNumbers({ append: false, cursor: 0, mailDate: normalizedSettings.mail_date ?? null })
+      hasBootstrappedCandidatesRef.current = true
+    } catch {
+      // The bootstrap loader owns the user-facing error state for this path.
+    }
+  }
 
+  useEffect(() => {
     const bootstrap = async () => {
       try {
-        await Promise.all([
+        const [, , , normalizedSettings] = await Promise.all([
           loadStatus(),
-          loadResumes(),
-          loadAttachmentFiles(),
-          loadSkillUpgradeData(),
-          loadJobIntentLearningData(),
           loadAiStatus(),
           loadTelegramStatus(),
+          loadSettingsBootstrap(),
         ])
-        const normalizedSettings = await loadSettings()
         await loadRecentRuns(normalizedSettings.mail_date ?? null)
         await refreshVisibleCandidates(normalizedSettings.mail_date ?? null, { activeOnly: true, initialLoad: true })
-        await loadPremiumNumbers({ append: false, cursor: 0 })
+        await loadPremiumNumbers({ append: false, cursor: 0, mailDate: normalizedSettings.mail_date ?? null })
         hasBootstrappedCandidatesRef.current = true
       } catch (e) {
         setError((e as Error).message)
@@ -2573,13 +2576,13 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (!hasBootstrappedCandidatesRef.current) return
+    if (!hasBootstrappedCandidatesRef.current || !settingsBootstrapReady) return
     refreshVisibleCandidates(settings.mail_date ?? null, { activeOnly: true, includeLoaded: true }).catch((e) => setError((e as Error).message))
     loadRecentRuns(settings.mail_date ?? null).catch((e) => setError((e as Error).message))
-  }, [settings.mail_date])
+  }, [settings.mail_date, settingsBootstrapReady])
 
   useEffect(() => {
-    if (!hasBootstrappedCandidatesRef.current) return
+    if (!hasBootstrappedCandidatesRef.current || !settingsBootstrapReady) return
     const key = bucketForPage(activePage)
     if (!key) return
     if (bucketMeta[key].loaded) return
@@ -2589,13 +2592,13 @@ function App() {
       limit: INITIAL_BUCKET_LIMIT,
       markRefreshing: true,
     }).catch((e) => setError((e as Error).message))
-  }, [activePage, settings.mail_date, bucketMeta.failed.loaded, bucketMeta.needs_review.loaded, bucketMeta.approved_sent.loaded])
+  }, [activePage, settings.mail_date, bucketMeta.failed.loaded, bucketMeta.needs_review.loaded, bucketMeta.approved_sent.loaded, settingsBootstrapReady])
 
   useEffect(() => {
-    if (!hasBootstrappedCandidatesRef.current) return
+    if (!hasBootstrappedCandidatesRef.current || !settingsBootstrapReady) return
     if (activePage !== 'premium_numbers') return
     loadPremiumNumbers({ append: false, cursor: 0 }).catch((e) => setPremiumError((e as Error).message))
-  }, [activePage, premiumScopeFilter, premiumSearch, settings.mail_date, opportunityStatusFilter, opportunitySourceFilter])
+  }, [activePage, premiumScopeFilter, premiumSearch, settings.mail_date, opportunityStatusFilter, opportunitySourceFilter, settingsBootstrapReady])
 
   useEffect(() => {
     loadProductivityAnalytics(timeRange).catch((e) => setError((e as Error).message))
@@ -2695,7 +2698,7 @@ function App() {
         body: JSON.stringify(settings),
       })
       if (!res.ok) throw new Error('Failed to save settings')
-      await loadSettings()
+      await loadSettingsBootstrap()
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -2714,7 +2717,7 @@ function App() {
       if (!res.ok) throw new Error('Failed to upload resume')
       setResumeFile(null)
       setResumeSkillsInput('')
-      await loadResumes()
+      await loadSettingsBootstrap()
     } catch (e) {
       setError((e as Error).message)
     }
@@ -2729,7 +2732,7 @@ function App() {
         body: JSON.stringify({ skills_text: resumeSkillEdits[resumeId] ?? '' }),
       })
       if (!res.ok) throw new Error('Failed to save resume skills')
-      await loadResumes()
+      await loadSettingsBootstrap()
     } catch (e) {
       setError((e as Error).message)
     }
@@ -2744,7 +2747,7 @@ function App() {
         body: JSON.stringify({ is_enabled: isEnabled }),
       })
       if (!res.ok) throw new Error('Failed to update resume')
-      await loadResumes()
+      await loadSettingsBootstrap()
     } catch (e) {
       setError((e as Error).message)
     }
@@ -2755,7 +2758,7 @@ function App() {
     try {
       const res = await fetch(`${apiBase}/settings/resumes/${resumeId}`, { method: 'DELETE' })
       if (!res.ok) throw new Error('Failed to delete resume')
-      await loadResumes()
+      await loadSettingsBootstrap()
     } catch (e) {
       setError((e as Error).message)
     }
@@ -2772,7 +2775,7 @@ function App() {
       const res = await fetch(`${apiBase}/settings/attachments`, { method: 'POST', body: fd })
       if (!res.ok) throw new Error('Failed to upload attachment files')
       setAttachmentUploadFiles([])
-      await loadAttachmentFiles()
+      await loadSettingsBootstrap()
     } catch (e) {
       setError((e as Error).message)
     }
@@ -2787,7 +2790,7 @@ function App() {
         body: JSON.stringify({ is_enabled: isEnabled }),
       })
       if (!res.ok) throw new Error('Failed to update attachment file')
-      await loadAttachmentFiles()
+      await loadSettingsBootstrap()
     } catch (e) {
       setError((e as Error).message)
     }
@@ -2798,7 +2801,7 @@ function App() {
     try {
       const res = await fetch(`${apiBase}/settings/attachments/${attachmentId}`, { method: 'DELETE' })
       if (!res.ok) throw new Error('Failed to delete attachment file')
-      await loadAttachmentFiles()
+      await loadSettingsBootstrap()
     } catch (e) {
       setError((e as Error).message)
     }
@@ -2814,7 +2817,7 @@ function App() {
         body: JSON.stringify({ skill_name: skill.skill_name }),
       })
       if (!res.ok) throw new Error('Failed to approve skill')
-      await loadSkillUpgradeData()
+      await loadSettingsBootstrap()
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -2831,7 +2834,7 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
       })
       if (!res.ok) throw new Error('Failed to approve all skills')
-      await loadSkillUpgradeData()
+      await loadSettingsBootstrap()
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -2849,7 +2852,7 @@ function App() {
         body: JSON.stringify({ skill_name: skill.skill_name }),
       })
       if (!res.ok) throw new Error('Failed to dismiss skill')
-      await loadSkillUpgradeData()
+      await loadSettingsBootstrap()
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -2867,7 +2870,7 @@ function App() {
         body: JSON.stringify({ phrase: signal.phrase, polarity: signal.polarity }),
       })
       if (!res.ok) throw new Error('Failed to approve job-intent signal')
-      await loadJobIntentLearningData()
+      await loadSettingsBootstrap()
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -2885,7 +2888,7 @@ function App() {
         body: JSON.stringify({ phrase: signal.phrase, polarity: signal.polarity }),
       })
       if (!res.ok) throw new Error('Failed to dismiss job-intent signal')
-      await loadJobIntentLearningData()
+      await loadSettingsBootstrap()
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -2902,7 +2905,7 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
       })
       if (!res.ok) throw new Error('Failed to approve all job-intent signals')
-      await loadJobIntentLearningData()
+      await loadSettingsBootstrap()
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -2950,7 +2953,7 @@ function App() {
       await refreshVisibleCandidates(settings.mail_date ?? null, { activeOnly: false })
       await loadProductivityAnalytics(timeRange)
       await loadRecentRuns(settings.mail_date ?? null)
-      await loadJobIntentLearningData()
+      await loadSettingsBootstrap()
     } catch (e) {
       if ((e as Error).name === 'AbortError') {
         if (!status?.authenticated) {
@@ -3411,7 +3414,7 @@ function App() {
       setError('Failed to save query bucket')
       return
     }
-    await loadSettings()
+    await loadSettingsBootstrap()
   }
 
   const addEmployerDomainChip = (raw: string) => {
@@ -3451,9 +3454,10 @@ function App() {
           <div className="topSearch">
             <input
               className="search"
-              value={settings.gmail_query}
+              value={hasLoadedSettingsBootstrap ? settings.gmail_query : ''}
               onChange={(e) => setSettings({ ...settings, gmail_query: e.target.value })}
-              placeholder="Search Dashboard..."
+              placeholder={hasLoadedSettingsBootstrap ? 'Search Dashboard...' : 'Loading saved settings...'}
+              disabled={!hasLoadedSettingsBootstrap}
             />
           </div>
           <div className="topActions">
@@ -3512,6 +3516,7 @@ function App() {
                 value={settings.mail_date ?? ''}
                 onChange={(e) => setSettings({ ...settings, mail_date: e.target.value || null })}
                 aria-label="Mail date filter"
+                disabled={!hasLoadedSettingsBootstrap}
               />
             </span>
             {settings.mail_date ? (
@@ -3649,7 +3654,39 @@ function App() {
             </section>
           ) : null}
 
-          {activePage === 'run_queue' ? (
+          {settingsBootstrapError ? (
+            <section className="card">
+              <h2>Settings Load Status</h2>
+              <p className="errorMessage">{settingsBootstrapError}</p>
+              {!settingsBootstrapReady ? (
+                <button type="button" onClick={() => retrySettingsBootstrap().catch(() => {
+                  // The retry helper owns bootstrap-specific error state.
+                })}>
+                  Retry Loading Settings
+                </button>
+              ) : null}
+            </section>
+          ) : null}
+
+          {activePage === 'run_queue' && !hasLoadedSettingsBootstrap ? (
+            <section className="card pageSection">
+              <h2>Settings Bootstrap</h2>
+              <p className="subtle">
+                {settingsBootstrapStatus === 'loading'
+                  ? 'Loading saved settings, resumes, attachments, and learning data...'
+                  : 'Saved settings are not loaded yet. Retry loading settings to avoid showing empty defaults.'}
+              </p>
+              {settingsBootstrapStatus === 'error' ? (
+                <button type="button" onClick={() => retrySettingsBootstrap().catch(() => {
+                  // The retry helper owns bootstrap-specific error state.
+                })}>
+                  Retry Loading Settings
+                </button>
+              ) : null}
+            </section>
+          ) : null}
+
+          {activePage === 'run_queue' && hasLoadedSettingsBootstrap ? (
             <form className="configGrid runQueueGrid" onSubmit={saveSettings}>
               <section className="card">
                 <h2>Gmail Access</h2>

@@ -17,6 +17,60 @@ function makeResponse(payload: unknown): MockResponse {
   }
 }
 
+function makeSettings(overrides?: Record<string, unknown>) {
+  return {
+    enabled: true,
+    gmail_query: 'is:unread',
+    default_gmail_query: 'is:unread',
+    saved_gmail_queries: [],
+    mail_date: null,
+    default_date_mode: 'today',
+    min_salary: null,
+    accepted_locations: [],
+    visa_required_allowed: false,
+    remote_preference: 'any',
+    role_keywords: [],
+    must_have_skills: [],
+    employer_domains: [],
+    free_text_guidance: '',
+    qualification_threshold: 0.6,
+    feature_auto_polling: false,
+    feature_auto_poll_interval_minutes: 10,
+    feature_nvoids_enabled: true,
+    feature_nvoids_auto_sync: false,
+    feature_nvoids_poll_interval_minutes: 30,
+    nvoids_batch_limit: 10,
+    nvoids_locations: [],
+    feature_auto_send: false,
+    feature_retry_queue: false,
+    feature_ai_enabled: false,
+    feature_ai_extractor_enabled: false,
+    feature_semantic_enabled: false,
+    draft_text_size: 'normal',
+    fallback_draft_template: '',
+    signature_name: '',
+    signature_phone: '',
+    signature_email: '',
+    preferred_employer_cc_email: '',
+    resume_display_name: '',
+    policy: null,
+    ...overrides,
+  }
+}
+
+function makeBootstrapPayload(overrides?: { settings?: Record<string, unknown> }) {
+  return {
+    settings: makeSettings(overrides?.settings),
+    resumes: [],
+    attachments: [],
+    pending_skills: [],
+    pending_job_intent_signals: [],
+    approved_job_intent_signals: [],
+    loaded_at: '2026-07-09T00:00:00Z',
+    owner_id: 'default-owner',
+  }
+}
+
 async function flushPromises(iterations = 1): Promise<void> {
   for (let index = 0; index < iterations; index += 1) {
     await Promise.resolve()
@@ -41,50 +95,7 @@ describe('Recent Runs skipped-item drill-down', () => {
         if (url.endsWith('/ai/status')) return makeResponse({ configured: true, connected: true, running: false, provider: 'mock', model: 'mock', detail: 'ok', last_error: null, last_started_at: null, last_finished_at: null, last_duration_ms: null, last_draft_source: null })
         if (url.endsWith('/telegram/status')) return makeResponse({ enabled: false, polling: false, alerts_enabled: false, authorized_chats: 0, detail: 'off' })
         if (url.endsWith('/gmail/oauth/url')) return makeResponse({ authorization_url: null })
-        if (url.endsWith('/settings')) {
-          return makeResponse({
-            enabled: true,
-            gmail_query: 'is:unread',
-            default_gmail_query: 'is:unread',
-            saved_gmail_queries: [],
-            mail_date: null,
-            default_date_mode: 'today',
-            min_salary: null,
-            accepted_locations: [],
-            visa_required_allowed: false,
-            remote_preference: 'any',
-            role_keywords: [],
-            must_have_skills: [],
-            employer_domains: [],
-            free_text_guidance: '',
-            qualification_threshold: 0.6,
-            feature_auto_polling: false,
-            feature_auto_poll_interval_minutes: 10,
-            feature_nvoids_enabled: true,
-            feature_nvoids_auto_sync: false,
-            feature_nvoids_poll_interval_minutes: 30,
-            nvoids_batch_limit: 10,
-            nvoids_locations: [],
-            feature_auto_send: false,
-            feature_retry_queue: false,
-            feature_ai_enabled: false,
-            feature_ai_extractor_enabled: false,
-            feature_semantic_enabled: false,
-            draft_text_size: 'normal',
-            fallback_draft_template: '',
-            signature_name: '',
-            signature_phone: '',
-            signature_email: '',
-            preferred_employer_cc_email: '',
-            resume_display_name: '',
-            policy: null,
-          })
-        }
-        if (url.endsWith('/settings/resumes')) return makeResponse([])
-        if (url.endsWith('/settings/attachments')) return makeResponse([])
-        if (url.endsWith('/settings/skills/pending')) return makeResponse([])
-        if (url.endsWith('/settings/job-intent-learning/pending')) return makeResponse([])
-        if (url.endsWith('/settings/job-intent-learning/approved')) return makeResponse([])
+        if (url.endsWith('/settings/bootstrap')) return makeResponse(makeBootstrapPayload())
         if (url.includes('/recent-runs/gmail_sync%3Abatch-1/items')) {
           return makeResponse({
             items: [
@@ -242,50 +253,9 @@ describe('Recent Runs skipped-item drill-down', () => {
         if (url.endsWith('/ai/status')) return makeResponse({ configured: true, connected: true, running: false, provider: 'mock', model: 'mock', detail: 'ok', last_error: null, last_started_at: null, last_finished_at: null, last_duration_ms: null, last_draft_source: null })
         if (url.endsWith('/telegram/status')) return makeResponse({ enabled: false, polling: false, alerts_enabled: false, authorized_chats: 0, detail: 'off' })
         if (url.endsWith('/gmail/oauth/url')) return makeResponse({ authorization_url: null })
-        if (url.endsWith('/settings')) {
-          return makeResponse({
-            enabled: true,
-            gmail_query: 'is:unread',
-            default_gmail_query: 'is:unread',
-            saved_gmail_queries: [],
-            mail_date: '2026-07-08',
-            default_date_mode: 'today',
-            min_salary: null,
-            accepted_locations: [],
-            visa_required_allowed: false,
-            remote_preference: 'any',
-            role_keywords: [],
-            must_have_skills: [],
-            employer_domains: [],
-            free_text_guidance: '',
-            qualification_threshold: 0.6,
-            feature_auto_polling: false,
-            feature_auto_poll_interval_minutes: 10,
-            feature_nvoids_enabled: true,
-            feature_nvoids_auto_sync: false,
-            feature_nvoids_poll_interval_minutes: 30,
-            nvoids_batch_limit: 10,
-            nvoids_locations: [],
-            feature_auto_send: false,
-            feature_retry_queue: false,
-            feature_ai_enabled: false,
-            feature_ai_extractor_enabled: false,
-            feature_semantic_enabled: false,
-            draft_text_size: 'normal',
-            fallback_draft_template: '',
-            signature_name: '',
-            signature_phone: '',
-            signature_email: '',
-            preferred_employer_cc_email: '',
-            resume_display_name: '',
-            policy: null,
-          })
+        if (url.endsWith('/settings/bootstrap')) {
+          return makeResponse(makeBootstrapPayload({ settings: { mail_date: '2026-07-08' } }))
         }
-        if (url.endsWith('/settings/resumes')) return makeResponse([])
-        if (url.endsWith('/settings/attachments')) return makeResponse([])
-        if (url.endsWith('/settings/skills/pending')) return makeResponse([])
-        if (url.endsWith('/settings/job-intent-learning/pending')) return makeResponse([])
-        if (url.endsWith('/settings/job-intent-learning/approved')) return makeResponse([])
         if (url.includes('/recent-runs/')) return makeResponse({ items: [], next_cursor: null, has_next: false })
         if (url.includes('/recent-runs')) return makeResponse({ items: [], next_cursor: null, has_next: false })
         if (url.includes('/candidates?')) return makeResponse({ items: [], next_cursor: null, has_next: false })
