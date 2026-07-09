@@ -393,6 +393,479 @@ class ScoringRuntimeServiceTests(unittest.TestCase):
         breakdown = json.loads(selection.picker_breakdown_json or "{}")
         self.assertIn("Oracle", breakdown.get("matched_priority_skills", []))
         self.assertGreater(float(breakdown.get("partial_credit_score", 0.0)), 0.0)
+        self.assertEqual(breakdown.get("mandatory_gate_status"), "needs_review")
+
+    def test_mandatory_pass_beats_slightly_higher_broad_fit(self) -> None:
+        service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1, 0.2], "hash")))
+        parsed = {
+            "role": "Java Full Stack Developer",
+            "skills_text": "Java, Spring Boot, Oracle, PL/SQL",
+            "salary_text": "",
+            "location": "Remote",
+        }
+        body = "Required Qualifications:\nJava\nSpring Boot\nOracle\nPL/SQL"
+
+        class Settings:
+            feature_semantic_enabled = False
+            role_keywords = ""
+            free_text_guidance = ""
+
+        class Resume:
+            def __init__(self, rid: int, name: str, skills: str):
+                self.id = rid
+                self.file_name = name
+                self.skills_text = skills
+                self.semantic_embedding = None
+                self.file_path = name
+                self.is_enabled = True
+                self.is_current = False
+
+        broad_fit = Resume(1, "broad_fit.docx", "Java, Spring Boot, React, AWS, CI/CD, Microservices")
+        mandatory_fit = Resume(2, "mandatory_fit.docx", "Java, Spring Boot, Oracle, PL/SQL")
+
+        selection = service.select_best_resume_match(
+            subject="",
+            body=body,
+            parsed=parsed,
+            user_settings=Settings(),
+            email_row=None,
+            resumes=[broad_fit, mandatory_fit],
+            fallback_resume=broad_fit,
+        )
+        breakdown = json.loads(selection.picker_breakdown_json or "{}")
+        self.assertEqual(selection.resume.file_name, "mandatory_fit.docx")
+        self.assertEqual(breakdown.get("mandatory_gate_status"), "pass")
+        self.assertEqual(breakdown.get("mandatory_missing_skills"), [])
+
+    def test_alias_based_mandatory_gate_passes_reactive_and_procedural_sql(self) -> None:
+        service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1, 0.2], "hash")))
+        parsed = {
+            "role": "Java Developer",
+            "skills_text": "Spring Reactive, Procedural SQL, Java",
+            "salary_text": "",
+            "location": "Remote",
+        }
+        body = "Required Skills:\nSpring Reactive\nProcedural SQL\nJava"
+
+        class Settings:
+            feature_semantic_enabled = False
+            role_keywords = ""
+            free_text_guidance = ""
+
+        class Resume:
+            def __init__(self, rid: int, name: str, skills: str):
+                self.id = rid
+                self.file_name = name
+                self.skills_text = skills
+                self.semantic_embedding = None
+                self.file_path = name
+                self.is_enabled = True
+                self.is_current = False
+
+        reactive_resume = Resume(1, "reactive_resume.docx", "Java, Spring WebFlux, PL/SQL, Stored Procedures")
+
+        selection = service.select_best_resume_match(
+            subject="",
+            body=body,
+            parsed=parsed,
+            user_settings=Settings(),
+            email_row=None,
+            resumes=[reactive_resume],
+            fallback_resume=reactive_resume,
+        )
+        breakdown = json.loads(selection.picker_breakdown_json or "{}")
+        evidence = breakdown.get("mandatory_evidence", {})
+        self.assertEqual(breakdown.get("mandatory_gate_status"), "pass")
+        self.assertEqual(breakdown.get("mandatory_missing_skills"), [])
+        self.assertEqual(evidence["Spring Reactive"]["matched_alias"], "spring webflux")
+        self.assertEqual(evidence["Procedural SQL"]["matched_alias"], "pl/sql")
+
+    def test_oracle_db_does_not_satisfy_oci_requirement(self) -> None:
+        service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1, 0.2], "hash")))
+        parsed = {
+            "role": "Cloud Security Engineer",
+            "skills_text": "Oracle Cloud Infrastructure (OCI), Terraform, PowerShell",
+            "salary_text": "",
+            "location": "Remote",
+        }
+        body = "Required Skills:\nOracle Cloud Infrastructure (OCI)\nTerraform\nPowerShell"
+
+        class Settings:
+            feature_semantic_enabled = False
+            role_keywords = ""
+            free_text_guidance = ""
+
+        class Resume:
+            def __init__(self, rid: int, name: str, skills: str):
+                self.id = rid
+                self.file_name = name
+                self.skills_text = skills
+                self.semantic_embedding = None
+                self.file_path = name
+                self.is_enabled = True
+                self.is_current = False
+
+        oracle_db_resume = Resume(1, "oracle_db.docx", "Oracle Database, PL/SQL, Terraform, PowerShell")
+
+        selection = service.select_best_resume_match(
+            subject="",
+            body=body,
+            parsed=parsed,
+            user_settings=Settings(),
+            email_row=None,
+            resumes=[oracle_db_resume],
+            fallback_resume=oracle_db_resume,
+        )
+        breakdown = json.loads(selection.picker_breakdown_json or "{}")
+        self.assertIn("Oracle Cloud Infrastructure (OCI)", breakdown.get("mandatory_missing_skills", []))
+        self.assertEqual(breakdown.get("mandatory_gate_status"), "fail")
+
+    def test_sspm_security_jd_prefers_security_resume(self) -> None:
+        service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1, 0.2], "hash")))
+        parsed = {
+            "role": "Cloud Security Engineer",
+            "skills_text": "SaaS Security Posture Management, AppOmni, CASB, Terraform, PowerShell",
+            "salary_text": "",
+            "location": "Remote",
+        }
+        body = "Must Have:\nSaaS Security Posture Management\nAppOmni\nCASB\nTerraform\nPowerShell"
+
+        class Settings:
+            feature_semantic_enabled = False
+            role_keywords = ""
+            free_text_guidance = ""
+
+        class Resume:
+            def __init__(self, rid: int, name: str, skills: str):
+                self.id = rid
+                self.file_name = name
+                self.skills_text = skills
+                self.semantic_embedding = None
+                self.file_path = name
+                self.is_enabled = True
+                self.is_current = False
+
+        unrelated_resume = Resume(1, "oracle_java.docx", "Oracle, Java, Spring Boot")
+        security_resume = Resume(2, "security_resume.docx", "SSPM, AppOmni, CASB, Terraform, PowerShell")
+
+        selection = service.select_best_resume_match(
+            subject="",
+            body=body,
+            parsed=parsed,
+            user_settings=Settings(),
+            email_row=None,
+            resumes=[unrelated_resume, security_resume],
+            fallback_resume=unrelated_resume,
+        )
+        breakdown = json.loads(selection.picker_breakdown_json or "{}")
+        self.assertEqual(selection.resume.file_name, "security_resume.docx")
+        self.assertEqual(breakdown.get("mandatory_gate_status"), "pass")
+
+    def test_all_fail_fallback_and_candidate_rankings_include_gate_details(self) -> None:
+        service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1, 0.2], "hash")))
+        parsed = {
+            "role": "Cloud Security Engineer",
+            "skills_text": "SaaS Security Posture Management, AppOmni, CASB",
+            "salary_text": "",
+            "location": "Remote",
+        }
+        body = "Mandatory Skills:\nSaaS Security Posture Management\nAppOmni\nCASB"
+
+        class Settings:
+            feature_semantic_enabled = False
+            role_keywords = ""
+            free_text_guidance = ""
+
+        class Resume:
+            def __init__(self, rid: int, name: str, skills: str):
+                self.id = rid
+                self.file_name = name
+                self.skills_text = skills
+                self.semantic_embedding = None
+                self.file_path = name
+                self.is_enabled = True
+                self.is_current = False
+
+        resume_a = Resume(1, "resume_a.docx", "Java, Spring Boot")
+        resume_b = Resume(2, "resume_b.docx", "Terraform")
+
+        selection = service.select_best_resume_match(
+            subject="",
+            body=body,
+            parsed=parsed,
+            user_settings=Settings(),
+            email_row=None,
+            resumes=[resume_a, resume_b],
+            fallback_resume=resume_a,
+        )
+        rankings = json.loads(selection.candidate_rankings_json or "{}").get("rankings", [])
+        self.assertEqual(selection.mandatory_gate_status, "fail")
+        self.assertTrue(rankings)
+        self.assertIn("mandatory_gate_status", rankings[0]["picker_breakdown"])
+        self.assertIn("mandatory_missing_skills", rankings[0]["picker_breakdown"])
+
+    def test_grouped_skills_decompose_for_raw_overlap_without_duplicate_missing_phrase(self) -> None:
+        service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1, 0.2], "hash")))
+        overlap, matched, missing = service._raw_skill_overlap(
+            "Spring Boot & Microservices, Docker & Kubernetes, SQL/NoSQL Databases",
+            "Spring Boot, Microservices, Docker, Kubernetes, SQL",
+        )
+        self.assertAlmostEqual(overlap, 5 / 6)
+        self.assertIn("spring boot", matched)
+        self.assertIn("microservices", matched)
+        self.assertIn("docker", matched)
+        self.assertIn("kubernetes", matched)
+        self.assertIn("sql", matched)
+        self.assertIn("nosql", missing)
+        self.assertNotIn("spring boot & microservices", missing)
+        self.assertNotIn("docker & kubernetes", missing)
+        self.assertNotIn("sql/nosql databases", missing)
+
+    def test_preferred_grouped_skills_do_not_create_mandatory_fail(self) -> None:
+        service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1, 0.2], "hash")))
+        parsed = {
+            "role": "Java Developer",
+            "skills_text": "Java, Spring Boot & Microservices, REST APIs, Docker & Kubernetes",
+            "salary_text": "",
+            "location": "Remote",
+        }
+        body = (
+            "Required Skills:\n"
+            "Java\n"
+            "Spring Boot & Microservices\n"
+            "REST APIs\n\n"
+            "Preferred Skills:\n"
+            "Docker & Kubernetes\n"
+            "Maven/Gradle\n"
+            "SQL/NoSQL Databases"
+        )
+
+        class Settings:
+            feature_semantic_enabled = False
+            role_keywords = ""
+            free_text_guidance = ""
+
+        class Resume:
+            def __init__(self, rid: int, name: str, skills: str):
+                self.id = rid
+                self.file_name = name
+                self.skills_text = skills
+                self.semantic_embedding = None
+                self.file_path = name
+                self.is_enabled = True
+                self.is_current = False
+
+        resume = Resume(1, "java_resume.docx", "Java, Spring Boot, Microservices, REST APIs")
+
+        selection = service.select_best_resume_match(
+            subject="",
+            body=body,
+            parsed=parsed,
+            user_settings=Settings(),
+            email_row=None,
+            resumes=[resume],
+            fallback_resume=resume,
+        )
+        breakdown = json.loads(selection.picker_breakdown_json or "{}")
+        self.assertEqual(breakdown.get("mandatory_gate_status"), "pass")
+        self.assertNotIn("Docker", breakdown.get("mandatory_missing_skills", []))
+        self.assertNotIn("Kubernetes", breakdown.get("mandatory_missing_skills", []))
+
+    def test_email_4108_style_all_fail_selects_highest_failed_candidate_with_warning(self) -> None:
+        service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1, 0.2], "hash")))
+        parsed = {
+            "role": "Java Lead Developer",
+            "skills_text": (
+                "Java, Spring Boot & Microservices, GitLab, CI/CD Pipeline Implementation, "
+                "Twistlock (Prisma Cloud) Security Scanning, REST APIs, Agile/Scrum Methodologies, "
+                "P&C Knowledge, AWS Cloud Services, Docker & Kubernetes, Maven/Gradle, SQL/NoSQL Databases"
+            ),
+            "salary_text": "",
+            "location": "Remote",
+        }
+        body = (
+            "Mandatory Skills:\n"
+            "Java (Java 8+)\n"
+            "Spring Boot & Microservices\n"
+            "GitLab\n"
+            "CI/CD Pipeline Implementation\n"
+            "Twistlock (Prisma Cloud) Security Scanning\n"
+            "REST APIs\n"
+            "Agile/Scrum Methodologies\n"
+            "P&C Knowledge\n\n"
+            "Preferred Skills:\n"
+            "AWS Cloud Services\n"
+            "Docker & Kubernetes\n"
+            "Maven/Gradle\n"
+            "SQL/NoSQL Databases"
+        )
+
+        class Settings:
+            feature_semantic_enabled = False
+            role_keywords = ""
+            free_text_guidance = ""
+
+        class Resume:
+            def __init__(self, rid: int, name: str, skills: str):
+                self.id = rid
+                self.file_name = name
+                self.skills_text = skills
+                self.semantic_embedding = None
+                self.file_path = name
+                self.is_enabled = True
+                self.is_current = False
+
+        lower_failed = Resume(
+            1,
+            "JJTNG.docx",
+            "Java, Spring Boot, Microservices, REST APIs, AWS, Docker, Kubernetes, Maven",
+        )
+        higher_failed = Resume(
+            2,
+            "JJAS.docx",
+            "Java, Spring Boot, Microservices, REST APIs, Agile, Scrum, AWS, Docker, Kubernetes, Maven, SQL",
+        )
+
+        selection = service.select_best_resume_match(
+            subject="",
+            body=body,
+            parsed=parsed,
+            user_settings=Settings(),
+            email_row=None,
+            resumes=[lower_failed, higher_failed],
+            fallback_resume=lower_failed,
+        )
+        breakdown = json.loads(selection.picker_breakdown_json or "{}")
+        rankings = json.loads(selection.candidate_rankings_json or "{}").get("rankings", [])
+        self.assertEqual(selection.resume.file_name, "JJAS.docx")
+        self.assertEqual(selection.mandatory_gate_status, "fail")
+        self.assertEqual(breakdown.get("selection_status"), "needs_review")
+        self.assertIn("closest available resume selected", selection.selection_reason or "")
+        self.assertIn("new resume generation may be needed", selection.selection_reason or "")
+        self.assertIn("GitLab", breakdown.get("mandatory_missing_skills", []))
+        self.assertIn("Twistlock (Prisma Cloud) Security Scanning", breakdown.get("mandatory_missing_skills", []))
+        self.assertIn("P&C Knowledge", breakdown.get("mandatory_missing_skills", []))
+        self.assertTrue(rankings)
+        self.assertEqual(rankings[0]["resume_file_name"], "JJAS.docx")
+
+    def test_gitlab_twistlock_and_pc_do_not_collapse_to_generic_equivalents(self) -> None:
+        service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1, 0.2], "hash")))
+        parsed = {
+            "role": "Java Lead Developer",
+            "skills_text": "GitLab CI/CD Pipeline Implementation, Twistlock (Prisma Cloud) Security Scanning, P&C Knowledge",
+            "salary_text": "",
+            "location": "Remote",
+        }
+        body = (
+            "Required Skills:\n"
+            "GitLab CI/CD Pipeline Implementation\n"
+            "Twistlock (Prisma Cloud) Security Scanning\n"
+            "P&C Knowledge"
+        )
+
+        class Settings:
+            feature_semantic_enabled = False
+            role_keywords = ""
+            free_text_guidance = ""
+
+        class Resume:
+            def __init__(self, rid: int, name: str, skills: str):
+                self.id = rid
+                self.file_name = name
+                self.skills_text = skills
+                self.semantic_embedding = None
+                self.file_path = name
+                self.is_enabled = True
+                self.is_current = False
+
+        generic_resume = Resume(
+            1,
+            "generic_resume.docx",
+            "Jenkins CI/CD, Security Scanning, Insurance Domain",
+        )
+
+        selection = service.select_best_resume_match(
+            subject="",
+            body=body,
+            parsed=parsed,
+            user_settings=Settings(),
+            email_row=None,
+            resumes=[generic_resume],
+            fallback_resume=generic_resume,
+        )
+        breakdown = json.loads(selection.picker_breakdown_json or "{}")
+        self.assertEqual(breakdown.get("mandatory_gate_status"), "fail")
+        self.assertIn("GitLab CI/CD Pipeline Implementation", breakdown.get("mandatory_missing_skills", []))
+        self.assertIn("Twistlock (Prisma Cloud) Security Scanning", breakdown.get("mandatory_missing_skills", []))
+        self.assertIn("P&C Knowledge", breakdown.get("mandatory_missing_skills", []))
+
+    def test_fail_group_prefers_highest_final_score_over_higher_coverage(self) -> None:
+        service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1, 0.2], "hash")))
+        parsed = {
+            "role": "Java Lead Developer",
+            "skills_text": (
+                "Java, Spring Boot & Microservices, GitLab CI/CD Pipeline Implementation, "
+                "Twistlock (Prisma Cloud) Security Scanning, P&C Knowledge, REST APIs, Agile/Scrum Methodologies, "
+                "AWS Cloud Services, Docker & Kubernetes"
+            ),
+            "salary_text": "",
+            "location": "Remote",
+        }
+        body = (
+            "Mandatory Skills:\n"
+            "Java\n"
+            "Spring Boot & Microservices\n"
+            "GitLab CI/CD Pipeline Implementation\n"
+            "Twistlock (Prisma Cloud) Security Scanning\n"
+            "P&C Knowledge\n"
+            "REST APIs\n"
+            "Agile/Scrum Methodologies\n\n"
+            "Preferred Skills:\n"
+            "AWS Cloud Services\n"
+            "Docker & Kubernetes"
+        )
+
+        class Settings:
+            feature_semantic_enabled = False
+            role_keywords = ""
+            free_text_guidance = ""
+
+        class Resume:
+            def __init__(self, rid: int, name: str, skills: str):
+                self.id = rid
+                self.file_name = name
+                self.skills_text = skills
+                self.semantic_embedding = None
+                self.file_path = name
+                self.is_enabled = True
+                self.is_current = False
+
+        higher_coverage_lower_score = Resume(
+            1,
+            "coverage_first.docx",
+            "Java, Spring Boot, Microservices, REST APIs",
+        )
+        lower_coverage_higher_score = Resume(
+            2,
+            "score_first.docx",
+            "Java, Spring Boot, Microservices, REST APIs, Agile, Scrum, AWS, Docker, Kubernetes",
+        )
+
+        selection = service.select_best_resume_match(
+            subject="",
+            body=body,
+            parsed=parsed,
+            user_settings=Settings(),
+            email_row=None,
+            resumes=[higher_coverage_lower_score, lower_coverage_higher_score],
+            fallback_resume=higher_coverage_lower_score,
+        )
+        rankings = json.loads(selection.candidate_rankings_json or "{}").get("rankings", [])
+        self.assertEqual(selection.mandatory_gate_status, "fail")
+        self.assertEqual(selection.resume.file_name, "score_first.docx")
+        self.assertTrue(rankings)
+        self.assertEqual(rankings[0]["resume_file_name"], "score_first.docx")
+        self.assertGreater(rankings[0]["final_resume_score"], rankings[1]["final_resume_score"])
 
     def test_partial_credit_scores_concepts_and_awareness_below_direct(self) -> None:
         service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1], "hash")))

@@ -9,14 +9,20 @@ from typing import Any, Callable
 
 from app.ai.resume_context import extract_resume_context
 from app.models import RecruiterEmail, ResumeAsset, UserSettings
-from app.phase0 import ai_assist_score
+from app.parsing.skill_audit import audit_skills_text
+from app.phase0 import ai_assist_score, build_skill_source_sections, slice_jd_sections
 from app.semantic.embeddings_service import embedding_from_json, embedding_to_json
 from app.semantic.ranking import blend_scores, clamp01, semantic_similarity
 from app.skill_taxonomy import (
+    aggregate_jd_skill_evidence,
     build_semantic_skill_summary,
     compute_intent_weighted_match,
     detect_role_family,
+    extract_jd_skill_evidence,
     extract_taxonomy_skills,
+    load_skill_taxonomy,
+    normalize_skill_token,
+    normalize_taxonomy_text,
     score_taxonomy_skills,
 )
 
@@ -54,6 +60,8 @@ class ResumeMatchSelection:
     email_embedding_json: str | None
     resume_embedding_json: str | None
     semantic_diag: SemanticDiagnostics
+    mandatory_gate_status: str = "not_applicable"
+    mandatory_coverage: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -61,6 +69,27 @@ class PrioritySkillRule:
     canonical_name: str
     aliases: tuple[str, ...]
     weight: float
+
+
+@dataclass(frozen=True)
+class MandatorySkillRule:
+    canonical_name: str
+    aliases: tuple[str, ...]
+    source: str
+    buckets: tuple[str, ...] = ()
+    critical: bool = False
+
+
+@dataclass(frozen=True)
+class MandatorySkillGateResult:
+    status: str
+    coverage: float
+    required_skills: tuple[str, ...]
+    matched_required_skills: tuple[str, ...]
+    missing_required_skills: tuple[str, ...]
+    weak_required_skills: tuple[str, ...]
+    critical_missing: tuple[str, ...]
+    evidence: dict[str, object]
 
 
 _PRIORITY_SKILL_RULES: tuple[PrioritySkillRule, ...] = (
@@ -81,6 +110,60 @@ _PRIORITY_SKILL_RULES: tuple[PrioritySkillRule, ...] = (
 
 _PROJECT_CONTEXT_TERMS = ("project", "projects", "platform", "solution", "support", "context", "integration", "delivery")
 _WEAK_PARTIAL_TERMS = ("awareness", "familiarity", "exposure")
+_MANDATORY_SECTION_BUCKETS = {"mandatory", "required", "technical_skills", "essential"}
+_MANDATORY_STRICT_BUCKETS = {"mandatory", "required", "essential"}
+_MANDATORY_STATUS_RANK = {"pass": 0, "needs_review": 1, "not_applicable": 2, "fail": 3}
+_MANDATORY_ALIAS_OVERRIDES: dict[str, tuple[str, ...]] = {
+    "Spring Reactive": ("spring reactive", "spring webflux", "project reactor", "reactive spring"),
+    "Procedural SQL": ("procedural sql", "pl/sql", "plsql", "stored procedures", "database procedures"),
+    "Oracle Cloud Infrastructure (OCI)": ("oracle cloud infrastructure", "oracle cloud", "oci"),
+    "SaaS Security Posture Management": ("saas security posture management", "sspm"),
+    "GitLab CI/CD Pipeline Implementation": (
+        "gitlab ci/cd pipeline implementation",
+        "gitlab cicd pipeline implementation",
+        "gitlab ci",
+        "gitlab ci/cd",
+        "gitlab pipelines",
+        ".gitlab-ci.yml",
+    ),
+    "CI/CD Pipeline Implementation": ("ci/cd pipeline implementation", "cicd pipeline implementation", "pipeline implementation"),
+    "Twistlock (Prisma Cloud) Security Scanning": (
+        "twistlock (prisma cloud) security scanning",
+        "twistlock prisma cloud security scanning",
+        "twistlock",
+        "prisma cloud",
+        "prisma cloud compute",
+        "prisma cloud compute edition",
+    ),
+    "P&C Knowledge": (
+        "p&c knowledge",
+        "property and casualty",
+        "property & casualty",
+        "property casualty insurance",
+        "property and casualty insurance",
+    ),
+    "CASB": ("casb", "cloud access security broker"),
+    "Vulnerability Scanning": ("vulnerability scanning", "vulnerability code scanning", "sast", "dast", "sonarqube", "veracode", "checkmarx"),
+    "Linux Scripting": ("linux scripting", "shell scripting", "bash"),
+    "Terraform": ("terraform", "infrastructure as code", "iac"),
+    "PowerShell": ("powershell", "powershell scripting"),
+}
+_RAW_SKILL_SPLIT_RE = re.compile(r"[,;\n|•]+")
+_GROUPED_SKILL_EXPANSIONS: dict[str, tuple[str, ...]] = {
+    "spring boot & microservices": ("Spring Boot", "Microservices"),
+    "spring boot and microservices": ("Spring Boot", "Microservices"),
+    "docker & kubernetes": ("Docker", "Kubernetes"),
+    "docker and kubernetes": ("Docker", "Kubernetes"),
+    "sql/nosql databases": ("SQL", "NoSQL"),
+    "sql nosql databases": ("SQL", "NoSQL"),
+    "sql and nosql databases": ("SQL", "NoSQL"),
+    "maven/gradle": ("Maven", "Gradle"),
+    "maven gradle": ("Maven", "Gradle"),
+    "maven and gradle": ("Maven", "Gradle"),
+    "agile/scrum methodologies": ("Agile", "Scrum"),
+    "agile scrum methodologies": ("Agile", "Scrum"),
+    "agile and scrum methodologies": ("Agile", "Scrum"),
+}
 
 
 class ScoringRuntimeService:
@@ -109,6 +192,178 @@ class ScoringRuntimeService:
             return ""
         return extract_resume_context(resume.file_path, resume.file_name)
 
+    def _picker_sort_key(self, selection: ResumeMatchSelection) -> tuple[int, float, float, float, float]:
+        return (
+            _MANDATORY_STATUS_RANK.get(selection.mandatory_gate_status, len(_MANDATORY_STATUS_RANK)),
+            -selection.final_resume_score,
+            -selection.mandatory_coverage,
+            -(selection.ats_score or 0.0),
+            -selection.ai_score,
+        )
+
+    def _split_skill_candidates(self, text: str | None) -> list[str]:
+        candidates: list[str] = []
+        seen: set[str] = set()
+        for part in _RAW_SKILL_SPLIT_RE.split(str(text or "")):
+            token = re.sub(r"^[\-\*\u2022:\s]+|[\-\*\u2022:\s]+$", "", str(part or "").strip())
+            token = re.sub(r"\s+", " ", token).strip()
+            if not token or len(token) > 80:
+                continue
+            if len(token.split()) > 8 and token.lower() not in _MANDATORY_ALIAS_OVERRIDES:
+                continue
+            normalized = normalize_taxonomy_text(token)
+            expanded = _GROUPED_SKILL_EXPANSIONS.get(normalized)
+            if expanded:
+                for item in expanded:
+                    item_key = normalize_taxonomy_text(item)
+                    if not item_key or item_key == "none detected" or item_key in seen:
+                        continue
+                    seen.add(item_key)
+                    candidates.append(item)
+                continue
+            if not normalized or normalized == "none detected" or normalized in seen:
+                continue
+            seen.add(normalized)
+            candidates.append(token)
+        return candidates
+
+    def _rule_aliases(self, canonical_name: str) -> tuple[str, ...]:
+        override = _MANDATORY_ALIAS_OVERRIDES.get(canonical_name)
+        if override:
+            return override
+        normalized = normalize_skill_token(canonical_name, preserve_unknown=True) or canonical_name
+        aliases = [normalized]
+        seen_aliases = {normalize_taxonomy_text(item) for item in aliases}
+        entry = load_skill_taxonomy().exact_lookup.get(normalize_taxonomy_text(normalized))
+        if entry:
+            for alias in (entry.canonical_name, *entry.aliases):
+                key = normalize_taxonomy_text(alias)
+                if key and key not in seen_aliases:
+                    aliases.append(alias)
+                    seen_aliases.add(key)
+        normalized_aliases = tuple(normalize_taxonomy_text(item) for item in aliases if normalize_taxonomy_text(item))
+        return normalized_aliases or (normalize_taxonomy_text(normalized),)
+
+    def _append_mandatory_rule(
+        self,
+        rules: list[MandatorySkillRule],
+        seen: set[str],
+        *,
+        canonical_name: str,
+        source: str,
+        buckets: tuple[str, ...] = (),
+        critical: bool = False,
+    ) -> None:
+        normalized_input = normalize_taxonomy_text(canonical_name)
+        override_canonical = next(
+            (
+                canonical
+                for canonical, aliases in _MANDATORY_ALIAS_OVERRIDES.items()
+                if normalized_input == normalize_taxonomy_text(canonical)
+                or normalized_input in {normalize_taxonomy_text(alias) for alias in aliases}
+            ),
+            None,
+        )
+        normalized_name = override_canonical or normalize_skill_token(canonical_name, preserve_unknown=True) or canonical_name
+        key = normalize_taxonomy_text(normalized_name)
+        if not key or key in seen:
+            return
+        seen.add(key)
+        aliases = self._rule_aliases(normalized_name)
+        rules.append(
+            MandatorySkillRule(
+                canonical_name=normalized_name,
+                aliases=aliases or (key,),
+                source=source,
+                buckets=buckets,
+                critical=critical,
+            )
+        )
+
+    def _prune_mandatory_rules(self, rules: list[MandatorySkillRule]) -> list[MandatorySkillRule]:
+        normalized_present = {normalize_taxonomy_text(rule.canonical_name) for rule in rules}
+        drop_keys: set[str] = set()
+        if "pl sql" in normalized_present:
+            drop_keys.update({"sql", "pl"})
+        if "procedural sql" in normalized_present:
+            drop_keys.update({"sql", "stored procedures", "stored procedure"})
+        if "spring boot" in normalized_present:
+            drop_keys.update({"spring framework", "spring"})
+        if "spring reactive" in normalized_present:
+            drop_keys.update({"spring framework", "spring"})
+        return [rule for rule in rules if normalize_taxonomy_text(rule.canonical_name) not in drop_keys]
+
+    def _extract_mandatory_skill_rules(
+        self,
+        *,
+        subject: str,
+        body: str,
+        parsed: dict[str, str | int],
+        parser_details: dict[str, object] | None,
+    ) -> list[MandatorySkillRule]:
+        rules: list[MandatorySkillRule] = []
+        seen: set[str] = set()
+
+        skill_sections = build_skill_source_sections(slice_jd_sections("\n".join(part for part in [subject, body] if part).strip()))
+        strong_sections = [section for section in skill_sections if section.bucket in _MANDATORY_SECTION_BUCKETS]
+        if strong_sections:
+            aggregated = aggregate_jd_skill_evidence(extract_jd_skill_evidence(strong_sections))
+            for skill in aggregated:
+                buckets = tuple(skill.buckets)
+                critical = any(bucket in _MANDATORY_STRICT_BUCKETS for bucket in buckets)
+                self._append_mandatory_rule(
+                    rules,
+                    seen,
+                    canonical_name=skill.canonical_name,
+                    source="jd_sections",
+                    buckets=buckets,
+                    critical=critical,
+                )
+            for section in strong_sections:
+                audit = audit_skills_text(", ".join(self._split_skill_candidates(section.text)))
+                bucket_tuple = (section.bucket,)
+                critical = section.bucket in _MANDATORY_STRICT_BUCKETS
+                for skill_name in [*audit.known, *audit.unknown]:
+                    self._append_mandatory_rule(
+                        rules,
+                        seen,
+                        canonical_name=skill_name,
+                        source="jd_sections_raw",
+                        buckets=bucket_tuple,
+                        critical=critical,
+                    )
+            rules = self._prune_mandatory_rules(rules)
+            if rules:
+                return rules
+
+        parser_skills: list[str] = []
+        if parser_details:
+            approved_skills_text = parser_details.get("approved_skills_text")
+            if isinstance(approved_skills_text, str):
+                parser_skills.extend(self._split_skill_candidates(approved_skills_text))
+            skills_audit = parser_details.get("skills_audit")
+            if isinstance(skills_audit, dict):
+                parser_skills.extend(str(item).strip() for item in (skills_audit.get("known") or []) if str(item).strip())
+                parser_skills.extend(str(item).strip() for item in (skills_audit.get("unknown") or []) if str(item).strip())
+
+        parser_skills.extend(self._split_skill_candidates(str(parsed.get("skills_text", "") or "")))
+        parser_skills.extend(entry.canonical_name for entry in extract_taxonomy_skills(str(parsed.get("role", "") or "")))
+        fallback_unique: list[str] = []
+        for skill_name in parser_skills:
+            normalized = normalize_skill_token(skill_name, preserve_unknown=True) or skill_name
+            key = normalize_taxonomy_text(normalized)
+            if key and key not in {normalize_taxonomy_text(item) for item in fallback_unique}:
+                fallback_unique.append(normalized)
+        for idx, skill_name in enumerate(fallback_unique):
+            self._append_mandatory_rule(
+                rules,
+                seen,
+                canonical_name=skill_name,
+                source="parsed_fallback",
+                critical=idx < 3,
+            )
+        return self._prune_mandatory_rules(rules)
+
     def select_best_resume_match(
         self,
         *,
@@ -125,6 +380,12 @@ class ScoringRuntimeService:
         external_thread_id: str | None = None,
     ) -> ResumeMatchSelection:
         enabled_resumes = [resume for resume in resumes if getattr(resume, "is_enabled", False)]
+        mandatory_rules = self._extract_mandatory_skill_rules(
+            subject=subject,
+            body=body,
+            parsed=parsed,
+            parser_details=parser_details,
+        )
 
         def _score_resume(resume: ResumeAsset | None, email_ctx: RecruiterEmail | Any | None) -> tuple[ResumeMatchSelection, RecruiterEmail | Any | None]:
             ai_score, ai_summary, ai_score_source, email_embedding_json, resume_embedding_json, semantic_diag = self.compute_blended_ai_score(
@@ -169,8 +430,11 @@ class ScoringRuntimeService:
                     email_embedding_json=email_embedding_json,
                     resume_embedding_json=resume_embedding_json,
                     semantic_diag=semantic_diag,
+                    subject=subject,
+                    body=body,
                     parsed=parsed,
                     parser_details=parser_details,
+                    mandatory_rules=mandatory_rules,
                 ),
                 next_email_ctx,
             )
@@ -185,11 +449,11 @@ class ScoringRuntimeService:
         for resume in enabled_resumes:
             selection, email_ctx = _score_resume(resume, email_ctx)
             scored_selections.append(selection)
-            if best_selection is None or selection.final_resume_score > best_selection.final_resume_score:
+            if best_selection is None or self._picker_sort_key(selection) < self._picker_sort_key(best_selection):
                 best_selection = selection
 
         assert best_selection is not None
-        scored_selections.sort(key=lambda item: item.final_resume_score, reverse=True)
+        scored_selections.sort(key=self._picker_sort_key)
         best_selection.candidate_rankings_json = self._json_payload(
             {
                 "selected_resume_file_name": getattr(best_selection.resume, "file_name", None),
@@ -287,9 +551,9 @@ class ScoringRuntimeService:
     def _raw_skill_tokens(self, skills_text: str | None) -> list[str]:
         tokens: list[str] = []
         seen: set[str] = set()
-        for part in (skills_text or "").split(","):
-            token = re.sub(r"\s+", " ", part.strip().lower())
-            if not token or token == "none_detected" or token in seen:
+        for part in self._split_skill_candidates(skills_text):
+            token = normalize_taxonomy_text(part)
+            if not token or token == "none detected" or token in seen:
                 continue
             seen.add(token)
             tokens.append(token)
@@ -320,7 +584,7 @@ class ScoringRuntimeService:
         return json.dumps(payload, separators=(",", ":"))
 
     def _normalize_skill_phrase(self, value: str | None) -> str:
-        return re.sub(r"\s+", " ", str(value or "").strip().lower())
+        return normalize_taxonomy_text(value)
 
     def _jd_priority_pool(self, parsed: dict[str, str | int], parser_details: dict[str, object] | None) -> str:
         parts = [str(parsed.get("role", "")), str(parsed.get("skills_text", ""))]
@@ -384,6 +648,123 @@ class ScoringRuntimeService:
                 best_score = score
                 best_label = label
         return best_score, best_label
+
+    def _match_mandatory_rule(
+        self,
+        *,
+        resume_skills_text: str,
+        rule: MandatorySkillRule,
+    ) -> tuple[float, str | None, str | None]:
+        resume_chunks = [chunk.strip() for chunk in resume_skills_text.split(",") if chunk.strip()]
+        best_score = 0.0
+        best_label: str | None = None
+        matched_alias: str | None = None
+        for chunk in resume_chunks:
+            normalized_chunk = self._normalize_skill_phrase(chunk)
+            if not normalized_chunk:
+                continue
+            matched = next(
+                (
+                    alias
+                    for alias in rule.aliases
+                    if alias and f" {normalize_taxonomy_text(alias)} " in f" {normalized_chunk} "
+                ),
+                None,
+            )
+            if not matched:
+                continue
+            score = 1.0
+            label = "direct"
+            if "concepts" in normalized_chunk:
+                score = 0.60
+                label = "concepts"
+            elif any(term in normalized_chunk for term in _WEAK_PARTIAL_TERMS):
+                score = 0.40
+                label = "awareness"
+            elif any(term in normalized_chunk for term in _PROJECT_CONTEXT_TERMS):
+                score = 0.85
+                label = "project_context"
+            if score > best_score:
+                best_score = score
+                best_label = label
+                matched_alias = matched
+        return best_score, best_label, matched_alias
+
+    def _compute_mandatory_skill_gate(
+        self,
+        *,
+        rules: list[MandatorySkillRule],
+        resume: ResumeAsset | None,
+    ) -> MandatorySkillGateResult:
+        if not rules:
+            return MandatorySkillGateResult(
+                status="not_applicable",
+                coverage=1.0,
+                required_skills=(),
+                matched_required_skills=(),
+                missing_required_skills=(),
+                weak_required_skills=(),
+                critical_missing=(),
+                evidence={},
+            )
+
+        resume_skills_text = str(getattr(resume, "skills_text", "") or "")
+        required_skills = tuple(rule.canonical_name for rule in rules)
+        strong_matches: list[str] = []
+        weak_matches: list[str] = []
+        missing_matches: list[str] = []
+        critical_missing: list[str] = []
+        evidence: dict[str, object] = {}
+        strong_count = 0
+        weak_count = 0
+        for rule in rules:
+            evidence_score, evidence_type, matched_alias = self._match_mandatory_rule(
+                resume_skills_text=resume_skills_text,
+                rule=rule,
+            )
+            if evidence_score >= 0.85:
+                strong_matches.append(rule.canonical_name)
+                strong_count += 1
+            elif evidence_score > 0.0:
+                weak_matches.append(rule.canonical_name)
+                weak_count += 1
+            else:
+                missing_matches.append(rule.canonical_name)
+                if rule.critical:
+                    critical_missing.append(rule.canonical_name)
+            evidence[rule.canonical_name] = {
+                "source": rule.source,
+                "buckets": list(rule.buckets),
+                "critical": rule.critical,
+                "matched": evidence_score > 0.0,
+                "match_type": evidence_type,
+                "matched_alias": matched_alias,
+                "evidence_score": round(evidence_score, 3),
+            }
+
+        total_rules = len(rules) or 1
+        coverage = clamp01((strong_count + (weak_count * 0.5)) / total_rules)
+        if not required_skills:
+            status = "not_applicable"
+        elif strong_count == total_rules and not critical_missing:
+            status = "pass"
+        elif critical_missing or coverage < 0.5:
+            status = "fail"
+        elif strong_count > 0 or weak_count > 0:
+            status = "needs_review"
+        else:
+            status = "fail"
+
+        return MandatorySkillGateResult(
+            status=status,
+            coverage=coverage,
+            required_skills=required_skills,
+            matched_required_skills=tuple(strong_matches),
+            missing_required_skills=tuple(missing_matches),
+            weak_required_skills=tuple(weak_matches),
+            critical_missing=tuple(critical_missing),
+            evidence=evidence,
+        )
 
     def _compute_jd_priority_scores(
         self,
@@ -469,9 +850,13 @@ class ScoringRuntimeService:
         email_embedding_json: str | None,
         resume_embedding_json: str | None,
         semantic_diag: SemanticDiagnostics,
+        subject: str,
+        body: str,
         parsed: dict[str, str | int],
         parser_details: dict[str, object] | None,
+        mandatory_rules: list[MandatorySkillRule],
     ) -> ResumeMatchSelection:
+        _ = subject, body
         ats_score_01 = clamp01((ats_score or 0.0) / 100.0)
         resume_skills_text = str(getattr(resume, "skills_text", "") or "").strip()
         intent = compute_intent_weighted_match(
@@ -479,6 +864,7 @@ class ScoringRuntimeService:
             jd_skills_text=str(parsed.get("skills_text", "")),
             resume_skills_text=resume_skills_text,
         )
+        mandatory_gate = self._compute_mandatory_skill_gate(rules=mandatory_rules, resume=resume)
         priority_data = self._compute_jd_priority_scores(parsed=parsed, parser_details=parser_details, resume=resume)
         jd_priority_score = float(priority_data["jd_priority_score"])
         partial_credit_score = float(priority_data["partial_credit_score"])
@@ -499,6 +885,12 @@ class ScoringRuntimeService:
         matched_priority = list(priority_data["matched_priority_skills"])
         missing_priority = list(priority_data["missing_priority_skills"])
         selected_resume_file_name = getattr(resume, "file_name", None)
+        selection_status = "ready_to_submit" if mandatory_gate.status == "pass" else "needs_review"
+        selection_warning = (
+            "Mandatory FAIL - closest available resume selected; new resume generation may be needed."
+            if mandatory_gate.status == "fail"
+            else None
+        )
         picker_breakdown = {
             "selected_resume_file_name": selected_resume_file_name,
             "final_resume_score": round(final_resume_score, 4),
@@ -516,13 +908,34 @@ class ScoringRuntimeService:
             "matched_priority_skills": matched_priority,
             "missing_priority_skills": missing_priority,
             "priority_evidence": priority_data["priority_evidence"],
+            "mandatory_gate_status": mandatory_gate.status,
+            "mandatory_coverage": round(mandatory_gate.coverage, 4),
+            "mandatory_required_skills": list(mandatory_gate.required_skills),
+            "mandatory_matched_skills": list(mandatory_gate.matched_required_skills),
+            "mandatory_missing_skills": list(mandatory_gate.missing_required_skills),
+            "mandatory_weak_skills": list(mandatory_gate.weak_required_skills),
+            "critical_missing": list(mandatory_gate.critical_missing),
+            "mandatory_evidence": mandatory_gate.evidence,
+            "selection_status": selection_status,
+            "selection_warning": selection_warning,
             "weak_signal_hits": list(intent.weak_signal_hits),
         }
-        selection_reason = (
-            f"Final {final_resume_score:.2f}; ai={ai_score:.2f}; ats={(ats_score or 0.0):.2f}; "
-            f"priority={jd_priority_score:.2f}; role_fit={role_family_fit_score:.2f}; "
-            f"matched={', '.join(matched_priority[:4]) or 'none'}"
+        selection_reason_parts = [f"Mandatory {mandatory_gate.status.upper()} {mandatory_gate.coverage:.2f}"]
+        if mandatory_gate.status == "fail":
+            selection_reason_parts.append("closest available resume selected")
+            selection_reason_parts.append("new resume generation may be needed")
+        selection_reason_parts.extend(
+            [
+                f"Final {final_resume_score:.2f}",
+                f"ai={ai_score:.2f}",
+                f"ats={(ats_score or 0.0):.2f}",
+                f"priority={jd_priority_score:.2f}",
+                f"role_fit={role_family_fit_score:.2f}",
+                f"matched={', '.join(matched_priority[:4]) or 'none'}",
+                f"missing_required={', '.join(mandatory_gate.missing_required_skills[:4]) or 'none'}",
+            ]
         )
+        selection_reason = "; ".join(selection_reason_parts)
         return ResumeMatchSelection(
             resume=resume,
             ai_score=ai_score,
@@ -539,6 +952,8 @@ class ScoringRuntimeService:
             email_embedding_json=email_embedding_json,
             resume_embedding_json=resume_embedding_json,
             semantic_diag=semantic_diag,
+            mandatory_gate_status=mandatory_gate.status,
+            mandatory_coverage=mandatory_gate.coverage,
         )
 
     def _intent_weighted_keyword_score(
