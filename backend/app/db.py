@@ -311,6 +311,14 @@ def ensure_sqlite_phase0_columns() -> None:
             ("intent_negative_evidence_json", "ALTER TABLE recruiter_emails ADD COLUMN intent_negative_evidence_json TEXT"),
             ("gate_action", "ALTER TABLE recruiter_emails ADD COLUMN gate_action VARCHAR(40)"),
             ("gate_provider", "ALTER TABLE recruiter_emails ADD COLUMN gate_provider VARCHAR(80)"),
+            ("source_group_name", "ALTER TABLE recruiter_emails ADD COLUMN source_group_name VARCHAR(255)"),
+            ("source_group_email", "ALTER TABLE recruiter_emails ADD COLUMN source_group_email VARCHAR(255)"),
+            ("source_group_match_method", "ALTER TABLE recruiter_emails ADD COLUMN source_group_match_method VARCHAR(80)"),
+            ("source_group_trusted", "ALTER TABLE recruiter_emails ADD COLUMN source_group_trusted BOOLEAN"),
+            ("qualification_result", "ALTER TABLE recruiter_emails ADD COLUMN qualification_result VARCHAR(80)"),
+            ("blocking_rule", "ALTER TABLE recruiter_emails ADD COLUMN blocking_rule VARCHAR(120)"),
+            ("qualification_detail", "ALTER TABLE recruiter_emails ADD COLUMN qualification_detail TEXT"),
+            ("qualification_context_json", "ALTER TABLE recruiter_emails ADD COLUMN qualification_context_json TEXT"),
             ("sync_batch_id", "ALTER TABLE recruiter_emails ADD COLUMN sync_batch_id VARCHAR(100)"),
             ("gmail_sent_id", "ALTER TABLE recruiter_emails ADD COLUMN gmail_sent_id VARCHAR(255)"),
             ("sent_attachment_file_names_json", "ALTER TABLE recruiter_emails ADD COLUMN sent_attachment_file_names_json TEXT"),
@@ -350,6 +358,7 @@ def ensure_sqlite_phase0_columns() -> None:
             ("feature_ai_extractor_enabled", "ALTER TABLE user_settings ADD COLUMN feature_ai_extractor_enabled BOOLEAN DEFAULT 0"),
             ("feature_semantic_enabled", "ALTER TABLE user_settings ADD COLUMN feature_semantic_enabled BOOLEAN DEFAULT 0"),
             ("feature_groq_job_parser_enabled", "ALTER TABLE user_settings ADD COLUMN feature_groq_job_parser_enabled BOOLEAN DEFAULT 0"),
+            ("feature_gmail_requirement_groups_enabled", "ALTER TABLE user_settings ADD COLUMN feature_gmail_requirement_groups_enabled BOOLEAN DEFAULT 0"),
             ("draft_text_size", "ALTER TABLE user_settings ADD COLUMN draft_text_size VARCHAR(20) DEFAULT 'normal'"),
             ("feature_auto_poll_interval_minutes", "ALTER TABLE user_settings ADD COLUMN feature_auto_poll_interval_minutes INTEGER DEFAULT 10"),
             ("feature_nvoids_enabled", "ALTER TABLE user_settings ADD COLUMN feature_nvoids_enabled BOOLEAN DEFAULT 1"),
@@ -380,6 +389,28 @@ def ensure_sqlite_phase0_columns() -> None:
             if column_name not in existing_resume_assets:
                 conn.exec_driver_sql(statement)
 
+        conn.exec_driver_sql(
+            """
+            CREATE TABLE IF NOT EXISTS gmail_requirement_groups (
+                id INTEGER PRIMARY KEY,
+                owner_id VARCHAR(100),
+                display_name VARCHAR(255) DEFAULT '',
+                group_email VARCHAR(255) DEFAULT '',
+                normalized_group_email VARCHAR(255) DEFAULT '',
+                group_slug VARCHAR(255),
+                enabled BOOLEAN DEFAULT 1,
+                created_at DATETIME,
+                updated_at DATETIME
+            )
+            """
+        )
+        conn.exec_driver_sql(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_gmail_requirement_groups_owner_normalized "
+            "ON gmail_requirement_groups (owner_id, normalized_group_email)"
+        )
+        conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_gmail_requirement_groups_owner_id ON gmail_requirement_groups (owner_id)"
+        )
         conn.exec_driver_sql(
             """
             CREATE TABLE IF NOT EXISTS attachment_assets (
@@ -603,6 +634,14 @@ def ensure_sqlite_phase0_columns() -> None:
             ("intent_negative_evidence_json", "ALTER TABLE recent_run_skipped_items ADD COLUMN intent_negative_evidence_json TEXT"),
             ("gate_action", "ALTER TABLE recent_run_skipped_items ADD COLUMN gate_action VARCHAR(40)"),
             ("gate_provider", "ALTER TABLE recent_run_skipped_items ADD COLUMN gate_provider VARCHAR(80)"),
+            ("source_group_name", "ALTER TABLE recent_run_skipped_items ADD COLUMN source_group_name VARCHAR(255)"),
+            ("source_group_email", "ALTER TABLE recent_run_skipped_items ADD COLUMN source_group_email VARCHAR(255)"),
+            ("source_group_match_method", "ALTER TABLE recent_run_skipped_items ADD COLUMN source_group_match_method VARCHAR(80)"),
+            ("source_group_trusted", "ALTER TABLE recent_run_skipped_items ADD COLUMN source_group_trusted BOOLEAN"),
+            ("qualification_result", "ALTER TABLE recent_run_skipped_items ADD COLUMN qualification_result VARCHAR(80)"),
+            ("blocking_rule", "ALTER TABLE recent_run_skipped_items ADD COLUMN blocking_rule VARCHAR(120)"),
+            ("qualification_detail", "ALTER TABLE recent_run_skipped_items ADD COLUMN qualification_detail TEXT"),
+            ("qualification_context_json", "ALTER TABLE recent_run_skipped_items ADD COLUMN qualification_context_json TEXT"),
         ]
         for column_name, statement in recent_run_skipped_alter_statements:
             if column_name not in existing_recent_run_skipped_items:

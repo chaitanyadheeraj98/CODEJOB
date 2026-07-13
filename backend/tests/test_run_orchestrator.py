@@ -351,11 +351,13 @@ class RunOrchestratorTests(unittest.TestCase):
             self.assertIsNotNone(row)
             assert row is not None
             self.assertEqual(row.state, "processed_skipped")
+            self.assertEqual(row.qualification_result, "rejected")
             self.assertEqual(marked, ["m-3"])
             skipped_item = db.query(RecentRunSkippedItem).filter(RecentRunSkippedItem.run_key == "automation_run:test-3").first()
             self.assertIsNotNone(skipped_item)
             assert skipped_item is not None
             self.assertEqual(skipped_item.candidate_email_id, row.id)
+            self.assertEqual(skipped_item.qualification_result, "rejected")
 
     def test_explicit_interview_block_skips_before_draft_generation(self) -> None:
         with Session(self.engine) as db:
@@ -386,6 +388,7 @@ class RunOrchestratorTests(unittest.TestCase):
             self.assertEqual(row.state, "processed_skipped")
             self.assertEqual(row.auto_reject_reason, "f2f_non_texas")
             self.assertEqual(row.skip_reason, "f2f_non_texas_blocked")
+            self.assertEqual(row.blocking_rule, "f2f_non_texas")
             self.assertEqual(row.decision, "Reject")
             self.assertEqual(row.decision_reason, "blocked")
             self.assertIsNone(row.draft_source)

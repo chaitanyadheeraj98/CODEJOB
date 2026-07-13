@@ -79,6 +79,7 @@ class SettingsRequest(BaseModel):
     feature_ai_extractor_enabled: bool = False
     feature_semantic_enabled: bool = False
     feature_groq_job_parser_enabled: bool = False
+    feature_gmail_requirement_groups_enabled: bool = False
     draft_text_size: str = "normal"
     fallback_draft_template: str = ""
     signature_name: str = ""
@@ -301,6 +302,7 @@ class JobIntentTaxonomyEntryResponse(BaseModel):
 
 class SettingsBootstrapResponse(BaseModel):
     settings: SettingsResponse
+    gmail_requirement_groups: list["GmailRequirementGroupResponse"] = Field(default_factory=list)
     resumes: list[ResumeResponse] = Field(default_factory=list)
     attachments: list[AttachmentAssetResponse] = Field(default_factory=list)
     pending_skills: list[PendingSkillResponse] = Field(default_factory=list)
@@ -381,6 +383,17 @@ class EmailResponse(BaseModel):
     intent_negative_evidence: list[str] = Field(default_factory=list, validation_alias=AliasChoices("intent_negative_evidence", "intent_negative_evidence_json"))
     gate_action: str | None = None
     gate_provider: str | None = None
+    source_group_name: str | None = None
+    source_group_email: str | None = None
+    source_group_match_method: str | None = None
+    source_group_trusted: bool | None = None
+    qualification_result: str | None = None
+    blocking_rule: str | None = None
+    qualification_detail: str | None = None
+    qualification_context: dict[str, object] | None = Field(
+        default=None,
+        validation_alias=AliasChoices("qualification_context", "qualification_context_json"),
+    )
     sync_batch_id: str | None
     draft_reply: str
     draft_source: str | None = None
@@ -457,7 +470,7 @@ class EmailResponse(BaseModel):
             return [str(item).strip() for item in value if str(item).strip()]
         return []
 
-    @field_validator("parser_details", "ats_breakdown", "resume_picker_candidates", "resume_picker_breakdown", mode="before")
+    @field_validator("parser_details", "ats_breakdown", "resume_picker_candidates", "resume_picker_breakdown", "qualification_context", mode="before")
     @classmethod
     def parse_json_object(cls, value: Any) -> dict[str, object] | None:
         if value in (None, ""):
@@ -791,6 +804,14 @@ class RecentRunItemResponse(BaseModel):
     intent_negative_evidence: list[str] = Field(default_factory=list)
     gate_action: str | None = None
     gate_provider: str | None = None
+    source_group_name: str | None = None
+    source_group_email: str | None = None
+    source_group_match_method: str | None = None
+    source_group_trusted: bool | None = None
+    qualification_result: str | None = None
+    blocking_rule: str | None = None
+    qualification_detail: str | None = None
+    qualification_context: dict[str, object] | None = None
     created_at: datetime
 
 
@@ -819,6 +840,35 @@ class RecentRunListResponse(BaseModel):
     items: list[RecentRunResponse]
     next_cursor: int | None = None
     has_next: bool = False
+
+
+class GmailRequirementGroupCreateRequest(BaseModel):
+    value: str
+    display_name: str | None = None
+    enabled: bool = True
+
+
+class GmailRequirementGroupBulkCreateRequest(BaseModel):
+    values: str
+
+
+class GmailRequirementGroupUpdateRequest(BaseModel):
+    display_name: str | None = None
+    enabled: bool | None = None
+
+
+class GmailRequirementGroupResponse(BaseModel):
+    id: int
+    owner_id: str
+    display_name: str
+    group_email: str
+    normalized_group_email: str
+    group_slug: str | None = None
+    enabled: bool
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
 
 
 class AutomationRunRequest(BaseModel):
@@ -856,6 +906,9 @@ class TelegramStatusResponse(BaseModel):
     alerts_enabled: bool
     authorized_chats: int
     detail: str
+
+
+SettingsBootstrapResponse.model_rebuild()
 
 
 class ProductivityEventCreateRequest(BaseModel):

@@ -46,6 +46,8 @@ function makeSettings(overrides?: Record<string, unknown>) {
     feature_ai_enabled: false,
     feature_ai_extractor_enabled: false,
     feature_semantic_enabled: false,
+    feature_groq_job_parser_enabled: false,
+    feature_gmail_requirement_groups_enabled: false,
     draft_text_size: 'normal',
     fallback_draft_template: '',
     signature_name: '',
@@ -61,6 +63,7 @@ function makeSettings(overrides?: Record<string, unknown>) {
 function makeBootstrapPayload(overrides?: { settings?: Record<string, unknown> }) {
   return {
     settings: makeSettings(overrides?.settings),
+    gmail_requirement_groups: [],
     resumes: [],
     attachments: [],
     pending_skills: [],
@@ -111,6 +114,12 @@ describe('Recent Runs skipped-item drill-down', () => {
                 sender: 'Recruiter <r@example.com>',
                 gmail_message_url: 'https://mail.google.com/mail/u/0/#all/msg-1',
                 source_url: null,
+                source_group_name: 'C2C Corp2Corp Jobs',
+                source_group_email: 'c2c-corp2corp-jobs@googlegroups.com',
+                source_group_match_method: 'list_post',
+                qualification_result: 'rejected',
+                blocking_rule: 'accepted_location',
+                qualification_detail: 'Location "Pittsburgh, PA" did not match accepted locations: Texas, Remote.',
                 created_at: '2026-06-30T20:00:00Z',
               },
             ],
@@ -229,6 +238,8 @@ describe('Recent Runs skipped-item drill-down', () => {
 
     expect(container.textContent ?? '').toContain('Skipped because this Gmail message already exists in the candidate database.')
     expect(container.textContent ?? '').toContain("Skipped because listing location 'Dallas, Texas, USA' did not match the saved Nvoids location filters.")
+    expect(container.textContent ?? '').toContain('C2C Corp2Corp Jobs')
+    expect(container.textContent ?? '').toContain('accepted_location')
 
     const links = Array.from(container.querySelectorAll('a')).map((link) => ({
       text: link.textContent,

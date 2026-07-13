@@ -46,6 +46,13 @@ class GmailMessageCandidate(TypedDict):
     snippet: str
     gmail_received_at: datetime | None
     label_ids: list[str]
+    to_header: str
+    cc_header: str
+    list_id: str
+    list_post: str
+    list_unsubscribe: str
+    delivered_to: str
+    mailing_list: str
 
 
 @dataclass(frozen=True)
@@ -351,8 +358,15 @@ def list_unread_candidates_by_query(query: str, max_results_per_page: int = 100)
                 for item in header_items
             ]
             from_header = _get_header(headers, "From")
+            to_header = _get_header(headers, "To")
+            cc_header = _get_header(headers, "Cc")
             subject = _get_header(headers, "Subject") or "(No Subject)"
             rfc_message_id = _get_header(headers, "Message-ID")
+            list_id = _get_header(headers, "List-Id")
+            list_post = _get_header(headers, "List-Post")
+            list_unsubscribe = _get_header(headers, "List-Unsubscribe")
+            delivered_to = _get_header(headers, "Delivered-To")
+            mailing_list = _get_header(headers, "Mailing-List")
             internal_date_ms = details.get("internalDate")
             gmail_received_at = None
             if internal_date_ms:
@@ -376,6 +390,13 @@ def list_unread_candidates_by_query(query: str, max_results_per_page: int = 100)
                     "snippet": snippet,
                     "gmail_received_at": gmail_received_at,
                     "label_ids": [str(label) for label in details.get("labelIds", []) if isinstance(label, str)],
+                    "to_header": to_header,
+                    "cc_header": cc_header,
+                    "list_id": list_id,
+                    "list_post": list_post,
+                    "list_unsubscribe": list_unsubscribe,
+                    "delivered_to": delivered_to,
+                    "mailing_list": mailing_list,
                 }
             )
 

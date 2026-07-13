@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from app.gates.job_description_gate import classify_email_intent
 from app.job_intent_learning import JobIntentLearningSignal
+from app.services.gmail_group_source_service import TrustedGroupContext
 from app.taxonomy.job_description_taxonomy import classify_job_description_taxonomy
 
 
@@ -65,6 +66,25 @@ class JobDescriptionGateTests(unittest.TestCase):
         self.assertEqual(without_signal.intent_type, "unknown")
         self.assertEqual(with_signal.intent_type, "recruiter_job_requirement")
         self.assertEqual(with_signal.action, "process_for_queue")
+
+    def test_taxonomy_trusted_group_keeps_ambiguous_message_in_review(self) -> None:
+        decision = classify_job_description_taxonomy(
+            sender="poster@example.com",
+            subject="[C2C-Corp2Corp-Jobs] FYI",
+            body="Please review when you have time.",
+            trusted_group_context=TrustedGroupContext(
+                matched=True,
+                group_id=1,
+                group_name="C2C Corp2Corp Jobs",
+                group_email="c2c-corp2corp-jobs@googlegroups.com",
+                match_method="subject_prefix",
+                confidence=0.8,
+                trusted=True,
+            ),
+        )
+
+        self.assertEqual(decision.intent_type, "unknown")
+        self.assertEqual(decision.action, "needs_review")
 
     @patch(
         "app.gates.job_description_gate.classify_job_description_taxonomy",

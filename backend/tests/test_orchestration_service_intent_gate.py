@@ -8,7 +8,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.gates import EmailIntentDecision
 from app.db import Base
-from app.models import RecruiterEmail, SyncRun, UserSettings
+from app.models import GmailRequirementGroup, RecruiterEmail, SyncRun, UserSettings
 from app.recent_runs import RUN_SOURCE_GMAIL_SYNC, gmail_sync_run_key
 from app.services.orchestration_service import OrchestrationDeps, OrchestrationService
 
@@ -40,6 +40,7 @@ class OrchestrationServiceIntentGateTests(unittest.TestCase):
                 feature_ai_extractor_enabled=False,
                 feature_semantic_enabled=False,
                 feature_groq_job_parser_enabled=False,
+                feature_gmail_requirement_groups_enabled=True,
                 fallback_draft_template="Hi",
                 signature_name="Tester",
                 signature_phone="+1",
@@ -47,6 +48,16 @@ class OrchestrationServiceIntentGateTests(unittest.TestCase):
                 policy_json="",
             )
             db.add(user_settings)
+            db.add(
+                GmailRequirementGroup(
+                    owner_id="default-owner",
+                    display_name="C2C Corp2Corp Jobs",
+                    group_email="c2c-corp2corp-jobs@googlegroups.com",
+                    normalized_group_email="c2c-corp2corp-jobs@googlegroups.com",
+                    group_slug="C2C-Corp2Corp-Jobs",
+                    enabled=True,
+                )
+            )
             db.commit()
 
             deps = OrchestrationDeps(
@@ -121,14 +132,21 @@ class OrchestrationServiceIntentGateTests(unittest.TestCase):
                         "external_rfc_message_id": "rfc-sync-1",
                         "gmail_received_at": datetime.now(UTC),
                         "recipient_email": "legacy-to@example.com",
+                        "list_post": "<mailto:c2c-corp2corp-jobs@googlegroups.com>",
+                        "list_unsubscribe": "<mailto:c2c-corp2corp-jobs+unsubscribe@googlegroups.com>",
+                        "list_id": "C2C Corp2Corp Jobs <c2c-corp2corp-jobs.googlegroups.com>",
+                        "to_header": "",
+                        "cc_header": "",
+                        "delivered_to": "",
+                        "mailing_list": "",
                     }
                 ],
                 is_recruiter_like=lambda *_args, **_kwargs: False,
-                classify_email_intent=lambda **_kwargs: EmailIntentDecision(
+                classify_email_intent=lambda **kwargs: EmailIntentDecision(
                     intent_type="recruiter_job_requirement",
                     action="process_for_queue",
                     confidence=0.93,
-                    reason="Matched direct job-description structure.",
+                    reason=f"Matched direct job-description structure from {(kwargs.get('trusted_group_context').group_name if kwargs.get('trusted_group_context') else 'none')}.",
                     evidence=["position", "required skills", "location"],
                     negative_evidence=[],
                     provider="taxonomy",
@@ -161,6 +179,8 @@ class OrchestrationServiceIntentGateTests(unittest.TestCase):
             assert row is not None
             self.assertEqual(row.intent_type, "recruiter_job_requirement")
             self.assertEqual(row.gate_provider, "taxonomy")
+            self.assertEqual(row.source_group_email, "c2c-corp2corp-jobs@googlegroups.com")
+            self.assertEqual(row.source_group_match_method, "list_post")
 
 
 if __name__ == "__main__":

@@ -14,6 +14,7 @@ from app.job_intent_learning import (
     POSITIVE_RECRUITER_JD,
     normalize_job_intent_phrase,
 )
+from app.services.gmail_group_source_service import TrustedGroupContext
 
 JOB_STRUCTURE_TERMS = (
     "job description",
@@ -198,6 +199,7 @@ def classify_job_description_taxonomy(
     body: str,
     snippet: str = "",
     recruiter_like: bool = False,
+    trusted_group_context: TrustedGroupContext | None = None,
     approved_learning_signals: Sequence[JobIntentLearningSignal] | None = None,
 ) -> JobDescriptionTaxonomyDecision:
     header_text = _normalize_text(sender, subject, snippet)
@@ -243,7 +245,7 @@ def classify_job_description_taxonomy(
     if recruiter_like:
         positive_evidence.append("recruiter_like_signal")
 
-    positive_score = (
+    base_positive_score = (
         len(structure_hits) * 2.4
         + len(recruiter_action_hits) * 2.0
         + len(staffing_hits) * 1.8
@@ -258,7 +260,7 @@ def classify_job_description_taxonomy(
         NEGATIVE_CANDIDATE_HOTLIST,
     )
     candidate_score = len(candidate_hits) * 2.4
-    if candidate_score >= 3.6 and candidate_score >= positive_score + 0.8:
+    if candidate_score >= 3.6 and candidate_score >= base_positive_score + 0.8:
         return JobDescriptionTaxonomyDecision(
             intent_type="candidate_marketing_or_hotlist",
             action="skip",
@@ -267,6 +269,7 @@ def classify_job_description_taxonomy(
             evidence=[],
             negative_evidence=[f"candidate_marketing:{item}" for item in candidate_hits],
         )
+    positive_score = base_positive_score
 
     job_board_hits = _collect_matches(header_text, JOB_BOARD_ALERT_TERMS) + _collect_learned_matches(
         full_text,
@@ -312,6 +315,11 @@ def classify_job_description_taxonomy(
             negative_evidence=[f"newsletter:{item}" for item in strong_newsletter_hits],
         )
 
+    if trusted_group_context and trusted_group_context.matched and trusted_group_context.trusted:
+        positive_score += 1.6
+        group_name = trusted_group_context.group_name or trusted_group_context.group_email or "trusted_group"
+        positive_evidence.append(f"trusted_group:{group_name}")
+
     if weak_footer_hits:
         negative_evidence.extend(f"weak_footer:{item}" for item in weak_footer_hits)
 
@@ -327,6 +335,17 @@ def classify_job_description_taxonomy(
             action="process_for_queue",
             confidence=confidence,
             reason=reason,
+            evidence=positive_evidence,
+            negative_evidence=negative_evidence,
+        )
+
+    if trusted_group_context and trusted_group_context.matched and trusted_group_context.trusted:
+        group_name = trusted_group_context.group_name or trusted_group_context.group_email or "trusted_group"
+        return JobDescriptionTaxonomyDecision(
+            intent_type="unknown",
+            action="needs_review",
+            confidence=min(0.55 + (positive_score * 0.03), 0.82),
+            reason=f"Matched trusted group source {group_name}, but the body did not contain enough job-description evidence to auto-queue.",
             evidence=positive_evidence,
             negative_evidence=negative_evidence,
         )

@@ -14,6 +14,7 @@ from app.taxonomy.job_description_taxonomy import (
     JobDescriptionTaxonomyDecision,
     classify_job_description_taxonomy,
 )
+from app.services.gmail_group_source_service import TrustedGroupContext
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +172,7 @@ def classify_email_intent(
     snippet: str = "",
     recruiter_like: bool = False,
     groq_enabled: bool = False,
+    trusted_group_context: TrustedGroupContext | None = None,
     approved_learning_signals: Sequence[JobIntentLearningSignal] | None = None,
 ) -> EmailIntentDecision:
     taxonomy = classify_job_description_taxonomy(
@@ -179,6 +181,7 @@ def classify_email_intent(
         body=body,
         snippet=snippet,
         recruiter_like=recruiter_like,
+        trusted_group_context=trusted_group_context,
         approved_learning_signals=approved_learning_signals,
     )
 
@@ -197,7 +200,9 @@ def classify_email_intent(
             "Do not require exact recruiter, staffing, or hiring words. "
             "Treat job-description structure, rate/location terms, visa/work authorization, "
             "C2C/W2/vendor/client language, implementation partner language, and resume-submission requests as strong positive evidence. "
+            "Treat a trusted requirement group as positive source context, not as an automatic pass. "
             "Treat unsubscribe text, Google Groups footers, and reply prefixes as weak evidence only unless the rest of the email is clearly non-job. "
+            "If a trusted group message is clearly a hotlist or candidate marketing, still classify it as candidate_marketing_or_hotlist. "
             "If the message is candidate marketing or a hotlist, classify it as candidate_marketing_or_hotlist instead of newsletter. "
             "Return 0-5 reusable learning_signals with concise phrases that would improve fallback classification later."
         ),
@@ -206,6 +211,10 @@ def classify_email_intent(
             f"Subject: {subject}\n"
             f"Snippet: {snippet}\n"
             f"Recruiter-like signal: {recruiter_like}\n"
+            f"Trusted group matched: {bool(trusted_group_context and trusted_group_context.matched)}\n"
+            f"Trusted group name: {(trusted_group_context.group_name if trusted_group_context else '') or 'none'}\n"
+            f"Trusted group email: {(trusted_group_context.group_email if trusted_group_context else '') or 'none'}\n"
+            f"Trusted group match method: {(trusted_group_context.match_method if trusted_group_context else '') or 'none'}\n"
             f"Fallback taxonomy intent: {taxonomy.intent_type}\n"
             f"Fallback taxonomy action: {taxonomy.action}\n"
             f"Fallback taxonomy confidence: {taxonomy.confidence:.2f}\n"

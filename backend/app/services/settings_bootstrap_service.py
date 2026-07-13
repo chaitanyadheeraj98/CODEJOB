@@ -127,6 +127,7 @@ class SettingsBootstrapService:
                 feature_ai_extractor_enabled=False,
                 feature_semantic_enabled=False,
                 feature_groq_job_parser_enabled=False,
+                feature_gmail_requirement_groups_enabled=False,
                 draft_text_size="normal",
                 fallback_draft_template=DEFAULT_FALLBACK_DRAFT_TEMPLATE,
                 signature_name=DEFAULT_SIGNATURE_NAME,

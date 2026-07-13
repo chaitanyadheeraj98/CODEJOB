@@ -15,6 +15,9 @@ from sqlalchemy.orm import Session
 from app.automation.queue_preparation import (
     QueuePreparationDependencies,
     QueuePreparationRequest,
+    describe_f2f_block,
+    describe_hard_filter_block,
+    describe_score_threshold_block,
     prepare_candidate_for_queue,
 )
 from app.gates import EmailIntentDecision
@@ -26,7 +29,7 @@ from app.job_intent_learning import approved_learning_signals_for_owner, record_
 from app.services import policy_service
 from app.services.policy_service import EffectiveRunInputs
 from app.gmail_client import GmailMessageCandidate, MailAttachment
-from app.models import AttachmentAsset, DraftEditFeedback, RecipientRoutingFeedback, RecentRunSkippedItem, RecruiterEmail, ResumeAsset, SyncRun, UserSettings
+from app.models import AttachmentAsset, DraftEditFeedback, GmailRequirementGroup, RecipientRoutingFeedback, RecentRunSkippedItem, RecruiterEmail, ResumeAsset, SyncRun, UserSettings
 from app.parsing import build_skills_json_payload
 from app.phase0 import RoutingResult, parse_email_with_details
 from app.recent_runs import (
@@ -42,6 +45,7 @@ from app.recent_runs import (
 from app.routing import RoutingDecision
 from app.schemas import ApproveSendRequest, AutomationRunRequest, AutomationRunResponse, GmailSyncResponse, RegenerateCandidateRequest, RejectRequest, ResolveRecipientsRequest
 from app.services.candidate_runtime_service import resolve_resume_display_name
+from app.services.gmail_group_source_service import ConfiguredRequirementGroup, resolve_trusted_group_context
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +150,28 @@ class OrchestrationService:
             needs_manual_confirmation=False,
         )
 
+    def _load_enabled_requirement_groups(self, db: Session) -> list[ConfiguredRequirementGroup]:
+        rows = (
+            db.query(GmailRequirementGroup)
+            .filter(
+                GmailRequirementGroup.owner_id == self.deps.owner_id,
+                GmailRequirementGroup.enabled.is_(True),
+            )
+            .order_by(GmailRequirementGroup.id.asc())
+            .all()
+        )
+        return [
+            ConfiguredRequirementGroup(
+                id=row.id,
+                display_name=row.display_name,
+                group_email=row.group_email,
+                normalized_group_email=row.normalized_group_email,
+                group_slug=row.group_slug,
+                enabled=row.enabled,
+            )
+            for row in rows
+        ]
+
     def sync_gmail(self, db: Session) -> GmailSyncResponse:
         if not self.deps.is_gmail_configured():
             raise HTTPException(status_code=400, detail="Gmail OAuth is not configured")
@@ -179,6 +205,7 @@ class OrchestrationService:
             effective_query = resolved.effective_query
             effective_policy = resolved.policy
             threshold = self.deps.policy_threshold(user_settings, effective_policy)
+            trusted_groups = self._load_enabled_requirement_groups(db) if user_settings.feature_gmail_requirement_groups_enabled else []
             candidates = self.deps.list_unread_candidates_by_query(effective_query)
             for item in candidates:
                 existing = (
@@ -213,6 +240,18 @@ class OrchestrationService:
                 recruiter_like_warning: str | None = None
                 recruiter_like_mode = policy_service.recruiter_like_rule_mode(effective_policy)
                 is_recruiter_like = self.deps.is_recruiter_like(item["sender"], item["subject"], item["body"])
+                trusted_group_context = resolve_trusted_group_context(
+                    groups=trusted_groups,
+                    subject=item["subject"],
+                    body=item["body"],
+                    to_header=item.get("to_header"),
+                    cc_header=item.get("cc_header"),
+                    list_id=item.get("list_id"),
+                    list_post=item.get("list_post"),
+                    list_unsubscribe=item.get("list_unsubscribe"),
+                    delivered_to=item.get("delivered_to"),
+                    mailing_list=item.get("mailing_list"),
+                )
                 approved_learning_signals = approved_learning_signals_for_owner(db, self.deps.owner_id)
                 intent_decision = self.deps.classify_email_intent(
                     sender=item["sender"],
@@ -221,6 +260,7 @@ class OrchestrationService:
                     snippet=item.get("snippet", ""),
                     recruiter_like=is_recruiter_like,
                     groq_enabled=bool(user_settings.feature_groq_job_parser_enabled),
+                    trusted_group_context=trusted_group_context,
                     approved_learning_signals=approved_learning_signals,
                 )
                 if intent_decision.provider == "groq":
@@ -256,6 +296,10 @@ class OrchestrationService:
                             intent_negative_evidence=intent_decision.negative_evidence,
                             gate_action=intent_decision.action,
                             gate_provider=intent_decision.provider,
+                            source_group_name=trusted_group_context.group_name,
+                            source_group_email=trusted_group_context.group_email,
+                            source_group_match_method=trusted_group_context.match_method,
+                            source_group_trusted=trusted_group_context.trusted if trusted_group_context.matched else False,
                         ),
                     )
                     continue
@@ -300,6 +344,10 @@ class OrchestrationService:
                 decision = "Qualified"
                 decision_reason = "Qualified by hard filters + AI score"
                 auto_reject_reason = None
+                qualification_result = "qualified"
+                blocking_rule: str | None = None
+                qualification_detail = "Qualified for queue review."
+                qualification_context: dict[str, object] | None = None
                 draft = ""
                 routed: RoutingResult | None = None
                 warnings: list[str] = []
@@ -311,16 +359,28 @@ class OrchestrationService:
                 if not hard_pass:
                     state = "auto_rejected"
                     decision = "Reject"
-                    decision_reason = "Hard filters failed"
+                    blocking_rule, qualification_detail, qualification_context = describe_hard_filter_block(
+                        parsed=parsed,
+                        user_settings=user_settings,
+                        effective_policy=effective_policy,
+                        hard_reason=hard_reason,
+                    )
+                    decision_reason = qualification_detail
                     auto_reject_reason = hard_reason.removeprefix("blocked: ").strip()
+                    qualification_result = "rejected"
                 elif (
                     policy_service.draft_rule_mode(effective_policy, "score_threshold") == "block"
                     and ai_score < threshold
                 ):
                     state = "auto_rejected"
                     decision = "Reject"
-                    decision_reason = f"AI score below threshold ({threshold:.2f})"
+                    blocking_rule, qualification_detail, qualification_context = describe_score_threshold_block(
+                        ai_score=ai_score,
+                        threshold=threshold,
+                    )
+                    decision_reason = qualification_detail
                     auto_reject_reason = "ai_score_too_low"
+                    qualification_result = "rejected"
                 else:
                     if policy_service.draft_rule_mode(effective_policy, "score_threshold") == "warn" and ai_score < threshold:
                         warnings.append(f"score_below_threshold:{ai_score:.2f}<{threshold:.2f}")
@@ -328,8 +388,10 @@ class OrchestrationService:
                     if blocked:
                         state = "auto_rejected"
                         decision = "Reject"
-                        decision_reason = block_reason
+                        blocking_rule, qualification_detail, qualification_context = describe_f2f_block(block_reason=block_reason)
+                        decision_reason = qualification_detail
                         auto_reject_reason = "f2f_non_texas"
+                        qualification_result = "rejected"
                     elif block_reason:
                         warnings.append(block_reason)
                     else:
@@ -349,6 +411,11 @@ class OrchestrationService:
                         )
                         if warnings:
                             decision_reason = "Qualified by hard filters + AI score with warnings"
+                if state == "needs_review":
+                    qualification_result = "qualified"
+                    blocking_rule = None
+                    qualification_detail = "Qualified for queue review."
+                    qualification_context = {"warnings": warnings}
 
                 email = RecruiterEmail(
                     owner_id=self.deps.owner_id,
@@ -395,6 +462,14 @@ class OrchestrationService:
                     intent_negative_evidence_json=json.dumps(intent_decision.negative_evidence, separators=(",", ":")),
                     gate_action=intent_decision.action,
                     gate_provider=intent_decision.provider,
+                    source_group_name=trusted_group_context.group_name,
+                    source_group_email=trusted_group_context.group_email,
+                    source_group_match_method=trusted_group_context.match_method,
+                    source_group_trusted=trusted_group_context.trusted if trusted_group_context.matched else False,
+                    qualification_result=qualification_result,
+                    blocking_rule=blocking_rule,
+                    qualification_detail=qualification_detail,
+                    qualification_context_json=json.dumps(qualification_context or {}, separators=(",", ":")),
                     sync_batch_id=sync_batch_id,
                     draft_reply=draft,
                     draft_source="rules_only" if draft else None,
@@ -555,6 +630,7 @@ class OrchestrationService:
         try:
             active_resume = self.deps.active_resume(db)
             enabled_resumes = self.deps.enabled_resumes(db)
+            trusted_groups = self._load_enabled_requirement_groups(db) if user_settings.feature_gmail_requirement_groups_enabled else []
             run_orchestrator = RunOrchestrator()
             result = run_orchestrator.execute(
                 RunOrchestratorRequest(
@@ -566,6 +642,7 @@ class OrchestrationService:
                     active_resume=active_resume,
                     enabled_resumes=enabled_resumes,
                     effective_policy=effective_policy,
+                    trusted_groups=trusted_groups,
                     threshold=threshold,
                     dry_run=dry_run,
                     model_name=self.deps.model_name,

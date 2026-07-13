@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from urllib.parse import quote
 
-from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.ai.draft_quality import assess_draft_quality
@@ -57,6 +57,14 @@ class RecruiterEmail(Base):
     intent_negative_evidence_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     gate_action: Mapped[str | None] = mapped_column(String(40), nullable=True)
     gate_provider: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    source_group_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    source_group_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    source_group_match_method: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    source_group_trusted: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    qualification_result: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    blocking_rule: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    qualification_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    qualification_context_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     sync_batch_id: Mapped[str | None] = mapped_column(String(100), index=True, nullable=True)
     draft_reply: Mapped[str] = mapped_column(Text, default="")
     draft_source: Mapped[str | None] = mapped_column(String(50), nullable=True)
@@ -159,6 +167,7 @@ class UserSettings(Base):
     feature_ai_extractor_enabled: Mapped[bool] = mapped_column(default=False)
     feature_semantic_enabled: Mapped[bool] = mapped_column(default=False)
     feature_groq_job_parser_enabled: Mapped[bool] = mapped_column(default=False)
+    feature_gmail_requirement_groups_enabled: Mapped[bool] = mapped_column(default=False)
     draft_text_size: Mapped[str] = mapped_column(String(20), default="normal")
     fallback_draft_template: Mapped[str] = mapped_column(Text, default="")
     signature_name: Mapped[str] = mapped_column(String(255), default="")
@@ -185,6 +194,23 @@ class ResumeAsset(Base):
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     is_current: Mapped[bool] = mapped_column(default=True)
     semantic_embedding: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+
+class GmailRequirementGroup(Base):
+    __tablename__ = "gmail_requirement_groups"
+    __table_args__ = (
+        UniqueConstraint("owner_id", "normalized_group_email", name="ux_gmail_requirement_groups_owner_normalized"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    display_name: Mapped[str] = mapped_column(String(255), default="")
+    group_email: Mapped[str] = mapped_column(String(255), default="", index=True)
+    normalized_group_email: Mapped[str] = mapped_column(String(255), default="", index=True)
+    group_slug: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
@@ -297,6 +323,14 @@ class RecentRunSkippedItem(Base):
     intent_negative_evidence_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     gate_action: Mapped[str | None] = mapped_column(String(40), nullable=True)
     gate_provider: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    source_group_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    source_group_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    source_group_match_method: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    source_group_trusted: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    qualification_result: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    blocking_rule: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    qualification_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    qualification_context_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
 

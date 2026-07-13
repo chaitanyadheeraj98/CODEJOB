@@ -8,6 +8,7 @@ from app.ai.resume_context_attribution import RESUME_CONTEXT_MISSING, RESUME_CON
 from app.models import RecruiterEmail, ResumeAsset, UserSettings
 from app.routing import RoutingDecision
 from app.services import policy_service
+from app.phase0 import _parse_salary_floor
 
 
 @dataclass(frozen=True)
@@ -57,11 +58,86 @@ class QueuePreparationResult:
     decision_reason: str
     auto_reject_reason: str | None
     skip_reason: str | None
+    qualification_result: str | None
+    blocking_rule: str | None
+    qualification_detail: str | None
+    qualification_context: dict[str, object] | None
     draft_reply: str | None
     draft_source: str | None
     draft_model: str | None
     draft_ai_error: str | None
     draft_resume_context_status: str | None
+
+
+def describe_hard_filter_block(
+    *,
+    parsed: Mapping[str, str | int | bool],
+    user_settings: UserSettings,
+    effective_policy: Mapping[str, Any],
+    hard_reason: str,
+) -> tuple[str, str, dict[str, object]]:
+    reasons = [part.strip() for part in hard_reason.removeprefix("blocked: ").split(",") if part.strip()]
+    rules = policy_service.draft_rules(effective_policy)
+    accepted_rule = rules["accepted_location"]
+    accepted_from_rule = [loc.strip() for loc in accepted_rule.get("locations", []) if loc.strip()]
+    accepted_locations = accepted_from_rule or [loc.strip() for loc in user_settings.accepted_locations.split(",") if loc.strip()]
+    if "location_mismatch" in reasons:
+        actual_location = str(parsed.get("location") or "unknown")
+        return (
+            "accepted_location",
+            f'Location "{actual_location}" did not match accepted locations: {", ".join(accepted_locations) or "none"}.',
+            {"actual_location": actual_location, "accepted_locations": accepted_locations},
+        )
+    if "salary_below_min" in reasons:
+        minimum_salary = rules["minimum_salary"].get("value")
+        if minimum_salary is None:
+            minimum_salary = user_settings.min_salary
+        actual_floor = _parse_salary_floor(str(parsed.get("salary_text") or ""))
+        return (
+            "minimum_salary",
+            f'Salary floor {actual_floor if actual_floor is not None else "unknown"} was below minimum {minimum_salary}.',
+            {"actual_salary_floor": actual_floor, "minimum_salary": minimum_salary},
+        )
+    missing_skills_reason = next((reason for reason in reasons if reason.startswith("missing_skills:")), None)
+    if missing_skills_reason:
+        missing_skills = [skill for skill in missing_skills_reason.split(":", 1)[1].split("|") if skill]
+        return (
+            "must_have_skills",
+            f'Missing required skills: {", ".join(missing_skills)}.',
+            {"missing_skills": missing_skills},
+        )
+    return (
+        "hard_filters",
+        "One or more qualification rules blocked this message.",
+        {"reasons": reasons},
+    )
+
+
+def describe_score_threshold_block(*, ai_score: float, threshold: float) -> tuple[str, str, dict[str, object]]:
+    return (
+        "score_threshold",
+        f"Resume-fit score {ai_score:.2f} was below threshold {threshold:.2f}.",
+        {"ai_score": round(ai_score, 4), "threshold": round(threshold, 4)},
+    )
+
+
+def describe_f2f_block(*, block_reason: str) -> tuple[str, str, dict[str, object]]:
+    return (
+        "f2f_non_texas",
+        block_reason or "Face-to-face requirement blocked this role.",
+        {"policy_reason": block_reason},
+    )
+
+
+def describe_routing_block(routing_decision: RoutingDecision) -> tuple[str, str, dict[str, object]]:
+    return (
+        "recipient_mapping",
+        "Recipient routing could not resolve both recruiter To and employer CC.",
+        {
+            "routing_status": routing_decision.status,
+            "recommended_skip_reason": routing_decision.recommended_skip_reason,
+        },
+    )
 
 
 def _valid_nvoids_listing_url(value: str | None) -> str | None:
@@ -124,8 +200,22 @@ def prepare_candidate_for_queue(
     if score_mode == "warn" and ai_score < request.threshold:
         warning_messages.append(f"score_below_threshold:{ai_score:.2f}<{request.threshold:.2f}")
     if not hard_pass or score_blocked or blocked:
+        if blocked:
+            blocking_rule, qualification_detail, qualification_context = describe_f2f_block(block_reason=block_reason)
+        elif not hard_pass:
+            blocking_rule, qualification_detail, qualification_context = describe_hard_filter_block(
+                parsed=parsed,
+                user_settings=request.user_settings,
+                effective_policy=request.effective_policy,
+                hard_reason=hard_reason,
+            )
+        else:
+            blocking_rule, qualification_detail, qualification_context = describe_score_threshold_block(
+                ai_score=ai_score,
+                threshold=request.threshold,
+            )
         auto_reject_reason = "f2f_non_texas" if blocked else (hard_reason.removeprefix("blocked: ").strip() if not hard_pass else "ai_score_too_low")
-        decision_reason = block_reason if blocked else "Not qualified for auto-reply"
+        decision_reason = qualification_detail
         skip_reason = "f2f_non_texas_blocked" if blocked else "not_qualified"
         return QueuePreparationResult(
             outcome="not_qualified",
@@ -141,6 +231,10 @@ def prepare_candidate_for_queue(
             decision_reason=decision_reason,
             auto_reject_reason=auto_reject_reason,
             skip_reason=skip_reason,
+            qualification_result="rejected",
+            blocking_rule=blocking_rule,
+            qualification_detail=qualification_detail,
+            qualification_context=qualification_context,
             draft_reply=None,
             draft_source=None,
             draft_model=None,
@@ -158,6 +252,7 @@ def prepare_candidate_for_queue(
     )
     recipient_mapping_mode = policy_service.recipient_mapping_rule_mode(request.effective_policy)
     if routing_decision.should_mark_failed and recipient_mapping_mode == "block":
+        blocking_rule, qualification_detail, qualification_context = describe_routing_block(routing_decision)
         return QueuePreparationResult(
             outcome="routing_failed",
             parsed=parsed,
@@ -169,9 +264,13 @@ def prepare_candidate_for_queue(
             resume_embedding_json=resume_embedding_json,
             semantic_diag=semantic_diag,
             routing_decision=routing_decision,
-            decision_reason="Recipient routing unresolved",
+            decision_reason=qualification_detail,
             auto_reject_reason=None,
             skip_reason=routing_decision.recommended_skip_reason,
+            qualification_result="rejected",
+            blocking_rule=blocking_rule,
+            qualification_detail=qualification_detail,
+            qualification_context=qualification_context,
             draft_reply=None,
             draft_source=None,
             draft_model=None,
@@ -243,6 +342,10 @@ def prepare_candidate_for_queue(
         decision_reason="Qualified and queued for manual approval with warnings" if warning_messages else "Qualified and queued for manual approval",
         auto_reject_reason=None,
         skip_reason=None,
+        qualification_result="qualified",
+        blocking_rule=None,
+        qualification_detail="Qualified for queue review.",
+        qualification_context={"warnings": warning_messages},
         draft_reply=draft_reply,
         draft_source=draft_source,
         draft_model=draft_model,

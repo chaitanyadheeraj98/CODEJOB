@@ -65,6 +65,14 @@ class SkippedItemRecord:
     intent_negative_evidence: list[str] | None = None
     gate_action: str | None = None
     gate_provider: str | None = None
+    source_group_name: str | None = None
+    source_group_email: str | None = None
+    source_group_match_method: str | None = None
+    source_group_trusted: bool | None = None
+    qualification_result: str | None = None
+    blocking_rule: str | None = None
+    qualification_detail: str | None = None
+    qualification_context: dict[str, Any] | None = None
 
 
 def create_recent_run(
@@ -154,6 +162,14 @@ def record_skipped_item(db: Session, payload: SkippedItemRecord) -> RecentRunSki
         intent_negative_evidence_json=json.dumps(payload.intent_negative_evidence or [], separators=(",", ":")),
         gate_action=payload.gate_action,
         gate_provider=payload.gate_provider,
+        source_group_name=payload.source_group_name,
+        source_group_email=payload.source_group_email,
+        source_group_match_method=payload.source_group_match_method,
+        source_group_trusted=payload.source_group_trusted,
+        qualification_result=payload.qualification_result,
+        blocking_rule=payload.blocking_rule,
+        qualification_detail=payload.qualification_detail,
+        qualification_context_json=json.dumps(payload.qualification_context or {}, separators=(",", ":")),
     )
     db.add(row)
     db.flush()

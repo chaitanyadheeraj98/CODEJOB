@@ -58,6 +58,7 @@ from app.models import (
     CustomSkillTaxonomyEntry,
     DraftEditFeedback,
     EmployerNumber,
+    GmailRequirementGroup,
     JobIntentTaxonomyEntry,
     NumberReviewQueue,
     PremiumNumberLead,
@@ -110,6 +111,12 @@ from app.job_intent_learning import normalize_job_intent_phrase
 from app.services import analytics_service, policy_service
 from app.services.auto_runner_service import AutoRunnerService
 from app.services.candidate_runtime_service import CandidateRuntimeDeps, CandidateRuntimeService, resolve_resume_display_name
+from app.services.gmail_group_source_service import (
+    canonical_group_display_name,
+    normalize_google_group_email,
+    normalize_google_group_slug,
+    parse_group_inputs,
+)
 from app.services.gmail_labeling_runtime_service import GmailLabelingRuntimeService
 from app.services.orchestration_service import OrchestrationDeps, OrchestrationService
 from app.services.routing_runtime_service import RoutingRuntimeDeps, RoutingRuntimeService
@@ -175,6 +182,10 @@ from app.schemas import (
     TelegramStatusResponse,
     ExternalFeedSyncResponse,
     ExternalScrapeRunResponse,
+    GmailRequirementGroupBulkCreateRequest,
+    GmailRequirementGroupCreateRequest,
+    GmailRequirementGroupResponse,
+    GmailRequirementGroupUpdateRequest,
 )
 from app.semantic.embeddings_service import (
     begin_embedding_latency_capture,
@@ -1759,6 +1770,14 @@ def _recent_run_item_response(row: RecentRunSkippedItem) -> RecentRunItemRespons
         intent_negative_evidence=_json_string_list(row.intent_negative_evidence_json),
         gate_action=row.gate_action,
         gate_provider=row.gate_provider,
+        source_group_name=row.source_group_name,
+        source_group_email=row.source_group_email,
+        source_group_match_method=row.source_group_match_method,
+        source_group_trusted=row.source_group_trusted,
+        qualification_result=row.qualification_result,
+        blocking_rule=row.blocking_rule,
+        qualification_detail=row.qualification_detail,
+        qualification_context=_json_object(row.qualification_context_json),
         created_at=row.created_at,
     )
 
@@ -1795,6 +1814,7 @@ def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
         feature_ai_extractor_enabled=s.feature_ai_extractor_enabled,
         feature_semantic_enabled=s.feature_semantic_enabled,
         feature_groq_job_parser_enabled=s.feature_groq_job_parser_enabled,
+        feature_gmail_requirement_groups_enabled=s.feature_gmail_requirement_groups_enabled,
         draft_text_size=normalize_draft_text_size(s.draft_text_size),
         fallback_draft_template=s.fallback_draft_template or DEFAULT_FALLBACK_DRAFT_TEMPLATE,
         signature_name=(s.signature_name or "").strip() or DEFAULT_SIGNATURE_NAME,
@@ -1809,6 +1829,71 @@ def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
         created_at=s.created_at,
         updated_at=s.updated_at,
     )
+
+
+def _json_object(raw: str | None) -> dict[str, object] | None:
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _list_gmail_requirement_groups(db: Session) -> list[GmailRequirementGroup]:
+    return (
+        db.query(GmailRequirementGroup)
+        .filter(GmailRequirementGroup.owner_id == settings.owner_id)
+        .order_by(GmailRequirementGroup.display_name.asc(), GmailRequirementGroup.id.asc())
+        .all()
+    )
+
+
+def _gmail_requirement_group_response(row: GmailRequirementGroup) -> GmailRequirementGroupResponse:
+    return GmailRequirementGroupResponse.model_validate(row)
+
+
+def _create_gmail_requirement_group(
+    db: Session,
+    *,
+    value: str,
+    display_name: str | None = None,
+    enabled: bool = True,
+) -> GmailRequirementGroup:
+    normalized_group_email = normalize_google_group_email(value)
+    if not normalized_group_email:
+        raise HTTPException(status_code=400, detail="Could not normalize this group value into a Google Groups address.")
+    group_slug = normalize_google_group_slug(value) or normalized_group_email.split("@", 1)[0]
+    existing = (
+        db.query(GmailRequirementGroup)
+        .filter(
+            GmailRequirementGroup.owner_id == settings.owner_id,
+            GmailRequirementGroup.normalized_group_email == normalized_group_email,
+        )
+        .first()
+    )
+    if existing:
+        if display_name is not None and display_name.strip():
+            existing.display_name = display_name.strip()
+        existing.group_email = normalized_group_email
+        existing.group_slug = group_slug
+        existing.enabled = enabled
+        db.commit()
+        db.refresh(existing)
+        return existing
+    row = GmailRequirementGroup(
+        owner_id=settings.owner_id,
+        display_name=canonical_group_display_name(normalized_group_email, display_name),
+        group_email=normalized_group_email,
+        normalized_group_email=normalized_group_email,
+        group_slug=group_slug,
+        enabled=enabled,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
 
 
 def _repair_unknown_role_drafts(db: Session, emails: list[RecruiterEmail]) -> None:
@@ -1866,6 +1951,7 @@ def get_settings_bootstrap(db: Session = Depends(get_db)) -> SettingsBootstrapRe
     user_settings = _get_settings(db)
     return SettingsBootstrapResponse(
         settings=_settings_response_from_model(user_settings),
+        gmail_requirement_groups=[_gmail_requirement_group_response(item) for item in _list_gmail_requirement_groups(db)],
         resumes=[ResumeResponse.model_validate(item) for item in _list_resumes(db)],
         attachments=[AttachmentAssetResponse.model_validate(item) for item in _list_attachment_assets(db)],
         pending_skills=_list_pending_unknown_skills(db),
@@ -1912,6 +1998,7 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
     s.feature_ai_extractor_enabled = payload.feature_ai_extractor_enabled
     s.feature_semantic_enabled = payload.feature_semantic_enabled
     s.feature_groq_job_parser_enabled = payload.feature_groq_job_parser_enabled
+    s.feature_gmail_requirement_groups_enabled = payload.feature_gmail_requirement_groups_enabled
     s.draft_text_size = normalize_draft_text_size(payload.draft_text_size)
     s.fallback_draft_template = payload.fallback_draft_template.strip() if payload.fallback_draft_template.strip() else DEFAULT_FALLBACK_DRAFT_TEMPLATE
     s.signature_name = payload.signature_name.strip() if payload.signature_name.strip() else DEFAULT_SIGNATURE_NAME
@@ -1926,6 +2013,83 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
     db.commit()
     db.refresh(s)
     return _settings_response_from_model(s)
+
+
+@app.get("/settings/gmail-groups", response_model=list[GmailRequirementGroupResponse])
+def list_gmail_requirement_groups(db: Session = Depends(get_db)) -> list[GmailRequirementGroupResponse]:
+    return [_gmail_requirement_group_response(item) for item in _list_gmail_requirement_groups(db)]
+
+
+@app.post("/settings/gmail-groups", response_model=GmailRequirementGroupResponse)
+def create_gmail_requirement_group(payload: GmailRequirementGroupCreateRequest, db: Session = Depends(get_db)) -> GmailRequirementGroupResponse:
+    row = _create_gmail_requirement_group(
+        db,
+        value=payload.value,
+        display_name=payload.display_name,
+        enabled=payload.enabled,
+    )
+    return _gmail_requirement_group_response(row)
+
+
+@app.post("/settings/gmail-groups/bulk", response_model=list[GmailRequirementGroupResponse])
+def bulk_create_gmail_requirement_groups(
+    payload: GmailRequirementGroupBulkCreateRequest,
+    db: Session = Depends(get_db),
+) -> list[GmailRequirementGroupResponse]:
+    rows: list[GmailRequirementGroupResponse] = []
+    for normalized_group_email, display_name in parse_group_inputs(payload.values):
+        row = _create_gmail_requirement_group(
+            db,
+            value=normalized_group_email,
+            display_name=display_name,
+            enabled=True,
+        )
+        rows.append(_gmail_requirement_group_response(row))
+    return rows
+
+
+@app.patch("/settings/gmail-groups/{group_id}", response_model=GmailRequirementGroupResponse)
+def update_gmail_requirement_group(
+    group_id: int,
+    payload: GmailRequirementGroupUpdateRequest,
+    db: Session = Depends(get_db),
+) -> GmailRequirementGroupResponse:
+    row = (
+        db.query(GmailRequirementGroup)
+        .filter(
+            GmailRequirementGroup.owner_id == settings.owner_id,
+            GmailRequirementGroup.id == group_id,
+        )
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Gmail requirement group not found")
+    if payload.display_name is not None:
+        normalized_display_name = payload.display_name.strip()
+        row.display_name = normalized_display_name or canonical_group_display_name(row.group_email, None)
+    if payload.enabled is not None:
+        row.enabled = payload.enabled
+    db.commit()
+    db.refresh(row)
+    return _gmail_requirement_group_response(row)
+
+
+@app.delete("/settings/gmail-groups/{group_id}", response_model=GmailRequirementGroupResponse)
+def delete_gmail_requirement_group(group_id: int, db: Session = Depends(get_db)) -> GmailRequirementGroupResponse:
+    row = (
+        db.query(GmailRequirementGroup)
+        .filter(
+            GmailRequirementGroup.owner_id == settings.owner_id,
+            GmailRequirementGroup.id == group_id,
+        )
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Gmail requirement group not found")
+    response = _gmail_requirement_group_response(row)
+    db.delete(row)
+    db.commit()
+    return response
 
 
 @app.post("/settings/resume", response_model=ResumeResponse)

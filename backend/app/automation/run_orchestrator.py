@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 import logging
 from typing import Any, Callable, Mapping, cast
@@ -16,6 +16,7 @@ from app.parsing import build_skills_json_payload
 from app.recent_runs import SkippedItemRecord
 from app.routing import RoutingDecision
 from app.services import policy_service
+from app.services.gmail_group_source_service import ConfiguredRequirementGroup, resolve_trusted_group_context
 from .queue_preparation import (
     QueuePreparationDependencies,
     QueuePreparationRequest,
@@ -72,6 +73,7 @@ class RunOrchestratorRequest:
     run_source: str
     run_key: str
     deps: RunOrchestratorDependencies
+    trusted_groups: list[ConfiguredRequirementGroup] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -138,6 +140,18 @@ class RunOrchestrator:
             recruiter_like_warning: str | None = None
             recruiter_like_mode = policy_service.recruiter_like_rule_mode(request.effective_policy)
             recruiter_like = request.deps.is_recruiter_like(sender, subject, body)
+            trusted_group_context = resolve_trusted_group_context(
+                groups=request.trusted_groups,
+                subject=subject,
+                body=body,
+                to_header=str(item.get("to_header") or ""),
+                cc_header=str(item.get("cc_header") or ""),
+                list_id=str(item.get("list_id") or ""),
+                list_post=str(item.get("list_post") or ""),
+                list_unsubscribe=str(item.get("list_unsubscribe") or ""),
+                delivered_to=str(item.get("delivered_to") or ""),
+                mailing_list=str(item.get("mailing_list") or ""),
+            )
             approved_learning_signals = approved_learning_signals_for_owner(request.db, request.owner_id)
             intent_decision = request.deps.classify_email_intent(
                 sender=sender,
@@ -146,6 +160,7 @@ class RunOrchestrator:
                 snippet=snippet,
                 recruiter_like=recruiter_like,
                 groq_enabled=bool(request.user_settings.feature_groq_job_parser_enabled),
+                trusted_group_context=trusted_group_context,
                 approved_learning_signals=approved_learning_signals,
             )
             if intent_decision.provider == "groq":
@@ -166,6 +181,7 @@ class RunOrchestrator:
                     reason_code=intent_decision.intent_type or "skip",
                     reason_detail=intent_decision.reason,
                     intent_decision=intent_decision,
+                    trusted_group_context=trusted_group_context,
                 )
                 continue
             if recruiter_like_mode in {"block", "warn"} and not recruiter_like:
@@ -255,6 +271,11 @@ class RunOrchestrator:
                         reason_code=preparation.skip_reason or "not_qualified",
                         reason_detail=preparation.decision_reason or "Skipped because the candidate was not qualified for queueing.",
                         intent_decision=intent_decision,
+                        trusted_group_context=trusted_group_context,
+                        qualification_result=preparation.qualification_result,
+                        blocking_rule=preparation.blocking_rule,
+                        qualification_detail=preparation.qualification_detail,
+                        qualification_context=preparation.qualification_context,
                     )
                     continue
                 email = self._email_row(existing, request, item, parsed, parser_details_json, skills_json)
@@ -297,6 +318,14 @@ class RunOrchestrator:
                     target.intent_negative_evidence_json = json.dumps(intent_decision.negative_evidence, separators=(",", ":"))
                     target.gate_action = intent_decision.action
                     target.gate_provider = intent_decision.provider
+                    target.source_group_name = trusted_group_context.group_name
+                    target.source_group_email = trusted_group_context.group_email
+                    target.source_group_match_method = trusted_group_context.match_method
+                    target.source_group_trusted = trusted_group_context.trusted if trusted_group_context.matched else False
+                    target.qualification_result = preparation.qualification_result
+                    target.blocking_rule = preparation.blocking_rule
+                    target.qualification_detail = preparation.qualification_detail
+                    target.qualification_context_json = json.dumps(preparation.qualification_context or {}, separators=(",", ":"))
                     target.last_error = None
                     target.draft_source = None
                     target.draft_model = None
@@ -327,6 +356,11 @@ class RunOrchestrator:
                     candidate_email_id=email.id,
                     gmail_message_url=email.gmail_message_url,
                     intent_decision=intent_decision,
+                    trusted_group_context=trusted_group_context,
+                    qualification_result=email.qualification_result,
+                    blocking_rule=email.blocking_rule,
+                    qualification_detail=email.qualification_detail,
+                    qualification_context=json.loads(email.qualification_context_json or "{}") if email.qualification_context_json else None,
                 )
                 last_email = email
                 continue
@@ -352,10 +386,18 @@ class RunOrchestrator:
                     target.intent_negative_evidence_json = json.dumps(intent_decision.negative_evidence, separators=(",", ":"))
                     target.gate_action = intent_decision.action
                     target.gate_provider = intent_decision.provider
+                    target.source_group_name = trusted_group_context.group_name
+                    target.source_group_email = trusted_group_context.group_email
+                    target.source_group_match_method = trusted_group_context.match_method
+                    target.source_group_trusted = trusted_group_context.trusted if trusted_group_context.matched else False
                     warnings: list[str] = []
                     if recruiter_like_warning:
                         warnings.append(recruiter_like_warning)
                     target.hard_filter_result = policy_service.combine_rule_messages(warnings)
+                    target.qualification_result = preparation.qualification_result
+                    target.blocking_rule = preparation.blocking_rule
+                    target.qualification_detail = preparation.qualification_detail
+                    target.qualification_context_json = json.dumps(preparation.qualification_context or {}, separators=(",", ":"))
                     request.deps.apply_routing_decision(target, routing_decision)
                     target.routing_confirmed = False
                     target.resume_asset_id = selected_resume.id if selected_resume else None
@@ -432,12 +474,20 @@ class RunOrchestrator:
                 target.intent_negative_evidence_json = json.dumps(intent_decision.negative_evidence, separators=(",", ":"))
                 target.gate_action = intent_decision.action
                 target.gate_provider = intent_decision.provider
+                target.source_group_name = trusted_group_context.group_name
+                target.source_group_email = trusted_group_context.group_email
+                target.source_group_match_method = trusted_group_context.match_method
+                target.source_group_trusted = trusted_group_context.trusted if trusted_group_context.matched else False
                 warnings: list[str] = []
                 if preparation.hard_filter_reason not in {"", "hard_filters_passed"}:
                     warnings.append(preparation.hard_filter_reason.removeprefix("warnings: ").strip())
                 if recruiter_like_warning:
                     warnings.append(recruiter_like_warning)
                 target.hard_filter_result = policy_service.combine_rule_messages(warnings)
+                target.qualification_result = preparation.qualification_result
+                target.blocking_rule = preparation.blocking_rule
+                target.qualification_detail = preparation.qualification_detail
+                target.qualification_context_json = json.dumps(preparation.qualification_context or {}, separators=(",", ":"))
                 target.draft_reply = preparation.draft_reply or ""
                 target.draft_source = preparation.draft_source
                 target.draft_model = preparation.draft_model
@@ -581,6 +631,11 @@ class RunOrchestrator:
         candidate_email_id: int | None = None,
         gmail_message_url: str | None = None,
         intent_decision: EmailIntentDecision | None = None,
+        trusted_group_context: Any = None,
+        qualification_result: str | None = None,
+        blocking_rule: str | None = None,
+        qualification_detail: str | None = None,
+        qualification_context: dict[str, Any] | None = None,
     ) -> None:
         request.deps.record_skipped_item(
             request.db,
@@ -605,5 +660,13 @@ class RunOrchestrator:
                 intent_negative_evidence=intent_decision.negative_evidence if intent_decision else None,
                 gate_action=intent_decision.action if intent_decision else None,
                 gate_provider=intent_decision.provider if intent_decision else None,
+                source_group_name=getattr(trusted_group_context, "group_name", None),
+                source_group_email=getattr(trusted_group_context, "group_email", None),
+                source_group_match_method=getattr(trusted_group_context, "match_method", None),
+                source_group_trusted=getattr(trusted_group_context, "trusted", None),
+                qualification_result=qualification_result,
+                blocking_rule=blocking_rule,
+                qualification_detail=qualification_detail,
+                qualification_context=qualification_context,
             ),
         )

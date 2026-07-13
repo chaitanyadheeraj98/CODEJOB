@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import Sidebar from './components/Sidebar'
 import { withAiToggle } from './features/ai/state'
+import TrustedGmailGroupsPanel, { type TrustedGmailGroup } from './features/gmail_groups/TrustedGmailGroupsPanel'
 import { getDraftSourceLabel } from './features/ai/ui'
 import { withSavedQueries } from './features/query_bucket/api'
 import QueryBucket from './features/query_bucket/QueryBucket'
@@ -175,6 +176,7 @@ type SettingsPayload = {
   feature_ai_extractor_enabled: boolean
   feature_semantic_enabled: boolean
   feature_groq_job_parser_enabled: boolean
+  feature_gmail_requirement_groups_enabled: boolean
   draft_text_size: DraftTextSize
   fallback_draft_template: string
   signature_name: string
@@ -386,6 +388,14 @@ type RecentRunItem = {
   intent_negative_evidence: string[]
   gate_action?: string | null
   gate_provider?: string | null
+  source_group_name?: string | null
+  source_group_email?: string | null
+  source_group_match_method?: string | null
+  source_group_trusted?: boolean | null
+  qualification_result?: string | null
+  blocking_rule?: string | null
+  qualification_detail?: string | null
+  qualification_context?: Record<string, unknown> | null
   created_at: string
 }
 
@@ -472,6 +482,7 @@ type JobIntentLearningSignal = {
 
 type SettingsBootstrapPayload = {
   settings: SettingsPayload
+  gmail_requirement_groups: TrustedGmailGroup[]
   resumes: ResumeAsset[]
   attachments: AttachmentAsset[]
   pending_skills: PendingSkill[]
@@ -1875,6 +1886,7 @@ function App() {
     feature_ai_extractor_enabled: false,
     feature_semantic_enabled: false,
     feature_groq_job_parser_enabled: false,
+    feature_gmail_requirement_groups_enabled: false,
     draft_text_size: 'normal',
     fallback_draft_template: '',
     signature_name: '',
@@ -1888,6 +1900,8 @@ function App() {
   const [resumeSkillsInput, setResumeSkillsInput] = useState('')
   const [resumeSkillEdits, setResumeSkillEdits] = useState<Record<number, string>>({})
   const [attachmentUploadFiles, setAttachmentUploadFiles] = useState<File[]>([])
+  const [gmailRequirementGroups, setGmailRequirementGroups] = useState<TrustedGmailGroup[]>([])
+  const [gmailGroupsBusy, setGmailGroupsBusy] = useState(false)
   const [resumeAssets, setResumeAssets] = useState<ResumeAsset[]>([])
   const [attachmentFiles, setAttachmentFiles] = useState<AttachmentAsset[]>([])
   const [pendingSkills, setPendingSkills] = useState<PendingSkill[]>([])
@@ -2166,6 +2180,7 @@ function App() {
       feature_ai_extractor_enabled: Boolean(payload.feature_ai_extractor_enabled),
       feature_semantic_enabled: Boolean(payload.feature_semantic_enabled),
       feature_groq_job_parser_enabled: Boolean(payload.feature_groq_job_parser_enabled),
+      feature_gmail_requirement_groups_enabled: Boolean(payload.feature_gmail_requirement_groups_enabled),
       default_gmail_query: payload.default_gmail_query || payload.gmail_query || 'is:unread',
       saved_gmail_queries: payload.saved_gmail_queries ?? [],
       default_date_mode: payload.default_date_mode === 'off' ? 'off' : 'today',
@@ -2187,6 +2202,7 @@ function App() {
   const applySettingsBootstrapPayload = (payload: SettingsBootstrapPayload): SettingsPayload => {
     const normalized = normalizeSettingsPayload(payload.settings)
     setSettings(normalized)
+    setGmailRequirementGroups(payload.gmail_requirement_groups ?? [])
     setResumeAssets(payload.resumes ?? [])
     setResumeSkillEdits(Object.fromEntries((payload.resumes ?? []).map((resume) => [resume.id, resume.skills_text ?? ''])))
     setAttachmentFiles(payload.attachments ?? [])
@@ -2227,6 +2243,62 @@ function App() {
     setSettingsBootstrapStatus('ready')
     setHasLoadedSettingsBootstrap(true)
     return normalized
+  }
+
+  const addTrustedGmailGroup = async (value: string, displayName: string) => {
+    setGmailGroupsBusy(true)
+    try {
+      const res = await fetch(`${apiBase}/settings/gmail-groups`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value, display_name: displayName, enabled: true }),
+      })
+      if (!res.ok) throw new Error('Failed to add trusted Gmail group')
+      await loadSettingsBootstrap()
+    } finally {
+      setGmailGroupsBusy(false)
+    }
+  }
+
+  const bulkAddTrustedGmailGroups = async (values: string) => {
+    setGmailGroupsBusy(true)
+    try {
+      const res = await fetch(`${apiBase}/settings/gmail-groups/bulk`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ values }),
+      })
+      if (!res.ok) throw new Error('Failed to bulk add trusted Gmail groups')
+      await loadSettingsBootstrap()
+    } finally {
+      setGmailGroupsBusy(false)
+    }
+  }
+
+  const updateTrustedGmailGroup = async (groupId: number, patch: { display_name?: string; enabled?: boolean }) => {
+    setGmailGroupsBusy(true)
+    try {
+      const res = await fetch(`${apiBase}/settings/gmail-groups/${groupId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      })
+      if (!res.ok) throw new Error('Failed to update trusted Gmail group')
+      await loadSettingsBootstrap()
+    } finally {
+      setGmailGroupsBusy(false)
+    }
+  }
+
+  const deleteTrustedGmailGroup = async (groupId: number) => {
+    setGmailGroupsBusy(true)
+    try {
+      const res = await fetch(`${apiBase}/settings/gmail-groups/${groupId}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error('Failed to delete trusted Gmail group')
+      await loadSettingsBootstrap()
+    } finally {
+      setGmailGroupsBusy(false)
+    }
   }
 
   const activeResume = resumeAssets.find((item) => item.is_current) ?? null
@@ -4206,6 +4278,17 @@ function App() {
                 </div>
               </section>
 
+              <TrustedGmailGroupsPanel
+                featureEnabled={settings.feature_gmail_requirement_groups_enabled}
+                groups={gmailRequirementGroups}
+                busy={gmailGroupsBusy}
+                onFeatureToggle={(enabled) => setSettings({ ...settings, feature_gmail_requirement_groups_enabled: enabled })}
+                onAddGroup={addTrustedGmailGroup}
+                onBulkAdd={bulkAddTrustedGmailGroups}
+                onUpdateGroup={updateTrustedGmailGroup}
+                onDeleteGroup={deleteTrustedGmailGroup}
+              />
+
               <section className="card">
                 <h2>Execution Control</h2>
                 <div className="stack">
@@ -4790,6 +4873,15 @@ function App() {
                             <p><strong>Source:</strong> {getSourceLabel(skipped.source_type)}</p>
                             <p><strong>Title:</strong> {renderTextOrDash(skipped.title_or_subject)}</p>
                             <p><strong>Why:</strong> {renderTextOrDash(skipped.reason_detail || skipped.reason_code)}</p>
+                            {skipped.source_group_name || skipped.source_group_email ? (
+                              <p>
+                                <strong>Source Group:</strong>{' '}
+                                {[skipped.source_group_name, skipped.source_group_email].filter(Boolean).join(' | ')}
+                              </p>
+                            ) : null}
+                            {skipped.source_group_match_method ? (
+                              <p><strong>Matched Through:</strong> {skipped.source_group_match_method}</p>
+                            ) : null}
                             {skipped.intent_type || skipped.gate_action || skipped.gate_provider ? (
                               <p>
                                 <strong>Gate:</strong>{' '}
@@ -4801,6 +4893,15 @@ function App() {
                             ) : null}
                             {skipped.intent_reason && skipped.intent_reason !== skipped.reason_detail ? (
                               <p><strong>Intent Reason:</strong> {skipped.intent_reason}</p>
+                            ) : null}
+                            {skipped.qualification_result ? (
+                              <p><strong>Qualification Result:</strong> {skipped.qualification_result}</p>
+                            ) : null}
+                            {skipped.blocking_rule ? (
+                              <p><strong>Blocking Rule:</strong> {skipped.blocking_rule}</p>
+                            ) : null}
+                            {skipped.qualification_detail && skipped.qualification_detail !== skipped.reason_detail ? (
+                              <p><strong>Qualification Detail:</strong> {skipped.qualification_detail}</p>
                             ) : null}
                             {intentEvidence.length > 0 ? (
                               <div className="automationMetrics">
