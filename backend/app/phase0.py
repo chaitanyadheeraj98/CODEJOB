@@ -3,6 +3,13 @@ from dataclasses import asdict, dataclass
 from typing import Any, Mapping
 
 from app.models import UserSettings
+from app.parsing.jd_requirements import (
+    REQUIREMENTS_SCHEMA_VERSION,
+    parse_structured_jd_requirements,
+    requirements_from_payload,
+    requirements_to_payload,
+    structured_requirements_from_ai_payload,
+)
 from app.services import policy_service
 from app.parsing.ai_extractor import ai_extractor_result_to_payload, extract_ai_job_details
 from app.parsing.skill_audit import audit_skills_text, skill_audit_result_to_payload
@@ -766,17 +773,62 @@ def hard_filter_check(
     parsed: dict[str, str | int | bool],
     settings: UserSettings,
     policy: policy_service.PolicyConfig | None = None,
+    parser_details: Mapping[str, Any] | None = None,
 ) -> tuple[bool, str]:
     blocked_reasons: list[str] = []
     warning_reasons: list[str] = []
     rules = policy_service.draft_rules(policy)
+    structured_requirements = requirements_from_payload(
+        ((parser_details or {}).get("structured_requirements") if isinstance(parser_details, Mapping) else None)
+    )
+
+    def _normalize_requirement_names(values: list[str]) -> set[str]:
+        normalized: set[str] = set()
+        for value in values:
+            skill = str(value or "").strip()
+            if not skill:
+                continue
+            normalized.add(skill.lower())
+            normalized.add(display_skill_label(skill).lower())
+        return {value for value in normalized if value}
+
+    def _structured_skill_inventory() -> set[str]:
+        skills: set[str] = set()
+        for group in (
+            *structured_requirements.required_groups,
+            *structured_requirements.preferred_groups,
+            *structured_requirements.informational_groups,
+        ):
+            for skill in group.skills:
+                skills.update(_normalize_requirement_names([skill.canonical_name, skill.matched_alias or ""]))
+        return skills
+
+    def _effective_locations() -> set[str]:
+        values = {str(parsed.get("location") or "").strip().lower()}
+        for location in structured_requirements.locations:
+            cleaned = str(location).strip().lower()
+            if not cleaned:
+                continue
+            values.add(cleaned)
+            if "tx" in cleaned or "texas" in cleaned:
+                values.add("texas")
+            if "remote" in cleaned:
+                values.add("remote")
+        work_mode = str(structured_requirements.work_mode or "").strip().lower()
+        if work_mode:
+            values.add(work_mode)
+        if structured_requirements.local_required:
+            values.add("local")
+            values.add("local only")
+        return {value for value in values if value}
 
     accepted_rule = rules["accepted_location"]
     accepted_mode = policy_service.draft_rule_mode(policy, "accepted_location")
     accepted_from_rule = [loc.strip().lower() for loc in accepted_rule.get("locations", []) if loc.strip()]
     accepted = accepted_from_rule or [loc.strip().lower() for loc in settings.accepted_locations.split(",") if loc.strip()]
     if accepted_mode != "ignore" and accepted:
-        if accepted and str(parsed["location"]).lower() not in accepted and "any" not in accepted:
+        effective_locations = _effective_locations()
+        if accepted and "any" not in accepted and not any(location in accepted for location in effective_locations):
             if accepted_mode == "block":
                 blocked_reasons.append("location_mismatch")
             else:
@@ -801,7 +853,16 @@ def hard_filter_check(
         combined = f"{parsed['role']} {parsed['skills_text']}".lower()
         must_have_from_rule = [s.strip().lower() for s in must_have_rule.get("skills", []) if s.strip()]
         must_have_skills = must_have_from_rule or [s.strip().lower() for s in settings.must_have_skills.split(",") if s.strip()]
-        missing = [skill for skill in must_have_skills if skill not in combined]
+        structured_skills = _structured_skill_inventory()
+        missing: list[str] = []
+        for skill in must_have_skills:
+            normalized_targets = _normalize_requirement_names([skill])
+            if structured_skills:
+                if not normalized_targets.intersection(structured_skills):
+                    missing.append(skill)
+                continue
+            if skill not in combined:
+                missing.append(skill)
         if missing:
             reason = f"missing_skills:{'|'.join(missing)}"
             if must_have_mode == "block":
@@ -1176,10 +1237,19 @@ def parse_email_with_details(
         normalize_skills_text(str(base.get("skills_text", "")), preserve_unknown=True)
     ).skills_text
     _apply_nvoids_source_hints(base, source=source, source_hints=source_hints)
+    section_body = ai_body_override if source == "nvoids" and ai_body_override is not None else body
+    cleaned_body = strip_recruiter_footer(strip_forward_headers(section_body or ""))
+    sections = slice_jd_sections(cleaned_body)
+    rules_requirements = parse_structured_jd_requirements(
+        build_skill_source_sections(sections),
+        full_text="\n".join(part for part in [subject, cleaned_body] if str(part or "").strip()),
+        source_hints=source_hints,
+    )
 
     final_parsed: dict[str, str | int | bool] = dict(base)
     ai_merge_notes: list[str] = []
     ai_payload: dict[str, Any] | None = None
+    structured_requirements_payload = requirements_to_payload(rules_requirements)
     parser_mode = "base_only"
     parser_warning: str | None = None
     fallback_used = False
@@ -1213,6 +1283,9 @@ def parse_email_with_details(
                 source=source,
                 source_hints=source_hints,
             )
+            structured_requirements_payload = requirements_to_payload(
+                structured_requirements_from_ai_payload(ai_payload, fallback=rules_requirements)
+            )
             parser_mode = "ai_primary"
 
     final_skills_audit = audit_skills_text(str(final_parsed.get("skills_text", "")))
@@ -1237,6 +1310,8 @@ def parse_email_with_details(
         "source_hints": {key: value for key, value in dict(source_hints or {}).items() if value not in (None, "")},
         "ai_input_source": str((source_hints or {}).get("ai_input_source") or ""),
         "ai_input_chars": int((source_hints or {}).get("ai_input_chars") or 0),
+        "structured_requirements": structured_requirements_payload,
+        "requirements_schema_version": REQUIREMENTS_SCHEMA_VERSION,
     }
     return final_parsed, parser_details
 

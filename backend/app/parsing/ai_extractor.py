@@ -22,6 +22,8 @@ class AIExtractorResult:
     visa_hints: tuple[str, ...] = ()
     experience_years_min: int | None = None
     skills_text: str = ""
+    must_have_skills: tuple[str, ...] = ()
+    nice_to_have_skills: tuple[str, ...] = ()
     f2f_mentioned: bool = False
     asks_contact_fields: bool = False
     is_texas_role: bool = False
@@ -357,6 +359,8 @@ def extract_ai_job_details(
     skills_text = ", ".join(free_skill_values)
     raw_skill_values = free_skill_values[:]
     skills_approved, skills_unknown = _split_skills(raw_skill_values)
+    must_have_skills = _dedupe_strings(_as_string_list(normalized_payload.get("must_have_skills")))
+    nice_to_have_skills = _dedupe_strings(_as_string_list(normalized_payload.get("nice_to_have_skills")))
 
     return AIExtractorResult(
         role_candidates=_dedupe_strings(role_candidates),
@@ -368,6 +372,8 @@ def extract_ai_job_details(
         visa_hints=_dedupe_strings(_as_string_list(normalized_payload.get("visa_hints"))),
         experience_years_min=_normalize_years(normalized_payload.get("experience_years_min")),
         skills_text=skills_text,
+        must_have_skills=must_have_skills,
+        nice_to_have_skills=nice_to_have_skills,
         f2f_mentioned=_normalize_bool(normalized_payload.get("f2f_mentioned")),
         asks_contact_fields=_normalize_bool(normalized_payload.get("asks_contact_fields")),
         is_texas_role=_normalize_bool(normalized_payload.get("is_texas_role")),
@@ -389,6 +395,8 @@ def ai_extractor_result_to_payload(result: AIExtractorResult) -> dict[str, objec
         "visa_hints": list(result.visa_hints),
         "experience_years_min": result.experience_years_min,
         "skills_text": result.skills_text,
+        "must_have_skills": list(result.must_have_skills),
+        "nice_to_have_skills": list(result.nice_to_have_skills),
         "f2f_mentioned": result.f2f_mentioned,
         "asks_contact_fields": result.asks_contact_fields,
         "is_texas_role": result.is_texas_role,

@@ -69,6 +69,21 @@ class ScoringRuntimeServiceTests(unittest.TestCase):
         self.assertTrue(payload is not None)
         self.assertGreaterEqual(len(calls), 2)
 
+    def test_safe_embed_chunking_reuses_cached_payload_for_long_input(self) -> None:
+        calls: list[int] = []
+
+        def embed(text: str) -> tuple[list[float], str]:
+            calls.append(len(text))
+            return [1.0, 2.0], "openrouter"
+
+        service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=embed))
+        vector, payload, provider, chunks = service._safe_embed_with_chunking("[0.25,0.75]", "x" * 2500)
+        self.assertEqual(vector, [0.25, 0.75])
+        self.assertEqual(payload, "[0.25,0.75]")
+        self.assertEqual(provider, "cache")
+        self.assertEqual(chunks, 1)
+        self.assertEqual(calls, [])
+
     def test_missing_resume_skills_skips_semantic_instead_of_file_extraction(self) -> None:
         def failing_embed(_text: str) -> tuple[list[float], str]:
             raise ValueError("No embedding data received")
@@ -304,6 +319,60 @@ class ScoringRuntimeServiceTests(unittest.TestCase):
         self.assertGreater(selection.final_resume_score, 0.0)
         self.assertIsNotNone(selection.picker_breakdown_json)
         self.assertIsNotNone(selection.candidate_rankings_json)
+
+    def test_select_best_resume_match_reuses_precomputed_email_embedding_across_resumes(self) -> None:
+        calls: list[int] = []
+
+        def embed(text: str) -> tuple[list[float], str]:
+            calls.append(len(text))
+            return [0.5, 0.5], "sbert"
+
+        service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=embed))
+        parsed = {
+            "role": "AI Engineer",
+            "skills_text": "RAG, Tool Calling, Human-in-the-Loop, Agentic Workflows, Embeddings, Observability, Python, Java, TypeScript, REST APIs",
+            "salary_text": "",
+            "location": "Remote",
+        }
+        body = "Need an AI engineer with strong retrieval, agentic workflows, observability, and safety. " * 40
+
+        class Settings:
+            feature_semantic_enabled = True
+            role_keywords = ""
+            free_text_guidance = ""
+
+        class Resume:
+            def __init__(self, rid: int, name: str, skills: str):
+                self.id = rid
+                self.file_name = name
+                self.skills_text = skills
+                self.semantic_embedding = None
+                self.file_path = name
+                self.is_enabled = True
+                self.is_current = False
+
+        resume_a = Resume(1, "a.docx", "Python, RAG")
+        resume_b = Resume(2, "b.docx", "Java, Observability")
+        email_chunks = service._chunk_text(
+            service.semantic_text_for_email("", body, parsed["role"], parsed["skills_text"]),
+            chunk_size=900,
+        )
+        expected_email_chunks = len(email_chunks)
+
+        selection = service.select_best_resume_match(
+            subject="",
+            body=body,
+            parsed=parsed,
+            user_settings=Settings(),
+            email_row=None,
+            resumes=[resume_a, resume_b],
+            fallback_resume=resume_a,
+        )
+
+        self.assertIsNotNone(selection.resume)
+        self.assertEqual(len(calls), expected_email_chunks + 2)
+        self.assertEqual(calls[:expected_email_chunks], [len(chunk) for chunk in email_chunks])
+        self.assertTrue(all(count < 900 for count in calls[-2:]))
 
     def test_non_ai_jd_keeps_foundation_bias_stable(self) -> None:
         service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1, 0.2], "hash")))
@@ -670,6 +739,238 @@ class ScoringRuntimeServiceTests(unittest.TestCase):
         self.assertEqual(breakdown.get("mandatory_gate_status"), "pass")
         self.assertNotIn("Docker", breakdown.get("mandatory_missing_skills", []))
         self.assertNotIn("Kubernetes", breakdown.get("mandatory_missing_skills", []))
+
+    def test_structured_any_group_is_satisfied_by_single_matching_alternative(self) -> None:
+        service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1, 0.2], "hash")))
+        parsed = {
+            "role": "Backend Engineer",
+            "skills_text": "Kafka, JMS, RabbitMQ",
+            "salary_text": "",
+            "location": "Remote",
+        }
+        parser_details = {
+            "structured_requirements": {
+                "schema_version": 1,
+                "required_groups": [
+                    {
+                        "group_id": "g1",
+                        "level": "mandatory",
+                        "mode": "any",
+                        "skills": [
+                            {"skill_id": "kafka", "canonical_name": "Kafka", "matched_alias": "kafka", "evidence_text": "Kafka, JMS, or RabbitMQ", "versions": [], "qualifiers": []},
+                            {"skill_id": "jms", "canonical_name": "JMS", "matched_alias": "jms", "evidence_text": "Kafka, JMS, or RabbitMQ", "versions": [], "qualifiers": []},
+                            {"skill_id": "rabbitmq", "canonical_name": "RabbitMQ", "matched_alias": "rabbitmq", "evidence_text": "Kafka, JMS, or RabbitMQ", "versions": [], "qualifiers": []},
+                        ],
+                        "evidence_text": "Kafka, JMS, or RabbitMQ",
+                        "section_heading": "Required Skills",
+                        "section_bucket": "required",
+                    }
+                ],
+                "preferred_groups": [],
+                "informational_groups": [],
+                "experience_years_min": None,
+                "local_required": False,
+                "work_mode": None,
+                "locations": [],
+                "warnings": [],
+                "preferred_domains": [],
+            }
+        }
+
+        class Settings:
+            feature_semantic_enabled = False
+            role_keywords = ""
+            free_text_guidance = ""
+
+        class Resume:
+            def __init__(self) -> None:
+                self.id = 1
+                self.file_name = "backend.docx"
+                self.skills_text = "Java, RabbitMQ, Spring Boot"
+                self.semantic_embedding = None
+                self.file_path = "backend.docx"
+                self.is_enabled = True
+                self.is_current = False
+
+        selection = service.select_best_resume_match(
+            subject="",
+            body="Required Skills: Kafka, JMS, or RabbitMQ",
+            parsed=parsed,
+            parser_details=parser_details,
+            user_settings=Settings(),
+            email_row=None,
+            resumes=[Resume()],
+            fallback_resume=None,
+        )
+        breakdown = json.loads(selection.picker_breakdown_json or "{}")
+        self.assertEqual(breakdown.get("mandatory_gate_status"), "pass")
+        self.assertNotIn("Kafka", breakdown.get("mandatory_missing_skills", []))
+        self.assertNotIn("JMS", breakdown.get("mandatory_missing_skills", []))
+        self.assertEqual(breakdown.get("matched_alternatives", {}).get("Kafka or JMS or RabbitMQ"), "RabbitMQ")
+
+    def test_version_unverified_is_reported_without_hard_fail(self) -> None:
+        service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1, 0.2], "hash")))
+        parsed = {
+            "role": "Java Developer",
+            "skills_text": "Java",
+            "salary_text": "",
+            "location": "Remote",
+        }
+        parser_details = {
+            "structured_requirements": {
+                "schema_version": 1,
+                "required_groups": [
+                    {
+                        "group_id": "java-version",
+                        "level": "mandatory",
+                        "mode": "all",
+                        "skills": [
+                            {"skill_id": "java", "canonical_name": "Java", "matched_alias": "java", "evidence_text": "Java 17/21", "versions": ["17", "21"], "qualifiers": []},
+                        ],
+                        "evidence_text": "Java 17/21",
+                        "section_heading": "Required Skills",
+                        "section_bucket": "required",
+                    }
+                ],
+                "preferred_groups": [],
+                "informational_groups": [],
+                "experience_years_min": None,
+                "local_required": False,
+                "work_mode": None,
+                "locations": [],
+                "warnings": [],
+                "preferred_domains": [],
+            }
+        }
+
+        class Settings:
+            feature_semantic_enabled = False
+            role_keywords = ""
+            free_text_guidance = ""
+
+        class Resume:
+            def __init__(self) -> None:
+                self.id = 1
+                self.file_name = "java.docx"
+                self.skills_text = "Java, Spring Boot"
+                self.semantic_embedding = None
+                self.file_path = "java.docx"
+                self.is_enabled = True
+                self.is_current = False
+
+        selection = service.select_best_resume_match(
+            subject="",
+            body="Required Skills: Java 17/21",
+            parsed=parsed,
+            parser_details=parser_details,
+            user_settings=Settings(),
+            email_row=None,
+            resumes=[Resume()],
+            fallback_resume=None,
+        )
+        breakdown = json.loads(selection.picker_breakdown_json or "{}")
+        self.assertIn("Java", breakdown.get("version_unverified", []))
+        self.assertNotEqual(breakdown.get("mandatory_gate_status"), "fail")
+
+    def test_compute_ats_score_uses_structured_required_and_preferred_group_coverage(self) -> None:
+        service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1, 0.2], "hash")))
+        parsed = {
+            "role": "Backend Engineer",
+            "skills_text": "Kafka, RabbitMQ, Docker",
+            "salary_text": "",
+            "location": "Remote",
+        }
+        parser_details = {
+            "structured_requirements": {
+                "schema_version": 1,
+                "required_groups": [
+                    {
+                        "group_id": "req-any",
+                        "level": "mandatory",
+                        "mode": "any",
+                        "skills": [
+                            {"skill_id": "kafka", "canonical_name": "Kafka", "matched_alias": "kafka", "evidence_text": "Kafka or RabbitMQ", "versions": [], "qualifiers": []},
+                            {"skill_id": "rabbitmq", "canonical_name": "RabbitMQ", "matched_alias": "rabbitmq", "evidence_text": "Kafka or RabbitMQ", "versions": [], "qualifiers": []},
+                        ],
+                        "evidence_text": "Kafka or RabbitMQ",
+                        "section_heading": "Required Skills",
+                        "section_bucket": "required",
+                    }
+                ],
+                "preferred_groups": [
+                    {
+                        "group_id": "pref-docker",
+                        "level": "preferred",
+                        "mode": "all",
+                        "skills": [
+                            {"skill_id": "docker", "canonical_name": "Docker", "matched_alias": "docker", "evidence_text": "Docker", "versions": [], "qualifiers": []},
+                        ],
+                        "evidence_text": "Docker",
+                        "section_heading": "Preferred Skills",
+                        "section_bucket": "preferred",
+                    }
+                ],
+                "informational_groups": [],
+                "experience_years_min": None,
+                "local_required": False,
+                "work_mode": None,
+                "locations": [],
+                "warnings": [],
+                "preferred_domains": [],
+            }
+        }
+
+        class Settings:
+            feature_semantic_enabled = False
+
+        class Resume:
+            file_name = "backend.docx"
+            skills_text = "RabbitMQ, Docker, Java"
+
+        score, _source, summary, breakdown_json = service.compute_ats_score(
+            subject="Backend Engineer",
+            body="Need Kafka or RabbitMQ. Docker preferred.",
+            parsed=parsed,
+            parser_details=parser_details,
+            user_settings=Settings(),
+            resume=Resume(),
+        )
+
+        self.assertIsNotNone(score)
+        breakdown = json.loads(breakdown_json or "{}")
+        self.assertEqual(breakdown.get("required_group_coverage"), 1.0)
+        self.assertEqual(breakdown.get("preferred_group_coverage"), 1.0)
+        self.assertEqual(breakdown.get("matched_alternatives", {}).get("Kafka or RabbitMQ"), "RabbitMQ")
+        self.assertEqual(breakdown.get("unmet_required_groups"), [])
+        self.assertIn("required_group_coverage=1.00", summary or "")
+
+    def test_compute_ats_score_falls_back_to_legacy_overlap_when_structured_requirements_missing(self) -> None:
+        service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1, 0.2], "hash")))
+        parsed = {
+            "role": "Java Developer",
+            "skills_text": "Java, Spring Boot, AWS, Microservices",
+            "salary_text": "",
+            "location": "Remote",
+        }
+
+        class Settings:
+            feature_semantic_enabled = False
+
+        class Resume:
+            file_name = "legacy.docx"
+            skills_text = "Java, Spring Boot"
+
+        _score, _source, _summary, breakdown_json = service.compute_ats_score(
+            subject="Java Developer",
+            body="Need Java, Spring Boot, AWS, and Microservices",
+            parsed=parsed,
+            user_settings=Settings(),
+            resume=Resume(),
+        )
+        breakdown = json.loads(breakdown_json or "{}")
+        self.assertAlmostEqual(breakdown.get("raw_overlap", 0.0), 0.5)
+        self.assertAlmostEqual(breakdown.get("primary_overlap", 0.0), 0.5)
+        self.assertIsNone(breakdown.get("required_group_coverage"))
 
     def test_email_4108_style_all_fail_selects_highest_failed_candidate_with_warning(self) -> None:
         service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1, 0.2], "hash")))

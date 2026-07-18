@@ -1523,6 +1523,83 @@ class ExternalFeedsApiTests(unittest.TestCase):
             external_feed_service_module.generate_reply_with_ai_or_fallback = original_generate
             main.external_feed_service.scoring_runtime.compute_blended_ai_score = original_compute
 
+    def test_sync_reuses_resume_selection_semantic_result_without_queue_rescore(self) -> None:
+        self._add_resume()
+        original_select = main.external_feed_service.scoring_runtime.select_best_resume_match
+        original_compute = main.external_feed_service.scoring_runtime.compute_blended_ai_score
+        try:
+            with self.SessionLocal() as db:
+                settings = db.query(UserSettings).filter(UserSettings.owner_id == main.settings.owner_id).first()
+                assert settings is not None
+                settings.feature_semantic_enabled = True
+                settings.qualification_threshold = 0.6
+                db.commit()
+
+            rescore_calls = {"count": 0}
+
+            def _unexpected_rescore(**_kwargs: object) -> tuple[float, str, str, str | None, str | None, object]:
+                rescore_calls["count"] += 1
+                return (
+                    0.91,
+                    "unexpected rescore",
+                    "v2_rules_plus_semantic",
+                    "[9.9,9.9]",
+                    "[8.8,8.8]",
+                    SimpleNamespace(input_source="latest_block", input_chars=42, chunks=1, fallback_reason=None),
+                )
+
+            def _precomputed_selection(**kwargs: object) -> object:
+                resume = kwargs.get("fallback_resume") or (kwargs.get("resumes") or [None])[0]
+                return SimpleNamespace(
+                    resume=resume,
+                    ai_score=0.93,
+                    ai_summary="precomputed semantic match",
+                    ai_score_source="v2_rules_plus_semantic",
+                    final_resume_score=0.88,
+                    selection_reason="Final 0.88; ai=0.93; ats=80.00",
+                    candidate_rankings_json='{"rankings":[{"resume_file_name":"resume.pdf","final_resume_score":0.88}]}',
+                    picker_breakdown_json='{"selection_status":"ready_to_submit"}',
+                    ats_score=80.0,
+                    ats_score_source="hybrid_structured_plus_semantic",
+                    ats_summary="ATS hybrid score 80/100",
+                    ats_breakdown_json='{"matched_raw_skills":["Java"]}',
+                    email_embedding_json="[0.1,0.2]",
+                    resume_embedding_json="[0.3,0.4]",
+                    semantic_diag=SimpleNamespace(
+                        input_source="chunked",
+                        input_chars=1200,
+                        chunks=3,
+                        fallback_reason=None,
+                        keyword_source="parsed_only",
+                        thread_snapshot_used=False,
+                        thread_snapshot_email_id=None,
+                    ),
+                )
+
+            main.external_feed_service.scoring_runtime.select_best_resume_match = _precomputed_selection
+            main.external_feed_service.scoring_runtime.compute_blended_ai_score = _unexpected_rescore
+
+            sync = self.client.post("/external-feeds/nvoids/sync")
+            self.assertEqual(sync.status_code, 200, sync.text)
+            self.assertEqual(rescore_calls["count"], 0)
+
+            with self.SessionLocal() as db:
+                row = (
+                    db.query(RecruiterEmail)
+                    .filter(RecruiterEmail.owner_id == main.settings.owner_id, RecruiterEmail.source == "nvoids")
+                    .order_by(RecruiterEmail.id.desc())
+                    .first()
+                )
+                self.assertIsNotNone(row)
+                assert row is not None
+                self.assertEqual(row.ai_score_source, "v2_rules_plus_semantic")
+                self.assertEqual(row.semantic_input_source, "chunked")
+                self.assertEqual(row.semantic_chunks, 3)
+                self.assertEqual(row.semantic_embedding, "[0.1,0.2]")
+        finally:
+            main.external_feed_service.scoring_runtime.select_best_resume_match = original_select
+            main.external_feed_service.scoring_runtime.compute_blended_ai_score = original_compute
+
     def test_sync_queues_rules_only_with_missing_resume_when_ai_enabled(self) -> None:
         original_compute = main.external_feed_service.scoring_runtime.compute_blended_ai_score
         try:

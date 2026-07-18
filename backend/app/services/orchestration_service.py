@@ -312,7 +312,7 @@ class OrchestrationService:
                     source="gmail",
                     ai_extractor_enabled=user_settings.feature_ai_extractor_enabled,
                 )
-                hard_pass, hard_reason = self.deps.hard_filter_check(parsed, user_settings, effective_policy)
+                hard_pass, hard_reason = self.deps.hard_filter_check(parsed, user_settings, effective_policy, parser_details)
                 active_resume = self.deps.active_resume(db)
                 resume_selection = self.deps.select_best_resume_match(
                     subject=item["subject"],

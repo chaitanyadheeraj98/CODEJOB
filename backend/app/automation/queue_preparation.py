@@ -41,6 +41,12 @@ class QueuePreparationRequest:
     external_thread_id: str | None = None
     routing_decision: RoutingDecision | None = None
     parsed_overrides: Mapping[str, str | int | bool] | None = None
+    precomputed_ai_score: float | None = None
+    precomputed_ai_summary: str | None = None
+    precomputed_ai_score_source: str | None = None
+    precomputed_email_embedding_json: str | None = None
+    precomputed_resume_embedding_json: str | None = None
+    precomputed_semantic_diag: Any | None = None
 
 
 @dataclass(frozen=True)
@@ -181,17 +187,25 @@ def prepare_candidate_for_queue(
     warning_messages: list[str] = []
     if hard_pass and hard_reason.startswith("warnings: "):
         warning_messages.extend([part.strip() for part in hard_reason.removeprefix("warnings: ").split(",") if part.strip()])
-    ai_score, ai_summary, ai_score_source, email_embedding_json, resume_embedding_json, semantic_diag = deps.compute_blended_ai_score(
-        request.subject,
-        request.body,
-        parsed,
-        request.user_settings,
-        request.existing_email,
-        request.scoring_resume,
-        request.db,
-        request.owner_id,
-        str(request.external_thread_id or ""),
-    )
+    if request.precomputed_ai_score is not None:
+        ai_score = request.precomputed_ai_score
+        ai_summary = request.precomputed_ai_summary or ""
+        ai_score_source = request.precomputed_ai_score_source or "precomputed"
+        email_embedding_json = request.precomputed_email_embedding_json
+        resume_embedding_json = request.precomputed_resume_embedding_json
+        semantic_diag = request.precomputed_semantic_diag
+    else:
+        ai_score, ai_summary, ai_score_source, email_embedding_json, resume_embedding_json, semantic_diag = deps.compute_blended_ai_score(
+            request.subject,
+            request.body,
+            parsed,
+            request.user_settings,
+            request.existing_email,
+            request.scoring_resume,
+            request.db,
+            request.owner_id,
+            str(request.external_thread_id or ""),
+        )
     blocked, block_reason = deps.policy_f2f_block(parsed, request.effective_policy)
     if not blocked and block_reason:
         warning_messages.append(block_reason)

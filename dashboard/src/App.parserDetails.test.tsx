@@ -34,6 +34,7 @@ describe('ParserDetailsPanel', () => {
           atsSource="hybrid_structured_only"
           atsSummary="ATS hybrid score 84/100; raw_overlap=0.75; intent_match=0.82"
           atsBreakdown={{ raw_overlap: 0.75, matched_raw_skills: ['Java', 'Spring Boot'], selected_resume_file_name: 'resume.docx' }}
+          resumePickerBreakdown={null}
           expanded={false}
           onToggle={onToggle}
           parserDetails={{
@@ -83,6 +84,14 @@ describe('ParserDetailsPanel', () => {
           atsSource="hybrid_structured_only"
           atsSummary="ATS hybrid score 84/100; raw_overlap=0.75; intent_match=0.82"
           atsBreakdown={{ raw_overlap: 0.75, matched_raw_skills: ['Java', 'Spring Boot'], selected_resume_file_name: 'resume.docx' }}
+          resumePickerBreakdown={{
+            mandatory_gate_status: 'needs_review',
+            mandatory_coverage: 0.75,
+            satisfied_required_groups: ['Database requirement', 'Java 17/21'],
+            unmet_required_groups: ['Messaging requirement'],
+            matched_alternatives: { 'Database requirement': 'PostgreSQL' },
+            version_unverified: ['Java 17/21'],
+          }}
           expanded={true}
           onToggle={onToggle}
           parserDetails={{
@@ -109,6 +118,34 @@ describe('ParserDetailsPanel', () => {
             unknown_skills: ['Temporal Workflow'],
             parser_warning: null,
             source_hints: { canonical_title: 'Full Stack Developer', canonical_location: 'Remote, USA', work_mode: 'Remote' },
+            structured_requirements: {
+              schema_version: 1,
+              required_groups: [
+                {
+                  group_id: 'req-1',
+                  mode: 'all',
+                  skills: [{ canonical_name: 'Java', versions: ['17', '21'] }],
+                },
+                {
+                  group_id: 'req-2',
+                  mode: 'any',
+                  skills: [{ canonical_name: 'Kafka' }, { canonical_name: 'JMS' }],
+                },
+              ],
+              preferred_groups: [
+                {
+                  group_id: 'pref-1',
+                  mode: 'any',
+                  skills: [{ canonical_name: 'AWS' }, { canonical_name: 'Azure' }],
+                },
+              ],
+              informational_groups: [],
+              experience_years_min: 8,
+              local_required: true,
+              work_mode: 'Onsite',
+              locations: ['San Antonio, TX', 'Remote, USA'],
+              preferred_domains: ['USAA'],
+            },
           }}
         />,
       )
@@ -131,6 +168,23 @@ describe('ParserDetailsPanel', () => {
     expect(container.textContent ?? '').toContain('Skills Audit')
     expect(container.textContent ?? '').toContain('Source Hints')
     expect(container.textContent ?? '').toContain('AI Evidence')
+    expect(container.textContent ?? '').toContain('Required Requirements')
+    expect(container.textContent ?? '').toContain('One required')
+    expect(container.textContent ?? '').toContain('Kafka or JMS')
+    expect(container.textContent ?? '').toContain('Preferred Requirements')
+    expect(container.textContent ?? '').toContain('AWS or Azure')
+    expect(container.textContent ?? '').toContain('Constraints')
+    expect(container.textContent ?? '').toContain('8+ years')
+    expect(container.textContent ?? '').toContain('San Antonio, TX')
+    expect(container.textContent ?? '').toContain('Required')
+    expect(container.textContent ?? '').toContain('Onsite')
+    expect(container.textContent ?? '').toContain('USAA')
+    expect(container.textContent ?? '').toContain('Resume-Picker Result')
+    expect(container.textContent ?? '').toContain('Database requirement through PostgreSQL')
+    expect(container.textContent ?? '').toContain('Messaging requirement')
+    expect(container.textContent ?? '').toContain('Java 17/21')
+    expect(container.textContent ?? '').toContain('Matched Alternatives')
+    expect(container.textContent ?? '').toContain('PostgreSQL')
     expect(container.querySelectorAll('.parserDetailsCardBody').length).toBeGreaterThanOrEqual(5)
     expect(container.querySelectorAll('.parserChip').length).toBeGreaterThanOrEqual(4)
     expect(container.querySelectorAll('.parserMetricRow').length).toBeGreaterThanOrEqual(4)
@@ -157,6 +211,62 @@ describe('ParserDetailsPanel', () => {
     expect(container.textContent ?? '').toContain('canonical_title: Full Stack Developer')
     expect(container.textContent ?? '').toContain('confidence: 0.87')
     expect(container.textContent ?? '').toContain('evidence: title: Full Stack Developer')
+    expect(container.textContent ?? '').toContain('Required Requirements')
+    expect(container.textContent ?? '').toContain('All required: Java 17/21')
+    expect(container.textContent ?? '').toContain('One required: Kafka or JMS')
+    expect(container.textContent ?? '').toContain('Preferred Requirements')
+    expect(container.textContent ?? '').toContain('Preferred: AWS or Azure')
+    expect(container.textContent ?? '').toContain('Constraints')
+    expect(container.textContent ?? '').toContain('Experience: 8+ years')
+    expect(container.textContent ?? '').toContain('Location: San Antonio, TX')
+    expect(container.textContent ?? '').toContain('Resume-Picker Result')
+    expect(container.textContent ?? '').toContain('Satisfied: Database requirement through PostgreSQL; Java 17/21')
+    expect(container.textContent ?? '').toContain('Matched alternatives: PostgreSQL')
+  })
+
+  it('renders safely when structured payload data is missing or malformed', () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+    })
+
+    act(() => {
+      root.render(
+        <ParserDetailsPanel
+          candidateId={7}
+          source="gmail"
+          atsScore={null}
+          atsSource={null}
+          atsSummary={null}
+          atsBreakdown={{}}
+          resumePickerBreakdown={{ mandatory_gate_status: 'fail', matched_alternatives: 'bad-shape' as unknown as Record<string, unknown> }}
+          expanded={true}
+          onToggle={() => {}}
+          parserDetails={{
+            parser_version: 'v1',
+            source: 'gmail',
+            parser_mode: 'base_only',
+            fallback_used: false,
+            merged_result: { role: 'Backend Engineer', location: 'Remote', skills_text: 'Java, SQL' },
+            structured_requirements: {
+              required_groups: 'bad-shape',
+              preferred_groups: null,
+              locations: ['Remote', 'not a location\nfragment'],
+            } as unknown as Record<string, unknown>,
+          }}
+        />,
+      )
+    })
+
+    expect(container.textContent ?? '').toContain('Required Requirements')
+    expect(container.textContent ?? '').toContain('Preferred Requirements')
+    expect(container.textContent ?? '').toContain('Constraints')
+    expect(container.textContent ?? '').toContain('Resume-Picker Result')
+    expect(container.textContent ?? '').toContain('Final Skills Text')
+    expect(container.textContent ?? '').toContain('Java')
   })
 
   it('renders resume picker diagnostics and top alternatives', () => {

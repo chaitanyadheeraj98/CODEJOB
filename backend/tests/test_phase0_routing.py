@@ -81,6 +81,9 @@ class RecipientRoutingTests(unittest.TestCase):
         self.assertEqual(details["unknown_skills"], [])
         self.assertEqual(parsed["role"], "AI Engineer")
         self.assertIn("Python", str(parsed["skills_text"]))
+        self.assertEqual(details["requirements_schema_version"], 1)
+        self.assertIn("structured_requirements", details)
+        self.assertIn("required_groups", details["structured_requirements"])
 
     def test_parse_email_with_details_freezes_current_details_shape(self) -> None:
         _parsed, details = parse_email_with_details(
@@ -107,6 +110,8 @@ class RecipientRoutingTests(unittest.TestCase):
                 "source_hints",
                 "ai_input_source",
                 "ai_input_chars",
+                "structured_requirements",
+                "requirements_schema_version",
             },
         )
         self.assertEqual(details["parser_version"], "base_only_v2")
@@ -118,6 +123,8 @@ class RecipientRoutingTests(unittest.TestCase):
         self.assertEqual(details["ai_input_chars"], 0)
         self.assertIsInstance(details["ai_merge_notes"], list)
         self.assertEqual(details["skills_audit"]["skills_text"], _parsed["skills_text"])
+        self.assertEqual(details["requirements_schema_version"], 1)
+        self.assertIsInstance(details["structured_requirements"], dict)
 
     def test_parse_email_with_details_keeps_ai_extractor_disabled_by_default(self) -> None:
         with patch("app.phase0.extract_ai_job_details") as mock_ai:
@@ -151,6 +158,8 @@ class RecipientRoutingTests(unittest.TestCase):
             "experience_years_min": 2,
             "salary_text": "$95/hr",
             "skills_text": "Amazon ECS, Grafana, Temporal",
+            "must_have_skills": ["Amazon ECS"],
+            "nice_to_have_skills": ["Grafana"],
             "f2f_mentioned": False,
             "asks_contact_fields": True,
             "is_texas_role": False,
@@ -208,6 +217,9 @@ class RecipientRoutingTests(unittest.TestCase):
         self.assertIsNone(details["parser_warning"])
         self.assertFalse(details["fallback_used"])
         self.assertEqual(details["skills_audit"]["unknown"], ["Temporal"])
+        structured = details["structured_requirements"]
+        self.assertEqual(structured["required_groups"][0]["skills"][0]["canonical_name"], "Amazon ECS")
+        self.assertEqual(structured["preferred_groups"][0]["skills"][0]["canonical_name"], "Grafana")
 
     def test_parse_email_with_details_uses_ai_body_override_only_for_ai_input(self) -> None:
         ai_override = (
@@ -444,6 +456,72 @@ class RecipientRoutingTests(unittest.TestCase):
         self.assertEqual(
             hard_filter_check(parsed, settings, policy),
             (True, "warnings: location_mismatch, salary_below_min, missing_skills:spring"),
+        )
+
+    def test_hard_filter_check_uses_structured_requirements_for_canonical_must_have_skills(self) -> None:
+        settings = self._user_settings()
+        parsed = self._parsed_candidate()
+        parsed["skills_text"] = "java"
+        parser_details = {
+            "structured_requirements": {
+                "schema_version": 1,
+                "required_groups": [
+                    {
+                        "group_id": "spring-required",
+                        "level": "mandatory",
+                        "mode": "all",
+                        "skills": [
+                            {"skill_id": "spring_boot", "canonical_name": "Spring Boot", "matched_alias": "spring boot", "evidence_text": "Spring Boot", "versions": [], "qualifiers": []},
+                        ],
+                        "evidence_text": "Spring Boot",
+                        "section_heading": "Required Skills",
+                        "section_bucket": "required",
+                    }
+                ],
+                "preferred_groups": [],
+                "informational_groups": [],
+                "experience_years_min": None,
+                "local_required": False,
+                "work_mode": None,
+                "locations": [],
+                "warnings": [],
+                "preferred_domains": [],
+            }
+        }
+        policy = policy_service.default_policy()
+        policy["qualification"]["draft_rules"]["accepted_location"]["mode"] = "ignore"
+        policy["qualification"]["draft_rules"]["minimum_salary"]["mode"] = "ignore"
+        policy["qualification"]["draft_rules"]["must_have_skills"]["skills"] = ["spring boot"]
+
+        self.assertEqual(
+            hard_filter_check(parsed, settings, policy, parser_details),
+            (True, "hard_filters_passed"),
+        )
+
+    def test_hard_filter_check_uses_structured_location_when_flat_location_is_weaker(self) -> None:
+        settings = self._user_settings()
+        parsed = self._parsed_candidate()
+        parser_details = {
+            "structured_requirements": {
+                "schema_version": 1,
+                "required_groups": [],
+                "preferred_groups": [],
+                "informational_groups": [],
+                "experience_years_min": 8,
+                "local_required": True,
+                "work_mode": "Remote",
+                "locations": ["Austin, TX"],
+                "warnings": [],
+                "preferred_domains": [],
+            }
+        }
+        policy = policy_service.default_policy()
+        policy["qualification"]["draft_rules"]["minimum_salary"]["mode"] = "warn"
+        policy["qualification"]["draft_rules"]["must_have_skills"]["mode"] = "warn"
+
+        self.assertEqual(
+            hard_filter_check(parsed, settings, policy, parser_details),
+            (True, "warnings: salary_below_min, missing_skills:spring"),
         )
 
     def test_parse_email_with_details_survives_ai_extractor_failure_without_contract_change(self) -> None:

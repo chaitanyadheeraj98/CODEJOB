@@ -201,6 +201,17 @@ class SkillTaxonomy:
     entries: tuple[SkillTaxonomyEntry, ...]
     entries_for_search: tuple[SkillTaxonomyEntry, ...]
     exact_lookup: dict[str, SkillTaxonomyEntry]
+    validation_warnings: tuple[str, ...] = ()
+    ambiguous_aliases: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
+class TaxonomySkillMatch:
+    entry: SkillTaxonomyEntry
+    matched_alias: str
+    start: int
+    end: int
+    normalized_text: str
 
 
 @dataclass(frozen=True)
@@ -458,10 +469,25 @@ def load_skill_taxonomy() -> SkillTaxonomy:
         seen.add(entry.id)
         entries.append(entry)
 
-    exact_lookup: dict[str, SkillTaxonomyEntry] = {}
+    alias_owners: dict[str, list[SkillTaxonomyEntry]] = {}
     for entry in entries:
         for token in entry.normalized_forms:
-            exact_lookup.setdefault(token, entry)
+            alias_owners.setdefault(token, []).append(entry)
+
+    exact_lookup: dict[str, SkillTaxonomyEntry] = {}
+    validation_warnings: list[str] = []
+    ambiguous_aliases: set[str] = set()
+    for token, owners in alias_owners.items():
+        if token.isdigit():
+            validation_warnings.append(f"numeric_only_alias:{token}")
+            continue
+        if len({owner.id for owner in owners}) > 1:
+            ambiguous_aliases.add(token)
+            validation_warnings.append(
+                "ambiguous_alias:" + token + ":" + "|".join(sorted(owner.canonical_name for owner in owners))
+            )
+            continue
+        exact_lookup[token] = owners[0]
 
     entries_for_search = tuple(
         sorted(
@@ -473,7 +499,13 @@ def load_skill_taxonomy() -> SkillTaxonomy:
             ),
         )
     )
-    return SkillTaxonomy(entries=tuple(entries), entries_for_search=entries_for_search, exact_lookup=exact_lookup)
+    return SkillTaxonomy(
+        entries=tuple(entries),
+        entries_for_search=entries_for_search,
+        exact_lookup=exact_lookup,
+        validation_warnings=tuple(validation_warnings),
+        ambiguous_aliases=frozenset(ambiguous_aliases),
+    )
 
 
 def clear_skill_taxonomy_cache() -> None:
@@ -615,6 +647,45 @@ def extract_taxonomy_skills(text: str | None) -> list[SkillTaxonomyEntry]:
         matches.append((first_match, -entry.weight, entry.canonical_name.lower(), entry))
     matches.sort(key=lambda item: (item[0], item[1], item[2]))
     return [entry for *_ignored, entry in matches]
+
+
+def extract_taxonomy_skill_matches(text: str | None) -> list[TaxonomySkillMatch]:
+    normalized_text = normalize_taxonomy_text(text)
+    if not normalized_text:
+        return []
+    raw_text = str(text or "")
+    taxonomy = load_skill_taxonomy()
+    haystack = f" {normalized_text} "
+    matches: list[tuple[int, float, str, str, SkillTaxonomyEntry]] = []
+    seen_entry_ids: set[str] = set()
+    for entry in taxonomy.entries_for_search:
+        best: tuple[int, str] | None = None
+        for token in entry.normalized_forms:
+            if token in taxonomy.ambiguous_aliases and token != normalize_taxonomy_text(entry.canonical_name):
+                continue
+            if not _is_allowed_taxonomy_match(token, entry, normalized_text, raw_text):
+                continue
+            position = haystack.find(f" {token} ")
+            if position < 0:
+                continue
+            adjusted = max(0, position - 1)
+            if best is None or adjusted < best[0] or (adjusted == best[0] and len(token) > len(best[1])):
+                best = (adjusted, token)
+        if best is None or entry.id in seen_entry_ids:
+            continue
+        seen_entry_ids.add(entry.id)
+        matches.append((best[0], -entry.weight, entry.canonical_name.lower(), best[1], entry))
+    matches.sort(key=lambda item: (item[0], item[1], item[2]))
+    return [
+        TaxonomySkillMatch(
+            entry=entry,
+            matched_alias=alias,
+            start=start,
+            end=start + len(alias),
+            normalized_text=normalized_text,
+        )
+        for start, _weight, _name, alias, entry in matches
+    ]
 
 
 def _is_allowed_taxonomy_match(token: str, entry: SkillTaxonomyEntry, normalized_text: str, raw_text: str) -> bool:

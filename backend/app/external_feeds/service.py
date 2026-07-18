@@ -962,6 +962,12 @@ class ExternalFeedService:
                 external_thread_id=item.source_url or external_message_id,
                 routing_decision=routing_decision,
                 parsed_overrides=dict(parsed),
+                precomputed_ai_score=cast(float | None, getattr(resume_selection, "ai_score", None)),
+                precomputed_ai_summary=cast(str | None, getattr(resume_selection, "ai_summary", None)),
+                precomputed_ai_score_source=cast(str | None, getattr(resume_selection, "ai_score_source", None)),
+                precomputed_email_embedding_json=cast(str | None, getattr(resume_selection, "email_embedding_json", None)),
+                precomputed_resume_embedding_json=cast(str | None, getattr(resume_selection, "resume_embedding_json", None)),
+                precomputed_semantic_diag=getattr(resume_selection, "semantic_diag", None),
             ),
             QueuePreparationDependencies(
                 parse_email=parse_email,

@@ -66,6 +66,8 @@ class AIExtractorTests(unittest.TestCase):
         self.assertEqual(payload["visa_hints"], ["H1B"])
         self.assertEqual(payload["experience_years_min"], 8)
         self.assertEqual(payload["skills_text"], "Java, Amazon ECS, Grafana, Temporal")
+        self.assertEqual(payload["must_have_skills"], [])
+        self.assertEqual(payload["nice_to_have_skills"], [])
         self.assertTrue(payload["f2f_mentioned"])
         self.assertTrue(payload["asks_contact_fields"])
         self.assertTrue(payload["is_texas_role"])
@@ -81,6 +83,8 @@ class AIExtractorTests(unittest.TestCase):
 
         self.assertEqual(payload["role_candidates"], [])
         self.assertEqual(payload["skills_text"], "")
+        self.assertEqual(payload["must_have_skills"], [])
+        self.assertEqual(payload["nice_to_have_skills"], [])
         self.assertEqual(payload["skills_approved"], [])
         self.assertEqual(payload["skills_unknown"], [])
         self.assertFalse(payload["f2f_mentioned"])
@@ -105,6 +109,8 @@ class AIExtractorTests(unittest.TestCase):
 
         self.assertEqual(payload["role_candidates"], ["Platform Engineer"])
         self.assertEqual(payload["skills_text"], "Python, RAG, Kubernetes, Temporal")
+        self.assertEqual(payload["must_have_skills"], ["Kubernetes", "Python"])
+        self.assertEqual(payload["nice_to_have_skills"], [])
         self.assertIn("Python", payload["skills_approved"])
         self.assertIn("Kubernetes", payload["skills_approved"])
         self.assertIn("Temporal", payload["skills_unknown"])

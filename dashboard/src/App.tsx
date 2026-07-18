@@ -1213,6 +1213,32 @@ type ParserDetailsPayload = {
   parser_warning?: string | null
   fallback_used?: boolean
   source_hints?: Record<string, unknown>
+  structured_requirements?: StructuredRequirementsPayload | Record<string, unknown> | null
+  requirements_schema_version?: number
+}
+
+type StructuredRequirementSkill = {
+  canonical_name: string
+  versions: string[]
+}
+
+type StructuredRequirementGroup = {
+  group_id: string
+  level: string
+  mode: 'all' | 'any'
+  skills: StructuredRequirementSkill[]
+}
+
+type StructuredRequirementsPayload = {
+  schema_version?: number
+  required_groups: StructuredRequirementGroup[]
+  preferred_groups: StructuredRequirementGroup[]
+  informational_groups: StructuredRequirementGroup[]
+  experience_years_min?: number | null
+  local_required?: boolean
+  work_mode?: string | null
+  locations: string[]
+  preferred_domains: string[]
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -1222,6 +1248,51 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function normalizeParserDetails(value: unknown): ParserDetailsPayload | null {
   if (!isRecord(value)) return null
   return value as ParserDetailsPayload
+}
+
+function readStructuredRequirementSkill(value: unknown): StructuredRequirementSkill | null {
+  if (!isRecord(value)) return null
+  const canonicalName = recordStringValue(value, 'canonical_name')
+  if (!canonicalName) return null
+  return {
+    canonical_name: canonicalName,
+    versions: recordStringArray(value, 'versions'),
+  }
+}
+
+function readStructuredRequirementGroup(value: unknown): StructuredRequirementGroup | null {
+  if (!isRecord(value)) return null
+  const mode = recordStringValue(value, 'mode').toLowerCase() === 'any' ? 'any' : 'all'
+  const skills = Array.isArray(value.skills)
+    ? value.skills.map(readStructuredRequirementSkill).filter((item): item is StructuredRequirementSkill => item != null)
+    : []
+  if (skills.length === 0) return null
+  return {
+    group_id: recordStringValue(value, 'group_id'),
+    level: recordStringValue(value, 'level'),
+    mode,
+    skills,
+  }
+}
+
+function normalizeStructuredRequirements(value: unknown): StructuredRequirementsPayload | null {
+  if (!isRecord(value)) return null
+  const readGroups = (key: string) => {
+    const raw = value[key]
+    if (!Array.isArray(raw)) return []
+    return raw.map(readStructuredRequirementGroup).filter((item): item is StructuredRequirementGroup => item != null)
+  }
+  return {
+    schema_version: typeof value.schema_version === 'number' ? value.schema_version : undefined,
+    required_groups: readGroups('required_groups'),
+    preferred_groups: readGroups('preferred_groups'),
+    informational_groups: readGroups('informational_groups'),
+    experience_years_min: typeof value.experience_years_min === 'number' ? value.experience_years_min : null,
+    local_required: typeof value.local_required === 'boolean' ? value.local_required : undefined,
+    work_mode: recordStringValue(value, 'work_mode') || null,
+    locations: recordStringArray(value, 'locations'),
+    preferred_domains: recordStringArray(value, 'preferred_domains'),
+  }
 }
 
 function renderParserValue(value: unknown): string {
@@ -1311,6 +1382,111 @@ function parserTokensFromValue(value: unknown): string[] {
 
   visit(value)
   return items
+}
+
+function formatStructuredSkill(skill: StructuredRequirementSkill): string {
+  if (skill.versions.length === 0) return skill.canonical_name
+  return `${skill.canonical_name} ${skill.versions.join('/')}`
+}
+
+function formatRequirementGroupSkills(group: StructuredRequirementGroup): string {
+  const items = group.skills.map(formatStructuredSkill)
+  return group.mode === 'any' ? items.join(' or ') : items.join(', ')
+}
+
+function requirementModeLabel(group: StructuredRequirementGroup, preferred = false): string {
+  if (preferred) return group.mode === 'any' ? 'Preferred' : 'Preferred'
+  return group.mode === 'any' ? 'One required' : 'All required'
+}
+
+function normalizeLocationValue(value: string): string {
+  return value.replace(/\s+/g, ' ').trim()
+}
+
+function isCleanLocationValue(value: string): boolean {
+  const text = normalizeLocationValue(value)
+  if (!text || text.includes('\n')) return false
+  if (/send resume|education|spring boot|kafka|docker|merchant|permanent resident/i.test(text)) return false
+  return /remote|onsite|hybrid|[A-Za-z][A-Za-z .'-]+,\s*[A-Za-z0-9]{2,}/i.test(text)
+}
+
+function pickDisplayLocation(locations: string[]): string {
+  const cleanLocations = Array.from(new Set(locations.map(normalizeLocationValue).filter(isCleanLocationValue)))
+  return cleanLocations[0] ?? '-'
+}
+
+function readRequirementGroupLabels(value: unknown, key: string): string[] {
+  if (!isRecord(value)) return []
+  return recordStringArray(value, key)
+}
+
+function readMatchedAlternatives(value: unknown): Record<string, string> {
+  if (!isRecord(value)) return {}
+  return Object.fromEntries(
+    Object.entries(value)
+      .map(([key, raw]) => [key.trim(), renderParserValue(raw).trim()] as const)
+      .filter(([key, raw]) => key && raw && raw !== '-'),
+  )
+}
+
+function summarizePickerGroupResult(
+  label: string,
+  matchedAlternatives: Record<string, string>,
+): string {
+  const matchedAlternative = matchedAlternatives[label]
+  if (matchedAlternative) return `${label} through ${matchedAlternative}`
+  return label
+}
+
+function rawRequirementGroupLines(groups: StructuredRequirementGroup[], preferred = false): string {
+  if (groups.length === 0) return '-'
+  return groups
+    .map((group) => `${requirementModeLabel(group, preferred)}: ${formatRequirementGroupSkills(group)}`)
+    .join('\n')
+}
+
+function rawConstraintsSummary(structuredRequirements: StructuredRequirementsPayload | null): string {
+  if (!structuredRequirements) return '-'
+  const lines = [
+    `Experience: ${structuredRequirements.experience_years_min != null ? `${structuredRequirements.experience_years_min}+ years` : '-'}`,
+    `Location: ${pickDisplayLocation(structuredRequirements.locations)}`,
+    `Local candidate: ${
+      structuredRequirements.local_required == null
+        ? '-'
+        : structuredRequirements.local_required
+          ? 'Required'
+          : 'Not required'
+    }`,
+    `Work mode: ${structuredRequirements.work_mode || '-'}`,
+    `Preferred experience/domain: ${structuredRequirements.preferred_domains.length > 0 ? structuredRequirements.preferred_domains.join(', ') : '-'}`,
+  ]
+  return lines.join('\n')
+}
+
+function rawResumePickerSummary(args: {
+  mandatoryStatus: string
+  mandatoryCoverage: string
+  satisfiedRequiredGroups: string[]
+  unmetRequiredGroups: string[]
+  matchedAlternatives: Record<string, string>
+  versionUnverified: string[]
+}): string {
+  const {
+    mandatoryStatus,
+    mandatoryCoverage,
+    satisfiedRequiredGroups,
+    unmetRequiredGroups,
+    matchedAlternatives,
+    versionUnverified,
+  } = args
+  return [
+    `Mandatory gate status: ${mandatoryStatus || '-'}`,
+    `Mandatory coverage: ${mandatoryCoverage}`,
+    `Satisfied: ${satisfiedRequiredGroups.length > 0 ? satisfiedRequiredGroups.join('; ') : '-'}`,
+    `Unmet: ${unmetRequiredGroups.length > 0 ? unmetRequiredGroups.join('; ') : '-'}`,
+    `Matched alternatives: ${Object.keys(matchedAlternatives).length > 0 ? Object.values(matchedAlternatives).join('; ') : '-'}`,
+    `Version not verified: ${versionUnverified.length > 0 ? versionUnverified.join('; ') : '-'}`,
+  ].join('\n')
 }
 
 function formatParserMetricValue(value: unknown, options?: { percent?: boolean }): string {
@@ -1479,6 +1655,7 @@ type ParserDetailsPanelProps = {
   atsSource?: string | null
   atsSummary?: string | null
   atsBreakdown?: Record<string, unknown> | null
+  resumePickerBreakdown?: Record<string, unknown> | null
   expanded: boolean
   onToggle: (candidateId: number) => void
 }
@@ -1491,6 +1668,7 @@ export function ParserDetailsPanel({
   atsSource,
   atsSummary,
   atsBreakdown,
+  resumePickerBreakdown,
   expanded,
   onToggle,
 }: ParserDetailsPanelProps) {
@@ -1556,6 +1734,7 @@ export function ParserDetailsPanel({
       : []
   })()
   const aiExtractor = isRecord(normalized.ai_extractor_result) ? normalized.ai_extractor_result : null
+  const structuredRequirements = normalizeStructuredRequirements(normalized.structured_requirements)
   const sourceHints = isRecord(normalized.source_hints) ? normalized.source_hints : null
   const parserMode = normalized.parser_mode || (aiExtractor ? 'ai_primary' : 'base_only')
   const parserWarning = renderParserValue(normalized.parser_warning)
@@ -1581,6 +1760,20 @@ export function ParserDetailsPanel({
     : {}
   const matchedRawSkills = isRecord(atsBreakdown) ? recordStringArray(atsBreakdown, 'matched_raw_skills') : []
   const missingRawSkills = isRecord(atsBreakdown) ? recordStringArray(atsBreakdown, 'missing_raw_skills') : []
+  const pickerBreakdown = isRecord(resumePickerBreakdown) ? resumePickerBreakdown : null
+  const mandatoryStatus = pickerBreakdown ? recordStringValue(pickerBreakdown, 'mandatory_gate_status') : ''
+  const mandatoryCoverageRaw = pickerBreakdown?.mandatory_coverage
+  const mandatoryCoverage =
+    typeof mandatoryCoverageRaw === 'number' && Number.isFinite(mandatoryCoverageRaw)
+      ? `${Math.round(mandatoryCoverageRaw * 100)}%`
+      : '-'
+  const matchedAlternatives = readMatchedAlternatives(pickerBreakdown?.matched_alternatives)
+  const satisfiedRequiredGroups = readRequirementGroupLabels(pickerBreakdown, 'satisfied_required_groups').map((label) =>
+    summarizePickerGroupResult(label, matchedAlternatives),
+  )
+  const unmetRequiredGroups = readRequirementGroupLabels(pickerBreakdown, 'unmet_required_groups')
+  const versionUnverified = readRequirementGroupLabels(pickerBreakdown, 'version_unverified')
+  const displayLocation = pickDisplayLocation(structuredRequirements?.locations ?? [])
   const isRawView = viewMode === 'v1'
   return (
     <div className="parserDetailsSection">
@@ -1656,6 +1849,39 @@ export function ParserDetailsPanel({
                 <ParserDetailsCard title="AI Evidence" className="parserDetailsBlockWide">
                   <pre className="parserLegacyPre">{renderParserValue(legacyAiEvidence)}</pre>
                 </ParserDetailsCard>
+                <ParserDetailsCard title="Required Requirements">
+                  <pre className="parserLegacyPre">{rawRequirementGroupLines(structuredRequirements?.required_groups ?? [])}</pre>
+                  <ParserRawDebug value={structuredRequirements?.required_groups ?? []} />
+                </ParserDetailsCard>
+                <ParserDetailsCard title="Preferred Requirements">
+                  <pre className="parserLegacyPre">{rawRequirementGroupLines(structuredRequirements?.preferred_groups ?? [], true)}</pre>
+                  <ParserRawDebug value={structuredRequirements?.preferred_groups ?? []} />
+                </ParserDetailsCard>
+                <ParserDetailsCard title="Constraints">
+                  <pre className="parserLegacyPre">{rawConstraintsSummary(structuredRequirements)}</pre>
+                  <ParserRawDebug
+                    value={{
+                      experience_years_min: structuredRequirements?.experience_years_min,
+                      locations: structuredRequirements?.locations ?? [],
+                      local_required: structuredRequirements?.local_required,
+                      work_mode: structuredRequirements?.work_mode,
+                      preferred_domains: structuredRequirements?.preferred_domains ?? [],
+                    }}
+                  />
+                </ParserDetailsCard>
+                <ParserDetailsCard title="Resume-Picker Result">
+                  <pre className="parserLegacyPre">
+                    {rawResumePickerSummary({
+                      mandatoryStatus,
+                      mandatoryCoverage,
+                      satisfiedRequiredGroups,
+                      unmetRequiredGroups,
+                      matchedAlternatives,
+                      versionUnverified,
+                    })}
+                  </pre>
+                  <ParserRawDebug value={pickerBreakdown ?? {}} />
+                </ParserDetailsCard>
               </div>
             </>
           ) : (
@@ -1687,6 +1913,94 @@ export function ParserDetailsPanel({
                 <ParserStructuredSection title={fallbackUsed ? 'Base Fallback Result' : 'Base Parser Result'} data={baseResult} />
                 <ParserStructuredSection title="AI Extractor Result" data={aiExtractor ?? {}} />
                 <ParserStructuredSection title="Skills Audit" data={skillsAudit ?? {}} />
+                <ParserDetailsCard title="Required Requirements">
+                  {structuredRequirements && structuredRequirements.required_groups.length > 0 ? (
+                    <div className="parserKeyValueList">
+                      {structuredRequirements.required_groups.map((group, index) => (
+                        <div key={group.group_id || `required-${index}`} className="parserKeyValueRow">
+                          <span className="parserLabel">{requirementModeLabel(group)}</span>
+                          <span className="parserValue">{formatRequirementGroupSkills(group)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="subtle">-</p>
+                  )}
+                  <ParserRawDebug value={structuredRequirements?.required_groups ?? []} />
+                </ParserDetailsCard>
+                <ParserDetailsCard title="Preferred Requirements">
+                  {structuredRequirements && structuredRequirements.preferred_groups.length > 0 ? (
+                    <div className="parserKeyValueList">
+                      {structuredRequirements.preferred_groups.map((group, index) => (
+                        <div key={group.group_id || `preferred-${index}`} className="parserKeyValueRow">
+                          <span className="parserLabel">{requirementModeLabel(group, true)}</span>
+                          <span className="parserValue">{formatRequirementGroupSkills(group)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="subtle">-</p>
+                  )}
+                  <ParserRawDebug value={structuredRequirements?.preferred_groups ?? []} />
+                </ParserDetailsCard>
+                <ParserDetailsCard title="Constraints">
+                  <ParserKeyValueList
+                    record={{
+                      experience:
+                        structuredRequirements?.experience_years_min != null ? `${structuredRequirements.experience_years_min}+ years` : '-',
+                      location: displayLocation,
+                      local_candidate:
+                        structuredRequirements?.local_required == null
+                          ? '-'
+                          : structuredRequirements.local_required
+                            ? 'Required'
+                            : 'Not required',
+                      work_mode: structuredRequirements?.work_mode || '-',
+                      preferred_experience_domain:
+                        structuredRequirements && structuredRequirements.preferred_domains.length > 0
+                          ? structuredRequirements.preferred_domains.join(', ')
+                          : '-',
+                    }}
+                  />
+                  <ParserRawDebug
+                    value={{
+                      experience_years_min: structuredRequirements?.experience_years_min,
+                      locations: structuredRequirements?.locations ?? [],
+                      local_required: structuredRequirements?.local_required,
+                      work_mode: structuredRequirements?.work_mode,
+                      preferred_domains: structuredRequirements?.preferred_domains ?? [],
+                    }}
+                  />
+                </ParserDetailsCard>
+                <ParserDetailsCard title="Resume-Picker Result">
+                  <ParserKeyValueList
+                    record={{
+                      mandatory_gate_status: mandatoryStatus || '-',
+                      mandatory_coverage: mandatoryCoverage,
+                    }}
+                  />
+                  <div className="parserSectionGroup">
+                    <div>
+                      <p className="parserSectionLabel">Satisfied</p>
+                      <ParserChipList items={satisfiedRequiredGroups} />
+                    </div>
+                    <div>
+                      <p className="parserSectionLabel">Unmet</p>
+                      <ParserChipList items={unmetRequiredGroups} />
+                    </div>
+                  </div>
+                  <div className="parserSectionGroup">
+                    <div>
+                      <p className="parserSectionLabel">Matched Alternatives</p>
+                      <ParserChipList items={Object.values(matchedAlternatives)} />
+                    </div>
+                    <div>
+                      <p className="parserSectionLabel">Version Not Verified</p>
+                      <ParserChipList items={versionUnverified} />
+                    </div>
+                  </div>
+                  <ParserRawDebug value={pickerBreakdown ?? {}} />
+                </ParserDetailsCard>
                 <ParserDetailsCard title="ATS Breakdown">
                   <ParserMetricGrid rows={atsMetricRows.slice(0, 7)} />
                   <div className="parserSectionGroup">
@@ -4642,6 +4956,7 @@ function App() {
                   atsSource={item.ats_score_source}
                   atsSummary={item.ats_summary}
                   atsBreakdown={item.ats_breakdown}
+                  resumePickerBreakdown={item.resume_picker_breakdown}
                   expanded={parserExpanded}
                   onToggle={(candidateId) =>
                     setExpandedParserDetailIds((prev) => ({
@@ -5308,6 +5623,7 @@ function App() {
                           atsSource={item.ats_score_source}
                           atsSummary={item.ats_summary}
                           atsBreakdown={item.ats_breakdown}
+                          resumePickerBreakdown={item.resume_picker_breakdown}
                           expanded={parserExpanded}
                           onToggle={(candidateId) =>
                             setExpandedParserDetailIds((prev) => ({

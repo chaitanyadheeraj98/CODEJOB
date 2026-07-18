@@ -1078,7 +1078,7 @@ def _get_orchestration_service() -> OrchestrationService:
                 classify_email_intent=lambda **kwargs: classify_email_intent(**kwargs),
                 parse_email=lambda subject, body: parse_email(subject, body),
                 parse_email_with_details=lambda subject, body, **kwargs: parse_email_with_details(subject, body, **kwargs),
-                hard_filter_check=lambda parsed, user_settings, effective_policy: hard_filter_check(parsed, user_settings, effective_policy),
+                hard_filter_check=lambda parsed, user_settings, effective_policy, parser_details=None: hard_filter_check(parsed, user_settings, effective_policy, parser_details),
                 greeting_from_to_contact=lambda to_email, body: greeting_from_to_contact(to_email, body),
                 generate_reply_with_ai_or_fallback=lambda **kwargs: generate_reply_with_ai_or_fallback(**kwargs),
                 send_reply_with_attachment=lambda *args, **kwargs: send_reply_with_attachment(*args, **kwargs),
@@ -2833,7 +2833,7 @@ def ingest_email(payload: IngestEmailRequest, db: Session = Depends(get_db)) -> 
     user_settings = _get_settings(db)
     parsed, parser_details = parse_email_with_details(payload.subject, payload.body, source="manual")
     effective_policy = policy_service.read_policy_from_settings(user_settings.policy_json)
-    hard_pass, hard_reason = hard_filter_check(parsed, user_settings, effective_policy)
+    hard_pass, hard_reason = hard_filter_check(parsed, user_settings, effective_policy, parser_details)
     active_resume = _active_resume(db)
     resume_selection = _select_best_resume_match(
         subject=payload.subject,
