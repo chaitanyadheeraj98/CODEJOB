@@ -2,10 +2,10 @@
 
 # CODEJOB Mermaid Feature Flows
 
-- Audit date: 2026-05-30
-- Branch: semantic-embeddings
-- Commit: 5991f97
-- Evidence basis: code inspection + targeted test run
+- Audit date: 2026-06-09
+- Branch: copilot/update-md-files-another-one
+- Commit: 7c71e7c
+- Evidence basis: code inspection
 - Verification limits: full end-to-end runtime execution was not performed in this session.
 
 ## Feature Coverage Summary
@@ -30,7 +30,7 @@
 | Settings and execution controls | settings form in `App.tsx` | `GET/PUT /settings` | Live | Yes |
 | Auto polling | settings auto-poll toggle | auto runner loop + settings interval controls | Live (optional) | Yes |
 | HR-5 auto-send and retry queue behavior | toggles and run summary display in UI | runtime orchestration paths using `feature_auto_send` and `feature_retry_queue` | Live (optional) | Yes |
-| Telegram operations | telegram status shown in UI | `GET /telegram/status`, runtime telegram command/callback handling | Live (optional) | Yes |
+| Telegram operations | telegram status shown in UI | `GET /telegram/status`, `/review <id>` command, runtime telegram command/callback handling | Live (optional) | Yes |
 | Google Sheets append | no dedicated UI; send side-effect only | orchestration send path integration | Unknown | Yes |
 
 ## Gmail OAuth and Inbox Sync
@@ -441,25 +441,46 @@ flowchart TD
 
 ## Telegram Operations
 
+Runtime summary: dashboard polls telegram status; Telegram bot accepts `/review <email_id>`
+to fetch and display full candidate detail (routing, draft, resume context, errors) directly in
+Telegram. A "Review by ID" button on the needs-review menu triggers the `await_review_id`
+pending mode.
+
 ```mermaid
 sequenceDiagram
   participant FE as App.tsx
   participant BE as main.py
-  participant TG as Telegram Runtime
+  participant RT as TelegramRuntime
+  participant DB as SQLite
+  participant TG as Telegram Client
+
   FE->>BE: GET /telegram/status
-  BE->>TG: read runtime status
-  TG-->>BE: enabled/polling/auth state
+  BE->>RT: read runtime status
+  RT-->>BE: enabled/polling/auth state
   BE-->>FE: status payload
+
+  TG->>RT: /needs_review
+  RT-->>TG: compact list (ID + subject per candidate)
+
+  TG->>RT: /review <email_id>
+  RT->>DB: query RecruiterEmail by id + owner_id
+  DB-->>RT: RecruiterEmail row
+  RT->>RT: _hydrate_candidates_for_review()
+  RT->>RT: _format_review_message()
+  RT-->>TG: rich detail reply (routing, draft, resume context, errors)
+
+  note over RT,TG: Only needs_review candidates accepted<br/>Non-review state returns rejection message
 ```
 
 | Evidence type | Source |
 | --- | --- |
-| Frontend entry | `dashboard/src/App.tsx:676` |
+| Frontend entry | `dashboard/src/App.tsx:676` (status display) |
 | API endpoint | `GET /telegram/status` |
-| Backend logic | `backend/app/main.py:telegram_status,_init_telegram_service` |
-| Data touched | runtime status state |
-| Tests | No direct test found |
-| Verification limit | bot command interactions not executed in session |
+| Backend logic | `backend/app/main.py:telegram_status,_get_candidate_review,_get_candidate_for_review,_serialize_candidate_for_review,_hydrate_candidates_for_review` |
+| Backend service | `backend/app/services/telegram_runtime_service.py:TelegramRuntime.handle_command,_format_review_message,_truncate_text,_draft_source_label,_resume_context_label,_source_listing_url` |
+| Data touched | `recruiter_emails` (state, routing fields, draft fields, resume fields) |
+| Tests | `backend/tests/test_telegram_interactive.py:TelegramReviewCommandTests` — 5 tests added (code inspection; not run in this session) |
+| Verification limit | bot command interactions and `/review` end-to-end not executed in this session; test deps unavailable |
 
 ## Google Sheets Append
 
@@ -481,12 +502,13 @@ flowchart TD
 
 ## Reviewer Attention
 
-- Runtime flows not executed in this session: OAuth completion, Telegram interactions, run-once full-cycle send, Nvoids sync, and Google Sheets append.
-- Tests re-run in this session: only `backend/tests/test_premium_numbers_extraction.py` (`17 passed`).
+- Runtime flows not executed in this session: OAuth completion, Telegram interactions (including new `/review` command), run-once full-cycle send, Nvoids sync, and Google Sheets append.
+- Backend tests could not be run in this session: `python -m pytest` failed with `No module named pytest` (system Python); `uv` not available; backend deps not installable in environment. Blocker class: missing dependency / incompatible local runtime.
+- New tests added in this commit (`backend/tests/test_telegram_interactive.py:TelegramReviewCommandTests`, 5 tests) are code-inspection-verified only; not executed in this session.
 - Human validation still needed for integration-dependent flows (Gmail, Telegram, optional sheets).
 
-- Audit date: 2026-05-30
-- Branch: semantic-embeddings
-- Commit: 5991f97
-- Evidence basis: code inspection + targeted test run
+- Audit date: 2026-06-09
+- Branch: copilot/update-md-files-another-one
+- Commit: 7c71e7c
+- Evidence basis: code inspection
 - Verification limits: external integrations and full end-to-end runtime flows were not executed in this session.

@@ -38,7 +38,7 @@ flowchart TD
 - Backend full verification is currently limited by stale import in `backend/tests/test_phone_attribution.py`.
 - Frontend tests passed in this session (`npm test -- --run`), but lint/build were not rerun.
 
-- Audit date: 2026-05-22
-- Branch: external-recruiter-feed-ingestion
+- Audit date: 2026-06-09
+- Branch: copilot/update-md-files-another-one
 - Evidence basis: both
-- Verification limits: backend full-suite pass cannot be claimed due collection blocker.
+- Verification limits: backend full-suite pass cannot be claimed due collection blocker and missing deps in this session.

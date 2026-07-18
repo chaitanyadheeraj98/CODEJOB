@@ -19,7 +19,7 @@
 | --- | --- | --- |
 | AI drafting | Requires `feature_ai_enabled` and provider configuration | AI status and settings flags in `backend/app/main.py`, toggle/UI in `App.tsx` |
 | Semantic embeddings and blended scoring | Requires semantic feature/provider settings | semantic settings fields and AI status metadata in `main.py`; semantic toggle in `App.tsx` |
-| Telegram operations | Requires bot token/allowed chats and polling runtime | `/telegram/status` and runtime wiring in `main.py`; status display in `App.tsx` |
+| Telegram operations | Requires bot token/allowed chats and polling runtime | `GET /telegram/status`, `/review <email_id>` command handling, runtime telegram command/callback handling; bot replies with rich candidate detail (routing, draft, resume context) for `needs_review` candidates |
 | Google Sheets append | Best-effort append path on send flows when configured | integration hooks in orchestration path (backend service wiring) |
 
 ## Persisted Flags With Runtime Effect
@@ -41,8 +41,8 @@
 
 Mermaid not needed: this update is feature inventory and status normalization, not a flow change.
 
-- Audit date: 2026-05-30
-- Branch: semantic-embeddings
-- Commit: 5991f97
+- Audit date: 2026-06-09
+- Branch: copilot/update-md-files-another-one
+- Commit: 7c71e7c
 - Evidence basis: code inspection
 - Verification limits: no end-to-end runtime integration test run in this session.

@@ -23,7 +23,7 @@
 
 Mermaid not needed: this is a static UI capability alignment update.
 
-- Audit date: 2026-05-22
-- Branch: external-recruiter-feed-ingestion
+- Audit date: 2026-06-09
+- Branch: copilot/update-md-files-another-one
 - Evidence basis: code inspection
-- Verification limits: UI behavior inferred from source and frontend test run; lint/build checks were not rerun in this session.
+- Verification limits: UI behavior inferred from source; lint/build checks were not rerun in this session.
