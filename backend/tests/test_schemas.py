@@ -62,6 +62,7 @@ class EmailResponseRoutingTests(unittest.TestCase):
             routing_confirmed=False,
             resume_asset_id=None,
             resume_file_name=None,
+            screening_mode="strict",
             parser_details_json='{"parser_version":"spacy_enrichment_v1","approved_skills_text":"java","unknown_skills":[],"merged_result":{"role":"Java Developer"}}',
             sent_at=None,
             gmail_sent_id=None,
@@ -72,6 +73,7 @@ class EmailResponseRoutingTests(unittest.TestCase):
 
         response = EmailResponse.model_validate(source)
 
+        self.assertEqual(response.screening_mode, "strict")
         self.assertEqual(response.routing_evidence[0].email, "recruiter@example.com")
         self.assertEqual(response.routing_candidates, [])
         self.assertEqual(
@@ -114,6 +116,28 @@ class EmailResponseRoutingTests(unittest.TestCase):
     def test_settings_request_accepts_groq_job_parser_toggle(self) -> None:
         payload = SettingsRequest.model_validate({"feature_groq_job_parser_enabled": True})
         self.assertTrue(payload.feature_groq_job_parser_enabled)
+
+    def test_settings_request_accepts_role_manifest_and_candidate_profile(self) -> None:
+        payload = SettingsRequest.model_validate(
+            {
+                "feature_role_manifest_enabled": True,
+                "feature_strict_candidate_screening_enabled": True,
+                "candidate_work_authorizations": ["USC", "GC"],
+                "candidate_total_experience_years": 7,
+                "candidate_us_experience_years": 4,
+                "candidate_current_location": "Dallas, TX",
+            }
+        )
+
+        self.assertTrue(payload.feature_role_manifest_enabled)
+        self.assertTrue(payload.feature_strict_candidate_screening_enabled)
+        self.assertEqual(payload.candidate_work_authorizations, ["USC", "GC"])
+        self.assertEqual(payload.candidate_total_experience_years, 7)
+        self.assertEqual(payload.candidate_us_experience_years, 4)
+        self.assertEqual(payload.candidate_current_location, "Dallas, TX")
+
+        omitted = SettingsRequest.model_validate({})
+        self.assertFalse(omitted.feature_strict_candidate_screening_enabled)
 
 
 if __name__ == "__main__":

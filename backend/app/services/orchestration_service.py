@@ -45,7 +45,9 @@ from app.recent_runs import (
 from app.routing import RoutingDecision
 from app.schemas import ApproveSendRequest, AutomationRunRequest, AutomationRunResponse, GmailSyncResponse, RegenerateCandidateRequest, RejectRequest, ResolveRecipientsRequest
 from app.services.candidate_runtime_service import resolve_resume_display_name
+from app.services.candidate_screening_service import CandidateScreeningService, apply_screening_decision
 from app.services.gmail_group_source_service import ConfiguredRequirementGroup, resolve_trusted_group_context
+from app.services.sendability_service import apply_resume_sendability, resolve_sendability_status
 
 logger = logging.getLogger(__name__)
 
@@ -313,6 +315,44 @@ class OrchestrationService:
                     ai_extractor_enabled=user_settings.feature_ai_extractor_enabled,
                 )
                 hard_pass, hard_reason = self.deps.hard_filter_check(parsed, user_settings, effective_policy, parser_details)
+                screening = CandidateScreeningService().evaluate_parser_details(parser_details, user_settings)
+                if hard_pass and not screening.proceed_to_scoring:
+                    email = RecruiterEmail(
+                        owner_id=self.deps.owner_id,
+                        sender=item["sender"],
+                        subject=item["subject"],
+                        body=item["body"],
+                        role=str(parsed["role"]),
+                        location=str(parsed["location"]),
+                        salary_text=str(parsed["salary_text"]),
+                        skills_text=str(parsed["skills_text"]),
+                        skills_json=json.dumps(
+                            build_skills_json_payload(
+                                parser_details,
+                                fallback_skills_text=str(parsed["skills_text"]),
+                            ),
+                            separators=(",", ":"),
+                        ),
+                        decision="Qualified",
+                        state="needs_review",
+                        decision_reason="strict_candidate_screening",
+                        hard_filter_result=hard_reason,
+                        approval_status="pending",
+                        sent_status="not_sent",
+                        source="gmail",
+                        sync_batch_id=sync_batch_id,
+                        external_message_id=item["external_message_id"],
+                        external_thread_id=item["external_thread_id"],
+                        external_rfc_message_id=item.get("external_rfc_message_id"),
+                        gmail_received_at=item.get("gmail_received_at"),
+                        recipient_email=item["recipient_email"],
+                        parser_details_json=json.dumps(parser_details, separators=(",", ":")),
+                    )
+                    apply_screening_decision(email, screening)
+                    self.deps.apply_gmail_label_for_email(email=email, candidate_item=item)
+                    db.add(email)
+                    imported_count += 1
+                    continue
                 active_resume = self.deps.active_resume(db)
                 resume_selection = self.deps.select_best_resume_match(
                     subject=item["subject"],
@@ -491,6 +531,9 @@ class OrchestrationService:
                 if routed:
                     self.deps.apply_routing_result(email, routed)
                     email.routing_confirmed = False
+                apply_screening_decision(email, screening)
+                if email.state == "needs_review":
+                    apply_resume_sendability(email)
                 self.deps.apply_gmail_label_for_email(email=email, candidate_item=item)
                 if selected_resume and resume_embedding_json and selected_resume.semantic_embedding != resume_embedding_json:
                     selected_resume.semantic_embedding = resume_embedding_json
@@ -707,7 +750,12 @@ class OrchestrationService:
 
             auto_sent_count = 0
             auto_send_failed_count = 0
-            if user_settings.feature_auto_send and not dry_run and result.queued_email_ids:
+            if (
+                user_settings.feature_auto_send
+                and not user_settings.feature_role_manifest_enabled
+                and not dry_run
+                and result.queued_email_ids
+            ):
                 auto_sent_count, auto_send_failed_count = self._auto_send_newly_queued(
                     result.queued_email_ids, db
                 )
@@ -750,6 +798,7 @@ class OrchestrationService:
                 auto_send_failed_count=auto_send_failed_count if user_settings.feature_auto_send else None,
                 retry_promoted_count=retry_promoted_count if user_settings.feature_retry_queue else None,
                 retry_skipped_count=retry_skipped_count if user_settings.feature_retry_queue else None,
+                queued_email_ids=result.queued_email_ids,
             )
             skipped_item_count = (
                 db.query(func.count())
@@ -829,6 +878,13 @@ class OrchestrationService:
         auto_send_failed_count = 0
         for email_id in queued_email_ids:
             try:
+                candidate = (
+                    db.query(RecruiterEmail).filter(RecruiterEmail.id == email_id).first()
+                    if hasattr(db, "query")
+                    else None
+                )
+                if candidate is not None and candidate.is_multi_role_child:
+                    raise HTTPException(status_code=400, detail="Multi-role children require manual approval")
                 self.approve_send(email_id, ApproveSendRequest(), db)
                 auto_sent_count += 1
             except HTTPException as exc:
@@ -880,6 +936,23 @@ class OrchestrationService:
             )
             self.deps.apply_routing_decision(email, routing_decision)
             if routing_decision.is_sendable_candidate and not routing_decision.should_mark_failed:
+                retry_status = resolve_sendability_status(email)
+                retry_structural_block = retry_status in {
+                    "source_parent",
+                    "superseded_multi_role",
+                    "manifest_review",
+                    "extraction_review",
+                }
+                retry_strict_block = email.screening_mode == "strict" and retry_status != "sendable"
+                retry_historical_safety_block = email.screening_mode is None and retry_status in {
+                    "blocked_ineligible",
+                    "eligibility_review",
+                    "mandatory_resume_fail",
+                    "mandatory_resume_review",
+                }
+                if retry_structural_block or retry_strict_block or retry_historical_safety_block:
+                    retry_skipped_count += 1
+                    continue
                 email.state = "needs_review"
                 email.last_error = None
                 email.skip_reason = None
@@ -913,6 +986,45 @@ class OrchestrationService:
             raise HTTPException(status_code=400, detail="Candidate is in terminal state")
         if email.state != "needs_review":
             raise HTTPException(status_code=400, detail="Only needs_review candidates can be approved")
+        sendability_status = resolve_sendability_status(email)
+        if email.sendability_status != sendability_status:
+            email.sendability_status = sendability_status
+            db.commit()
+        structural_blocked = sendability_status in {
+            "source_parent",
+            "superseded_multi_role",
+            "manifest_review",
+            "extraction_review",
+        }
+        strict_screening = email.screening_mode == "strict"
+        persisted_safety_block = email.screening_mode is None and sendability_status in {
+            "blocked_ineligible",
+            "eligibility_review",
+            "mandatory_resume_fail",
+            "mandatory_resume_review",
+        }
+        if structural_blocked or persisted_safety_block or (strict_screening and sendability_status != "sendable"):
+            raise HTTPException(status_code=400, detail=f"Candidate is not sendable: {sendability_status}")
+
+        source_parent = None
+        source_already_sent = False
+        if email.source_parent_email_id:
+            source_parent = db.query(RecruiterEmail).filter(RecruiterEmail.id == email.source_parent_email_id).first()
+            sibling_sent = (
+                db.query(RecruiterEmail.id)
+                .filter(
+                    RecruiterEmail.source_parent_email_id == email.source_parent_email_id,
+                    RecruiterEmail.id != email.id,
+                    RecruiterEmail.sent_status == "sent",
+                )
+                .first()
+            )
+            source_already_sent = bool(sibling_sent)
+            if sibling_sent and not payload.confirm_same_source_additional_send:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Another role from this source was already sent; explicit confirmation is required.",
+                )
 
         original_draft = email.draft_reply
         if payload.edited_reply:
@@ -968,12 +1080,13 @@ class OrchestrationService:
         email.resume_asset_id = resume.id
         email.resume_file_name = resume.file_name
 
+        source_email = source_parent or email
         if email.source == "gmail":
-            if not email.external_thread_id:
+            if not source_email.external_thread_id:
                 raise HTTPException(status_code=400, detail="Missing Gmail metadata")
             try:
                 sent_message_id = self.deps.send_reply_with_attachment(
-                    email.external_thread_id,
+                    source_email.external_thread_id,
                     email.recipient_email,
                     email.cc_email,
                     email.subject,
@@ -981,8 +1094,8 @@ class OrchestrationService:
                     draft_text_size=user_settings.draft_text_size,
                     attachments=attachments,
                 )
-                if email.external_message_id:
-                    self.deps.mark_message_processed(email.external_message_id)
+                if source_email.external_message_id and not source_already_sent:
+                    self.deps.mark_message_processed(source_email.external_message_id)
             except Exception as exc:
                 email.last_error = str(exc)
                 db.commit()
@@ -1139,6 +1252,37 @@ class OrchestrationService:
                 external_context_warning = "Nvoids source context unavailable during regenerate; used stored candidate content."
 
         parsed, parser_details = self.deps.parse_email_with_details(parse_subject, parse_body, **parse_kwargs)
+        inherited_constraints: list[dict[str, object]] = []
+        try:
+            raw_inherited = json.loads(email.inherited_constraints_json or "[]")
+            if isinstance(raw_inherited, list):
+                inherited_constraints = [item for item in raw_inherited if isinstance(item, dict)]
+        except (TypeError, ValueError):
+            inherited_constraints = []
+        screening = CandidateScreeningService().evaluate_parser_details(
+            parser_details,
+            user_settings,
+            inherited_constraints=inherited_constraints,
+        )
+        if not screening.proceed_to_scoring:
+            email.role = str(parsed.get("role") or email.role or parse_subject)
+            email.location = str(parsed.get("location") or email.location or "")
+            email.salary_text = str(parsed.get("salary_text") or email.salary_text or "")
+            email.skills_text = str(parsed.get("skills_text") or email.skills_text or "")
+            email.parser_details_json = json.dumps(parser_details, separators=(",", ":"))
+            email.skills_json = json.dumps(
+                build_skills_json_payload(parser_details, fallback_skills_text=email.skills_text),
+                separators=(",", ":"),
+            )
+            email.state = "needs_review"
+            email.decision = "Qualified"
+            email.decision_reason = "strict_candidate_screening"
+            email.approval_status = "pending"
+            email.sent_status = "not_sent"
+            apply_screening_decision(email, screening)
+            db.commit()
+            db.refresh(email)
+            return email
         resume_selection = self.deps.select_best_resume_match(
             subject=parse_subject,
             body=parse_body,
@@ -1184,6 +1328,7 @@ class OrchestrationService:
                 external_thread_id=email.external_thread_id,
                 routing_decision=routing_decision,
                 parsed_overrides=dict(parsed),
+                parser_details=parser_details,
             ),
             QueuePreparationDependencies(
                 parse_email=self.deps.parse_email,
@@ -1285,6 +1430,8 @@ class OrchestrationService:
 
         email.approval_status = "pending"
         email.sent_status = "not_sent"
+        apply_screening_decision(email, screening)
+        apply_resume_sendability(email)
 
         db.commit()
         db.refresh(email)
@@ -1353,6 +1500,15 @@ class OrchestrationService:
         role = str(parsed["role"])
         greeting_line = self.deps.greeting_from_to_contact(to_email, email.body)
         user_settings = self.deps.get_settings(db)
+        parser_details = json.loads(email.parser_details_json or "{}")
+        if not isinstance(parser_details, dict):
+            parser_details = {}
+        screening = CandidateScreeningService().evaluate_parser_details(parser_details, user_settings)
+        apply_screening_decision(email, screening)
+        if not screening.proceed_to_scoring:
+            db.commit()
+            db.refresh(email)
+            return email
         resume_selection = self.deps.select_best_resume_match(
             subject=email.subject,
             body=email.body,
@@ -1429,6 +1585,8 @@ class OrchestrationService:
         email.draft_model = draft_model
         email.draft_ai_error = draft_ai_error
         email.draft_resume_context_status = draft_resume_context_status
+        apply_screening_decision(email, screening)
+        apply_resume_sendability(email)
 
         sender_domain = self.deps.email_domain(email.sender)
         body_lower = (email.body or "").lower()

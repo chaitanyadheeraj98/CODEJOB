@@ -14,7 +14,10 @@ from app.phase0 import _parse_salary_floor
 @dataclass(frozen=True)
 class QueuePreparationDependencies:
     parse_email: Callable[[str, str], dict[str, str | int | bool]]
-    hard_filter_check: Callable[[dict[str, str | int | bool], UserSettings, Mapping[str, Any]], tuple[bool, str]]
+    hard_filter_check: Callable[
+        [dict[str, str | int | bool], UserSettings, Mapping[str, Any], Mapping[str, Any] | None],
+        tuple[bool, str],
+    ]
     compute_blended_ai_score: Callable[..., tuple[float, str, str, str | None, str | None, Any]]
     policy_f2f_block: Callable[[dict[str, str | int | bool], Mapping[str, Any]], tuple[bool, str]]
     evaluate_routing_policy: Callable[..., RoutingDecision]
@@ -41,6 +44,7 @@ class QueuePreparationRequest:
     external_thread_id: str | None = None
     routing_decision: RoutingDecision | None = None
     parsed_overrides: Mapping[str, str | int | bool] | None = None
+    parser_details: Mapping[str, Any] | None = None
     precomputed_ai_score: float | None = None
     precomputed_ai_summary: str | None = None
     precomputed_ai_score_source: str | None = None
@@ -183,7 +187,12 @@ def prepare_candidate_for_queue(
         parsed = dict(request.parsed_overrides)
     else:
         parsed = deps.parse_email(request.subject, request.body)
-    hard_pass, hard_reason = deps.hard_filter_check(parsed, request.user_settings, request.effective_policy)
+    hard_pass, hard_reason = deps.hard_filter_check(
+        parsed,
+        request.user_settings,
+        request.effective_policy,
+        request.parser_details,
+    )
     warning_messages: list[str] = []
     if hard_pass and hard_reason.startswith("warnings: "):
         warning_messages.extend([part.strip() for part in hard_reason.removeprefix("warnings: ").split(",") if part.strip()])

@@ -17,6 +17,8 @@ from app.recent_runs import SkippedItemRecord
 from app.routing import RoutingDecision
 from app.services import policy_service
 from app.services.gmail_group_source_service import ConfiguredRequirementGroup, resolve_trusted_group_context
+from app.services.candidate_screening_service import CandidateScreeningService, apply_screening_decision
+from app.services.sendability_service import apply_resume_sendability
 from .queue_preparation import (
     QueuePreparationDependencies,
     QueuePreparationRequest,
@@ -29,11 +31,30 @@ logger = logging.getLogger(__name__)
 CandidateItem = Mapping[str, Any]
 
 
+def _default_intent_decision(**_kwargs: object) -> EmailIntentDecision:
+    return EmailIntentDecision(
+        intent_type="recruiter_job_requirement",
+        action="process_for_queue",
+        confidence=1.0,
+        reason="Legacy dependency set did not provide an intent classifier.",
+        evidence=[],
+        negative_evidence=[],
+        provider="legacy",
+    )
+
+
+def _discard_skipped_item(_db: Session, _payload: SkippedItemRecord) -> None:
+    return None
+
+
 @dataclass(frozen=True)
 class RunOrchestratorDependencies:
     parse_email: Callable[[str, str], dict[str, str | int | bool]]
     parse_email_with_details: Callable[..., tuple[dict[str, str | int | bool], dict[str, Any]]]
-    hard_filter_check: Callable[[dict[str, str | int | bool], UserSettings, Mapping[str, Any]], tuple[bool, str]]
+    hard_filter_check: Callable[
+        [dict[str, str | int | bool], UserSettings, Mapping[str, Any], Mapping[str, Any] | None],
+        tuple[bool, str],
+    ]
     compute_blended_ai_score: Callable[
         [str, str, dict[str, str | int | bool], UserSettings, RecruiterEmail | None, ResumeAsset | None],
         tuple[float, str, str, str | None, str | None, Any],
@@ -53,8 +74,8 @@ class RunOrchestratorDependencies:
     apply_gmail_label: Callable[[Session, RecruiterEmail, CandidateItem], None]
     mark_message_processed: Callable[[str], None]
     is_recruiter_like: Callable[[str, str, str], bool]
-    classify_email_intent: Callable[..., EmailIntentDecision]
-    record_skipped_item: Callable[[Session, SkippedItemRecord], None]
+    classify_email_intent: Callable[..., EmailIntentDecision] = _default_intent_decision
+    record_skipped_item: Callable[[Session, SkippedItemRecord], None] = _discard_skipped_item
 
 
 @dataclass(frozen=True)
@@ -70,9 +91,9 @@ class RunOrchestratorRequest:
     threshold: float
     dry_run: bool
     model_name: str
-    run_source: str
-    run_key: str
     deps: RunOrchestratorDependencies
+    run_source: str = "automation_run"
+    run_key: str = ""
     trusted_groups: list[ConfiguredRequirementGroup] = field(default_factory=list)
 
 
@@ -200,6 +221,46 @@ class RunOrchestrator:
                 ),
                 separators=(",", ":"),
             )
+            screening = CandidateScreeningService().evaluate_parser_details(
+                parser_details,
+                request.user_settings,
+            )
+            if not screening.proceed_to_scoring:
+                if request.dry_run:
+                    queued_count += 1
+                    continue
+                email = self._email_row(existing, request, item, parsed_for_selection, parser_details_json, skills_json)
+
+                def apply_screened_state(target: RecruiterEmail) -> None:
+                    target.external_rfc_message_id = target.external_rfc_message_id or item.get("external_rfc_message_id")
+                    target.gmail_received_at = target.gmail_received_at or item.get("gmail_received_at")
+                    target.parser_details_json = parser_details_json
+                    target.skills_json = skills_json
+                    target.state = "needs_review"
+                    target.decision = "Qualified"
+                    target.decision_reason = "strict_candidate_screening"
+                    target.approval_status = "pending"
+                    target.sent_status = "not_sent"
+                    apply_screening_decision(target, screening)
+
+                apply_screened_state(email)
+                email = self._commit_email_phase(
+                    request=request,
+                    email=email,
+                    existing=existing,
+                    external_message_id=external_message_id,
+                    branch_name="strict_candidate_screening",
+                    reapply_state=apply_screened_state,
+                )
+                request.db.refresh(email)
+                request.deps.apply_gmail_label(request.db, email, item)
+                request.db.commit()
+                request.db.refresh(email)
+                request.deps.mark_message_processed(external_message_id)
+                queued_count += 1
+                queued_email_ids.append(email.id)
+                last_email = email
+                continue
             resume_selection = request.deps.select_best_resume_match(
                 subject=subject,
                 body=body,
@@ -238,6 +299,7 @@ class RunOrchestrator:
                         existing_email=existing,
                         external_thread_id=str(item.get("external_thread_id") or ""),
                         parsed_overrides=parsed_for_selection,
+                        parser_details=parser_details,
                     ),
                     QueuePreparationDependencies(
                         parse_email=request.deps.parse_email,
@@ -507,6 +569,8 @@ class RunOrchestrator:
                 target.routing_confirmed = False
                 target.resume_asset_id = selected_resume.id if selected_resume else None
                 target.resume_file_name = selected_resume.file_name if selected_resume else None
+                apply_screening_decision(target, screening)
+                apply_resume_sendability(target)
                 target.skip_reason = None
 
             apply_queued_state(email)

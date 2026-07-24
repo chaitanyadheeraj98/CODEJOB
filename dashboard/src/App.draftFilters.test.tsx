@@ -272,7 +272,7 @@ describe('Draft Qualification Rules settings UI', () => {
     })
 
     const saveButton = Array.from(container.querySelectorAll('button')).find((button) =>
-      button.textContent?.includes('Save Filters'),
+      button.textContent?.includes('Save Settings'),
     ) as HTMLButtonElement | undefined
 
     await act(async () => {
@@ -309,7 +309,7 @@ describe('Draft Qualification Rules settings UI', () => {
     })
 
     const saveButton = Array.from(container.querySelectorAll('button')).find((button) =>
-      button.textContent?.includes('Save Filters'),
+      button.textContent?.includes('Save Settings'),
     ) as HTMLButtonElement | undefined
 
     await act(async () => {

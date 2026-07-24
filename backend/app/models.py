@@ -14,6 +14,9 @@ def utc_now() -> datetime:
 
 class RecruiterEmail(Base):
     __tablename__ = "recruiter_emails"
+    __table_args__ = (
+        UniqueConstraint("source_parent_email_id", "requirement_key", name="ux_recruiter_email_parent_requirement"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     owner_id: Mapped[str] = mapped_column(String(100), default="default-owner", index=True)
@@ -93,6 +96,22 @@ class RecruiterEmail(Base):
     resume_asset_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     resume_file_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     parser_details_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    screening_mode: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    source_parent_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    is_source_parent: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_multi_role_child: Mapped[bool] = mapped_column(Boolean, default=False)
+    requirement_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    requirement_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    requirement_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    requirement_source_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    inherited_constraints_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    role_manifest_status: Mapped[str] = mapped_column(String(40), default="not_run")
+    role_manifest_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    role_manifest_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    role_manifest_diagnostics_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    eligibility_status: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    eligibility_details_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sendability_status: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     gmail_sent_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     sent_attachment_file_names_json: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -168,6 +187,12 @@ class UserSettings(Base):
     feature_semantic_enabled: Mapped[bool] = mapped_column(default=False)
     feature_groq_job_parser_enabled: Mapped[bool] = mapped_column(default=False)
     feature_gmail_requirement_groups_enabled: Mapped[bool] = mapped_column(default=False)
+    feature_role_manifest_enabled: Mapped[bool] = mapped_column(default=False)
+    feature_strict_candidate_screening_enabled: Mapped[bool] = mapped_column(default=False)
+    candidate_work_authorizations_json: Mapped[str] = mapped_column(Text, default="[]")
+    candidate_total_experience_years: Mapped[float | None] = mapped_column(Float, nullable=True)
+    candidate_us_experience_years: Mapped[float | None] = mapped_column(Float, nullable=True)
+    candidate_current_location: Mapped[str] = mapped_column(String(255), default="")
     draft_text_size: Mapped[str] = mapped_column(String(20), default="normal")
     fallback_draft_template: Mapped[str] = mapped_column(Text, default="")
     signature_name: Mapped[str] = mapped_column(String(255), default="")
@@ -292,6 +317,10 @@ class RecentRun(Base):
     skipped_count: Mapped[int] = mapped_column(Integer, default=0)
     failed_count: Mapped[int] = mapped_column(Integer, default=0)
     skipped_item_count: Mapped[int] = mapped_column(Integer, default=0)
+    source_count: Mapped[int] = mapped_column(Integer, default=0)
+    requirement_count: Mapped[int] = mapped_column(Integer, default=0)
+    multi_role_source_count: Mapped[int] = mapped_column(Integer, default=0)
+    manifest_review_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 

@@ -1,4 +1,5 @@
 import unittest
+from dataclasses import replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -131,6 +132,7 @@ class RunOrchestratorTests(unittest.TestCase):
             _parsed: dict[str, str | int | bool],
             _user_settings: UserSettings,
             _policy: dict[str, object],
+            _parser_details=None,
         ) -> tuple[bool, str]:
             return hard_pass, "hard_fail" if not hard_pass else "pass"
 
@@ -295,6 +297,70 @@ class RunOrchestratorTests(unittest.TestCase):
             assert skipped_item is not None
             self.assertEqual(skipped_item.reason_code, "approved_sent_duplicate")
             self.assertEqual(skipped_item.gmail_message_url, "https://mail.google.com/mail/u/0/#all/m-1")
+
+    def test_strict_eligibility_mismatch_stops_before_resume_scoring_and_drafting(self) -> None:
+        with Session(self.engine) as db:
+            user_settings = self._seed_user_settings(db, feature_ai_enabled=True)
+            user_settings.feature_strict_candidate_screening_enabled = True
+            user_settings.candidate_work_authorizations_json = '["H1B"]'
+            db.commit()
+            resume = self._seed_resume(db)
+            deps, marked, _events = self._deps()
+            original_parse = deps.parse_email_with_details
+            scoring_calls = {"count": 0}
+            draft_calls = {"count": 0}
+
+            def parse_with_usc_requirement(subject: str, body: str, **kwargs: object):
+                parsed, details = original_parse(subject, body, **kwargs)
+                details["structured_requirements"] = {
+                    "allowed_work_authorizations": ["USC", "GC"],
+                    "experience_years_min": 12,
+                }
+                return parsed, details
+
+            def should_not_score(**_kwargs: object) -> object:
+                scoring_calls["count"] += 1
+                raise AssertionError("strict eligibility must run before resume scoring")
+
+            def should_not_draft(**_kwargs: object) -> object:
+                draft_calls["count"] += 1
+                raise AssertionError("strict eligibility must run before drafting")
+
+            strict_deps = replace(
+                deps,
+                parse_email_with_details=parse_with_usc_requirement,
+                select_best_resume_match=should_not_score,
+                generate_reply_with_ai_or_fallback=should_not_draft,
+            )
+            result = RunOrchestrator().execute(
+                RunOrchestratorRequest(
+                    db=db,
+                    owner_id="default-owner",
+                    items=[self._item("m-strict-1")],
+                    user_settings=user_settings,
+                    resume=resume,
+                    active_resume=resume,
+                    enabled_resumes=[resume],
+                    effective_policy={},
+                    threshold=0.6,
+                    dry_run=False,
+                    model_name="deepseek-chat",
+                    run_source="automation_run",
+                    run_key="automation_run:strict",
+                    deps=strict_deps,
+                )
+            )
+
+            row = db.query(RecruiterEmail).filter(RecruiterEmail.external_message_id == "m-strict-1").one()
+            self.assertEqual(result.queued_count, 1)
+            self.assertEqual(scoring_calls["count"], 0)
+            self.assertEqual(draft_calls["count"], 0)
+            self.assertEqual(row.screening_mode, "strict")
+            self.assertEqual(row.eligibility_status, "blocked")
+            self.assertEqual(row.sendability_status, "blocked_ineligible")
+            self.assertEqual(row.draft_reply, "")
+            self.assertIsNone(row.resume_asset_id)
+            self.assertEqual(marked, ["m-strict-1"])
 
     def test_dry_run_does_not_mutate_database_or_mark_processed(self) -> None:
         with Session(self.engine) as db:

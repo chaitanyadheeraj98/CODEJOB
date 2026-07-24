@@ -39,7 +39,9 @@ from app.routing import RoutingDecision
 from app.semantic.embeddings_service import generate_embedding
 from app.services import policy_service
 from app.services.candidate_runtime_service import CandidateRuntimeDeps, CandidateRuntimeService
+from app.services.candidate_screening_service import CandidateScreeningService, apply_screening_decision
 from app.services.scoring_runtime_service import ScoringRuntimeDeps, ScoringRuntimeService
+from app.services.sendability_service import apply_resume_sendability
 
 from .collector import NvoidsCollector
 from .dedupe import build_dedupe_hash
@@ -922,6 +924,48 @@ class ExternalFeedService:
                 "ai_input_chars": len(ai_parse_body or ""),
             },
         )
+        screening = CandidateScreeningService().evaluate_parser_details(parser_details, settings)
+        if not screening.proceed_to_scoring:
+            email = RecruiterEmail(
+                owner_id=owner_id,
+                sender=sender_identity,
+                subject=subject,
+                body=body,
+                role=str(item.role or parsed.get("role", subject)),
+                location=str(parsed.get("location", item.location or "")),
+                salary_text=str(parsed.get("salary_text", item.rate or "")),
+                skills_text=str(parsed.get("skills_text", item.skills_text or "")),
+                skills_json=json.dumps(
+                    build_skills_json_payload(
+                        parser_details,
+                        fallback_skills_text=str(parsed.get("skills_text", item.skills_text or "")),
+                    ),
+                    separators=(",", ":"),
+                ),
+                decision="Qualified",
+                state="needs_review",
+                decision_reason="strict_candidate_screening",
+                hard_filter_result="strict_candidate_screening",
+                approval_status="pending",
+                sent_status="not_sent",
+                source="nvoids",
+                external_message_id=external_message_id,
+                external_thread_id=item.source_url or external_message_id,
+                gmail_received_at=item.posted_at or datetime.now(UTC),
+                recipient_email=recruiter_to or None,
+                cc_email=cc_email,
+                routing_status=routing_decision.status,
+                routing_confidence=routing_decision.confidence,
+                routing_reason=routing_decision.reason,
+                routing_evidence="[]",
+                routing_candidates="[]",
+                routing_confirmed=False,
+                parser_details_json=json.dumps(parser_details, separators=(",", ":")),
+            )
+            apply_screening_decision(email, screening)
+            db.add(email)
+            db.flush()
+            return EnqueueResult(enqueued=True, candidate_email_id=email.id)
         resume_selection = self.scoring_runtime.select_best_resume_match(
             subject=subject,
             body=body,
@@ -962,6 +1006,7 @@ class ExternalFeedService:
                 external_thread_id=item.source_url or external_message_id,
                 routing_decision=routing_decision,
                 parsed_overrides=dict(parsed),
+                parser_details=parser_details,
                 precomputed_ai_score=cast(float | None, getattr(resume_selection, "ai_score", None)),
                 precomputed_ai_summary=cast(str | None, getattr(resume_selection, "ai_summary", None)),
                 precomputed_ai_score_source=cast(str | None, getattr(resume_selection, "ai_score_source", None)),
@@ -1086,6 +1131,8 @@ class ExternalFeedService:
             resume_file_name=selected_resume.file_name if selected_resume else None,
             parser_details_json=json.dumps(parser_details, separators=(",", ":")),
         )
+        apply_screening_decision(email, screening)
+        apply_resume_sendability(email)
         logger.info(
             "nvoids_enqueue_success external_post_id=%r recruiter_to=%r cc_email=%r role=%r ai_score=%.3f resume_id=%r resume_name=%r draft_source=%r",
             item.external_post_id,

@@ -22,6 +22,11 @@ _SPLIT_RE = re.compile(r"(?:\r?\n\s*[-*•]?\s*|\r?\n+|;\s+)")
 _LOCAL_ONLY_RE = re.compile(r"\b(?:locals? only|local candidates? only|need locals?)\b", re.I)
 _WORK_MODE_RE = re.compile(r"\b(remote|hybrid|onsite|on site)\b", re.I)
 _EXPERIENCE_RE = re.compile(r"\b(\d{1,2})\s*\+?\s*years?\b", re.I)
+_US_EXPERIENCE_RE = re.compile(r"\b(\d{1,2})\s*\+?\s*years?\s+(?:of\s+)?(?:u\.?s\.?|united states)\s+experience\b", re.I)
+_AUTHORIZATION_RE = re.compile(
+    r"\b(?:visa|work authorization)\s*[:\-]?\s*([^\n;]+)|\b(USC\s*/\s*GC\s+only|US citizens?\s+only|green card(?: holders?)?\s+only|no sponsorship)\b",
+    re.I,
+)
 _CITY_STATE_RE = re.compile(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*,\s*(?:[A-Z]{2}|[A-Z][a-z]+))\b")
 _DOMAIN_RE = re.compile(r"\b(?:preferred|plus|good to have).{0,30}\b(?:with|at|from|in)\s+([A-Z][A-Za-z0-9&.\- ]+)\b")
 _PROTECTED_SLASH_TERMS = {"ci cd", "tcp ip", "ui ux", "oauth oidc"}
@@ -54,6 +59,8 @@ class ParsedJDRequirements:
     preferred_groups: tuple[RequirementGroup, ...] = ()
     informational_groups: tuple[RequirementGroup, ...] = ()
     experience_years_min: int | None = None
+    us_experience_years_min: int | None = None
+    allowed_work_authorizations: tuple[str, ...] = ()
     local_required: bool = False
     work_mode: str | None = None
     locations: tuple[str, ...] = ()
@@ -248,6 +255,20 @@ def parse_structured_jd_requirements(
                 informational_groups.extend(groups)
 
     years = [int(value) for value in _EXPERIENCE_RE.findall(full_text or "")]
+    us_years = [int(value) for value in _US_EXPERIENCE_RE.findall(full_text or "")]
+    allowed_authorizations: list[str] = []
+    for match in _AUTHORIZATION_RE.finditer(full_text or ""):
+        value = " ".join(part for part in match.groups() if part).casefold()
+        if "usc" in value or "citizen" in value:
+            allowed_authorizations.append("USC")
+        if "gc" in value or "green card" in value:
+            allowed_authorizations.append("GC")
+        if "h1b" in value:
+            allowed_authorizations.append("H1B")
+        if "ead" in value:
+            allowed_authorizations.append("EAD")
+        if "tn" in value:
+            allowed_authorizations.append("TN")
     hinted_location = str((source_hints or {}).get("canonical_location") or "").strip()
     locations = _dedupe_strings([hinted_location, *_CITY_STATE_RE.findall(full_text or "")])
     work_mode_match = _WORK_MODE_RE.search(full_text or "")
@@ -258,6 +279,8 @@ def parse_structured_jd_requirements(
         preferred_groups=tuple(preferred_groups),
         informational_groups=tuple(informational_groups),
         experience_years_min=max(years) if years else None,
+        us_experience_years_min=max(us_years) if us_years else None,
+        allowed_work_authorizations=_dedupe_strings(allowed_authorizations),
         local_required=bool(_LOCAL_ONLY_RE.search(full_text or "")),
         work_mode=work_mode_match.group(1).replace("on site", "onsite").title() if work_mode_match else None,
         locations=locations,
@@ -317,6 +340,8 @@ def structured_requirements_from_ai_payload(
         preferred_groups=tuple(preferred_groups),
         informational_groups=tuple(informational_groups),
         experience_years_min=int(payload.get("experience_years_min")) if payload.get("experience_years_min") not in (None, "") else fallback.experience_years_min,
+        us_experience_years_min=fallback.us_experience_years_min,
+        allowed_work_authorizations=fallback.allowed_work_authorizations,
         local_required=fallback.local_required,
         work_mode=str(payload.get("work_mode") or fallback.work_mode or "").strip() or fallback.work_mode,
         locations=_dedupe_strings([str(payload.get("primary_location") or "").strip(), *fallback.locations]),
@@ -366,6 +391,8 @@ def requirements_to_payload(requirements: ParsedJDRequirements) -> dict[str, Any
         "preferred_groups": [group_payload(group) for group in requirements.preferred_groups],
         "informational_groups": [group_payload(group) for group in requirements.informational_groups],
         "experience_years_min": requirements.experience_years_min,
+        "us_experience_years_min": requirements.us_experience_years_min,
+        "allowed_work_authorizations": list(requirements.allowed_work_authorizations),
         "local_required": requirements.local_required,
         "work_mode": requirements.work_mode,
         "locations": list(requirements.locations),
@@ -403,6 +430,8 @@ def requirements_from_payload(payload: Mapping[str, Any] | None) -> ParsedJDRequ
         preferred_groups=tuple(load_group(group) for group in raw.get("preferred_groups", []) if isinstance(group, Mapping)),
         informational_groups=tuple(load_group(group) for group in raw.get("informational_groups", []) if isinstance(group, Mapping)),
         experience_years_min=raw.get("experience_years_min") if isinstance(raw.get("experience_years_min"), int) else None,
+        us_experience_years_min=raw.get("us_experience_years_min") if isinstance(raw.get("us_experience_years_min"), int) else None,
+        allowed_work_authorizations=tuple(str(value) for value in raw.get("allowed_work_authorizations", []) if str(value).strip()),
         local_required=bool(raw.get("local_required", False)),
         work_mode=str(raw.get("work_mode") or "").strip() or None,
         locations=tuple(str(value) for value in raw.get("locations", []) if str(value).strip()),

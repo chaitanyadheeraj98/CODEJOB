@@ -177,6 +177,12 @@ type SettingsPayload = {
   feature_semantic_enabled: boolean
   feature_groq_job_parser_enabled: boolean
   feature_gmail_requirement_groups_enabled: boolean
+  feature_role_manifest_enabled: boolean
+  feature_strict_candidate_screening_enabled: boolean
+  candidate_work_authorizations: string[]
+  candidate_total_experience_years: number | null
+  candidate_us_experience_years: number | null
+  candidate_current_location: string
   draft_text_size: DraftTextSize
   fallback_draft_template: string
   signature_name: string
@@ -362,6 +368,10 @@ type AutomationRunResponse = {
   auto_send_failed_count?: number | null
   retry_promoted_count?: number | null
   retry_skipped_count?: number | null
+  source_count?: number | null
+  requirement_count?: number | null
+  multi_role_source_count?: number | null
+  manifest_review_count?: number | null
 }
 
 type RecentRunItem = {
@@ -916,6 +926,22 @@ type Candidate = {
   external_message_id: string | null
   external_thread_id: string | null
   gmail_sent_id?: string | null
+  source_parent_email_id?: number | null
+  is_source_parent?: boolean
+  is_multi_role_child?: boolean
+  requirement_index?: number | null
+  requirement_count?: number | null
+  requirement_key?: string | null
+  requirement_source_text?: string | null
+  inherited_constraints?: Array<Record<string, unknown>>
+  role_manifest_status?: string
+  role_manifest_confidence?: number | null
+  role_manifest?: Record<string, unknown> | null
+  role_manifest_diagnostics?: Record<string, unknown> | null
+  eligibility_status?: string | null
+  eligibility_details?: Record<string, unknown> | null
+  sendability_status?: string | null
+  screening_mode?: 'compatibility' | 'strict' | null
 }
 
 type SentItemDetails = {
@@ -2201,6 +2227,12 @@ function App() {
     feature_semantic_enabled: false,
     feature_groq_job_parser_enabled: false,
     feature_gmail_requirement_groups_enabled: false,
+    feature_role_manifest_enabled: false,
+    feature_strict_candidate_screening_enabled: false,
+    candidate_work_authorizations: [],
+    candidate_total_experience_years: null,
+    candidate_us_experience_years: null,
+    candidate_current_location: '',
     draft_text_size: 'normal',
     fallback_draft_template: '',
     signature_name: '',
@@ -2495,6 +2527,12 @@ function App() {
       feature_semantic_enabled: Boolean(payload.feature_semantic_enabled),
       feature_groq_job_parser_enabled: Boolean(payload.feature_groq_job_parser_enabled),
       feature_gmail_requirement_groups_enabled: Boolean(payload.feature_gmail_requirement_groups_enabled),
+      feature_role_manifest_enabled: Boolean(payload.feature_role_manifest_enabled),
+      feature_strict_candidate_screening_enabled: Boolean(payload.feature_strict_candidate_screening_enabled),
+      candidate_work_authorizations: payload.candidate_work_authorizations ?? [],
+      candidate_total_experience_years: payload.candidate_total_experience_years ?? null,
+      candidate_us_experience_years: payload.candidate_us_experience_years ?? null,
+      candidate_current_location: payload.candidate_current_location ?? '',
       default_gmail_query: payload.default_gmail_query || payload.gmail_query || 'is:unread',
       saved_gmail_queries: payload.saved_gmail_queries ?? [],
       default_date_mode: payload.default_date_mode === 'off' ? 'off' : 'today',
@@ -3445,17 +3483,28 @@ function App() {
     }
   }
 
-  const approveSend = async (candidate: Candidate) => {
+  const approveSend = async (candidate: Candidate, confirmAdditionalSend = false) => {
     setSendingId(candidate.id)
     setError('')
     try {
       const res = await fetch(`${apiBase}/candidates/${candidate.id}/approve-send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ edited_reply: draftEdits[candidate.id] ?? candidate.draft_reply }),
+        body: JSON.stringify({
+          edited_reply: draftEdits[candidate.id] ?? candidate.draft_reply,
+          confirm_same_source_additional_send: confirmAdditionalSend,
+        }),
       })
       if (!res.ok) {
         const details = await res.json().catch(() => null)
+        if (
+          res.status === 409 &&
+          candidate.is_multi_role_child &&
+          window.confirm(`${details?.detail ?? 'Another role from this source was already sent.'}\n\nSend this additional role anyway?`)
+        ) {
+          await approveSend(candidate, true)
+          return
+        }
         throw new Error(details?.detail ?? 'Approve & send failed')
       }
       schedulePostMutationRefresh()
@@ -3505,6 +3554,23 @@ function App() {
       }
       const updated = (await res.json()) as Candidate
       setDraftEdits((prev) => ({ ...prev, [updated.id]: updated.draft_reply ?? '' }))
+      schedulePostMutationRefresh()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setRegeneratingId(null)
+    }
+  }
+
+  const retryRoleDetection = async (candidateId: number) => {
+    setRegeneratingId(candidateId)
+    setError('')
+    try {
+      const res = await fetch(`${apiBase}/candidates/${candidateId}/retry-role-detection`, { method: 'POST' })
+      if (!res.ok) {
+        const details = await res.json().catch(() => null)
+        throw new Error(details?.detail ?? 'Retry Detection failed')
+      }
       schedulePostMutationRefresh()
     } catch (e) {
       setError((e as Error).message)
@@ -4137,6 +4203,17 @@ function App() {
                     </span>
                   </label>
                   <label className="toggleRow">
+                    <span>Enable Role Manifest Detection</span>
+                    <span className="toggleSwitch">
+                      <input
+                        type="checkbox"
+                        checked={settings.feature_role_manifest_enabled}
+                        onChange={(e) => setSettings({ ...settings, feature_role_manifest_enabled: e.target.checked })}
+                      />
+                      <span className="toggleTrack" />
+                    </span>
+                  </label>
+                  <label className="toggleRow">
                     <span>Enable Semantic Matching</span>
                     <span className="toggleSwitch">
                       <input
@@ -4511,6 +4588,61 @@ function App() {
               <section className="card">
                 <h2>Profile Settings</h2>
                 <div className="stack">
+                  <h3>Candidate Eligibility Profile</h3>
+                  <label className="toggleRow">
+                    <span>Enforce Strict Candidate Screening</span>
+                    <span className="toggleSwitch">
+                      <input
+                        type="checkbox"
+                        checked={settings.feature_strict_candidate_screening_enabled}
+                        onChange={(e) => setSettings({
+                          ...settings,
+                          feature_strict_candidate_screening_enabled: e.target.checked,
+                        })}
+                      />
+                      <span className="toggleTrack" />
+                    </span>
+                  </label>
+                  <p className="subtle">
+                    Off keeps eligibility and mandatory-resume mismatches advisory so otherwise-qualified opportunities still receive ATS scoring and drafts. On blocks mismatches before scoring and sending.
+                  </p>
+                  <label>
+                    Candidate Work Authorizations (comma separated)
+                    <input
+                      value={settings.candidate_work_authorizations.join(', ')}
+                      onChange={(e) => setSettings({
+                        ...settings,
+                        candidate_work_authorizations: e.target.value.split(',').map((value) => value.trim()).filter(Boolean),
+                      })}
+                    />
+                  </label>
+                  <label>
+                    Total Experience Years
+                    <input
+                      type="number"
+                      min={0}
+                      step={0.5}
+                      value={settings.candidate_total_experience_years ?? ''}
+                      onChange={(e) => setSettings({ ...settings, candidate_total_experience_years: e.target.value === '' ? null : Number(e.target.value) })}
+                    />
+                  </label>
+                  <label>
+                    U.S. Experience Years
+                    <input
+                      type="number"
+                      min={0}
+                      step={0.5}
+                      value={settings.candidate_us_experience_years ?? ''}
+                      onChange={(e) => setSettings({ ...settings, candidate_us_experience_years: e.target.value === '' ? null : Number(e.target.value) })}
+                    />
+                  </label>
+                  <label>
+                    Current Location
+                    <input
+                      value={settings.candidate_current_location}
+                      onChange={(e) => setSettings({ ...settings, candidate_current_location: e.target.value })}
+                    />
+                  </label>
                   <label>
                     Default Query
                     <input
@@ -4720,7 +4852,7 @@ function App() {
                   <p className="subtle">
                     Available tokens: {'{{greeting}}'}, {'{{role}}'}, {'{{sender}}'}, {'{{location}}'}, {'{{salary_text}}'}, {'{{skills_list}}'}, {'{{skills_inline}}'}, {'{{resume_file_name}}'}, {'{{signature_name}}'}, {'{{signature_phone}}'}, {'{{signature_email}}'}, {'{{requested_details_block}}'}.
                   </p>
-                  <button type="submit" disabled={saving}>{saving ? 'Saving...' : 'Save Filters'}</button>
+                  <button type="submit" disabled={saving}>{saving ? 'Saving...' : 'Save Settings'}</button>
                   <div className="stack">
                     <strong>Attachment files</strong>
                     <p className="subtle">Upload global reusable files that will be sent alongside the active resume.</p>
@@ -4901,23 +5033,55 @@ function App() {
           {activePage === 'needs_review' ? (
             <section className="card pageSection">
           <h2>Needs Review (Manual Approval Required)</h2>
-          {queue.length === 0 ? <p className="subtle">No queued emails.</p> : null}
-          {queue.map((item) => {
+          {queue.filter((item) => !item.is_source_parent).length === 0 ? <p className="subtle">No queued emails.</p> : null}
+          {queue.filter((item) => !item.is_source_parent).map((item, index, visibleQueue) => {
             const effectiveDraft = draftEdits[item.id] ?? item.draft_reply
             const routingTrusted = canTrustRouting(item)
             const verdict = getOverallVerdict(item, effectiveDraft, routingTrusted)
             const parserDetails = normalizeParserDetails(item.parser_details)
             const parserExpanded = Boolean(expandedParserDetailIds[item.id])
             const requiresResumeForApproval = item.source === 'gmail'
+            const structuralSendabilityBlock = [
+              'source_parent',
+              'superseded_multi_role',
+              'manifest_review',
+              'extraction_review',
+            ].includes(item.sendability_status ?? '')
+            const historicalSafetyBlock =
+              item.screening_mode == null &&
+              ['blocked_ineligible', 'eligibility_review', 'mandatory_resume_fail', 'mandatory_resume_review']
+                .includes(item.sendability_status ?? '')
+            const screeningAllowsApproval =
+              !structuralSendabilityBlock &&
+              !historicalSafetyBlock &&
+              (item.screening_mode !== 'strict' || item.sendability_status === 'sendable')
             const canApprove =
+              screeningAllowsApproval &&
               Boolean(item.recipient_email) &&
               Boolean(item.cc_email) &&
               Boolean(effectiveDraft?.trim()) &&
               (!requiresResumeForApproval || Boolean(item.resume_file_name)) &&
               routingTrusted
+            const showSourceHeader = Boolean(
+              item.source_parent_email_id &&
+              visibleQueue[index - 1]?.source_parent_email_id !== item.source_parent_email_id,
+            )
             return (
-              <article key={item.id} className="emailItem">
+              <div key={item.id} className="multiRoleCandidateGroup">
+              {showSourceHeader ? (
+                <div className="card">
+                  <h3>Email {item.source_parent_email_id} — {item.requirement_count ?? 0} roles detected</h3>
+                  <p className="subtle">Each role is processed, scored, drafted, and approved independently.</p>
+                  <button type="button" onClick={() => retryRoleDetection(item.source_parent_email_id!)}>
+                    Retry Detection
+                  </button>
+                </div>
+              ) : null}
+              <article className="emailItem">
                 <p><strong>Email ID:</strong> {item.id}</p>
+                {item.is_multi_role_child ? (
+                  <p><strong>Requirement:</strong> {item.requirement_index ?? '-'} of {item.requirement_count ?? '-'}</p>
+                ) : null}
                 <p><strong>From:</strong> {item.sender}</p>
                 <p><strong>Subject:</strong> {item.subject}</p>
                 {sourceListingUrl(item) ? (
@@ -4941,6 +5105,27 @@ function App() {
                 <p><strong>ATS Score:</strong> {formatAtsScore(item.ats_score)} {item.ats_score != null ? `(${getAtsStrengthLabel(item.ats_score)})` : ''}</p>
                 {renderRoutingPanel(item)}
                 <p><strong>Resume:</strong> {item.resume_file_name ?? '-'}</p>
+                <p><strong>Sendability:</strong> {item.sendability_status ?? 'legacy evaluation'}</p>
+                <p><strong>Screening Mode:</strong> {item.screening_mode ?? 'historical / not recorded'}</p>
+                {item.eligibility_status ? <p><strong>Eligibility:</strong> {item.eligibility_status}</p> : null}
+                {item.eligibility_details ? (
+                  <details>
+                    <summary>Eligibility diagnostics</summary>
+                    <pre>{JSON.stringify(item.eligibility_details, null, 2)}</pre>
+                  </details>
+                ) : null}
+                {item.inherited_constraints?.length ? (
+                  <details>
+                    <summary>Inherited source constraints</summary>
+                    <pre>{JSON.stringify(item.inherited_constraints, null, 2)}</pre>
+                  </details>
+                ) : null}
+                {item.role_manifest_diagnostics ? (
+                  <details>
+                    <summary>Role manifest diagnostics</summary>
+                    <pre>{JSON.stringify(item.role_manifest_diagnostics, null, 2)}</pre>
+                  </details>
+                ) : null}
                 <ResumePickerPanel candidate={item} />
                 <p><strong>Attachment files:</strong> {(enabledAttachmentNames.length > 0 ? enabledAttachmentNames : item.attachment_file_names ?? []).join(', ') || '-'}</p>
                 <p>
@@ -5007,6 +5192,15 @@ function App() {
                   >
                     {regeneratingId === item.id ? 'Regenerating...' : 'Regenerate'}
                   </button>
+                  {['invalid', 'uncertain'].includes(item.role_manifest_status ?? '') || item.sendability_status === 'superseded_multi_role' ? (
+                    <button
+                      type="button"
+                      onClick={() => retryRoleDetection(item.source_parent_email_id ?? item.id)}
+                      disabled={regeneratingId === item.id}
+                    >
+                      {regeneratingId === item.id ? 'Detecting...' : 'Retry Detection'}
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     onClick={() => rejectSend(item.id)}
@@ -5027,6 +5221,7 @@ function App() {
                   </span>
                 </div>
               </article>
+              </div>
             )
           })}
           {bucketMeta.needs_review.hasNext ? (
@@ -5147,7 +5342,7 @@ function App() {
                     .join(' | ')}
                 </p>
               ) : null}
-              {item.effective_query || item.matched_count != null || item.queued_count != null || item.skipped_count != null || item.failed_count != null ? (
+              {item.effective_query || item.matched_count != null || item.queued_count != null || item.skipped_count != null || item.failed_count != null || item.source_count != null || item.requirement_count != null ? (
                 <p className="subtle">
                   <strong>Summary:</strong>{' '}
                   {[
@@ -5156,6 +5351,10 @@ function App() {
                     item.queued_count != null ? `Queued: ${item.queued_count}` : null,
                     item.skipped_count != null ? `Skipped: ${item.skipped_count}` : null,
                     item.failed_count != null ? `Failed: ${item.failed_count}` : null,
+                    item.source_count != null ? `Sources: ${item.source_count}` : null,
+                    item.requirement_count != null ? `Requirements: ${item.requirement_count}` : null,
+                    item.multi_role_source_count != null ? `Multi-role: ${item.multi_role_source_count}` : null,
+                    item.manifest_review_count != null ? `Manifest review: ${item.manifest_review_count}` : null,
                   ]
                     .filter(Boolean)
                     .join(' | ')}

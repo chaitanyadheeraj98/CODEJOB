@@ -74,6 +74,7 @@ from app.models import (
 )
 from app.models import RecipientRoutingFeedback
 from app.parsing import build_skills_json_payload
+from app.parsing.jd_requirements import requirements_from_payload, requirements_to_payload
 from app.parsing.skill_audit import is_suspicious_skill_blob
 from app.telegram_bot import TelegramBotService, TelegramReply
 from app.phase0 import (
@@ -118,7 +119,14 @@ from app.services.gmail_group_source_service import (
     parse_group_inputs,
 )
 from app.services.gmail_labeling_runtime_service import GmailLabelingRuntimeService
+from app.services.candidate_screening_service import (
+    CandidateScreeningService,
+    apply_screening_decision,
+)
 from app.services.orchestration_service import OrchestrationDeps, OrchestrationService
+from app.services.requirement_expansion_service import RequirementExpansionService
+from app.services.role_manifest_service import RoleManifestService
+from app.services.sendability_service import apply_resume_sendability, resolve_sendability_status
 from app.services.routing_runtime_service import RoutingRuntimeDeps, RoutingRuntimeService
 from app.services.scoring_runtime_service import ScoringRuntimeDeps, ScoringRuntimeService
 from app.services.settings_bootstrap_service import SettingsBootstrapService
@@ -179,6 +187,7 @@ from app.schemas import (
     RecentRunListResponse,
     RecentRunResponse,
     RegenerateCandidateRequest,
+    RoleDetectionRetryResponse,
     TelegramStatusResponse,
     ExternalFeedSyncResponse,
     ExternalScrapeRunResponse,
@@ -1696,12 +1705,14 @@ def _build_run_response(
     auto_send_failed_count: int | None = None,
     retry_promoted_count: int | None = None,
     retry_skipped_count: int | None = None,
+    queued_email_ids: list[int] | None = None,
 ) -> AutomationRunResponse:
     if not email:
         return AutomationRunResponse(
             status=status,
             detail=detail,
             run_key=run_key,
+            queued_email_ids=queued_email_ids or [],
             effective_query=effective_query,
             matched_count=matched_count,
             queued_count=queued_count,
@@ -1717,6 +1728,7 @@ def _build_run_response(
         detail=detail,
         run_key=run_key,
         email_id=email.id,
+        queued_email_ids=queued_email_ids or [],
         gmail_message_url=email.gmail_message_url,
         decision_reason=email.decision_reason,
         skip_reason=email.skip_reason,
@@ -1815,6 +1827,12 @@ def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
         feature_semantic_enabled=s.feature_semantic_enabled,
         feature_groq_job_parser_enabled=s.feature_groq_job_parser_enabled,
         feature_gmail_requirement_groups_enabled=s.feature_gmail_requirement_groups_enabled,
+        feature_role_manifest_enabled=s.feature_role_manifest_enabled,
+        feature_strict_candidate_screening_enabled=s.feature_strict_candidate_screening_enabled,
+        candidate_work_authorizations=_json_string_list(s.candidate_work_authorizations_json),
+        candidate_total_experience_years=s.candidate_total_experience_years,
+        candidate_us_experience_years=s.candidate_us_experience_years,
+        candidate_current_location=s.candidate_current_location or "",
         draft_text_size=normalize_draft_text_size(s.draft_text_size),
         fallback_draft_template=s.fallback_draft_template or DEFAULT_FALLBACK_DRAFT_TEMPLATE,
         signature_name=(s.signature_name or "").strip() or DEFAULT_SIGNATURE_NAME,
@@ -1917,6 +1935,7 @@ def _serialize_candidate_for_review(db: Session, email: RecruiterEmail) -> Email
     payload = EmailResponse.model_validate(email).model_dump()
     payload["attachment_file_names"] = _enabled_attachment_file_names(db)
     payload["parser_details"] = email.parser_details_json
+    payload["sendability_status"] = resolve_sendability_status(email)
     return EmailResponse.model_validate(payload)
 
 
@@ -1999,6 +2018,19 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
     s.feature_semantic_enabled = payload.feature_semantic_enabled
     s.feature_groq_job_parser_enabled = payload.feature_groq_job_parser_enabled
     s.feature_gmail_requirement_groups_enabled = payload.feature_gmail_requirement_groups_enabled
+    provided_fields = payload.model_fields_set
+    if "feature_role_manifest_enabled" in provided_fields:
+        s.feature_role_manifest_enabled = payload.feature_role_manifest_enabled
+    if "feature_strict_candidate_screening_enabled" in provided_fields:
+        s.feature_strict_candidate_screening_enabled = payload.feature_strict_candidate_screening_enabled
+    if "candidate_work_authorizations" in provided_fields:
+        s.candidate_work_authorizations_json = json.dumps(payload.candidate_work_authorizations or [], separators=(",", ":"))
+    if "candidate_total_experience_years" in provided_fields:
+        s.candidate_total_experience_years = payload.candidate_total_experience_years
+    if "candidate_us_experience_years" in provided_fields:
+        s.candidate_us_experience_years = payload.candidate_us_experience_years
+    if "candidate_current_location" in provided_fields:
+        s.candidate_current_location = (payload.candidate_current_location or "").strip()
     s.draft_text_size = normalize_draft_text_size(payload.draft_text_size)
     s.fallback_draft_template = payload.fallback_draft_template.strip() if payload.fallback_draft_template.strip() else DEFAULT_FALLBACK_DRAFT_TEMPLATE
     s.signature_name = payload.signature_name.strip() if payload.signature_name.strip() else DEFAULT_SIGNATURE_NAME
@@ -2435,7 +2467,7 @@ def gmail_status() -> GmailStatusResponse:
 
 @app.get("/ai/status", response_model=AIStatusResponse)
 def ai_status(db: Session = Depends(get_db)) -> AIStatusResponse:
-    user_settings = _get_settings(db)
+    user_settings = _get_settings(db) if hasattr(db, "query") else None
     connected = bool(settings.deepseek_api_key)
     configured = connected and bool(settings.deepseek_base_url) and bool(settings.deepseek_model_fast)
     detail = "Ready" if connected else "DeepSeek API key missing (set Deepseek_API_KEY)."
@@ -2483,7 +2515,7 @@ def ai_status(db: Session = Depends(get_db)) -> AIStatusResponse:
         embedding_detail = f"No runtime signal yet (no embedding attempts in this process). {embedding_detail}"
 
     groq_configured = bool(settings.groq_api_key) and bool(settings.groq_base_url) and bool(settings.groq_gate_model)
-    groq_enabled_in_settings = bool(user_settings.feature_groq_job_parser_enabled)
+    groq_enabled_in_settings = bool(getattr(user_settings, "feature_groq_job_parser_enabled", False))
     groq_request_mode = runtime_state.groq_request_mode or groq_request_mode_for_model(settings.groq_gate_model)
     groq_runtime_healthy: bool | None
     if runtime_state.groq_last_success_at and (
@@ -2748,9 +2780,34 @@ def productivity_trend(
     )
 
 
+def _update_manifest_run_counts(db: Session, run_key: str | None, source_rows: list[RecruiterEmail]) -> None:
+    if not run_key:
+        return
+    recent_run = db.query(RecentRun).filter(RecentRun.owner_id == settings.owner_id, RecentRun.run_key == run_key).first()
+    if recent_run is None:
+        return
+    recent_run.source_count = len(source_rows)
+    recent_run.requirement_count = sum(
+        max(1, int(row.requirement_count or 1)) for row in source_rows
+    )
+    recent_run.multi_role_source_count = sum(1 for row in source_rows if row.role_manifest_status == "multiple")
+    recent_run.manifest_review_count = sum(
+        1 for row in source_rows if row.role_manifest_status in {"invalid", "uncertain"}
+    )
+    db.commit()
+
+
 @app.post("/gmail/sync", response_model=GmailSyncResponse)
 def gmail_sync(db: Session = Depends(get_db)) -> GmailSyncResponse:
-    return _get_orchestration_service().sync_gmail(db)
+    response = _get_orchestration_service().sync_gmail(db)
+    user_settings = _get_settings(db)
+    if user_settings.feature_role_manifest_enabled:
+        rows = db.query(RecruiterEmail).filter(RecruiterEmail.sync_batch_id == response.sync_batch_id).all()
+        for row in rows:
+            if not row.is_multi_role_child:
+                retry_role_detection(row.id, db)
+        _update_manifest_run_counts(db, response.run_key, rows)
+    return response
 
 
 @app.post("/gmail/oauth/start", response_model=OAuthStartResponse)
@@ -2825,7 +2882,37 @@ def _recruiter_opportunity_response(row: RecruiterOpportunity, recruiter: Recrui
 
 @app.post("/automation/run-once", response_model=AutomationRunResponse)
 def automation_run_once(payload: AutomationRunRequest | None = None, db: Session = Depends(get_db)) -> AutomationRunResponse:
-    return _get_orchestration_service().run_once(payload, db)
+    response = _get_orchestration_service().run_once(payload, db)
+    user_settings = _get_settings(db)
+    if user_settings.feature_role_manifest_enabled and response.queued_email_ids:
+        source_rows = (
+            db.query(RecruiterEmail)
+            .filter(RecruiterEmail.id.in_(response.queued_email_ids))
+            .all()
+        )
+        auto_sent_count = response.auto_sent_count or 0
+        auto_send_failed_count = response.auto_send_failed_count or 0
+        dry_run = policy_service.policy_dry_run(
+            policy_service.read_policy_from_settings(user_settings.policy_json)
+        )
+        for source_row in source_rows:
+            if not source_row.is_multi_role_child:
+                detection = retry_role_detection(source_row.id, db)
+                if user_settings.feature_auto_send and not dry_run and detection.manifest_status == "single":
+                    try:
+                        _get_orchestration_service().approve_send(
+                            source_row.id,
+                            ApproveSendRequest(),
+                            db,
+                        )
+                        auto_sent_count += 1
+                    except HTTPException:
+                        auto_send_failed_count += 1
+        if user_settings.feature_auto_send:
+            response.auto_sent_count = auto_sent_count
+            response.auto_send_failed_count = auto_send_failed_count
+        _update_manifest_run_counts(db, response.run_key, source_rows)
+    return response
 
 
 @app.post("/phase0/emails/ingest", response_model=EmailResponse)
@@ -2834,6 +2921,38 @@ def ingest_email(payload: IngestEmailRequest, db: Session = Depends(get_db)) -> 
     parsed, parser_details = parse_email_with_details(payload.subject, payload.body, source="manual")
     effective_policy = policy_service.read_policy_from_settings(user_settings.policy_json)
     hard_pass, hard_reason = hard_filter_check(parsed, user_settings, effective_policy, parser_details)
+    screening = CandidateScreeningService().evaluate_parser_details(parser_details, user_settings)
+    if hard_pass and not screening.proceed_to_scoring:
+        email = RecruiterEmail(
+            owner_id=settings.owner_id,
+            sender=payload.sender,
+            subject=payload.subject,
+            body=payload.body,
+            role=str(parsed["role"]),
+            location=str(parsed["location"]),
+            salary_text=str(parsed["salary_text"]),
+            skills_text=str(parsed["skills_text"]),
+            skills_json=json.dumps(
+                build_skills_json_payload(parser_details, fallback_skills_text=str(parsed["skills_text"])),
+                separators=(",", ":"),
+            ),
+            decision="Qualified",
+            state="needs_review",
+            decision_reason="strict_candidate_screening",
+            hard_filter_result=hard_reason,
+            approval_status="pending",
+            sent_status="not_sent",
+            source="manual",
+            parser_details_json=json.dumps(parser_details, separators=(",", ":")),
+        )
+        apply_screening_decision(email, screening)
+        db.add(email)
+        db.commit()
+        db.refresh(email)
+        if user_settings.feature_role_manifest_enabled:
+            retry_role_detection(email.id, db)
+            db.refresh(email)
+        return email
     active_resume = _active_resume(db)
     resume_selection = _select_best_resume_match(
         subject=payload.subject,
@@ -2933,11 +3052,17 @@ def ingest_email(payload: IngestEmailRequest, db: Session = Depends(get_db)) -> 
         source="manual",
         parser_details_json=json.dumps(parser_details, separators=(",", ":")),
     )
+    apply_screening_decision(email, screening)
+    if email.state == "needs_review":
+        apply_resume_sendability(email)
     db.add(email)
     if selected_resume and resume_embedding_json and selected_resume.semantic_embedding != resume_embedding_json:
         selected_resume.semantic_embedding = resume_embedding_json
     db.commit()
     db.refresh(email)
+    if user_settings.feature_role_manifest_enabled:
+        retry_role_detection(email.id, db)
+        db.refresh(email)
     if state == "needs_review":
         _record_productivity_event(
             db,
@@ -3010,6 +3135,7 @@ def list_candidates(
                     **EmailResponse.model_validate(item).model_dump(),
                     "attachment_file_names": attachment_file_names,
                     "parser_details": item.parser_details_json,
+                    "sendability_status": resolve_sendability_status(item),
                 }
             )
             for item in visible
@@ -3585,6 +3711,7 @@ def sync_external_nvoids(
     resolved_batch_limit = batch_limit if batch_limit is not None else _nvoids_batch_limit(user_settings)
     if not telegram_action_lock.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="another_run_in_progress")
+    started_at = datetime.now(UTC)
     try:
         result = external_feed_service.sync_nvoids(
             db,
@@ -3602,6 +3729,19 @@ def sync_external_nvoids(
         raise HTTPException(status_code=502, detail=f"nvoids_sync_failed: {exc}") from exc
     finally:
         telegram_action_lock.release()
+    if user_settings.feature_role_manifest_enabled:
+        rows = (
+            db.query(RecruiterEmail)
+            .filter(
+                RecruiterEmail.source == "nvoids",
+                RecruiterEmail.created_at >= started_at,
+                RecruiterEmail.is_multi_role_child.is_(False),
+            )
+            .all()
+        )
+        for row in rows:
+            retry_role_detection(row.id, db)
+        _update_manifest_run_counts(db, result.run_key, rows)
     return ExternalFeedSyncResponse(
         source_type=result.source_type,
         run_key=result.run_key,
@@ -3893,7 +4033,93 @@ def regenerate_candidate(
     payload: RegenerateCandidateRequest,
     db: Session = Depends(get_db),
 ) -> RecruiterEmail:
+    requested = _get_candidate_for_review(db, email_id)
+    user_settings = _get_settings(db)
+    if user_settings.feature_role_manifest_enabled and not requested.is_multi_role_child:
+        retry_role_detection(requested.id, db)
+        return _get_candidate_for_review(db, requested.id)
     return _get_orchestration_service().regenerate_candidate(email_id, payload, db)
+
+
+@app.post("/candidates/{email_id}/retry-role-detection", response_model=RoleDetectionRetryResponse)
+def retry_role_detection(email_id: int, db: Session = Depends(get_db)) -> RoleDetectionRetryResponse:
+    requested = _get_candidate_for_review(db, email_id)
+    source = requested
+    if requested.source_parent_email_id:
+        source = _get_candidate_for_review(db, requested.source_parent_email_id)
+    user_settings = _get_settings(db)
+    manifest_result = RoleManifestService().detect(source.body)
+    expansion = RequirementExpansionService().expand(
+        db,
+        source,
+        manifest_result,
+        materialize=settings.role_manifest_child_creation_enabled,
+    )
+
+    processing_ids = list(expansion.child_ids)
+    if manifest_result.status == "single":
+        processing_ids = [source.id]
+    if processing_ids:
+        for child_id in processing_ids:
+            child = _get_candidate_for_review(db, child_id)
+            if child.state in {"approved_sent", "rejected", "auto_rejected"}:
+                continue
+            try:
+                parsed, parser_details = parse_email_with_details(
+                    child.subject,
+                    child.requirement_source_text or child.body,
+                    source=child.source,
+                    ai_extractor_enabled=user_settings.feature_ai_extractor_enabled,
+                )
+                inherited = json.loads(child.inherited_constraints_json or "[]")
+                if not isinstance(inherited, list):
+                    inherited = []
+                structured = requirements_from_payload(
+                    parser_details.get("structured_requirements")
+                    if isinstance(parser_details.get("structured_requirements"), Mapping)
+                    else None
+                )
+                structured = apply_inherited_constraints(
+                    structured,
+                    [item for item in inherited if isinstance(item, Mapping)],
+                )
+                parser_details["structured_requirements"] = requirements_to_payload(structured)
+                screening = CandidateScreeningService().evaluate_parser_details(
+                    parser_details,
+                    user_settings,
+                )
+                child.role = str(parsed.get("role") or child.role)
+                child.location = str(parsed.get("location") or "unknown")
+                child.salary_text = str(parsed.get("salary_text") or "not_specified")
+                child.skills_text = str(parsed.get("skills_text") or "none_detected")
+                child.parser_details_json = json.dumps(parser_details, separators=(",", ":"))
+                child.skills_json = json.dumps(
+                    build_skills_json_payload(parser_details, fallback_skills_text=child.skills_text),
+                    separators=(",", ":"),
+                )
+                apply_screening_decision(child, screening)
+                if not screening.proceed_to_scoring:
+                    db.commit()
+                    continue
+                db.commit()
+                _get_orchestration_service().regenerate_candidate(
+                    child.id,
+                    RegenerateCandidateRequest(preserve_manual_routing=True, preserve_review_visibility=True),
+                    db,
+                )
+            except Exception as exc:
+                db.rollback()
+                failed_child = _get_candidate_for_review(db, child_id)
+                failed_child.sendability_status = "extraction_review"
+                failed_child.last_error = str(exc)
+                db.commit()
+
+    return RoleDetectionRetryResponse(
+        source_parent_id=expansion.source_parent_id,
+        manifest_status=expansion.manifest_status,
+        requirement_count=expansion.requirement_count,
+        child_ids=list(expansion.child_ids),
+    )
 
 
 @app.delete("/candidates/{email_id}", response_model=dict[str, int | bool | str])

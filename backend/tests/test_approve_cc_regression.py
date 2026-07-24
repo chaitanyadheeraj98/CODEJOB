@@ -215,6 +215,32 @@ class ApproveCcRegressionTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400, response.text)
         self.assertEqual(response.json()["detail"], "CC email is required before sending")
 
+    def test_second_multi_role_sibling_requires_explicit_confirmation(self) -> None:
+        with Session(self.engine) as db:
+            parent = self._add_needs_review_email(db, cc_email="vaishnavi@horizonsoftech.net")
+            parent.is_source_parent = True
+            parent.sendability_status = "source_parent"
+            first_sibling = self._add_needs_review_email(db, cc_email="vaishnavi@horizonsoftech.net")
+            first_sibling.source_parent_email_id = parent.id
+            first_sibling.is_multi_role_child = True
+            first_sibling.state = "approved_sent"
+            first_sibling.sent_status = "sent"
+            first_sibling.sendability_status = "sendable"
+            second_sibling = self._add_needs_review_email(db, cc_email="vaishnavi@horizonsoftech.net")
+            second_sibling.source_parent_email_id = parent.id
+            second_sibling.is_multi_role_child = True
+            second_sibling.sendability_status = "sendable"
+            db.commit()
+            second_id = second_sibling.id
+
+        response = self.client.post(
+            f"/candidates/{second_id}/approve-send",
+            json={"edited_reply": None, "confirm_same_source_additional_send": False},
+        )
+
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertIn("explicit confirmation", response.json()["detail"])
+
     def test_gmail_sync_persists_routing_to_and_cc_for_needs_review_candidate(self) -> None:
         original_is_gmail_configured = main.is_gmail_configured
         original_list_unread = main.list_unread_candidates_by_query

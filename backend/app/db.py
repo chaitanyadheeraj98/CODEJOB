@@ -279,6 +279,22 @@ def ensure_sqlite_phase0_columns() -> None:
             ("resume_file_name", "ALTER TABLE recruiter_emails ADD COLUMN resume_file_name VARCHAR(255)"),
             ("skills_json", "ALTER TABLE recruiter_emails ADD COLUMN skills_json TEXT"),
             ("parser_details_json", "ALTER TABLE recruiter_emails ADD COLUMN parser_details_json TEXT"),
+            ("screening_mode", "ALTER TABLE recruiter_emails ADD COLUMN screening_mode VARCHAR(30)"),
+            ("source_parent_email_id", "ALTER TABLE recruiter_emails ADD COLUMN source_parent_email_id INTEGER"),
+            ("is_source_parent", "ALTER TABLE recruiter_emails ADD COLUMN is_source_parent BOOLEAN DEFAULT 0"),
+            ("is_multi_role_child", "ALTER TABLE recruiter_emails ADD COLUMN is_multi_role_child BOOLEAN DEFAULT 0"),
+            ("requirement_index", "ALTER TABLE recruiter_emails ADD COLUMN requirement_index INTEGER"),
+            ("requirement_count", "ALTER TABLE recruiter_emails ADD COLUMN requirement_count INTEGER"),
+            ("requirement_key", "ALTER TABLE recruiter_emails ADD COLUMN requirement_key VARCHAR(64)"),
+            ("requirement_source_text", "ALTER TABLE recruiter_emails ADD COLUMN requirement_source_text TEXT"),
+            ("inherited_constraints_json", "ALTER TABLE recruiter_emails ADD COLUMN inherited_constraints_json TEXT"),
+            ("role_manifest_status", "ALTER TABLE recruiter_emails ADD COLUMN role_manifest_status VARCHAR(40) DEFAULT 'not_run'"),
+            ("role_manifest_confidence", "ALTER TABLE recruiter_emails ADD COLUMN role_manifest_confidence FLOAT"),
+            ("role_manifest_json", "ALTER TABLE recruiter_emails ADD COLUMN role_manifest_json TEXT"),
+            ("role_manifest_diagnostics_json", "ALTER TABLE recruiter_emails ADD COLUMN role_manifest_diagnostics_json TEXT"),
+            ("eligibility_status", "ALTER TABLE recruiter_emails ADD COLUMN eligibility_status VARCHAR(40)"),
+            ("eligibility_details_json", "ALTER TABLE recruiter_emails ADD COLUMN eligibility_details_json TEXT"),
+            ("sendability_status", "ALTER TABLE recruiter_emails ADD COLUMN sendability_status VARCHAR(50)"),
             ("sent_at", "ALTER TABLE recruiter_emails ADD COLUMN sent_at DATETIME"),
             ("last_error", "ALTER TABLE recruiter_emails ADD COLUMN last_error TEXT"),
             ("state", "ALTER TABLE recruiter_emails ADD COLUMN state VARCHAR(50) DEFAULT 'auto_rejected'"),
@@ -337,6 +353,10 @@ def ensure_sqlite_phase0_columns() -> None:
             "CREATE UNIQUE INDEX IF NOT EXISTS ix_recruiter_emails_external_message_id "
             "ON recruiter_emails (external_message_id)"
         )
+        conn.exec_driver_sql(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_recruiter_email_parent_requirement "
+            "ON recruiter_emails (source_parent_email_id, requirement_key)"
+        )
 
         existing_feedback = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(recipient_routing_feedback)")}
         feedback_alter_statements = [
@@ -359,6 +379,12 @@ def ensure_sqlite_phase0_columns() -> None:
             ("feature_semantic_enabled", "ALTER TABLE user_settings ADD COLUMN feature_semantic_enabled BOOLEAN DEFAULT 0"),
             ("feature_groq_job_parser_enabled", "ALTER TABLE user_settings ADD COLUMN feature_groq_job_parser_enabled BOOLEAN DEFAULT 0"),
             ("feature_gmail_requirement_groups_enabled", "ALTER TABLE user_settings ADD COLUMN feature_gmail_requirement_groups_enabled BOOLEAN DEFAULT 0"),
+            ("feature_role_manifest_enabled", "ALTER TABLE user_settings ADD COLUMN feature_role_manifest_enabled BOOLEAN DEFAULT 0"),
+            ("feature_strict_candidate_screening_enabled", "ALTER TABLE user_settings ADD COLUMN feature_strict_candidate_screening_enabled BOOLEAN DEFAULT 0"),
+            ("candidate_work_authorizations_json", "ALTER TABLE user_settings ADD COLUMN candidate_work_authorizations_json TEXT DEFAULT '[]'"),
+            ("candidate_total_experience_years", "ALTER TABLE user_settings ADD COLUMN candidate_total_experience_years FLOAT"),
+            ("candidate_us_experience_years", "ALTER TABLE user_settings ADD COLUMN candidate_us_experience_years FLOAT"),
+            ("candidate_current_location", "ALTER TABLE user_settings ADD COLUMN candidate_current_location VARCHAR(255) DEFAULT ''"),
             ("draft_text_size", "ALTER TABLE user_settings ADD COLUMN draft_text_size VARCHAR(20) DEFAULT 'normal'"),
             ("feature_auto_poll_interval_minutes", "ALTER TABLE user_settings ADD COLUMN feature_auto_poll_interval_minutes INTEGER DEFAULT 10"),
             ("feature_nvoids_enabled", "ALTER TABLE user_settings ADD COLUMN feature_nvoids_enabled BOOLEAN DEFAULT 1"),
@@ -377,6 +403,17 @@ def ensure_sqlite_phase0_columns() -> None:
         ]
         for column_name, statement in settings_alter_statements:
             if column_name not in existing_settings:
+                conn.exec_driver_sql(statement)
+
+        existing_recent_runs = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(recent_runs)")}
+        recent_run_alter_statements = [
+            ("source_count", "ALTER TABLE recent_runs ADD COLUMN source_count INTEGER DEFAULT 0"),
+            ("requirement_count", "ALTER TABLE recent_runs ADD COLUMN requirement_count INTEGER DEFAULT 0"),
+            ("multi_role_source_count", "ALTER TABLE recent_runs ADD COLUMN multi_role_source_count INTEGER DEFAULT 0"),
+            ("manifest_review_count", "ALTER TABLE recent_runs ADD COLUMN manifest_review_count INTEGER DEFAULT 0"),
+        ]
+        for column_name, statement in recent_run_alter_statements:
+            if column_name not in existing_recent_runs:
                 conn.exec_driver_sql(statement)
 
         existing_resume_assets = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(resume_assets)")}

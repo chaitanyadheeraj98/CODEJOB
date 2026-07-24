@@ -19,6 +19,7 @@ from app.phase0 import (
     resolve_to_cc,
     slice_jd_sections,
     should_block_f2f,
+    strip_recruiter_footer,
 )
 from app.services import policy_service
 
@@ -46,6 +47,18 @@ www.horizonsoftech.net
 
 
 class RecipientRoutingTests(unittest.TestCase):
+    def test_pre_jd_share_resume_instruction_is_not_treated_as_footer(self) -> None:
+        body = """Please share resumes along with your LinkedIn URL
+
+Title: AI Pod Product Owner
+Job ID: DLTJP00057258
+VISA: USC/GC Only
+Required Qualifications:
+14+ years total experience and 10+ years US experience
+"""
+
+        self.assertEqual(strip_recruiter_footer(body), body)
+
     def _user_settings(self) -> UserSettings:
         return UserSettings(
             owner_id="default-owner",
@@ -84,6 +97,16 @@ class RecipientRoutingTests(unittest.TestCase):
         self.assertEqual(details["requirements_schema_version"], 1)
         self.assertIn("structured_requirements", details)
         self.assertIn("required_groups", details["structured_requirements"])
+
+    def test_placeholder_skill_is_not_promoted_to_a_mandatory_requirement(self) -> None:
+        parsed, details = parse_email_with_details(
+            "Role: Project Manager",
+            "Location: Remote\nRequired skills: none_detected, unknown",
+            source="gmail",
+        )
+
+        self.assertEqual(parsed["skills_text"], "none_detected")
+        self.assertEqual(details["structured_requirements"]["required_groups"], [])
 
     def test_parse_email_with_details_freezes_current_details_shape(self) -> None:
         _parsed, details = parse_email_with_details(

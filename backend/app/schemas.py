@@ -16,6 +16,7 @@ class IngestEmailRequest(BaseModel):
 
 class ApproveSendRequest(BaseModel):
     edited_reply: str | None = None
+    confirm_same_source_additional_send: bool = False
 
 
 class RejectRequest(BaseModel):
@@ -35,6 +36,13 @@ class ResolveRecipientsRequest(BaseModel):
 class RegenerateCandidateRequest(BaseModel):
     preserve_manual_routing: bool = True
     preserve_review_visibility: bool = True
+
+
+class RoleDetectionRetryResponse(BaseModel):
+    source_parent_id: int
+    manifest_status: str
+    requirement_count: int
+    child_ids: list[int] = Field(default_factory=list)
 
 
 class RoutingEvidenceResponse(BaseModel):
@@ -80,6 +88,12 @@ class SettingsRequest(BaseModel):
     feature_semantic_enabled: bool = False
     feature_groq_job_parser_enabled: bool = False
     feature_gmail_requirement_groups_enabled: bool = False
+    feature_role_manifest_enabled: bool = False
+    feature_strict_candidate_screening_enabled: bool = False
+    candidate_work_authorizations: list[str] | None = Field(default_factory=list)
+    candidate_total_experience_years: float | None = Field(default=None, ge=0)
+    candidate_us_experience_years: float | None = Field(default=None, ge=0)
+    candidate_current_location: str | None = ""
     draft_text_size: str = "normal"
     fallback_draft_template: str = ""
     signature_name: str = ""
@@ -426,6 +440,34 @@ class EmailResponse(BaseModel):
         default=None,
         validation_alias=AliasChoices("parser_details", "parser_details_json"),
     )
+    screening_mode: str | None = None
+    source_parent_email_id: int | None = None
+    is_source_parent: bool = False
+    is_multi_role_child: bool = False
+    requirement_index: int | None = None
+    requirement_count: int | None = None
+    requirement_key: str | None = None
+    requirement_source_text: str | None = None
+    inherited_constraints: list[dict[str, object]] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("inherited_constraints", "inherited_constraints_json"),
+    )
+    role_manifest_status: str = "not_run"
+    role_manifest_confidence: float | None = None
+    role_manifest: dict[str, object] | None = Field(
+        default=None,
+        validation_alias=AliasChoices("role_manifest", "role_manifest_json"),
+    )
+    role_manifest_diagnostics: dict[str, object] | None = Field(
+        default=None,
+        validation_alias=AliasChoices("role_manifest_diagnostics", "role_manifest_diagnostics_json"),
+    )
+    eligibility_status: str | None = None
+    eligibility_details: dict[str, object] | None = Field(
+        default=None,
+        validation_alias=AliasChoices("eligibility_details", "eligibility_details_json"),
+    )
+    sendability_status: str | None = None
     attachment_file_names: list[str] = Field(default_factory=list)
     sent_at: datetime | None
     gmail_sent_id: str | None
@@ -470,7 +512,7 @@ class EmailResponse(BaseModel):
             return [str(item).strip() for item in value if str(item).strip()]
         return []
 
-    @field_validator("parser_details", "ats_breakdown", "resume_picker_candidates", "resume_picker_breakdown", "qualification_context", mode="before")
+    @field_validator("parser_details", "ats_breakdown", "resume_picker_candidates", "resume_picker_breakdown", "qualification_context", "role_manifest", "role_manifest_diagnostics", "eligibility_details", mode="before")
     @classmethod
     def parse_json_object(cls, value: Any) -> dict[str, object] | None:
         if value in (None, ""):
@@ -484,6 +526,18 @@ class EmailResponse(BaseModel):
         if isinstance(value, dict):
             return cast(dict[str, object], value)
         return None
+
+    @field_validator("inherited_constraints", mode="before")
+    @classmethod
+    def parse_json_list(cls, value: Any) -> list[dict[str, object]]:
+        if value in (None, ""):
+            return []
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                return []
+        return [cast(dict[str, object], item) for item in value if isinstance(item, dict)] if isinstance(value, list) else []
 
 
 class GmailStatusResponse(BaseModel):
@@ -763,6 +817,7 @@ class AutomationRunResponse(BaseModel):
     detail: str
     run_key: str | None = None
     email_id: int | None = None
+    queued_email_ids: list[int] = Field(default_factory=list)
     gmail_message_url: str | None = None
     decision_reason: str | None = None
     skip_reason: str | None = None
@@ -831,6 +886,10 @@ class RecentRunResponse(BaseModel):
     skipped_count: int | None = None
     failed_count: int | None = None
     skipped_item_count: int = 0
+    source_count: int = 0
+    requirement_count: int = 0
+    multi_role_source_count: int = 0
+    manifest_review_count: int = 0
     sync_batch_id: str | None = None
     external_scrape_run_id: int | None = None
     created_at: datetime

@@ -49,6 +49,13 @@ function makeSettings(overrides?: Record<string, unknown>) {
     feature_ai_extractor_enabled: false,
     feature_semantic_enabled: false,
     feature_groq_job_parser_enabled: false,
+    feature_gmail_requirement_groups_enabled: false,
+    feature_role_manifest_enabled: false,
+    feature_strict_candidate_screening_enabled: false,
+    candidate_work_authorizations: [],
+    candidate_total_experience_years: null,
+    candidate_us_experience_years: null,
+    candidate_current_location: '',
     draft_text_size: 'normal',
     fallback_draft_template: '',
     signature_name: '',
@@ -333,7 +340,7 @@ describe('Settings bootstrap flow', () => {
     expect(bootstrapCalls).toBe(1)
 
     const saveButton = Array.from(container.querySelectorAll('button')).find((button) =>
-      button.textContent === 'Save Filters',
+      button.textContent === 'Save Settings',
     ) as HTMLButtonElement | undefined
     expect(saveButton).toBeDefined()
 
@@ -344,5 +351,36 @@ describe('Settings bootstrap flow', () => {
 
     expect(saveCalls).toBe(1)
     expect(bootstrapCalls).toBe(2)
+  })
+
+  it('places the editable eligibility profile and strict toggle under Profile Settings', async () => {
+    vi.stubGlobal('fetch', makeAppFetch())
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+    })
+
+    await act(async () => {
+      root.render(<App />)
+      await flushPromises(6)
+    })
+
+    const sections = Array.from(container.querySelectorAll('section'))
+    const profile = sections.find((section) => section.querySelector('h2')?.textContent === 'Profile Settings')
+    const automation = sections.find((section) => section.querySelector('h2')?.textContent === 'Automation Filters')
+    expect(profile?.textContent).toContain('Candidate Eligibility Profile')
+    expect(profile?.textContent).toContain('Enforce Strict Candidate Screening')
+    expect(profile?.textContent).toContain('Candidate Work Authorizations')
+    expect(profile?.textContent).toContain('Total Experience Years')
+    expect(profile?.textContent).toContain('U.S. Experience Years')
+    expect(profile?.textContent).toContain('Current Location')
+    expect(automation?.textContent).toContain('Enable Role Manifest Detection')
+    expect(automation?.textContent).not.toContain('Candidate Work Authorizations')
+    const profileInputs = Array.from(profile?.querySelectorAll('input') ?? [])
+    expect(profileInputs.every((input) => !input.disabled)).toBe(true)
+    expect(container.textContent).toContain('Save Settings')
   })
 })

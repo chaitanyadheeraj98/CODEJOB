@@ -190,7 +190,7 @@ describe('Execution Control preferred employer CC', () => {
     })
 
     const saveButton = Array.from(container.querySelectorAll('button')).find((button) =>
-      button.textContent?.includes('Save Filters'),
+      button.textContent?.includes('Save Settings'),
     ) as HTMLButtonElement | undefined
     expect(saveButton).toBeDefined()
 

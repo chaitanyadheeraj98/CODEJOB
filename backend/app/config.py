@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     deepseek_model_fast: str = "deepseek-chat"
     deepseek_timeout_seconds: float = 20.0
     feature_deepseek_enabled: bool = False
+    role_manifest_child_creation_enabled: bool = Field(
+        default=False,
+        validation_alias="ROLE_MANIFEST_CHILD_CREATION_ENABLED",
+    )
     groq_api_key: str = Field(
         default="",
         validation_alias=AliasChoices("CodeJobGroq", "GROQ_API_KEY", "Groq_API_KEY"),

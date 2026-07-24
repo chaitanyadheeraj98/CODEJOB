@@ -91,6 +91,16 @@ describe('ATS review UI', () => {
       attachment_file_names: [],
       sent_at: null,
       gmail_sent_id: null,
+      source_parent_email_id: 4435,
+      is_source_parent: false,
+      is_multi_role_child: true,
+      requirement_index: 1,
+      requirement_count: 6,
+      inherited_constraints: [{ type: 'work_authorization', value: 'USC/GC Only' }],
+      role_manifest_status: 'multiple',
+      role_manifest_diagnostics: { model: 'deepseek-chat', finish_reason: 'stop' },
+      eligibility_status: 'pass',
+      sendability_status: 'sendable',
       last_error: null,
       created_at: '2026-06-24T00:00:00Z',
       updated_at: '2026-06-24T00:00:00Z',
@@ -245,5 +255,9 @@ describe('ATS review UI', () => {
     expect(container.textContent ?? '').toContain('Strong')
     expect(container.textContent ?? '').toContain('Resume:')
     expect(container.textContent ?? '').toContain('JavaVariant_ARPPSOPP.docx')
+    expect(container.textContent ?? '').toContain('Email 4435')
+    expect(container.textContent ?? '').toContain('6 roles detected')
+    expect(container.textContent ?? '').toContain('Requirement: 1 of 6')
+    expect(container.textContent ?? '').toContain('Sendability: sendable')
   })
 })

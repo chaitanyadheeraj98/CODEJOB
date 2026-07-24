@@ -696,14 +696,13 @@ def strip_recruiter_footer(body: str) -> str:
             return "\n".join(lines[:idx]).strip()
         if FOOTER_TITLE_RE.search(line) and _looks_like_footer_cluster(lines, idx):
             return "\n".join(lines[:idx]).strip()
-        if any(
-            phrase in normalized
-            for phrase in (
-                "unsubscribe",
-                "reply if interested",
-                "please share resume",
-                "call me",
-            )
+        near_message_end = idx >= max(0, len(lines) - 8)
+        if "unsubscribe" in normalized and near_message_end:
+            return "\n".join(lines[:idx]).strip()
+        if (
+            near_message_end
+            and any(phrase in normalized for phrase in ("reply if interested", "please share resume", "call me"))
+            and _looks_like_footer_cluster(lines, idx)
         ):
             return "\n".join(lines[:idx]).strip()
 
@@ -712,8 +711,9 @@ def strip_recruiter_footer(body: str) -> str:
         r"(?is)\b[A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+){0,3}\s+(?:technical recruiter|recruiter|account manager)\b(?=.*(?:email\s*:|phone\s*:|ph\s*:|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})).*$",
     ]
     for pattern in inline_footer_patterns:
-        stripped = re.sub(pattern, "", body).strip()
-        if stripped and stripped != body and len(stripped) >= max(80, int(len(body) * 0.35)):
+        without_footer = re.sub(pattern, "", body)
+        stripped = without_footer.strip()
+        if stripped and without_footer != body and len(stripped) >= max(80, int(len(body) * 0.35)):
             return stripped
     return body
 

@@ -5,6 +5,8 @@ from pathlib import Path
 import sys
 
 from alembic import context
+from alembic.script import ScriptDirectory
+from sqlalchemy import inspect
 from sqlalchemy import engine_from_config, pool
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -44,6 +46,18 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
+        if not inspect(connection).get_table_names():
+            Base.metadata.create_all(bind=connection)
+            connection.exec_driver_sql(
+                "CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"
+            )
+            connection.exec_driver_sql(
+                "INSERT INTO alembic_version(version_num) VALUES (?)",
+                (ScriptDirectory.from_config(config).get_current_head(),),
+            )
+            connection.commit()
+            return
+        connection.rollback()
         context.configure(connection=connection, target_metadata=target_metadata)
 
         with context.begin_transaction():

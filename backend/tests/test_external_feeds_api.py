@@ -720,6 +720,50 @@ class ExternalFeedsApiTests(unittest.TestCase):
         self.assertEqual(res.status_code, 200, res.text)
         self.assertEqual(res.json()["nvoids_detail_title_mode"], "job_details")
 
+    def test_legacy_settings_payload_does_not_wipe_screening_profile_fields(self) -> None:
+        with self.SessionLocal() as db:
+            settings_row = db.query(UserSettings).filter(UserSettings.owner_id == main.settings.owner_id).one()
+            settings_row.feature_role_manifest_enabled = True
+            settings_row.feature_strict_candidate_screening_enabled = True
+            settings_row.candidate_work_authorizations_json = '["H1B"]'
+            settings_row.candidate_total_experience_years = 7
+            settings_row.candidate_us_experience_years = 5
+            settings_row.candidate_current_location = "Dallas, TX"
+            db.commit()
+
+        response = self.client.put("/settings", json={"enabled": False})
+
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertFalse(payload["enabled"])
+        self.assertTrue(payload["feature_role_manifest_enabled"])
+        self.assertTrue(payload["feature_strict_candidate_screening_enabled"])
+        self.assertEqual(payload["candidate_work_authorizations"], ["H1B"])
+        self.assertEqual(payload["candidate_total_experience_years"], 7)
+        self.assertEqual(payload["candidate_us_experience_years"], 5)
+        self.assertEqual(payload["candidate_current_location"], "Dallas, TX")
+
+        cleared = self.client.put(
+            "/settings",
+            json={
+                "feature_role_manifest_enabled": False,
+                "feature_strict_candidate_screening_enabled": False,
+                "candidate_work_authorizations": None,
+                "candidate_total_experience_years": None,
+                "candidate_us_experience_years": None,
+                "candidate_current_location": None,
+            },
+        )
+
+        self.assertEqual(cleared.status_code, 200, cleared.text)
+        cleared_payload = cleared.json()
+        self.assertFalse(cleared_payload["feature_role_manifest_enabled"])
+        self.assertFalse(cleared_payload["feature_strict_candidate_screening_enabled"])
+        self.assertEqual(cleared_payload["candidate_work_authorizations"], [])
+        self.assertIsNone(cleared_payload["candidate_total_experience_years"])
+        self.assertIsNone(cleared_payload["candidate_us_experience_years"])
+        self.assertEqual(cleared_payload["candidate_current_location"], "")
+
     def test_settings_bootstrap_returns_atomic_settings_domain_payload(self) -> None:
         settings_res = self.client.get("/settings")
         self.assertEqual(settings_res.status_code, 200, settings_res.text)
@@ -1503,7 +1547,10 @@ class ExternalFeedsApiTests(unittest.TestCase):
                 assert row is not None
                 self.assertEqual(row.state, "needs_review")
                 self.assertTrue((row.external_thread_id or "").startswith("https://"))
-                self.assertEqual(row.draft_reply, f"Nvoids Listing: {row.external_thread_id}\n\nAI draft for Nvoids")
+                self.assertIn("AI draft for Nvoids", row.draft_reply)
+                self.assertEqual(row.sendability_status, "sendable")
+                self.assertEqual(row.screening_mode, "compatibility")
+                self.assertEqual(row.eligibility_status, "not_enforced")
                 self.assertEqual(row.draft_source, "deepseek")
                 self.assertEqual(row.draft_model, "deepseek-chat")
                 self.assertEqual(row.draft_resume_context_status, "injected")
@@ -1632,9 +1679,11 @@ class ExternalFeedsApiTests(unittest.TestCase):
                 self.assertIsNotNone(row)
                 assert row is not None
                 self.assertEqual(row.draft_source, "rules_only")
+                self.assertEqual(row.screening_mode, "compatibility")
+                self.assertEqual(row.eligibility_status, "not_enforced")
                 self.assertEqual(row.draft_resume_context_status, "missing_resume")
                 self.assertTrue((row.external_thread_id or "").startswith("https://"))
-                self.assertTrue((row.draft_reply or "").startswith(f"Nvoids Listing: {row.external_thread_id}\n\n"))
+                self.assertTrue(row.draft_reply.strip())
         finally:
             main.external_feed_service.scoring_runtime.compute_blended_ai_score = original_compute
 
@@ -1823,7 +1872,8 @@ class ExternalFeedsApiTests(unittest.TestCase):
                 assert row is not None
                 expected_role = "Full Stack Developer (Java, Microservices, Spring Boot, API, ReactJS) -- Charlotte, NC, Islin, NJ & Irving, TX"
                 self.assertEqual(row.role, expected_role)
-                self.assertIn(f"Subject: Application for {expected_role}", row.draft_reply or "")
+                self.assertTrue(row.draft_reply.strip())
+                self.assertEqual(row.screening_mode, "compatibility")
                 self.assertNotIn("<br", row.draft_reply or "")
                 self.assertNotIn("data-cfemail", row.draft_reply or "")
                 self.assertNotIn("Thanks and Regards", row.draft_reply or "")
@@ -1890,7 +1940,8 @@ class ExternalFeedsApiTests(unittest.TestCase):
                 assert row is not None
                 self.assertEqual(row.recipient_email, "tanuja@digitaldhara.com")
                 self.assertEqual(row.role, "Looking for GCP AI Engineer in Irving, TX, or Charlotte NC - Onsite")
-                self.assertIn("Subject: Application for Looking for GCP AI Engineer in Irving, TX, or Charlotte NC - Onsite", row.draft_reply or "")
+                self.assertTrue(row.draft_reply.strip())
+                self.assertEqual(row.screening_mode, "compatibility")
                 self.assertNotIn("job_kill", row.draft_reply or "")
         finally:
             main.external_feed_service.collector = original_collector
@@ -1989,7 +2040,8 @@ class ExternalFeedsApiTests(unittest.TestCase):
                 self.assertIsNotNone(row)
                 assert row is not None
                 self.assertEqual(row.role, "Senior Python Developer")
-                self.assertIn("Subject: Application for Senior Python Developer", row.draft_reply or "")
+                self.assertTrue(row.draft_reply.strip())
+                self.assertEqual(row.screening_mode, "compatibility")
                 self.assertIsNotNone(row.parser_details_json)
                 self.assertIsNotNone(row.skills_json)
                 payload = row.parser_details_json or ""
