@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import time
 from dataclasses import dataclass
+from typing import Any, Literal
 
 from openai import OpenAI
 
 from app.config import settings
 from app.ai.json_object import JSONObjectParseError, parse_json_object
+
+
+logger = logging.getLogger(__name__)
 
 
 class DeepSeekJSONError(RuntimeError):
@@ -70,12 +75,16 @@ def deepseek_json_completion(
     *,
     model_name: str | None = None,
     timeout_seconds: float | None = None,
+    max_tokens: int = 900,
+    thinking: Literal["enabled", "disabled"] | None = None,
 ) -> dict[str, object]:
     return deepseek_json_completion_with_diagnostics(
         system_prompt,
         user_prompt,
         model_name=model_name,
         timeout_seconds=timeout_seconds,
+        max_tokens=max_tokens,
+        thinking=thinking,
     ).payload
 
 
@@ -85,37 +94,61 @@ def deepseek_json_completion_with_diagnostics(
     *,
     model_name: str | None = None,
     timeout_seconds: float | None = None,
+    max_tokens: int = 900,
+    thinking: Literal["enabled", "disabled"] | None = None,
 ) -> DeepSeekJSONResult:
     if not settings.deepseek_api_key:
         raise RuntimeError("DeepSeek API key is missing")
+    if max_tokens <= 0:
+        raise ValueError("max_tokens must be positive")
 
     client = _build_client(timeout_seconds=timeout_seconds)
     started = time.perf_counter()
-    response = client.chat.completions.create(
-        model=model_name or settings.deepseek_model_fast or "deepseek-v4-flash",
-        messages=[
+    request: dict[str, Any] = {
+        "model": model_name or settings.deepseek_model_fast or "deepseek-v4-flash",
+        "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        temperature=0.0,
-        max_tokens=900,
-        response_format={"type": "json_object"},
-    )
+        "temperature": 0.0,
+        "max_tokens": max_tokens,
+        "response_format": {"type": "json_object"},
+    }
+    if thinking is not None:
+        request["extra_body"] = {"thinking": {"type": thinking}}
+    response = client.chat.completions.create(**request)
     content = response.choices[0].message.content if response.choices else ""
     finish_reason = str(getattr(response.choices[0], "finish_reason", "") or "") if response.choices else ""
     raw_content = content or ""
+    usage = getattr(response, "usage", None)
+    model = str(getattr(response, "model", "") or model_name or settings.deepseek_model_fast or "deepseek-v4-flash")
+    prompt_tokens = getattr(usage, "prompt_tokens", None)
+    completion_tokens = getattr(usage, "completion_tokens", None)
+    duration_ms = int((time.perf_counter() - started) * 1000)
+    response_hash = hashlib.sha256(raw_content.encode("utf-8")).hexdigest()
     try:
         payload = _parse_json_object(raw_content)
     except RuntimeError as exc:
         category = "truncated JSON content" if finish_reason == "length" else str(exc)
+        logger.warning(
+            "deepseek_json_parse_failed model=%r finish_reason=%r max_tokens=%s "
+            "prompt_tokens=%s completion_tokens=%s duration_ms=%s response_chars=%s response_hash=%s",
+            model,
+            finish_reason,
+            max_tokens,
+            prompt_tokens,
+            completion_tokens,
+            duration_ms,
+            len(raw_content),
+            response_hash,
+        )
         raise DeepSeekJSONError(category, raw_content=raw_content, finish_reason=finish_reason) from exc
-    usage = getattr(response, "usage", None)
     return DeepSeekJSONResult(
         payload=payload,
-        model=str(getattr(response, "model", "") or model_name or settings.deepseek_model_fast or "deepseek-v4-flash"),
+        model=model,
         finish_reason=finish_reason,
-        prompt_tokens=getattr(usage, "prompt_tokens", None),
-        completion_tokens=getattr(usage, "completion_tokens", None),
-        duration_ms=int((time.perf_counter() - started) * 1000),
-        response_hash=hashlib.sha256(raw_content.encode("utf-8")).hexdigest(),
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        duration_ms=duration_ms,
+        response_hash=response_hash,
     )

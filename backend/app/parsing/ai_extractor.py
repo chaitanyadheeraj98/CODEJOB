@@ -11,6 +11,9 @@ from app.parsing.skill_audit import is_suspicious_skill_blob, recover_known_skil
 from app.skill_taxonomy import normalize_skill_token
 
 
+AI_EXTRACTOR_MAX_TOKENS = 2_048
+
+
 @dataclass(frozen=True)
 class AIExtractorResult:
     role_candidates: tuple[str, ...] = ()
@@ -333,6 +336,8 @@ def extract_ai_job_details(
             user_prompt,
             model_name=model_name,
             timeout_seconds=timeout_seconds,
+            max_tokens=AI_EXTRACTOR_MAX_TOKENS,
+            thinking="disabled",
         )
     except Exception as exc:
         return AIExtractorResult(error=str(exc), evidence={"extractor_error": [str(exc)]})

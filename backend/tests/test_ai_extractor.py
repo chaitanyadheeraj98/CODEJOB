@@ -2,13 +2,30 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from app.ai.deepseek_client import _parse_json_object, deepseek_json_completion
-from app.parsing.ai_extractor import ai_extractor_result_to_payload, extract_ai_job_details
+from app.ai.deepseek_client import DeepSeekJSONError, _parse_json_object, deepseek_json_completion
+from app.parsing.ai_extractor import AI_EXTRACTOR_MAX_TOKENS, ai_extractor_result_to_payload, extract_ai_job_details
 
 
-def _fake_response(content: str) -> SimpleNamespace:
+def _fake_response(
+    content: str,
+    *,
+    finish_reason: str = "stop",
+    model: str = "deepseek-v4-flash",
+    prompt_tokens: int = 101,
+    completion_tokens: int = 23,
+) -> SimpleNamespace:
     return SimpleNamespace(
-        choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content=content),
+                finish_reason=finish_reason,
+            )
+        ],
+        model=model,
+        usage=SimpleNamespace(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        ),
     )
 
 
@@ -28,6 +45,9 @@ class DeepSeekJsonCompletionTests(unittest.TestCase):
         payload = deepseek_json_completion("system", "user")
 
         self.assertEqual(payload["role"], "Java Developer")
+        request = mock_openai.return_value.chat.completions.create.call_args.kwargs
+        self.assertEqual(request["max_tokens"], 900)
+        self.assertNotIn("extra_body", request)
 
     @patch("app.ai.deepseek_client.settings.deepseek_api_key", "test-key")
     @patch("app.ai.deepseek_client.OpenAI")
@@ -39,6 +59,80 @@ class DeepSeekJsonCompletionTests(unittest.TestCase):
         payload = deepseek_json_completion("system", "user")
 
         self.assertEqual(payload["company"], "Acme Corp")
+
+    @patch("app.ai.deepseek_client.settings.deepseek_api_key", "test-key")
+    @patch("app.ai.deepseek_client.OpenAI")
+    def test_explicit_json_completion_budget_and_thinking_are_forwarded(self, mock_openai) -> None:
+        mock_openai.return_value.chat.completions.create.return_value = _fake_response('{"role":"Java Developer"}')
+
+        payload = deepseek_json_completion(
+            "system",
+            "user",
+            model_name="deepseek-test-model",
+            timeout_seconds=12.5,
+            max_tokens=2_048,
+            thinking="disabled",
+        )
+
+        self.assertEqual(payload["role"], "Java Developer")
+        self.assertEqual(mock_openai.call_args.kwargs["timeout"], 12.5)
+        request = mock_openai.return_value.chat.completions.create.call_args.kwargs
+        self.assertEqual(request["model"], "deepseek-test-model")
+        self.assertEqual(request["max_tokens"], 2_048)
+        self.assertEqual(request["extra_body"], {"thinking": {"type": "disabled"}})
+
+    @patch("app.ai.deepseek_client.settings.deepseek_api_key", "test-key")
+    @patch("app.ai.deepseek_client.OpenAI")
+    def test_nonpositive_json_completion_budget_is_rejected_before_request(self, mock_openai) -> None:
+        with self.assertRaisesRegex(ValueError, "max_tokens must be positive"):
+            deepseek_json_completion("system", "user", max_tokens=0)
+
+        mock_openai.return_value.chat.completions.create.assert_not_called()
+
+    @patch("app.ai.deepseek_client.settings.deepseek_api_key", "test-key")
+    @patch("app.ai.deepseek_client.OpenAI")
+    def test_length_truncation_logs_only_sanitized_diagnostics(self, mock_openai) -> None:
+        raw_content = '{"role":"Java Developer","skills":["Java"'
+        mock_openai.return_value.chat.completions.create.return_value = _fake_response(
+            raw_content,
+            finish_reason="length",
+            completion_tokens=2_048,
+        )
+
+        with self.assertLogs("app.ai.deepseek_client", level="WARNING") as captured:
+            with self.assertRaises(DeepSeekJSONError) as raised:
+                deepseek_json_completion(
+                    "system secret",
+                    "user secret",
+                    max_tokens=2_048,
+                    thinking="disabled",
+                )
+
+        self.assertEqual(str(raised.exception), "truncated JSON content")
+        self.assertEqual(raised.exception.finish_reason, "length")
+        self.assertEqual(raised.exception.raw_content, raw_content)
+        logged = "\n".join(captured.output)
+        self.assertIn("deepseek_json_parse_failed", logged)
+        self.assertIn("finish_reason='length'", logged)
+        self.assertIn("max_tokens=2048", logged)
+        self.assertIn("completion_tokens=2048", logged)
+        self.assertIn(f"response_chars={len(raw_content)}", logged)
+        self.assertNotIn(raw_content, logged)
+        self.assertNotIn("system secret", logged)
+        self.assertNotIn("user secret", logged)
+
+    @patch("app.ai.deepseek_client.settings.deepseek_api_key", "test-key")
+    @patch("app.ai.deepseek_client.OpenAI")
+    def test_stop_finish_reason_keeps_existing_malformed_error(self, mock_openai) -> None:
+        mock_openai.return_value.chat.completions.create.return_value = _fake_response(
+            '{"role":',
+            finish_reason="stop",
+        )
+
+        with self.assertRaisesRegex(DeepSeekJSONError, "DeepSeek returned malformed JSON content") as raised:
+            deepseek_json_completion("system", "user")
+
+        self.assertEqual(raised.exception.finish_reason, "stop")
 
 
 class AIExtractorTests(unittest.TestCase):
@@ -65,6 +159,9 @@ class AIExtractorTests(unittest.TestCase):
         result = extract_ai_job_details("Senior Java Engineer", "Role: Senior Java Engineer")
         payload = ai_extractor_result_to_payload(result)
 
+        request = _mock_completion.call_args.kwargs
+        self.assertEqual(request["max_tokens"], AI_EXTRACTOR_MAX_TOKENS)
+        self.assertEqual(request["thinking"], "disabled")
         self.assertEqual(payload["role_candidates"], ["Senior Java Engineer", "Java Engineer"])
         self.assertEqual(payload["company"], "Acme Corp")
         self.assertEqual(payload["primary_location"], "Dallas, TX")

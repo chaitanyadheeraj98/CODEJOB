@@ -384,8 +384,8 @@ Required Qualifications:
                     "skills_approved": (),
                     "skills_unknown": (),
                     "confidence": 0.0,
-                    "evidence": {"extractor_error": ["malformed response"]},
-                    "error": "malformed response",
+                    "evidence": {"extractor_error": ["truncated JSON content"]},
+                    "error": "truncated JSON content",
                 },
             )()
             parsed, details = parse_email_with_details(
@@ -394,13 +394,26 @@ Required Qualifications:
                 source="nvoids",
                 ai_extractor_enabled=True,
                 ai_body_override=ai_override,
+                source_hints={
+                    "canonical_title": "AI Engineer",
+                    "ai_input_source": "nvoids_detail_table_row_3",
+                    "ai_input_chars": len(ai_override),
+                },
             )
 
         self.assertEqual(parsed["role"], "AI Engineer")
+        self.assertIn("Python", parsed["skills_text"])
+        self.assertEqual(details["parser_version"], "ai_fallback_v2")
         self.assertEqual(details["parser_mode"], "ai_fallback")
         self.assertTrue(details["fallback_used"])
-        self.assertEqual(details["ai_extractor_result"]["error"], "malformed response")
-        self.assertIn("base parser fallback used", str(details["parser_warning"]))
+        self.assertEqual(details["ai_extractor_result"]["error"], "truncated JSON content")
+        self.assertEqual(details["source_hints"]["canonical_title"], "AI Engineer")
+        self.assertEqual(details["ai_input_source"], "nvoids_detail_table_row_3")
+        self.assertEqual(details["ai_input_chars"], len(ai_override))
+        self.assertEqual(
+            details["parser_warning"],
+            "AI extractor failed; base parser fallback used: truncated JSON content",
+        )
 
     def test_policy_normalization_backfills_missing_draft_rules(self) -> None:
         normalized = policy_service.normalize_policy(

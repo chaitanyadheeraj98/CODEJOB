@@ -1,7 +1,8 @@
 import unittest
+from unittest.mock import patch
 
 from app.ai.deepseek_client import DeepSeekJSONError, DeepSeekJSONResult
-from app.services.role_manifest_service import RoleManifestService
+from app.services.role_manifest_service import RoleManifestService, _default_provider
 
 
 DELOITTE_SOURCE = """Please share resumes along with your LinkedIn URL
@@ -27,6 +28,23 @@ Job ID: DLTJP00052466
 
 
 class RoleManifestServiceTests(unittest.TestCase):
+    @patch("app.services.role_manifest_service.deepseek_json_completion_with_diagnostics")
+    def test_default_provider_keeps_shared_json_completion_defaults(self, mock_completion) -> None:
+        mock_completion.return_value = DeepSeekJSONResult(
+            payload={},
+            model="deepseek-chat",
+            finish_reason="stop",
+            prompt_tokens=None,
+            completion_tokens=None,
+            duration_ms=1,
+            response_hash="hash",
+        )
+
+        result = _default_provider("system", "user")
+
+        self.assertIs(result, mock_completion.return_value)
+        mock_completion.assert_called_once_with("system", "user", timeout_seconds=30.0)
+
     def test_validated_manifest_materializes_six_bounded_roles(self) -> None:
         provider_payload = {
             "classification": "multiple",

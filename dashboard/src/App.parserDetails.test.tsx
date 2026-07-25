@@ -269,6 +269,65 @@ describe('ParserDetailsPanel', () => {
     expect(container.textContent ?? '').toContain('Java')
   })
 
+  it('preserves the AI truncation fallback warning in readable and raw modes', () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+    })
+
+    act(() => {
+      root.render(
+        <ParserDetailsPanel
+          candidateId={78}
+          source="nvoids"
+          atsScore={73}
+          atsSource="hybrid_structured_only"
+          atsSummary="ATS hybrid score 73/100"
+          atsBreakdown={{ raw_overlap: 0.28, intent_match: 0.65 }}
+          resumePickerBreakdown={null}
+          expanded={true}
+          onToggle={() => {}}
+          parserDetails={{
+            parser_version: 'ai_fallback_v2',
+            source: 'nvoids',
+            parser_mode: 'ai_fallback',
+            fallback_used: true,
+            merged_result: { role: 'Java Developer', skills_text: 'Java, Spring Boot' },
+            base_parser_result: { role: 'Java Developer', skills_text: 'Java, Spring Boot' },
+            ai_extractor_result: {
+              error: 'truncated JSON content',
+              evidence: { extractor_error: ['truncated JSON content'] },
+            },
+            parser_warning: 'AI extractor failed; base parser fallback used: truncated JSON content',
+            approved_skills_text: 'Java, Spring Boot',
+            unknown_skills: [],
+          }}
+        />,
+      )
+    })
+
+    expect(container.textContent ?? '').toContain('Mode: ai_fallback')
+    expect(container.textContent ?? '').toContain('Fallback: Yes')
+    expect(container.textContent ?? '').toContain(
+      'AI extractor failed; base parser fallback used: truncated JSON content',
+    )
+
+    const rawToggle = Array.from(container.querySelectorAll('button')).find(
+      (node) => node.textContent === 'Raw v1',
+    ) as HTMLButtonElement | undefined
+    act(() => {
+      rawToggle?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(container.textContent ?? '').toContain('fallback_used: true')
+    expect(container.textContent ?? '').toContain('error: truncated JSON content')
+    expect(container.textContent ?? '').not.toContain('system secret')
+    expect(container.textContent ?? '').not.toContain('user secret')
+  })
+
   it('renders resume picker diagnostics and top alternatives', () => {
     const container = document.createElement('div')
     document.body.appendChild(container)
