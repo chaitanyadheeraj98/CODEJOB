@@ -2,16 +2,13 @@
   --bg: #f3f5f8;
   --surface: #ffffff;
   --surface-soft: #f8fafc;
-  --surface-muted: #eef2f8;
   --line: #cfd6e4;
   --line-strong: #b8c2d6;
   --ink: #111827;
   --muted: #5b6478;
-  --muted-soft: #7c8598;
   --primary: #0f4bcf;
   --primary-strong: #0b3faa;
   --danger: #b60f1f;
-  --danger-soft: #fde8ea;
   --ok: #0f4bcf;
 }
 
@@ -681,10 +678,6 @@
   padding-bottom: 14px;
 }
 
-.card.slim {
-  max-width: none;
-}
-
 .stack {
   display: grid;
   gap: 14px;
@@ -978,7 +971,6 @@
 
 .skillUpgradeCard,
 .skillUpgradeStack,
-.skillUpgradeColumns,
 .skillUpgradeColumn,
 .skillUpgradeList,
 .skillUpgradeItem,
@@ -987,12 +979,6 @@
 .skillUpgradeMeta,
 .skillUpgradeName {
   min-width: 0;
-}
-
-.skillUpgradeColumns {
-  display: grid;
-  gap: 16px;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
 }
 
 .skillUpgradeColumn {

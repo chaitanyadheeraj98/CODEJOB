@@ -4,12 +4,12 @@ import hashlib
 import json
 import re
 import time
-from dataclasses import dataclass, field
-from typing import Callable, Literal, Protocol
+from dataclasses import dataclass, field, replace
+from typing import Callable, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from app.ai.deepseek_client import DeepSeekJSONError, deepseek_json_completion_with_diagnostics
+from app.ai.deepseek_client import DeepSeekJSONError, DeepSeekJSONResult, deepseek_json_completion_with_diagnostics
 
 
 MIN_MANIFEST_CONFIDENCE = 0.85
@@ -79,16 +79,7 @@ class RoleManifestResult:
     error: str | None = None
 
 
-class ManifestProviderResult(Protocol):
-    payload: dict[str, object]
-    model: str
-    finish_reason: str
-    prompt_tokens: int | None
-    completion_tokens: int | None
-    response_hash: str
-
-
-ManifestProvider = Callable[[str, str], dict[str, object] | ManifestProviderResult]
+ManifestProvider = Callable[[str, str], dict[str, object] | DeepSeekJSONResult]
 
 
 SYSTEM_PROMPT = """Identify whether the supplied recruiting source contains one or multiple distinct job requirements.
@@ -97,7 +88,7 @@ Every role requires title_hint, requisition_id, start_line, end_line, confidence
 Do not infer boundaries or constraints without direct source evidence."""
 
 
-def _default_provider(system_prompt: str, user_prompt: str) -> ManifestProviderResult:
+def _default_provider(system_prompt: str, user_prompt: str) -> DeepSeekJSONResult:
     return deepseek_json_completion_with_diagnostics(system_prompt, user_prompt, timeout_seconds=30.0)
 
 
@@ -122,7 +113,7 @@ def _requirement_key(role: DetectedRole, source_text: str) -> str:
     return hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
 
 
-def _provider_payload(value: dict[str, object] | ManifestProviderResult) -> tuple[dict[str, object], RoleManifestDiagnostics]:
+def _provider_payload(value: dict[str, object] | DeepSeekJSONResult) -> tuple[dict[str, object], RoleManifestDiagnostics]:
     if isinstance(value, dict):
         encoded = json.dumps(value, sort_keys=True, separators=(",", ":"))
         return value, RoleManifestDiagnostics(response_hash=hashlib.sha256(encoded.encode("utf-8")).hexdigest())
@@ -189,8 +180,10 @@ class RoleManifestService:
                 manifest = RoleManifest.model_validate(payload)
                 if manifest.classification == "uncertain":
                     elapsed = int((time.perf_counter() - started) * 1000)
-                    diagnostics = RoleManifestDiagnostics(
-                        **{**provider_diagnostics.__dict__, "duration_ms": elapsed, "repair_attempted": bool(attempt)}
+                    diagnostics = replace(
+                        provider_diagnostics,
+                        duration_ms=elapsed,
+                        repair_attempted=bool(attempt),
                     )
                     return RoleManifestResult(
                         status="uncertain",
@@ -200,8 +193,10 @@ class RoleManifestService:
                     )
                 requirements = self._validate_and_materialize(manifest, lines)
                 elapsed = int((time.perf_counter() - started) * 1000)
-                diagnostics = RoleManifestDiagnostics(
-                    **{**provider_diagnostics.__dict__, "duration_ms": elapsed, "repair_attempted": bool(attempt)}
+                diagnostics = replace(
+                    provider_diagnostics,
+                    duration_ms=elapsed,
+                    repair_attempted=bool(attempt),
                 )
                 return RoleManifestResult(
                     status=manifest.classification,

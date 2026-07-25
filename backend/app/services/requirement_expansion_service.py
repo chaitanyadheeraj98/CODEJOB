@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass
-from typing import Callable
 
 from sqlalchemy.orm import Session
 
@@ -19,7 +18,6 @@ class ExpansionResult:
     manifest_status: str
     requirement_count: int
     child_ids: tuple[int, ...] = ()
-    failed_child_ids: tuple[int, ...] = ()
 
 
 class RequirementExpansionService:
@@ -30,7 +28,6 @@ class RequirementExpansionService:
         manifest_result: RoleManifestResult,
         *,
         materialize: bool,
-        process_child: Callable[[RecruiterEmail], None] | None = None,
     ) -> ExpansionResult:
         parent.role_manifest_status = manifest_result.status
         parent.role_manifest_confidence = (
@@ -95,7 +92,6 @@ class RequirementExpansionService:
         }
 
         child_ids: list[int] = []
-        failed_ids: list[int] = []
         source_identity = (parent.external_message_id or f"source-{parent.id}").strip()
         for requirement in manifest_result.requirements:
             child = existing_children.get(requirement.requirement_key)
@@ -143,14 +139,6 @@ class RequirementExpansionService:
             child.sendability_status = None
             db.flush()
             child_ids.append(child.id)
-            if process_child is not None:
-                try:
-                    with db.begin_nested():
-                        process_child(child)
-                except Exception as exc:
-                    child.sendability_status = "extraction_review"
-                    child.last_error = str(exc)
-                    failed_ids.append(child.id)
 
         for key, child in existing_children.items():
             if key not in active_keys and child.state not in TERMINAL_STATES:
@@ -162,5 +150,4 @@ class RequirementExpansionService:
             manifest_status="multiple",
             requirement_count=len(manifest_result.requirements),
             child_ids=tuple(child_ids),
-            failed_child_ids=tuple(failed_ids),
         )

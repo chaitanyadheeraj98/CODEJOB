@@ -68,19 +68,6 @@ def _normalize_line(value: str) -> str:
     return line.strip(" |:-")
 
 
-def _is_meaningful_nvoids_title_line(line: str) -> bool:
-    normalized = _normalize_line(line)
-    if not normalized:
-        return False
-    if _SKIP_DETAIL_TITLE_RE.search(normalized):
-        return False
-    if _NOISE_LINE_RE.search(normalized) or _HTML_ROLE_NOISE_RE.search(normalized):
-        return False
-    if _EMAIL_RE.search(normalized) or normalized.lower().startswith("http"):
-        return False
-    return True
-
-
 def _has_meaningful_html_text(detail_html: str) -> bool:
     if not detail_html:
         return False
@@ -139,20 +126,6 @@ def _extract_emails_from_fragment(fragment_html: str, fragment_text: str) -> lis
     for match in _EMAIL_RE.findall(fragment_text or ""):
         _add(match)
     return emails
-
-
-def _extract_title_location_from_subject(subject: str) -> tuple[str, str]:
-    normalized = _normalize_line(subject)
-    if not normalized:
-        return "", ""
-    if " at " in normalized.lower():
-        parts = re.split(r"\s+at\s+", normalized, maxsplit=1, flags=re.IGNORECASE)
-        if len(parts) == 2:
-            return _normalize_line(parts[0]), _normalize_line(parts[1])
-    if " -- " in normalized:
-        title_part, location_part = normalized.split(" -- ", 1)
-        return _normalize_line(title_part), _normalize_line(location_part)
-    return normalized, ""
 
 
 def _normalize_multiline_text(value: str) -> str:
@@ -564,48 +537,6 @@ def parse_job_detail_contacts(detail_html: str) -> tuple[str, str, str]:
         return "", "", ""
     detail = parse_nvoids_detail(detail_html, "", "")
     return detail.recruiter_email, detail.recruiter_phone, detail.recruiter_name
-
-
-def _extract_detail_scope_text(detail_html: str) -> str:
-    if BeautifulSoup is not None:
-        soup = BeautifulSoup(detail_html or "", "lxml")
-        for tag in soup(["script", "style", "noscript"]):
-            tag.decompose()
-        scored_blocks: list[tuple[int, str]] = []
-        for cell in soup.find_all("td"):
-            text = cell.get_text("\n", strip=True)
-            if not text:
-                continue
-            low = text.lower()
-            score = 0
-            if "email:" in low:
-                score += 4
-            if "from:" in low or "reply to:" in low:
-                score += 4
-            if "hiring" in low or "location" in low or "duration" in low:
-                score += 1
-            if _NOISE_LINE_RE.search(low):
-                score -= 3
-            if score > 0:
-                scored_blocks.append((score, text))
-        if scored_blocks:
-            scored_blocks.sort(key=lambda item: item[0], reverse=True)
-            selected = [block for _, block in scored_blocks[:8]]
-            return "\n".join(selected)
-        return soup.get_text("\n", strip=True)
-    text = re.sub(r"(?i)</(td|tr|div|p|br|li|h1|h2|h3|h4|h5|h6)>", "\n", detail_html or "")
-    text = re.sub(r"<[^>]+>", " ", text)
-    text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r"\n+", "\n", text)
-    return text.strip()
-
-
-def _extract_first_email(lines: list[str]) -> str:
-    for line in lines:
-        matches = _EMAIL_RE.findall(line)
-        if matches:
-            return matches[0].lower()
-    return ""
 
 
 def _extract_recruiter_name(scoped_text: str) -> str:

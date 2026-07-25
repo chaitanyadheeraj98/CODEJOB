@@ -8,8 +8,8 @@ from app.models import RecruiterEmail, UserSettings
 from app.parsing.jd_requirements import ParsedJDRequirements
 from app.services.eligibility_service import (
     CandidateProfile,
-    EligibilityService,
     apply_inherited_constraints,
+    evaluate_eligibility,
 )
 
 
@@ -24,9 +24,6 @@ class CandidateScreeningDecision:
 
 
 class CandidateScreeningService:
-    def __init__(self, eligibility_service: EligibilityService | None = None) -> None:
-        self._eligibility_service = eligibility_service or EligibilityService()
-
     def evaluate(
         self,
         requirements: ParsedJDRequirements,
@@ -42,7 +39,7 @@ class CandidateScreeningService:
                 enforce_mandatory_resume_gate=False,
             )
 
-        eligibility = self._eligibility_service.evaluate(requirements, profile)
+        eligibility = evaluate_eligibility(requirements, profile)
         return CandidateScreeningDecision(
             mode="strict",
             eligibility_status=eligibility.status,

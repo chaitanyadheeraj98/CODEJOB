@@ -238,18 +238,6 @@ def is_recruiter_like(sender: str, subject: str, body: str) -> bool:
     return any(hint in combined for hint in RECRUITER_HINTS)
 
 
-def extract_employer_email(body: str, recruiter_email: str | None = None) -> str | None:
-    matches = EMAIL_RE.findall(body)
-    cleaned: list[str] = []
-    recruiter_lower = recruiter_email.lower() if recruiter_email else ""
-    for email in matches:
-        e = email.strip().lower()
-        if recruiter_lower and e == recruiter_lower:
-            continue
-        cleaned.append(e)
-    return cleaned[0] if cleaned else None
-
-
 def extract_email_address(value: str) -> str:
     match = EMAIL_RE.search(value)
     return match.group(0).lower() if match else value.strip().lower()
@@ -259,10 +247,6 @@ def email_domain(value: str) -> str:
     email = extract_email_address(value)
     parts = email.split("@", 1)
     return parts[1].lower() if len(parts) == 2 else ""
-
-
-def _is_employer_email(email: str) -> bool:
-    return email_domain(email) in EMPLOYER_DOMAINS
 
 
 def normalize_employer_domains(raw_domains: list[str] | tuple[str, ...] | set[str] | None) -> set[str]:
@@ -718,14 +702,6 @@ def strip_recruiter_footer(body: str) -> str:
     return body
 
 
-def _clean_body_for_skill_extraction(subject: str, body: str) -> str:
-    cleaned = strip_forward_headers(body)
-    cleaned = strip_recruiter_footer(cleaned)
-    if not cleaned:
-        return f"{subject} {body}".strip()
-    return f"{subject} {cleaned}".strip()
-
-
 def _extract_location_text(subject: str, body: str) -> str:
     combined = f"{subject}\n{body}"
     line_hit = re.search(
@@ -969,50 +945,6 @@ def render_fallback_draft_template(template: str, context: dict[str, str]) -> st
     return rendered
 
 
-def _normalize_person_name(candidate: str) -> str | None:
-    cleaned = re.sub(r"[^A-Za-z .'-]", " ", candidate).strip()
-    cleaned = re.sub(r"\s+", " ", cleaned)
-    if not cleaned:
-        return None
-    parts = cleaned.split()
-    if len(parts) < 1 or len(parts) > 4:
-        return None
-    for part in parts:
-        low = part.lower().strip(".")
-        if low in {"hi", "hello", "thanks", "regards", "best", "email"}:
-            return None
-        if not re.fullmatch(r"[A-Za-z][A-Za-z.'-]*", part):
-            return None
-    return " ".join(part.capitalize() for part in parts)
-
-
-def _name_from_body_for_email(to_email: str, body: str) -> str | None:
-    escaped = re.escape(to_email)
-    inline = re.search(rf"(?im)([A-Za-z][A-Za-z .'-]{{1,80}}?)\s*<\s*{escaped}\s*>", body)
-    if inline:
-        return _normalize_person_name(inline.group(1))
-
-    lines = body.splitlines()
-    for idx, line in enumerate(lines):
-        if to_email.lower() not in line.lower():
-            continue
-        before = re.split(re.escape(to_email), line, flags=re.IGNORECASE)[0]
-        normalized = _normalize_person_name(before.replace("email", "").replace(":", " ").strip(" -,\t"))
-        if normalized:
-            return normalized
-        for prev_offset in (1, 2):
-            prev_idx = idx - prev_offset
-            if prev_idx < 0:
-                break
-            prev_line = lines[prev_idx].strip()
-            if not prev_line:
-                continue
-            normalized_prev = _normalize_person_name(prev_line)
-            if normalized_prev:
-                return normalized_prev
-    return None
-
-
 def greeting_from_to_contact(to_email: str | None, body: str) -> str:
     _ = (to_email, body)
     return DEFAULT_GREETING_LINE
@@ -1116,41 +1048,6 @@ def _should_run_ai_extractor(
         return False
     combined_text = " ".join(part.strip() for part in [subject, body] if part and str(part).strip()).strip()
     return len(combined_text) >= 80 or len(str(body or "").strip()) >= 60
-
-
-def _should_use_ai_role(
-    base_role: str,
-    ai_role: str,
-    *,
-    confidence: float,
-    source: str,
-    source_hints: Mapping[str, Any] | None,
-) -> bool:
-    base_value = str(base_role or "").strip()
-    ai_value = str(ai_role or "").strip()
-    if not ai_value:
-        return False
-    if source == "nvoids":
-        canonical_title = str((source_hints or {}).get("canonical_title") or "").strip()
-        if canonical_title:
-            return ai_value == canonical_title and (not base_value or base_value == "Unknown Role")
-        return False
-    if not base_value or base_value == "Unknown Role":
-        return confidence >= 0.55
-    return False
-
-
-def _should_use_ai_location(
-    base_location: str,
-    ai_location: str,
-    *,
-    confidence: float,
-) -> bool:
-    base_value = str(base_location or "").strip()
-    ai_value = str(ai_location or "").strip()
-    if not ai_value:
-        return False
-    return (not base_value or base_value == "Unknown") and confidence >= 0.55
 
 
 def _apply_nvoids_source_hints(

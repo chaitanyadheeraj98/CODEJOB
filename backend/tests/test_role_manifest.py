@@ -1,6 +1,6 @@
 import unittest
 
-from app.ai.deepseek_client import DeepSeekJSONError
+from app.ai.deepseek_client import DeepSeekJSONError, DeepSeekJSONResult
 from app.services.role_manifest_service import RoleManifestService
 
 
@@ -128,6 +128,41 @@ class RoleManifestServiceTests(unittest.TestCase):
         self.assertEqual(result.status, "multiple")
         self.assertEqual(len(result.requirements), 3)
         self.assertEqual([item.start_line for item in result.requirements], [2, 18, 33])
+
+    def test_deepseek_result_metadata_is_preserved_in_diagnostics(self) -> None:
+        payload = {
+            "classification": "single",
+            "role_count": 1,
+            "confidence": 0.95,
+            "roles": [
+                {
+                    "index": 1,
+                    "title_hint": "AI Pod Product Owner",
+                    "start_line": 3,
+                    "end_line": 5,
+                    "confidence": 0.95,
+                }
+            ],
+        }
+        provider_result = DeepSeekJSONResult(
+            payload=payload,
+            model="deepseek-chat",
+            finish_reason="stop",
+            prompt_tokens=101,
+            completion_tokens=23,
+            duration_ms=777,
+            response_hash="provider-response-hash",
+        )
+
+        result = RoleManifestService(provider=lambda system, user: provider_result).detect(DELOITTE_SOURCE)
+
+        self.assertEqual(result.status, "single")
+        self.assertEqual(result.diagnostics.model, "deepseek-chat")
+        self.assertEqual(result.diagnostics.finish_reason, "stop")
+        self.assertEqual(result.diagnostics.prompt_tokens, 101)
+        self.assertEqual(result.diagnostics.completion_tokens, 23)
+        self.assertEqual(result.diagnostics.response_hash, "provider-response-hash")
+        self.assertFalse(result.diagnostics.repair_attempted)
 
 
 if __name__ == "__main__":

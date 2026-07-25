@@ -1,6 +1,5 @@
 from .policy import (
     HeuristicRoutingAdapter,
-    LearnedRoutingAdapter,
     RoutingAdapter,
     RoutingDecision,
     RoutingPolicyInput,
@@ -9,7 +8,6 @@ from .policy import (
 
 __all__ = [
     "HeuristicRoutingAdapter",
-    "LearnedRoutingAdapter",
     "RoutingAdapter",
     "RoutingDecision",
     "RoutingPolicyInput",

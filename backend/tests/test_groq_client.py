@@ -1,3 +1,4 @@
+import json
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -5,7 +6,7 @@ from unittest.mock import patch
 import httpx
 from openai import BadRequestError
 
-from app.ai.groq_client import groq_chat_json, groq_request_mode_for_model
+from app.ai.groq_client import _parse_json_object, groq_chat_json, groq_request_mode_for_model
 from app.config import settings
 
 
@@ -20,6 +21,13 @@ def _fake_response(content: str) -> SimpleNamespace:
 
 
 class GroqClientTests(unittest.TestCase):
+    def test_parser_accepts_wrapped_objects_and_retains_error_types(self) -> None:
+        self.assertEqual(_parse_json_object('Result: {"action":"needs_review"} done.'), {"action": "needs_review"})
+        with self.assertRaises(json.JSONDecodeError):
+            _parse_json_object('["not", "an", "object"]')
+        with self.assertRaisesRegex(ValueError, "empty content"):
+            _parse_json_object("")
+
     def setUp(self) -> None:
         self._orig_api_key = settings.groq_api_key
         self._orig_model = settings.groq_gate_model

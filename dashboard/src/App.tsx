@@ -1,10 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import './App.css'
 import Sidebar from './components/Sidebar'
-import { withAiToggle } from './features/ai/state'
 import TrustedGmailGroupsPanel, { type TrustedGmailGroup } from './features/gmail_groups/TrustedGmailGroupsPanel'
 import { getDraftSourceLabel } from './features/ai/ui'
-import { withSavedQueries } from './features/query_bucket/api'
 import QueryBucket from './features/query_bucket/QueryBucket'
 import { type CandidateState, useCandidateBuckets } from './candidateBuckets'
 import { addEmployerDomain, removeEmployerDomain } from './employerDomains'
@@ -1703,48 +1701,14 @@ export function ParserDetailsPanel({
   if (!normalized) return null
   const legacyFinalResult = normalized.merged_result ?? {}
   const legacyBaseResult = normalized.base_parser_result ?? {}
-  const legacySkillsAudit = isRecord(normalized.skills_audit) ? normalized.skills_audit : null
-  const legacyApprovedSkillsText = (() => {
-    const audited = legacySkillsAudit ? recordStringArray(legacySkillsAudit, 'known').join(', ') : ''
-    if (audited) return audited
-    return (normalized.approved_skills_text || recordStringValue(isRecord(legacyFinalResult) ? legacyFinalResult : null, 'skills_text')).trim()
-  })()
-  const legacyUnknownSkills = (() => {
-    if (legacySkillsAudit) {
-      const audited = recordStringArray(legacySkillsAudit, 'unknown')
-      if (audited.length > 0) return audited
-    }
-    return Array.isArray(normalized.unknown_skills)
-      ? normalized.unknown_skills.map((item) => renderParserValue(item).trim()).filter(Boolean).filter((item) => item !== '-')
-      : []
-  })()
-  const legacyAiExtractor = isRecord(normalized.ai_extractor_result) ? normalized.ai_extractor_result : null
-  const legacySourceHints = isRecord(normalized.source_hints) ? normalized.source_hints : null
-  const legacyParserMode = normalized.parser_mode || (legacyAiExtractor ? 'ai_primary' : 'base_only')
-  const legacyParserWarning = renderParserValue(normalized.parser_warning)
-  const legacyFallbackUsed = Boolean(normalized.fallback_used)
-  const legacyParserStatus = {
-    mode: legacyParserMode,
-    fallback_used: legacyFallbackUsed,
-    warning: legacyParserWarning === '-' ? null : legacyParserWarning,
-  }
-  const legacyAtsSummary = atsSummary || `ATS Score: ${formatAtsScore(atsScore)} (${getAtsStrengthLabel(atsScore)})`
-  const legacyAtsBreakdown = {
-    score: atsScore == null ? '-' : `${formatAtsScore(atsScore)} (${getAtsStrengthLabel(atsScore)})`,
-    source: atsSource ?? '-',
-    ...(atsBreakdown ?? {}),
-  }
-  const legacyAiEvidence = legacyAiExtractor
-    ? {
-        confidence: legacyAiExtractor.confidence,
-        evidence: legacyAiExtractor.evidence,
-        error: legacyAiExtractor.error,
-      }
-    : {}
-
-  const finalResult = isRecord(normalized.merged_result) ? normalized.merged_result : {}
-  const baseResult = isRecord(normalized.base_parser_result) ? normalized.base_parser_result : {}
+  const finalResult = isRecord(legacyFinalResult) ? legacyFinalResult : {}
+  const baseResult = isRecord(legacyBaseResult) ? legacyBaseResult : {}
   const skillsAudit = isRecord(normalized.skills_audit) ? normalized.skills_audit : null
+  const legacyApprovedSkillsText = (() => {
+    const audited = skillsAudit ? recordStringArray(skillsAudit, 'known').join(', ') : ''
+    if (audited) return audited
+    return (normalized.approved_skills_text || recordStringValue(finalResult, 'skills_text')).trim()
+  })()
   const approvedSkills = (() => {
     const audited = skillsAudit ? recordStringArray(skillsAudit, 'known') : []
     if (audited.length > 0) return audited
@@ -1770,6 +1734,7 @@ export function ParserDetailsPanel({
     fallback_used: fallbackUsed,
     warning: parserWarning === '-' ? null : parserWarning,
   }
+  const legacyAtsSummary = atsSummary || `ATS Score: ${formatAtsScore(atsScore)} (${getAtsStrengthLabel(atsScore)})`
   const finalSkills = parserTokensFromValue(recordStringValue(finalResult, 'skills_text'))
   const atsMetricRows = parserMetricRowsFromAts(atsScore, atsSource, atsSummary, atsBreakdown)
   const atsBreakdownRecord = {
@@ -1838,7 +1803,7 @@ export function ParserDetailsPanel({
             <>
               <div className="parserDetailsSummaryGrid">
                 <ParserDetailsCard title="Parser Status" className="parserDetailsSummaryBlock">
-                  <pre className="parserLegacyPre">{renderParserValue(legacyParserStatus)}</pre>
+                  <pre className="parserLegacyPre">{renderParserValue(parserStatus)}</pre>
                 </ParserDetailsCard>
                 <ParserDetailsCard title="Final Skills Text" className="parserDetailsSummaryBlock">
                   <pre className="parserLegacyPre">{recordStringValue(isRecord(legacyFinalResult) ? legacyFinalResult : null, 'skills_text') || '-'}</pre>
@@ -1847,7 +1812,7 @@ export function ParserDetailsPanel({
                   <pre className="parserLegacyPre">{legacyApprovedSkillsText || '-'}</pre>
                 </ParserDetailsCard>
                 <ParserDetailsCard title="Unknown Skills" className="parserDetailsSummaryBlock">
-                  <pre className="parserLegacyPre">{legacyUnknownSkills.length > 0 ? legacyUnknownSkills.join(', ') : '-'}</pre>
+                  <pre className="parserLegacyPre">{unknownSkills.length > 0 ? unknownSkills.join(', ') : '-'}</pre>
                 </ParserDetailsCard>
                 <ParserDetailsCard title="ATS Summary" className="parserDetailsSummaryBlock">
                   <pre className="parserLegacyPre">{legacyAtsSummary}</pre>
@@ -1857,23 +1822,23 @@ export function ParserDetailsPanel({
                 <ParserDetailsCard title="Final Extracted Result">
                   <pre className="parserLegacyPre">{renderParserValue(legacyFinalResult)}</pre>
                 </ParserDetailsCard>
-                <ParserDetailsCard title={legacyFallbackUsed ? 'Base Fallback Result' : 'Base Parser Result'}>
+                <ParserDetailsCard title={fallbackUsed ? 'Base Fallback Result' : 'Base Parser Result'}>
                   <pre className="parserLegacyPre">{renderParserValue(legacyBaseResult)}</pre>
                 </ParserDetailsCard>
                 <ParserDetailsCard title="AI Extractor Result">
-                  <pre className="parserLegacyPre">{renderParserValue(legacyAiExtractor ?? {})}</pre>
+                  <pre className="parserLegacyPre">{renderParserValue(aiExtractor ?? {})}</pre>
                 </ParserDetailsCard>
                 <ParserDetailsCard title="Skills Audit">
-                  <pre className="parserLegacyPre">{renderParserValue(legacySkillsAudit ?? {})}</pre>
+                  <pre className="parserLegacyPre">{renderParserValue(skillsAudit ?? {})}</pre>
                 </ParserDetailsCard>
                 <ParserDetailsCard title="ATS Breakdown">
-                  <pre className="parserLegacyPre">{renderParserValue(legacyAtsBreakdown)}</pre>
+                  <pre className="parserLegacyPre">{renderParserValue(atsBreakdownRecord)}</pre>
                 </ParserDetailsCard>
                 <ParserDetailsCard title="Source Hints">
-                  <pre className="parserLegacyPre">{renderParserValue(legacySourceHints ?? {})}</pre>
+                  <pre className="parserLegacyPre">{renderParserValue(sourceHints ?? {})}</pre>
                 </ParserDetailsCard>
                 <ParserDetailsCard title="AI Evidence" className="parserDetailsBlockWide">
-                  <pre className="parserLegacyPre">{renderParserValue(legacyAiEvidence)}</pre>
+                  <pre className="parserLegacyPre">{renderParserValue(aiEvidenceRecord)}</pre>
                 </ParserDetailsCard>
                 <ParserDetailsCard title="Required Requirements">
                   <pre className="parserLegacyPre">{rawRequirementGroupLines(structuredRequirements?.required_groups ?? [])}</pre>
@@ -3697,23 +3662,16 @@ function App() {
   const groqLastDuration = aiStatus?.groq_last_duration_ms
     ? `${(aiStatus.groq_last_duration_ms / 1000).toFixed(1)}s`
     : null
-  const trendBars = useMemo<ProductivityBarPoint[]>(
-    () => (productivityTrend?.bars ?? []),
-    [productivityTrend?.bars],
-  )
+  const trendBars: ProductivityBarPoint[] = productivityTrend?.bars ?? []
   const latestScore = productivityTrend?.kpi_total_sent ?? trendBars.reduce((sum, bar) => sum + bar.sent_count, 0)
   const trendDelta = productivityTrend?.trend_delta_pct ?? 0
   const liveDirection = productivityTrend?.trend_direction === 'down' ? 'down' : (productivityTrend?.trend_direction ?? 'flat')
-  const realtimeSignals = useMemo(
-    () =>
-      productivityEvents.slice(0, 8).map((event) => {
-        const when = new Date(event.occurred_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-        return `${when} ${event.event_type.replaceAll('_', ' ')}`
-      }),
-    [productivityEvents],
-  )
-  const visibleBars = useMemo(() => [...trendBars].reverse(), [trendBars])
-  const maxSentInBars = useMemo(() => Math.max(1, ...visibleBars.map((bar) => bar.sent_count)), [visibleBars])
+  const realtimeSignals = productivityEvents.slice(0, 8).map((event) => {
+    const when = new Date(event.occurred_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    return `${when} ${event.event_type.replaceAll('_', ' ')}`
+  })
+  const visibleBars = [...trendBars].reverse()
+  const maxSentInBars = Math.max(1, ...visibleBars.map((bar) => bar.sent_count))
 
   const formatBucketLabel = (timestamp: string, range: TimeRangeKey) => {
     const dt = new Date(timestamp)
@@ -3855,7 +3813,7 @@ function App() {
   }
 
   const updateSavedQueries = async (nextSavedQueries: string[]) => {
-    const nextSettings = withSavedQueries(settings, nextSavedQueries)
+    const nextSettings = { ...settings, saved_gmail_queries: nextSavedQueries }
     setSettings(nextSettings)
     const res = await fetch(`${apiBase}/settings`, {
       method: 'PUT',
@@ -4156,7 +4114,7 @@ function App() {
                 <h2>AI Access</h2>
                 <div className="stack">
                   <div className="row"><span className="label">Provider</span><span>{aiStatus?.provider ?? 'DeepSeek'}</span></div>
-                  <div className="row"><span className="label">Model</span><span className="tag">{aiStatus?.model ?? 'deepseek-chat'}</span></div>
+                  <div className="row"><span className="label">Model</span><span className="tag">{aiStatus?.model ?? 'deepseek-v4-flash'}</span></div>
                   <div className="row"><span className="label">Connection</span><span className="dotOk">{aiStatus?.connected ? 'Healthy' : 'Disconnected'}</span></div>
                   <div className="row"><span className="label">Groq Enabled</span><span>{aiStatus?.groq_enabled_in_settings ? 'On' : 'Off'}</span></div>
                   <div className="row"><span className="label">Groq Config</span><span>{typeof aiStatus?.groq_configured === 'boolean' ? (aiStatus.groq_configured ? 'Configured' : 'Missing setup') : 'Unknown'}</span></div>
@@ -4186,7 +4144,7 @@ function App() {
                       <input
                         type="checkbox"
                         checked={settings.feature_ai_enabled}
-                        onChange={(e) => setSettings(withAiToggle(settings, e.target.checked))}
+                        onChange={(e) => setSettings({ ...settings, feature_ai_enabled: e.target.checked })}
                       />
                       <span className="toggleTrack" />
                     </span>

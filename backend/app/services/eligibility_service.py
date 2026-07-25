@@ -46,59 +46,58 @@ class EligibilityResult:
     evidence: dict[str, object] = field(default_factory=dict)
 
 
-class EligibilityService:
-    def evaluate(self, requirements: ParsedJDRequirements, profile: CandidateProfile) -> EligibilityResult:
-        blocked: list[str] = []
-        review: list[str] = []
-        allowed = {normalize_authorization(value) for value in requirements.allowed_work_authorizations if value}
-        actual = {normalize_authorization(value) for value in profile.work_authorizations if value}
+def evaluate_eligibility(requirements: ParsedJDRequirements, profile: CandidateProfile) -> EligibilityResult:
+    blocked: list[str] = []
+    review: list[str] = []
+    allowed = {normalize_authorization(value) for value in requirements.allowed_work_authorizations if value}
+    actual = {normalize_authorization(value) for value in profile.work_authorizations if value}
 
-        if allowed:
-            if not actual:
-                review.append("work_authorization_missing")
-            elif allowed.isdisjoint(actual):
-                blocked.append("work_authorization_mismatch")
+    if allowed:
+        if not actual:
+            review.append("work_authorization_missing")
+        elif allowed.isdisjoint(actual):
+            blocked.append("work_authorization_mismatch")
 
-        if requirements.experience_years_min is not None:
-            if profile.total_experience_years is None:
-                review.append("total_experience_missing")
-            elif profile.total_experience_years < requirements.experience_years_min:
-                blocked.append("total_experience_shortfall")
+    if requirements.experience_years_min is not None:
+        if profile.total_experience_years is None:
+            review.append("total_experience_missing")
+        elif profile.total_experience_years < requirements.experience_years_min:
+            blocked.append("total_experience_shortfall")
 
-        if requirements.us_experience_years_min is not None:
-            if profile.us_experience_years is None:
-                review.append("us_experience_missing")
-            elif profile.us_experience_years < requirements.us_experience_years_min:
-                blocked.append("us_experience_shortfall")
+    if requirements.us_experience_years_min is not None:
+        if profile.us_experience_years is None:
+            review.append("us_experience_missing")
+        elif profile.us_experience_years < requirements.us_experience_years_min:
+            blocked.append("us_experience_shortfall")
 
-        if requirements.local_required and requirements.locations:
-            current = _normalize_location(profile.current_location)
-            required_locations = {_normalize_location(value) for value in requirements.locations if value}
-            if not current:
-                review.append("current_location_missing")
-            elif required_locations and all(location not in current and current not in location for location in required_locations):
-                blocked.append("local_location_mismatch")
+    if requirements.local_required and requirements.locations:
+        current = _normalize_location(profile.current_location)
+        required_locations = {_normalize_location(value) for value in requirements.locations if value}
+        if not current:
+            review.append("current_location_missing")
+        elif required_locations and all(location not in current and current not in location for location in required_locations):
+            blocked.append("local_location_mismatch")
 
-        evidence = {
-            "requirements": {
-                "allowed_work_authorizations": sorted(allowed),
-                "total_experience_years_min": requirements.experience_years_min,
-                "us_experience_years_min": requirements.us_experience_years_min,
-                "local_required": requirements.local_required,
-                "locations": list(requirements.locations),
-            },
-            "candidate_profile": {
-                "work_authorizations": sorted(actual),
-                "total_experience_years": profile.total_experience_years,
-                "us_experience_years": profile.us_experience_years,
-                "current_location": profile.current_location,
-            },
-        }
-        if blocked:
-            return EligibilityResult(status="blocked", reason_codes=tuple(dict.fromkeys(blocked)), evidence=evidence)
-        if review:
-            return EligibilityResult(status="needs_review", reason_codes=tuple(dict.fromkeys(review)), evidence=evidence)
-        return EligibilityResult(status="pass", evidence=evidence)
+    evidence = {
+        "requirements": {
+            "allowed_work_authorizations": sorted(allowed),
+            "total_experience_years_min": requirements.experience_years_min,
+            "us_experience_years_min": requirements.us_experience_years_min,
+            "local_required": requirements.local_required,
+            "locations": list(requirements.locations),
+        },
+        "candidate_profile": {
+            "work_authorizations": sorted(actual),
+            "total_experience_years": profile.total_experience_years,
+            "us_experience_years": profile.us_experience_years,
+            "current_location": profile.current_location,
+        },
+    }
+    if blocked:
+        return EligibilityResult(status="blocked", reason_codes=tuple(dict.fromkeys(blocked)), evidence=evidence)
+    if review:
+        return EligibilityResult(status="needs_review", reason_codes=tuple(dict.fromkeys(review)), evidence=evidence)
+    return EligibilityResult(status="pass", evidence=evidence)
 
 
 def apply_inherited_constraints(

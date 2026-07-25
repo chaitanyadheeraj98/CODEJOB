@@ -207,22 +207,18 @@ from app.semantic.embeddings_service import (
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     global auto_runner_thread, telegram_service, gmail_labeling_service
-    StartupService(
+    startup_service = StartupService(
         ensure_default_settings=_ensure_default_settings,
         ensure_labeling_service=gmail_labeling_runtime_service.ensure_service,
         init_telegram_service=_init_telegram_service,
         auto_runner_loop=_auto_runner_loop,
-    ).startup()
+    )
+    startup_service.startup()
     auto_runner_thread = runtime_state.auto_runner_thread
     telegram_service = runtime_state.telegram_service
     gmail_labeling_service = runtime_state.gmail_labeling_service
     yield
-    StartupService(
-        ensure_default_settings=_ensure_default_settings,
-        ensure_labeling_service=gmail_labeling_runtime_service.ensure_service,
-        init_telegram_service=_init_telegram_service,
-        auto_runner_loop=_auto_runner_loop,
-    ).shutdown()
+    startup_service.shutdown()
     auto_runner_thread = runtime_state.auto_runner_thread
     telegram_service = runtime_state.telegram_service
     gmail_labeling_service = runtime_state.gmail_labeling_service
@@ -547,12 +543,6 @@ def _json_string_list(value: str | None) -> list[str]:
         if text and text not in items:
             items.append(text)
     return items
-
-
-def _record_string_value(record: Mapping[str, object] | None, key: str) -> str | None:
-    if not record:
-        return None
-    return _clean_optional_text(record.get(key))
 
 
 def _record_string_list(record: Mapping[str, object] | None, key: str) -> list[str]:
@@ -1212,18 +1202,6 @@ def _refresh_resume_embedding(resume: ResumeAsset) -> None:
         logger.warning("Resume semantic embedding skipped: %s", exc)
 
 
-def _resume_for_candidate(db: Session, email: RecruiterEmail) -> ResumeAsset | None:
-    if email.resume_asset_id:
-        pinned = (
-            db.query(ResumeAsset)
-            .filter(ResumeAsset.owner_id == settings.owner_id, ResumeAsset.id == email.resume_asset_id)
-            .first()
-        )
-        if pinned:
-            return pinned
-    return _active_resume(db)
-
-
 def _select_best_resume_match(
     *,
     subject: str,
@@ -1548,16 +1526,8 @@ def _upsert_job_intent_entry(
     return created
 
 
-def _semantic_text_for_email(subject: str, body: str, role: str, skills_text: str) -> str:
-    return _get_scoring_runtime_service().semantic_text_for_email(subject, body, role, skills_text)
-
-
 def _semantic_text_for_resume(resume: ResumeAsset | None) -> str:
     return _get_scoring_runtime_service().semantic_text_for_resume(resume)
-
-
-def _ensure_embedding_cached(current_payload: str | None, text: str) -> tuple[list[float], str | None, str]:
-    return _get_scoring_runtime_service().ensure_embedding_cached(current_payload, text)
 
 
 def _compute_blended_ai_score(
@@ -1597,10 +1567,6 @@ def _email_domain(address: str) -> str:
     return email_domain(address)
 
 
-def _learned_recipient_pairs(db: Session, sender: str) -> list[tuple[str, str]]:
-    return _get_routing_runtime_service().learned_recipient_pairs(db, sender)
-
-
 def _apply_routing_result(email: RecruiterEmail, routing: RoutingResult) -> None:
     _get_routing_runtime_service().apply_routing_result(email, routing)
 
@@ -1611,10 +1577,6 @@ def _apply_routing_decision(email: RecruiterEmail, routing: RoutingDecision) -> 
 
 def _capture_premium_numbers(db: Session, email: RecruiterEmail) -> None:
     _get_candidate_runtime_service().capture_premium_numbers(db, email)
-
-
-def _routing_is_sendable(email: RecruiterEmail) -> bool:
-    return _get_routing_runtime_service().routing_is_sendable(email)
 
 
 def _evaluate_routing_for_email(email: RecruiterEmail) -> RoutingDecision:
@@ -1644,10 +1606,6 @@ def _evaluate_routing_policy(
         routing_confirmed,
         precomputed=precomputed,
     )
-
-
-def _apply_draft_learning(db: Session, draft: str) -> str:
-    return _get_candidate_runtime_service().apply_draft_learning(db, draft)
 
 
 def _build_user_fallback_draft(
@@ -2550,7 +2508,7 @@ def ai_status(db: Session = Depends(get_db)) -> AIStatusResponse:
         connected=connected,
         running=ai_running,
         provider="deepseek",
-        model=settings.deepseek_model_fast or "deepseek-chat",
+        model=settings.deepseek_model_fast or "deepseek-v4-flash",
         detail=detail,
         embedding_provider=embedding_provider,
         embedding_model=embedding_model,
@@ -3147,10 +3105,6 @@ def list_candidates(
 
 def _ensure_gmail_labeling_service() -> GmailLabelingService:
     return gmail_labeling_runtime_service.ensure_service()
-
-
-def _build_label_rule_input_from_email(email: RecruiterEmail) -> LabelRuleInput:
-    return gmail_labeling_runtime_service.build_label_rule_input(email)
 
 
 def _apply_gmail_label_for_email(

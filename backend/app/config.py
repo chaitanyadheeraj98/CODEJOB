@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     deepseek_api_key: str = Field(default="", validation_alias="Deepseek_API_KEY")
     deepseek_base_url: str = "https://api.deepseek.com"
-    deepseek_model_fast: str = "deepseek-chat"
+    deepseek_model_fast: str = "deepseek-v4-flash"
     deepseek_timeout_seconds: float = 20.0
     feature_deepseek_enabled: bool = False
     role_manifest_child_creation_enabled: bool = Field(

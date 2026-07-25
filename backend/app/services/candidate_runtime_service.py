@@ -52,10 +52,6 @@ class CandidateRuntimeService:
             logger.warning("Premium numbers extraction skipped for email_id=%s: %s", email.id, exc)
             return None
 
-    def apply_draft_learning(self, db: Session, draft: str) -> str:
-        _ = db
-        return draft
-
     def build_user_fallback_draft(
         self,
         db: Session,
@@ -67,6 +63,7 @@ class CandidateRuntimeService:
         greeting_line: str,
         resume_file_name: str | None,
     ) -> str:
+        _ = db
         template = (user_settings.fallback_draft_template or DEFAULT_FALLBACK_DRAFT_TEMPLATE).strip()
         signature_name = (user_settings.signature_name or "").strip() or DEFAULT_SIGNATURE_NAME
         signature_phone = (user_settings.signature_phone or "").strip() or DEFAULT_SIGNATURE_PHONE
@@ -87,8 +84,8 @@ class CandidateRuntimeService:
         }
         rendered = render_fallback_draft_template(template, context)
         if rendered.strip():
-            return self.apply_draft_learning(db, rendered)
-        return self.apply_draft_learning(db, draft_reply(sender, role, parsed, greeting_line))
+            return rendered
+        return draft_reply(sender, role, parsed, greeting_line)
 
     def repair_unknown_role_drafts(self, db: Session, emails: list[RecruiterEmail]) -> None:
         changed = False

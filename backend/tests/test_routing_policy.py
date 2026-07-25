@@ -1,12 +1,13 @@
 import unittest
 
 from app.phase0 import RoutingResult, analyze_recipient_routing
+from app.models import RecruiterEmail
 from app.routing import (
     HeuristicRoutingAdapter,
-    LearnedRoutingAdapter,
     RoutingPolicyInput,
     RoutingPolicyService,
 )
+from app.services.routing_runtime_service import RoutingRuntimeDeps, RoutingRuntimeService
 
 
 EMAIL_30_BODY = """
@@ -145,17 +146,54 @@ class RoutingPolicyTests(unittest.TestCase):
         self.assertEqual(actual.status, expected.status)
         self.assertEqual(actual.confidence, expected.confidence)
 
-    def test_learned_adapter_falls_back_deterministically(self) -> None:
-        payload = RoutingPolicyInput(
-            sender="Prashanth Kinnera <kprashanth@horizonsoftech.net>",
-            subject="Java Microservices RPA Developer",
-            body=EMAIL_30_BODY,
+    def test_routing_decision_assignment_matches_routing_result_assignment(self) -> None:
+        service = RoutingRuntimeService(
+            RoutingRuntimeDeps(owner_id="default-owner", get_employer_domains=lambda db: [])
         )
-        expected = HeuristicRoutingAdapter().evaluate(payload)
-        actual = LearnedRoutingAdapter().evaluate(payload)
-        self.assertEqual(actual.to_email, expected.to_email)
-        self.assertEqual(actual.cc_email, expected.cc_email)
-        self.assertEqual(actual.status, expected.status)
+        decision = RoutingPolicyService(
+            adapter=HeuristicRoutingAdapter()
+        ).evaluate(
+            RoutingPolicyInput(
+                sender="Prashanth Kinnera <kprashanth@horizonsoftech.net>",
+                subject="Java Microservices RPA Developer",
+                body=EMAIL_30_BODY,
+            )
+        )
+        from_decision = RecruiterEmail(
+            owner_id="default-owner",
+            sender="recruiter@example.com",
+            subject="Role",
+            body="Body",
+            state="needs_review",
+            decision="Qualified",
+            source="gmail",
+        )
+        from_result = RecruiterEmail(
+            owner_id="default-owner",
+            sender="recruiter@example.com",
+            subject="Role",
+            body="Body",
+            state="needs_review",
+            decision="Qualified",
+            source="gmail",
+        )
+
+        service.apply_routing_decision(from_decision, decision)
+        service.apply_routing_result(from_result, decision.to_routing_result())
+
+        fields = (
+            "recipient_email",
+            "cc_email",
+            "routing_status",
+            "routing_confidence",
+            "routing_reason",
+            "routing_evidence",
+            "routing_candidates",
+        )
+        self.assertEqual(
+            tuple(getattr(from_decision, field) for field in fields),
+            tuple(getattr(from_result, field) for field in fields),
+        )
 
 
 if __name__ == "__main__":

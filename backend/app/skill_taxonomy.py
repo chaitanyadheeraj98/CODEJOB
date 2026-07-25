@@ -708,10 +708,6 @@ def _entry_by_skill_id(skill_id: str) -> SkillTaxonomyEntry | None:
     return None
 
 
-def _entry_by_canonical_name(canonical_name: str) -> SkillTaxonomyEntry | None:
-    return load_skill_taxonomy().exact_lookup.get(normalize_taxonomy_text(canonical_name))
-
-
 def _jd_skill_bucket_rank(bucket: str) -> int:
     order = {
         "mandatory": 0,
@@ -993,14 +989,6 @@ def detect_role_family_from_entries(
     if scores[best_family] >= 2.0:
         return best_family
     return "general"
-
-
-def group_entries_by_cluster(entries: list[SkillTaxonomyEntry]) -> dict[str, list[SkillTaxonomyEntry]]:
-    grouped: dict[str, list[SkillTaxonomyEntry]] = {}
-    for entry in entries:
-        for cluster in entry.intent_clusters:
-            grouped.setdefault(cluster, []).append(entry)
-    return grouped
 
 
 def build_semantic_skill_summary(skills_text: str | None, *, role_text: str | None = None, limit: int = 12) -> str:

@@ -350,19 +350,6 @@ def structured_requirements_from_ai_payload(
     )
 
 
-def flatten_requirement_skills(requirements: ParsedJDRequirements) -> str:
-    seen: set[str] = set()
-    ordered: list[str] = []
-    for group in (*requirements.required_groups, *requirements.preferred_groups, *requirements.informational_groups):
-        for skill in group.skills:
-            key = normalize_taxonomy_text(skill.canonical_name)
-            if not key or key in seen:
-                continue
-            seen.add(key)
-            ordered.append(skill.canonical_name)
-    return ", ".join(ordered) if ordered else "none_detected"
-
-
 def requirements_to_payload(requirements: ParsedJDRequirements) -> dict[str, Any]:
     def skill_payload(skill: SkillRequirement) -> dict[str, Any]:
         return {

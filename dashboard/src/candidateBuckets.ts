@@ -15,12 +15,6 @@ export type CandidateListResponse = {
   has_next: boolean
 }
 
-export type CandidateBuckets = {
-  queue: Candidate[]
-  failed: Candidate[]
-  sent: Candidate[]
-}
-
 type RequestTracker = { current: number }
 
 export type BucketMeta = { nextCursor: number | null; hasNext: boolean; loaded: boolean }
@@ -75,55 +69,6 @@ export async function fetchCandidatesPageByState(
     items: data.items,
     nextCursor: data.next_cursor,
     hasNext: data.has_next,
-  }
-}
-
-export async function fetchCandidatesByState(
-  apiBase: string,
-  state: CandidateState,
-  limit: number,
-  mailDate: string | null,
-  fetchImpl: typeof fetch,
-  signal?: AbortSignal,
-): Promise<Candidate[]> {
-  const page = await fetchCandidatesPageByState(apiBase, state, limit, mailDate, fetchImpl, undefined, signal)
-  return page.items
-}
-
-export async function refreshCandidateBuckets(args: {
-  apiBase: string
-  limit: number
-  mailDate: string | null
-  fetchImpl?: typeof fetch
-  tracker: RequestTracker
-  onStart?: () => void
-  onSuccess: (buckets: CandidateBuckets) => void
-  onError?: (error: Error) => void
-  onFinally?: () => void
-}): Promise<{ applied: boolean }> {
-  const fetchFn = args.fetchImpl ?? fetch
-  const requestId = args.tracker.current + 1
-  args.tracker.current = requestId
-  args.onStart?.()
-
-  try {
-    const [queue, failed, sent] = await Promise.all([
-      fetchCandidatesByState(args.apiBase, 'needs_review', args.limit, args.mailDate, fetchFn),
-      fetchCandidatesByState(args.apiBase, 'failed', args.limit, args.mailDate, fetchFn),
-      fetchCandidatesByState(args.apiBase, 'approved_sent', args.limit, args.mailDate, fetchFn),
-    ])
-    if (requestId !== args.tracker.current) return { applied: false }
-    args.onSuccess({ queue, failed, sent })
-    return { applied: true }
-  } catch (error) {
-    if (requestId === args.tracker.current) {
-      args.onError?.(error as Error)
-    }
-    return { applied: false }
-  } finally {
-    if (requestId === args.tracker.current) {
-      args.onFinally?.()
-    }
   }
 }
 

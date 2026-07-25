@@ -2,7 +2,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from app.ai.deepseek_client import deepseek_json_completion
+from app.ai.deepseek_client import _parse_json_object, deepseek_json_completion
 from app.parsing.ai_extractor import ai_extractor_result_to_payload, extract_ai_job_details
 
 
@@ -13,6 +13,13 @@ def _fake_response(content: str) -> SimpleNamespace:
 
 
 class DeepSeekJsonCompletionTests(unittest.TestCase):
+    def test_parser_accepts_prose_wrapped_object_and_rejects_non_objects(self) -> None:
+        self.assertEqual(_parse_json_object('Result: {"role":"Platform Engineer"} done.'), {"role": "Platform Engineer"})
+        with self.assertRaisesRegex(RuntimeError, "malformed JSON content"):
+            _parse_json_object('["not", "an", "object"]')
+        with self.assertRaisesRegex(RuntimeError, "empty content"):
+            _parse_json_object("")
+
     @patch("app.ai.deepseek_client.settings.deepseek_api_key", "test-key")
     @patch("app.ai.deepseek_client.OpenAI")
     def test_parses_plain_json_object_response(self, mock_openai) -> None:

@@ -1,16 +1,13 @@
 from __future__ import annotations
 
 import json
-import re
 import time
 from typing import Any
 
 from openai import APIError, APITimeoutError, BadRequestError, OpenAI, RateLimitError
 
 from app.config import settings
-
-JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", re.IGNORECASE)
-JSON_OBJECT_RE = re.compile(r"\{[\s\S]*\}")
+from app.ai.json_object import JSONObjectParseError, parse_json_object
 STRUCTURED_OUTPUT_MODELS = frozenset(
     {
         "openai/gpt-oss-20b",
@@ -33,35 +30,12 @@ def groq_request_mode_for_model(model: str | None) -> str:
 
 
 def _parse_json_object(content: str) -> dict[str, object]:
-    text = (content or "").strip()
-    if not text:
-        raise ValueError("Groq returned empty content")
     try:
-        parsed = json.loads(text)
-        if isinstance(parsed, dict):
-            return parsed
-    except json.JSONDecodeError:
-        pass
-
-    fenced = JSON_FENCE_RE.search(text)
-    if fenced:
-        try:
-            parsed = json.loads(fenced.group(1))
-            if isinstance(parsed, dict):
-                return parsed
-        except json.JSONDecodeError:
-            pass
-
-    match = JSON_OBJECT_RE.search(text)
-    if match:
-        try:
-            parsed = json.loads(match.group(0))
-            if isinstance(parsed, dict):
-                return parsed
-        except json.JSONDecodeError:
-            pass
-
-    raise json.JSONDecodeError("Groq returned malformed JSON content", text, 0)
+        return parse_json_object(content)
+    except JSONObjectParseError as exc:
+        if exc.kind == "empty":
+            raise ValueError("Groq returned empty content") from exc
+        raise json.JSONDecodeError("Groq returned malformed JSON content", exc.content, 0) from exc
 
 
 def _is_number(value: object) -> bool:

@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.models import RecipientRoutingFeedback, RecruiterEmail
 from app.phase0 import RoutingEvidence, RoutingResult, analyze_recipient_routing, email_domain
-from app.routing import HeuristicRoutingAdapter, LearnedRoutingAdapter, RoutingDecision, RoutingPolicyInput, RoutingPolicyService
+from app.routing import HeuristicRoutingAdapter, RoutingDecision, RoutingPolicyInput, RoutingPolicyService
 
 
 @dataclass
@@ -50,13 +50,7 @@ class RoutingRuntimeService:
         email.routing_candidates = self.routing_payload_json(routing.candidates)
 
     def apply_routing_decision(self, email: RecruiterEmail, routing: RoutingDecision) -> None:
-        email.recipient_email = routing.to_email
-        email.cc_email = routing.cc_email
-        email.routing_status = routing.status
-        email.routing_confidence = routing.confidence
-        email.routing_reason = routing.reason
-        email.routing_evidence = self.routing_payload_json(routing.evidence)
-        email.routing_candidates = self.routing_payload_json(routing.candidates)
+        self.apply_routing_result(email, routing.to_routing_result())
 
     def analyze_email_routing(self, db: Session, sender: str, subject: str, body: str, snippet: str = "") -> RoutingResult:
         return analyze_recipient_routing(
@@ -102,8 +96,7 @@ class RoutingRuntimeService:
 
         learned_pairs = self.learned_recipient_pairs(db, sender) if db else []
         employer_domains = self.deps.get_employer_domains(db) if db is not None else None
-        adapter = LearnedRoutingAdapter(fallback=HeuristicRoutingAdapter())
-        service = RoutingPolicyService(adapter=adapter)
+        service = RoutingPolicyService(adapter=HeuristicRoutingAdapter())
         return service.evaluate(
             RoutingPolicyInput(
                 sender=sender,

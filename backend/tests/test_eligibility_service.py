@@ -1,7 +1,7 @@
 import unittest
 
 from app.parsing.jd_requirements import ParsedJDRequirements
-from app.services.eligibility_service import CandidateProfile, EligibilityService
+from app.services.eligibility_service import CandidateProfile, evaluate_eligibility
 
 
 class EligibilityServiceTests(unittest.TestCase):
@@ -18,7 +18,7 @@ class EligibilityServiceTests(unittest.TestCase):
             current_location="Dallas, TX",
         )
 
-        result = EligibilityService().evaluate(requirements, profile)
+        result = evaluate_eligibility(requirements, profile)
 
         self.assertEqual(result.status, "blocked")
         self.assertEqual(

@@ -43,6 +43,15 @@ def _has_mandatory_requirements(email: RecruiterEmail) -> bool:
     return isinstance(groups, list) and any(isinstance(group, dict) and group.get("skills") for group in groups)
 
 
+def _strict_mandatory_gate(email: RecruiterEmail) -> tuple[str, str | None]:
+    status = mandatory_gate_status(email)
+    if status == "fail":
+        return status, "mandatory_resume_fail"
+    if status in {"needs_review", "review"} and _has_mandatory_requirements(email):
+        return status, "mandatory_resume_review"
+    return status, None
+
+
 def resolve_sendability_status(email: RecruiterEmail) -> str:
     stored = email.sendability_status
     if stored in STRUCTURAL_BLOCKING_STATUSES:
@@ -59,12 +68,10 @@ def resolve_sendability_status(email: RecruiterEmail) -> str:
     if email.is_source_parent:
         return "source_parent"
     if strict:
-        status = mandatory_gate_status(email)
-        if status == "fail":
-            return "mandatory_resume_fail"
-        if status in {"needs_review", "review"} and _has_mandatory_requirements(email):
-            return "mandatory_resume_review"
-        if status in {"pass", "not_applicable"}:
+        gate_status, blocking_status = _strict_mandatory_gate(email)
+        if blocking_status is not None:
+            return blocking_status
+        if gate_status in {"pass", "not_applicable"}:
             return "sendable"
     if email.state == "needs_review" and (email.draft_reply or "").strip():
         return "sendable"
@@ -86,14 +93,16 @@ def apply_resume_sendability(email: RecruiterEmail) -> str:
         return email.sendability_status or "not_ready"
     if email.sendability_status in ELIGIBILITY_BLOCKING_STATUSES:
         return email.sendability_status
-    status = mandatory_gate_status(email)
-    if status == "fail":
-        email.sendability_status = "mandatory_resume_fail"
-    elif status in {"needs_review", "review"}:
-        email.sendability_status = "mandatory_resume_review" if _has_mandatory_requirements(email) else "sendable"
-    elif status in {"pass", "not_applicable"}:
+    gate_status, blocking_status = _strict_mandatory_gate(email)
+    email.sendability_status = blocking_status
+    if email.sendability_status is None and gate_status in {
+        "needs_review",
+        "review",
+        "pass",
+        "not_applicable",
+    }:
         email.sendability_status = "sendable"
-    else:
+    elif email.sendability_status is None:
         email.sendability_status = (
             "sendable"
             if email.state == "needs_review" and (email.draft_reply or "").strip()

@@ -60,19 +60,6 @@ class HeuristicRoutingAdapter:
         )
 
 
-class LearnedRoutingAdapter:
-    """Placeholder adapter for future learned routing models.
-
-    Current behavior delegates to heuristic analysis for deterministic parity.
-    """
-
-    def __init__(self, fallback: RoutingAdapter | None = None) -> None:
-        self._fallback = fallback or HeuristicRoutingAdapter()
-
-    def evaluate(self, payload: RoutingPolicyInput) -> RoutingResult:
-        return self._fallback.evaluate(payload)
-
-
 class RoutingPolicyService:
     def __init__(self, adapter: RoutingAdapter | None = None) -> None:
         self._adapter = adapter or HeuristicRoutingAdapter()

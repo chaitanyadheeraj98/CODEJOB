@@ -999,7 +999,7 @@ class ExternalFeedService:
                 user_settings=settings,
                 effective_policy=effective_policy,
                 threshold=threshold,
-                model_name="deepseek-chat",
+                model_name="deepseek-v4-flash",
                 scoring_resume=selected_resume,
                 draft_resume=selected_resume,
                 existing_email=existing,

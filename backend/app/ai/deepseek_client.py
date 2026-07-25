@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-import re
 import hashlib
 import time
 from dataclasses import dataclass
@@ -9,9 +7,7 @@ from dataclasses import dataclass
 from openai import OpenAI
 
 from app.config import settings
-
-JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", re.IGNORECASE)
-JSON_OBJECT_RE = re.compile(r"\{[\s\S]*\}")
+from app.ai.json_object import JSONObjectParseError, parse_json_object
 
 
 class DeepSeekJSONError(RuntimeError):
@@ -41,35 +37,11 @@ def _build_client(*, timeout_seconds: float | None = None) -> OpenAI:
 
 
 def _parse_json_object(content: str) -> dict[str, object]:
-    text = (content or "").strip()
-    if not text:
-        raise RuntimeError("DeepSeek returned empty content")
     try:
-        parsed = json.loads(text)
-        if isinstance(parsed, dict):
-            return parsed
-    except json.JSONDecodeError:
-        pass
-
-    fenced = JSON_FENCE_RE.search(text)
-    if fenced:
-        try:
-            parsed = json.loads(fenced.group(1))
-            if isinstance(parsed, dict):
-                return parsed
-        except json.JSONDecodeError:
-            pass
-
-    match = JSON_OBJECT_RE.search(text)
-    if match:
-        try:
-            parsed = json.loads(match.group(0))
-            if isinstance(parsed, dict):
-                return parsed
-        except json.JSONDecodeError:
-            pass
-
-    raise RuntimeError("DeepSeek returned malformed JSON content")
+        return parse_json_object(content)
+    except JSONObjectParseError as exc:
+        detail = "empty" if exc.kind == "empty" else "malformed JSON"
+        raise RuntimeError(f"DeepSeek returned {detail} content") from exc
 
 
 def deepseek_chat_completion(system_prompt: str, user_prompt: str, *, model_name: str | None = None) -> str:
@@ -78,7 +50,7 @@ def deepseek_chat_completion(system_prompt: str, user_prompt: str, *, model_name
 
     client = _build_client()
     response = client.chat.completions.create(
-        model=model_name or settings.deepseek_model_fast or "deepseek-chat",
+        model=model_name or settings.deepseek_model_fast or "deepseek-v4-flash",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -120,7 +92,7 @@ def deepseek_json_completion_with_diagnostics(
     client = _build_client(timeout_seconds=timeout_seconds)
     started = time.perf_counter()
     response = client.chat.completions.create(
-        model=model_name or settings.deepseek_model_fast or "deepseek-chat",
+        model=model_name or settings.deepseek_model_fast or "deepseek-v4-flash",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -140,7 +112,7 @@ def deepseek_json_completion_with_diagnostics(
     usage = getattr(response, "usage", None)
     return DeepSeekJSONResult(
         payload=payload,
-        model=str(getattr(response, "model", "") or model_name or settings.deepseek_model_fast or "deepseek-chat"),
+        model=str(getattr(response, "model", "") or model_name or settings.deepseek_model_fast or "deepseek-v4-flash"),
         finish_reason=finish_reason,
         prompt_tokens=getattr(usage, "prompt_tokens", None),
         completion_tokens=getattr(usage, "completion_tokens", None),

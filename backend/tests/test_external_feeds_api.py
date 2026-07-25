@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import httpx
 os.environ["DEBUG"] = "false"
@@ -22,6 +23,7 @@ from app.external_feeds import service as external_feed_service_module
 from app.external_feeds.service import ExternalFeedService
 from app.external_feeds.models import ExternalFeedSource, ExternalOpportunity
 from app.models import AttachmentAsset, CustomSkillTaxonomyEntry, EmployerNumber, NumberReviewQueue, RecentRun, RecentRunSkippedItem, RecruiterEmail, RecruiterNumber, RecruiterOpportunity, ResumeAsset, UserSettings
+from app.services.role_manifest_service import RoleManifestService
 
 
 class _FakeCollector:
@@ -265,6 +267,88 @@ class ExternalFeedsApiTests(unittest.TestCase):
         self.assertEqual(detail.jd_body_source, "nvoids_detail_table_row_3")
         self.assertNotIn("Email:", detail.jd_body)
         self.assertNotIn("View All", detail.jd_body)
+
+    def test_retry_role_detection_reuses_materialized_children(self) -> None:
+        source_text = """VISA: USC/GC Only
+1. Platform Engineer
+Job ID: ENG-1
+2. Data Engineer
+Job ID: ENG-2"""
+        manifest = RoleManifestService(
+            provider=lambda system, user: {
+                "classification": "multiple",
+                "role_count": 2,
+                "confidence": 0.96,
+                "shared_constraints": [],
+                "roles": [
+                    {
+                        "index": 1,
+                        "title_hint": "Platform Engineer",
+                        "requisition_id": "ENG-1",
+                        "start_line": 2,
+                        "end_line": 3,
+                        "confidence": 0.98,
+                    },
+                    {
+                        "index": 2,
+                        "title_hint": "Data Engineer",
+                        "requisition_id": "ENG-2",
+                        "start_line": 4,
+                        "end_line": 5,
+                        "confidence": 0.98,
+                    },
+                ],
+            }
+        ).detect(source_text)
+        with self.SessionLocal() as db:
+            parent = RecruiterEmail(
+                owner_id=main.settings.owner_id,
+                sender="recruiter@example.com",
+                subject="Two roles",
+                body=source_text,
+                role="",
+                location="",
+                salary_text="",
+                skills_text="",
+                score=0,
+                decision="Qualified",
+                state="needs_review",
+                source="gmail",
+                external_message_id="gmail-multi-role-1",
+            )
+            db.add(parent)
+            db.commit()
+            parent_id = parent.id
+
+        parsed = {
+            "role": "Engineer",
+            "location": "Remote",
+            "salary_text": "not_specified",
+            "skills_text": "Python",
+        }
+        details = {"structured_requirements": {}}
+        with (
+            patch.object(main.settings, "role_manifest_child_creation_enabled", True),
+            patch.object(main, "RoleManifestService") as manifest_service_type,
+            patch.object(main, "parse_email_with_details", return_value=(parsed, details)),
+            patch.object(main, "_get_orchestration_service") as get_orchestration_service,
+        ):
+            manifest_service_type.return_value.detect.return_value = manifest
+            get_orchestration_service.return_value.regenerate_candidate.return_value = None
+
+            first = self.client.post(f"/candidates/{parent_id}/retry-role-detection")
+            second = self.client.post(f"/candidates/{parent_id}/retry-role-detection")
+
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertEqual(second.status_code, 200, second.text)
+        self.assertEqual(first.json()["child_ids"], second.json()["child_ids"])
+        with self.SessionLocal() as db:
+            self.assertEqual(
+                db.query(RecruiterEmail)
+                .filter(RecruiterEmail.source_parent_email_id == parent_id)
+                .count(),
+                2,
+            )
 
     def test_manual_sync_returns_summary_and_runs(self) -> None:
         sync = self.client.post("/external-feeds/nvoids/sync")
