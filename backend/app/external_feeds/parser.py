@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import logging
 import re
 from datetime import UTC, datetime
@@ -139,7 +140,7 @@ def _extract_row_text_with_linebreaks(row_html: str, row_text: str) -> str:
         text = re.sub(r"(?i)<br\s*/?>", "\n", row_html)
         text = re.sub(r"(?i)</(td|tr|div|p|li|ul|ol)>", "\n", text)
         text = re.sub(r"<[^>]+>", "", text)
-        normalized = _normalize_multiline_text(text)
+        normalized = _normalize_multiline_text(html.unescape(text))
         if normalized:
             return normalized
     return _normalize_multiline_text(row_text)

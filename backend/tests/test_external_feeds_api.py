@@ -1,4 +1,5 @@
 import os
+import re
 import tempfile
 import unittest
 from datetime import UTC, date, datetime, timedelta
@@ -24,6 +25,14 @@ from app.external_feeds.service import ExternalFeedService
 from app.external_feeds.models import ExternalFeedSource, ExternalOpportunity
 from app.models import AttachmentAsset, CustomSkillTaxonomyEntry, EmployerNumber, NumberReviewQueue, RecentRun, RecentRunSkippedItem, RecruiterEmail, RecruiterNumber, RecruiterOpportunity, ResumeAsset, UserSettings
 from app.services.role_manifest_service import RoleManifestService
+from role_manifest_fixtures import (
+    REAL_NVOIDS_SIX_ROLE_MANIFEST,
+    REAL_NVOIDS_SIX_ROLE_SOURCE,
+    REAL_NVOIDS_SIX_ROLE_TITLES,
+    REAL_NVOIDS_THREE_ROLE_MANIFEST,
+    REAL_NVOIDS_THREE_ROLE_SOURCE,
+    REAL_NVOIDS_THREE_ROLE_TITLES,
+)
 
 
 class _FakeCollector:
@@ -350,6 +359,97 @@ Job ID: ENG-2"""
                 2,
             )
 
+    def test_retry_role_detection_processes_each_role_from_both_real_nvoids_shapes(self) -> None:
+        cases = [
+            (
+                "nvoids:3563272",
+                REAL_NVOIDS_SIX_ROLE_SOURCE,
+                REAL_NVOIDS_SIX_ROLE_MANIFEST,
+                REAL_NVOIDS_SIX_ROLE_TITLES,
+            ),
+            (
+                "nvoids:3565603",
+                REAL_NVOIDS_THREE_ROLE_SOURCE,
+                REAL_NVOIDS_THREE_ROLE_MANIFEST,
+                REAL_NVOIDS_THREE_ROLE_TITLES,
+            ),
+        ]
+        manifests = [
+            RoleManifestService(provider=lambda system, user, payload=payload: payload).detect(source)
+            for _, source, payload, _ in cases
+        ]
+        with self.SessionLocal() as db:
+            parents = [
+                RecruiterEmail(
+                    owner_id=main.settings.owner_id,
+                    sender="recruiter@example.com",
+                    subject="Multiple roles",
+                    body=source,
+                    role="Mixed requirement",
+                    location="",
+                    salary_text="",
+                    skills_text="",
+                    score=0,
+                    decision="Qualified",
+                    state="needs_review",
+                    source="nvoids",
+                    external_message_id=external_message_id,
+                )
+                for external_message_id, source, _, _ in cases
+            ]
+            db.add_all(parents)
+            db.commit()
+            parent_ids = [parent.id for parent in parents]
+
+        def parse_child(_subject: str, body: str, **_kwargs):
+            title = re.sub(r"^\d+\.\s*", "", body.splitlines()[0]).strip(" |")
+            return (
+                {
+                    "role": title,
+                    "location": "Remote",
+                    "salary_text": "not_specified",
+                    "skills_text": "role specific skills",
+                },
+                {"structured_requirements": {}},
+            )
+
+        with (
+            patch.object(main.settings, "role_manifest_child_creation_enabled", True),
+            patch.object(main, "RoleManifestService") as manifest_service_type,
+            patch.object(main, "parse_email_with_details", side_effect=parse_child),
+            patch.object(main, "_get_orchestration_service") as get_orchestration_service,
+        ):
+            manifest_service_type.return_value.detect.side_effect = manifests
+            responses = [
+                self.client.post(f"/candidates/{parent_id}/retry-role-detection")
+                for parent_id in parent_ids
+            ]
+
+        self.assertEqual([response.status_code for response in responses], [200, 200])
+        self.assertEqual([response.json()["requirement_count"] for response in responses], [6, 3])
+        with self.SessionLocal() as db:
+            all_children = (
+                db.query(RecruiterEmail)
+                .filter(RecruiterEmail.source_parent_email_id.in_(parent_ids))
+                .all()
+            )
+            self.assertEqual(
+                get_orchestration_service.return_value.regenerate_candidate.call_count,
+                9,
+                [(child.role, child.sendability_status, child.last_error) for child in all_children],
+            )
+            for parent_id, (_, _, _, expected_titles) in zip(parent_ids, cases, strict=True):
+                parent = db.get(RecruiterEmail, parent_id)
+                children = (
+                    db.query(RecruiterEmail)
+                    .filter(RecruiterEmail.source_parent_email_id == parent_id)
+                    .order_by(RecruiterEmail.requirement_index)
+                    .all()
+                )
+                self.assertEqual([child.role for child in children], list(expected_titles))
+                self.assertTrue(all(child.is_multi_role_child for child in children))
+                self.assertEqual(parent.sendability_status if parent else None, "superseded_multi_role")
+
     def test_manual_sync_returns_summary_and_runs(self) -> None:
         sync = self.client.post("/external-feeds/nvoids/sync")
         self.assertEqual(sync.status_code, 200, sync.text)
@@ -379,6 +479,81 @@ Job ID: ENG-2"""
         run_items = runs.json()
         self.assertGreaterEqual(len(run_items), 1)
         self.assertEqual(run_items[0]["source_type"], "nvoids")
+
+    def test_manual_sync_continues_role_detection_after_one_row_fails(self) -> None:
+        with self.SessionLocal() as db:
+            user_settings = db.query(UserSettings).filter(UserSettings.owner_id == main.settings.owner_id).one()
+            user_settings.feature_role_manifest_enabled = True
+            db.commit()
+
+        def sync_nvoids(db, **_kwargs):
+            db.add_all(
+                [
+                    RecruiterEmail(
+                        owner_id=main.settings.owner_id,
+                        sender="first@example.com",
+                        subject="First role",
+                        body="First role body",
+                        role="First role",
+                        location="Remote",
+                        salary_text="",
+                        skills_text="",
+                        score=0,
+                        decision="Qualified",
+                        state="needs_review",
+                        source="nvoids",
+                        external_message_id="nvoids:batch-resilience-1",
+                        created_at=datetime.now(UTC),
+                    ),
+                    RecruiterEmail(
+                        owner_id=main.settings.owner_id,
+                        sender="second@example.com",
+                        subject="Second role",
+                        body="Second role body",
+                        role="Second role",
+                        location="Remote",
+                        salary_text="",
+                        skills_text="",
+                        score=0,
+                        decision="Qualified",
+                        state="needs_review",
+                        source="nvoids",
+                        external_message_id="nvoids:batch-resilience-2",
+                        created_at=datetime.now(UTC),
+                    ),
+                ]
+            )
+            db.commit()
+            return SimpleNamespace(
+                source_type="nvoids",
+                run_key="nvoids_sync:batch-resilience",
+                fetched_count=2,
+                created_count=2,
+                deduped_count=0,
+                failed_count=0,
+                skipped_location_count=0,
+                run_id=1,
+            )
+
+        detection_calls: list[int] = []
+
+        def retry_role_detection(email_id: int, _db):
+            detection_calls.append(email_id)
+            if len(detection_calls) == 1:
+                raise RuntimeError("first row failed")
+            return SimpleNamespace(manifest_status="single")
+
+        with (
+            patch.object(main.external_feed_service, "sync_nvoids", side_effect=sync_nvoids),
+            patch.object(main, "retry_role_detection", side_effect=retry_role_detection),
+            self.assertLogs(main.logger.name, level="ERROR") as captured_logs,
+        ):
+            sync = self.client.post("/external-feeds/nvoids/sync")
+
+        self.assertEqual(sync.status_code, 200, sync.text)
+        self.assertEqual(len(detection_calls), 2)
+        self.assertIn("role_manifest_retry_failed", "\n".join(captured_logs.output))
+        self.assertIn("nvoids_sync:batch-resilience", "\n".join(captured_logs.output))
 
     def test_recent_runs_list_returns_gmail_and_nvoids_runs_in_descending_order(self) -> None:
         with self.SessionLocal() as db:
@@ -857,6 +1032,10 @@ Job ID: ENG-2"""
         payload = bootstrap_res.json()
 
         self.assertEqual(payload["settings"], settings_res.json())
+        self.assertEqual(
+            payload["role_manifest_child_creation_enabled"],
+            main.settings.role_manifest_child_creation_enabled,
+        )
         self.assertEqual(payload["owner_id"], settings_res.json()["owner_id"])
         self.assertIn("loaded_at", payload)
         self.assertIsInstance(payload["resumes"], list)

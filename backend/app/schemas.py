@@ -316,6 +316,7 @@ class JobIntentTaxonomyEntryResponse(BaseModel):
 
 class SettingsBootstrapResponse(BaseModel):
     settings: SettingsResponse
+    role_manifest_child_creation_enabled: bool = False
     gmail_requirement_groups: list["GmailRequirementGroupResponse"] = Field(default_factory=list)
     resumes: list[ResumeResponse] = Field(default_factory=list)
     attachments: list[AttachmentAssetResponse] = Field(default_factory=list)

@@ -490,6 +490,7 @@ type JobIntentLearningSignal = {
 
 type SettingsBootstrapPayload = {
   settings: SettingsPayload
+  role_manifest_child_creation_enabled: boolean
   gmail_requirement_groups: TrustedGmailGroup[]
   resumes: ResumeAsset[]
   attachments: AttachmentAsset[]
@@ -2249,6 +2250,7 @@ function App() {
   const [settingsBootstrapStatus, setSettingsBootstrapStatus] = useState<BootstrapStatus>('idle')
   const [settingsBootstrapError, setSettingsBootstrapError] = useState('')
   const [hasLoadedSettingsBootstrap, setHasLoadedSettingsBootstrap] = useState(false)
+  const [roleManifestChildCreationEnabled, setRoleManifestChildCreationEnabled] = useState(false)
   const [skillDraft, setSkillDraft] = useState('')
   const [nvoidsLocationDraft, setNvoidsLocationDraft] = useState('')
   const [employerDomainDraft, setEmployerDomainDraft] = useState('')
@@ -2519,6 +2521,7 @@ function App() {
   const applySettingsBootstrapPayload = (payload: SettingsBootstrapPayload): SettingsPayload => {
     const normalized = normalizeSettingsPayload(payload.settings)
     setSettings(normalized)
+    setRoleManifestChildCreationEnabled(Boolean(payload.role_manifest_child_creation_enabled))
     setGmailRequirementGroups(payload.gmail_requirement_groups ?? [])
     setResumeAssets(payload.resumes ?? [])
     setResumeSkillEdits(Object.fromEntries((payload.resumes ?? []).map((resume) => [resume.id, resume.skills_text ?? ''])))
@@ -4171,6 +4174,11 @@ function App() {
                       <span className="toggleTrack" />
                     </span>
                   </label>
+                  <p className="subtle">
+                    {roleManifestChildCreationEnabled
+                      ? 'Detection and child drafting are active at the deployment level.'
+                      : 'Detection only (dark-run). Child drafts are disabled at the deployment level.'}
+                  </p>
                   <label className="toggleRow">
                     <span>Enable Semantic Matching</span>
                     <span className="toggleSwitch">

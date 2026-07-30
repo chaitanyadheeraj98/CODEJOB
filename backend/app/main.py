@@ -123,6 +123,7 @@ from app.services.candidate_screening_service import (
     CandidateScreeningService,
     apply_screening_decision,
 )
+from app.services.eligibility_service import apply_inherited_constraints
 from app.services.orchestration_service import OrchestrationDeps, OrchestrationService
 from app.services.requirement_expansion_service import RequirementExpansionService
 from app.services.role_manifest_service import RoleManifestService
@@ -1928,6 +1929,7 @@ def get_settings_bootstrap(db: Session = Depends(get_db)) -> SettingsBootstrapRe
     user_settings = _get_settings(db)
     return SettingsBootstrapResponse(
         settings=_settings_response_from_model(user_settings),
+        role_manifest_child_creation_enabled=settings.role_manifest_child_creation_enabled,
         gmail_requirement_groups=[_gmail_requirement_group_response(item) for item in _list_gmail_requirement_groups(db)],
         resumes=[ResumeResponse.model_validate(item) for item in _list_resumes(db)],
         attachments=[AttachmentAssetResponse.model_validate(item) for item in _list_attachment_assets(db)],
@@ -2763,7 +2765,15 @@ def gmail_sync(db: Session = Depends(get_db)) -> GmailSyncResponse:
         rows = db.query(RecruiterEmail).filter(RecruiterEmail.sync_batch_id == response.sync_batch_id).all()
         for row in rows:
             if not row.is_multi_role_child:
-                retry_role_detection(row.id, db)
+                try:
+                    retry_role_detection(row.id, db)
+                except Exception:
+                    db.rollback()
+                    logger.exception(
+                        "role_manifest_retry_failed source=gmail email_id=%s sync_batch_id=%r",
+                        row.id,
+                        response.sync_batch_id,
+                    )
         _update_manifest_run_counts(db, response.run_key, rows)
     return response
 
@@ -2855,7 +2865,16 @@ def automation_run_once(payload: AutomationRunRequest | None = None, db: Session
         )
         for source_row in source_rows:
             if not source_row.is_multi_role_child:
-                detection = retry_role_detection(source_row.id, db)
+                try:
+                    detection = retry_role_detection(source_row.id, db)
+                except Exception:
+                    db.rollback()
+                    logger.exception(
+                        "role_manifest_retry_failed source=automation email_id=%s run_key=%r",
+                        source_row.id,
+                        response.run_key,
+                    )
+                    continue
                 if user_settings.feature_auto_send and not dry_run and detection.manifest_status == "single":
                     try:
                         _get_orchestration_service().approve_send(
@@ -3694,7 +3713,16 @@ def sync_external_nvoids(
             .all()
         )
         for row in rows:
-            retry_role_detection(row.id, db)
+            try:
+                retry_role_detection(row.id, db)
+            except Exception:
+                db.rollback()
+                logger.exception(
+                    "role_manifest_retry_failed source=nvoids email_id=%s external_message_id=%r run_key=%r",
+                    row.id,
+                    row.external_message_id,
+                    result.run_key,
+                )
         _update_manifest_run_counts(db, result.run_key, rows)
     return ExternalFeedSyncResponse(
         source_type=result.source_type,

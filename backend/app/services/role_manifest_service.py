@@ -7,13 +7,17 @@ import time
 from dataclasses import dataclass, field, replace
 from typing import Callable, Literal
 
+from instructor.core.exceptions import IncompleteOutputException, InstructorError, InstructorRetryException
+from instructor.core.hooks import HookName, Hooks
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from app.ai.deepseek_client import DeepSeekJSONError, DeepSeekJSONResult, deepseek_json_completion_with_diagnostics
+from app.ai.deepseek_client import DeepSeekJSONError, DeepSeekJSONResult, build_deepseek_instructor_client
+from app.config import settings
 
 
 MIN_MANIFEST_CONFIDENCE = 0.85
 MAX_ROLES_PER_SOURCE = 10
+ROLE_MANIFEST_MAX_TOKENS = 1_600
 
 
 class SharedConstraint(BaseModel):
@@ -89,7 +93,43 @@ Do not infer boundaries or constraints without direct source evidence."""
 
 
 def _default_provider(system_prompt: str, user_prompt: str) -> DeepSeekJSONResult:
-    return deepseek_json_completion_with_diagnostics(system_prompt, user_prompt, timeout_seconds=30.0)
+    client = build_deepseek_instructor_client(timeout_seconds=30.0)
+    hooks = Hooks()
+    attempt_count = 0
+
+    def count_attempt(*args, **kwargs) -> None:
+        nonlocal attempt_count
+        attempt_count += 1
+
+    hooks.on(HookName.COMPLETION_KWARGS, count_attempt)
+    started = time.perf_counter()
+    manifest, response = client.create_with_completion(
+        model=settings.deepseek_model_fast or "deepseek-v4-flash",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        response_model=RoleManifest,
+        max_retries=1,
+        temperature=0.0,
+        max_tokens=ROLE_MANIFEST_MAX_TOKENS,
+        extra_body={"thinking": {"type": "disabled"}},
+        hooks=hooks,
+    )
+    choice = response.choices[0] if response.choices else None
+    raw_content = (choice.message.content or "") if choice is not None else ""
+    encoded = raw_content or manifest.model_dump_json()
+    usage = getattr(response, "usage", None)
+    return DeepSeekJSONResult(
+        payload=manifest.model_dump(mode="json"),
+        model=str(getattr(response, "model", "") or settings.deepseek_model_fast or "deepseek-v4-flash"),
+        finish_reason=str(getattr(choice, "finish_reason", "") or ""),
+        prompt_tokens=getattr(usage, "prompt_tokens", None),
+        completion_tokens=getattr(usage, "completion_tokens", None),
+        duration_ms=int((time.perf_counter() - started) * 1000),
+        response_hash=hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
+        repair_attempted=attempt_count > 1,
+    )
 
 
 def _numbered_source(lines: list[str], start_line: int = 1) -> str:
@@ -123,22 +163,57 @@ def _provider_payload(value: dict[str, object] | DeepSeekJSONResult) -> tuple[di
         prompt_tokens=value.prompt_tokens,
         completion_tokens=value.completion_tokens,
         response_hash=value.response_hash,
+        repair_attempted=value.repair_attempted,
     )
 
 
 def _error_category(exc: Exception) -> str:
     text = str(exc).casefold()
+    if isinstance(exc, IncompleteOutputException):
+        return "truncated_json"
     if "api key" in text:
         return "missing_api_key"
     if "timeout" in text:
         return "timeout"
     if "truncat" in text:
         return "truncated_json"
+    if isinstance(exc, (ValidationError, InstructorRetryException)):
+        return "schema_failure"
     if "json" in text:
         return "malformed_json"
-    if isinstance(exc, ValidationError):
-        return "schema_failure"
     return "provider_error"
+
+
+def _safe_error_message(exc: Exception) -> str:
+    if isinstance(exc, IncompleteOutputException):
+        return "The output is incomplete due to a max_tokens length limit."
+    if isinstance(exc, InstructorRetryException):
+        return "Role manifest schema validation failed after retries"
+    if isinstance(exc, InstructorError):
+        return "Role manifest provider request failed"
+    return str(exc)
+
+
+def _failure_diagnostics(
+    exc: Exception,
+    *,
+    duration_ms: int,
+    repair_attempted: bool,
+) -> RoleManifestDiagnostics:
+    response = getattr(exc, "last_completion", None)
+    choice = response.choices[0] if response is not None and response.choices else None
+    raw_content = (choice.message.content or "") if choice is not None else ""
+    usage = getattr(exc, "total_usage", None) or getattr(response, "usage", None)
+    return RoleManifestDiagnostics(
+        model=str(getattr(response, "model", "") or ""),
+        finish_reason=str(getattr(choice, "finish_reason", "") or ""),
+        prompt_tokens=getattr(usage, "prompt_tokens", None),
+        completion_tokens=getattr(usage, "completion_tokens", None),
+        duration_ms=duration_ms,
+        response_hash=hashlib.sha256(raw_content.encode("utf-8")).hexdigest() if raw_content else "",
+        error_category=_error_category(exc),
+        repair_attempted=repair_attempted,
+    )
 
 
 class RoleManifestService:
@@ -151,9 +226,10 @@ class RoleManifestService:
         max_window_lines: int = 250,
         window_overlap_lines: int = 30,
     ) -> None:
+        uses_default_provider = provider is None
         self._provider = provider or _default_provider
         self._confidence_threshold = confidence_threshold
-        self._repair_attempts = max(0, repair_attempts)
+        self._repair_attempts = 0 if uses_default_provider else max(0, repair_attempts)
         self._max_window_lines = max(20, max_window_lines)
         self._window_overlap_lines = max(1, min(window_overlap_lines, self._max_window_lines // 2))
 
@@ -183,7 +259,7 @@ class RoleManifestService:
                     diagnostics = replace(
                         provider_diagnostics,
                         duration_ms=elapsed,
-                        repair_attempted=bool(attempt),
+                        repair_attempted=provider_diagnostics.repair_attempted or bool(attempt),
                     )
                     return RoleManifestResult(
                         status="uncertain",
@@ -196,7 +272,7 @@ class RoleManifestService:
                 diagnostics = replace(
                     provider_diagnostics,
                     duration_ms=elapsed,
-                    repair_attempted=bool(attempt),
+                    repair_attempted=provider_diagnostics.repair_attempted or bool(attempt),
                 )
                 return RoleManifestResult(
                     status=manifest.classification,
@@ -205,17 +281,21 @@ class RoleManifestService:
                     inherited_constraints=tuple(manifest.shared_constraints),
                     diagnostics=diagnostics,
                 )
-            except (RuntimeError, ValueError, ValidationError) as exc:
+            except (RuntimeError, ValueError, ValidationError, InstructorError) as exc:
                 last_error = exc
                 if isinstance(exc, DeepSeekJSONError):
                     repair_content = exc.raw_content
 
         elapsed = int((time.perf_counter() - started) * 1000)
-        category = _error_category(last_error or RuntimeError("manifest failure"))
+        failure = last_error or RuntimeError("manifest failure")
         return RoleManifestResult(
             status="invalid",
-            diagnostics=RoleManifestDiagnostics(duration_ms=elapsed, error_category=category, repair_attempted=self._repair_attempts > 0),
-            error=str(last_error or "Role manifest failed"),
+            diagnostics=_failure_diagnostics(
+                failure,
+                duration_ms=elapsed,
+                repair_attempted=self._repair_attempts > 0 or int(getattr(failure, "n_attempts", 1) or 1) > 1,
+            ),
+            error=_safe_error_message(failure),
         )
 
     def _detect_large_source(self, lines: list[str]) -> RoleManifestResult:
@@ -233,14 +313,15 @@ class RoleManifestService:
                     self._provider(SYSTEM_PROMPT, _numbered_source(window, start_line=start + 1))
                 )
                 manifest = RoleManifest.model_validate(payload)
-            except (RuntimeError, ValueError, ValidationError) as exc:
+            except (RuntimeError, ValueError, ValidationError, InstructorError) as exc:
                 return RoleManifestResult(
                     status="invalid",
-                    diagnostics=RoleManifestDiagnostics(
+                    diagnostics=_failure_diagnostics(
+                        exc,
                         duration_ms=int((time.perf_counter() - started) * 1000),
-                        error_category=_error_category(exc),
+                        repair_attempted=int(getattr(exc, "n_attempts", 1) or 1) > 1,
                     ),
-                    error=str(exc),
+                    error=_safe_error_message(exc),
                 )
             if manifest.classification == "uncertain" or manifest.confidence < self._confidence_threshold:
                 return RoleManifestResult(status="uncertain", manifest=manifest, error="A source window was uncertain")

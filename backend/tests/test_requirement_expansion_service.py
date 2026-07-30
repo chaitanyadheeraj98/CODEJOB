@@ -7,6 +7,11 @@ from app.db import Base
 from app.models import RecruiterEmail
 from app.services.requirement_expansion_service import RequirementExpansionService
 from app.services.role_manifest_service import RoleManifestService
+from role_manifest_fixtures import (
+    REAL_NVOIDS_SIX_ROLE_MANIFEST,
+    REAL_NVOIDS_SIX_ROLE_SOURCE,
+    REAL_NVOIDS_SIX_ROLE_TITLES,
+)
 
 
 DELOITTE_SOURCE = """Please share resumes along with your LinkedIn URL
@@ -20,6 +25,44 @@ Job ID: DLTJP00057259
 
 
 class RequirementExpansionServiceTests(unittest.TestCase):
+    def test_real_nvoids_parent_materializes_six_distinct_children(self) -> None:
+        engine = create_engine("sqlite+pysqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        manifest = RoleManifestService(
+            provider=lambda system, user: REAL_NVOIDS_SIX_ROLE_MANIFEST,
+        ).detect(REAL_NVOIDS_SIX_ROLE_SOURCE)
+
+        with Session(engine) as db:
+            parent = RecruiterEmail(
+                owner_id="default-owner",
+                sender="recruiter@example.com",
+                subject="Multiple requirements",
+                body=REAL_NVOIDS_SIX_ROLE_SOURCE,
+                role="Urgent Requirements",
+                state="needs_review",
+                decision="Qualified",
+                external_message_id="nvoids:3563272",
+                source="nvoids",
+            )
+            db.add(parent)
+            db.commit()
+
+            result = RequirementExpansionService().expand(db, parent, manifest, materialize=True)
+            children = (
+                db.query(RecruiterEmail)
+                .filter(RecruiterEmail.source_parent_email_id == parent.id)
+                .order_by(RecruiterEmail.requirement_index)
+                .all()
+            )
+
+            self.assertEqual(result.requirement_count, 6)
+            self.assertEqual(len(children), 6)
+            self.assertEqual([child.role for child in children], list(REAL_NVOIDS_SIX_ROLE_TITLES))
+            self.assertTrue(all(child.is_multi_role_child for child in children))
+            self.assertEqual(len({child.requirement_key for child in children}), 6)
+            self.assertTrue(all("&amp;" not in child.role for child in children))
+            self.assertEqual(parent.sendability_status, "superseded_multi_role")
+
     def test_reprocessing_multi_role_parent_does_not_duplicate_children(self) -> None:
         engine = create_engine("sqlite+pysqlite:///:memory:")
         Base.metadata.create_all(engine)

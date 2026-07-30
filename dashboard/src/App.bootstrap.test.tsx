@@ -78,6 +78,7 @@ function makeBootstrapPayload(overrides?: {
 }) {
   return {
     settings: makeSettings(overrides?.settings),
+    role_manifest_child_creation_enabled: false,
     resumes: overrides?.resumes ?? [],
     attachments: overrides?.attachments ?? [],
     pending_skills: overrides?.pending_skills ?? [],
@@ -382,5 +383,34 @@ describe('Settings bootstrap flow', () => {
     const profileInputs = Array.from(profile?.querySelectorAll('input') ?? [])
     expect(profileInputs.every((input) => !input.disabled)).toBe(true)
     expect(container.textContent).toContain('Save Settings')
+  })
+
+  it.each([
+    [false, 'Detection only (dark-run). Child drafts are disabled at the deployment level.'],
+    [true, 'Detection and child drafting are active at the deployment level.'],
+  ])('shows the read-only role manifest deployment state when child creation is %s', async (enabled, expected) => {
+    vi.stubGlobal(
+      'fetch',
+      makeAppFetch({
+        bootstrapPayload: {
+          ...makeBootstrapPayload(),
+          role_manifest_child_creation_enabled: enabled,
+        },
+      }),
+    )
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+    })
+
+    await act(async () => {
+      root.render(<App />)
+      await flushPromises(6)
+    })
+
+    expect(container.textContent).toContain(expected)
   })
 })

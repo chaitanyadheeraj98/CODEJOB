@@ -6,6 +6,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Literal
 
+import instructor
 from openai import OpenAI
 
 from app.config import settings
@@ -31,6 +32,7 @@ class DeepSeekJSONResult:
     completion_tokens: int | None
     duration_ms: int
     response_hash: str
+    repair_attempted: bool = False
 
 
 def _build_client(*, timeout_seconds: float | None = None) -> OpenAI:
@@ -38,6 +40,15 @@ def _build_client(*, timeout_seconds: float | None = None) -> OpenAI:
         api_key=settings.deepseek_api_key,
         base_url=settings.deepseek_base_url,
         timeout=timeout_seconds if timeout_seconds is not None else settings.deepseek_timeout_seconds,
+    )
+
+
+def build_deepseek_instructor_client(*, timeout_seconds: float | None = None):
+    if not settings.deepseek_api_key:
+        raise RuntimeError("DeepSeek API key is missing")
+    return instructor.from_openai(
+        _build_client(timeout_seconds=timeout_seconds),
+        mode=instructor.Mode.JSON,
     )
 
 

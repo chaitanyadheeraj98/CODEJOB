@@ -279,6 +279,25 @@ class ExternalFeedsParserTests(unittest.TestCase):
         self.assertIn("Java, Spring Boot, NodeJS, AWS, Kafka", detail.jd_body)
         self.assertEqual(detail.jd_body_source, "nvoids_detail_table_row_3")
 
+    def test_parse_nvoids_detail_decodes_html_entities_in_jd_body(self) -> None:
+        html = """
+        <html><body>
+        <table>
+          <tr><td>Multiple requirements at Remote, Remote, USA</td></tr>
+          <tr><td>Email: recruiter@example.com</td></tr>
+          <tr><td>ServiceNow Discovery &amp; Service Mapping Lead<br>Camunda &amp; Java Spring Boot Developer</td></tr>
+          <tr><td>recruiter@example.com | View All</td></tr>
+          <tr><td>11:00 PM 30-Jul-26</td></tr>
+        </table>
+        </body></html>
+        """
+
+        detail = parse_nvoids_detail(html, "Fallback Title", "Fallback Location")
+
+        self.assertIn("ServiceNow Discovery & Service Mapping Lead", detail.jd_body)
+        self.assertIn("Camunda & Java Spring Boot Developer", detail.jd_body)
+        self.assertNotIn("&amp;", detail.jd_body)
+
     def test_parse_nvoids_detail_returns_strict_fallback_when_rows_missing(self) -> None:
         html = """
         <html><body>
