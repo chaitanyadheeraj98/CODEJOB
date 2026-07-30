@@ -90,6 +90,11 @@ def create_recent_run(
     skipped_item_count: int = 0,
     sync_batch_id: str | None = None,
     external_scrape_run_id: int | None = None,
+    job_backend_id: str | None = None,
+    total_items: int | None = None,
+    processed_items: int = 0,
+    progress_pct: float | None = None,
+    queue_name: str | None = None,
 ) -> RecentRun:
     row = RecentRun(
         owner_id=owner_id,
@@ -104,6 +109,11 @@ def create_recent_run(
         skipped_count=skipped_count,
         failed_count=failed_count,
         skipped_item_count=skipped_item_count,
+        job_backend_id=job_backend_id,
+        total_items=total_items,
+        processed_items=processed_items,
+        progress_pct=progress_pct,
+        queue_name=queue_name,
     )
     db.add(row)
     db.flush()
@@ -191,6 +201,11 @@ def row_to_recent_run_dict(row: RecentRun) -> dict[str, Any]:
         "requirement_count": row.requirement_count,
         "multi_role_source_count": row.multi_role_source_count,
         "manifest_review_count": row.manifest_review_count,
+        "job_backend_id": row.job_backend_id,
+        "total_items": row.total_items,
+        "processed_items": row.processed_items,
+        "progress_pct": row.progress_pct,
+        "queue_name": row.queue_name,
         "created_at": row.created_at,
         "sync_batch_id": row.sync_batch_id,
         "external_scrape_run_id": row.external_scrape_run_id,

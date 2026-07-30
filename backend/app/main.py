@@ -3,7 +3,7 @@ import json
 import logging
 import re
 import uuid
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from dataclasses import dataclass
@@ -18,6 +18,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, or_
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
+from rq import Retry
+from rq.command import send_stop_job_command
+from rq.job import Job, JobStatus
+from rq.exceptions import NoSuchJobError
 
 from app.config import settings
 from app.ai.reply_service import generate_reply_with_ai_or_fallback
@@ -95,7 +99,26 @@ from app.phase0 import (
     should_block_f2f,
 )
 from app.routing import RoutingDecision
-from app.recent_runs import build_gmail_message_url, row_to_recent_run_dict
+from app.recent_runs import (
+    RUN_SOURCE_AUTOMATION,
+    RUN_SOURCE_GMAIL_SYNC,
+    RUN_SOURCE_NVOIDS_SYNC,
+    automation_run_key,
+    build_gmail_message_url,
+    create_recent_run,
+    gmail_sync_run_key,
+    row_to_recent_run_dict,
+)
+from app.jobs.queues import (
+    AUTOMATION_RUN_QUEUE,
+    GMAIL_SYNC_QUEUE,
+    NVOIDS_SYNC_QUEUE,
+    active_job_id,
+    get_queue,
+    get_redis_connection,
+    redis_is_ready,
+)
+from app.jobs.tasks import run_automation_job, run_gmail_sync_job, run_nvoids_sync_job
 from app.skill_taxonomy import (
     clear_skill_taxonomy_cache,
     extract_skills_text,
@@ -156,6 +179,8 @@ from app.schemas import (
     GmailLabelingPreviewResponse,
     IngestEmailRequest,
     JobIntentTaxonomyEntryResponse,
+    JobEnqueueResponse,
+    JobStatusResponse,
     OAuthStartResponse,
     OAuthUrlResponse,
     EmployerNumberResponse,
@@ -870,18 +895,107 @@ def _maybe_generate_cold_call_script(email: object, *, resume: ResumeAsset | Non
         return
 
 
+def _enqueue_background_job(
+    db: Session,
+    *,
+    queue_name: str,
+    run_source: str,
+    run_key: str,
+    task: Callable[..., object],
+    task_kwargs: dict[str, object],
+    total_items: int | None = None,
+    sync_batch_id: str | None = None,
+) -> JobEnqueueResponse:
+    try:
+        current_job_id = active_job_id(queue_name)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"job_queue_unavailable: {exc}") from exc
+    if current_job_id:
+        raise HTTPException(status_code=409, detail=f"another_job_in_progress:{current_job_id}")
+
+    job_id = uuid.uuid4().hex
+    recent_run = create_recent_run(
+        db,
+        owner_id=settings.owner_id,
+        run_source=run_source,
+        run_key=run_key,
+        status="queued",
+        detail=f"Queued on {queue_name}.",
+        job_backend_id=job_id,
+        total_items=total_items,
+        processed_items=0,
+        progress_pct=0.0,
+        queue_name=queue_name,
+        sync_batch_id=sync_batch_id,
+    )
+    db.commit()
+    try:
+        queue = get_queue(queue_name)
+        queue.enqueue(
+            task,
+            kwargs=task_kwargs,
+            job_id=job_id,
+            retry=Retry(max=2, interval=[15, 60]),
+            job_timeout=1800,
+            result_ttl=86400,
+            failure_ttl=604800,
+        )
+    except Exception as exc:
+        recent_run.status = "failed"
+        recent_run.detail = f"Failed to enqueue background job: {exc}"
+        db.commit()
+        raise HTTPException(status_code=503, detail=f"job_enqueue_failed: {exc}") from exc
+    return JobEnqueueResponse(run_key=run_key, job_id=job_id, status="queued")
+
+
+def _enqueue_gmail_sync(db: Session) -> JobEnqueueResponse:
+    sync_batch_id = str(uuid.uuid4())
+    run_key = gmail_sync_run_key(sync_batch_id)
+    return _enqueue_background_job(
+        db,
+        queue_name=GMAIL_SYNC_QUEUE,
+        run_source=RUN_SOURCE_GMAIL_SYNC,
+        run_key=run_key,
+        task=run_gmail_sync_job,
+        task_kwargs={"run_key": run_key, "sync_batch_id": sync_batch_id},
+        sync_batch_id=sync_batch_id,
+    )
+
+
+def _enqueue_nvoids_sync(db: Session, *, max_items: int) -> JobEnqueueResponse:
+    run_key = f"nvoids_sync:job-{uuid.uuid4().hex}"
+    return _enqueue_background_job(
+        db,
+        queue_name=NVOIDS_SYNC_QUEUE,
+        run_source=RUN_SOURCE_NVOIDS_SYNC,
+        run_key=run_key,
+        task=run_nvoids_sync_job,
+        task_kwargs={"run_key": run_key, "max_items": max_items},
+        total_items=max_items,
+    )
+
+
+def _enqueue_automation(payload: AutomationRunRequest | None, db: Session) -> JobEnqueueResponse:
+    run_key = automation_run_key(uuid.uuid4().hex)
+    return _enqueue_background_job(
+        db,
+        queue_name=AUTOMATION_RUN_QUEUE,
+        run_source=RUN_SOURCE_AUTOMATION,
+        run_key=run_key,
+        task=run_automation_job,
+        task_kwargs={"run_key": run_key, "payload": payload.model_dump() if payload else None},
+        total_items=1,
+    )
+
+
 def _get_auto_runner_service() -> AutoRunnerService:
     global auto_runner_service
     if auto_runner_service is None:
         auto_runner_service = AutoRunnerService(
             session_factory=SessionLocal,
             get_settings=_get_settings,
-            run_once=automation_run_once,
-            run_nvoids_once=lambda db, max_items: external_feed_service.sync_nvoids(
-                db,
-                owner_id=settings.owner_id,
-                max_items=max_items,
-            ),
+            run_once=_enqueue_automation,
+            run_nvoids_once=lambda db, max_items: _enqueue_nvoids_sync(db, max_items=max_items),
             action_lock=telegram_action_lock,
             stop_event=auto_runner_stop_event,
         )
@@ -2757,9 +2871,17 @@ def _update_manifest_run_counts(db: Session, run_key: str | None, source_rows: l
     db.commit()
 
 
-@app.post("/gmail/sync", response_model=GmailSyncResponse)
-def gmail_sync(db: Session = Depends(get_db)) -> GmailSyncResponse:
-    response = _get_orchestration_service().sync_gmail(db)
+def _run_gmail_sync(
+    db: Session,
+    *,
+    sync_batch_id: str | None = None,
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> GmailSyncResponse:
+    response = _get_orchestration_service().sync_gmail(
+        db,
+        sync_batch_id=sync_batch_id,
+        progress_callback=progress_callback,
+    )
     user_settings = _get_settings(db)
     if user_settings.feature_role_manifest_enabled:
         rows = db.query(RecruiterEmail).filter(RecruiterEmail.sync_batch_id == response.sync_batch_id).all()
@@ -2776,6 +2898,217 @@ def gmail_sync(db: Session = Depends(get_db)) -> GmailSyncResponse:
                     )
         _update_manifest_run_counts(db, response.run_key, rows)
     return response
+
+
+def _run_automation(
+    payload: AutomationRunRequest | None,
+    db: Session,
+    *,
+    run_key_override: str | None = None,
+) -> AutomationRunResponse:
+    response = _get_orchestration_service().run_once(payload, db, run_key_override=run_key_override)
+    user_settings = _get_settings(db)
+    if user_settings.feature_role_manifest_enabled and response.queued_email_ids:
+        source_rows = (
+            db.query(RecruiterEmail)
+            .filter(RecruiterEmail.id.in_(response.queued_email_ids))
+            .all()
+        )
+        auto_sent_count = response.auto_sent_count or 0
+        auto_send_failed_count = response.auto_send_failed_count or 0
+        dry_run = policy_service.policy_dry_run(
+            policy_service.read_policy_from_settings(user_settings.policy_json)
+        )
+        for source_row in source_rows:
+            if not source_row.is_multi_role_child:
+                try:
+                    detection = retry_role_detection(source_row.id, db)
+                except Exception:
+                    db.rollback()
+                    logger.exception(
+                        "role_manifest_retry_failed source=automation email_id=%s run_key=%r",
+                        source_row.id,
+                        response.run_key,
+                    )
+                    continue
+                if user_settings.feature_auto_send and not dry_run and detection.manifest_status == "single":
+                    try:
+                        _get_orchestration_service().approve_send(
+                            source_row.id,
+                            ApproveSendRequest(),
+                            db,
+                        )
+                        auto_sent_count += 1
+                    except HTTPException:
+                        auto_send_failed_count += 1
+        if user_settings.feature_auto_send:
+            response.auto_sent_count = auto_sent_count
+            response.auto_send_failed_count = auto_send_failed_count
+        _update_manifest_run_counts(db, response.run_key, source_rows)
+    return response
+
+
+def _run_nvoids_sync(
+    db: Session,
+    *,
+    max_items: int,
+    run_key_override: str | None = None,
+    progress_callback: Callable[[int, int], None] | None = None,
+    role_manifest_enabled: bool | None = None,
+):
+    if role_manifest_enabled is None:
+        role_manifest_enabled = bool(_get_settings(db).feature_role_manifest_enabled)
+    existing_source_ids = {
+        row_id
+        for (row_id,) in (
+            db.query(RecruiterEmail.id)
+            .filter(RecruiterEmail.source == "nvoids")
+            .all()
+        )
+    }
+    result = external_feed_service.sync_nvoids(
+        db,
+        owner_id=settings.owner_id,
+        max_items=max_items,
+        run_key_override=run_key_override,
+        progress_callback=progress_callback,
+    )
+    if role_manifest_enabled:
+        rows = (
+            db.query(RecruiterEmail)
+            .filter(RecruiterEmail.source == "nvoids")
+            .all()
+        )
+        rows = [row for row in rows if row.id not in existing_source_ids and not row.is_multi_role_child]
+        for row in rows:
+            try:
+                retry_role_detection(row.id, db)
+            except Exception:
+                db.rollback()
+                logger.exception(
+                    "role_manifest_retry_failed source=nvoids email_id=%s external_message_id=%r run_key=%r",
+                    row.id,
+                    row.external_message_id,
+                    result.run_key,
+                )
+        _update_manifest_run_counts(db, result.run_key, rows)
+    return result
+
+
+@app.get("/jobs/health")
+def jobs_health() -> dict[str, object]:
+    try:
+        ready = redis_is_ready()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"job_queue_unavailable: {exc}") from exc
+    return {"status": "ok" if ready else "unavailable", "redis_ready": ready}
+
+
+@app.post("/jobs/gmail-sync", response_model=JobEnqueueResponse, status_code=202)
+def enqueue_gmail_sync(db: Session = Depends(get_db)) -> JobEnqueueResponse:
+    return _enqueue_gmail_sync(db)
+
+
+@app.post("/jobs/nvoids-sync", response_model=JobEnqueueResponse, status_code=202)
+def enqueue_nvoids_sync(
+    batch_limit: int | None = Query(default=None, ge=1, le=50),
+    db: Session = Depends(get_db),
+) -> JobEnqueueResponse:
+    user_settings = _get_settings(db)
+    if not user_settings.feature_nvoids_enabled:
+        raise HTTPException(status_code=400, detail="Nvoids sync is disabled in settings")
+    resolved_batch_limit = batch_limit if batch_limit is not None else _nvoids_batch_limit(user_settings)
+    return _enqueue_nvoids_sync(db, max_items=resolved_batch_limit)
+
+
+@app.post("/jobs/automation-run", response_model=JobEnqueueResponse, status_code=202)
+def enqueue_automation_run(
+    payload: AutomationRunRequest | None = None,
+    db: Session = Depends(get_db),
+) -> JobEnqueueResponse:
+    return _enqueue_automation(payload, db)
+
+
+@app.get("/jobs/{run_key}", response_model=JobStatusResponse)
+def job_status(run_key: str, db: Session = Depends(get_db)) -> JobStatusResponse:
+    row = (
+        db.query(RecentRun)
+        .filter(RecentRun.owner_id == settings.owner_id, RecentRun.run_key == run_key)
+        .first()
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="job_not_found")
+    payload = row_to_recent_run_dict(row)
+    if row.job_backend_id:
+        try:
+            backend_status = Job.fetch(
+                row.job_backend_id,
+                connection=get_redis_connection(),
+            ).get_status(refresh=True)
+            if backend_status == JobStatus.STARTED:
+                payload["status"] = "running"
+            elif backend_status in {
+                JobStatus.QUEUED,
+                JobStatus.DEFERRED,
+                JobStatus.SCHEDULED,
+            }:
+                payload["status"] = "queued"
+            elif backend_status in {JobStatus.CANCELED, JobStatus.STOPPED}:
+                payload["status"] = "canceled"
+            elif backend_status == JobStatus.FAILED:
+                payload["status"] = "failed"
+        except NoSuchJobError:
+            logger.warning("job_status_backend_record_missing run_key=%r job_id=%r", run_key, row.job_backend_id)
+        except Exception:
+            logger.exception("job_status_backend_lookup_failed run_key=%r job_id=%r", run_key, row.job_backend_id)
+    return JobStatusResponse(**payload, job_id=row.job_backend_id)
+
+
+@app.post("/jobs/{run_key}/cancel", response_model=JobStatusResponse)
+def cancel_job(run_key: str, db: Session = Depends(get_db)) -> JobStatusResponse:
+    row = (
+        db.query(RecentRun)
+        .filter(RecentRun.owner_id == settings.owner_id, RecentRun.run_key == run_key)
+        .first()
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="job_not_found")
+    job: Job | None = None
+    backend_status: JobStatus | None = None
+    if row.job_backend_id:
+        try:
+            job = Job.fetch(row.job_backend_id, connection=get_redis_connection())
+            backend_status = job.get_status(refresh=True)
+        except NoSuchJobError:
+            logger.warning("job_cancel_backend_record_missing run_key=%r job_id=%r", run_key, row.job_backend_id)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"job_cancel_failed: {exc}") from exc
+    backend_cancelable = backend_status in {
+        JobStatus.QUEUED,
+        JobStatus.DEFERRED,
+        JobStatus.SCHEDULED,
+        JobStatus.STARTED,
+    }
+    if row.status not in {"queued", "running"} and not backend_cancelable:
+        raise HTTPException(status_code=409, detail=f"job_not_cancelable:{row.status}")
+    if job is not None:
+        try:
+            if backend_status == JobStatus.STARTED:
+                send_stop_job_command(job.connection, job.id)
+            else:
+                job.cancel()
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"job_cancel_failed: {exc}") from exc
+    row.status = "canceled"
+    row.detail = "Background job canceled."
+    db.commit()
+    db.refresh(row)
+    return JobStatusResponse(**row_to_recent_run_dict(row), job_id=row.job_backend_id)
+
+
+@app.post("/gmail/sync", response_model=GmailSyncResponse)
+def gmail_sync(db: Session = Depends(get_db)) -> GmailSyncResponse:
+    return _run_gmail_sync(db)
 
 
 @app.post("/gmail/oauth/start", response_model=OAuthStartResponse)
@@ -2850,46 +3183,7 @@ def _recruiter_opportunity_response(row: RecruiterOpportunity, recruiter: Recrui
 
 @app.post("/automation/run-once", response_model=AutomationRunResponse)
 def automation_run_once(payload: AutomationRunRequest | None = None, db: Session = Depends(get_db)) -> AutomationRunResponse:
-    response = _get_orchestration_service().run_once(payload, db)
-    user_settings = _get_settings(db)
-    if user_settings.feature_role_manifest_enabled and response.queued_email_ids:
-        source_rows = (
-            db.query(RecruiterEmail)
-            .filter(RecruiterEmail.id.in_(response.queued_email_ids))
-            .all()
-        )
-        auto_sent_count = response.auto_sent_count or 0
-        auto_send_failed_count = response.auto_send_failed_count or 0
-        dry_run = policy_service.policy_dry_run(
-            policy_service.read_policy_from_settings(user_settings.policy_json)
-        )
-        for source_row in source_rows:
-            if not source_row.is_multi_role_child:
-                try:
-                    detection = retry_role_detection(source_row.id, db)
-                except Exception:
-                    db.rollback()
-                    logger.exception(
-                        "role_manifest_retry_failed source=automation email_id=%s run_key=%r",
-                        source_row.id,
-                        response.run_key,
-                    )
-                    continue
-                if user_settings.feature_auto_send and not dry_run and detection.manifest_status == "single":
-                    try:
-                        _get_orchestration_service().approve_send(
-                            source_row.id,
-                            ApproveSendRequest(),
-                            db,
-                        )
-                        auto_sent_count += 1
-                    except HTTPException:
-                        auto_send_failed_count += 1
-        if user_settings.feature_auto_send:
-            response.auto_sent_count = auto_sent_count
-            response.auto_send_failed_count = auto_send_failed_count
-        _update_manifest_run_counts(db, response.run_key, source_rows)
-    return response
+    return _run_automation(payload, db)
 
 
 @app.post("/phase0/emails/ingest", response_model=EmailResponse)
@@ -3684,12 +3978,11 @@ def sync_external_nvoids(
     resolved_batch_limit = batch_limit if batch_limit is not None else _nvoids_batch_limit(user_settings)
     if not telegram_action_lock.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="another_run_in_progress")
-    started_at = datetime.now(UTC)
     try:
-        result = external_feed_service.sync_nvoids(
+        result = _run_nvoids_sync(
             db,
-            owner_id=settings.owner_id,
             max_items=resolved_batch_limit,
+            role_manifest_enabled=bool(user_settings.feature_role_manifest_enabled),
         )
     except Exception as exc:
         logger.exception(
@@ -3702,28 +3995,6 @@ def sync_external_nvoids(
         raise HTTPException(status_code=502, detail=f"nvoids_sync_failed: {exc}") from exc
     finally:
         telegram_action_lock.release()
-    if user_settings.feature_role_manifest_enabled:
-        rows = (
-            db.query(RecruiterEmail)
-            .filter(
-                RecruiterEmail.source == "nvoids",
-                RecruiterEmail.created_at >= started_at,
-                RecruiterEmail.is_multi_role_child.is_(False),
-            )
-            .all()
-        )
-        for row in rows:
-            try:
-                retry_role_detection(row.id, db)
-            except Exception:
-                db.rollback()
-                logger.exception(
-                    "role_manifest_retry_failed source=nvoids email_id=%s external_message_id=%r run_key=%r",
-                    row.id,
-                    row.external_message_id,
-                    result.run_key,
-                )
-        _update_manifest_run_counts(db, result.run_key, rows)
     return ExternalFeedSyncResponse(
         source_type=result.source_type,
         run_key=result.run_key,

@@ -21,6 +21,25 @@ services:
       redis:
         condition: service_healthy
 
+  worker:
+    build:
+      context: ./backend
+    container_name: codejob-worker
+    env_file:
+      - ./backend/.env
+    environment:
+      DATABASE_URL: sqlite:///./data/codejob.db
+      REDIS_URL: redis://redis:6379/0
+      ALLOW_RUNTIME_SCHEMA_PATCH: "false"
+    command: rq worker gmail_sync nvoids_sync automation_run --url redis://redis:6379/0
+    volumes:
+      - backend_data:/app/data
+    depends_on:
+      backend:
+        condition: service_started
+      redis:
+        condition: service_healthy
+
   dashboard:
     build:
       context: ./dashboard

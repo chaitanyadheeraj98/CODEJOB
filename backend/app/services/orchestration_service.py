@@ -29,7 +29,7 @@ from app.job_intent_learning import approved_learning_signals_for_owner, record_
 from app.services import policy_service
 from app.services.policy_service import EffectiveRunInputs
 from app.gmail_client import GmailMessageCandidate, MailAttachment
-from app.models import AttachmentAsset, DraftEditFeedback, GmailRequirementGroup, RecipientRoutingFeedback, RecentRunSkippedItem, RecruiterEmail, ResumeAsset, SyncRun, UserSettings
+from app.models import AttachmentAsset, DraftEditFeedback, GmailRequirementGroup, RecipientRoutingFeedback, RecentRun, RecentRunSkippedItem, RecruiterEmail, ResumeAsset, SyncRun, UserSettings
 from app.parsing import build_skills_json_payload
 from app.phase0 import RoutingResult, parse_email_with_details
 from app.recent_runs import (
@@ -174,7 +174,13 @@ class OrchestrationService:
             for row in rows
         ]
 
-    def sync_gmail(self, db: Session) -> GmailSyncResponse:
+    def sync_gmail(
+        self,
+        db: Session,
+        *,
+        sync_batch_id: str | None = None,
+        progress_callback: Callable[[int, int], None] | None = None,
+    ) -> GmailSyncResponse:
         if not self.deps.is_gmail_configured():
             raise HTTPException(status_code=400, detail="Gmail OAuth is not configured")
 
@@ -182,20 +188,26 @@ class OrchestrationService:
         if not user_settings.enabled:
             raise HTTPException(status_code=400, detail="Pipeline is disabled in settings")
 
-        sync_batch_id = str(uuid.uuid4())
+        sync_batch_id = sync_batch_id or str(uuid.uuid4())
         sync_run = SyncRun(owner_id=self.deps.owner_id, sync_batch_id=sync_batch_id, started_at=datetime.now(UTC))
         db.add(sync_run)
         db.commit()
         run_key = gmail_sync_run_key(sync_batch_id)
-        recent_run = create_recent_run(
-            db,
-            owner_id=self.deps.owner_id,
-            run_source=RUN_SOURCE_GMAIL_SYNC,
-            run_key=run_key,
-            sync_batch_id=sync_batch_id,
-            status="running",
-            detail="Gmail sync started.",
-        )
+        recent_run = db.query(RecentRun).filter(RecentRun.run_key == run_key).first()
+        if recent_run is None:
+            recent_run = create_recent_run(
+                db,
+                owner_id=self.deps.owner_id,
+                run_source=RUN_SOURCE_GMAIL_SYNC,
+                run_key=run_key,
+                sync_batch_id=sync_batch_id,
+                status="running",
+                detail="Gmail sync started.",
+            )
+        else:
+            recent_run.status = "running"
+            recent_run.detail = "Gmail sync started."
+            recent_run.sync_batch_id = sync_batch_id
         db.commit()
 
         imported_count = 0
@@ -209,6 +221,16 @@ class OrchestrationService:
             threshold = self.deps.policy_threshold(user_settings, effective_policy)
             trusted_groups = self._load_enabled_requirement_groups(db) if user_settings.feature_gmail_requirement_groups_enabled else []
             candidates = self.deps.list_unread_candidates_by_query(effective_query)
+            processed_items = 0
+            total_items = len(candidates)
+
+            def report_item() -> None:
+                nonlocal processed_items
+                processed_items += 1
+                db.commit()
+                if progress_callback is not None:
+                    progress_callback(processed_items, total_items)
+
             for item in candidates:
                 existing = (
                     db.query(RecruiterEmail)
@@ -237,6 +259,7 @@ class OrchestrationService:
                             gmail_message_url=existing.gmail_message_url,
                         ),
                     )
+                    report_item()
                     continue
 
                 recruiter_like_warning: str | None = None
@@ -304,6 +327,7 @@ class OrchestrationService:
                             source_group_trusted=trusted_group_context.trusted if trusted_group_context.matched else False,
                         ),
                     )
+                    report_item()
                     continue
                 if recruiter_like_mode in {"block", "warn"} and not is_recruiter_like:
                     recruiter_like_warning = "non_recruiter_like_gmail"
@@ -352,6 +376,7 @@ class OrchestrationService:
                     self.deps.apply_gmail_label_for_email(email=email, candidate_item=item)
                     db.add(email)
                     imported_count += 1
+                    report_item()
                     continue
                 active_resume = self.deps.active_resume(db)
                 resume_selection = self.deps.select_best_resume_match(
@@ -539,6 +564,7 @@ class OrchestrationService:
                     selected_resume.semantic_embedding = resume_embedding_json
                 db.add(email)
                 imported_count += 1
+                report_item()
 
             sync_run.imported_count = imported_count
             sync_run.skipped_count = skipped_count
@@ -584,17 +610,27 @@ class OrchestrationService:
         )
         return response
 
-    def run_once(self, payload: AutomationRunRequest | None, db: Session) -> AutomationRunResponse:
-        raw_run_id = str(uuid.uuid4())
-        run_key = automation_run_key(raw_run_id)
-        recent_run = create_recent_run(
-            db,
-            owner_id=self.deps.owner_id,
-            run_source=RUN_SOURCE_AUTOMATION,
-            run_key=run_key,
-            status="running",
-            detail="Automation run started.",
-        )
+    def run_once(
+        self,
+        payload: AutomationRunRequest | None,
+        db: Session,
+        *,
+        run_key_override: str | None = None,
+    ) -> AutomationRunResponse:
+        run_key = run_key_override or automation_run_key(str(uuid.uuid4()))
+        recent_run = db.query(RecentRun).filter(RecentRun.run_key == run_key).first()
+        if recent_run is None:
+            recent_run = create_recent_run(
+                db,
+                owner_id=self.deps.owner_id,
+                run_source=RUN_SOURCE_AUTOMATION,
+                run_key=run_key,
+                status="running",
+                detail="Automation run started.",
+            )
+        else:
+            recent_run.status = "running"
+            recent_run.detail = "Automation run started."
         db.commit()
         if not self.deps.is_gmail_configured():
             raise HTTPException(status_code=400, detail="Gmail OAuth is not configured")

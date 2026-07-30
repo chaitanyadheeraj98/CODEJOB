@@ -411,6 +411,11 @@ def ensure_sqlite_phase0_columns() -> None:
             ("requirement_count", "ALTER TABLE recent_runs ADD COLUMN requirement_count INTEGER DEFAULT 0"),
             ("multi_role_source_count", "ALTER TABLE recent_runs ADD COLUMN multi_role_source_count INTEGER DEFAULT 0"),
             ("manifest_review_count", "ALTER TABLE recent_runs ADD COLUMN manifest_review_count INTEGER DEFAULT 0"),
+            ("job_backend_id", "ALTER TABLE recent_runs ADD COLUMN job_backend_id VARCHAR(100)"),
+            ("total_items", "ALTER TABLE recent_runs ADD COLUMN total_items INTEGER"),
+            ("processed_items", "ALTER TABLE recent_runs ADD COLUMN processed_items INTEGER DEFAULT 0"),
+            ("progress_pct", "ALTER TABLE recent_runs ADD COLUMN progress_pct FLOAT"),
+            ("queue_name", "ALTER TABLE recent_runs ADD COLUMN queue_name VARCHAR(40)"),
         ]
         for column_name, statement in recent_run_alter_statements:
             if column_name not in existing_recent_runs:
@@ -613,6 +618,11 @@ def ensure_sqlite_phase0_columns() -> None:
                 skipped_count INTEGER DEFAULT 0,
                 failed_count INTEGER DEFAULT 0,
                 skipped_item_count INTEGER DEFAULT 0,
+                job_backend_id VARCHAR(100),
+                total_items INTEGER,
+                processed_items INTEGER DEFAULT 0,
+                progress_pct FLOAT,
+                queue_name VARCHAR(40),
                 created_at DATETIME,
                 updated_at DATETIME
             )

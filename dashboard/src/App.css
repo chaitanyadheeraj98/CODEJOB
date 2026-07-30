@@ -287,6 +287,42 @@
   align-items: center;
 }
 
+.jobProgressGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.jobProgressCard {
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 12px 14px;
+}
+
+.jobProgressCard div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.jobProgressCard span,
+.jobProgressCard p {
+  color: #4e596f;
+  font-size: 13px;
+}
+
+.jobProgressCard progress {
+  width: 100%;
+  height: 12px;
+}
+
+.jobProgressCard p {
+  margin: 7px 0 0;
+}
+
 .queryBucketInline {
   position: relative;
   min-width: 0;

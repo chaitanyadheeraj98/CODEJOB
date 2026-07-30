@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 import json
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import cast
 
@@ -16,7 +17,7 @@ from app.automation.queue_preparation import (
     QueuePreparationRequest,
     prepare_candidate_for_queue,
 )
-from app.models import EmployerNumber, NumberReviewQueue, RecruiterEmail, RecruiterNumber, RecruiterOpportunity, ResumeAsset, UserSettings
+from app.models import EmployerNumber, NumberReviewQueue, RecentRun, RecruiterEmail, RecruiterNumber, RecruiterOpportunity, ResumeAsset, UserSettings
 from app.parsing import build_skills_json_payload
 from app.premium_numbers.phone_normalization import best_display_phone, canonicalize_phone
 from app.phase0 import (
@@ -174,6 +175,8 @@ class ExternalFeedService:
         max_pages: int = 3,
         max_items: int = 10,
         duplicate_stop_threshold: int = 2,
+        run_key_override: str | None = None,
+        progress_callback: Callable[[int, int], None] | None = None,
     ) -> ExternalFeedSyncResult:
         source = self.ensure_nvoids_source(db, owner_id=owner_id)
         user_settings = (
@@ -187,19 +190,25 @@ class ExternalFeedService:
         db.add(run)
         db.commit()
         db.refresh(run)
-        run_key = nvoids_run_key(run.id)
-        recent_run = create_recent_run(
-            db,
-            owner_id=owner_id,
-            run_source=RUN_SOURCE_NVOIDS_SYNC,
-            run_key=run_key,
-            status="running",
-            detail="Nvoids sync started.",
-            skipped_count=0,
-            failed_count=0,
-            skipped_item_count=0,
-            external_scrape_run_id=run.id,
-        )
+        run_key = run_key_override or nvoids_run_key(run.id)
+        recent_run = db.query(RecentRun).filter(RecentRun.run_key == run_key).first()
+        if recent_run is None:
+            recent_run = create_recent_run(
+                db,
+                owner_id=owner_id,
+                run_source=RUN_SOURCE_NVOIDS_SYNC,
+                run_key=run_key,
+                status="running",
+                detail="Nvoids sync started.",
+                skipped_count=0,
+                failed_count=0,
+                skipped_item_count=0,
+                external_scrape_run_id=run.id,
+            )
+        else:
+            recent_run.status = "running"
+            recent_run.detail = "Nvoids sync started."
+            recent_run.external_scrape_run_id = run.id
         db.commit()
         db.refresh(recent_run)
 
@@ -213,6 +222,14 @@ class ExternalFeedService:
         enqueue_attempts = 0
         enqueue_successes = 0
         detail_fetch_fallback_rows = 0
+        processed_items = 0
+
+        def report_item() -> None:
+            nonlocal processed_items
+            processed_items += 1
+            db.commit()
+            if progress_callback is not None:
+                progress_callback(processed_items, max(max_items, processed_items))
 
         if hasattr(self.collector, "reset_detail_fetch_metrics"):
             self.collector.reset_detail_fetch_metrics()
@@ -271,6 +288,7 @@ class ExternalFeedService:
                             row.location,
                             location_filters,
                         )
+                        report_item()
                         continue
                     detail_html = ""
                     detail_url = row.href
@@ -327,6 +345,7 @@ class ExternalFeedService:
                             detail_title_mode,
                             detail_url,
                         )
+                        report_item()
                         continue
                     try:
                         if detail_html.strip():
@@ -351,6 +370,7 @@ class ExternalFeedService:
                             row.href,
                             bool(detail_html.strip()),
                         )
+                        report_item()
                         continue
                     if recruiter_email:
                         parsed = parsed.__class__(
@@ -409,6 +429,7 @@ class ExternalFeedService:
                             parsed.external_post_id,
                             dedupe_hash,
                         )
+                        report_item()
                         continue
 
                     record = ExternalOpportunity(
@@ -465,8 +486,8 @@ class ExternalFeedService:
                             ),
                         )
                     created_count += 1
+                    report_item()
 
-                db.commit()
                 if created_count >= max_items:
                     break
                 if page_deduped >= len(rows):

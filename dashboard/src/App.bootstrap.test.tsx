@@ -134,8 +134,68 @@ describe('Settings bootstrap flow', () => {
   const cleanups: Array<() => void> = []
 
   afterEach(() => {
+    vi.useRealTimers()
     while (cleanups.length) cleanups.pop()?.()
     vi.restoreAllMocks()
+  })
+
+  it('enqueues automation, renders native progress, and polls to completion', async () => {
+    vi.useFakeTimers()
+    let jobPolls = 0
+    const baseFetch = makeAppFetch()
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/jobs/automation-run') && init?.method === 'POST') {
+        return makeResponse({ run_key: 'automation_run:test-job', job_id: 'job-1', status: 'queued' })
+      }
+      if (url.includes('/jobs/automation_run%3Atest-job')) {
+        jobPolls += 1
+        const complete = jobPolls > 1
+        return makeResponse({
+          run_key: 'automation_run:test-job',
+          job_id: 'job-1',
+          status: complete ? 'ok' : 'running',
+          detail: complete ? 'Automation complete.' : 'Processing candidates.',
+          processed_items: complete ? 1 : 0,
+          total_items: 1,
+          progress_pct: complete ? 100 : 25,
+          queue_name: 'automation_run',
+        })
+      }
+      return baseFetch(input, init)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+    })
+
+    await act(async () => {
+      root.render(<App />)
+      await flushPromises(8)
+    })
+    const runButton = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'Sync + Queue')
+    expect(runButton).toBeTruthy()
+
+    await act(async () => {
+      runButton?.click()
+      await flushPromises(10)
+    })
+    const progress = container.querySelector('progress') as HTMLProgressElement | null
+    expect(progress?.value).toBe(25)
+    expect(container.textContent ?? '').toContain('Processing candidates.')
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500)
+      await flushPromises(10)
+    })
+    expect((container.querySelector('progress') as HTMLProgressElement | null)?.value).toBe(100)
+    expect(container.textContent ?? '').toContain('Automation complete.')
+    expect(runButton?.hasAttribute('disabled')).toBe(false)
   })
 
   it('hydrates settings-domain data together from the bootstrap payload', async () => {

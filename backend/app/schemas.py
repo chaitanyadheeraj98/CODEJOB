@@ -891,9 +891,24 @@ class RecentRunResponse(BaseModel):
     requirement_count: int = 0
     multi_role_source_count: int = 0
     manifest_review_count: int = 0
+    job_backend_id: str | None = None
+    total_items: int | None = None
+    processed_items: int = 0
+    progress_pct: float | None = None
+    queue_name: str | None = None
     sync_batch_id: str | None = None
     external_scrape_run_id: int | None = None
     created_at: datetime
+
+
+class JobEnqueueResponse(BaseModel):
+    run_key: str
+    job_id: str
+    status: str
+
+
+class JobStatusResponse(RecentRunResponse):
+    job_id: str | None = None
 
 
 class RecentRunListResponse(BaseModel):

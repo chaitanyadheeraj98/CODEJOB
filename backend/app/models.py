@@ -321,6 +321,11 @@ class RecentRun(Base):
     requirement_count: Mapped[int] = mapped_column(Integer, default=0)
     multi_role_source_count: Mapped[int] = mapped_column(Integer, default=0)
     manifest_review_count: Mapped[int] = mapped_column(Integer, default=0)
+    job_backend_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    total_items: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    processed_items: Mapped[int] = mapped_column(Integer, default=0)
+    progress_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    queue_name: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 

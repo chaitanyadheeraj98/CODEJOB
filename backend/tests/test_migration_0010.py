@@ -57,7 +57,7 @@ class StrictCandidateScreeningMigrationTests(unittest.TestCase):
             self.assertIsNone(mode)
             upgraded.dispose()
 
-    def test_fresh_sqlite_upgrade_reaches_0010(self) -> None:
+    def test_fresh_sqlite_upgrade_reaches_async_job_progress_head(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database_path = Path(directory) / "fresh.db"
             database_url = f"sqlite:///{database_path.as_posix()}"
@@ -75,7 +75,7 @@ class StrictCandidateScreeningMigrationTests(unittest.TestCase):
                 inspector = sa.inspect(engine)
                 with engine.connect() as connection:
                     revision = connection.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one()
-                self.assertEqual(revision, "20260723_0010")
+                self.assertEqual(revision, "20260730_0011")
                 self.assertIn(
                     "feature_strict_candidate_screening_enabled",
                     {column["name"] for column in inspector.get_columns("user_settings")},
@@ -83,6 +83,11 @@ class StrictCandidateScreeningMigrationTests(unittest.TestCase):
                 self.assertIn(
                     "screening_mode",
                     {column["name"] for column in inspector.get_columns("recruiter_emails")},
+                )
+                recent_run_columns = {column["name"] for column in inspector.get_columns("recent_runs")}
+                self.assertTrue(
+                    {"job_backend_id", "total_items", "processed_items", "progress_pct", "queue_name"}
+                    <= recent_run_columns
                 )
             finally:
                 engine.dispose()

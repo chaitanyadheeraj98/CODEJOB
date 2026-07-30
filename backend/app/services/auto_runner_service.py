@@ -9,8 +9,6 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models import UserSettings
-from app.schemas import AutomationRunResponse
-
 logger = logging.getLogger(__name__)
 
 
@@ -20,7 +18,7 @@ class AutoRunnerService:
         *,
         session_factory: Callable[[], Session],
         get_settings: Callable[[Session], UserSettings],
-        run_once: Callable[[object | None, Session], AutomationRunResponse],
+        run_once: Callable[[object | None, Session], object],
         run_nvoids_once: Callable[[Session, int], object],
         action_lock: Lock,
         stop_event: Event,
@@ -60,11 +58,10 @@ class AutoRunnerService:
                         try:
                             result = self._run_once(None, db)
                             logger.info(
-                                "Auto runner completed: status=%s matched=%s queued=%s failed=%s",
-                                result.status,
-                                result.matched_count,
-                                result.queued_count,
-                                result.failed_count,
+                                "Auto runner enqueued: status=%s job_id=%s run_key=%s",
+                                getattr(result, "status", None),
+                                getattr(result, "job_id", None),
+                                getattr(result, "run_key", None),
                             )
                         except HTTPException as exc:
                             logger.warning("Auto runner skipped/failed: status=%s detail=%s", exc.status_code, exc.detail)
@@ -79,11 +76,10 @@ class AutoRunnerService:
                         try:
                             result = self._run_nvoids_once(db, nvoids_limit)
                             logger.info(
-                                "Auto nvoids sync completed: fetched=%s created=%s deduped=%s failed=%s",
-                                getattr(result, "fetched_count", None),
-                                getattr(result, "created_count", None),
-                                getattr(result, "deduped_count", None),
-                                getattr(result, "failed_count", None),
+                                "Auto nvoids sync enqueued: status=%s job_id=%s run_key=%s",
+                                getattr(result, "status", None),
+                                getattr(result, "job_id", None),
+                                getattr(result, "run_key", None),
                             )
                         except HTTPException as exc:
                             logger.warning("Auto nvoids sync skipped/failed: status=%s detail=%s", exc.status_code, exc.detail)

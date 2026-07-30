@@ -418,6 +418,23 @@ type RecentRunCard = AutomationRunResponse & {
   skipped_items_error?: string | null
 }
 
+type BackgroundJob = {
+  run_key: string
+  job_id: string | null
+  status: string
+  detail: string
+  processed_items: number
+  total_items: number | null
+  progress_pct: number | null
+  queue_name: string | null
+}
+
+type JobEnqueueResponse = {
+  run_key: string
+  job_id: string
+  status: string
+}
+
 type RecentRunListResponse = {
   items: RecentRunCard[]
   next_cursor?: number | null
@@ -2225,6 +2242,8 @@ function App() {
   const [jobIntentActionKey, setJobIntentActionKey] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
   const [nvoidsRunning, setNvoidsRunning] = useState(false)
+  const [automationJob, setAutomationJob] = useState<BackgroundJob | null>(null)
+  const [nvoidsJob, setNvoidsJob] = useState<BackgroundJob | null>(null)
   const [oauthInProgress, setOauthInProgress] = useState(false)
   const [oauthAuthorizationUrl, setOauthAuthorizationUrl] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -3026,6 +3045,66 @@ function App() {
   }, [running])
 
   useEffect(() => {
+    const pendingJobs = [
+      automationJob ? { kind: 'automation' as const, job: automationJob } : null,
+      nvoidsJob ? { kind: 'nvoids' as const, job: nvoidsJob } : null,
+    ].filter((item): item is { kind: 'automation' | 'nvoids'; job: BackgroundJob } => item !== null)
+      .filter(({ job }) => job.status === 'queued' || job.status === 'running')
+    if (pendingJobs.length === 0) return
+
+    let canceled = false
+    let timerId: number | null = null
+    const poll = async () => {
+      const results = await Promise.all(pendingJobs.map(async ({ kind, job }) => {
+        const response = await fetch(`${apiBase}/jobs/${encodeURIComponent(job.run_key)}`)
+        if (!response.ok) throw new Error(`Failed to load ${kind} job progress`)
+        return { kind, job: (await response.json()) as BackgroundJob }
+      }))
+      if (canceled) return
+
+      let terminal = false
+      for (const result of results) {
+        const isTerminal = result.job.status !== 'queued' && result.job.status !== 'running'
+        if (result.kind === 'automation') {
+          setAutomationJob(result.job)
+          if (isTerminal) setRunning(false)
+        } else {
+          setNvoidsJob(result.job)
+          if (isTerminal) setNvoidsRunning(false)
+        }
+        terminal = terminal || isTerminal
+        if (result.job.status === 'failed' || result.job.status === 'canceled') {
+          setError(result.job.detail)
+        }
+      }
+
+      if (terminal) {
+        await Promise.all([
+          loadStatus(),
+          loadAiStatus(),
+          refreshVisibleCandidates(settings.mail_date ?? null, { activeOnly: false }),
+          loadPremiumNumbers(),
+          loadRecentRuns(settings.mail_date ?? null),
+          loadSettingsBootstrap(),
+        ])
+      }
+      if (!canceled && results.some(({ job }) => job.status === 'queued' || job.status === 'running')) {
+        timerId = window.setTimeout(() => {
+          poll().catch((e) => setError((e as Error).message))
+        }, 1500)
+      }
+    }
+
+    poll().catch((e) => setError((e as Error).message))
+    return () => {
+      canceled = true
+      if (timerId !== null) window.clearTimeout(timerId)
+    }
+    // Polling intentionally keys only on job identity; the loop carries each fresh status forward.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [automationJob?.run_key, nvoidsJob?.run_key])
+
+  useEffect(() => {
     return () => {
       if (refreshTimerRef.current !== null) {
         window.clearTimeout(refreshTimerRef.current)
@@ -3309,56 +3388,27 @@ function App() {
     setRunning(true)
     setError('')
     try {
-      const controller = new AbortController()
-      const timeoutMs = settings.feature_ai_enabled ? 90000 : 45000
-      const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs)
-      const res = await fetch(`${apiBase}/automation/run-once`, {
+      const res = await fetch(`${apiBase}/jobs/automation-run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mail_date: settings.mail_date || null }),
-        signal: controller.signal,
       })
-      window.clearTimeout(timeoutId)
       if (!res.ok) {
         const details = await res.json().catch(() => null)
         throw new Error(details?.detail ?? 'Automation run failed')
       }
-      const data = (await res.json()) as AutomationRunResponse
-      setLogs((prev) => [
-        {
-          ...data,
-          run_source: data.run_source ?? 'automation_run',
-          skipped_item_count: data.skipped_item_count ?? data.skipped_count ?? 0,
-          skipped_items: [],
-          skipped_items_loaded: false,
-          skipped_items_loading: false,
-          skipped_items_error: null,
-        },
-        ...prev.filter((item) => item.run_key !== data.run_key),
-      ].slice(0, RECENT_RUNS_LIMIT))
-      if (data.status === 'oauth_required' || data.status === 'oauth_in_progress') {
-        setError(data.detail)
-      }
-      await loadStatus()
-      await loadAiStatus()
-      await loadTelegramStatus()
-      await refreshVisibleCandidates(settings.mail_date ?? null, { activeOnly: false })
-      await loadProductivityAnalytics(timeRange)
+      const data = (await res.json()) as JobEnqueueResponse
+      setAutomationJob({
+        ...data,
+        detail: 'Waiting for the automation worker.',
+        processed_items: 0,
+        total_items: 1,
+        progress_pct: 0,
+        queue_name: 'automation_run',
+      })
       await loadRecentRuns(settings.mail_date ?? null)
-      await loadSettingsBootstrap()
     } catch (e) {
-      if ((e as Error).name === 'AbortError') {
-        if (!status?.authenticated) {
-          setError('Request timed out. Gmail OAuth may be waiting in backend logs. Complete Google sign-in, then retry.')
-        } else if (settings.feature_ai_enabled && aiStatus?.connected) {
-          setError('AI reply generation is taking longer than expected. The backend may still finish; wait a moment, then refresh the queue.')
-        } else {
-          setError('Sync is taking longer than expected. Wait a moment, then retry Sync + Queue.')
-        }
-      } else {
-        setError((e as Error).message)
-      }
-    } finally {
+      setError((e as Error).message)
       setRunning(false)
     }
   }
@@ -3371,37 +3421,25 @@ function App() {
     try {
       const params = new URLSearchParams()
       params.set('batch_limit', String(Math.max(1, Math.min(settings.nvoids_batch_limit || 10, 50))))
-      const res = await fetch(`${apiBase}/external-feeds/nvoids/sync?${params.toString()}`, {
+      const res = await fetch(`${apiBase}/jobs/nvoids-sync?${params.toString()}`, {
         method: 'POST',
       })
       if (!res.ok) {
         const details = await res.json().catch(() => null)
         throw new Error(details?.detail ?? 'Nvoids sync failed')
       }
-      const data = (await res.json()) as { source_type: string; run_key?: string | null; fetched_count: number; created_count: number; deduped_count: number; failed_count: number; skipped_location_count: number }
-      setLogs((prev) => [
-        {
-          run_key: data.run_key ?? null,
-          run_source: 'nvoids_sync',
-          status: 'ok',
-          detail: `nvoids sync complete: fetched=${data.fetched_count} created=${data.created_count} deduped=${data.deduped_count} skipped_location=${data.skipped_location_count} failed=${data.failed_count}`,
-          skipped_count: data.skipped_location_count,
-          failed_count: data.failed_count,
-          skipped_item_count: data.skipped_location_count,
-          email_id: null,
-          skipped_items: [],
-          skipped_items_loaded: false,
-          skipped_items_loading: false,
-          skipped_items_error: null,
-        },
-        ...prev.filter((item) => item.run_key !== data.run_key),
-      ].slice(0, RECENT_RUNS_LIMIT))
-      await refreshVisibleCandidates(settings.mail_date ?? null, { activeOnly: false })
-      await loadPremiumNumbers()
+      const data = (await res.json()) as JobEnqueueResponse
+      setNvoidsJob({
+        ...data,
+        detail: 'Waiting for the Nvoids worker.',
+        processed_items: 0,
+        total_items: Math.max(1, Math.min(settings.nvoids_batch_limit || 10, 50)),
+        progress_pct: 0,
+        queue_name: 'nvoids_sync',
+      })
       await loadRecentRuns(settings.mail_date ?? null)
     } catch (e) {
       setError((e as Error).message)
-    } finally {
       setNvoidsRunning(false)
     }
   }
@@ -3879,7 +3917,7 @@ function App() {
               type="button"
               className="btnMuted"
               onClick={runNvoidsSync}
-              disabled={nvoidsRunning || running || !settings.feature_nvoids_enabled}
+              disabled={nvoidsRunning || !settings.feature_nvoids_enabled}
             >
               {nvoidsRunning ? 'Nvoids Syncing...' : 'Sync Nvoids'}
             </button>
@@ -3988,11 +4026,27 @@ function App() {
               type="button"
               className="syncBtn topBarAction"
               onClick={runNvoidsSync}
-              disabled={nvoidsRunning || running || !settings.feature_nvoids_enabled}
+              disabled={nvoidsRunning || !settings.feature_nvoids_enabled}
             >
               {nvoidsRunning ? 'Syncing Nvoids...' : 'Sync + Queue Nvoids'}
             </button>
           </section>
+          {automationJob || nvoidsJob ? (
+            <section className="jobProgressGrid" aria-label="Background job progress">
+              {[automationJob, nvoidsJob].filter((job): job is BackgroundJob => job !== null).map((job) => (
+                <article className="jobProgressCard" key={job.run_key}>
+                  <div>
+                    <strong>{job.queue_name === 'nvoids_sync' ? 'Nvoids sync' : 'Gmail automation'}</strong>
+                    <span>{job.status} · {job.processed_items}/{job.total_items ?? '?'}</span>
+                  </div>
+                  <progress max={100} value={job.progress_pct ?? 0}>
+                    {job.progress_pct ?? 0}%
+                  </progress>
+                  <p>{job.detail}</p>
+                </article>
+              ))}
+            </section>
+          ) : null}
 
           {activePage === 'run_queue' ? (
             <section className="liveMonitorCard">
@@ -4982,7 +5036,7 @@ function App() {
                   <button
                     type="button"
                     onClick={runNvoidsSync}
-                    disabled={nvoidsRunning || running || !settings.feature_nvoids_enabled}
+                    disabled={nvoidsRunning || !settings.feature_nvoids_enabled}
                   >
                     {nvoidsRunning ? 'Running Nvoids Sync...' : 'Run Nvoids Sync Now'}
                   </button>
