@@ -430,10 +430,11 @@ class RoleManifestService:
             )
             previous_end = role.end_line
 
-        for constraint in manifest.shared_constraints:
+        for constraint in list(manifest.shared_constraints):
             if constraint.end_line < constraint.start_line or constraint.end_line > len(lines):
-                raise ValueError("Shared constraint boundary is invalid")
+                manifest.shared_constraints.remove(constraint)
+                continue
             evidence = "\n".join(lines[constraint.start_line - 1 : constraint.end_line]).strip()
             if not evidence or constraint.value.casefold() not in evidence.casefold():
-                raise ValueError("Shared constraint is not evidence-backed")
+                manifest.shared_constraints.remove(constraint)
         return tuple(requirements)
