@@ -1342,8 +1342,11 @@ class OrchestrationService:
         resume_picker_candidates_json = cast(str | None, getattr(resume_selection, "candidate_rankings_json", None))
         resume_picker_breakdown_json = cast(str | None, getattr(resume_selection, "picker_breakdown_json", None))
 
+        existing_routing_usable = bool((email.recipient_email or "").strip() and (email.cc_email or "").strip())
         routing_decision = None
         if payload.preserve_manual_routing and email.routing_confirmed:
+            routing_decision = self._manual_routing_decision(email)
+        elif email.source == "nvoids" and existing_routing_usable:
             routing_decision = self._manual_routing_decision(email)
 
         preparation = prepare_candidate_for_queue(

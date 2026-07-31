@@ -480,12 +480,13 @@ class CandidateRegenerateTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400, response.text)
         self.assertEqual(response.json()["detail"], "Candidate is in terminal state")
 
-    def test_regenerate_nvoids_reuses_external_context(self) -> None:
+    def test_regenerate_nvoids_reuses_external_context_and_preserves_safe_routing(self) -> None:
         original_parse_with_details = main.parse_email_with_details
         original_select_best_resume_match = main._select_best_resume_match
         original_compute_blended = main._compute_blended_ai_score
         original_hard_filter_check = main.hard_filter_check
         original_generate_reply = main.generate_reply_with_ai_or_fallback
+        original_eval_routing = main._evaluate_routing_policy
         original_parse_nvoids_detail = orchestration_module.parse_nvoids_detail
         captured_kwargs: dict[str, object] = {}
         try:
@@ -559,6 +560,9 @@ class CandidateRegenerateTests(unittest.TestCase):
                 ai_error=None,
                 resume_context_status="full",
             )
+            main._evaluate_routing_policy = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("routing evaluation should be skipped for safe Nvoids routing")
+            )
 
             response = self.client.post(
                 f"/candidates/{email.id}/regenerate",
@@ -572,12 +576,16 @@ class CandidateRegenerateTests(unittest.TestCase):
             assert isinstance(source_hints, dict)
             self.assertEqual(source_hints.get("canonical_title"), "Senior Java Developer")
             self.assertEqual(source_hints.get("ai_input_source"), "nvoids_detail_table_row_3")
+            self.assertEqual(response.json()["recipient_email"], "saved-to@example.com")
+            self.assertEqual(response.json()["cc_email"], "saved-cc@example.com")
+            self.assertEqual(response.json()["state"], "needs_review")
         finally:
             main.parse_email_with_details = original_parse_with_details
             main._select_best_resume_match = original_select_best_resume_match
             main._compute_blended_ai_score = original_compute_blended
             main.hard_filter_check = original_hard_filter_check
             main.generate_reply_with_ai_or_fallback = original_generate_reply
+            main._evaluate_routing_policy = original_eval_routing
             orchestration_module.parse_nvoids_detail = original_parse_nvoids_detail
 
 

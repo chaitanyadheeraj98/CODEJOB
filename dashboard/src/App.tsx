@@ -5262,16 +5262,17 @@ function App() {
           {failedQueue.length === 0 ? <p className="subtle">No failed emails.</p> : null}
           {failedQueue.map((item) => {
             const fix = routingFixes[item.id] ?? { to: '', cc: '' }
+            const openUrl = sourceListingUrl(item) ?? item.gmail_message_url
             return (
               <article key={`failed-${item.id}`} className="emailItem">
                 <p><strong>Email ID:</strong> {item.id}</p>
                 <p><strong>From:</strong> {item.sender}</p>
                 <p><strong>Subject:</strong> {item.subject}</p>
-                {item.gmail_message_url ? (
+                {openUrl ? (
                   <p>
                     <strong>Open:</strong>{' '}
-                    <a href={item.gmail_message_url} target="_blank" rel="noreferrer">
-                      Open exact email in Gmail
+                    <a href={openUrl} target="_blank" rel="noreferrer">
+                      {item.source === 'nvoids' ? 'Open Original Post' : 'Open exact email in Gmail'}
                     </a>
                   </p>
                 ) : null}

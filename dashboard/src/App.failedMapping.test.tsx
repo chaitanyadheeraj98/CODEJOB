@@ -106,6 +106,16 @@ describe('Failed Mapping delete flow', () => {
         updated_at: '2026-06-28T10:00:00Z',
       },
     ]
+    failedItems.push({
+      ...failedItems[0],
+      id: 102,
+      sender: 'Nvoids Recruiter <nvoids@example.com>',
+      subject: 'Nvoids role needing routing help',
+      source: 'nvoids',
+      external_message_id: 'nvoids:3566946',
+      external_thread_id: 'https://nvoids.com/job_details.jsp?id=3566946',
+      gmail_message_url: '',
+    })
 
     vi.stubGlobal('confirm', vi.fn(() => true))
 
@@ -260,6 +270,10 @@ describe('Failed Mapping delete flow', () => {
 
     expect(container.textContent ?? '').toContain('Failed Recipient Mapping (Teach the model)')
     expect(container.textContent ?? '').toContain('Delete')
+    const nvoidsLink = Array.from(container.querySelectorAll('a')).find(
+      (link) => link.textContent === 'Open Original Post',
+    )
+    expect(nvoidsLink?.getAttribute('href')).toBe('https://nvoids.com/job_details.jsp?id=3566946')
 
     const deleteButton = Array.from(container.querySelectorAll('button')).find((button) =>
       button.textContent?.includes('Delete'),
