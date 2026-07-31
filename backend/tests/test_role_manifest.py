@@ -154,6 +154,62 @@ class RoleManifestServiceTests(unittest.TestCase):
         self.assertEqual(result.diagnostics.finish_reason, "length")
         self.assertEqual(create.call_count, 1)
 
+    def test_shared_constraint_without_evidence_is_dropped_not_invalid(self) -> None:
+        payload = {
+            "classification": "single",
+            "role_count": 1,
+            "confidence": 0.95,
+            "shared_constraints": [
+                {"type": "location", "value": "Remote", "start_line": 1, "end_line": 1},
+            ],
+            "roles": [
+                {
+                    "index": 1,
+                    "title_hint": "Senior Engineer",
+                    "start_line": 1,
+                    "end_line": 2,
+                    "confidence": 0.95,
+                }
+            ],
+        }
+
+        def provider(_system: str, _user: str):
+            return payload
+
+        result = RoleManifestService(provider=provider, repair_attempts=0).detect(
+            "Senior Engineer position\nFull time role"
+        )
+
+        self.assertEqual(result.status, "single")
+        self.assertIsNone(result.error)
+        self.assertEqual(result.inherited_constraints, ())
+        self.assertEqual(len(result.requirements), 1)
+
+    def test_local_validation_failure_maps_to_validation_failure_category(self) -> None:
+        payload = {
+            "classification": "single",
+            "role_count": 1,
+            "confidence": 0.50,
+            "roles": [
+                {
+                    "index": 1,
+                    "title_hint": "Senior Engineer",
+                    "start_line": 1,
+                    "end_line": 1,
+                    "confidence": 0.95,
+                }
+            ],
+        }
+
+        def provider(_system: str, _user: str):
+            return payload
+
+        result = RoleManifestService(provider=provider, repair_attempts=0).detect("Senior Engineer position")
+
+        self.assertEqual(result.status, "invalid")
+        self.assertEqual(result.diagnostics.error_category, "validation_failure")
+        self.assertEqual(result.error, "Manifest confidence is below threshold")
+
     def test_instructor_retry_surfaces_specific_validation_error(self) -> None:
         valid = {
             "classification": "single",

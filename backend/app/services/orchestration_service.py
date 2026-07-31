@@ -989,25 +989,23 @@ class OrchestrationService:
                 if retry_structural_block or retry_strict_block or retry_historical_safety_block:
                     retry_skipped_count += 1
                     continue
-                email.state = "needs_review"
-                email.last_error = None
-                email.skip_reason = None
-                email.decision = "Qualified"
-                email.decision_reason = "Recovered by retry queue routing refresh"
-                email.approval_status = "pending"
-                email.sent_status = "not_sent"
-                retry_promoted_count += 1
-                self.deps.record_productivity_event(
-                    db,
-                    event_type="needs_review_marked",
-                    event_source="state",
-                    entity_id=email.id,
-                    metadata={"source": "retry_queue"},
-                )
+                try:
+                    self.regenerate_candidate(email.id, RegenerateCandidateRequest(), db)
+                    retry_promoted_count += 1
+                    self.deps.record_productivity_event(
+                        db,
+                        event_type="needs_review_marked",
+                        event_source="state",
+                        entity_id=email.id,
+                        metadata={"source": "retry_queue"},
+                    )
+                except Exception:
+                    db.rollback()
+                    logger.exception("retry_failed_queue_regenerate_failed email_id=%s", email.id)
+                    retry_skipped_count += 1
             else:
                 retry_skipped_count += 1
-        if failed_items:
-            db.commit()
+        db.commit()
         return retry_promoted_count, retry_skipped_count
 
     def approve_send(self, email_id: int, payload: ApproveSendRequest, db: Session) -> RecruiterEmail:
@@ -1445,6 +1443,10 @@ class OrchestrationService:
         if preparation.routing_decision is not None:
             self.deps.apply_routing_decision(email, preparation.routing_decision)
         email.routing_confirmed = bool(routing_decision is not None and payload.preserve_manual_routing and not routing_decision.should_mark_failed)
+
+        email.qualification_result = preparation.qualification_result
+        email.blocking_rule = preparation.blocking_rule
+        email.qualification_detail = preparation.qualification_detail
 
         if preparation.outcome == "routing_failed":
             email.state = "failed"

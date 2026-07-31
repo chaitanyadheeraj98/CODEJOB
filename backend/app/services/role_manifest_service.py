@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import time
 from dataclasses import dataclass, field, replace
@@ -14,6 +15,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from app.ai.deepseek_client import DeepSeekJSONError, DeepSeekJSONResult, build_deepseek_instructor_client
 from app.config import settings
 
+
+logger = logging.getLogger(__name__)
 
 MIN_MANIFEST_CONFIDENCE = 0.85
 MAX_ROLES_PER_SOURCE = 10
@@ -181,6 +184,8 @@ def _error_category(exc: Exception) -> str:
         return "schema_failure"
     if "json" in text:
         return "malformed_json"
+    if isinstance(exc, ValueError):
+        return "validation_failure"
     return "provider_error"
 
 
@@ -288,6 +293,11 @@ class RoleManifestService:
 
         elapsed = int((time.perf_counter() - started) * 1000)
         failure = last_error or RuntimeError("manifest failure")
+        logger.warning(
+            "role_manifest_detect_failed category=%s error=%s",
+            _error_category(failure),
+            _safe_error_message(failure),
+        )
         return RoleManifestResult(
             status="invalid",
             diagnostics=_failure_diagnostics(
@@ -314,6 +324,11 @@ class RoleManifestService:
                 )
                 manifest = RoleManifest.model_validate(payload)
             except (RuntimeError, ValueError, ValidationError, InstructorError) as exc:
+                logger.warning(
+                    "role_manifest_detect_large_source_failed category=%s error=%s",
+                    _error_category(exc),
+                    _safe_error_message(exc),
+                )
                 return RoleManifestResult(
                     status="invalid",
                     diagnostics=_failure_diagnostics(
@@ -377,6 +392,7 @@ class RoleManifestService:
         try:
             requirements = self._validate_and_materialize(merged, lines)
         except ValueError as exc:
+            logger.warning("role_manifest_merge_validation_failed error=%s", str(exc))
             return RoleManifestResult(status="invalid", manifest=merged, error=str(exc))
         combined_hash = hashlib.sha256("|".join(response_hashes).encode("utf-8")).hexdigest()
         return RoleManifestResult(

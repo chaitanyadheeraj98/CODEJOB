@@ -55,6 +55,8 @@ class RequirementExpansionService:
         if manifest_result.status == "single":
             parent.requirement_count = 1
             parent.requirement_index = 1
+            if parent.sendability_status == "manifest_review":
+                parent.sendability_status = None
             db.commit()
             return ExpansionResult(parent.id, "single", 1)
 

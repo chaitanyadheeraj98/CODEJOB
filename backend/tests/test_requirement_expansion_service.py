@@ -63,6 +63,47 @@ class RequirementExpansionServiceTests(unittest.TestCase):
             self.assertTrue(all("&amp;" not in child.role for child in children))
             self.assertEqual(parent.sendability_status, "superseded_multi_role")
 
+    def test_single_reclassification_clears_stale_manifest_review_status(self) -> None:
+        engine = create_engine("sqlite+pysqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        single_payload = {
+            "classification": "single",
+            "role_count": 1,
+            "confidence": 0.95,
+            "roles": [
+                {
+                    "index": 1,
+                    "title_hint": "AI Pod Product Owner",
+                    "start_line": 1,
+                    "end_line": 1,
+                    "confidence": 0.95,
+                }
+            ],
+        }
+        manifest = RoleManifestService(provider=lambda system, user: single_payload).detect("AI Pod Product Owner role")
+
+        with Session(engine) as db:
+            parent = RecruiterEmail(
+                owner_id="default-owner",
+                sender="recruiter@example.com",
+                subject="Single role",
+                body="AI Pod Product Owner role",
+                role="AI Pod Product Owner",
+                state="needs_review",
+                decision="Qualified",
+                external_message_id="gmail-message-single-1",
+                source="gmail",
+                sendability_status="manifest_review",
+                role_manifest_status="invalid",
+            )
+            db.add(parent)
+            db.commit()
+
+            result = RequirementExpansionService().expand(db, parent, manifest, materialize=True)
+
+            self.assertEqual(result.manifest_status, "single")
+            self.assertIsNone(parent.sendability_status)
+
     def test_reprocessing_multi_role_parent_does_not_duplicate_children(self) -> None:
         engine = create_engine("sqlite+pysqlite:///:memory:")
         Base.metadata.create_all(engine)
