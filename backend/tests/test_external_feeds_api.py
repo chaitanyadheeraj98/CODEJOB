@@ -1044,6 +1044,26 @@ Job ID: ENG-2"""
         self.assertIsInstance(payload["pending_job_intent_signals"], list)
         self.assertIsInstance(payload["approved_job_intent_signals"], list)
 
+    def test_settings_bootstrap_can_defer_learning_queues(self) -> None:
+        with (
+            patch.object(
+                main,
+                "_list_pending_unknown_skills",
+                side_effect=AssertionError("pending skills should be deferred"),
+            ),
+            patch.object(
+                main,
+                "_list_job_intent_entries",
+                side_effect=AssertionError("job intent queues should be deferred"),
+            ),
+        ):
+            response = self.client.get("/settings/bootstrap?include_learning_data=false")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["pending_skills"], [])
+        self.assertEqual(response.json()["pending_job_intent_signals"], [])
+        self.assertEqual(response.json()["approved_job_intent_signals"], [])
+
     def test_settings_reject_invalid_preferred_employer_cc_email(self) -> None:
         res = self.client.put(
             "/settings",

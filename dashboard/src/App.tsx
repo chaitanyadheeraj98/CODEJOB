@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import Sidebar from './components/Sidebar'
 import TrustedGmailGroupsPanel, { type TrustedGmailGroup } from './features/gmail_groups/TrustedGmailGroupsPanel'
@@ -12,6 +12,7 @@ const GMAIL_OAUTH_POLL_INTERVAL_MS = 2000
 const GMAIL_OAUTH_POLL_TIMEOUT_MS = 180000
 const VIEW_EVENT_THROTTLE_MS = 60000
 const PREMIUM_PAGE_LIMIT = 25
+const SETTINGS_REVIEW_BATCH_SIZE = 50
 export const DRAFT_TEXT_SIZE_OPTIONS = ['small', 'normal', 'large', 'huge'] as const
 export type DraftTextSize = (typeof DRAFT_TEXT_SIZE_OPTIONS)[number]
 type NvoidsDetailTitleMode = 'job_details' | 'hotlist_details' | 'all'
@@ -576,7 +577,12 @@ export function ResumeDatabaseSection({
             : 'No legacy current fallback resume is available yet.'}
         </p>
         <div className="stack resumeDatabaseUpload">
-          <input type="file" accept=".pdf,.doc,.docx" onChange={(e) => setResumeFile(e.target.files?.[0] ?? null)} />
+          <input
+            type="file"
+            accept=".pdf,.doc,.docx"
+            aria-label="Upload resume file"
+            onChange={(e) => setResumeFile(e.target.files?.[0] ?? null)}
+          />
           <label className="resumeDatabaseField">
             <span>Resume Skills</span>
             <textarea
@@ -694,7 +700,13 @@ export function SkillUpgradeSection({
   approveSkill,
   dismissSkill,
 }: SkillUpgradeSectionProps) {
-  const actionablePendingSkills = pendingSkills.filter((skill) => !isSuspiciousPendingSkillName(skill.skill_name))
+  const [visibleSkillCount, setVisibleSkillCount] = useState(SETTINGS_REVIEW_BATCH_SIZE)
+  const actionablePendingSkills = useMemo(
+    () => pendingSkills.filter((skill) => !isSuspiciousPendingSkillName(skill.skill_name)),
+    [pendingSkills],
+  )
+  const visibleSkills = pendingSkills.slice(0, visibleSkillCount)
+  const remainingSkills = pendingSkills.length - visibleSkills.length
   return (
     <section className="card skillUpgradeCard">
       <h2>Upgrade Skills</h2>
@@ -727,7 +739,7 @@ export function SkillUpgradeSection({
             <p className="subtle">No pending unknown skills right now.</p>
           ) : (
             <div className="skillUpgradeList">
-              {pendingSkills.map((skill) => {
+              {visibleSkills.map((skill) => {
                 const approveKey = `approve:${skill.normalized_name}`
                 const dismissKey = `dismiss:${skill.normalized_name}`
                 const isSuspicious = isSuspiciousPendingSkillName(skill.skill_name)
@@ -768,6 +780,14 @@ export function SkillUpgradeSection({
                   </article>
                 )
               })}
+              {remainingSkills > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => setVisibleSkillCount((count) => count + SETTINGS_REVIEW_BATCH_SIZE)}
+                >
+                  Show {Math.min(SETTINGS_REVIEW_BATCH_SIZE, remainingSkills)} more
+                </button>
+              ) : null}
             </div>
           )}
         </section>
@@ -795,6 +815,12 @@ export function JobIntentLearningSection({
   approveSignal,
   dismissSignal,
 }: JobIntentLearningSectionProps) {
+  const [visiblePendingCount, setVisiblePendingCount] = useState(SETTINGS_REVIEW_BATCH_SIZE)
+  const [visibleApprovedCount, setVisibleApprovedCount] = useState(SETTINGS_REVIEW_BATCH_SIZE)
+  const visiblePendingSignals = pendingSignals.slice(0, visiblePendingCount)
+  const visibleApprovedSignals = approvedSignals.slice(0, visibleApprovedCount)
+  const remainingPendingSignals = pendingSignals.length - visiblePendingSignals.length
+  const remainingApprovedSignals = approvedSignals.length - visibleApprovedSignals.length
   return (
     <section className="card skillUpgradeCard">
       <h2>Job Intent Learning</h2>
@@ -826,7 +852,7 @@ export function JobIntentLearningSection({
             <p className="subtle">No pending job-intent learning right now.</p>
           ) : (
             <div className="skillUpgradeList">
-              {pendingSignals.map((signal) => {
+              {visiblePendingSignals.map((signal) => {
                 const approveKey = `approve-intent:${signal.id}`
                 const dismissKey = `dismiss-intent:${signal.id}`
                 return (
@@ -866,6 +892,14 @@ export function JobIntentLearningSection({
                   </article>
                 )
               })}
+              {remainingPendingSignals > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => setVisiblePendingCount((count) => count + SETTINGS_REVIEW_BATCH_SIZE)}
+                >
+                  Show {Math.min(SETTINGS_REVIEW_BATCH_SIZE, remainingPendingSignals)} more pending signals
+                </button>
+              ) : null}
             </div>
           )}
         </section>
@@ -881,7 +915,7 @@ export function JobIntentLearningSection({
             <p className="subtle">No approved intent signals yet.</p>
           ) : (
             <div className="skillUpgradeList">
-              {approvedSignals.map((signal) => (
+              {visibleApprovedSignals.map((signal) => (
                 <article key={`approved-${signal.id}`} className="skillUpgradeItem">
                   <div className="skillUpgradeItemHeader">
                     <strong className="skillUpgradeName">{signal.phrase}</strong>
@@ -891,6 +925,14 @@ export function JobIntentLearningSection({
                   <p className="subtle skillUpgradeMeta">Confidence: {signal.confidence_aggregate.toFixed(2)}</p>
                 </article>
               ))}
+              {remainingApprovedSignals > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => setVisibleApprovedCount((count) => count + SETTINGS_REVIEW_BATCH_SIZE)}
+                >
+                  Show {Math.min(SETTINGS_REVIEW_BATCH_SIZE, remainingApprovedSignals)} more approved signals
+                </button>
+              ) : null}
             </div>
           )}
         </section>
@@ -2262,13 +2304,14 @@ function App() {
   const [routingFixes, setRoutingFixes] = useState<Record<number, { to: string; cc: string }>>({})
   const [fixingId, setFixingId] = useState<number | null>(null)
   const [deletingFailedId, setDeletingFailedId] = useState<number | null>(null)
-  const [activePage, setActivePage] = useState<'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'premium_numbers'>('run_queue')
+  const [activePage, setActivePage] = useState<'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'premium_numbers' | 'settings'>('run_queue')
   const [dynamicPolicyBeta, setDynamicPolicyBeta] = useState(false)
   const [selectedProfileToApply, setSelectedProfileToApply] = useState<PolicyProfileName>('Balanced')
   const [lastAppliedProfile, setLastAppliedProfile] = useState<PolicyProfileName | null>(null)
   const [settingsBootstrapStatus, setSettingsBootstrapStatus] = useState<BootstrapStatus>('idle')
   const [settingsBootstrapError, setSettingsBootstrapError] = useState('')
   const [hasLoadedSettingsBootstrap, setHasLoadedSettingsBootstrap] = useState(false)
+  const [hasLoadedLearningData, setHasLoadedLearningData] = useState(false)
   const [roleManifestChildCreationEnabled, setRoleManifestChildCreationEnabled] = useState(false)
   const [skillDraft, setSkillDraft] = useState('')
   const [nvoidsLocationDraft, setNvoidsLocationDraft] = useState('')
@@ -2563,18 +2606,41 @@ function App() {
     return normalized
   }
 
+  const loadLearningData = useCallback(async (): Promise<void> => {
+    setSkillsLoading(true)
+    setJobIntentLoading(true)
+    try {
+      const [skillsResponse, pendingIntentResponse, approvedIntentResponse] = await Promise.all([
+        fetch(`${apiBase}/settings/skills/pending`),
+        fetch(`${apiBase}/settings/job-intent-learning/pending`),
+        fetch(`${apiBase}/settings/job-intent-learning/approved`),
+      ])
+      if (!skillsResponse.ok || !pendingIntentResponse.ok || !approvedIntentResponse.ok) {
+        throw new Error('Failed to load learning queues')
+      }
+      const [skills, pendingSignals, approvedSignals] = await Promise.all([
+        skillsResponse.json() as Promise<PendingSkill[]>,
+        pendingIntentResponse.json() as Promise<JobIntentLearningSignal[]>,
+        approvedIntentResponse.json() as Promise<JobIntentLearningSignal[]>,
+      ])
+      setPendingSkills(skills)
+      setPendingJobIntentSignals(pendingSignals)
+      setApprovedJobIntentSignals(approvedSignals)
+      setHasLoadedLearningData(true)
+    } finally {
+      setSkillsLoading(false)
+      setJobIntentLoading(false)
+    }
+  }, [apiBase])
+
   const loadSettingsBootstrap = async (): Promise<SettingsPayload> => {
     setSettingsBootstrapStatus('loading')
     setSettingsBootstrapError('')
-    setSkillsLoading(true)
-    setJobIntentLoading(true)
-    const res = await fetch(`${apiBase}/settings/bootstrap`)
+    const res = await fetch(`${apiBase}/settings/bootstrap?include_learning_data=false`)
     if (!res.ok) {
       const message = 'Failed to load saved settings'
       setSettingsBootstrapStatus('error')
       setSettingsBootstrapError(message)
-      setSkillsLoading(false)
-      setJobIntentLoading(false)
       throw new Error(message)
     }
     const payload = (await res.json()) as SettingsBootstrapPayload
@@ -2917,6 +2983,7 @@ function App() {
       recent_runs: 'view_recent_runs',
       sent_items: 'view_sent_items',
       premium_numbers: 'view_premium_numbers',
+      settings: 'view_run_queue',
     }
     const eventType = eventMap[page]
     const throttleKey = `${page}:${timeRange}`
@@ -2985,6 +3052,11 @@ function App() {
     }
     bootstrap().catch((e) => setError((e as Error).message))
   }, [])
+
+  useEffect(() => {
+    if (activePage !== 'settings' || hasLoadedLearningData) return
+    loadLearningData().catch((e) => setError((e as Error).message))
+  }, [activePage, hasLoadedLearningData, loadLearningData])
 
   useEffect(() => {
     if (!hasBootstrappedCandidatesRef.current || !settingsBootstrapReady) return
@@ -3288,7 +3360,7 @@ function App() {
         body: JSON.stringify({ skill_name: skill.skill_name }),
       })
       if (!res.ok) throw new Error('Failed to approve skill')
-      await loadSettingsBootstrap()
+      await loadLearningData()
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -3305,7 +3377,7 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
       })
       if (!res.ok) throw new Error('Failed to approve all skills')
-      await loadSettingsBootstrap()
+      await loadLearningData()
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -3323,7 +3395,7 @@ function App() {
         body: JSON.stringify({ skill_name: skill.skill_name }),
       })
       if (!res.ok) throw new Error('Failed to dismiss skill')
-      await loadSettingsBootstrap()
+      await loadLearningData()
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -3341,7 +3413,7 @@ function App() {
         body: JSON.stringify({ phrase: signal.phrase, polarity: signal.polarity }),
       })
       if (!res.ok) throw new Error('Failed to approve job-intent signal')
-      await loadSettingsBootstrap()
+      await loadLearningData()
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -3359,7 +3431,7 @@ function App() {
         body: JSON.stringify({ phrase: signal.phrase, polarity: signal.polarity }),
       })
       if (!res.ok) throw new Error('Failed to dismiss job-intent signal')
-      await loadSettingsBootstrap()
+      await loadLearningData()
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -3376,7 +3448,7 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
       })
       if (!res.ok) throw new Error('Failed to approve all job-intent signals')
-      await loadSettingsBootstrap()
+      await loadLearningData()
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -3985,8 +4057,12 @@ function App() {
 
         <div className="pageBody">
           <div className="titleBlock">
-            <h1>Run Queue Dashboard</h1>
-            <p>Manage and monitor your automated recruitment email operations.</p>
+            <h1>{activePage === 'settings' ? 'Settings' : 'Run Queue Dashboard'}</h1>
+            <p>
+              {activePage === 'settings'
+                ? 'Manage learning queues, trusted Gmail groups, and resume assets.'
+                : 'Manage and monitor your automated recruitment email operations.'}
+            </p>
           </div>
 
           <section className="statsGrid">
@@ -4153,7 +4229,7 @@ function App() {
             </section>
           ) : null}
 
-          {activePage === 'run_queue' && hasLoadedSettingsBootstrap ? (
+          {activePage === 'settings' && hasLoadedSettingsBootstrap ? (
             <form className="configGrid runQueueGrid" onSubmit={saveSettings}>
               <section className="card">
                 <h2>Gmail Access</h2>
@@ -4302,25 +4378,6 @@ function App() {
                   </label>
                 </div>
               </section>
-
-              <SkillUpgradeSection
-                pendingSkills={pendingSkills}
-                loading={skillsLoading}
-                busySkillKey={skillActionKey}
-                approveAllSkills={approveAllPendingSkills}
-                approveSkill={approvePendingSkill}
-                dismissSkill={dismissPendingSkill}
-              />
-
-              <JobIntentLearningSection
-                pendingSignals={pendingJobIntentSignals}
-                approvedSignals={approvedJobIntentSignals}
-                loading={jobIntentLoading}
-                busySignalKey={jobIntentActionKey}
-                approveAllSignals={approveAllPendingJobIntentSignals}
-                approveSignal={approvePendingJobIntentSignal}
-                dismissSignal={dismissPendingJobIntentSignal}
-              />
 
               <section className="card">
                 <h2>Employer Domains</h2>
@@ -4744,17 +4801,6 @@ function App() {
                 </div>
               </section>
 
-              <TrustedGmailGroupsPanel
-                featureEnabled={settings.feature_gmail_requirement_groups_enabled}
-                groups={gmailRequirementGroups}
-                busy={gmailGroupsBusy}
-                onFeatureToggle={(enabled) => setSettings({ ...settings, feature_gmail_requirement_groups_enabled: enabled })}
-                onAddGroup={addTrustedGmailGroup}
-                onBulkAdd={bulkAddTrustedGmailGroups}
-                onUpdateGroup={updateTrustedGmailGroup}
-                onDeleteGroup={deleteTrustedGmailGroup}
-              />
-
               <section className="card">
                 <h2>Execution Control</h2>
                 <div className="stack">
@@ -4879,6 +4925,7 @@ function App() {
                     <input
                       type="file"
                       multiple
+                      aria-label="Upload attachment files"
                       onChange={(e) => setAttachmentUploadFiles(Array.from(e.target.files ?? []))}
                     />
                     <button type="button" onClick={uploadAttachmentFiles} disabled={attachmentUploadFiles.length === 0}>
@@ -4912,21 +4959,6 @@ function App() {
                   </div>
                 </div>
               </section>
-
-              <ResumeDatabaseSection
-                activeResume={activeResume}
-                resumeFile={resumeFile}
-                resumeSkillsInput={resumeSkillsInput}
-                resumeSkillEdits={resumeSkillEdits}
-                resumeAssets={resumeAssets}
-                setResumeFile={setResumeFile}
-                setResumeSkillsInput={setResumeSkillsInput}
-                setResumeSkillEdits={setResumeSkillEdits}
-                uploadResume={uploadResume}
-                saveResumeSkills={saveResumeSkills}
-                toggleResumeAsset={toggleResumeAsset}
-                deleteResumeAsset={deleteResumeAsset}
-              />
 
               <section className="card">
                 <h2>Nvoids Control</h2>
@@ -5046,6 +5078,52 @@ function App() {
                 </div>
               </section>
             </form>
+          ) : null}
+
+          {activePage === 'settings' ? (
+            <div className="configGrid runQueueGrid">
+              <SkillUpgradeSection
+                pendingSkills={pendingSkills}
+                loading={skillsLoading}
+                busySkillKey={skillActionKey}
+                approveAllSkills={approveAllPendingSkills}
+                approveSkill={approvePendingSkill}
+                dismissSkill={dismissPendingSkill}
+              />
+              <JobIntentLearningSection
+                pendingSignals={pendingJobIntentSignals}
+                approvedSignals={approvedJobIntentSignals}
+                loading={jobIntentLoading}
+                busySignalKey={jobIntentActionKey}
+                approveAllSignals={approveAllPendingJobIntentSignals}
+                approveSignal={approvePendingJobIntentSignal}
+                dismissSignal={dismissPendingJobIntentSignal}
+              />
+              <TrustedGmailGroupsPanel
+                featureEnabled={settings.feature_gmail_requirement_groups_enabled}
+                groups={gmailRequirementGroups}
+                busy={gmailGroupsBusy}
+                onFeatureToggle={(enabled) => setSettings({ ...settings, feature_gmail_requirement_groups_enabled: enabled })}
+                onAddGroup={addTrustedGmailGroup}
+                onBulkAdd={bulkAddTrustedGmailGroups}
+                onUpdateGroup={updateTrustedGmailGroup}
+                onDeleteGroup={deleteTrustedGmailGroup}
+              />
+              <ResumeDatabaseSection
+                activeResume={activeResume}
+                resumeFile={resumeFile}
+                resumeSkillsInput={resumeSkillsInput}
+                resumeSkillEdits={resumeSkillEdits}
+                resumeAssets={resumeAssets}
+                setResumeFile={setResumeFile}
+                setResumeSkillsInput={setResumeSkillsInput}
+                setResumeSkillEdits={setResumeSkillEdits}
+                uploadResume={uploadResume}
+                saveResumeSkills={saveResumeSkills}
+                toggleResumeAsset={toggleResumeAsset}
+                deleteResumeAsset={deleteResumeAsset}
+              />
+            </div>
           ) : null}
 
           {error ? <p className="errorMessage">{error}</p> : null}

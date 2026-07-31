@@ -90,7 +90,7 @@ describe('Groq status UI', () => {
         if (url.endsWith('/ai/status')) return makeResponse(aiStatus)
         if (url.endsWith('/telegram/status')) return makeResponse({ enabled: false, polling: false, alerts_enabled: false, authorized_chats: 0, detail: 'off' })
         if (url.endsWith('/gmail/oauth/url')) return makeResponse({ authorization_url: null })
-        if (url.endsWith('/settings/bootstrap')) return makeResponse(makeBootstrapPayload())
+        if (url.includes('/settings/bootstrap')) return makeResponse(makeBootstrapPayload())
         if (url.includes('/recent-runs')) return makeResponse({ items: [], next_cursor: null, has_next: false })
         if (url.includes('/analytics/trend')) return makeResponse({ range: 'current_day', bucket: 'hour', trend_direction: 'flat', trend_delta_pct: 0, kpi_total_sent: 0, previous_period_total_sent: 0, bars: [] })
         if (url.includes('/analytics/events')) return makeResponse([])
@@ -116,6 +116,13 @@ describe('Groq status UI', () => {
     })
     await act(async () => {
       await new Promise((resolve) => window.setTimeout(resolve, 50))
+    })
+    const settingsButton = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Settings',
+    )
+    await act(async () => {
+      settingsButton?.click()
+      await Promise.resolve()
     })
 
     return {

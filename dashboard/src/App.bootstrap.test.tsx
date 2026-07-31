@@ -95,6 +95,16 @@ async function flushPromises(iterations = 4): Promise<void> {
   }
 }
 
+async function openSettings(container: HTMLElement): Promise<void> {
+  const settingsButton = Array.from(container.querySelectorAll('button')).find(
+    (button) => button.textContent === 'Settings',
+  )
+  await act(async () => {
+    settingsButton?.click()
+    await flushPromises(6)
+  })
+}
+
 function makeAppFetch(options?: {
   bootstrapOk?: boolean
   bootstrapPayload?: ReturnType<typeof makeBootstrapPayload>
@@ -107,10 +117,19 @@ function makeAppFetch(options?: {
     if (url.endsWith('/ai/status')) return makeResponse({ configured: true, connected: true, running: false, provider: 'mock', model: 'mock', detail: 'ok', last_error: null, last_started_at: null, last_finished_at: null, last_duration_ms: null, last_draft_source: null })
     if (url.endsWith('/telegram/status')) return makeResponse({ enabled: false, polling: false, alerts_enabled: false, authorized_chats: 0, detail: 'off' })
     if (url.endsWith('/gmail/oauth/url')) return makeResponse({ authorization_url: null })
-    if (url.endsWith('/settings/bootstrap')) {
+    if (url.includes('/settings/bootstrap')) {
       options?.onBootstrapCall?.()
       if (options?.bootstrapOk === false) return makeResponse({ detail: 'failed' }, false)
       return makeResponse(options?.bootstrapPayload ?? makeBootstrapPayload())
+    }
+    if (url.endsWith('/settings/skills/pending')) {
+      return makeResponse(options?.bootstrapPayload?.pending_skills ?? [])
+    }
+    if (url.endsWith('/settings/job-intent-learning/pending')) {
+      return makeResponse(options?.bootstrapPayload?.pending_job_intent_signals ?? [])
+    }
+    if (url.endsWith('/settings/job-intent-learning/approved')) {
+      return makeResponse(options?.bootstrapPayload?.approved_job_intent_signals ?? [])
     }
     if (url.endsWith('/settings') && init?.method === 'PUT') {
       options?.onSaveSettings?.()
@@ -269,10 +288,13 @@ describe('Settings bootstrap flow', () => {
 
     const searchInput = container.querySelector('input.search') as HTMLInputElement | null
     expect(searchInput?.value).toBe('from:recruiters newer_than:7d')
-    expect(container.textContent ?? '').toContain('Primary Resume.docx')
+    await openSettings(container)
     expect(container.textContent ?? '').toContain('cover-letter.pdf')
+    expect(container.querySelector('input[aria-label="Upload attachment files"]')).not.toBeNull()
+    expect(container.textContent ?? '').toContain('Primary Resume.docx')
     expect(container.textContent ?? '').toContain('Twistlock')
     expect(container.textContent ?? '').toContain('java developer')
+    expect(container.querySelector('input[aria-label="Upload resume file"]')).not.toBeNull()
     expect(container.textContent ?? '').not.toContain('Settings Bootstrap')
   })
 
@@ -399,6 +421,7 @@ describe('Settings bootstrap flow', () => {
     })
 
     expect(bootstrapCalls).toBe(1)
+    await openSettings(container)
 
     const saveButton = Array.from(container.querySelectorAll('button')).find((button) =>
       button.textContent === 'Save Settings',
@@ -428,6 +451,7 @@ describe('Settings bootstrap flow', () => {
       root.render(<App />)
       await flushPromises(6)
     })
+    await openSettings(container)
 
     const sections = Array.from(container.querySelectorAll('section'))
     const profile = sections.find((section) => section.querySelector('h2')?.textContent === 'Profile Settings')
@@ -470,6 +494,7 @@ describe('Settings bootstrap flow', () => {
       root.render(<App />)
       await flushPromises(6)
     })
+    await openSettings(container)
 
     expect(container.textContent).toContain(expected)
   })

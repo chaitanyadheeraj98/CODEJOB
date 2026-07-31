@@ -5,8 +5,8 @@ type SidebarProps = {
   runCount: number
   sentCount: number
   premiumCount: number
-  activePage: 'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'premium_numbers'
-  onNavigate: (section: 'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'premium_numbers') => void
+  activePage: 'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'premium_numbers' | 'settings'
+  onNavigate: (section: 'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'premium_numbers' | 'settings') => void
 }
 
 export default function Sidebar({
@@ -61,7 +61,13 @@ export default function Sidebar({
         ))}
       </nav>
       <nav className="footerNav">
-        <button className="navItem" type="button">Settings</button>
+        <button
+          className={`navItem ${activePage === 'settings' ? 'active' : ''}`}
+          type="button"
+          onClick={() => onNavigate('settings')}
+        >
+          Settings
+        </button>
         <button className="navItem" type="button">Help Center</button>
       </nav>
     </aside>

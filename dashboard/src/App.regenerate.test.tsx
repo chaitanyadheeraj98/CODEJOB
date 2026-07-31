@@ -171,7 +171,7 @@ describe('Needs Review regenerate flow', () => {
         if (url.endsWith('/ai/status')) return Promise.resolve(makeResponse({ configured: true, connected: true, running: false, provider: 'mock', model: 'mock', detail: 'ok', last_error: null, last_started_at: null, last_finished_at: null, last_duration_ms: null, last_draft_source: null }))
         if (url.endsWith('/telegram/status')) return Promise.resolve(makeResponse({ enabled: false, polling: false, alerts_enabled: false, authorized_chats: 0, detail: 'off' }))
         if (url.endsWith('/gmail/oauth/url')) return Promise.resolve(makeResponse({ authorization_url: null }))
-        if (url.endsWith('/settings/bootstrap')) return Promise.resolve(makeResponse(makeBootstrapPayload()))
+        if (url.includes('/settings/bootstrap')) return Promise.resolve(makeResponse(makeBootstrapPayload()))
         if (url.includes('/recent-runs/')) return Promise.resolve(makeResponse({ items: [], next_cursor: null, has_next: false }))
         if (url.includes('/recent-runs')) return Promise.resolve(makeResponse({ items: [], next_cursor: null, has_next: false }))
         if (url.includes('/candidates?')) {

@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 from sqlalchemy import func, or_
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
@@ -371,6 +372,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 EVENT_WEIGHTS: dict[str, float] = {
     "approved_sent": 4.0,
@@ -2003,6 +2005,30 @@ def _hydrate_candidates_for_review(db: Session, emails: list[RecruiterEmail]) ->
     _fill_missing_gmail_rfc_ids(db, emails)
 
 
+def _compact_resume_picker_candidates(value: object) -> dict[str, object] | None:
+    if not isinstance(value, Mapping):
+        return None
+    compact: dict[str, object] = {}
+    selected = value.get("selected_resume_file_name")
+    if isinstance(selected, str):
+        compact["selected_resume_file_name"] = selected
+    rankings = value.get("rankings")
+    if isinstance(rankings, list):
+        ranking_fields = (
+            "resume_file_name",
+            "final_resume_score",
+            "ai_score",
+            "ats_score",
+            "selection_reason",
+        )
+        compact["rankings"] = [
+            {field: ranking[field] for field in ranking_fields if field in ranking}
+            for ranking in rankings
+            if isinstance(ranking, Mapping)
+        ]
+    return compact
+
+
 def _serialize_candidate_for_review(db: Session, email: RecruiterEmail) -> EmailResponse:
     _hydrate_candidates_for_review(db, [email])
     payload = EmailResponse.model_validate(email).model_dump()
@@ -2039,21 +2065,31 @@ def get_settings(db: Session = Depends(get_db)) -> SettingsResponse:
 
 
 @app.get("/settings/bootstrap", response_model=SettingsBootstrapResponse)
-def get_settings_bootstrap(db: Session = Depends(get_db)) -> SettingsBootstrapResponse:
+def get_settings_bootstrap(
+    include_learning_data: bool = Query(True),
+    db: Session = Depends(get_db),
+) -> SettingsBootstrapResponse:
     user_settings = _get_settings(db)
+    pending_skills = _list_pending_unknown_skills(db) if include_learning_data else []
+    pending_job_intent_signals = (
+        [_serialize_job_intent_entry(item) for item in _list_job_intent_entries(db, status="pending")]
+        if include_learning_data
+        else []
+    )
+    approved_job_intent_signals = (
+        [_serialize_job_intent_entry(item) for item in _list_job_intent_entries(db, status="approved")]
+        if include_learning_data
+        else []
+    )
     return SettingsBootstrapResponse(
         settings=_settings_response_from_model(user_settings),
         role_manifest_child_creation_enabled=settings.role_manifest_child_creation_enabled,
         gmail_requirement_groups=[_gmail_requirement_group_response(item) for item in _list_gmail_requirement_groups(db)],
         resumes=[ResumeResponse.model_validate(item) for item in _list_resumes(db)],
         attachments=[AttachmentAssetResponse.model_validate(item) for item in _list_attachment_assets(db)],
-        pending_skills=_list_pending_unknown_skills(db),
-        pending_job_intent_signals=[
-            _serialize_job_intent_entry(item) for item in _list_job_intent_entries(db, status="pending")
-        ],
-        approved_job_intent_signals=[
-            _serialize_job_intent_entry(item) for item in _list_job_intent_entries(db, status="approved")
-        ],
+        pending_skills=pending_skills,
+        pending_job_intent_signals=pending_job_intent_signals,
+        approved_job_intent_signals=approved_job_intent_signals,
         loaded_at=datetime.now(UTC),
         owner_id=user_settings.owner_id,
     )
@@ -3399,18 +3435,16 @@ def list_candidates(
     _hydrate_candidates_for_review(db, visible)
     next_cursor = cursor + limit if has_next else None
     attachment_file_names = _enabled_attachment_file_names(db)
+    serialized_items: list[EmailResponse] = []
+    for item in visible:
+        payload = EmailResponse.model_validate(item).model_dump()
+        payload["attachment_file_names"] = attachment_file_names
+        payload["parser_details"] = item.parser_details_json
+        payload["resume_picker_candidates"] = _compact_resume_picker_candidates(payload["resume_picker_candidates"])
+        payload["sendability_status"] = resolve_sendability_status(item)
+        serialized_items.append(EmailResponse.model_validate(payload))
     return CandidateListResponse(
-        items=[
-            EmailResponse.model_validate(
-                {
-                    **EmailResponse.model_validate(item).model_dump(),
-                    "attachment_file_names": attachment_file_names,
-                    "parser_details": item.parser_details_json,
-                    "sendability_status": resolve_sendability_status(item),
-                }
-            )
-            for item in visible
-        ],
+        items=serialized_items,
         next_cursor=next_cursor,
         has_next=has_next,
     )

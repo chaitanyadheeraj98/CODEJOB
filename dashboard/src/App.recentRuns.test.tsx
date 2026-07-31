@@ -98,7 +98,7 @@ describe('Recent Runs skipped-item drill-down', () => {
         if (url.endsWith('/ai/status')) return makeResponse({ configured: true, connected: true, running: false, provider: 'mock', model: 'mock', detail: 'ok', last_error: null, last_started_at: null, last_finished_at: null, last_duration_ms: null, last_draft_source: null })
         if (url.endsWith('/telegram/status')) return makeResponse({ enabled: false, polling: false, alerts_enabled: false, authorized_chats: 0, detail: 'off' })
         if (url.endsWith('/gmail/oauth/url')) return makeResponse({ authorization_url: null })
-        if (url.endsWith('/settings/bootstrap')) return makeResponse(makeBootstrapPayload())
+        if (url.includes('/settings/bootstrap')) return makeResponse(makeBootstrapPayload())
         if (url.includes('/recent-runs/gmail_sync%3Abatch-1/items')) {
           return makeResponse({
             items: [
@@ -264,7 +264,7 @@ describe('Recent Runs skipped-item drill-down', () => {
         if (url.endsWith('/ai/status')) return makeResponse({ configured: true, connected: true, running: false, provider: 'mock', model: 'mock', detail: 'ok', last_error: null, last_started_at: null, last_finished_at: null, last_duration_ms: null, last_draft_source: null })
         if (url.endsWith('/telegram/status')) return makeResponse({ enabled: false, polling: false, alerts_enabled: false, authorized_chats: 0, detail: 'off' })
         if (url.endsWith('/gmail/oauth/url')) return makeResponse({ authorization_url: null })
-        if (url.endsWith('/settings/bootstrap')) {
+        if (url.includes('/settings/bootstrap')) {
           return makeResponse(makeBootstrapPayload({ settings: { mail_date: '2026-07-08' } }))
         }
         if (url.includes('/recent-runs/')) return makeResponse({ items: [], next_cursor: null, has_next: false })
