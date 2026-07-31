@@ -15,6 +15,7 @@ class RoutingPolicyInput:
     learned_pairs: list[tuple[str, str]] | None = None
     employer_domains: list[str] | None = None
     routing_confirmed: bool = False
+    preferred_employer_cc_email: str | None = None
 
 
 @dataclass(frozen=True)
@@ -68,9 +69,18 @@ class RoutingPolicyService:
         routing = self._adapter.evaluate(payload)
         to_email = routing.to_email
         cc_email = routing.cc_email
+        # SOP Case 1/2: default CC to the Execution Panel address when the To side resolved.
+        preferred_cc = _normalize_routing_email(payload.preferred_employer_cc_email)
         status = (routing.status or "").strip().lower()
         confidence = float(routing.confidence or 0.0)
         reason = routing.reason
+        if to_email and preferred_cc and preferred_cc != _normalize_routing_email(to_email) and cc_email != preferred_cc:
+            filled_missing_cc = not cc_email
+            cc_email = preferred_cc
+            if filled_missing_cc:
+                status = "safe"
+                confidence = max(confidence, 0.85)
+                reason = "Resolved recruiter To; CC defaulted to the Execution Panel address."
         normalized_to = _normalize_routing_email(to_email)
         normalized_cc = _normalize_routing_email(cc_email)
         has_duplicate_recipients = bool(normalized_to and normalized_cc and normalized_to == normalized_cc)

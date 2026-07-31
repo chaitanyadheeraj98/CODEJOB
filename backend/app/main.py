@@ -1101,6 +1101,7 @@ def _get_routing_runtime_service() -> RoutingRuntimeService:
             RoutingRuntimeDeps(
                 owner_id=settings.owner_id,
                 get_employer_domains=lambda db: _csv_to_list(_get_settings(db).employer_domains),
+                get_preferred_employer_cc=lambda db: (_get_settings(db).preferred_employer_cc_email or "").strip().lower(),
             )
         )
     return routing_runtime_service

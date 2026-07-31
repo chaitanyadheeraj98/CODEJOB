@@ -15,6 +15,7 @@ from app.routing import HeuristicRoutingAdapter, RoutingDecision, RoutingPolicyI
 class RoutingRuntimeDeps:
     owner_id: str
     get_employer_domains: Callable[[Session], list[str]]
+    get_preferred_employer_cc: Callable[[Session], str] = lambda db: ""
 
 
 class RoutingRuntimeService:
@@ -91,11 +92,13 @@ class RoutingRuntimeService:
                     snippet=snippet,
                     learned_pairs=[],
                     routing_confirmed=routing_confirmed,
+                    preferred_employer_cc_email=self.deps.get_preferred_employer_cc(db) if db is not None else None,
                 )
             )
 
         learned_pairs = self.learned_recipient_pairs(db, sender) if db else []
         employer_domains = self.deps.get_employer_domains(db) if db is not None else None
+        preferred_employer_cc_email = self.deps.get_preferred_employer_cc(db) if db is not None else None
         service = RoutingPolicyService(adapter=HeuristicRoutingAdapter())
         return service.evaluate(
             RoutingPolicyInput(
@@ -106,6 +109,7 @@ class RoutingRuntimeService:
                 learned_pairs=learned_pairs,
                 employer_domains=employer_domains,
                 routing_confirmed=routing_confirmed,
+                preferred_employer_cc_email=preferred_employer_cc_email,
             )
         )
 

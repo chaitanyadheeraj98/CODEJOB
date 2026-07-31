@@ -316,7 +316,28 @@ def analyze_recipient_routing(
 
     to_candidates = [item for item in candidates if item.role == "to"]
     cc_candidates = [item for item in candidates if item.role == "cc"]
-    selected_to = to_candidates[0] if to_candidates else None
+
+    # SOP: resolve "To" from the sender header vs. body recruiter contacts by shape.
+    sender_candidate = next((item for item in to_candidates if item.source == "sender_header"), None)
+    body_candidates = [item for item in to_candidates if item.source == "body_recruiter_contact"]
+    manual_mapping_reason = ""
+    if sender_candidate and body_candidates:
+        distinct = [item for item in body_candidates if item.email != sender_candidate.email]
+        if len(body_candidates) >= 3:
+            selected_to = None
+            manual_mapping_reason = (
+                f"{len(body_candidates)} distinct recruiter contacts found in the email body; "
+                "routing requires manual review (SOP Case 3)."
+            )
+        elif len(distinct) == 1:
+            selected_to = distinct[0]
+        elif len(distinct) == 0:
+            selected_to = sender_candidate
+        else:
+            selected_to = None
+            manual_mapping_reason = "Body recruiter contacts do not uniquely disambiguate the sender header (SOP Case 2)."
+    else:
+        selected_to = to_candidates[0] if to_candidates else None
     selected_cc = cc_candidates[0] if cc_candidates else None
 
     learned_pairs = learned_pairs or []
@@ -366,6 +387,9 @@ def analyze_recipient_routing(
         status = "missing"
         confidence = 0.0
         reason = "No usable recruiter or employer routing contacts found."
+
+    if manual_mapping_reason and not selected_to:
+        reason = manual_mapping_reason
 
     return RoutingResult(
         to_email=selected_to.email if selected_to else None,

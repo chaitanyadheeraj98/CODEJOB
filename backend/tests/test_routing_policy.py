@@ -195,6 +195,55 @@ class RoutingPolicyTests(unittest.TestCase):
             tuple(getattr(from_result, field) for field in fields),
         )
 
+    def test_sop_case1_single_sender_uses_preferred_cc(self) -> None:
+        service = RoutingPolicyService(adapter=HeuristicRoutingAdapter())
+        decision = service.evaluate(
+            RoutingPolicyInput(
+                sender="Shaheen <shaheen4sierra@gmail.com>",
+                subject="Role",
+                body="No other contacts here.",
+                preferred_employer_cc_email="hr@horizonsoftech.net",
+            )
+        )
+        self.assertEqual(decision.to_email, "shaheen4sierra@gmail.com")
+        self.assertEqual(decision.cc_email, "hr@horizonsoftech.net")
+        self.assertFalse(decision.should_mark_failed)
+        self.assertEqual(decision.recommended_state, "needs_review")
+
+    def test_sop_case2_two_body_contacts_picks_the_one_that_differs(self) -> None:
+        service = RoutingPolicyService(adapter=HeuristicRoutingAdapter())
+        decision = service.evaluate(
+            RoutingPolicyInput(
+                sender="Jobs <jobs@everestglobalsolutionsinc.com>",
+                subject="Role",
+                body=(
+                    "Reach out to sushwanth@everestglobalsolutionsinc.com for details.\n"
+                    "Reply-To: jobs@everestglobalsolutionsinc.com"
+                ),
+                preferred_employer_cc_email="hr@horizonsoftech.net",
+            )
+        )
+        self.assertEqual(decision.to_email, "sushwanth@everestglobalsolutionsinc.com")
+        self.assertEqual(decision.cc_email, "hr@horizonsoftech.net")
+        self.assertFalse(decision.should_mark_failed)
+
+    def test_sop_case3_many_body_contacts_forces_failed_mapping(self) -> None:
+        service = RoutingPolicyService(adapter=HeuristicRoutingAdapter())
+        decision = service.evaluate(
+            RoutingPolicyInput(
+                sender="Jobs <jobs@everestglobalsolutionsinc.com>",
+                subject="Role",
+                body=(
+                    "a@recruiters.com b@recruiters.com c@recruiters.com d@recruiters.com"
+                ),
+                preferred_employer_cc_email="hr@horizonsoftech.net",
+            )
+        )
+        self.assertIsNone(decision.to_email)
+        self.assertTrue(decision.should_mark_failed)
+        self.assertEqual(decision.recommended_state, "failed")
+        self.assertIn("manual review", decision.reason)
+
 
 if __name__ == "__main__":
     unittest.main()

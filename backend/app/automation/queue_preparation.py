@@ -140,9 +140,10 @@ def describe_f2f_block(*, block_reason: str) -> tuple[str, str, dict[str, object
 
 
 def describe_routing_block(routing_decision: RoutingDecision) -> tuple[str, str, dict[str, object]]:
+    detail = routing_decision.reason or "Recipient routing could not resolve both recruiter To and employer CC."
     return (
         "recipient_mapping",
-        "Recipient routing could not resolve both recruiter To and employer CC.",
+        detail,
         {
             "routing_status": routing_decision.status,
             "recommended_skip_reason": routing_decision.recommended_skip_reason,
