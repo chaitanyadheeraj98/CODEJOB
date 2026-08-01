@@ -140,6 +140,50 @@ class RoleManifestServiceTests(unittest.TestCase):
         self.assertNotIn("private-source", result.error or "")
         self.assertNotIn("must-not-leak", result.error or "")
 
+    def test_large_source_duplicate_role_with_bad_boundary_in_overlap_window_is_merged_not_rejected(self) -> None:
+        # max_window_lines has a 20-line floor (RoleManifestService.__init__), so the
+        # source must exceed that to exercise the windowed/chunked _detect_large_source path.
+        lines = [f"line-{index}" for index in range(1, 29)]  # 28 lines
+        call_count = {"n": 0}
+
+        def provider(_system: str, _user: str):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return {
+                    "classification": "multiple",
+                    "role_count": 2,
+                    "confidence": 0.95,
+                    "roles": [
+                        {"index": 1, "title_hint": "Role One", "start_line": 2, "end_line": 8, "confidence": 0.95},
+                        {"index": 2, "title_hint": "Role Two", "start_line": 10, "end_line": 18, "confidence": 0.95},
+                    ],
+                }
+            return {
+                "classification": "multiple",
+                "role_count": 2,
+                "confidence": 0.95,
+                "roles": [
+                    # Duplicate of "Role Two" from window 1, but the provider mis-reports
+                    # its start_line as relative-to-window (1) instead of absolute (>=16),
+                    # mirroring the real email-5080 failure.
+                    {"index": 1, "title_hint": "Role Two", "start_line": 1, "end_line": 18, "confidence": 0.9},
+                    {"index": 2, "title_hint": "Role Three", "start_line": 20, "end_line": 28, "confidence": 0.95},
+                ],
+            }
+
+        result = RoleManifestService(
+            provider=provider,
+            max_window_lines=20,
+            window_overlap_lines=5,
+        ).detect("\n".join(lines))
+
+        self.assertEqual(result.status, "multiple")
+        self.assertIsNone(result.error)
+        titles = sorted(role.title_hint for role in result.manifest.roles)
+        self.assertEqual(titles, ["Role One", "Role Three", "Role Two"])
+        role_two = next(role for role in result.manifest.roles if role.title_hint == "Role Two")
+        self.assertEqual((role_two.start_line, role_two.end_line), (10, 18))
+
     @patch("app.services.role_manifest_service.build_deepseek_instructor_client")
     def test_real_instructor_length_response_degrades_to_invalid(self, mock_builder) -> None:
         client, create = _instructor_client(

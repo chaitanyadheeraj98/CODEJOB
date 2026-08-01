@@ -44,9 +44,13 @@ from app.recent_runs import (
 )
 from app.routing import RoutingDecision
 from app.schemas import ApproveSendRequest, AutomationRunRequest, AutomationRunResponse, GmailSyncResponse, RegenerateCandidateRequest, RejectRequest, ResolveRecipientsRequest
+from app.config import settings as app_settings
 from app.services.candidate_runtime_service import resolve_resume_display_name
 from app.services.candidate_screening_service import CandidateScreeningService, apply_screening_decision
 from app.services.gmail_group_source_service import ConfiguredRequirementGroup, resolve_trusted_group_context
+from app.services.requirement_expansion_service import RequirementExpansionService
+from app.services.role_manifest_pipeline import extract_and_score_children
+from app.services.role_manifest_service import RoleManifestResult, RoleManifestService
 from app.services.sendability_service import apply_resume_sendability, resolve_sendability_status
 
 logger = logging.getLogger(__name__)
@@ -173,6 +177,40 @@ class OrchestrationService:
             )
             for row in rows
         ]
+
+    def _get_email_or_raise(self, db: Session, email_id: int) -> RecruiterEmail:
+        email = (
+            db.query(RecruiterEmail)
+            .filter(RecruiterEmail.owner_id == self.deps.owner_id, RecruiterEmail.id == email_id)
+            .first()
+        )
+        if not email:
+            raise HTTPException(status_code=404, detail="Candidate not found")
+        return email
+
+    def _detect_role_manifest_if_enabled(self, user_settings: UserSettings, body: str) -> RoleManifestResult | None:
+        if not user_settings.feature_role_manifest_enabled:
+            return None
+        return RoleManifestService().detect(body)
+
+    def _expand_and_extract_children(
+        self, db: Session, email: RecruiterEmail, manifest_result: RoleManifestResult, user_settings: UserSettings
+    ) -> None:
+        expansion = RequirementExpansionService().expand(
+            db,
+            email,
+            manifest_result,
+            materialize=app_settings.role_manifest_child_creation_enabled,
+        )
+        if expansion.child_ids:
+            extract_and_score_children(
+                db,
+                expansion.child_ids,
+                user_settings=user_settings,
+                get_candidate=self._get_email_or_raise,
+                parse_email_with_details=self.deps.parse_email_with_details,
+                regenerate_candidate=self.regenerate_candidate,
+            )
 
     def sync_gmail(
         self,
@@ -332,11 +370,15 @@ class OrchestrationService:
                 if recruiter_like_mode in {"block", "warn"} and not is_recruiter_like:
                     recruiter_like_warning = "non_recruiter_like_gmail"
 
+                manifest_result = self._detect_role_manifest_if_enabled(user_settings, item["body"])
+                item_ai_extractor_enabled = user_settings.feature_ai_extractor_enabled and (
+                    manifest_result is None or manifest_result.status != "multiple"
+                )
                 parsed, parser_details = self.deps.parse_email_with_details(
                     item["subject"],
                     item["body"],
                     source="gmail",
-                    ai_extractor_enabled=user_settings.feature_ai_extractor_enabled,
+                    ai_extractor_enabled=item_ai_extractor_enabled,
                 )
                 hard_pass, hard_reason = self.deps.hard_filter_check(parsed, user_settings, effective_policy, parser_details)
                 screening = CandidateScreeningService().evaluate_parser_details(parser_details, user_settings)
@@ -377,6 +419,8 @@ class OrchestrationService:
                     db.add(email)
                     imported_count += 1
                     report_item()
+                    if manifest_result is not None:
+                        self._expand_and_extract_children(db, email, manifest_result, user_settings)
                     continue
                 active_resume = self.deps.active_resume(db)
                 resume_selection = self.deps.select_best_resume_match(
@@ -565,6 +609,8 @@ class OrchestrationService:
                 db.add(email)
                 imported_count += 1
                 report_item()
+                if manifest_result is not None:
+                    self._expand_and_extract_children(db, email, manifest_result, user_settings)
 
             sync_run.imported_count = imported_count
             sync_run.skipped_count = skipped_count
@@ -758,6 +804,8 @@ class OrchestrationService:
                         is_recruiter_like=self.deps.is_recruiter_like,
                         classify_email_intent=self.deps.classify_email_intent,
                         record_skipped_item=lambda db_ctx, payload: record_skipped_item(db_ctx, payload),
+                        regenerate_candidate=self.regenerate_candidate,
+                        get_candidate=self._get_email_or_raise,
                     ),
                 )
             )

@@ -947,6 +947,115 @@ class RunOrchestratorTests(unittest.TestCase):
             self.assertEqual(row.resume_picker_candidates_json, '{"rankings":[{"resume_file_name":"resume.pdf","final_resume_score":0.83}]}')
             self.assertEqual(row.resume_picker_breakdown_json, '{"matched_priority_skills":["Java"],"missing_priority_skills":["Oracle"]}')
 
+    def test_multi_role_item_skips_full_body_ai_extractor_and_creates_children(self) -> None:
+        from unittest.mock import patch
+
+        from app.services.role_manifest_service import RoleManifestService
+
+        two_role_source = "Backend Engineer role details here.\nFrontend Engineer role details here."
+
+        def two_role_manifest():
+            return RoleManifestService(
+                provider=lambda system, user: {
+                    "classification": "multiple",
+                    "role_count": 2,
+                    "confidence": 0.96,
+                    "shared_constraints": [],
+                    "roles": [
+                        {"index": 1, "title_hint": "Backend Engineer", "start_line": 1, "end_line": 1, "confidence": 0.98},
+                        {"index": 2, "title_hint": "Frontend Engineer", "start_line": 2, "end_line": 2, "confidence": 0.98},
+                    ],
+                }
+            ).detect(two_role_source)
+
+        with Session(self.engine) as db:
+            user_settings = self._seed_user_settings(db, feature_ai_enabled=False, feature_ai_extractor_enabled=True)
+            user_settings.feature_role_manifest_enabled = True
+            db.commit()
+            resume = self._seed_resume(db)
+            deps, marked, _events = self._deps()
+
+            parse_calls: list[dict[str, object]] = []
+            regenerate_calls: list[int] = []
+
+            def tracking_parse(subject: str, body: str, *, ai_extractor_enabled: bool = False, **kwargs: object):
+                parse_calls.append({"body": body, "ai_extractor_enabled": ai_extractor_enabled})
+                role = "Backend Engineer" if "Backend Engineer" in body else "Frontend Engineer" if "Frontend Engineer" in body else "Engineer"
+                return {
+                    "role": role,
+                    "location": "hybrid",
+                    "job_location_text": "hybrid",
+                    "salary_text": "$60/hr",
+                    "skills_text": "java",
+                    "f2f_mentioned": False,
+                    "asks_contact_fields": False,
+                    "is_texas_role": False,
+                }, {"parser_version": "base_only_v2", "structured_requirements": {}}
+
+            def fake_regenerate_candidate(email_id, _payload, target_db):
+                regenerate_calls.append(email_id)
+                child = target_db.get(RecruiterEmail, email_id)
+                child.draft_reply = "child draft"
+                child.state = "needs_review"
+                target_db.commit()
+                return child
+
+            def get_candidate(target_db, email_id):
+                return target_db.get(RecruiterEmail, email_id)
+
+            multi_role_deps = replace(
+                deps,
+                parse_email_with_details=tracking_parse,
+                regenerate_candidate=fake_regenerate_candidate,
+                get_candidate=get_candidate,
+            )
+            item = self._item("m-multi-run-1")
+            item["body"] = two_role_source
+
+            with patch(
+                "app.automation.run_orchestrator.RoleManifestService",
+                return_value=SimpleNamespace(detect=lambda body: two_role_manifest()),
+            ):
+                result = RunOrchestrator().execute(
+                    RunOrchestratorRequest(
+                        db=db,
+                        owner_id="default-owner",
+                        items=[item],
+                        user_settings=user_settings,
+                        resume=resume,
+                        active_resume=resume,
+                        enabled_resumes=[resume],
+                        effective_policy={},
+                        threshold=0.6,
+                        dry_run=False,
+                        model_name="deepseek-chat",
+                        run_source="automation_run",
+                        run_key="automation_run:multi-1",
+                        deps=multi_role_deps,
+                    )
+                )
+
+            self.assertEqual(result.queued_count, 1)
+            parent = db.query(RecruiterEmail).filter(RecruiterEmail.external_message_id == "m-multi-run-1").first()
+            self.assertIsNotNone(parent)
+            assert parent is not None
+            self.assertEqual(parent.role_manifest_status, "multiple")
+
+            parent_calls = [c for c in parse_calls if c["body"] == two_role_source]
+            self.assertEqual(len(parent_calls), 1)
+            self.assertFalse(parent_calls[0]["ai_extractor_enabled"])
+
+            children = (
+                db.query(RecruiterEmail)
+                .filter(RecruiterEmail.source_parent_email_id == parent.id)
+                .all()
+            )
+            self.assertEqual(len(children), 2)
+            child_calls = [c for c in parse_calls if c["body"] != two_role_source]
+            self.assertEqual(len(child_calls), 2)
+            self.assertTrue(all(c["ai_extractor_enabled"] for c in child_calls))
+            self.assertEqual(sorted(regenerate_calls), sorted(child.id for child in children))
+
 
 if __name__ == "__main__":
     unittest.main()

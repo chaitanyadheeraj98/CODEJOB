@@ -79,7 +79,6 @@ from app.models import (
 )
 from app.models import RecipientRoutingFeedback
 from app.parsing import build_skills_json_payload
-from app.parsing.jd_requirements import requirements_from_payload, requirements_to_payload
 from app.parsing.skill_audit import is_suspicious_skill_blob
 from app.telegram_bot import TelegramBotService, TelegramReply
 from app.phase0 import (
@@ -147,9 +146,9 @@ from app.services.candidate_screening_service import (
     CandidateScreeningService,
     apply_screening_decision,
 )
-from app.services.eligibility_service import apply_inherited_constraints
 from app.services.orchestration_service import OrchestrationDeps, OrchestrationService
 from app.services.requirement_expansion_service import RequirementExpansionService
+from app.services.role_manifest_pipeline import extract_and_score_children
 from app.services.role_manifest_service import RoleManifestService
 from app.services.sendability_service import apply_resume_sendability, resolve_sendability_status
 from app.services.routing_runtime_service import RoutingRuntimeDeps, RoutingRuntimeService
@@ -2923,7 +2922,9 @@ def _run_gmail_sync(
     if user_settings.feature_role_manifest_enabled:
         rows = db.query(RecruiterEmail).filter(RecruiterEmail.sync_batch_id == response.sync_batch_id).all()
         for row in rows:
-            if not row.is_multi_role_child:
+            # role_manifest_status is already stamped inline during sync_gmail for rows the
+            # new detect-before-parse ordering handled; this loop is now only a safety net.
+            if not row.is_multi_role_child and row.role_manifest_status is None:
                 try:
                     retry_role_detection(row.id, db)
                 except Exception:
@@ -2957,7 +2958,11 @@ def _run_automation(
             policy_service.read_policy_from_settings(user_settings.policy_json)
         )
         for source_row in source_rows:
-            if not source_row.is_multi_role_child:
+            if source_row.is_multi_role_child:
+                continue
+            # role_manifest_status is already stamped inline during run_once for rows the
+            # new detect-before-parse ordering handled; only call retry as a safety net.
+            if source_row.role_manifest_status is None:
                 try:
                     detection = retry_role_detection(source_row.id, db)
                 except Exception:
@@ -2968,16 +2973,19 @@ def _run_automation(
                         response.run_key,
                     )
                     continue
-                if user_settings.feature_auto_send and not dry_run and detection.manifest_status == "single":
-                    try:
-                        _get_orchestration_service().approve_send(
-                            source_row.id,
-                            ApproveSendRequest(),
-                            db,
-                        )
-                        auto_sent_count += 1
-                    except HTTPException:
-                        auto_send_failed_count += 1
+                manifest_status = detection.manifest_status
+            else:
+                manifest_status = source_row.role_manifest_status
+            if user_settings.feature_auto_send and not dry_run and manifest_status == "single":
+                try:
+                    _get_orchestration_service().approve_send(
+                        source_row.id,
+                        ApproveSendRequest(),
+                        db,
+                    )
+                    auto_sent_count += 1
+                except HTTPException:
+                    auto_send_failed_count += 1
         if user_settings.feature_auto_send:
             response.auto_sent_count = auto_sent_count
             response.auto_send_failed_count = auto_send_failed_count
@@ -4348,59 +4356,14 @@ def retry_role_detection(email_id: int, db: Session = Depends(get_db)) -> RoleDe
     if manifest_result.status == "single":
         processing_ids = [source.id]
     if processing_ids:
-        for child_id in processing_ids:
-            child = _get_candidate_for_review(db, child_id)
-            if child.state in {"approved_sent", "rejected", "auto_rejected"}:
-                continue
-            try:
-                parsed, parser_details = parse_email_with_details(
-                    child.subject,
-                    child.requirement_source_text or child.body,
-                    source=child.source,
-                    ai_extractor_enabled=user_settings.feature_ai_extractor_enabled,
-                )
-                inherited = json.loads(child.inherited_constraints_json or "[]")
-                if not isinstance(inherited, list):
-                    inherited = []
-                structured = requirements_from_payload(
-                    parser_details.get("structured_requirements")
-                    if isinstance(parser_details.get("structured_requirements"), Mapping)
-                    else None
-                )
-                structured = apply_inherited_constraints(
-                    structured,
-                    [item for item in inherited if isinstance(item, Mapping)],
-                )
-                parser_details["structured_requirements"] = requirements_to_payload(structured)
-                screening = CandidateScreeningService().evaluate_parser_details(
-                    parser_details,
-                    user_settings,
-                )
-                child.role = str(parsed.get("role") or child.role)
-                child.location = str(parsed.get("location") or "unknown")
-                child.salary_text = str(parsed.get("salary_text") or "not_specified")
-                child.skills_text = str(parsed.get("skills_text") or "none_detected")
-                child.parser_details_json = json.dumps(parser_details, separators=(",", ":"))
-                child.skills_json = json.dumps(
-                    build_skills_json_payload(parser_details, fallback_skills_text=child.skills_text),
-                    separators=(",", ":"),
-                )
-                apply_screening_decision(child, screening)
-                if not screening.proceed_to_scoring:
-                    db.commit()
-                    continue
-                db.commit()
-                _get_orchestration_service().regenerate_candidate(
-                    child.id,
-                    RegenerateCandidateRequest(preserve_manual_routing=True, preserve_review_visibility=True),
-                    db,
-                )
-            except Exception as exc:
-                db.rollback()
-                failed_child = _get_candidate_for_review(db, child_id)
-                failed_child.sendability_status = "extraction_review"
-                failed_child.last_error = str(exc)
-                db.commit()
+        extract_and_score_children(
+            db,
+            processing_ids,
+            user_settings=user_settings,
+            get_candidate=_get_candidate_for_review,
+            parse_email_with_details=parse_email_with_details,
+            regenerate_candidate=_get_orchestration_service().regenerate_candidate,
+        )
 
     return RoleDetectionRetryResponse(
         source_parent_id=expansion.source_parent_id,

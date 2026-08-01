@@ -339,11 +339,20 @@ class RoleManifestService:
                     error=_safe_error_message(exc),
                 )
             if manifest.classification == "uncertain" or manifest.confidence < self._confidence_threshold:
-                return RoleManifestResult(status="uncertain", manifest=manifest, error="A source window was uncertain")
+                elapsed = int((time.perf_counter() - started) * 1000)
+                logger.warning("role_manifest_detect_large_source_uncertain duration_ms=%s", elapsed)
+                return RoleManifestResult(
+                    status="uncertain",
+                    manifest=manifest,
+                    error="A source window was uncertain",
+                    diagnostics=RoleManifestDiagnostics(duration_ms=elapsed),
+                )
             response_hashes.append(diagnostics.response_hash)
             for role in manifest.roles:
-                if role.start_line < start + 1 or role.end_line > start + len(window):
-                    return RoleManifestResult(status="invalid", error="Window role boundary is outside its source window")
+                # Identity (title/requisition) match takes priority over boundary overlap:
+                # a duplicate role reported in an overlap window can carry a corrupted
+                # start/end line (e.g. relative-to-window instead of absolute), which
+                # would otherwise falsely "overlap" an unrelated, already-detected role.
                 duplicate_index: int | None = None
                 for index, existing in enumerate(detected_roles):
                     same_requisition = bool(
@@ -351,14 +360,33 @@ class RoleManifestService:
                         and existing.requisition_id
                         and role.requisition_id.casefold() == existing.requisition_id.casefold()
                     )
-                    boundaries_overlap = role.start_line <= existing.end_line and existing.start_line <= role.end_line
                     same_title = _normalize_title(role.title_hint) == _normalize_title(existing.title_hint)
-                    if boundaries_overlap and not same_title and not same_requisition:
-                        return RoleManifestResult(status="invalid", error="Conflicting overlapping window detections")
-                    if same_requisition or (same_title and boundaries_overlap):
+                    if same_requisition or same_title:
                         duplicate_index = index
                         break
                 if duplicate_index is None:
+                    conflicting = any(
+                        role.start_line <= existing.end_line and existing.start_line <= role.end_line
+                        for existing in detected_roles
+                    )
+                    if conflicting:
+                        elapsed = int((time.perf_counter() - started) * 1000)
+                        logger.warning("role_manifest_detect_large_source_conflict duration_ms=%s", elapsed)
+                        return RoleManifestResult(
+                            status="invalid",
+                            error="Conflicting overlapping window detections",
+                            diagnostics=RoleManifestDiagnostics(duration_ms=elapsed),
+                        )
+                role_boundary_valid = not (role.start_line < start + 1 or role.end_line > start + len(window))
+                if duplicate_index is None:
+                    if not role_boundary_valid:
+                        elapsed = int((time.perf_counter() - started) * 1000)
+                        logger.warning("role_manifest_detect_large_source_boundary_invalid duration_ms=%s", elapsed)
+                        return RoleManifestResult(
+                            status="invalid",
+                            error="Window role boundary is outside its source window",
+                            diagnostics=RoleManifestDiagnostics(duration_ms=elapsed),
+                        )
                     detected_roles.append(role)
                 else:
                     existing = detected_roles[duplicate_index]
@@ -366,8 +394,8 @@ class RoleManifestService:
                         index=existing.index,
                         title_hint=existing.title_hint,
                         requisition_id=existing.requisition_id or role.requisition_id,
-                        start_line=min(existing.start_line, role.start_line),
-                        end_line=max(existing.end_line, role.end_line),
+                        start_line=min(existing.start_line, role.start_line) if role_boundary_valid else existing.start_line,
+                        end_line=max(existing.end_line, role.end_line) if role_boundary_valid else existing.end_line,
                         confidence=max(existing.confidence, role.confidence),
                     )
             for constraint in manifest.shared_constraints:
@@ -379,7 +407,13 @@ class RoleManifestService:
 
         detected_roles.sort(key=lambda role: (role.start_line, role.end_line))
         if not detected_roles or len(detected_roles) > MAX_ROLES_PER_SOURCE:
-            return RoleManifestResult(status="invalid", error="Merged manifest role count is invalid")
+            elapsed = int((time.perf_counter() - started) * 1000)
+            logger.warning("role_manifest_merge_role_count_invalid count=%s duration_ms=%s", len(detected_roles), elapsed)
+            return RoleManifestResult(
+                status="invalid",
+                error="Merged manifest role count is invalid",
+                diagnostics=RoleManifestDiagnostics(duration_ms=elapsed),
+            )
         normalized_roles = [role.model_copy(update={"index": index}) for index, role in enumerate(detected_roles, start=1)]
         classification = "single" if len(normalized_roles) == 1 else "multiple"
         merged = RoleManifest(

@@ -11,6 +11,7 @@ from app.job_intent_learning import approved_learning_signals_for_owner, record_
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
+from app.config import settings as app_settings
 from app.models import RecruiterEmail, ResumeAsset, UserSettings
 from app.parsing import build_skills_json_payload
 from app.recent_runs import SkippedItemRecord
@@ -18,6 +19,9 @@ from app.routing import RoutingDecision
 from app.services import policy_service
 from app.services.gmail_group_source_service import ConfiguredRequirementGroup, resolve_trusted_group_context
 from app.services.candidate_screening_service import CandidateScreeningService, apply_screening_decision
+from app.services.requirement_expansion_service import RequirementExpansionService
+from app.services.role_manifest_pipeline import extract_and_score_children
+from app.services.role_manifest_service import RoleManifestResult, RoleManifestService
 from app.services.sendability_service import apply_resume_sendability
 from .queue_preparation import (
     QueuePreparationDependencies,
@@ -76,6 +80,8 @@ class RunOrchestratorDependencies:
     is_recruiter_like: Callable[[str, str, str], bool]
     classify_email_intent: Callable[..., EmailIntentDecision] = _default_intent_decision
     record_skipped_item: Callable[[Session, SkippedItemRecord], None] = _discard_skipped_item
+    regenerate_candidate: Callable[..., RecruiterEmail] | None = None
+    get_candidate: Callable[[Session, int], RecruiterEmail] | None = None
 
 
 @dataclass(frozen=True)
@@ -207,11 +213,17 @@ class RunOrchestrator:
                 continue
             if recruiter_like_mode in {"block", "warn"} and not recruiter_like:
                 recruiter_like_warning = "non_recruiter_like_gmail"
+            manifest_result: RoleManifestResult | None = None
+            if request.user_settings.feature_role_manifest_enabled:
+                manifest_result = RoleManifestService().detect(body)
+            item_ai_extractor_enabled = request.user_settings.feature_ai_extractor_enabled and (
+                manifest_result is None or manifest_result.status != "multiple"
+            )
             parsed_for_selection, parser_details = request.deps.parse_email_with_details(
                 subject,
                 body,
                 source="gmail",
-                ai_extractor_enabled=request.user_settings.feature_ai_extractor_enabled,
+                ai_extractor_enabled=item_ai_extractor_enabled,
             )
             parser_details_json = json.dumps(parser_details, separators=(",", ":"))
             skills_json = json.dumps(
@@ -260,6 +272,8 @@ class RunOrchestrator:
                 queued_count += 1
                 queued_email_ids.append(email.id)
                 last_email = email
+                if manifest_result is not None:
+                    self._expand_and_extract_children(request, email, manifest_result)
                 continue
             resume_selection = request.deps.select_best_resume_match(
                 subject=subject,
@@ -598,6 +612,8 @@ class RunOrchestrator:
             queued_count += 1
             queued_email_ids.append(email.id)
             last_email = email
+            if manifest_result is not None:
+                self._expand_and_extract_children(request, email, manifest_result)
 
         return RunOrchestratorResult(
             matched_count=matched_count,
@@ -612,6 +628,30 @@ class RunOrchestrator:
             ai_last_finished_at=ai_last_finished_at,
             ai_last_duration_ms=ai_last_duration_ms,
         )
+
+    def _expand_and_extract_children(
+        self,
+        request: RunOrchestratorRequest,
+        email: RecruiterEmail,
+        manifest_result: RoleManifestResult,
+    ) -> None:
+        if request.deps.regenerate_candidate is None or request.deps.get_candidate is None:
+            return
+        expansion = RequirementExpansionService().expand(
+            request.db,
+            email,
+            manifest_result,
+            materialize=app_settings.role_manifest_child_creation_enabled,
+        )
+        if expansion.child_ids:
+            extract_and_score_children(
+                request.db,
+                expansion.child_ids,
+                user_settings=request.user_settings,
+                get_candidate=request.deps.get_candidate,
+                parse_email_with_details=request.deps.parse_email_with_details,
+                regenerate_candidate=request.deps.regenerate_candidate,
+            )
 
     def _email_row(
         self,
