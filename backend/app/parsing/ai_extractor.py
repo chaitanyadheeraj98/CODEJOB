@@ -2,16 +2,17 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from app.ai.deepseek_client import deepseek_json_completion
+from app.ai.deepseek_client import DeepSeekJSONError, deepseek_json_completion
+from app.parsing.ai_extractor_sectional import extract_sections
 from app.parsing.skill_audit import is_suspicious_skill_blob, recover_known_skills_from_blob
 from app.skill_taxonomy import normalize_skill_token
 
 
-AI_EXTRACTOR_MAX_TOKENS = 2_048
+AI_EXTRACTOR_MAX_TOKENS = 6_000
 
 
 @dataclass(frozen=True)
@@ -36,6 +37,7 @@ class AIExtractorResult:
     confidence: float = 0.0
     evidence: dict[str, list[str]] = field(default_factory=dict)
     error: str | None = None
+    extraction_path: Literal["primary", "sectional"] = "primary"
 
 
 class _AIExtractionSchema(BaseModel):
@@ -330,6 +332,7 @@ def extract_ai_job_details(
     system_prompt = _build_system_prompt()
     user_prompt = _build_user_prompt(cleaned_subject, cleaned_body, source=source, source_hints=hints)
 
+    extraction_path: Literal["primary", "sectional"] = "primary"
     try:
         payload = deepseek_json_completion(
             system_prompt,
@@ -339,6 +342,25 @@ def extract_ai_job_details(
             max_tokens=AI_EXTRACTOR_MAX_TOKENS,
             thinking="disabled",
         )
+    except DeepSeekJSONError as exc:
+        if exc.finish_reason != "length":
+            return AIExtractorResult(error=str(exc), evidence={"extractor_error": [str(exc)]})
+        try:
+            payload = extract_sections(
+                system_prompt,
+                user_prompt,
+                source=source,
+                model_name=model_name,
+                timeout_seconds=timeout_seconds,
+            )
+            extraction_path = "sectional"
+        except Exception as sectional_exc:
+            error = str(sectional_exc)
+            return AIExtractorResult(
+                error=error,
+                evidence={"extractor_error": [error]},
+                extraction_path="sectional",
+            )
     except Exception as exc:
         return AIExtractorResult(error=str(exc), evidence={"extractor_error": [str(exc)]})
 
@@ -386,6 +408,7 @@ def extract_ai_job_details(
         skills_unknown=skills_unknown,
         confidence=_normalize_confidence(normalized_payload.get("confidence")),
         evidence=_normalize_evidence(normalized_payload.get("evidence")),
+        extraction_path=extraction_path,
     )
 
 
@@ -409,6 +432,7 @@ def ai_extractor_result_to_payload(result: AIExtractorResult) -> dict[str, objec
         "skills_unknown": list(result.skills_unknown),
         "confidence": result.confidence,
         "evidence": result.evidence,
+        "extraction_path": result.extraction_path,
     }
     if result.error:
         payload["error"] = result.error

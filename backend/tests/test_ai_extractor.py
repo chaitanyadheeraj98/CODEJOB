@@ -4,6 +4,11 @@ from unittest.mock import patch
 
 from app.ai.deepseek_client import DeepSeekJSONError, _parse_json_object, deepseek_json_completion
 from app.parsing.ai_extractor import AI_EXTRACTOR_MAX_TOKENS, ai_extractor_result_to_payload, extract_ai_job_details
+from ai_extractor_fixtures import (
+    REAL_NVOIDS_LLMOPS_CHILD_BODY,
+    REAL_NVOIDS_LLMOPS_CHILD_SOURCE,
+    REAL_NVOIDS_LLMOPS_CHILD_SUBJECT,
+)
 
 
 def _fake_response(
@@ -136,6 +141,117 @@ class DeepSeekJsonCompletionTests(unittest.TestCase):
 
 
 class AIExtractorTests(unittest.TestCase):
+    @patch("app.parsing.ai_extractor.extract_sections")
+    @patch(
+        "app.parsing.ai_extractor.deepseek_json_completion",
+        return_value={"role_candidates": ["Java Engineer"], "skills": ["Java"]},
+    )
+    def test_primary_path_does_not_invoke_sectional_extraction(self, _mock_completion, mock_sections) -> None:
+        result = extract_ai_job_details("Java Engineer", "Build Java services")
+
+        self.assertIsNone(result.error)
+        self.assertEqual(result.extraction_path, "primary")
+        mock_sections.assert_not_called()
+
+    @patch(
+        "app.parsing.ai_extractor.extract_sections",
+        return_value={
+            "role_candidates": ["Senior LLMOps Engineer"],
+            "primary_location": "Santa Clara, CA",
+            "skills": ["Python", "MLOps", "LLMOps", "RAG"],
+            "must_have_skills": ["Python", "MLOps", "LLMOps"],
+            "confidence": 0.93,
+            "evidence": {"skills": ["Strong proficiency in Python and MLOps"]},
+        },
+    )
+    @patch(
+        "app.parsing.ai_extractor.deepseek_json_completion",
+        side_effect=DeepSeekJSONError(
+            "truncated JSON content",
+            raw_content='{"role_candidates":["Senior LLMOps Engineer"]',
+            finish_reason="length",
+        ),
+    )
+    def test_length_truncation_invokes_sectional_extraction(self, _mock_completion, mock_sections) -> None:
+        result = extract_ai_job_details("Senior LLMOps Engineer", "Python MLOps LLMOps RAG")
+
+        self.assertIsNone(result.error)
+        self.assertEqual(result.extraction_path, "sectional")
+        self.assertEqual(result.role_candidates, ("Senior LLMOps Engineer",))
+        mock_sections.assert_called_once()
+
+    @patch("app.parsing.ai_extractor.extract_sections")
+    @patch(
+        "app.parsing.ai_extractor.deepseek_json_completion",
+        side_effect=DeepSeekJSONError(
+            "DeepSeek returned malformed JSON content",
+            raw_content='{"role":',
+            finish_reason="stop",
+        ),
+    )
+    def test_non_length_json_error_does_not_invoke_sectional_extraction(self, _mock_completion, mock_sections) -> None:
+        result = extract_ai_job_details("Subject", "Body")
+
+        self.assertEqual(result.error, "DeepSeek returned malformed JSON content")
+        self.assertEqual(result.extraction_path, "primary")
+        mock_sections.assert_not_called()
+
+    @patch(
+        "app.parsing.ai_extractor.extract_sections",
+        side_effect=RuntimeError("skills section failed after 3 attempts: truncated JSON content"),
+    )
+    @patch(
+        "app.parsing.ai_extractor.deepseek_json_completion",
+        side_effect=DeepSeekJSONError("truncated JSON content", finish_reason="length"),
+    )
+    def test_sectional_failure_returns_error_for_existing_base_fallback(self, _mock_completion, _mock_sections) -> None:
+        result = extract_ai_job_details("Subject", "Body")
+
+        self.assertEqual(result.extraction_path, "sectional")
+        self.assertIn("skills section failed", result.error or "")
+
+    @patch(
+        "app.parsing.ai_extractor.extract_sections",
+        return_value={
+            "role_candidates": ["Senior LLMOps / MLOps Engineer"],
+            "primary_location": "Santa Clara, CA",
+            "work_mode": "onsite",
+            "salary_text": "70-75/hr on C2C",
+            "experience_years_min": 14,
+            "skills": [
+                "Python",
+                "MLOps",
+                "LLMOps",
+                "Azure ML",
+                "Databricks",
+                "Kubernetes",
+                "Docker",
+                "RAG",
+            ],
+            "must_have_skills": ["Python", "MLOps", "LLMOps"],
+            "nice_to_have_skills": ["RAG"],
+            "confidence": 0.94,
+            "evidence": {
+                "role": ["Senior LLMOps / MLOps Engineer"],
+                "skills": ["Strong proficiency in Python", "Experience with Kubernetes, Docker, Azure ML"],
+            },
+        },
+    )
+    @patch(
+        "app.parsing.ai_extractor.deepseek_json_completion",
+        side_effect=DeepSeekJSONError("truncated JSON content", finish_reason="length"),
+    )
+    def test_real_email_5159_fixture_recovers_after_primary_truncation(self, _mock_completion, _mock_sections) -> None:
+        result = extract_ai_job_details(
+            REAL_NVOIDS_LLMOPS_CHILD_SUBJECT,
+            REAL_NVOIDS_LLMOPS_CHILD_BODY,
+            source=REAL_NVOIDS_LLMOPS_CHILD_SOURCE,
+        )
+
+        self.assertIsNone(result.error)
+        self.assertEqual(result.extraction_path, "sectional")
+        self.assertGreaterEqual(len(result.skills_approved) + len(result.skills_unknown), 4)
+
     @patch(
         "app.parsing.ai_extractor.deepseek_json_completion",
         return_value={
