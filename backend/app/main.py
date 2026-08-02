@@ -20,6 +20,7 @@ from sqlalchemy import func, or_
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 from rq import Retry
+from rq.registry import StartedJobRegistry
 from rq.command import send_stop_job_command
 from rq.job import Job, JobStatus
 from rq.exceptions import NoSuchJobError
@@ -60,6 +61,7 @@ from app.external_feeds.service import ExternalFeedService
 from app.external_feeds.models import ExternalOpportunity, ExternalScrapeRun
 from app.models import (
     AttachmentAsset,
+    CanonicalEntityTaxonomyEntry,
     CustomSkillTaxonomyEntry,
     DraftEditFeedback,
     EmployerNumber,
@@ -79,7 +81,7 @@ from app.models import (
 )
 from app.models import RecipientRoutingFeedback
 from app.parsing import build_skills_json_payload
-from app.parsing.skill_audit import is_suspicious_skill_blob
+from app.parsing.skill_audit import analyze_skill_candidate, is_safe_for_bulk_skill_approval
 from app.telegram_bot import TelegramBotService, TelegramReply
 from app.phase0 import (
     DEFAULT_FALLBACK_DRAFT_TEMPLATE,
@@ -120,6 +122,7 @@ from app.jobs.queues import (
 )
 from app.jobs.tasks import run_automation_job, run_gmail_sync_job, run_nvoids_sync_job
 from app.skill_taxonomy import (
+    TAXONOMY_PLACEHOLDER_KEYS,
     clear_skill_taxonomy_cache,
     extract_skills_text,
     load_skill_taxonomy,
@@ -155,6 +158,13 @@ from app.services.routing_runtime_service import RoutingRuntimeDeps, RoutingRunt
 from app.services.scoring_runtime_service import ScoringRuntimeDeps, ScoringRuntimeService
 from app.services.settings_bootstrap_service import SettingsBootstrapService
 from app.services.startup_service import StartupService
+from app.services.taxonomy_learning_service import (
+    BULK_APPROVAL_MIN_OCCURRENCES,
+    embed_pending_skills,
+    is_safe_for_bulk_entity_approval,
+    list_pending_entities,
+    upsert_entity,
+)
 from app.services.telegram_runtime_service import TelegramRuntime, TelegramRuntimeDeps
 from app.schemas import (
     AIStatusResponse,
@@ -167,11 +177,16 @@ from app.schemas import (
     AutomationRunResponse,
     BulkApproveJobIntentSignalsResponse,
     BulkApproveSkillsResponse,
+    BulkApproveEntitiesResponse,
     BulkRejectRequest,
     CandidateListResponse,
     CustomSkillTaxonomyEntryResponse,
+    CanonicalEntityTaxonomyEntryResponse,
     DismissJobIntentSignalRequest,
     DismissSkillRequest,
+    DismissEntityRequest,
+    EmbedPendingSkillsResponse,
+    EmbeddingStatusResponse,
     EmailResponse,
     GmailStatusResponse,
     GmailSyncResponse,
@@ -180,6 +195,7 @@ from app.schemas import (
     IngestEmailRequest,
     JobIntentTaxonomyEntryResponse,
     JobEnqueueResponse,
+    JobQueueSummaryResponse,
     JobStatusResponse,
     OAuthStartResponse,
     OAuthUrlResponse,
@@ -188,6 +204,8 @@ from app.schemas import (
     PremiumNumberListResponse,
     PremiumNumberResponse,
     PendingSkillResponse,
+    PendingEntityResponse,
+    ApproveEntityRequest,
     RecruiterNumberResponse,
     RecruiterNumberListResponse,
     RecruiterOpportunityDeleteResponse,
@@ -215,6 +233,7 @@ from app.schemas import (
     RegenerateCandidateRequest,
     RoleDetectionRetryResponse,
     TelegramStatusResponse,
+    TaxonomyMetricsResponse,
     ExternalFeedSyncResponse,
     ExternalScrapeRunResponse,
     GmailRequirementGroupBulkCreateRequest,
@@ -912,7 +931,19 @@ def _enqueue_background_job(
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"job_queue_unavailable: {exc}") from exc
     if current_job_id:
-        raise HTTPException(status_code=409, detail=f"another_job_in_progress:{current_job_id}")
+        existing_row = (
+            db.query(RecentRun)
+            .filter(RecentRun.owner_id == settings.owner_id, RecentRun.job_backend_id == current_job_id)
+            .first()
+        )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "another_job_in_progress",
+                "job_id": current_job_id,
+                "run_key": existing_row.run_key if existing_row else None,
+            },
+        )
 
     job_id = uuid.uuid4().hex
     recent_run = create_recent_run(
@@ -1406,6 +1437,16 @@ def _serialize_custom_skill_entry(entry: CustomSkillTaxonomyEntry) -> CustomSkil
     return CustomSkillTaxonomyEntryResponse.model_validate(payload)
 
 
+def _serialize_canonical_entity(entry: CanonicalEntityTaxonomyEntry) -> CanonicalEntityTaxonomyEntryResponse:
+    payload = CanonicalEntityTaxonomyEntryResponse.model_validate(entry).model_dump()
+    try:
+        aliases = json.loads(entry.aliases_json or "[]")
+    except json.JSONDecodeError:
+        aliases = []
+    payload["aliases"] = [str(item).strip() for item in aliases if str(item).strip()]
+    return CanonicalEntityTaxonomyEntryResponse.model_validate(payload)
+
+
 def _list_approved_custom_skill_entries(db: Session) -> list[CustomSkillTaxonomyEntry]:
     return (
         db.query(CustomSkillTaxonomyEntry)
@@ -1450,6 +1491,7 @@ def _list_pending_unknown_skills(db: Session) -> list[PendingSkillResponse]:
     )
     for email_id, skills_json, parser_details_json in rows:
         unknown_skills: list[object] = []
+        unknown_source = "legacy"
         if skills_json:
             try:
                 skills_payload = json.loads(skills_json)
@@ -1459,6 +1501,8 @@ def _list_pending_unknown_skills(db: Session) -> list[PendingSkillResponse]:
                 raw_unknown = skills_payload.get("unknown", [])
                 if isinstance(raw_unknown, list):
                     unknown_skills = raw_unknown
+                    stored_source = str(skills_payload.get("unknown_source") or "legacy")
+                    unknown_source = stored_source if stored_source in {"ai", "base", "legacy"} else "legacy"
         if not unknown_skills and parser_details_json:
             try:
                 payload = json.loads(parser_details_json)
@@ -1474,10 +1518,11 @@ def _list_pending_unknown_skills(db: Session) -> list[PendingSkillResponse]:
         for item in unknown_skills:
             skill_name = _clean_custom_skill_name(str(item))
             normalized = normalize_taxonomy_text(skill_name)
+            analysis = analyze_skill_candidate(skill_name)
             if (
                 not skill_name
                 or not normalized
-                or is_suspicious_skill_blob(skill_name)
+                or normalized in TAXONOMY_PLACEHOLDER_KEYS
                 or normalized in suppressed
                 or normalized in seen_for_candidate
             ):
@@ -1490,11 +1535,19 @@ def _list_pending_unknown_skills(db: Session) -> list[PendingSkillResponse]:
                     "normalized_name": normalized,
                     "occurrence_count": 0,
                     "candidate_ids": [],
+                    "suspicious": False,
+                    "recoverable_skills": set(),
+                    "source_tags": set(),
                 },
             )
             bucket["occurrence_count"] = int(bucket["occurrence_count"]) + 1
+            bucket["suspicious"] = bool(bucket["suspicious"]) or analysis.suspicious or bool(analysis.recovered_skills)
             candidate_ids = cast(list[int], bucket["candidate_ids"])
             candidate_ids.append(int(email_id))
+            recoverable = cast(set[str], bucket["recoverable_skills"])
+            recoverable.update(analysis.recovered_skills)
+            source_tags = cast(set[str], bucket["source_tags"])
+            source_tags.add(unknown_source)
     results: list[PendingSkillResponse] = []
     for item in aggregated.values():
         candidate_ids = sorted(set(cast(list[int], item["candidate_ids"])), reverse=True)
@@ -1504,6 +1557,9 @@ def _list_pending_unknown_skills(db: Session) -> list[PendingSkillResponse]:
                 normalized_name=str(item["normalized_name"]),
                 occurrence_count=int(item["occurrence_count"]),
                 candidate_ids=candidate_ids,
+                suspicious=bool(item["suspicious"]),
+                recoverable_skills=sorted(cast(set[str], item["recoverable_skills"]), key=str.casefold),
+                source_tags=sorted(cast(set[str], item["source_tags"])),
             )
         )
     results.sort(key=lambda item: (-item.occurrence_count, item.skill_name.lower(), item.normalized_name))
@@ -1518,6 +1574,7 @@ def _upsert_custom_skill_entry(
     aliases: list[str] | None = None,
     category: str = "custom",
     cluster_hint: str | None = None,
+    occurrence_count: int = 0,
     status: str,
     auto_commit: bool = True,
 ) -> CustomSkillTaxonomyEntry:
@@ -1540,6 +1597,9 @@ def _upsert_custom_skill_entry(
         row.aliases_json = json.dumps(normalized_aliases, separators=(",", ":"))
         row.category = normalized_category
         row.cluster_hint = _clean_custom_skill_name(cluster_hint) or None
+        row.occurrence_count = max(int(row.occurrence_count or 0), max(0, occurrence_count))
+        if status == "approved":
+            row.embedding_status = "pending"
         row.status = status
         if auto_commit:
             clear_skill_taxonomy_cache()
@@ -1552,6 +1612,8 @@ def _upsert_custom_skill_entry(
         aliases_json=json.dumps(normalized_aliases, separators=(",", ":")),
         category=normalized_category,
         cluster_hint=_clean_custom_skill_name(cluster_hint) or None,
+        occurrence_count=max(0, occurrence_count),
+        embedding_status="pending",
         status=status,
     )
     db.add(created)
@@ -2435,6 +2497,8 @@ def list_approved_skills(db: Session = Depends(get_db)) -> list[CustomSkillTaxon
 
 @app.post("/settings/skills/approve", response_model=CustomSkillTaxonomyEntryResponse)
 def approve_skill(payload: ApproveSkillRequest, db: Session = Depends(get_db)) -> CustomSkillTaxonomyEntryResponse:
+    pending = {item.normalized_name: item for item in _list_pending_unknown_skills(db)}
+    pending_item = pending.get(normalize_taxonomy_text(payload.skill_name))
     entry = _upsert_custom_skill_entry(
         db,
         skill_name=payload.skill_name,
@@ -2442,6 +2506,7 @@ def approve_skill(payload: ApproveSkillRequest, db: Session = Depends(get_db)) -
         aliases=payload.aliases,
         category=payload.category,
         cluster_hint=payload.cluster_hint,
+        occurrence_count=pending_item.occurrence_count if pending_item else 0,
         status="approved",
     )
     return _serialize_custom_skill_entry(entry)
@@ -2454,7 +2519,12 @@ def approve_all_skills(db: Session = Depends(get_db)) -> BulkApproveSkillsRespon
     suppressed = _known_or_suppressed_pending_skill_keys(db)
     for item in pending:
         normalized = normalize_taxonomy_text(item.skill_name)
-        if not normalized or normalized in suppressed:
+        if (
+            not normalized
+            or normalized in suppressed
+            or item.occurrence_count < BULK_APPROVAL_MIN_OCCURRENCES
+            or not is_safe_for_bulk_skill_approval(item.skill_name)
+        ):
             continue
         _upsert_custom_skill_entry(
             db,
@@ -2463,6 +2533,7 @@ def approve_all_skills(db: Session = Depends(get_db)) -> BulkApproveSkillsRespon
             aliases=[],
             category="custom",
             cluster_hint=None,
+            occurrence_count=item.occurrence_count,
             status="approved",
             auto_commit=False,
         )
@@ -2493,6 +2564,177 @@ def dismiss_skill(payload: DismissSkillRequest, db: Session = Depends(get_db)) -
         status="dismissed",
     )
     return _serialize_custom_skill_entry(entry)
+
+
+@app.get("/settings/skills/embedding-status", response_model=EmbeddingStatusResponse)
+def skill_embedding_status(db: Session = Depends(get_db)) -> EmbeddingStatusResponse:
+    pending_count = (
+        db.query(CustomSkillTaxonomyEntry)
+        .filter(
+            CustomSkillTaxonomyEntry.owner_id == settings.owner_id,
+            CustomSkillTaxonomyEntry.status == "approved",
+            CustomSkillTaxonomyEntry.embedding_status == "pending",
+        )
+        .count()
+    )
+    return EmbeddingStatusResponse(pending_count=pending_count)
+
+
+@app.post("/settings/skills/embed-pending", response_model=EmbedPendingSkillsResponse)
+def embed_approved_skills(db: Session = Depends(get_db)) -> EmbedPendingSkillsResponse:
+    if not runtime_state.taxonomy_embedding_lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="A taxonomy embedding batch is already running")
+    try:
+        return EmbedPendingSkillsResponse.model_validate(
+            embed_pending_skills(db, owner_id=settings.owner_id)
+        )
+    finally:
+        runtime_state.taxonomy_embedding_lock.release()
+
+
+@app.get("/settings/entities/{entity_type}/pending", response_model=list[PendingEntityResponse])
+def list_pending_taxonomy_entities(
+    entity_type: str,
+    db: Session = Depends(get_db),
+) -> list[PendingEntityResponse]:
+    try:
+        rows = list_pending_entities(db, owner_id=settings.owner_id, entity_type=entity_type)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return [PendingEntityResponse.model_validate(row) for row in rows]
+
+
+@app.get("/settings/entities/{entity_type}/approved", response_model=list[CanonicalEntityTaxonomyEntryResponse])
+def list_approved_taxonomy_entities(
+    entity_type: str,
+    db: Session = Depends(get_db),
+) -> list[CanonicalEntityTaxonomyEntryResponse]:
+    if entity_type not in {"company", "location"}:
+        raise HTTPException(status_code=404, detail="entity_type must be company or location")
+    rows = (
+        db.query(CanonicalEntityTaxonomyEntry)
+        .filter(
+            CanonicalEntityTaxonomyEntry.owner_id == settings.owner_id,
+            CanonicalEntityTaxonomyEntry.entity_type == entity_type,
+            CanonicalEntityTaxonomyEntry.status == "approved",
+        )
+        .order_by(CanonicalEntityTaxonomyEntry.canonical_name.asc())
+        .all()
+    )
+    return [_serialize_canonical_entity(row) for row in rows]
+
+
+@app.post("/settings/entities/{entity_type}/approve", response_model=CanonicalEntityTaxonomyEntryResponse)
+def approve_taxonomy_entity(
+    entity_type: str,
+    payload: ApproveEntityRequest,
+    db: Session = Depends(get_db),
+) -> CanonicalEntityTaxonomyEntryResponse:
+    try:
+        pending = {
+            str(item["normalized_name"]): item
+            for item in list_pending_entities(db, owner_id=settings.owner_id, entity_type=entity_type)
+        }
+        item = pending.get(normalize_taxonomy_text(payload.display_name), {})
+        row = upsert_entity(
+            db,
+            owner_id=settings.owner_id,
+            entity_type=entity_type,
+            display_name=payload.display_name,
+            canonical_name=payload.canonical_name,
+            aliases=payload.aliases,
+            occurrence_count=int(item.get("occurrence_count", 0)),
+            status="approved",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _serialize_canonical_entity(row)
+
+
+@app.post("/settings/entities/{entity_type}/approve-all", response_model=BulkApproveEntitiesResponse)
+def approve_all_taxonomy_entities(
+    entity_type: str,
+    db: Session = Depends(get_db),
+) -> BulkApproveEntitiesResponse:
+    try:
+        pending = list_pending_entities(db, owner_id=settings.owner_id, entity_type=entity_type)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    approved: list[str] = []
+    for item in pending:
+        if (
+            int(item["occurrence_count"]) < BULK_APPROVAL_MIN_OCCURRENCES
+            or not is_safe_for_bulk_entity_approval(str(item["display_name"]))
+        ):
+            continue
+        upsert_entity(
+            db,
+            owner_id=settings.owner_id,
+            entity_type=entity_type,
+            display_name=str(item["display_name"]),
+            canonical_name=None,
+            aliases=[],
+            occurrence_count=int(item["occurrence_count"]),
+            status="approved",
+            auto_commit=False,
+        )
+        approved.append(str(item["display_name"]))
+    if approved:
+        db.commit()
+    return BulkApproveEntitiesResponse(
+        processed_count=len(pending),
+        approved_count=len(approved),
+        skipped_count=len(pending) - len(approved),
+        approved_names=approved,
+    )
+
+
+@app.post("/settings/entities/{entity_type}/dismiss", response_model=CanonicalEntityTaxonomyEntryResponse)
+def dismiss_taxonomy_entity(
+    entity_type: str,
+    payload: DismissEntityRequest,
+    db: Session = Depends(get_db),
+) -> CanonicalEntityTaxonomyEntryResponse:
+    try:
+        row = upsert_entity(
+            db,
+            owner_id=settings.owner_id,
+            entity_type=entity_type,
+            display_name=payload.display_name,
+            canonical_name=None,
+            aliases=[],
+            occurrence_count=0,
+            status="dismissed",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _serialize_canonical_entity(row)
+
+
+@app.get("/settings/taxonomy/metrics", response_model=TaxonomyMetricsResponse)
+def taxonomy_learning_metrics(db: Session = Depends(get_db)) -> TaxonomyMetricsResponse:
+    rows = (
+        db.query(RecruiterEmail.skills_json, RecruiterEmail.parser_details_json)
+        .filter(RecruiterEmail.owner_id == settings.owner_id)
+        .all()
+    )
+    unknown_emails = 0
+    for skills_json, parser_details_json in rows:
+        skills_payload = _json_object(skills_json) or {}
+        parser_payload = _json_object(parser_details_json) or {}
+        unknown = skills_payload.get("unknown") or parser_payload.get("unknown_skills")
+        if isinstance(unknown, list) and unknown:
+            unknown_emails += 1
+    parsed_count = len(rows)
+    return TaxonomyMetricsResponse(
+        parsed_email_count=parsed_count,
+        emails_with_unknown_skills=unknown_emails,
+        unknown_skill_rate=round(unknown_emails / parsed_count, 4) if parsed_count else 0.0,
+        pending_skill_count=len(_list_pending_unknown_skills(db)),
+        pending_company_count=len(list_pending_entities(db, owner_id=settings.owner_id, entity_type="company")),
+        pending_location_count=len(list_pending_entities(db, owner_id=settings.owner_id, entity_type="location")),
+        alias_collision_count=len(load_skill_taxonomy().ambiguous_aliases),
+    )
 
 
 @app.get("/settings/job-intent-learning/pending", response_model=list[JobIntentTaxonomyEntryResponse])
@@ -3047,6 +3289,31 @@ def jobs_health() -> dict[str, object]:
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"job_queue_unavailable: {exc}") from exc
     return {"status": "ok" if ready else "unavailable", "redis_ready": ready}
+
+
+@app.get("/jobs/summary", response_model=JobQueueSummaryResponse)
+def jobs_summary(db: Session = Depends(get_db)) -> JobQueueSummaryResponse:
+    queued = 0
+    processing = 0
+    try:
+        connection = get_redis_connection()
+        for name in (GMAIL_SYNC_QUEUE, NVOIDS_SYNC_QUEUE, AUTOMATION_RUN_QUEUE):
+            queue = get_queue(name, connection=connection)
+            queued += queue.count
+            processing += StartedJobRegistry(name=name, connection=connection).count
+    except Exception:
+        logger.exception("jobs_summary_redis_unavailable")
+    succeeded = (
+        db.query(RecentRun)
+        .filter(RecentRun.owner_id == settings.owner_id, RecentRun.status == "ok")
+        .count()
+    )
+    failed = (
+        db.query(RecentRun)
+        .filter(RecentRun.owner_id == settings.owner_id, RecentRun.status == "failed")
+        .count()
+    )
+    return JobQueueSummaryResponse(queued=queued, processing=processing, succeeded=succeeded, failed=failed)
 
 
 @app.post("/jobs/gmail-sync", response_model=JobEnqueueResponse, status_code=202)

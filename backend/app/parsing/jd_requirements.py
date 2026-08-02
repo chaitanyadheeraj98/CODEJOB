@@ -66,6 +66,7 @@ class ParsedJDRequirements:
     locations: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
     preferred_domains: tuple[str, ...] = ()
+    excluded_skills: tuple[str, ...] = ()
 
 
 class JDSectionLike(Protocol):
@@ -347,6 +348,7 @@ def structured_requirements_from_ai_payload(
         locations=_dedupe_strings([str(payload.get("primary_location") or "").strip(), *fallback.locations]),
         warnings=fallback.warnings,
         preferred_domains=fallback.preferred_domains,
+        excluded_skills=_dedupe_strings(payload.get("excluded_skills") or fallback.excluded_skills),
     )
 
 
@@ -385,6 +387,7 @@ def requirements_to_payload(requirements: ParsedJDRequirements) -> dict[str, Any
         "locations": list(requirements.locations),
         "warnings": list(requirements.warnings),
         "preferred_domains": list(requirements.preferred_domains),
+        "excluded_skills": list(requirements.excluded_skills),
     }
 
 
@@ -424,4 +427,5 @@ def requirements_from_payload(payload: Mapping[str, Any] | None) -> ParsedJDRequ
         locations=tuple(str(value) for value in raw.get("locations", []) if str(value).strip()),
         warnings=tuple(str(value) for value in raw.get("warnings", []) if str(value).strip()),
         preferred_domains=tuple(str(value) for value in raw.get("preferred_domains", []) if str(value).strip()),
+        excluded_skills=tuple(str(value) for value in raw.get("excluded_skills", []) if str(value).strip()),
     )

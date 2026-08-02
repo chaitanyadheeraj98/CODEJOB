@@ -1429,7 +1429,7 @@ Job ID: ENG-2"""
         self.assertEqual(pending.status_code, 200, pending.text)
         self.assertEqual([item["skill_name"] for item in pending.json()], ["Legacy Graph Skill"])
 
-    def test_pending_skill_api_suppresses_suspicious_unknown_skill_blobs_from_skills_json(self) -> None:
+    def test_pending_skill_api_marks_suspicious_unknown_skill_blobs_from_skills_json(self) -> None:
         suspicious_blob = "angularjs next js jquery redux bootstrap material ui sass html node js express express js spring spring boot postgresql mysql mongodb redis dynamodb cassandra oracle aws azure gcp docker kubernetes terraform ansible jenkins github actions gitlab ci"
         with self.SessionLocal() as db:
             db.add(
@@ -1452,6 +1452,7 @@ Job ID: ENG-2"""
                             "known": ["Java"],
                             "unknown": [suspicious_blob, "PromptForge"],
                             "evidence": {"unknown": [suspicious_blob, "PromptForge"]},
+                            "unknown_source": "ai",
                         }
                     ),
                 )
@@ -1460,9 +1461,14 @@ Job ID: ENG-2"""
 
         pending = self.client.get("/settings/skills/pending")
         self.assertEqual(pending.status_code, 200, pending.text)
-        self.assertEqual([item["skill_name"] for item in pending.json()], ["PromptForge"])
+        by_name = {item["skill_name"]: item for item in pending.json()}
+        self.assertEqual(set(by_name), {suspicious_blob, "PromptForge"})
+        self.assertTrue(by_name[suspicious_blob]["suspicious"])
+        self.assertTrue(by_name[suspicious_blob]["recoverable_skills"])
+        self.assertEqual(by_name[suspicious_blob]["source_tags"], ["ai"])
+        self.assertFalse(by_name["PromptForge"]["suspicious"])
 
-    def test_pending_skill_api_suppresses_suspicious_legacy_unknown_skill_blobs(self) -> None:
+    def test_pending_skill_api_marks_suspicious_legacy_unknown_skill_blobs(self) -> None:
         suspicious_blob = "javascript typescript java sql react react js angular angularjs next js jquery redux bootstrap material ui sass html node js express express js spring spring boot postgresql mysql mongodb redis"
         with self.SessionLocal() as db:
             db.add(
@@ -1486,7 +1492,10 @@ Job ID: ENG-2"""
 
         pending = self.client.get("/settings/skills/pending")
         self.assertEqual(pending.status_code, 200, pending.text)
-        self.assertEqual([item["skill_name"] for item in pending.json()], ["PromptForge"])
+        by_name = {item["skill_name"]: item for item in pending.json()}
+        self.assertEqual(set(by_name), {suspicious_blob, "PromptForge"})
+        self.assertTrue(by_name[suspicious_blob]["suspicious"])
+        self.assertEqual(by_name[suspicious_blob]["source_tags"], ["legacy"])
 
     def test_dismissed_skill_is_suppressed_from_pending_results(self) -> None:
         with self.SessionLocal() as db:
@@ -1517,7 +1526,7 @@ Job ID: ENG-2"""
         self.assertEqual(pending.status_code, 200, pending.text)
         self.assertEqual(pending.json(), [])
 
-    def test_bulk_approve_pending_skills_empties_queue_and_lists_approved_entries(self) -> None:
+    def test_bulk_approve_pending_skills_approves_only_clean_atomic_entries(self) -> None:
         with self.SessionLocal() as db:
             db.add_all(
                 [
@@ -1534,7 +1543,7 @@ Job ID: ENG-2"""
                         decision="qualified",
                         state="needs_review",
                         source="gmail",
-                        skills_json='{"skills_text":"Java, Nebula Workflow Grid","known":["Java"],"unknown":["Nebula Workflow Grid"],"evidence":{"Nebula Workflow Grid":"ai_extractor"}}',
+                        skills_json='{"skills_text":"Java, Nebula Workflow Grid, Adaptive Prompt Forge","known":["Java"],"unknown":["Nebula Workflow Grid","Adaptive Prompt Forge","with a focus on IAM"],"evidence":{"Nebula Workflow Grid":"ai_extractor"},"unknown_source":"ai"}',
                     ),
                     RecruiterEmail(
                         owner_id=main.settings.owner_id,
@@ -1549,7 +1558,7 @@ Job ID: ENG-2"""
                         decision="qualified",
                         state="needs_review",
                         source="gmail",
-                        parser_details_json='{"unknown_skills":["Adaptive Prompt Forge"]}',
+                        parser_details_json='{"unknown_skills":["Adaptive Prompt Forge","Nebula Workflow Grid","with a focus on IAM"]}',
                     ),
                 ]
             )
@@ -1559,24 +1568,28 @@ Job ID: ENG-2"""
         self.assertEqual(pending_before.status_code, 200, pending_before.text)
         self.assertEqual(
             [item["skill_name"] for item in pending_before.json()],
-            ["Adaptive Prompt Forge", "Nebula Workflow Grid"],
+            ["Adaptive Prompt Forge", "Nebula Workflow Grid", "with a focus on IAM"],
         )
+        polluted = next(item for item in pending_before.json() if item["skill_name"] == "with a focus on IAM")
+        self.assertTrue(polluted["suspicious"])
+        self.assertEqual(polluted["recoverable_skills"], ["IAM"])
+        self.assertEqual(polluted["source_tags"], ["ai", "legacy"])
 
         approved = self.client.post("/settings/skills/approve-all")
         self.assertEqual(approved.status_code, 200, approved.text)
         self.assertEqual(
             approved.json(),
             {
-                "processed_count": 2,
+                "processed_count": 3,
                 "approved_count": 2,
-                "skipped_count": 0,
+                "skipped_count": 1,
                 "approved_skill_names": ["Adaptive Prompt Forge", "Nebula Workflow Grid"],
             },
         )
 
         pending_after = self.client.get("/settings/skills/pending")
         self.assertEqual(pending_after.status_code, 200, pending_after.text)
-        self.assertEqual(pending_after.json(), [])
+        self.assertEqual([item["skill_name"] for item in pending_after.json()], ["with a focus on IAM"])
 
         listed = self.client.get("/settings/skills/approved")
         self.assertEqual(listed.status_code, 200, listed.text)

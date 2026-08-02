@@ -215,6 +215,9 @@ class PendingSkillResponse(BaseModel):
     normalized_name: str
     occurrence_count: int
     candidate_ids: list[int] = Field(default_factory=list)
+    suspicious: bool = False
+    recoverable_skills: list[str] = Field(default_factory=list)
+    source_tags: list[str] = Field(default_factory=list)
 
 
 class BulkApproveSkillsResponse(BaseModel):
@@ -222,6 +225,80 @@ class BulkApproveSkillsResponse(BaseModel):
     approved_count: int
     skipped_count: int
     approved_skill_names: list[str] = Field(default_factory=list)
+
+
+class EmbeddingStatusResponse(BaseModel):
+    pending_count: int
+
+
+class EmbedPendingSkillsResponse(BaseModel):
+    embedded_count: int
+    remaining_count: int
+    duration_ms: int
+
+
+class PendingEntityResponse(BaseModel):
+    entity_type: str
+    display_name: str
+    normalized_name: str
+    occurrence_count: int
+    candidate_ids: list[int] = Field(default_factory=list)
+
+
+class CanonicalEntityTaxonomyEntryResponse(BaseModel):
+    id: int
+    owner_id: str
+    entity_type: str
+    canonical_name: str
+    aliases: list[str] = Field(default_factory=list, validation_alias=AliasChoices("aliases", "aliases_json"))
+    occurrence_count: int
+    embedding_status: str
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+    @field_validator("aliases", mode="before")
+    @classmethod
+    def parse_aliases(cls, value: Any) -> list[str]:
+        if value in (None, ""):
+            return []
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                return []
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        return []
+
+
+class ApproveEntityRequest(BaseModel):
+    display_name: str
+    canonical_name: str | None = None
+    aliases: list[str] = Field(default_factory=list)
+
+
+class DismissEntityRequest(BaseModel):
+    display_name: str
+
+
+class BulkApproveEntitiesResponse(BaseModel):
+    processed_count: int
+    approved_count: int
+    skipped_count: int
+    approved_names: list[str] = Field(default_factory=list)
+
+
+class TaxonomyMetricsResponse(BaseModel):
+    parsed_email_count: int
+    emails_with_unknown_skills: int
+    unknown_skill_rate: float
+    pending_skill_count: int
+    pending_company_count: int
+    pending_location_count: int
+    alias_collision_count: int
 
 
 class BulkApproveJobIntentSignalItemResponse(BaseModel):
@@ -243,6 +320,11 @@ class CustomSkillTaxonomyEntryResponse(BaseModel):
     aliases: list[str] = Field(default_factory=list, validation_alias=AliasChoices("aliases", "aliases_json"))
     category: str
     cluster_hint: str | None
+    description: str = ""
+    weight: float = 1.0
+    match_tier: str = "supporting"
+    occurrence_count: int = 0
+    embedding_status: str = "pending"
     status: str
     created_at: datetime
     updated_at: datetime
@@ -909,6 +991,13 @@ class JobEnqueueResponse(BaseModel):
 
 class JobStatusResponse(RecentRunResponse):
     job_id: str | None = None
+
+
+class JobQueueSummaryResponse(BaseModel):
+    queued: int
+    processing: int
+    succeeded: int
+    failed: int
 
 
 class RecentRunListResponse(BaseModel):

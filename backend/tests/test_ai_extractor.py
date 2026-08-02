@@ -264,6 +264,7 @@ class AIExtractorTests(unittest.TestCase):
             "visa_hints": ["H1B"],
             "experience_years_min": 8,
             "skills_text": "Java, Amazon ECS, Grafana, Temporal",
+            "excluded_skills": ["Python"],
             "f2f_mentioned": True,
             "asks_contact_fields": True,
             "is_texas_role": True,
@@ -288,6 +289,7 @@ class AIExtractorTests(unittest.TestCase):
         self.assertEqual(payload["skills_text"], "Java, Amazon ECS, Grafana, Temporal")
         self.assertEqual(payload["must_have_skills"], [])
         self.assertEqual(payload["nice_to_have_skills"], [])
+        self.assertEqual(payload["excluded_skills"], ["Python"])
         self.assertTrue(payload["f2f_mentioned"])
         self.assertTrue(payload["asks_contact_fields"])
         self.assertTrue(payload["is_texas_role"])

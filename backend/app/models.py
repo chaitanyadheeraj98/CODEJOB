@@ -264,6 +264,36 @@ class CustomSkillTaxonomyEntry(Base):
     aliases_json: Mapped[str] = mapped_column(Text, default="[]")
     category: Mapped[str] = mapped_column(String(120), default="custom")
     cluster_hint: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+    weight: Mapped[float] = mapped_column(Float, default=1.0)
+    match_tier: Mapped[str] = mapped_column(String(40), default="supporting")
+    occurrence_count: Mapped[int] = mapped_column(Integer, default=0)
+    embedding_status: Mapped[str] = mapped_column(String(40), default="pending", index=True)
+    embedding_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(40), default="approved", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+
+class CanonicalEntityTaxonomyEntry(Base):
+    __tablename__ = "canonical_entity_taxonomy_entries"
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_id",
+            "entity_type",
+            "canonical_name",
+            name="ux_canonical_entity_owner_type_name",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    entity_type: Mapped[str] = mapped_column(String(40), index=True)
+    canonical_name: Mapped[str] = mapped_column(String(255), index=True)
+    aliases_json: Mapped[str] = mapped_column(Text, default="[]")
+    occurrence_count: Mapped[int] = mapped_column(Integer, default=0)
+    embedding_status: Mapped[str] = mapped_column(String(40), default="pending", index=True)
+    embedding_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(40), default="approved", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)

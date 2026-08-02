@@ -1223,7 +1223,10 @@ def parse_email_with_details(
         "ai_extractor_result": ai_payload,
         "approved_skills_text": ", ".join(final_skills_audit.known) if final_skills_audit.known else "none_detected",
         "unknown_skills": list(final_skills_audit.unknown),
-        "skills_audit": skill_audit_result_to_payload(final_skills_audit),
+        "skills_audit": skill_audit_result_to_payload(
+            final_skills_audit,
+            unknown_source="ai" if parser_mode == "ai_primary" else "base",
+        ),
         "merged_result": final_parsed,
         "ai_merge_notes": ai_merge_notes,
         "parser_warning": parser_warning,
@@ -1240,4 +1243,3 @@ def parse_email_with_details(
 def parse_email(subject: str, body: str) -> dict[str, str | int | bool]:
     merged, _details = parse_email_with_details(subject, body)
     return merged
-

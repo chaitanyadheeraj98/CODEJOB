@@ -26,11 +26,15 @@ describe('SkillUpgradeSection', () => {
     const approveSkill = vi.fn()
     const approveAllSkills = vi.fn()
     const dismissSkill = vi.fn()
+    const embedSkills = vi.fn()
     const pendingSkill = {
       skill_name: 'Temporal Workflow',
       normalized_name: 'temporal workflow',
       occurrence_count: 2,
       candidate_ids: [44, 12],
+      suspicious: false,
+      recoverable_skills: [],
+      source_tags: ['ai'],
     }
 
     act(() => {
@@ -42,6 +46,8 @@ describe('SkillUpgradeSection', () => {
           approveAllSkills={approveAllSkills}
           approveSkill={approveSkill}
           dismissSkill={dismissSkill}
+          embeddingPendingCount={342}
+          embedSkills={embedSkills}
         />,
       )
     })
@@ -52,22 +58,26 @@ describe('SkillUpgradeSection', () => {
     expect(container.textContent ?? '').toContain('Temporal Workflow')
     expect(container.textContent ?? '').toContain('Candidate IDs: 44, 12')
     expect(container.textContent ?? '').toContain('Approve adds them to your custom taxonomy')
+    expect(container.textContent ?? '').toContain('342 approved skills pending embedding')
     expect(container.textContent ?? '').not.toContain('Approved Custom Skills')
 
     const buttons = Array.from(container.querySelectorAll('button'))
     const approveAllButton = buttons.find((button) => button.textContent === 'Approve all') as HTMLButtonElement | undefined
     const approveButton = buttons.find((button) => button.textContent === 'Approve') as HTMLButtonElement | undefined
     const dismissButton = buttons.find((button) => button.textContent === 'Dismiss') as HTMLButtonElement | undefined
+    const embedButton = buttons.find((button) => button.textContent === 'Embed Skills') as HTMLButtonElement | undefined
 
     act(() => {
       approveAllButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
       approveButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
       dismissButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      embedButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
 
     expect(approveAllSkills).toHaveBeenCalledTimes(1)
     expect(approveSkill).toHaveBeenCalledWith(pendingSkill)
     expect(dismissSkill).toHaveBeenCalledWith(pendingSkill)
+    expect(embedSkills).toHaveBeenCalledTimes(1)
   })
 
   it('disables approve all while bulk action is running', () => {
@@ -82,7 +92,15 @@ describe('SkillUpgradeSection', () => {
     act(() => {
       root.render(
         <SkillUpgradeSection
-          pendingSkills={[{ skill_name: 'Temporal Workflow', normalized_name: 'temporal workflow', occurrence_count: 2, candidate_ids: [44] }]}
+          pendingSkills={[{
+            skill_name: 'Temporal Workflow',
+            normalized_name: 'temporal workflow',
+            occurrence_count: 2,
+            candidate_ids: [44],
+            suspicious: false,
+            recoverable_skills: [],
+            source_tags: ['legacy'],
+          }]}
           loading={false}
           busySkillKey="approve-all-skills"
           approveAllSkills={() => {}}
@@ -114,11 +132,13 @@ describe('SkillUpgradeSection', () => {
         <SkillUpgradeSection
           pendingSkills={[
             {
-              skill_name:
-                'javascript typescript java sql react react js angular angularjs next js jquery redux bootstrap material ui sass html node js express express js spring spring boot postgresql mysql mongodb redis',
-              normalized_name: 'javascript typescript java sql react react js angular angularjs next js jquery redux bootstrap material ui sass html node js express express js spring spring boot postgresql mysql mongodb redis',
+              skill_name: 'with a focus on IAM',
+              normalized_name: 'with a focus on iam',
               occurrence_count: 2,
               candidate_ids: [4045, 4044],
+              suspicious: true,
+              recoverable_skills: ['IAM'],
+              source_tags: ['ai'],
             },
           ]}
           loading={false}
@@ -131,9 +151,10 @@ describe('SkillUpgradeSection', () => {
     })
 
     expect(container.textContent ?? '').toContain('Approve is disabled')
-    expect(container.textContent ?? '').not.toContain('Approve all')
+    expect(container.textContent ?? '').toContain('IAM')
 
     const buttons = Array.from(container.querySelectorAll('button'))
+    expect(buttons.find((button) => button.textContent === 'Approve all')).toBeUndefined()
     const approveButton = buttons.find((button) => button.textContent === 'Approve') as HTMLButtonElement | undefined
     const dismissButton = buttons.find((button) => button.textContent === 'Dismiss') as HTMLButtonElement | undefined
 
@@ -162,6 +183,9 @@ describe('SkillUpgradeSection', () => {
       normalized_name: `skill ${index + 1}`,
       occurrence_count: 1,
       candidate_ids: [index + 1],
+      suspicious: false,
+      recoverable_skills: [],
+      source_tags: ['legacy'],
     }))
 
     act(() => {

@@ -108,6 +108,28 @@ def _sbert_embedding(text: str, model_name: str) -> tuple[list[float], str]:
     return values, "sbert"
 
 
+def generate_embeddings(texts: list[str]) -> tuple[list[list[float]], str]:
+    if not texts:
+        return [], settings.effective_semantic_embedding_provider
+    provider = settings.effective_semantic_embedding_provider
+    dims = max(32, int(settings.semantic_embedding_dimension or 256))
+    if provider != "sbert":
+        return [_hash_embedding(text, dims) for text in texts], "hash"
+    model_name = settings.semantic_embedding_sbert_model or "sentence-transformers/all-MiniLM-L6-v2"
+    device = (settings.semantic_embedding_sbert_device or "cpu").strip() or "cpu"
+    try:
+        model = _load_sbert_model(model_name, device)
+        vectors = model.encode(texts, normalize_embeddings=True)
+        return [[float(item) for item in vector.tolist()] for vector in vectors], "sbert"
+    except Exception as exc:
+        logger.warning(
+            "embedding_batch_fallback primary_provider=sbert fallback_provider=hash failure_reason=%s items=%s",
+            str(exc),
+            len(texts),
+        )
+        return [_hash_embedding(text, dims) for text in texts], "hash"
+
+
 def _log_fallback(primary_provider: str, fallback_provider: str, failure_reason: str, text: str, latency_ms: float) -> None:
     logger.warning(
         "embedding_fallback primary_provider=%s fallback_provider=%s failure_reason=%s chars=%s latency_ms=%.2f",

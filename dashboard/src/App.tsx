@@ -58,13 +58,6 @@ function normalizeNvoidsDetailTitleMode(value: string | null | undefined): Nvoid
   return normalized === 'hotlist_details' || normalized === 'all' ? normalized : 'job_details'
 }
 
-function isSuspiciousPendingSkillName(value: string | null | undefined): boolean {
-  const text = (value ?? '').trim()
-  if (!text) return false
-  const words = text.split(/\s+/).filter(Boolean)
-  return words.length >= 7 || text.length >= 80
-}
-
 export function draftTextSizeToPreviewStyle(draftTextSize: string | null | undefined): { fontSize: string; lineHeight: string } {
   return DRAFT_TEXT_SIZE_STYLES[normalizeDraftTextSize(draftTextSize)]
 }
@@ -489,6 +482,23 @@ type PendingSkill = {
   normalized_name: string
   occurrence_count: number
   candidate_ids: number[]
+  suspicious: boolean
+  recoverable_skills: string[]
+  source_tags: string[]
+}
+
+type PendingEntity = {
+  entity_type: 'company' | 'location'
+  display_name: string
+  normalized_name: string
+  occurrence_count: number
+  candidate_ids: number[]
+}
+
+type EmbedPendingSkillsResponse = {
+  embedded_count: number
+  remaining_count: number
+  duration_ms: number
 }
 
 type JobIntentLearningSignal = {
@@ -690,6 +700,9 @@ type SkillUpgradeSectionProps = {
   approveAllSkills: () => void
   approveSkill: (skill: PendingSkill) => void
   dismissSkill: (skill: PendingSkill) => void
+  embeddingPendingCount?: number
+  embeddingSummary?: string
+  embedSkills?: () => void
 }
 
 export function SkillUpgradeSection({
@@ -699,10 +712,15 @@ export function SkillUpgradeSection({
   approveAllSkills,
   approveSkill,
   dismissSkill,
+  embeddingPendingCount = 0,
+  embeddingSummary = '',
+  embedSkills = () => {},
 }: SkillUpgradeSectionProps) {
   const [visibleSkillCount, setVisibleSkillCount] = useState(SETTINGS_REVIEW_BATCH_SIZE)
   const actionablePendingSkills = useMemo(
-    () => pendingSkills.filter((skill) => !isSuspiciousPendingSkillName(skill.skill_name)),
+    () => pendingSkills.filter(
+      (skill) => skill.occurrence_count >= 2 && !skill.suspicious,
+    ),
     [pendingSkills],
   )
   const visibleSkills = pendingSkills.slice(0, visibleSkillCount)
@@ -713,7 +731,8 @@ export function SkillUpgradeSection({
       <div className="stack skillUpgradeStack">
         <p className="subtle skillUpgradeIntro">
           Review parser-extracted unknown skills here. Approve adds them to your
-          custom taxonomy; dismiss removes them from this queue.
+          custom taxonomy; dismiss removes them from this queue. Approve all only
+          includes skills seen at least twice.
         </p>
 
         <section className="skillUpgradeColumn">
@@ -742,7 +761,7 @@ export function SkillUpgradeSection({
               {visibleSkills.map((skill) => {
                 const approveKey = `approve:${skill.normalized_name}`
                 const dismissKey = `dismiss:${skill.normalized_name}`
-                const isSuspicious = isSuspiciousPendingSkillName(skill.skill_name)
+                const isSuspicious = skill.suspicious
                 return (
                   <article key={skill.normalized_name} className="skillUpgradeItem">
                     <div className="skillUpgradeItemHeader">
@@ -755,9 +774,14 @@ export function SkillUpgradeSection({
                     <p className="subtle skillUpgradeMeta">
                       Candidate IDs: {skill.candidate_ids.length > 0 ? skill.candidate_ids.join(', ') : '-'}
                     </p>
+                    <p className="subtle skillUpgradeMeta">
+                      Source: {skill.source_tags.length > 0 ? skill.source_tags.join(', ') : 'legacy'}
+                    </p>
                     {isSuspicious ? (
                       <p className="skillUpgradeWarning">
-                        This looks like a malformed multi-skill blob. Approve is disabled; use Dismiss to remove it.
+                        This looks malformed or contains known skills
+                        {skill.recoverable_skills.length > 0 ? ` (${skill.recoverable_skills.join(', ')})` : ''}.
+                        {' '}Approve is disabled; use Dismiss to remove it.
                       </p>
                     ) : null}
                     <div className="skillUpgradeActions">
@@ -791,6 +815,102 @@ export function SkillUpgradeSection({
             </div>
           )}
         </section>
+
+        <section className="skillUpgradeColumn" aria-label="Approved skills embedding">
+          <div className="skillUpgradeColumnHeader">
+            <h3>Approved Skills — Embedding</h3>
+            <div className="rowBtns">
+              <button
+                type="button"
+                className="primary"
+                onClick={embedSkills}
+                disabled={busySkillKey !== null || embeddingPendingCount === 0}
+              >
+                {busySkillKey === 'embed-skills' ? 'Embedding...' : 'Embed Skills'}
+              </button>
+              <span className="skillUpgradeCount">{embeddingPendingCount}</span>
+            </div>
+          </div>
+          <p className="subtle skillUpgradeMeta">
+            {embeddingPendingCount} approved skill{embeddingPendingCount === 1 ? '' : 's'} pending embedding.
+          </p>
+          {embeddingPendingCount >= 150 ? (
+            <p className="subtle skillUpgradeMeta">A large batch is ready. Run it when mail sync is idle.</p>
+          ) : null}
+          {embeddingSummary ? <p className="subtle skillUpgradeMeta">{embeddingSummary}</p> : null}
+        </section>
+      </div>
+    </section>
+  )
+}
+
+type EntityUpgradeSectionProps = {
+  title: string
+  pendingEntities: PendingEntity[]
+  loading: boolean
+  busyKey: string | null
+  approveAll: () => void
+  approve: (entity: PendingEntity) => void
+  dismiss: (entity: PendingEntity) => void
+}
+
+export function EntityUpgradeSection({
+  title,
+  pendingEntities,
+  loading,
+  busyKey,
+  approveAll,
+  approve,
+  dismiss,
+}: EntityUpgradeSectionProps) {
+  const [visibleCount, setVisibleCount] = useState(SETTINGS_REVIEW_BATCH_SIZE)
+  const visibleEntities = pendingEntities.slice(0, visibleCount)
+  const remainingCount = pendingEntities.length - visibleEntities.length
+  const actionableEntities = useMemo(
+    () => pendingEntities.filter((entity) => entity.occurrence_count >= 2),
+    [pendingEntities],
+  )
+  return (
+    <section className="card skillUpgradeCard">
+      <h2>{title}</h2>
+      <div className="skillUpgradeColumn">
+        <div className="skillUpgradeColumnHeader">
+          <p className="subtle skillUpgradeIntro">
+            Review AI-extracted canonical-name candidates. Approve all only includes values seen at least twice.
+          </p>
+          <div className="rowBtns">
+            {!loading && actionableEntities.length > 0 ? (
+              <button type="button" className="primary" onClick={approveAll} disabled={busyKey !== null}>
+                {busyKey === 'approve-all' ? 'Approving all...' : `Approve all (${actionableEntities.length})`}
+              </button>
+            ) : null}
+            <span className="skillUpgradeCount">{pendingEntities.length}</span>
+          </div>
+        </div>
+        {loading ? <p className="subtle">Loading candidates...</p> : null}
+        {!loading && pendingEntities.length === 0 ? <p className="subtle">No pending candidates.</p> : null}
+        {!loading && pendingEntities.length > 0 ? (
+          <div className="skillUpgradeList">
+            {visibleEntities.map((entity) => (
+              <article key={entity.normalized_name} className="skillUpgradeItem">
+                <div className="skillUpgradeItemHeader">
+                  <strong className="skillUpgradeName">{entity.display_name}</strong>
+                  <span className="skillUpgradeBadge">{entity.occurrence_count} hit{entity.occurrence_count === 1 ? '' : 's'}</span>
+                </div>
+                <p className="subtle skillUpgradeMeta">Candidate IDs: {entity.candidate_ids.join(', ') || '-'}</p>
+                <div className="skillUpgradeActions">
+                  <button type="button" className="primary" onClick={() => approve(entity)} disabled={busyKey !== null}>Approve</button>
+                  <button type="button" onClick={() => dismiss(entity)} disabled={busyKey !== null}>Dismiss</button>
+                </div>
+              </article>
+            ))}
+            {remainingCount > 0 ? (
+              <button type="button" onClick={() => setVisibleCount((count) => count + SETTINGS_REVIEW_BATCH_SIZE)}>
+                Show {Math.min(SETTINGS_REVIEW_BATCH_SIZE, remainingCount)} more
+              </button>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </section>
   )
@@ -1246,6 +1366,13 @@ type ProductivityTrendResponse = {
   kpi_total_sent: number
   previous_period_total_sent: number
   bars: ProductivityBarPoint[]
+}
+
+type JobQueueSummary = {
+  queued: number
+  processing: number
+  succeeded: number
+  failed: number
 }
 
 type VerdictLabel = 'Excellent' | 'Strong' | 'Good' | 'Review' | 'Risky'
@@ -2276,8 +2403,13 @@ function App() {
   const [resumeAssets, setResumeAssets] = useState<ResumeAsset[]>([])
   const [attachmentFiles, setAttachmentFiles] = useState<AttachmentAsset[]>([])
   const [pendingSkills, setPendingSkills] = useState<PendingSkill[]>([])
+  const [pendingCompanies, setPendingCompanies] = useState<PendingEntity[]>([])
+  const [pendingLocations, setPendingLocations] = useState<PendingEntity[]>([])
+  const [embeddingPendingCount, setEmbeddingPendingCount] = useState(0)
+  const [embeddingSummary, setEmbeddingSummary] = useState('')
   const [skillsLoading, setSkillsLoading] = useState(false)
   const [skillActionKey, setSkillActionKey] = useState<string | null>(null)
+  const [entityActionKey, setEntityActionKey] = useState<string | null>(null)
   const [pendingJobIntentSignals, setPendingJobIntentSignals] = useState<JobIntentLearningSignal[]>([])
   const [approvedJobIntentSignals, setApprovedJobIntentSignals] = useState<JobIntentLearningSignal[]>([])
   const [jobIntentLoading, setJobIntentLoading] = useState(false)
@@ -2335,6 +2467,7 @@ function App() {
   const [timeRange, setTimeRange] = useState<TimeRangeKey>('current_day')
   const [productivityEvents, setProductivityEvents] = useState<ProductivityEvent[]>([])
   const [productivityTrend, setProductivityTrend] = useState<ProductivityTrendResponse | null>(null)
+  const [jobSummary, setJobSummary] = useState<JobQueueSummary | null>(null)
   const datePickerRef = useRef<HTMLInputElement | null>(null)
   const lastTrackedViewRef = useRef<Record<string, number>>({})
   const hasBootstrappedCandidatesRef = useRef(false)
@@ -2610,20 +2743,43 @@ function App() {
     setSkillsLoading(true)
     setJobIntentLoading(true)
     try {
-      const [skillsResponse, pendingIntentResponse, approvedIntentResponse] = await Promise.all([
+      const [
+        skillsResponse,
+        embeddingResponse,
+        companiesResponse,
+        locationsResponse,
+        pendingIntentResponse,
+        approvedIntentResponse,
+      ] = await Promise.all([
         fetch(`${apiBase}/settings/skills/pending`),
+        fetch(`${apiBase}/settings/skills/embedding-status`),
+        fetch(`${apiBase}/settings/entities/company/pending`),
+        fetch(`${apiBase}/settings/entities/location/pending`),
         fetch(`${apiBase}/settings/job-intent-learning/pending`),
         fetch(`${apiBase}/settings/job-intent-learning/approved`),
       ])
-      if (!skillsResponse.ok || !pendingIntentResponse.ok || !approvedIntentResponse.ok) {
+      if (
+        !skillsResponse.ok ||
+        !embeddingResponse.ok ||
+        !companiesResponse.ok ||
+        !locationsResponse.ok ||
+        !pendingIntentResponse.ok ||
+        !approvedIntentResponse.ok
+      ) {
         throw new Error('Failed to load learning queues')
       }
-      const [skills, pendingSignals, approvedSignals] = await Promise.all([
+      const [skills, embeddingStatus, companies, locations, pendingSignals, approvedSignals] = await Promise.all([
         skillsResponse.json() as Promise<PendingSkill[]>,
+        embeddingResponse.json() as Promise<{ pending_count: number }>,
+        companiesResponse.json() as Promise<PendingEntity[]>,
+        locationsResponse.json() as Promise<PendingEntity[]>,
         pendingIntentResponse.json() as Promise<JobIntentLearningSignal[]>,
         approvedIntentResponse.json() as Promise<JobIntentLearningSignal[]>,
       ])
       setPendingSkills(skills)
+      setEmbeddingPendingCount(embeddingStatus.pending_count)
+      setPendingCompanies(companies)
+      setPendingLocations(locations)
       setPendingJobIntentSignals(pendingSignals)
       setApprovedJobIntentSignals(approvedSignals)
       setHasLoadedLearningData(true)
@@ -2904,6 +3060,12 @@ function App() {
     setProductivityTrend((await trendRes.json()) as ProductivityTrendResponse)
   }
 
+  const loadJobsSummary = async () => {
+    const res = await fetch(`${apiBase}/jobs/summary`)
+    if (!res.ok) return
+    setJobSummary((await res.json()) as JobQueueSummary)
+  }
+
   const loadRecentRuns = async (mailDate: string | null = settings.mail_date ?? null) => {
     const params = new URLSearchParams()
     params.set('limit', String(RECENT_RUNS_LIMIT))
@@ -3017,6 +3179,9 @@ function App() {
       loadPremiumNumbers({ append: false, cursor: 0 }).catch(() => {
         // Keep UI responsive if premium numbers refresh fails transiently.
       })
+      loadJobsSummary().catch(() => {
+        // Keep UI responsive if job summary refresh fails transiently.
+      })
     }, 200)
   }
 
@@ -3042,6 +3207,7 @@ function App() {
           loadTelegramStatus(),
           loadSettingsBootstrap(),
         ])
+        loadJobsSummary().catch(() => {})
         await loadRecentRuns(normalizedSettings.mail_date ?? null)
         await refreshVisibleCandidates(normalizedSettings.mail_date ?? null, { activeOnly: true, initialLoad: true })
         await loadPremiumNumbers({ append: false, cursor: 0, mailDate: normalizedSettings.mail_date ?? null })
@@ -3086,6 +3252,15 @@ function App() {
   useEffect(() => {
     loadProductivityAnalytics(timeRange).catch((e) => setError((e as Error).message))
   }, [timeRange])
+
+  useEffect(() => {
+    if (activePage !== 'run_queue') return
+    loadJobsSummary().catch(() => {})
+    const intervalId = window.setInterval(() => {
+      loadJobsSummary().catch(() => {})
+    }, 5000)
+    return () => window.clearInterval(intervalId)
+  }, [activePage])
 
   useEffect(() => {
     trackViewEvent(activePage)
@@ -3403,6 +3578,45 @@ function App() {
     }
   }
 
+  const embedPendingSkills = async () => {
+    setSkillActionKey('embed-skills')
+    setEmbeddingSummary('')
+    setError('')
+    try {
+      const res = await fetch(`${apiBase}/settings/skills/embed-pending`, { method: 'POST' })
+      if (!res.ok) throw new Error('Failed to embed approved skills')
+      const result = (await res.json()) as EmbedPendingSkillsResponse
+      setEmbeddingSummary(`Embedded ${result.embedded_count} entries in ${(result.duration_ms / 1000).toFixed(1)}s.`)
+      await loadLearningData()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setSkillActionKey(null)
+    }
+  }
+
+  const runEntityAction = async (
+    entityType: PendingEntity['entity_type'],
+    action: 'approve' | 'approve-all' | 'dismiss',
+    entity?: PendingEntity,
+  ) => {
+    setEntityActionKey(`${entityType}:${action === 'approve-all' ? 'approve-all' : entity?.normalized_name ?? action}`)
+    setError('')
+    try {
+      const res = await fetch(`${apiBase}/settings/entities/${entityType}/${action}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: action === 'approve-all' ? undefined : JSON.stringify({ display_name: entity?.display_name }),
+      })
+      if (!res.ok) throw new Error(`Failed to ${action} ${entityType} candidate`)
+      await loadLearningData()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setEntityActionKey(null)
+    }
+  }
+
   const approvePendingJobIntentSignal = async (signal: JobIntentLearningSignal) => {
     setJobIntentActionKey(`approve-intent:${signal.id}`)
     setError('')
@@ -3467,7 +3681,18 @@ function App() {
       })
       if (!res.ok) {
         const details = await res.json().catch(() => null)
-        throw new Error(details?.detail ?? 'Automation run failed')
+        const runKey = details?.detail?.run_key as string | undefined
+        if (details?.detail?.code === 'another_job_in_progress' && runKey) {
+          // Already-running job: attach to it so the existing poller shows real progress
+          // instead of a raw "another_job_in_progress" error string.
+          setAutomationJob({
+            run_key: runKey, job_id: details.detail.job_id ?? null, status: 'running',
+            detail: 'Attaching to the automation run already in progress.',
+            processed_items: 0, total_items: null, progress_pct: null, queue_name: 'automation_run',
+          })
+          return
+        }
+        throw new Error(typeof details?.detail === 'string' ? details.detail : 'Automation run failed')
       }
       const data = (await res.json()) as JobEnqueueResponse
       setAutomationJob({
@@ -3498,7 +3723,18 @@ function App() {
       })
       if (!res.ok) {
         const details = await res.json().catch(() => null)
-        throw new Error(details?.detail ?? 'Nvoids sync failed')
+        const runKey = details?.detail?.run_key as string | undefined
+        if (details?.detail?.code === 'another_job_in_progress' && runKey) {
+          // Already-running job: attach to it so the existing poller shows real progress
+          // instead of a raw "another_job_in_progress" error string.
+          setNvoidsJob({
+            run_key: runKey, job_id: details.detail.job_id ?? null, status: 'running',
+            detail: 'Attaching to the Nvoids sync already in progress.',
+            processed_items: 0, total_items: null, progress_pct: null, queue_name: 'nvoids_sync',
+          })
+          return
+        }
+        throw new Error(typeof details?.detail === 'string' ? details.detail : 'Nvoids sync failed')
       }
       const data = (await res.json()) as JobEnqueueResponse
       setNvoidsJob({
@@ -4182,6 +4418,13 @@ function App() {
                 <span>Total approved & sent: {productivityTrend?.kpi_total_sent ?? 0}</span>
                 <span>Previous period sent: {productivityTrend?.previous_period_total_sent ?? 0}</span>
                 <span>Trend: {productivityTrend?.trend_direction ?? 'flat'} ({trendDelta >= 0 ? '+' : ''}{trendDelta.toFixed(1)}%)</span>
+              </div>
+              <h3 className="monitorSectionTitle">Worker Queue</h3>
+              <div className="monitorMeta">
+                <span>Queued: {jobSummary?.queued ?? 0}</span>
+                <span>Processing: {jobSummary?.processing ?? 0}</span>
+                <span>Succeeded: {jobSummary?.succeeded ?? 0}</span>
+                <span>Failed: {jobSummary?.failed ?? 0}</span>
               </div>
               <h3 className="monitorSectionTitle">Activity Log</h3>
               <div className="monitorHistory">
@@ -5089,6 +5332,27 @@ function App() {
                 approveAllSkills={approveAllPendingSkills}
                 approveSkill={approvePendingSkill}
                 dismissSkill={dismissPendingSkill}
+                embeddingPendingCount={embeddingPendingCount}
+                embeddingSummary={embeddingSummary}
+                embedSkills={embedPendingSkills}
+              />
+              <EntityUpgradeSection
+                title="Upgrade Companies"
+                pendingEntities={pendingCompanies}
+                loading={skillsLoading}
+                busyKey={entityActionKey?.startsWith('company:') ? entityActionKey.slice('company:'.length) : null}
+                approveAll={() => runEntityAction('company', 'approve-all')}
+                approve={(entity) => runEntityAction('company', 'approve', entity)}
+                dismiss={(entity) => runEntityAction('company', 'dismiss', entity)}
+              />
+              <EntityUpgradeSection
+                title="Upgrade Locations"
+                pendingEntities={pendingLocations}
+                loading={skillsLoading}
+                busyKey={entityActionKey?.startsWith('location:') ? entityActionKey.slice('location:'.length) : null}
+                approveAll={() => runEntityAction('location', 'approve-all')}
+                approve={(entity) => runEntityAction('location', 'approve', entity)}
+                dismiss={(entity) => runEntityAction('location', 'dismiss', entity)}
               />
               <JobIntentLearningSection
                 pendingSignals={pendingJobIntentSignals}

@@ -519,6 +519,12 @@ def ensure_sqlite_phase0_columns() -> None:
             ("aliases_json", "ALTER TABLE custom_skill_taxonomy_entries ADD COLUMN aliases_json TEXT DEFAULT '[]'"),
             ("category", "ALTER TABLE custom_skill_taxonomy_entries ADD COLUMN category VARCHAR(120) DEFAULT 'custom'"),
             ("cluster_hint", "ALTER TABLE custom_skill_taxonomy_entries ADD COLUMN cluster_hint VARCHAR(120)"),
+            ("description", "ALTER TABLE custom_skill_taxonomy_entries ADD COLUMN description TEXT DEFAULT ''"),
+            ("weight", "ALTER TABLE custom_skill_taxonomy_entries ADD COLUMN weight FLOAT DEFAULT 1.0"),
+            ("match_tier", "ALTER TABLE custom_skill_taxonomy_entries ADD COLUMN match_tier VARCHAR(40) DEFAULT 'supporting'"),
+            ("occurrence_count", "ALTER TABLE custom_skill_taxonomy_entries ADD COLUMN occurrence_count INTEGER DEFAULT 0"),
+            ("embedding_status", "ALTER TABLE custom_skill_taxonomy_entries ADD COLUMN embedding_status VARCHAR(40) DEFAULT 'pending'"),
+            ("embedding_json", "ALTER TABLE custom_skill_taxonomy_entries ADD COLUMN embedding_json TEXT"),
             ("status", "ALTER TABLE custom_skill_taxonomy_entries ADD COLUMN status VARCHAR(40) DEFAULT 'approved'"),
             ("created_at", "ALTER TABLE custom_skill_taxonomy_entries ADD COLUMN created_at DATETIME"),
             ("updated_at", "ALTER TABLE custom_skill_taxonomy_entries ADD COLUMN updated_at DATETIME"),
@@ -526,6 +532,36 @@ def ensure_sqlite_phase0_columns() -> None:
         for column_name, statement in custom_skill_taxonomy_alter_statements:
             if column_name not in existing_custom_skill_taxonomy_entries:
                 conn.exec_driver_sql(statement)
+
+        conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_custom_skill_taxonomy_entries_embedding_status "
+            "ON custom_skill_taxonomy_entries (embedding_status)"
+        )
+
+        # Legacy SQLite compatibility only. Alembic owns this schema from 20260801_0012 onward.
+        conn.exec_driver_sql(
+            """
+            CREATE TABLE IF NOT EXISTS canonical_entity_taxonomy_entries (
+                id INTEGER PRIMARY KEY,
+                owner_id VARCHAR(100),
+                entity_type VARCHAR(40),
+                canonical_name VARCHAR(255),
+                aliases_json TEXT DEFAULT '[]',
+                occurrence_count INTEGER DEFAULT 0,
+                embedding_status VARCHAR(40) DEFAULT 'pending',
+                embedding_json TEXT,
+                status VARCHAR(40) DEFAULT 'approved',
+                created_at DATETIME,
+                updated_at DATETIME,
+                CONSTRAINT ux_canonical_entity_owner_type_name UNIQUE (owner_id, entity_type, canonical_name)
+            )
+            """
+        )
+        for column in ("owner_id", "entity_type", "canonical_name", "embedding_status", "status"):
+            conn.exec_driver_sql(
+                f"CREATE INDEX IF NOT EXISTS ix_canonical_entity_taxonomy_entries_{column} "
+                f"ON canonical_entity_taxonomy_entries ({column})"
+            )
 
         conn.exec_driver_sql(
             """

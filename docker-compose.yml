@@ -31,7 +31,7 @@ services:
       DATABASE_URL: sqlite:///./data/codejob.db
       REDIS_URL: redis://redis:6379/0
       ALLOW_RUNTIME_SCHEMA_PATCH: "false"
-    command: rq worker gmail_sync nvoids_sync automation_run --url redis://redis:6379/0
+    command: rq worker gmail_sync nvoids_sync automation_run --url redis://redis:6379/0 --with-scheduler
     volumes:
       - backend_data:/app/data
     depends_on:

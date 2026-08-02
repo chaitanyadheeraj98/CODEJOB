@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from app.ai.deepseek_client import DeepSeekJSONError, deepseek_json_completion
 from app.parsing.ai_extractor_sectional import extract_sections
-from app.parsing.skill_audit import is_suspicious_skill_blob, recover_known_skills_from_blob
+from app.parsing.skill_audit import analyze_skill_candidate, split_skill_tokens
 from app.skill_taxonomy import normalize_skill_token
 
 
@@ -28,6 +28,7 @@ class AIExtractorResult:
     skills_text: str = ""
     must_have_skills: tuple[str, ...] = ()
     nice_to_have_skills: tuple[str, ...] = ()
+    excluded_skills: tuple[str, ...] = ()
     f2f_mentioned: bool = False
     asks_contact_fields: bool = False
     is_texas_role: bool = False
@@ -177,22 +178,17 @@ def _normalize_evidence(value: object) -> dict[str, list[str]]:
     return {"raw": values} if values else {}
 
 
-_SKILL_SPLIT_RE = re.compile(r"[\n,;/|]+")
-
-
 def _split_free_skill_text(value: str) -> list[str]:
     if not value:
         return []
-    parts = [item.strip() for item in _SKILL_SPLIT_RE.split(value) if item.strip()]
-    if len(parts) != 1:
-        return parts
-    token = parts[0]
-    recovered = recover_known_skills_from_blob(token)
-    if len(recovered) >= 2:
-        return list(recovered)
-    if is_suspicious_skill_blob(token):
-        return []
-    return parts
+    cleaned: list[str] = []
+    for token in split_skill_tokens(value):
+        analysis = analyze_skill_candidate(token)
+        if analysis.recovered_skills:
+            cleaned.extend(analysis.recovered_skills)
+        elif not analysis.suspicious:
+            cleaned.append(token)
+    return cleaned
 
 
 def _dedupe_skill_values(values: list[str]) -> tuple[str, ...]:
@@ -217,7 +213,8 @@ def _collect_free_skill_values(payload: dict[str, Any]) -> tuple[str, ...]:
         if isinstance(raw, str):
             values.extend(_split_free_skill_text(raw))
         else:
-            values.extend(_as_string_list(raw))
+            for item in _as_string_list(raw):
+                values.extend(_split_free_skill_text(item))
     return _dedupe_skill_values(values)
 
 
@@ -386,8 +383,15 @@ def extract_ai_job_details(
     skills_text = ", ".join(free_skill_values)
     raw_skill_values = free_skill_values[:]
     skills_approved, skills_unknown = _split_skills(raw_skill_values)
-    must_have_skills = _dedupe_strings(_as_string_list(normalized_payload.get("must_have_skills")))
-    nice_to_have_skills = _dedupe_strings(_as_string_list(normalized_payload.get("nice_to_have_skills")))
+    must_have_skills = _dedupe_strings(
+        [skill for item in _as_string_list(normalized_payload.get("must_have_skills")) for skill in _split_free_skill_text(item)]
+    )
+    nice_to_have_skills = _dedupe_strings(
+        [skill for item in _as_string_list(normalized_payload.get("nice_to_have_skills")) for skill in _split_free_skill_text(item)]
+    )
+    excluded_skills = _dedupe_strings(
+        [skill for item in _as_string_list(normalized_payload.get("excluded_skills")) for skill in _split_free_skill_text(item)]
+    )
 
     return AIExtractorResult(
         role_candidates=_dedupe_strings(role_candidates),
@@ -401,6 +405,7 @@ def extract_ai_job_details(
         skills_text=skills_text,
         must_have_skills=must_have_skills,
         nice_to_have_skills=nice_to_have_skills,
+        excluded_skills=excluded_skills,
         f2f_mentioned=_normalize_bool(normalized_payload.get("f2f_mentioned")),
         asks_contact_fields=_normalize_bool(normalized_payload.get("asks_contact_fields")),
         is_texas_role=_normalize_bool(normalized_payload.get("is_texas_role")),
@@ -425,6 +430,7 @@ def ai_extractor_result_to_payload(result: AIExtractorResult) -> dict[str, objec
         "skills_text": result.skills_text,
         "must_have_skills": list(result.must_have_skills),
         "nice_to_have_skills": list(result.nice_to_have_skills),
+        "excluded_skills": list(result.excluded_skills),
         "f2f_mentioned": result.f2f_mentioned,
         "asks_contact_fields": result.asks_contact_fields,
         "is_texas_role": result.is_texas_role,

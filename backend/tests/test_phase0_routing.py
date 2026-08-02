@@ -146,6 +146,7 @@ Required Qualifications:
         self.assertEqual(details["ai_input_chars"], 0)
         self.assertIsInstance(details["ai_merge_notes"], list)
         self.assertEqual(details["skills_audit"]["skills_text"], _parsed["skills_text"])
+        self.assertEqual(details["skills_audit"]["unknown_source"], "base")
         self.assertEqual(details["requirements_schema_version"], 1)
         self.assertIsInstance(details["structured_requirements"], dict)
 
@@ -240,6 +241,7 @@ Required Qualifications:
         self.assertIsNone(details["parser_warning"])
         self.assertFalse(details["fallback_used"])
         self.assertEqual(details["skills_audit"]["unknown"], ["Temporal"])
+        self.assertEqual(details["skills_audit"]["unknown_source"], "ai")
         structured = details["structured_requirements"]
         self.assertEqual(structured["required_groups"][0]["skills"][0]["canonical_name"], "Amazon ECS")
         self.assertEqual(structured["preferred_groups"][0]["skills"][0]["canonical_name"], "Grafana")
@@ -306,6 +308,7 @@ Required Qualifications:
         )
         self.assertEqual(details["ai_input_source"], "nvoids_detail_table_row_3")
         self.assertEqual(details["ai_input_chars"], len(ai_override))
+        self.assertEqual(details["skills_audit"]["unknown_source"], "ai")
         self.assertEqual(parsed["role"], "Cloud Engineer")
         self.assertEqual(details["base_parser_result"]["role"], "Base Engineer")
 
@@ -406,6 +409,7 @@ Required Qualifications:
         self.assertEqual(details["parser_version"], "ai_fallback_v2")
         self.assertEqual(details["parser_mode"], "ai_fallback")
         self.assertTrue(details["fallback_used"])
+        self.assertEqual(details["skills_audit"]["unknown_source"], "base")
         self.assertEqual(details["ai_extractor_result"]["error"], "truncated JSON content")
         self.assertEqual(details["source_hints"]["canonical_title"], "AI Engineer")
         self.assertEqual(details["ai_input_source"], "nvoids_detail_table_row_3")
@@ -576,6 +580,7 @@ Required Qualifications:
         self.assertEqual(details["approved_skills_text"], parsed["skills_text"])
         self.assertEqual(details["unknown_skills"], [])
         self.assertTrue(details["fallback_used"])
+        self.assertEqual(details["skills_audit"]["unknown_source"], "base")
         self.assertIn("base parser fallback used", str(details["parser_warning"]))
         self.assertTrue(details["ai_merge_notes"])
 

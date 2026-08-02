@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
 from typing import Iterable, Protocol
 
+from app.taxonomy_matcher import AliasMatcher
+
 _WORD_RE = re.compile(r"[^a-z0-9]+")
 _SKILL_SPLIT_RE = re.compile(r"[,;\n]+")
+TAXONOMY_PLACEHOLDER_KEYS = frozenset({"none detected", "unknown", "not specified", "n a"})
 _ROLE_FAMILY_AI_RE = re.compile(
     r"\b(ai|artificial intelligence|genai|llm|machine learning|ml|prompt)\b",
     re.IGNORECASE,
@@ -220,6 +223,10 @@ class CustomSkillSeed:
     aliases: tuple[str, ...]
     category: str
     cluster_hint: str | None = None
+    description: str = ""
+    weight: float = 1.0
+    match_tier: str = "supporting"
+    occurrence_count: int = 0
     owner_id: str = "default-owner"
     status: str = "approved"
 
@@ -425,7 +432,7 @@ def _coerce_entry(raw: object) -> SkillTaxonomyEntry | None:
         id=entry_id,
         canonical_name=canonical_name,
         category=category,
-        weight=float(raw.get("weight", 1.0) or 1.0),
+        weight=float(raw.get("weight", _FALLBACK_WEIGHTS.get(normalize_taxonomy_text(category), 1.0)) or 1.0),
         aliases=aliases,
         normalized_forms=tuple(normalized_forms),
         cluster_id=cluster_id,
@@ -462,11 +469,25 @@ def load_skill_taxonomy() -> SkillTaxonomy:
             if entry is not None:
                 entries.append(entry)
 
+    # Source of truth is intentionally additive: the committed JSON is the curated seed,
+    # while approved DB rows are the owner-specific live overlay.
+    canonical_indexes = {normalize_taxonomy_text(entry.canonical_name): index for index, entry in enumerate(entries)}
     for raw in _custom_skill_payloads():
         entry = _coerce_entry(raw)
-        if entry is None or entry.id in seen:
+        if entry is None:
+            continue
+        canonical_key = normalize_taxonomy_text(entry.canonical_name)
+        existing_index = canonical_indexes.get(canonical_key)
+        if existing_index is not None:
+            existing = entries[existing_index]
+            aliases = tuple(dict.fromkeys((*existing.aliases, *entry.aliases)))
+            normalized_forms = tuple(dict.fromkeys((*existing.normalized_forms, *entry.normalized_forms)))
+            entries[existing_index] = replace(existing, aliases=aliases, normalized_forms=normalized_forms)
+            continue
+        if entry.id in seen:
             continue
         seen.add(entry.id)
+        canonical_indexes[canonical_key] = len(entries)
         entries.append(entry)
 
     alias_owners: dict[str, list[SkillTaxonomyEntry]] = {}
@@ -509,7 +530,13 @@ def load_skill_taxonomy() -> SkillTaxonomy:
 
 
 def clear_skill_taxonomy_cache() -> None:
+    _compiled_taxonomy_matcher.cache_clear()
     load_skill_taxonomy.cache_clear()
+
+
+@lru_cache(maxsize=1)
+def _compiled_taxonomy_matcher() -> AliasMatcher:
+    return AliasMatcher(list(load_skill_taxonomy().exact_lookup))
 
 
 def _custom_skill_payloads() -> list[dict[str, object]]:
@@ -528,12 +555,12 @@ def _custom_skill_payloads() -> list[dict[str, object]]:
                     "id": entry_id,
                     "canonical_name": canonical_name,
                     "category": category,
-                    "weight": _FALLBACK_WEIGHTS.get(normalize_taxonomy_text(category), 1.0),
+                    "weight": float(seed.weight or _FALLBACK_WEIGHTS.get(normalize_taxonomy_text(category), 1.0)),
                     "aliases": aliases,
                     "normalized_forms": [canonical_name, *aliases],
                     "cluster_id": cluster_hint,
                     "related_skill_ids": [],
-                    "match_tier": _default_match_tier(category=category, canonical_name=canonical_name),
+                    "match_tier": seed.match_tier or _default_match_tier(category=category, canonical_name=canonical_name),
                     "intent_clusters": [cluster_hint],
                     "strength_signals": [],
                     "weak_signals": [],
@@ -574,6 +601,10 @@ def _load_custom_skill_seeds() -> tuple[CustomSkillSeed, ...]:
                     aliases=tuple(aliases),
                     category=row.category,
                     cluster_hint=row.cluster_hint,
+                    description=row.description,
+                    weight=float(row.weight or 1.0),
+                    match_tier=row.match_tier or "supporting",
+                    occurrence_count=int(row.occurrence_count or 0),
                     owner_id=row.owner_id,
                     status=row.status,
                 )
@@ -630,21 +661,19 @@ def extract_taxonomy_skills(text: str | None) -> list[SkillTaxonomyEntry]:
     if not normalized_text:
         return []
     raw_text = str(text or "")
-    haystack = f" {normalized_text} "
-    matches: list[tuple[int, float, str, SkillTaxonomyEntry]] = []
-    seen: set[str] = set()
-    for entry in load_skill_taxonomy().entries_for_search:
-        first_match: int | None = None
-        for token in entry.normalized_forms:
-            if not _is_allowed_taxonomy_match(token, entry, normalized_text, raw_text):
-                continue
-            position = haystack.find(f" {token} ")
-            if position >= 0 and (first_match is None or position < first_match):
-                first_match = position
-        if first_match is None or entry.id in seen:
+    taxonomy = load_skill_taxonomy()
+    best_by_entry: dict[str, tuple[int, SkillTaxonomyEntry]] = {}
+    for match in _compiled_taxonomy_matcher().find(normalized_text):
+        entry = taxonomy.exact_lookup.get(match.alias)
+        if entry is None or not _is_allowed_taxonomy_match(match.alias, entry, normalized_text, raw_text):
             continue
-        seen.add(entry.id)
-        matches.append((first_match, -entry.weight, entry.canonical_name.lower(), entry))
+        current = best_by_entry.get(entry.id)
+        if current is None or match.start < current[0]:
+            best_by_entry[entry.id] = (match.start, entry)
+    matches = [
+        (position, -entry.weight, entry.canonical_name.lower(), entry)
+        for position, entry in best_by_entry.values()
+    ]
     matches.sort(key=lambda item: (item[0], item[1], item[2]))
     return [entry for *_ignored, entry in matches]
 
@@ -655,26 +684,18 @@ def extract_taxonomy_skill_matches(text: str | None) -> list[TaxonomySkillMatch]
         return []
     raw_text = str(text or "")
     taxonomy = load_skill_taxonomy()
-    haystack = f" {normalized_text} "
-    matches: list[tuple[int, float, str, str, SkillTaxonomyEntry]] = []
-    seen_entry_ids: set[str] = set()
-    for entry in taxonomy.entries_for_search:
-        best: tuple[int, str] | None = None
-        for token in entry.normalized_forms:
-            if token in taxonomy.ambiguous_aliases and token != normalize_taxonomy_text(entry.canonical_name):
-                continue
-            if not _is_allowed_taxonomy_match(token, entry, normalized_text, raw_text):
-                continue
-            position = haystack.find(f" {token} ")
-            if position < 0:
-                continue
-            adjusted = max(0, position - 1)
-            if best is None or adjusted < best[0] or (adjusted == best[0] and len(token) > len(best[1])):
-                best = (adjusted, token)
-        if best is None or entry.id in seen_entry_ids:
+    best_by_entry: dict[str, tuple[int, str, SkillTaxonomyEntry]] = {}
+    for match in _compiled_taxonomy_matcher().find(normalized_text):
+        entry = taxonomy.exact_lookup.get(match.alias)
+        if entry is None or not _is_allowed_taxonomy_match(match.alias, entry, normalized_text, raw_text):
             continue
-        seen_entry_ids.add(entry.id)
-        matches.append((best[0], -entry.weight, entry.canonical_name.lower(), best[1], entry))
+        current = best_by_entry.get(entry.id)
+        if current is None or match.start < current[0] or (match.start == current[0] and len(match.alias) > len(current[1])):
+            best_by_entry[entry.id] = (match.start, match.alias, entry)
+    matches = [
+        (start, -entry.weight, entry.canonical_name.lower(), alias, entry)
+        for start, alias, entry in best_by_entry.values()
+    ]
     matches.sort(key=lambda item: (item[0], item[1], item[2]))
     return [
         TaxonomySkillMatch(

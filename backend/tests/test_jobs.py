@@ -93,9 +93,44 @@ class BackgroundJobTests(unittest.TestCase):
         with patch.object(main, "active_job_id", return_value="already-running"):
             response = self.client.post("/jobs/nvoids-sync")
         self.assertEqual(response.status_code, 409)
-        self.assertIn("another_job_in_progress", response.json()["detail"])
+        self.assertEqual(response.json()["detail"]["code"], "another_job_in_progress")
+        self.assertEqual(response.json()["detail"]["job_id"], "already-running")
+        self.assertIsNone(response.json()["detail"]["run_key"])
+
+    def test_duplicate_job_conflict_includes_run_key_when_a_recent_run_row_exists(self) -> None:
         with self.SessionLocal() as db:
-            self.assertEqual(db.query(RecentRun).count(), 0)
+            create_recent_run(
+                db, owner_id=main.settings.owner_id, run_source="nvoids_sync",
+                run_key="nvoids_sync:already-running-key", status="running", detail="in progress",
+                job_backend_id="already-running",
+            )
+            db.commit()
+        with patch.object(main, "active_job_id", return_value="already-running"):
+            response = self.client.post("/jobs/nvoids-sync")
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["detail"]["run_key"], "nvoids_sync:already-running-key")
+
+    def test_jobs_summary_counts_recent_runs_and_survives_redis_outage(self) -> None:
+        with self.SessionLocal() as db:
+            create_recent_run(
+                db, owner_id=main.settings.owner_id, run_source="nvoids_sync",
+                run_key="nvoids_sync:summary-ok", status="ok", detail="done",
+            )
+            create_recent_run(
+                db, owner_id=main.settings.owner_id, run_source="nvoids_sync",
+                run_key="nvoids_sync:summary-failed", status="failed", detail="boom",
+            )
+            db.commit()
+
+        with patch.object(main, "get_redis_connection", side_effect=ConnectionError("redis down")):
+            response = self.client.get("/jobs/summary")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["succeeded"], 1)
+        self.assertEqual(payload["failed"], 1)
+        self.assertEqual(payload["queued"], 0)
+        self.assertEqual(payload["processing"], 0)
 
     def test_progress_is_monotonic_and_mirrored_to_rq_metadata(self) -> None:
         job = SimpleNamespace(meta={}, save_meta=lambda: None)

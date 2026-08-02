@@ -251,6 +251,9 @@ describe('Settings bootstrap flow', () => {
               normalized_name: 'twistlock',
               occurrence_count: 1,
               candidate_ids: [42],
+              suspicious: false,
+              recoverable_skills: [],
+              source_tags: ['ai'],
             },
           ],
           pending_job_intent_signals: [

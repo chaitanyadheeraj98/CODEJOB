@@ -3728,15 +3728,11 @@
       "category": "engineering_practice",
       "weight": 0.85,
       "aliases": [
-        "documentation",
-        "api documentation",
-        "runbooks"
+        "api documentation"
       ],
       "normalized_forms": [
         "technical documentation",
-        "documentation",
-        "api documentation",
-        "runbooks"
+        "api documentation"
       ],
       "cluster_id": "cluster_engineering_practice",
       "related_skill_ids": []
@@ -4144,13 +4140,11 @@
       "category": "testing",
       "weight": 0.9,
       "aliases": [
-        "apache jmeter",
-        "performance testing"
+        "apache jmeter"
       ],
       "normalized_forms": [
         "jmeter",
-        "apache jmeter",
-        "performance testing"
+        "apache jmeter"
       ],
       "cluster_id": "cluster_testing",
       "related_skill_ids": []
@@ -6360,13 +6354,11 @@
       "category": "operations",
       "weight": 0.9,
       "aliases": [
-        "runbook automation",
-        "operational runbooks"
+        "runbook automation"
       ],
       "normalized_forms": [
         "runbook execution",
-        "runbook automation",
-        "operational runbooks"
+        "runbook automation"
       ],
       "cluster_id": "cluster_operations",
       "related_skill_ids": []
