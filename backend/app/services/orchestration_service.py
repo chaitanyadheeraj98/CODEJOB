@@ -326,7 +326,7 @@ class OrchestrationService:
                     trusted_group_context=trusted_group_context,
                     approved_learning_signals=approved_learning_signals,
                 )
-                if intent_decision.provider == "groq":
+                if intent_decision.provider == "groq" and intent_decision.learned_signals:
                     record_pending_job_intent_learning(
                         db,
                         owner_id=self.deps.owner_id,

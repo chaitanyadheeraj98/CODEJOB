@@ -83,6 +83,7 @@ from app.models import RecipientRoutingFeedback
 from app.parsing import build_skills_json_payload
 from app.parsing.skill_audit import analyze_skill_candidate, is_safe_for_bulk_skill_approval
 from app.telegram_bot import TelegramBotService, TelegramReply
+from app.taxonomy.job_description_taxonomy import clear_job_intent_signal_embedding_cache
 from app.phase0 import (
     DEFAULT_FALLBACK_DRAFT_TEMPLATE,
     DEFAULT_SIGNATURE_EMAIL,
@@ -134,7 +135,13 @@ from app.premium_numbers.intelligence import OPPORTUNITY_STATUS_VALUES
 from app.premium_numbers.phone_normalization import best_display_phone, canonicalize_phone
 from app.query_bucket import sanitize_saved_queries
 from app.runtime_state import runtime_state
-from app.job_intent_learning import normalize_job_intent_phrase
+from app.job_intent_learning import (
+    NEGATIVE_NEWSLETTER,
+    POSITIVE_RECRUITER_JD,
+    approved_learning_signals_for_owner,
+    normalize_job_intent_phrase,
+    prioritized_learning_signals,
+)
 from app.services import analytics_service, policy_service
 from app.services.auto_runner_service import AutoRunnerService
 from app.services.candidate_runtime_service import CandidateRuntimeDeps, CandidateRuntimeService, resolve_resume_display_name
@@ -186,6 +193,7 @@ from app.schemas import (
     DismissSkillRequest,
     DismissEntityRequest,
     EmbedPendingSkillsResponse,
+    EmbeddedJobIntentSignalResponse,
     EmbeddingStatusResponse,
     EmailResponse,
     GmailStatusResponse,
@@ -246,6 +254,7 @@ from app.semantic.embeddings_service import (
     embedding_to_json,
     end_embedding_latency_capture,
     generate_embedding,
+    generate_embeddings,
 )
 
 
@@ -1684,6 +1693,7 @@ def _upsert_job_intent_entry(
             db.refresh(existing)
         else:
             db.flush()
+        clear_job_intent_signal_embedding_cache()
         return existing
     created = JobIntentTaxonomyEntry(
         owner_id=settings.owner_id,
@@ -1702,6 +1712,7 @@ def _upsert_job_intent_entry(
         db.refresh(created)
     else:
         db.flush()
+    clear_job_intent_signal_embedding_cache()
     return created
 
 
@@ -2803,6 +2814,43 @@ def dismiss_job_intent_learning(
         status="dismissed",
     )
     return _serialize_job_intent_entry(entry)
+
+
+@app.post("/settings/job-intent-learning/{entry_id}/toggle-polarity", response_model=JobIntentTaxonomyEntryResponse)
+def toggle_job_intent_polarity(entry_id: int, db: Session = Depends(get_db)) -> JobIntentTaxonomyEntryResponse:
+    entry = (
+        db.query(JobIntentTaxonomyEntry)
+        .filter(JobIntentTaxonomyEntry.id == entry_id, JobIntentTaxonomyEntry.owner_id == settings.owner_id)
+        .first()
+    )
+    if entry is None:
+        raise HTTPException(status_code=404, detail="job_intent_entry_not_found")
+    entry.polarity = NEGATIVE_NEWSLETTER if entry.polarity == POSITIVE_RECRUITER_JD else POSITIVE_RECRUITER_JD
+    db.commit()
+    db.refresh(entry)
+    clear_job_intent_signal_embedding_cache()
+    return _serialize_job_intent_entry(entry)
+
+
+@app.get("/settings/job-intent-learning/embedded", response_model=list[EmbeddedJobIntentSignalResponse])
+def list_embedded_job_intent_signals(db: Session = Depends(get_db)) -> list[EmbeddedJobIntentSignalResponse]:
+    approved = approved_learning_signals_for_owner(db, settings.owner_id)
+    positive, negative = prioritized_learning_signals(approved)
+    selected = [*positive, *negative]
+    if not selected:
+        return []
+    _vectors, provider = generate_embeddings([signal.phrase for signal in selected])
+    embedded = provider == "sbert"
+    return [
+        EmbeddedJobIntentSignalResponse(
+            id=signal.id,
+            phrase=signal.phrase,
+            polarity=signal.polarity,
+            confidence=signal.confidence,
+            embedded=embedded,
+        )
+        for signal in selected
+    ]
 
 
 @app.get("/gmail/status", response_model=GmailStatusResponse)

@@ -1049,6 +1049,53 @@
   font-size: 13px;
 }
 
+.intentTabBar {
+  display: flex;
+  gap: 8px;
+}
+
+.intentTab {
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: #fff;
+  color: #33405a;
+  cursor: pointer;
+}
+
+.intentTab--active {
+  background: #1a56db;
+  border-color: #1a56db;
+  color: #fff;
+}
+
+.intentPolarityLight {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.intentPolarityLight--positive {
+  background: #1a7f37;
+  color: #fff;
+}
+
+.intentPolarityLight--negative {
+  background: #c53030;
+  color: #fff;
+}
+
+.intentPolarityLight:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .skillUpgradeList {
   display: grid;
   gap: 12px;

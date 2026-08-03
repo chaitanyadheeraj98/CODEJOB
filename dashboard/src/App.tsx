@@ -516,6 +516,14 @@ type JobIntentLearningSignal = {
   updated_at: string
 }
 
+type EmbeddedJobIntentSignal = {
+  id: number
+  phrase: string
+  polarity: string
+  confidence: number
+  embedded: boolean
+}
+
 type SettingsBootstrapPayload = {
   settings: SettingsPayload
   role_manifest_child_creation_enabled: boolean
@@ -916,31 +924,52 @@ export function EntityUpgradeSection({
   )
 }
 
+const isPositiveIntentPolarity = (polarity: string) => polarity === 'positive_recruiter_jd'
+
 type JobIntentLearningSectionProps = {
   pendingSignals: JobIntentLearningSignal[]
   approvedSignals: JobIntentLearningSignal[]
+  embeddedSignals?: EmbeddedJobIntentSignal[]
   loading: boolean
   busySignalKey: string | null
   approveAllSignals: () => void
   approveSignal: (signal: JobIntentLearningSignal) => void
   dismissSignal: (signal: JobIntentLearningSignal) => void
+  togglePolarity: (signal: { id: number }) => void
 }
 
 export function JobIntentLearningSection({
   pendingSignals,
   approvedSignals,
+  embeddedSignals = [],
   loading,
   busySignalKey,
   approveAllSignals,
   approveSignal,
   dismissSignal,
+  togglePolarity,
 }: JobIntentLearningSectionProps) {
   const [visiblePendingCount, setVisiblePendingCount] = useState(SETTINGS_REVIEW_BATCH_SIZE)
-  const [visibleApprovedCount, setVisibleApprovedCount] = useState(SETTINGS_REVIEW_BATCH_SIZE)
+  const [visiblePositiveApprovedCount, setVisiblePositiveApprovedCount] = useState(SETTINGS_REVIEW_BATCH_SIZE)
+  const [visibleNegativeApprovedCount, setVisibleNegativeApprovedCount] = useState(SETTINGS_REVIEW_BATCH_SIZE)
   const visiblePendingSignals = pendingSignals.slice(0, visiblePendingCount)
-  const visibleApprovedSignals = approvedSignals.slice(0, visibleApprovedCount)
+  const positiveApprovedSignals = useMemo(
+    () => approvedSignals.filter((signal) => isPositiveIntentPolarity(signal.polarity)),
+    [approvedSignals],
+  )
+  const negativeApprovedSignals = useMemo(
+    () => approvedSignals.filter((signal) => !isPositiveIntentPolarity(signal.polarity)),
+    [approvedSignals],
+  )
+  const visiblePositiveApprovedSignals = positiveApprovedSignals.slice(0, visiblePositiveApprovedCount)
+  const visibleNegativeApprovedSignals = negativeApprovedSignals.slice(0, visibleNegativeApprovedCount)
   const remainingPendingSignals = pendingSignals.length - visiblePendingSignals.length
-  const remainingApprovedSignals = approvedSignals.length - visibleApprovedSignals.length
+  const remainingPositiveApprovedSignals = positiveApprovedSignals.length - visiblePositiveApprovedSignals.length
+  const remainingNegativeApprovedSignals = negativeApprovedSignals.length - visibleNegativeApprovedSignals.length
+  const [activeIntentTab, setActiveIntentTab] = useState<'pending' | 'positive' | 'negative' | 'embedded'>('pending')
+  const [visibleEmbeddedCount, setVisibleEmbeddedCount] = useState(SETTINGS_REVIEW_BATCH_SIZE)
+  const visibleEmbeddedSignals = embeddedSignals.slice(0, visibleEmbeddedCount)
+  const remainingEmbeddedSignals = embeddedSignals.length - visibleEmbeddedSignals.length
   return (
     <section className="card skillUpgradeCard">
       <h2>Job Intent Learning</h2>
@@ -949,6 +978,22 @@ export function JobIntentLearningSection({
           Groq-suggested Gmail intent phrases land here for review. Approve lets fallback mode use them later; dismiss keeps them suppressed.
         </p>
 
+        <div className="intentTabBar" role="tablist">
+          <button type="button" role="tab" aria-selected={activeIntentTab === 'pending'} className={activeIntentTab === 'pending' ? 'intentTab intentTab--active' : 'intentTab'} onClick={() => setActiveIntentTab('pending')}>
+            Pending ({pendingSignals.length})
+          </button>
+          <button type="button" role="tab" aria-selected={activeIntentTab === 'positive'} className={activeIntentTab === 'positive' ? 'intentTab intentTab--active' : 'intentTab'} onClick={() => setActiveIntentTab('positive')}>
+            Positive ({positiveApprovedSignals.length})
+          </button>
+          <button type="button" role="tab" aria-selected={activeIntentTab === 'negative'} className={activeIntentTab === 'negative' ? 'intentTab intentTab--active' : 'intentTab'} onClick={() => setActiveIntentTab('negative')}>
+            Negative ({negativeApprovedSignals.length})
+          </button>
+          <button type="button" role="tab" aria-selected={activeIntentTab === 'embedded'} className={activeIntentTab === 'embedded' ? 'intentTab intentTab--active' : 'intentTab'} onClick={() => setActiveIntentTab('embedded')}>
+            Embedded ({embeddedSignals.length})
+          </button>
+        </div>
+
+        {activeIntentTab === 'pending' ? (
         <section className="skillUpgradeColumn">
           <div className="skillUpgradeColumnHeader">
             <h3>Pending Intent Signals</h3>
@@ -1023,39 +1068,133 @@ export function JobIntentLearningSection({
             </div>
           )}
         </section>
+        ) : null}
 
+        {activeIntentTab === 'positive' ? (
         <section className="skillUpgradeColumn">
           <div className="skillUpgradeColumnHeader">
-            <h3>Approved Intent Signals</h3>
-            <span className="skillUpgradeCount">{approvedSignals.length}</span>
+            <h4>Approved — Positive</h4>
+            <span className="skillUpgradeCount">{positiveApprovedSignals.length}</span>
           </div>
-          {loading ? (
-            <p className="subtle">Loading approved intent signals...</p>
-          ) : approvedSignals.length === 0 ? (
-            <p className="subtle">No approved intent signals yet.</p>
-          ) : (
+          {!loading && positiveApprovedSignals.length === 0 ? (
+            <p className="subtle">No approved positive signals yet.</p>
+          ) : !loading ? (
             <div className="skillUpgradeList">
-              {visibleApprovedSignals.map((signal) => (
+              {visiblePositiveApprovedSignals.map((signal) => (
                 <article key={`approved-${signal.id}`} className="skillUpgradeItem">
                   <div className="skillUpgradeItemHeader">
                     <strong className="skillUpgradeName">{signal.phrase}</strong>
-                    <span className="skillUpgradeBadge">{signal.polarity}</span>
+                    <button
+                      type="button"
+                      className="intentPolarityLight intentPolarityLight--positive"
+                      onClick={() => togglePolarity(signal)}
+                      disabled={busySignalKey !== null}
+                      title="Positive signal — click to mark negative"
+                    >
+                      {busySignalKey === `toggle-polarity:${signal.id}` ? '...' : 'Positive'}
+                    </button>
                   </div>
                   <p className="subtle skillUpgradeMeta">Examples: {signal.source_examples_count}</p>
                   <p className="subtle skillUpgradeMeta">Confidence: {signal.confidence_aggregate.toFixed(2)}</p>
                 </article>
               ))}
-              {remainingApprovedSignals > 0 ? (
+              {remainingPositiveApprovedSignals > 0 ? (
                 <button
                   type="button"
-                  onClick={() => setVisibleApprovedCount((count) => count + SETTINGS_REVIEW_BATCH_SIZE)}
+                  onClick={() => setVisiblePositiveApprovedCount((count) => count + SETTINGS_REVIEW_BATCH_SIZE)}
                 >
-                  Show {Math.min(SETTINGS_REVIEW_BATCH_SIZE, remainingApprovedSignals)} more approved signals
+                  Show {Math.min(SETTINGS_REVIEW_BATCH_SIZE, remainingPositiveApprovedSignals)} more positive signals
                 </button>
               ) : null}
             </div>
-          )}
+          ) : null}
         </section>
+        ) : null}
+
+        {activeIntentTab === 'negative' ? (
+        <section className="skillUpgradeColumn">
+          <div className="skillUpgradeColumnHeader">
+            <h4>Approved — Negative</h4>
+            <span className="skillUpgradeCount">{negativeApprovedSignals.length}</span>
+          </div>
+          {!loading && negativeApprovedSignals.length === 0 ? (
+            <p className="subtle">No approved negative signals yet.</p>
+          ) : !loading ? (
+            <div className="skillUpgradeList">
+              {visibleNegativeApprovedSignals.map((signal) => (
+                <article key={`approved-${signal.id}`} className="skillUpgradeItem">
+                  <div className="skillUpgradeItemHeader">
+                    <strong className="skillUpgradeName">{signal.phrase}</strong>
+                    <button
+                      type="button"
+                      className="intentPolarityLight intentPolarityLight--negative"
+                      onClick={() => togglePolarity(signal)}
+                      disabled={busySignalKey !== null}
+                      title="Negative signal — click to mark positive"
+                    >
+                      {busySignalKey === `toggle-polarity:${signal.id}` ? '...' : 'Negative'}
+                    </button>
+                  </div>
+                  <p className="subtle skillUpgradeMeta">Examples: {signal.source_examples_count}</p>
+                  <p className="subtle skillUpgradeMeta">Confidence: {signal.confidence_aggregate.toFixed(2)}</p>
+                </article>
+              ))}
+              {remainingNegativeApprovedSignals > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => setVisibleNegativeApprovedCount((count) => count + SETTINGS_REVIEW_BATCH_SIZE)}
+                >
+                  Show {Math.min(SETTINGS_REVIEW_BATCH_SIZE, remainingNegativeApprovedSignals)} more negative signals
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+        </section>
+        ) : null}
+
+        {activeIntentTab === 'embedded' ? (
+        <section className="skillUpgradeColumn">
+          <div className="skillUpgradeColumnHeader">
+            <h4>Currently Embedded Signals</h4>
+            <span className="skillUpgradeCount">{embeddedSignals.length}</span>
+          </div>
+          <p className="subtle skillUpgradeIntro">
+            These are the top-ranked approved signals Groq and semantic matching actually use right now (capped at 15 per polarity).
+          </p>
+          {!loading && embeddedSignals.length === 0 ? (
+            <p className="subtle">No signals are currently embedded.</p>
+          ) : !loading ? (
+            <div className="skillUpgradeList">
+              {visibleEmbeddedSignals.map((signal) => (
+                <article key={`embedded-${signal.id}`} className="skillUpgradeItem">
+                  <div className="skillUpgradeItemHeader">
+                    <strong className="skillUpgradeName">{signal.phrase}</strong>
+                    <button
+                      type="button"
+                      className={isPositiveIntentPolarity(signal.polarity) ? 'intentPolarityLight intentPolarityLight--positive' : 'intentPolarityLight intentPolarityLight--negative'}
+                      onClick={() => togglePolarity(signal)}
+                      disabled={busySignalKey !== null}
+                      title={isPositiveIntentPolarity(signal.polarity) ? 'Positive signal — click to mark negative' : 'Negative signal — click to mark positive'}
+                    >
+                      {busySignalKey === `toggle-polarity:${signal.id}` ? '...' : isPositiveIntentPolarity(signal.polarity) ? 'Positive' : 'Negative'}
+                    </button>
+                  </div>
+                  <p className="subtle skillUpgradeMeta">Confidence: {signal.confidence.toFixed(2)}</p>
+                  <p className="subtle skillUpgradeMeta">{signal.embedded ? 'Embedded via SBERT' : 'Fallback (hash embedding — SBERT unavailable)'}</p>
+                </article>
+              ))}
+              {remainingEmbeddedSignals > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => setVisibleEmbeddedCount((count) => count + SETTINGS_REVIEW_BATCH_SIZE)}
+                >
+                  Show {Math.min(SETTINGS_REVIEW_BATCH_SIZE, remainingEmbeddedSignals)} more embedded signals
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+        </section>
+        ) : null}
       </div>
     </section>
   )
@@ -2412,6 +2551,7 @@ function App() {
   const [entityActionKey, setEntityActionKey] = useState<string | null>(null)
   const [pendingJobIntentSignals, setPendingJobIntentSignals] = useState<JobIntentLearningSignal[]>([])
   const [approvedJobIntentSignals, setApprovedJobIntentSignals] = useState<JobIntentLearningSignal[]>([])
+  const [embeddedJobIntentSignals, setEmbeddedJobIntentSignals] = useState<EmbeddedJobIntentSignal[]>([])
   const [jobIntentLoading, setJobIntentLoading] = useState(false)
   const [jobIntentActionKey, setJobIntentActionKey] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
@@ -2740,8 +2880,13 @@ function App() {
   }
 
   const loadLearningData = useCallback(async (): Promise<void> => {
-    setSkillsLoading(true)
-    setJobIntentLoading(true)
+    // Only show the blanking "Loading..." placeholder on the first load — a background
+    // refresh after Approve/Dismiss/Toggle should update data in place, not collapse the
+    // list and reset scroll position while data the user is looking at is still valid.
+    if (!hasLoadedLearningData) {
+      setSkillsLoading(true)
+      setJobIntentLoading(true)
+    }
     try {
       const [
         skillsResponse,
@@ -2750,6 +2895,7 @@ function App() {
         locationsResponse,
         pendingIntentResponse,
         approvedIntentResponse,
+        embeddedIntentResponse,
       ] = await Promise.all([
         fetch(`${apiBase}/settings/skills/pending`),
         fetch(`${apiBase}/settings/skills/embedding-status`),
@@ -2757,6 +2903,7 @@ function App() {
         fetch(`${apiBase}/settings/entities/location/pending`),
         fetch(`${apiBase}/settings/job-intent-learning/pending`),
         fetch(`${apiBase}/settings/job-intent-learning/approved`),
+        fetch(`${apiBase}/settings/job-intent-learning/embedded`),
       ])
       if (
         !skillsResponse.ok ||
@@ -2764,17 +2911,19 @@ function App() {
         !companiesResponse.ok ||
         !locationsResponse.ok ||
         !pendingIntentResponse.ok ||
-        !approvedIntentResponse.ok
+        !approvedIntentResponse.ok ||
+        !embeddedIntentResponse.ok
       ) {
         throw new Error('Failed to load learning queues')
       }
-      const [skills, embeddingStatus, companies, locations, pendingSignals, approvedSignals] = await Promise.all([
+      const [skills, embeddingStatus, companies, locations, pendingSignals, approvedSignals, embeddedSignals] = await Promise.all([
         skillsResponse.json() as Promise<PendingSkill[]>,
         embeddingResponse.json() as Promise<{ pending_count: number }>,
         companiesResponse.json() as Promise<PendingEntity[]>,
         locationsResponse.json() as Promise<PendingEntity[]>,
         pendingIntentResponse.json() as Promise<JobIntentLearningSignal[]>,
         approvedIntentResponse.json() as Promise<JobIntentLearningSignal[]>,
+        embeddedIntentResponse.json() as Promise<EmbeddedJobIntentSignal[]>,
       ])
       setPendingSkills(skills)
       setEmbeddingPendingCount(embeddingStatus.pending_count)
@@ -2782,12 +2931,13 @@ function App() {
       setPendingLocations(locations)
       setPendingJobIntentSignals(pendingSignals)
       setApprovedJobIntentSignals(approvedSignals)
+      setEmbeddedJobIntentSignals(embeddedSignals)
       setHasLoadedLearningData(true)
     } finally {
       setSkillsLoading(false)
       setJobIntentLoading(false)
     }
-  }, [apiBase])
+  }, [apiBase, hasLoadedLearningData])
 
   const loadSettingsBootstrap = async (): Promise<SettingsPayload> => {
     setSettingsBootstrapStatus('loading')
@@ -3645,6 +3795,22 @@ function App() {
         body: JSON.stringify({ phrase: signal.phrase, polarity: signal.polarity }),
       })
       if (!res.ok) throw new Error('Failed to dismiss job-intent signal')
+      await loadLearningData()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setJobIntentActionKey(null)
+    }
+  }
+
+  const toggleJobIntentSignalPolarity = async (signal: { id: number }) => {
+    setJobIntentActionKey(`toggle-polarity:${signal.id}`)
+    setError('')
+    try {
+      const res = await fetch(`${apiBase}/settings/job-intent-learning/${signal.id}/toggle-polarity`, {
+        method: 'POST',
+      })
+      if (!res.ok) throw new Error('Failed to change the intent signal polarity')
       await loadLearningData()
     } catch (e) {
       setError((e as Error).message)
@@ -5357,11 +5523,13 @@ function App() {
               <JobIntentLearningSection
                 pendingSignals={pendingJobIntentSignals}
                 approvedSignals={approvedJobIntentSignals}
+                embeddedSignals={embeddedJobIntentSignals}
                 loading={jobIntentLoading}
                 busySignalKey={jobIntentActionKey}
                 approveAllSignals={approveAllPendingJobIntentSignals}
                 approveSignal={approvePendingJobIntentSignal}
                 dismissSignal={dismissPendingJobIntentSignal}
+                togglePolarity={toggleJobIntentSignalPolarity}
               />
               <TrustedGmailGroupsPanel
                 featureEnabled={settings.feature_gmail_requirement_groups_enabled}

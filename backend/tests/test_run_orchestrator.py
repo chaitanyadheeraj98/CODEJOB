@@ -10,7 +10,7 @@ from sqlalchemy.pool import StaticPool
 from app.automation import RunOrchestrator, RunOrchestratorDependencies, RunOrchestratorRequest
 from app.db import Base
 from app.gates import EmailIntentDecision
-from app.models import RecentRunSkippedItem, RecruiterEmail, ResumeAsset, UserSettings
+from app.models import JobIntentTaxonomyEntry, RecentRunSkippedItem, RecruiterEmail, ResumeAsset, UserSettings
 from app.phase0 import RoutingEvidence, RoutingResult
 from app.recent_runs import record_skipped_item
 from app.services import policy_service
@@ -605,6 +605,44 @@ class RunOrchestratorTests(unittest.TestCase):
             self.assertEqual(skipped_item.reason_code, "security_alert")
             self.assertEqual(skipped_item.intent_type, "security_alert")
             self.assertEqual(skipped_item.gmail_message_url, "https://mail.google.com/mail/u/0/#all/m-5c")
+
+    def test_groq_agreement_without_learning_signals_does_not_write_learning_rows(self) -> None:
+        with Session(self.engine) as db:
+            user_settings = self._seed_user_settings(db, feature_ai_enabled=False)
+            resume = self._seed_resume(db)
+            deps, _marked, _events = self._deps(
+                intent_decision=EmailIntentDecision(
+                    intent_type="recruiter_job_requirement",
+                    action="process_for_queue",
+                    confidence=0.91,
+                    reason="Groq and fallback agree.",
+                    evidence=["requirements"],
+                    negative_evidence=[],
+                    provider="groq",
+                    learned_signals=[],
+                )
+            )
+
+            RunOrchestrator().execute(
+                RunOrchestratorRequest(
+                    db=db,
+                    owner_id="default-owner",
+                    items=[self._item("m-groq-agree")],
+                    user_settings=user_settings,
+                    resume=resume,
+                    active_resume=resume,
+                    enabled_resumes=[resume],
+                    effective_policy=policy_service.default_policy(),
+                    threshold=0.6,
+                    dry_run=False,
+                    model_name="deepseek-chat",
+                    run_source="automation_run",
+                    run_key="automation_run:groq-agree",
+                    deps=deps,
+                )
+            )
+
+            self.assertEqual(db.query(JobIntentTaxonomyEntry).count(), 0)
 
     def test_real_job_message_still_processes_without_recruiter_words(self) -> None:
         with Session(self.engine) as db:

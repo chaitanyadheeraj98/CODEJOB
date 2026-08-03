@@ -5,10 +5,16 @@ from unittest.mock import patch
 from app.gates.job_description_gate import classify_email_intent
 from app.job_intent_learning import JobIntentLearningSignal
 from app.services.gmail_group_source_service import TrustedGroupContext
-from app.taxonomy.job_description_taxonomy import classify_job_description_taxonomy
+from app.taxonomy.job_description_taxonomy import (
+    classify_job_description_taxonomy,
+    clear_job_intent_signal_embedding_cache,
+)
 
 
 class JobDescriptionGateTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        clear_job_intent_signal_embedding_cache()
+
     def test_taxonomy_passes_real_job_with_unsubscribe_footer(self) -> None:
         decision = classify_job_description_taxonomy(
             sender="jobs@googlegroups.com",
@@ -126,6 +132,119 @@ class JobDescriptionGateTests(unittest.TestCase):
         self.assertEqual(decision.intent_type, "recruiter_job_requirement")
         self.assertEqual(decision.action, "process_for_queue")
         self.assertEqual(decision.learned_signals[0].phrase, "share resume")
+
+    @patch(
+        "app.gates.job_description_gate.classify_job_description_taxonomy",
+        return_value=SimpleNamespace(
+            intent_type="recruiter_job_requirement",
+            action="process_for_queue",
+            confidence=0.88,
+            reason="Fallback agrees.",
+            evidence=["requirements"],
+            negative_evidence=[],
+        ),
+    )
+    @patch(
+        "app.gates.job_description_gate.groq_chat_json",
+        return_value=(
+            {
+                "intent_type": "recruiter_job_requirement",
+                "action": "process_for_queue",
+                "confidence": 0.92,
+                "reason": "Groq agrees.",
+                "evidence": ["requirements"],
+                "negative_evidence": [],
+                "learning_signals": [
+                    {"phrase": "redundant phrase", "polarity": "positive_recruiter_jd", "confidence": 0.8}
+                ],
+            },
+            None,
+        ),
+    )
+    def test_groq_prompt_caps_confirmed_signals_and_drops_learning_on_agreement(
+        self,
+        mock_groq,
+        _mock_taxonomy,
+    ) -> None:
+        signals = [
+            JobIntentLearningSignal(
+                phrase=f"POS_SIGNAL_{index:02d}",
+                polarity="positive_recruiter_jd",
+                confidence=index / 20,
+            )
+            for index in range(20)
+        ] + [
+            JobIntentLearningSignal(
+                phrase=f"NEG_SIGNAL_{index:02d}",
+                polarity="negative_newsletter",
+                confidence=index / 20,
+            )
+            for index in range(20)
+        ]
+
+        decision = classify_email_intent(
+            sender="jobs@example.com",
+            subject="Data role",
+            body="Requirements attached.",
+            groq_enabled=True,
+            approved_learning_signals=signals,
+        )
+
+        prompt = mock_groq.call_args.kwargs["user_prompt"]
+        self.assertIn("POS_SIGNAL_19", prompt)
+        self.assertNotIn("POS_SIGNAL_00", prompt)
+        self.assertIn("NEG_SIGNAL_19", prompt)
+        self.assertNotIn("NEG_SIGNAL_00", prompt)
+        self.assertIn("supporting context, not as the sole basis", prompt)
+        self.assertEqual(decision.learned_signals, [])
+
+    @patch("app.taxonomy.job_description_taxonomy.generate_embeddings")
+    def test_semantic_approved_signal_adds_conservative_fallback_score(self, mock_embeddings) -> None:
+        mock_embeddings.side_effect = [
+            ([[1.0, 0.0]], "sbert"),
+            ([[0.8, 0.6]], "sbert"),
+        ]
+        kwargs = {
+            "sender": "jobs@example.com",
+            "subject": "Project Falcon",
+            "body": "Requirements are available in the attached brief.",
+            "recruiter_like": True,
+        }
+
+        without_signal = classify_job_description_taxonomy(**kwargs)
+        with_signal = classify_job_description_taxonomy(
+            **kwargs,
+            approved_learning_signals=[
+                JobIntentLearningSignal(
+                    phrase="talent requisition language",
+                    polarity="positive_recruiter_jd",
+                    confidence=0.9,
+                )
+            ],
+        )
+
+        self.assertEqual(without_signal.intent_type, "unknown")
+        self.assertEqual(with_signal.intent_type, "recruiter_job_requirement")
+        self.assertTrue(any(item.startswith("learned_semantic_positive:") for item in with_signal.evidence))
+
+    @patch("app.taxonomy.job_description_taxonomy.generate_embeddings", return_value=([[1.0, 0.0]], "hash"))
+    def test_hash_embedding_fallback_never_changes_intent(self, _mock_embeddings) -> None:
+        decision = classify_job_description_taxonomy(
+            sender="jobs@example.com",
+            subject="Project Falcon",
+            body="Requirements are available in the attached brief.",
+            recruiter_like=True,
+            approved_learning_signals=[
+                JobIntentLearningSignal(
+                    phrase="talent requisition language",
+                    polarity="positive_recruiter_jd",
+                    confidence=0.9,
+                )
+            ],
+        )
+
+        self.assertEqual(decision.intent_type, "unknown")
+        self.assertFalse(any(item.startswith("learned_semantic_") for item in decision.evidence))
 
     @patch(
         "app.gates.job_description_gate.classify_job_description_taxonomy",

@@ -396,6 +396,14 @@ class JobIntentTaxonomyEntryResponse(BaseModel):
         return []
 
 
+class EmbeddedJobIntentSignalResponse(BaseModel):
+    id: int
+    phrase: str
+    polarity: str
+    confidence: float
+    embedded: bool
+
+
 class SettingsBootstrapResponse(BaseModel):
     settings: SettingsResponse
     role_manifest_child_creation_enabled: bool = False

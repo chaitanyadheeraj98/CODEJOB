@@ -7,6 +7,7 @@ from typing import Iterable, Sequence
 
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.models import JobIntentTaxonomyEntry
 
 POSITIVE_RECRUITER_JD = "positive_recruiter_jd"
@@ -31,6 +32,30 @@ class JobIntentLearningSignal:
     phrase: str
     polarity: str
     confidence: float = 0.0
+    id: int = 0
+
+
+def prioritized_learning_signals(
+    signals: Sequence[JobIntentLearningSignal] | None,
+    *,
+    limit: int = 15,
+) -> tuple[list[JobIntentLearningSignal], list[JobIntentLearningSignal]]:
+    ranked = sorted(
+        signals or (),
+        key=lambda item: (-float(item.confidence or 0.0), normalize_job_intent_phrase(item.phrase)),
+    )
+    positive = [item for item in ranked if item.polarity == POSITIVE_RECRUITER_JD][:limit]
+    negative = [item for item in ranked if item.polarity != POSITIVE_RECRUITER_JD][:limit]
+    return positive, negative
+
+
+def prepare_job_intent_model_text(text: str) -> str:
+    limit = max(500, int(settings.groq_gate_body_char_limit or 6000))
+    prepared = (text or "").strip()[:limit]
+    if not settings.groq_gate_redact_contact_info:
+        return prepared
+    prepared = re.sub(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", "[email]", prepared)
+    return re.sub(r"(?:\+?\d[\d(). -]{7,}\d)", "[phone]", prepared)
 
 
 def normalize_job_intent_phrase(value: str | None) -> str:
@@ -120,6 +145,7 @@ def approved_learning_signals_for_owner(db: Session, owner_id: str) -> list[JobI
             phrase=str(row.phrase or "").strip(),
             polarity=str(row.polarity or "").strip(),
             confidence=float(row.confidence_aggregate or 0.0),
+            id=row.id,
         )
         for row in rows
         if str(row.phrase or "").strip() and str(row.polarity or "").strip() in VALID_JOB_INTENT_POLARITIES

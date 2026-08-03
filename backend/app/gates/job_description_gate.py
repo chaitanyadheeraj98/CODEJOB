@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import json
 import logging
-import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Sequence
 
 from app.ai.groq_client import groq_chat_json, groq_request_mode_for_model
 from app.config import settings
-from app.job_intent_learning import JobIntentLearningSignal
+from app.job_intent_learning import (
+    JobIntentLearningSignal,
+    prepare_job_intent_model_text,
+    prioritized_learning_signals,
+)
 from app.runtime_state import runtime_state
 from app.taxonomy.job_description_taxonomy import (
     JobDescriptionTaxonomyDecision,
@@ -84,19 +88,9 @@ GROQ_SCHEMA: dict[str, object] = {
 }
 
 
-def _truncate_body(text: str) -> str:
-    limit = max(500, int(settings.groq_gate_body_char_limit or 6000))
-    body = (text or "").strip()
-    if len(body) <= limit:
-        return body
-    return body[:limit]
-
-
-def _redact_contact_info(text: str) -> str:
-    if not settings.groq_gate_redact_contact_info:
-        return text
-    redacted = re.sub(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", "[email]", text)
-    return re.sub(r"(?:\+?\d[\d(). -]{7,}\d)", "[phone]", redacted)
+def _prompt_signal_phrases(signals: Sequence[JobIntentLearningSignal]) -> str:
+    phrases = [" ".join(str(item.phrase or "").split())[:160] for item in signals]
+    return json.dumps([phrase for phrase in phrases if phrase], ensure_ascii=True)
 
 
 def _taxonomy_to_decision(
@@ -192,7 +186,8 @@ def classify_email_intent(
     runtime_state.groq_last_attempted_at = started_at
     request_mode = groq_request_mode_for_model(settings.groq_gate_model)
     runtime_state.groq_request_mode = request_mode
-    body_for_model = _redact_contact_info(_truncate_body(body))
+    positive_signals, negative_signals = prioritized_learning_signals(approved_learning_signals)
+    body_for_model = prepare_job_intent_model_text(body)
     payload, error = groq_chat_json(
         system_prompt=(
             "Classify Gmail messages for job-intent gating. "
@@ -220,6 +215,9 @@ def classify_email_intent(
             f"Fallback taxonomy confidence: {taxonomy.confidence:.2f}\n"
             f"Fallback positive evidence: {', '.join(taxonomy.evidence) or 'none'}\n"
             f"Fallback negative evidence: {', '.join(taxonomy.negative_evidence) or 'none'}\n"
+            f"Known confirmed positive signals for this inbox: {_prompt_signal_phrases(positive_signals)}\n"
+            f"Known confirmed negative signals for this inbox: {_prompt_signal_phrases(negative_signals)}\n"
+            "Use confirmed signals as supporting context, not as the sole basis for a decision.\n"
             f"Body:\n{body_for_model}\n"
         ),
         schema=GROQ_SCHEMA,
@@ -228,16 +226,22 @@ def classify_email_intent(
     if payload is not None:
         decision = _coerce_groq_payload(payload)
         if decision is not None:
+            disagreed = taxonomy.intent_type != decision.intent_type or taxonomy.action != decision.action
+            if not disagreed:
+                decision = replace(decision, learned_signals=[])
             duration_ms = int((datetime.now(UTC) - started_at).total_seconds() * 1000)
             runtime_state.groq_last_success_at = datetime.now(UTC)
             runtime_state.groq_last_error = None
             runtime_state.groq_last_duration_ms = duration_ms
             runtime_state.groq_last_provider_result = "groq"
             logger.info(
-                "Groq gate success model=%s mode=%s duration_ms=%s",
+                "Groq gate success model=%s mode=%s duration_ms=%s fallback_intent=%s groq_intent=%s disagreed=%s",
                 settings.groq_gate_model or "llama-3.1-8b-instant",
                 request_mode,
                 duration_ms,
+                taxonomy.intent_type,
+                decision.intent_type,
+                disagreed,
             )
             return decision
         error = "groq_invalid_shape"

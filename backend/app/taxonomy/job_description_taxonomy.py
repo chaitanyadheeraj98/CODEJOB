@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from functools import lru_cache
+from math import sqrt
 from typing import Sequence
 
 from app.job_intent_learning import (
@@ -13,8 +15,14 @@ from app.job_intent_learning import (
     NEGATIVE_SECURITY,
     POSITIVE_RECRUITER_JD,
     normalize_job_intent_phrase,
+    prepare_job_intent_model_text,
+    prioritized_learning_signals,
 )
+from app.semantic.embeddings_service import generate_embeddings
 from app.services.gmail_group_source_service import TrustedGroupContext
+
+SEMANTIC_LEARNED_SIGNAL_THRESHOLD = 0.72
+SEMANTIC_LEARNED_SIGNAL_WEIGHT = 1.2
 
 JOB_STRUCTURE_TERMS = (
     "job description",
@@ -181,6 +189,52 @@ def _collect_learned_matches(
     return found
 
 
+@lru_cache(maxsize=32)
+def _cached_signal_embeddings(phrases: tuple[str, ...]) -> tuple[tuple[tuple[float, ...], ...], str]:
+    vectors, provider = generate_embeddings(list(phrases))
+    return tuple(tuple(vector) for vector in vectors), provider
+
+
+def clear_job_intent_signal_embedding_cache() -> None:
+    _cached_signal_embeddings.cache_clear()
+
+
+def _cosine_similarity(left: Sequence[float], right: Sequence[float]) -> float:
+    if not left or len(left) != len(right):
+        return -1.0
+    denominator = sqrt(sum(value * value for value in left)) * sqrt(sum(value * value for value in right))
+    return sum(a * b for a, b in zip(left, right)) / denominator if denominator else -1.0
+
+
+def _semantic_signal_scores(
+    body: str,
+    literal_text: str,
+    signals: Sequence[JobIntentLearningSignal] | None,
+) -> dict[str, tuple[JobIntentLearningSignal, float]]:
+    positive, negative = prioritized_learning_signals(signals)
+    selected = [
+        signal
+        for signal in [*positive, *negative]
+        if normalize_job_intent_phrase(signal.phrase) not in literal_text
+    ]
+    prepared_body = prepare_job_intent_model_text(body)
+    if not selected or not prepared_body:
+        return {}
+    signal_vectors, signal_provider = _cached_signal_embeddings(tuple(signal.phrase for signal in selected))
+    if signal_provider != "sbert":
+        return {}
+    body_vectors, body_provider = generate_embeddings([prepared_body])
+    if body_provider != "sbert" or not body_vectors:
+        return {}
+    scores: dict[str, tuple[JobIntentLearningSignal, float]] = {}
+    for signal, vector in zip(selected, signal_vectors):
+        similarity = _cosine_similarity(body_vectors[0], vector)
+        current = scores.get(signal.polarity)
+        if similarity >= SEMANTIC_LEARNED_SIGNAL_THRESHOLD and (current is None or similarity > current[1]):
+            scores[signal.polarity] = (signal, similarity)
+    return scores
+
+
 def _footer_zone(body: str) -> str:
     raw = (body or "").strip().lower()
     if not raw:
@@ -270,6 +324,25 @@ def classify_job_description_taxonomy(
             negative_evidence=[f"candidate_marketing:{item}" for item in candidate_hits],
         )
     positive_score = base_positive_score
+    semantic_scores = _semantic_signal_scores(body, full_text, approved_learning_signals)
+    semantic_positive = semantic_scores.get(POSITIVE_RECRUITER_JD)
+    semantic_positive_applied = False
+    semantic_negative = max(
+        (match for polarity, match in semantic_scores.items() if polarity != POSITIVE_RECRUITER_JD),
+        key=lambda match: match[1],
+        default=None,
+    )
+    if semantic_positive and (semantic_negative is None or semantic_positive[1] >= semantic_negative[1] + 0.05):
+        positive_score += SEMANTIC_LEARNED_SIGNAL_WEIGHT
+        semantic_positive_applied = True
+        positive_evidence.append(
+            f"learned_semantic_positive:{semantic_positive[0].phrase}:{semantic_positive[1]:.2f}"
+        )
+    elif semantic_negative and (semantic_positive is None or semantic_negative[1] >= semantic_positive[1] + 0.05):
+        positive_score = max(0.0, positive_score - SEMANTIC_LEARNED_SIGNAL_WEIGHT)
+        negative_evidence.append(
+            f"learned_semantic_negative:{semantic_negative[0].phrase}:{semantic_negative[1]:.2f}"
+        )
 
     job_board_hits = _collect_matches(header_text, JOB_BOARD_ALERT_TERMS) + _collect_learned_matches(
         full_text,
@@ -323,7 +396,14 @@ def classify_job_description_taxonomy(
     if weak_footer_hits:
         negative_evidence.extend(f"weak_footer:{item}" for item in weak_footer_hits)
 
-    if positive_score >= 4.0 and (structure_hits or recruiter_action_hits or staffing_hits or role_hits or learned_positive_hits):
+    if positive_score >= 4.0 and (
+        structure_hits
+        or recruiter_action_hits
+        or staffing_hits
+        or role_hits
+        or learned_positive_hits
+        or semantic_positive_applied
+    ):
         confidence = min(0.58 + (positive_score * 0.045), 0.96)
         reason = (
             "Matched recruiter job-description structure or submission language."

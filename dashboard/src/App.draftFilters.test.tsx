@@ -364,6 +364,7 @@ describe('Draft Qualification Rules settings UI', () => {
           approveAllSignals={vi.fn()}
           approveSignal={vi.fn()}
           dismissSignal={vi.fn()}
+          togglePolarity={vi.fn()}
         />,
       )
     })
@@ -401,6 +402,7 @@ describe('Draft Qualification Rules settings UI', () => {
           approveAllSignals={approveAllSignals}
           approveSignal={vi.fn()}
           dismissSignal={vi.fn()}
+          togglePolarity={vi.fn()}
         />,
       )
     })
@@ -432,6 +434,7 @@ describe('Draft Qualification Rules settings UI', () => {
           approveAllSignals={vi.fn()}
           approveSignal={vi.fn()}
           dismissSignal={vi.fn()}
+          togglePolarity={vi.fn()}
         />,
       )
     })

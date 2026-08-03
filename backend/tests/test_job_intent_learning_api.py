@@ -1,5 +1,6 @@
 import os
 import unittest
+from unittest.mock import patch
 
 os.environ["DEBUG"] = "false"
 
@@ -61,10 +62,12 @@ class JobIntentLearningApiTests(unittest.TestCase):
         self.assertEqual(len(payload), 2)
         self.assertEqual(payload[0]["status"], "pending")
 
-        approve = self.client.post(
-            "/settings/job-intent-learning/approve",
-            json={"phrase": payload[0]["phrase"], "polarity": payload[0]["polarity"]},
-        )
+        with patch("app.main.clear_job_intent_signal_embedding_cache") as clear_cache:
+            approve = self.client.post(
+                "/settings/job-intent-learning/approve",
+                json={"phrase": payload[0]["phrase"], "polarity": payload[0]["polarity"]},
+            )
+            clear_cache.assert_called_once()
         self.assertEqual(approve.status_code, 200, approve.text)
         self.assertEqual(approve.json()["status"], "approved")
 
@@ -201,6 +204,112 @@ class JobIntentLearningApiTests(unittest.TestCase):
         pending = self.client.get("/settings/job-intent-learning/pending")
         self.assertEqual(pending.status_code, 200, pending.text)
         self.assertEqual(pending.json(), [])
+
+    def test_toggle_polarity_flips_an_approved_signal_in_place(self) -> None:
+        with self.SessionLocal() as db:
+            entry = JobIntentTaxonomyEntry(
+                owner_id=main.settings.owner_id,
+                phrase="Woodland Hills, CA or Mason, OH",
+                normalized_phrase="woodland hills, ca or mason, oh",
+                polarity="positive_recruiter_jd",
+                source_examples_count=7,
+                sample_evidence_json="[]",
+                confidence_aggregate=0.81,
+                last_intent_type="recruiter_job_requirement",
+                status="approved",
+            )
+            db.add(entry)
+            db.commit()
+            db.refresh(entry)
+            entry_id = entry.id
+
+        response = self.client.post(f"/settings/job-intent-learning/{entry_id}/toggle-polarity")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["polarity"], "negative_newsletter")
+        self.assertEqual(response.json()["status"], "approved")
+
+        response = self.client.post(f"/settings/job-intent-learning/{entry_id}/toggle-polarity")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["polarity"], "positive_recruiter_jd")
+
+    def test_toggle_polarity_404s_for_unknown_entry(self) -> None:
+        response = self.client.post("/settings/job-intent-learning/999999/toggle-polarity")
+        self.assertEqual(response.status_code, 404)
+
+    def test_embedded_signals_returns_top_ranked_approved_signals_with_provider_flag(self) -> None:
+        with self.SessionLocal() as db:
+            approved_entry = JobIntentTaxonomyEntry(
+                owner_id=main.settings.owner_id,
+                phrase="share updated resume",
+                normalized_phrase="share updated resume",
+                polarity="positive_recruiter_jd",
+                source_examples_count=2,
+                sample_evidence_json="[]",
+                confidence_aggregate=0.77,
+                last_intent_type="recruiter_job_requirement",
+                status="approved",
+            )
+            db.add_all(
+                [
+                    approved_entry,
+                    JobIntentTaxonomyEntry(
+                        owner_id=main.settings.owner_id,
+                        phrase="consultant hotlist",
+                        normalized_phrase="consultant hotlist",
+                        polarity="negative_candidate_hotlist",
+                        source_examples_count=3,
+                        sample_evidence_json="[]",
+                        confidence_aggregate=0.86,
+                        last_intent_type="candidate_marketing_or_hotlist",
+                        status="pending",
+                    ),
+                ]
+            )
+            db.commit()
+            db.refresh(approved_entry)
+            approved_entry_id = approved_entry.id
+
+        with patch("app.main.generate_embeddings", return_value=([[0.1, 0.2]], "sbert")) as mocked:
+            response = self.client.get("/settings/job-intent-learning/embedded")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(
+            response.json(),
+            [{"id": approved_entry_id, "phrase": "share updated resume", "polarity": "positive_recruiter_jd", "confidence": 0.77, "embedded": True}],
+        )
+        mocked.assert_called_once_with(["share updated resume"])
+
+    def test_embedded_signal_id_can_be_used_to_toggle_its_polarity(self) -> None:
+        with self.SessionLocal() as db:
+            entry = JobIntentTaxonomyEntry(
+                owner_id=main.settings.owner_id,
+                phrase="50% off every evergreen Cultivated Culture product",
+                normalized_phrase="50% off every evergreen cultivated culture product",
+                polarity="positive_recruiter_jd",
+                source_examples_count=4,
+                sample_evidence_json="[]",
+                confidence_aggregate=0.9,
+                last_intent_type="recruiter_job_requirement",
+                status="approved",
+            )
+            db.add(entry)
+            db.commit()
+            db.refresh(entry)
+            entry_id = entry.id
+
+        with patch("app.main.generate_embeddings", return_value=([[0.1, 0.2]], "sbert")):
+            listed = self.client.get("/settings/job-intent-learning/embedded")
+        self.assertEqual(listed.status_code, 200, listed.text)
+        embedded_id = listed.json()[0]["id"]
+
+        toggled = self.client.post(f"/settings/job-intent-learning/{embedded_id}/toggle-polarity")
+        self.assertEqual(toggled.status_code, 200, toggled.text)
+        self.assertEqual(toggled.json()["polarity"], "negative_newsletter")
+        self.assertEqual(embedded_id, entry_id)
+
+    def test_embedded_signals_returns_empty_list_when_nothing_approved(self) -> None:
+        response = self.client.get("/settings/job-intent-learning/embedded")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json(), [])
 
 
 if __name__ == "__main__":

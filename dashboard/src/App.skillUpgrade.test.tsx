@@ -223,7 +223,7 @@ describe('SkillUpgradeSection', () => {
       owner_id: 'default-owner',
       phrase: `Signal ${index + 1}`,
       normalized_phrase: `signal ${index + 1}`,
-      polarity: 'positive',
+      polarity: 'positive_recruiter_jd',
       source_examples_count: 1,
       sample_evidence: [],
       confidence_aggregate: 0.8,
@@ -243,12 +243,123 @@ describe('SkillUpgradeSection', () => {
           approveAllSignals={() => {}}
           approveSignal={() => {}}
           dismissSignal={() => {}}
+          togglePolarity={() => {}}
         />,
       )
     })
 
-    expect(container.querySelectorAll('article.skillUpgradeItem')).toHaveLength(100)
+    expect(container.querySelectorAll('article.skillUpgradeItem')).toHaveLength(50)
     expect(container.textContent ?? '').toContain('Show 5 more pending signals')
-    expect(container.textContent ?? '').toContain('Show 5 more approved signals')
+
+    const positiveTab = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.startsWith('Positive ('))
+    act(() => positiveTab?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+
+    expect(container.querySelectorAll('article.skillUpgradeItem')).toHaveLength(50)
+    expect(container.textContent ?? '').toContain('Show 5 more positive signals')
+    expect(container.textContent ?? '').not.toContain('more negative signals')
+  })
+
+  it('renders a colored polarity toggle per approved signal and forwards clicks', () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+    })
+
+    const togglePolarity = vi.fn()
+    const positiveSignal = {
+      id: 1,
+      owner_id: 'default-owner',
+      phrase: 'share updated resume',
+      normalized_phrase: 'share updated resume',
+      polarity: 'positive_recruiter_jd',
+      source_examples_count: 3,
+      sample_evidence: [],
+      confidence_aggregate: 0.9,
+      last_intent_type: 'recruiter_job_requirement',
+      status: 'approved',
+      created_at: '2026-07-31T00:00:00Z',
+      updated_at: '2026-07-31T00:00:00Z',
+    }
+    const negativeSignal = { ...positiveSignal, id: 2, phrase: 'unsubscribe', polarity: 'negative_newsletter' }
+
+    act(() => {
+      root.render(
+        <JobIntentLearningSection
+          pendingSignals={[]}
+          approvedSignals={[positiveSignal, negativeSignal]}
+          loading={false}
+          busySignalKey={null}
+          approveAllSignals={() => {}}
+          approveSignal={() => {}}
+          dismissSignal={() => {}}
+          togglePolarity={togglePolarity}
+        />,
+      )
+    })
+
+    const clickTab = (label: string) => {
+      const tab = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.startsWith(label))
+      act(() => tab?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    }
+
+    clickTab('Positive (')
+    expect(container.textContent ?? '').toContain('PositiveExamples: 3')
+    const positiveButton = container.querySelector('.intentPolarityLight--positive') as HTMLButtonElement | null
+    expect(positiveButton?.textContent).toBe('Positive')
+    act(() => positiveButton?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    expect(togglePolarity).toHaveBeenCalledTimes(1)
+    expect(togglePolarity).toHaveBeenCalledWith(positiveSignal)
+
+    clickTab('Negative (')
+    expect(container.textContent ?? '').toContain('NegativeExamples: 3')
+    const negativeButton = container.querySelector('.intentPolarityLight--negative') as HTMLButtonElement | null
+    expect(negativeButton?.textContent).toBe('Negative')
+  })
+
+  it('renders an Embedded tab showing which top-ranked signals are currently embedded', () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+    })
+
+    const togglePolarity = vi.fn()
+    act(() => {
+      root.render(
+        <JobIntentLearningSection
+          pendingSignals={[]}
+          approvedSignals={[]}
+          embeddedSignals={[
+            { id: 11, phrase: 'share updated resume', polarity: 'positive_recruiter_jd', confidence: 0.9, embedded: true },
+            { id: 12, phrase: 'unsubscribe', polarity: 'negative_newsletter', confidence: 0.8, embedded: false },
+          ]}
+          loading={false}
+          busySignalKey={null}
+          approveAllSignals={() => {}}
+          approveSignal={() => {}}
+          dismissSignal={() => {}}
+          togglePolarity={togglePolarity}
+        />,
+      )
+    })
+
+    const embeddedTab = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.startsWith('Embedded ('))
+    expect(embeddedTab?.textContent).toBe('Embedded (2)')
+    act(() => embeddedTab?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+
+    expect(container.textContent ?? '').toContain('share updated resume')
+    expect(container.textContent ?? '').toContain('Embedded via SBERT')
+    expect(container.textContent ?? '').toContain('unsubscribe')
+    expect(container.textContent ?? '').toContain('Fallback (hash embedding — SBERT unavailable)')
+
+    const positiveToggle = container.querySelector('.intentPolarityLight--positive') as HTMLButtonElement | null
+    expect(positiveToggle?.tagName).toBe('BUTTON')
+    act(() => positiveToggle?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    expect(togglePolarity).toHaveBeenCalledWith({ id: 11, phrase: 'share updated resume', polarity: 'positive_recruiter_jd', confidence: 0.9, embedded: true })
   })
 })
