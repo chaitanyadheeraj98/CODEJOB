@@ -292,6 +292,53 @@ describe('Draft Qualification Rules settings UI', () => {
     expect(savedBody.accepted_locations).toEqual(['texas', 'remote', 'ohio'])
   })
 
+  it('returns to Run Queue with the server-confirmed configuration summary after save', async () => {
+    const { container } = await renderApp({
+      ...buildDefaultPolicy(),
+      qualification: {
+        ...buildDefaultPolicy().qualification,
+        draft_rules: {
+          ...defaultDraftRules(),
+          accepted_location: { mode: 'block', locations: ['texas', 'remote'] },
+          must_have_skills: { mode: 'block', skills: ['java', 'spring'] },
+        },
+      },
+    })
+    const qualificationThreshold = findInput(container, 'Qualification Threshold')
+    expect(qualificationThreshold).toBeDefined()
+
+    await act(async () => {
+      if (qualificationThreshold) setInputValue(qualificationThreshold, '0.91')
+      await Promise.resolve()
+    })
+
+    const saveButton = Array.from(container.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('Save Settings'),
+    ) as HTMLButtonElement | undefined
+
+    await clickButton(saveButton)
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const summaryIntro = container.querySelector('[aria-label="Active Configuration Summary"]')
+    expect(summaryIntro).not.toBeNull()
+    expect(summaryIntro?.textContent).toContain('Last saved:')
+    expect(container.querySelector('form')).toBeNull()
+
+    const summaryGrid = container.querySelector('.configSummaryGrid')
+    expect(summaryGrid).not.toBeNull()
+    expect(summaryGrid?.textContent).toContain('Qualification Threshold:0.60')
+    expect(summaryGrid?.textContent).not.toContain('0.91')
+    // Literal values, not just booleans/counts: accepted_locations and must_have_skills
+    // are non-empty in the fixture, employer_domains is empty.
+    expect(summaryGrid?.textContent).toContain('texas, remote')
+    expect(summaryGrid?.textContent).toContain('java, spring')
+    expect(summaryGrid?.textContent).toContain('Employer Domains:(none)')
+  })
+
   it('applies profile presets using draft rules and seeded values', async () => {
     const { container, putBodies } = await renderApp()
 

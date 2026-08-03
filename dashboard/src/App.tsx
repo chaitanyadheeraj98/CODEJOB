@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import './App.css'
 import Sidebar from './components/Sidebar'
 import TrustedGmailGroupsPanel, { type TrustedGmailGroup } from './features/gmail_groups/TrustedGmailGroupsPanel'
@@ -2577,6 +2577,8 @@ function App() {
   const [fixingId, setFixingId] = useState<number | null>(null)
   const [deletingFailedId, setDeletingFailedId] = useState<number | null>(null)
   const [activePage, setActivePage] = useState<'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'premium_numbers' | 'settings'>('run_queue')
+  const [lastSavedSettings, setLastSavedSettings] = useState<SettingsPayload | null>(null)
+  const [lastSavedAt, setLastSavedAt] = useState<string | null>(null)
   const [dynamicPolicyBeta, setDynamicPolicyBeta] = useState(false)
   const [selectedProfileToApply, setSelectedProfileToApply] = useState<PolicyProfileName>('Balanced')
   const [lastAppliedProfile, setLastAppliedProfile] = useState<PolicyProfileName | null>(null)
@@ -2783,6 +2785,38 @@ function App() {
       : lastAppliedProfile
         ? `Custom (from ${lastAppliedProfile})`
         : 'Custom'
+  const activeConfigurationSettings = lastSavedSettings ?? settings
+  const activeConfigurationPolicy = normalizeDynamicPolicy(
+    activeConfigurationSettings.policy ?? defaultPolicy,
+    activeConfigurationSettings,
+  )
+  const activeConfigurationDraftRules = activeConfigurationPolicy.qualification.draft_rules
+  const activeConfigurationProfile = activeConfigurationSettings.policy_profile_selected
+    ?? detectProfileFromPolicy(activeConfigurationPolicy)
+    ?? 'Custom'
+  const formatRuleMode = (mode: RuleMode) => `${mode.charAt(0).toUpperCase()}${mode.slice(1)}`
+  const formatBool = (value: boolean) => (value ? 'On' : 'Off')
+  const truncateConfigValue = (value: string, max = 60) => {
+    const trimmed = (value ?? '').trim()
+    if (!trimmed) return '(none)'
+    return trimmed.length > max ? `${trimmed.slice(0, max)}…` : trimmed
+  }
+  const summarizeConfigList = (values: string[], max = 6) => {
+    if (!values || values.length === 0) return '(none)'
+    const shown = values.slice(0, max).join(', ')
+    return values.length > max ? `${shown} +${values.length - max} more` : shown
+  }
+  const configRow = (label: string, value: ReactNode) => (
+    <div className="configSummaryRow" key={label}>
+      <span className="configSummaryLabel">{label}:</span>
+      <span className="configSummaryValue">{value}</span>
+    </div>
+  )
+  const nvoidsDetailTitleModeLabel = activeConfigurationSettings.nvoids_detail_title_mode === 'hotlist_details'
+    ? 'Hotlist Details'
+    : activeConfigurationSettings.nvoids_detail_title_mode === 'all'
+      ? 'All'
+      : 'Job Details'
   const settingsBootstrapReady = settingsBootstrapStatus === 'ready'
 
   const loadStatus = async (): Promise<GmailStatus> => {
@@ -3566,7 +3600,10 @@ function App() {
         body: JSON.stringify(settings),
       })
       if (!res.ok) throw new Error('Failed to save settings')
-      await loadSettingsBootstrap()
+      const savedSettings = await loadSettingsBootstrap()
+      setLastSavedSettings(savedSettings)
+      setLastSavedAt(new Date().toISOString())
+      setActivePage('run_queue')
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -4604,6 +4641,160 @@ function App() {
                 ) : null}
               </div>
             </section>
+          ) : null}
+
+          {activePage === 'run_queue' && hasLoadedSettingsBootstrap ? (
+            <section className="liveMonitorCard configSummaryIntro" aria-label="Active Configuration Summary">
+              <div className="liveMonitorHeader">
+                <div>
+                  <h2>Active Configuration Summary</h2>
+                  <p>Every saved setting, by panel, currently loaded for automation.</p>
+                </div>
+              </div>
+              <h3 className="monitorSectionTitle">
+                {lastSavedAt ? `Last saved: ${new Date(lastSavedAt).toLocaleString()}` : 'Loaded from saved settings'}
+              </h3>
+            </section>
+          ) : null}
+
+          {activePage === 'run_queue' && hasLoadedSettingsBootstrap ? (
+            <div className="configGrid runQueueGrid configSummaryGrid">
+              <section className="liveMonitorCard configSummaryCard">
+                <h3>Gmail Access</h3>
+                <div className="configSummaryList">
+                  {configRow('Status', status?.authenticated ? 'Authenticated' : 'Not authenticated')}
+                  {configRow('Configured', status?.configured ? 'Yes' : 'No')}
+                  {configRow('Account', status?.token_path ?? '-')}
+                  {configRow('Last Sync', status?.last_sync_at ?? 'Never')}
+                  {configRow('Telegram', telegramStatus?.polling ? 'Connected' : telegramStatus?.enabled ? 'Starting' : 'Disabled')}
+                  {configRow('Authorized Chats', telegramStatus?.authorized_chats ?? 0)}
+                </div>
+              </section>
+
+              <section className="liveMonitorCard configSummaryCard">
+                <h3>AI Access</h3>
+                <div className="configSummaryList">
+                  {configRow('Provider', aiStatus?.provider ?? 'DeepSeek')}
+                  {configRow('Model', aiStatus?.model ?? 'deepseek-v4-flash')}
+                  {configRow('Connection', aiStatus?.connected ? 'Healthy' : 'Disconnected')}
+                  {configRow('Groq Enabled', formatBool(!!aiStatus?.groq_enabled_in_settings))}
+                  {configRow('Groq Config', typeof aiStatus?.groq_configured === 'boolean' ? (aiStatus.groq_configured ? 'Configured' : 'Missing setup') : 'Unknown')}
+                  {configRow('Groq Model', aiStatus?.groq_model ?? 'llama-3.1-8b-instant')}
+                  {configRow('Groq Request Mode', aiStatus?.groq_request_mode || 'Unknown')}
+                  {configRow('Groq Runtime', typeof aiStatus?.groq_runtime_healthy === 'boolean' ? (aiStatus.groq_runtime_healthy ? 'Healthy' : 'Fallback') : 'Unknown')}
+                  {aiStatus?.groq_last_error ? configRow('Groq Error', aiStatus.groq_last_error) : null}
+                  {aiStatus?.groq_detail ? configRow('Groq Detail', aiStatus.groq_detail) : null}
+                  {aiStatus?.groq_last_success_at ? configRow('Groq Last Success', aiStatus.groq_last_success_at) : null}
+                  {groqLastDuration ? configRow('Groq Duration', groqLastDuration) : null}
+                  {configRow(
+                    'Embedding',
+                    (typeof aiStatus?.embedding_runtime_healthy === 'boolean'
+                      ? (aiStatus.embedding_runtime_healthy ? 'Healthy' : 'Disconnected')
+                      : typeof aiStatus?.embedding_connected === 'boolean'
+                        ? (aiStatus.embedding_connected ? 'Healthy' : 'Unknown')
+                        : 'Unknown')
+                    + (aiStatus?.embedding_provider ? ` (${aiStatus.embedding_provider}${aiStatus.embedding_model ? ` / ${aiStatus.embedding_model}` : ''})` : ''),
+                  )}
+                  {configRow('Embedding Config', typeof aiStatus?.embedding_configured === 'boolean' ? (aiStatus.embedding_configured ? 'Configured' : 'Missing setup') : 'Unknown')}
+                  {aiStatus?.embedding_last_error ? configRow('Embedding Error', aiStatus.embedding_last_error) : null}
+                  {aiStatus?.embedding_last_success_at ? configRow('Embedding Last Success', aiStatus.embedding_last_success_at) : null}
+                  {embeddingLastDuration ? configRow('Embedding Duration', embeddingLastDuration) : null}
+                  {aiStatus?.last_draft_source ? configRow('Draft Source', getDraftSourceLabel(aiStatus.last_draft_source)) : null}
+                  {aiLastDuration ? configRow('Last Duration', aiLastDuration) : null}
+                </div>
+              </section>
+
+              <section className="liveMonitorCard configSummaryCard">
+                <h3>Automation Filters</h3>
+                <div className="configSummaryList">
+                  {configRow('Enable AI Features', formatBool(activeConfigurationSettings.feature_ai_enabled))}
+                  {configRow('Enable AI Extractor', formatBool(activeConfigurationSettings.feature_ai_extractor_enabled))}
+                  {configRow('Enable Role Manifest Detection', formatBool(activeConfigurationSettings.feature_role_manifest_enabled))}
+                  {configRow('Enable Semantic Matching', formatBool(activeConfigurationSettings.feature_semantic_enabled))}
+                  {configRow('Enable Groq Smart Job Parser', formatBool(activeConfigurationSettings.feature_groq_job_parser_enabled))}
+                  {configRow('Qualification Threshold', activeConfigurationSettings.qualification_threshold.toFixed(2))}
+                  {configRow('Must-have Skills', summarizeConfigList(activeConfigurationSettings.must_have_skills))}
+                </div>
+              </section>
+
+              <section className="liveMonitorCard configSummaryCard">
+                <h3>Employer Domains</h3>
+                <div className="configSummaryList">
+                  {configRow('Employer Domains', summarizeConfigList(activeConfigurationSettings.employer_domains))}
+                </div>
+              </section>
+
+              <section className="liveMonitorCard configSummaryCard">
+                <h3>Dynamic Policy</h3>
+                <div className="configSummaryList">
+                  {configRow('Policy Profile', activeConfigurationProfile)}
+                  {configRow('Force Unread In Query', formatBool(activeConfigurationPolicy.query.force_unread))}
+                  {configRow('Include Labels', summarizeConfigList(activeConfigurationPolicy.query.include_labels))}
+                  {configRow('Exclude Labels', summarizeConfigList(activeConfigurationPolicy.query.exclude_labels))}
+                </div>
+              </section>
+
+              <section className="liveMonitorCard configSummaryCard">
+                <h3>Draft Qualification Rules</h3>
+                <div className="configSummaryList">
+                  {configRow('Recruiter-like Gmail Rule', formatRuleMode(activeConfigurationDraftRules.recruiter_like_gmail.mode))}
+                  {configRow('Accepted Location Rule', formatRuleMode(activeConfigurationDraftRules.accepted_location.mode))}
+                  {configRow('Accepted Locations', summarizeConfigList(activeConfigurationDraftRules.accepted_location.locations ?? activeConfigurationSettings.accepted_locations))}
+                  {configRow('Minimum Salary Rule', formatRuleMode(activeConfigurationDraftRules.minimum_salary.mode))}
+                  {configRow('Minimum Salary Or Rate', activeConfigurationDraftRules.minimum_salary.value ?? activeConfigurationSettings.min_salary ?? '(none)')}
+                  {configRow('Must-have Skills Rule', formatRuleMode(activeConfigurationDraftRules.must_have_skills.mode))}
+                  {configRow('Must-have Skills', summarizeConfigList(activeConfigurationDraftRules.must_have_skills.skills ?? activeConfigurationSettings.must_have_skills))}
+                  {configRow('Score Threshold Rule', formatRuleMode(activeConfigurationDraftRules.score_threshold.mode))}
+                  {configRow('Score Threshold Value', activeConfigurationDraftRules.score_threshold.value ?? activeConfigurationSettings.qualification_threshold)}
+                  {configRow('F2F Non-Texas Rule', formatRuleMode(activeConfigurationDraftRules.f2f_non_texas.mode))}
+                  {configRow('Unknown Location Rule', formatRuleMode(activeConfigurationDraftRules.unknown_location.mode))}
+                  {configRow('Recipient Mapping Rule', formatRuleMode(activeConfigurationDraftRules.recipient_mapping.mode))}
+                </div>
+              </section>
+
+              <section className="liveMonitorCard configSummaryCard">
+                <h3>Profile Settings</h3>
+                <div className="configSummaryList">
+                  {configRow('Enforce Strict Candidate Screening', formatBool(activeConfigurationSettings.feature_strict_candidate_screening_enabled))}
+                  {configRow('Candidate Work Authorizations', summarizeConfigList(activeConfigurationSettings.candidate_work_authorizations))}
+                  {configRow('Total Experience Years', activeConfigurationSettings.candidate_total_experience_years ?? '(none)')}
+                  {configRow('U.S. Experience Years', activeConfigurationSettings.candidate_us_experience_years ?? '(none)')}
+                  {configRow('Current Location', truncateConfigValue(activeConfigurationSettings.candidate_current_location))}
+                  {configRow('Default Query', truncateConfigValue(activeConfigurationSettings.default_gmail_query))}
+                  {configRow('Default Date', activeConfigurationSettings.default_date_mode === 'today' ? 'Today (auto)' : 'Off')}
+                  {configRow('Auto Run Every N Minutes', formatBool(activeConfigurationSettings.feature_auto_polling))}
+                  {configRow('Auto Run Interval (minutes)', activeConfigurationSettings.feature_auto_poll_interval_minutes)}
+                  {configRow('Signature Name', truncateConfigValue(activeConfigurationSettings.signature_name))}
+                  {configRow('Signature Phone', truncateConfigValue(activeConfigurationSettings.signature_phone))}
+                  {configRow('Signature Email', truncateConfigValue(activeConfigurationSettings.signature_email))}
+                  {configRow('Resume Name', truncateConfigValue(activeConfigurationSettings.resume_display_name))}
+                </div>
+              </section>
+
+              <section className="liveMonitorCard configSummaryCard">
+                <h3>Execution Control</h3>
+                <div className="configSummaryList">
+                  {configRow('Dry Run Mode', formatBool(activeConfigurationPolicy.run.dry_run))}
+                  {configRow('Auto Send Current Run Queue', formatBool(activeConfigurationSettings.feature_auto_send))}
+                  {configRow('Retry Failed Queue', formatBool(activeConfigurationSettings.feature_retry_queue))}
+                  {configRow('Batch Limit', activeConfigurationPolicy.run.batch_limit)}
+                  {configRow('Date Mode', activeConfigurationPolicy.query.date_mode === 'custom' ? 'Use selected date' : 'Ignore selected date')}
+                  {configRow('Draft Text Size', activeConfigurationSettings.draft_text_size)}
+                  {configRow('Preferred Employer CC', truncateConfigValue(activeConfigurationSettings.preferred_employer_cc_email))}
+                  {configRow('Fallback Draft Template', truncateConfigValue(activeConfigurationSettings.fallback_draft_template, 80))}
+                </div>
+              </section>
+
+              <section className="liveMonitorCard configSummaryCard">
+                <h3>Nvoids Control</h3>
+                <div className="configSummaryList">
+                  {configRow('Enable Nvoids Pipeline', activeConfigurationSettings.feature_nvoids_enabled ? 'Enabled' : 'Disabled')}
+                  {configRow('Auto Sync Nvoids', formatBool(activeConfigurationSettings.feature_nvoids_auto_sync))}
+                  {configRow('Nvoids Detail Page Type', nvoidsDetailTitleModeLabel)}
+                  {configRow('Preferred Nvoids Locations', summarizeConfigList(activeConfigurationSettings.nvoids_locations))}
+                </div>
+              </section>
+            </div>
           ) : null}
 
           {settingsBootstrapError ? (

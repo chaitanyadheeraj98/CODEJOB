@@ -607,6 +607,59 @@
   color: #d5e4ff;
 }
 
+.configSummaryIntro {
+  margin-bottom: 0;
+}
+
+.configSummaryGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+  margin-top: 18px;
+}
+
+.configSummaryCard {
+  margin-top: 0;
+  display: flex;
+  flex-direction: column;
+  height: 26rem;
+  overflow: hidden;
+}
+
+.configSummaryCard h3 {
+  margin: 0 0 10px;
+  font-size: 15px;
+  color: #f2f6ff;
+}
+
+.configSummaryList {
+  display: grid;
+  gap: 8px;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+
+.configSummaryRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(44, 67, 111, 0.4);
+  font-size: 13px;
+}
+
+.configSummaryLabel {
+  color: #9eb3dd;
+  flex: 0 0 auto;
+}
+
+.configSummaryValue {
+  color: #dce7ff;
+  text-align: right;
+  word-break: break-word;
+}
+
 .search,
 .actionBar input,
 .card input,
@@ -1626,12 +1679,17 @@
     font-size: 24px;
   }
 
-  .configGrid {
+  .configGrid,
+  .configSummaryGrid {
     grid-template-columns: 1fr 1fr;
   }
 
   .runQueueGrid > .card {
     height: 28rem;
+  }
+
+  .configSummaryCard {
+    height: 24rem;
   }
 
   .parserDetailsPanel {
@@ -1667,13 +1725,24 @@
   }
 
   .statsGrid,
-  .configGrid {
+  .configGrid,
+  .configSummaryGrid {
     grid-template-columns: 1fr;
   }
 
   .runQueueGrid > .card {
     height: auto;
     overflow: visible;
+  }
+
+  .configSummaryCard {
+    height: auto;
+    overflow: visible;
+  }
+
+  .configSummaryList {
+    overflow: visible;
+    padding-right: 0;
   }
 
   .runQueueGrid > .card > :not(h2) {
