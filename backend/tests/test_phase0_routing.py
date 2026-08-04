@@ -246,6 +246,63 @@ Required Qualifications:
         self.assertEqual(structured["required_groups"][0]["skills"][0]["canonical_name"], "Amazon ECS")
         self.assertEqual(structured["preferred_groups"][0]["skills"][0]["canonical_name"], "Grafana")
 
+    def test_ai_primary_role_not_overridden_by_nvoids_canonical_title(self) -> None:
+        ai_result = {
+            "role_candidates": ["Java Backend Developer"],
+            "company": "",
+            "primary_location": "Remote, USA",
+            "mentioned_locations": ["Remote, USA"],
+            "work_mode": "Remote",
+            "visa_hints": [],
+            "experience_years_min": 7,
+            "salary_text": "",
+            "skills_text": "Java, Spring Boot",
+            "must_have_skills": ["Java"],
+            "nice_to_have_skills": [],
+            "f2f_mentioned": False,
+            "asks_contact_fields": False,
+            "is_texas_role": False,
+            "skills_approved": ["Java", "Spring Boot"],
+            "skills_unknown": [],
+            "confidence": 0.9,
+            "evidence": {"role_candidates": ["Java Backend Developer"]},
+        }
+
+        with patch("app.phase0.extract_ai_job_details") as mock_ai, patch(
+            "app.phase0.ai_extractor_result_to_payload",
+            return_value=ai_result,
+        ):
+            mock_ai.return_value = type(
+                "AIResult",
+                (),
+                {
+                    "role_candidates": ("Java Backend Developer",),
+                    "company": "",
+                    "primary_location": "Remote, USA",
+                    "mentioned_locations": ("Remote, USA",),
+                    "work_mode": "Remote",
+                    "visa_hints": (),
+                    "experience_years_min": 7,
+                    "skills_text": "Java, Spring Boot",
+                    "skills_approved": ("Java", "Spring Boot"),
+                    "skills_unknown": (),
+                    "confidence": 0.9,
+                    "evidence": {"role_candidates": ["Java Backend Developer"]},
+                    "error": None,
+                },
+            )()
+            parsed, details = parse_email_with_details(
+                "We are hiring",
+                "Required Qualifications:\nJava, Spring Boot\n7+ years experience",
+                source="nvoids",
+                ai_extractor_enabled=True,
+                source_hints={"canonical_title": "We are hiring", "canonical_location": "Remote, USA"},
+            )
+
+        self.assertEqual(details["parser_mode"], "ai_primary")
+        self.assertFalse(details["fallback_used"])
+        self.assertEqual(parsed["role"], "Java Backend Developer")
+
     def test_parse_email_with_details_uses_ai_body_override_only_for_ai_input(self) -> None:
         ai_override = (
             "Python, Kubernetes, Terraform, AWS, observability, platform engineering, "

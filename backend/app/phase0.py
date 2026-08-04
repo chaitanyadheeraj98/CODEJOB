@@ -1138,7 +1138,6 @@ def _ai_primary_parse_result(
     parsed["asks_contact_fields"] = bool(payload.get("asks_contact_fields", False))
     parsed["is_texas_role"] = bool(payload.get("is_texas_role", False))
 
-    _apply_nvoids_source_hints(parsed, source=source, source_hints=source_hints)
     location_text = str(parsed.get("job_location_text") or parsed.get("location") or "").strip()
     parsed["is_texas_role"] = bool(TEXAS_RE.search(location_text))
     return parsed
