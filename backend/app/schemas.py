@@ -705,6 +705,7 @@ class CandidateListResponse(BaseModel):
     items: list[EmailResponse]
     next_cursor: int | None
     has_next: bool
+    total: int
 
 
 class SentItemDetailsResponse(BaseModel):

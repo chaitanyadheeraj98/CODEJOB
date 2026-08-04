@@ -3742,6 +3742,8 @@ def list_candidates(
                 )
             )
 
+    total = query.count()
+
     if sort == "highest_score":
         query = query.order_by(RecruiterEmail.score.desc(), RecruiterEmail.created_at.desc())
     elif _is_approved_sent_only(states):
@@ -3771,6 +3773,7 @@ def list_candidates(
         items=serialized_items,
         next_cursor=next_cursor,
         has_next=has_next,
+        total=total,
     )
 
 

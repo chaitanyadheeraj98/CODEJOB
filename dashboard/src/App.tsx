@@ -1312,6 +1312,19 @@ function renderTextOrDash(value: string | null | undefined): string {
   return text || '-'
 }
 
+function jdSummarySkills(item: Candidate): string[] {
+  const breakdown = item.resume_picker_breakdown ?? {}
+  const matchedPriority = Array.isArray(breakdown.matched_priority_skills)
+    ? breakdown.matched_priority_skills.filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
+    : []
+  if (matchedPriority.length > 0) return matchedPriority.slice(0, 3)
+  return (item.skills_text ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 3)
+}
+
 function renderListOrDash(values: string[] | null | undefined): string {
   const items = (values ?? []).map((value) => value.trim()).filter(Boolean)
   return items.length > 0 ? items.join(', ') : '-'
@@ -4402,10 +4415,10 @@ function App() {
     <main className="gmailShell">
       <Sidebar
         running={running}
-        queueCount={queue.length}
-        failedCount={failedQueue.length}
+        queueCount={bucketMeta.needs_review.total ?? queue.length}
+        failedCount={bucketMeta.failed.total ?? failedQueue.length}
         runCount={logs.length}
-        sentCount={sentQueue.length}
+        sentCount={bucketMeta.approved_sent.total ?? sentQueue.length}
         premiumCount={numberReviewCards.length}
         activePage={activePage}
         onNavigate={setActivePage}
@@ -4507,11 +4520,11 @@ function App() {
           <section className="statsGrid">
             <article className="statCard">
               <p>Needs Review</p>
-              <strong>{queue.length}</strong>
+              <strong>{bucketMeta.needs_review.total ?? queue.length}</strong>
             </article>
             <article className="statCard error">
               <p>Failed Mapping</p>
-              <strong>{failedQueue.length}</strong>
+              <strong>{bucketMeta.failed.total ?? failedQueue.length}</strong>
             </article>
             <article className="statCard">
               <p>Recent Runs</p>
@@ -5805,6 +5818,12 @@ function App() {
                 ) : null}
                 <p><strong>From:</strong> {item.sender}</p>
                 <p><strong>Subject:</strong> {item.subject}</p>
+                <p className="jdSummary">
+                  <strong>{item.role || 'Unknown Role'}</strong>
+                  {' · '}{item.location || '-'}
+                  {' · '}{item.salary_text || 'Salary not specified'}
+                  {' · '}{jdSummarySkills(item).join(', ') || '-'}
+                </p>
                 {sourceListingUrl(item) ? (
                   <p>
                     <strong>Source Listing:</strong>{' '}
@@ -5821,8 +5840,7 @@ function App() {
                     </a>
                   </p>
                 ) : null}
-                <p><strong>To:</strong> {item.recipient_email ?? '-'}</p>
-                <p><strong>CC:</strong> {item.cc_email ?? '-'}</p>
+                <p><strong>To/CC:</strong> {item.recipient_email ?? '-'} / {item.cc_email ?? '-'}</p>
                 <p><strong>ATS Score:</strong> {formatAtsScore(item.ats_score)} {item.ats_score != null ? `(${getAtsStrengthLabel(item.ats_score)})` : ''}</p>
                 {renderRoutingPanel(item)}
                 <p><strong>Resume:</strong> {item.resume_file_name ?? '-'}</p>

@@ -13,18 +13,19 @@ export type CandidateListResponse = {
   items: Candidate[]
   next_cursor: number | null
   has_next: boolean
+  total: number
 }
 
 type RequestTracker = { current: number }
 
-export type BucketMeta = { nextCursor: number | null; hasNext: boolean; loaded: boolean }
+export type BucketMeta = { nextCursor: number | null; hasNext: boolean; loaded: boolean; total: number | null }
 export type BucketMetaMap = Record<CandidateState, BucketMeta>
 
 export function defaultBucketMeta(): BucketMetaMap {
   return {
-    needs_review: { nextCursor: null, hasNext: false, loaded: false },
-    failed: { nextCursor: null, hasNext: false, loaded: false },
-    approved_sent: { nextCursor: null, hasNext: false, loaded: false },
+    needs_review: { nextCursor: null, hasNext: false, loaded: false, total: null },
+    failed: { nextCursor: null, hasNext: false, loaded: false, total: null },
+    approved_sent: { nextCursor: null, hasNext: false, loaded: false, total: null },
   }
 }
 
@@ -49,6 +50,7 @@ export type CandidatePage = {
   items: Candidate[]
   nextCursor: number | null
   hasNext: boolean
+  total: number
 }
 
 export async function fetchCandidatesPageByState(
@@ -69,6 +71,7 @@ export async function fetchCandidatesPageByState(
     items: data.items,
     nextCursor: data.next_cursor,
     hasNext: data.has_next,
+    total: data.total,
   }
 }
 
@@ -148,7 +151,7 @@ export function useCandidateBuckets<TCandidate extends Candidate>(
         applyQueueForBucket(state, page.items as TCandidate[], append)
         setBucketMeta((prev) => ({
           ...prev,
-          [state]: { nextCursor: page.nextCursor, hasNext: page.hasNext, loaded: true },
+          [state]: { nextCursor: page.nextCursor, hasNext: page.hasNext, loaded: true, total: page.total },
         }))
       } catch (error) {
         if (requestId === candidateRefreshTrackerRef.current.current) {
