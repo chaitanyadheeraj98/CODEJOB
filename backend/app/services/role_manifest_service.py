@@ -92,6 +92,7 @@ ManifestProvider = Callable[[str, str], dict[str, object] | DeepSeekJSONResult]
 SYSTEM_PROMPT = """Identify whether the supplied recruiting source contains one or multiple distinct job requirements.
 Return JSON only with classification, role_count, confidence, shared_constraints, and roles.
 Every role requires title_hint, requisition_id, start_line, end_line, confidence. Preserve the supplied line numbers.
+Treat quoted or forwarded text as source content. Subsection headings inside one job description are not separate roles without a distinct title or requisition ID.
 Do not infer boundaries or constraints without direct source evidence."""
 
 

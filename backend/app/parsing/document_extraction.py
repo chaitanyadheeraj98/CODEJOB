@@ -17,6 +17,13 @@ _DROPPED_CATEGORIES = {"Footer", "Header", "Page-footer", "Page-header", "PageBr
 _HTML_MARKUP_PATTERN = re.compile(
     r"(?is)<!doctype\s+html\b|<(?:html|head|body|style|script|table|tbody|thead|tr|td|th|div|span|p|br|ul|ol|li|h[1-6]|a|blockquote|section|article|font)\b"
 )
+_GMAIL_QUOTE_HEADER_PATTERN = re.compile(r"^on\s+.+\s+wrote:\s*$", re.IGNORECASE)
+_GMAIL_QUOTE_PREFIX_PATTERN = re.compile(r"^\s*>+\s?")
+_GOOGLE_GROUPS_FOOTER = "you received this message because you are subscribed to the google groups"
+_SIGNOFF_PATTERN = re.compile(
+    r"^(?:thanks?(?:\s*(?:&|and)\s*)?regards?|warm regards|best regards|kind regards|regards|sincerely)[,!?.]*$",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -222,3 +229,103 @@ def clean_html_if_present(text: str, *, max_chars: int | None = None) -> str:
     if not text.strip() or not _HTML_MARKUP_PATTERN.search(text):
         return text
     return clean_html_text(text, max_chars=max_chars)
+
+
+def _email_line_text(line: str) -> str:
+    return _GMAIL_QUOTE_PREFIX_PATTERN.sub("", line).strip().strip("*_ ")
+
+
+def _gmail_quote_header_length(lines: list[str], start: int) -> int:
+    for length in (1, 2):
+        if start + length > len(lines):
+            continue
+        candidate = " ".join(_email_line_text(line) for line in lines[start : start + length])
+        if _GMAIL_QUOTE_HEADER_PATTERN.fullmatch(" ".join(candidate.split())):
+            return length
+    return 0
+
+
+def _strip_google_groups_footers(lines: list[str]) -> list[str]:
+    cleaned: list[str] = []
+    index = 0
+    while index < len(lines):
+        if _GOOGLE_GROUPS_FOOTER not in _email_line_text(lines[index]).casefold():
+            cleaned.append(lines[index])
+            index += 1
+            continue
+
+        previous = len(cleaned) - 1
+        while previous >= 0 and not _email_line_text(cleaned[previous]):
+            previous -= 1
+        if previous >= 0 and _email_line_text(cleaned[previous]) == "--":
+            del cleaned[previous:]
+
+        index += 1
+        while index < len(lines) and _email_line_text(lines[index]):
+            index += 1
+        while index < len(lines) and not _email_line_text(lines[index]):
+            index += 1
+    return cleaned
+
+
+def _strip_trailing_signature(lines: list[str]) -> list[str]:
+    while lines and not _email_line_text(lines[-1]):
+        lines.pop()
+    for index in range(len(lines) - 1, -1, -1):
+        line = _email_line_text(lines[index])
+        if line != "--" and not _SIGNOFF_PATTERN.fullmatch(line):
+            continue
+        tail = [item for item in lines[index + 1 :] if _email_line_text(item)]
+        if len(tail) <= 20 and sum(len(_email_line_text(item)) for item in tail) <= 1200:
+            return lines[:index]
+    return lines
+
+
+def _clean_email_segment(lines: list[str]) -> list[str]:
+    return _strip_trailing_signature(_strip_google_groups_footers(lines))
+
+
+def strip_gmail_boilerplate(text: str) -> str:
+    """Remove deterministic Gmail thread noise while preserving substantive reply text."""
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").splitlines()
+    marker_start = -1
+    marker_length = 0
+    for index in range(len(lines)):
+        marker_length = _gmail_quote_header_length(lines, index)
+        if marker_length:
+            marker_start = index
+            break
+
+    if marker_start >= 0:
+        reply = _clean_email_segment(lines[:marker_start])
+        quoted = [
+            _GMAIL_QUOTE_PREFIX_PATTERN.sub("", line)
+            for line in lines[marker_start + marker_length :]
+        ]
+        cleaned_lines = [*reply, "", *_clean_email_segment(quoted)]
+    else:
+        cleaned_lines = _clean_email_segment(lines)
+
+    cleaned = re.sub(r"\n{3,}", "\n\n", "\n".join(cleaned_lines)).strip()
+    return cleaned or text.strip()
+
+
+def extract_gmail_reply_body(text: str) -> str:
+    """Return only the newest Gmail reply, without quoted thread history."""
+    source = clean_html_if_present(text)
+    lines = source.replace("\r\n", "\n").replace("\r", "\n").splitlines()
+    marker_start = next(
+        (index for index in range(len(lines)) if _gmail_quote_header_length(lines, index)),
+        len(lines),
+    )
+    current = lines[:marker_start]
+    cleaned_lines = _clean_email_segment(current)
+    if not any(_email_line_text(line) for line in cleaned_lines):
+        cleaned_lines = _strip_google_groups_footers(current)
+    cleaned = re.sub(r"\n{3,}", "\n\n", "\n".join(cleaned_lines)).strip()
+    return cleaned or source.strip()
+
+
+def prepare_gmail_parse_body(text: str, *, max_chars: int | None = None) -> str:
+    """Build parser input from a Gmail body without changing the persisted source."""
+    return strip_gmail_boilerplate(clean_html_if_present(text, max_chars=max_chars))

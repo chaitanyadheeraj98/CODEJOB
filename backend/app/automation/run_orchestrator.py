@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from app.config import settings as app_settings
 from app.models import RecruiterEmail, ResumeAsset, UserSettings
 from app.parsing import build_skills_json_payload
+from app.parsing.document_extraction import prepare_gmail_parse_body
 from app.recent_runs import SkippedItemRecord
 from app.routing import RoutingDecision
 from app.services import policy_service
@@ -213,15 +214,16 @@ class RunOrchestrator:
                 continue
             if recruiter_like_mode in {"block", "warn"} and not recruiter_like:
                 recruiter_like_warning = "non_recruiter_like_gmail"
+            parse_body = prepare_gmail_parse_body(body)
             manifest_result: RoleManifestResult | None = None
             if request.user_settings.feature_role_manifest_enabled:
-                manifest_result = RoleManifestService().detect(body)
+                manifest_result = RoleManifestService().detect(parse_body)
             item_ai_extractor_enabled = request.user_settings.feature_ai_extractor_enabled and (
                 manifest_result is None or manifest_result.status != "multiple"
             )
             parsed_for_selection, parser_details = request.deps.parse_email_with_details(
                 subject,
-                body,
+                parse_body,
                 source="gmail",
                 ai_extractor_enabled=item_ai_extractor_enabled,
             )

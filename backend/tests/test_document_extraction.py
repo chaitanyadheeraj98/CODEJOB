@@ -20,7 +20,13 @@ from unstructured.documents.elements import (
 from app.ai.resume_context import extract_resume_context
 from app.ai.resume_context_attribution import classify_extracted_resume_context
 from app.gmail_client import _decode_body
-from app.parsing.document_extraction import clean_html_text, elements_to_markdown, extract_document_text
+from app.parsing.document_extraction import (
+    clean_html_text,
+    elements_to_markdown,
+    extract_document_text,
+    prepare_gmail_parse_body,
+    strip_gmail_boilerplate,
+)
 from app.services.role_manifest_service import RoleManifestService
 
 
@@ -185,6 +191,90 @@ class DocumentExtractionTests(unittest.TestCase):
     def test_single_part_plain_gmail_body_is_unchanged(self) -> None:
         body = "Need a Python engineer."
         self.assertEqual(_decode_body({"mimeType": "text/plain", "body": {"data": _encoded(body)}}), body)
+
+    def test_multipart_gmail_prefers_structured_html_and_falls_back_to_plain(self) -> None:
+        payload = {
+            "parts": [
+                {"mimeType": "text/plain", "body": {"data": _encoded("Flat Python role")}},
+                {
+                    "mimeType": "text/html",
+                    "body": {"data": _encoded("<html><body><h1>Python Engineer</h1><ul><li>FastAPI</li></ul></body></html>")},
+                },
+            ]
+        }
+        structured = _decode_body(payload)
+
+        self.assertIn("Python Engineer", structured)
+        self.assertIn("- FastAPI", structured)
+        self.assertEqual(
+            _decode_body(
+                {
+                    "parts": [
+                        {"mimeType": "text/plain", "body": {"data": _encoded("Plain fallback")}},
+                        {"mimeType": "text/html", "body": {"data": _encoded("<style>.hidden{display:none}</style>")}},
+                    ]
+                }
+            ),
+            "Plain fallback",
+        )
+
+    def test_strip_gmail_boilerplate_handles_wrapped_quote_and_preserves_reply_content(self) -> None:
+        body = "\n".join(
+            [
+                "Rate is $70/hr and must remain.",
+                "",
+                "Thanks & Regards,",
+                "Jamie",
+                "Bench Sales Recruiter",
+                "",
+                "On Tue, Aug 4, 2026 at 4:20 PM Shubham <shubham@example.com>",
+                "wrote:",
+                "",
+                "> Job Title: Lead Software Engineer",
+                "> Position Summary",
+                *[
+                    line
+                    for index in range(110)
+                    for line in (f"> Requirement {index}", ">", ">")
+                ],
+                "> Warm Regards!",
+                "> Shubham Arora",
+                "> --",
+                "> You received this message because you are subscribed to the Google Groups",
+                "> Only C2C group.",
+                "> To unsubscribe, send an email.",
+                ">",
+                "--",
+                "You received this message because you are subscribed to the Google Groups",
+                "Only C2C group.",
+            ]
+        )
+
+        cleaned = strip_gmail_boilerplate(body)
+
+        self.assertGreater(len(body.splitlines()), 250)
+        self.assertLess(len(cleaned.splitlines()), 250)
+        self.assertIn("Rate is $70/hr and must remain.", cleaned)
+        self.assertIn("Job Title: Lead Software Engineer", cleaned)
+        self.assertIn("Requirement 109", cleaned)
+        self.assertNotIn("Thanks & Regards", cleaned)
+        self.assertNotIn("Shubham Arora", cleaned)
+        self.assertNotIn("Google Groups", cleaned)
+        self.assertNotIn("\n>", cleaned)
+        self.assertNotIn("wrote:", cleaned)
+
+    def test_prepare_gmail_parse_body_composes_html_cleaning_and_dequoting(self) -> None:
+        html = (
+            "<html><body><p>On Tue, Aug 4, 2026 at 4:20 PM Recruiter &lt;r@example.com&gt; wrote:</p>"
+            "<blockquote><h1>Data Engineer</h1><p>Python and Spark</p></blockquote></body></html>"
+        )
+
+        cleaned = prepare_gmail_parse_body(html)
+
+        self.assertIn("Data Engineer", cleaned)
+        self.assertIn("Python and Spark", cleaned)
+        self.assertNotIn("<blockquote>", cleaned)
+        self.assertNotIn("wrote:", cleaned)
 
     def test_role_manifest_line_numbers_remain_valid_for_markdown(self) -> None:
         cleaned = clean_html_text(
