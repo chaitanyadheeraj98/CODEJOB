@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from unittest.mock import patch
 
 os.environ["DEBUG"] = "false"
 
@@ -18,6 +19,7 @@ from app.external_feeds.models import ExternalFeedSource, ExternalOpportunity
 from app.models import RecruiterEmail, ResumeAsset, UserSettings
 from app.routing import RoutingDecision
 from app.services import orchestration_service as orchestration_module
+from app.services.role_manifest_service import RoleManifest, RoleManifestResult
 
 
 class CandidateRegenerateTests(unittest.TestCase):
@@ -140,13 +142,14 @@ class CandidateRegenerateTests(unittest.TestCase):
         state: str = "needs_review",
         routing_confirmed: bool = False,
         external_message_id: str | None = None,
+        body: str | None = None,
     ) -> RecruiterEmail:
         now = datetime.now(UTC)
         email = RecruiterEmail(
             owner_id=main.settings.owner_id,
             sender="Recruiter <r@example.com>" if source == "gmail" else "Recruiter <nvoids@example.com>",
             subject="Java role",
-            body="Body with recruiter@example.com and manager@example.com",
+            body=body if body is not None else "Body with recruiter@example.com and manager@example.com",
             role="Old Role",
             location="Old Location",
             salary_text="$60/hr",
@@ -315,6 +318,143 @@ class CandidateRegenerateTests(unittest.TestCase):
             main.generate_reply_with_ai_or_fallback = original_generate_reply
             main._evaluate_routing_policy = original_eval_routing
 
+    def test_regenerate_gmail_cleans_legacy_html_before_pipeline(self) -> None:
+        with Session(self.engine) as db:
+            resume = self._add_resume(db, file_name="resume-current.pdf")
+            selected_resume = self._resume_like(resume)
+            email = self._add_email(
+                db,
+                source="gmail",
+                body=(
+                    "<!doctype html><html><head><style>.hidden{display:none}</style></head>"
+                    "<body><h1>Java Engineer</h1><p>Contact recruiter@example.com</p></body></html>"
+                ),
+            )
+            email_id = email.id
+
+        parsed_bodies: list[str] = []
+        semantic_diag = SimpleNamespace(
+            input_source="chunked",
+            input_chars=100,
+            chunks=1,
+            fallback_reason=None,
+            keyword_source="jd_only",
+            thread_snapshot_used=False,
+            thread_snapshot_email_id=None,
+        )
+
+        def parse_email(_subject: str, body: str, **_kwargs):
+            parsed_bodies.append(body)
+            return (
+                {
+                    "role": "Java Engineer",
+                    "location": "Remote",
+                    "salary_text": "not_specified",
+                    "skills_text": "Java",
+                },
+                {"parser_version": "legacy-html"},
+            )
+
+        with (
+            patch.object(main, "parse_email_with_details", side_effect=parse_email),
+            patch.object(main, "_select_best_resume_match", return_value=SimpleNamespace(resume=selected_resume)),
+            patch.object(
+                main,
+                "_compute_blended_ai_score",
+                return_value=(0.91, "summary", "test", None, None, semantic_diag),
+            ),
+            patch.object(main, "hard_filter_check", return_value=(True, "")),
+            patch.object(
+                main,
+                "_evaluate_routing_policy",
+                return_value=RoutingDecision(
+                    to_email="fresh-to@example.com",
+                    cc_email="fresh-cc@example.com",
+                    status="safe",
+                    confidence=0.95,
+                    reason="fresh routing",
+                    evidence=[],
+                    candidates=[],
+                    recommended_state="needs_review",
+                    recommended_skip_reason=None,
+                    should_mark_failed=False,
+                    is_sendable_candidate=True,
+                    needs_manual_confirmation=False,
+                ),
+            ),
+            patch.object(
+                main,
+                "generate_reply_with_ai_or_fallback",
+                return_value=SimpleNamespace(
+                    draft_text="Fresh draft",
+                    source="rules_only",
+                    ai_model=None,
+                    ai_error=None,
+                    resume_context_status="rules_only",
+                ),
+            ),
+        ):
+            response = self.client.post(
+                f"/candidates/{email_id}/regenerate",
+                json={"preserve_manual_routing": True, "preserve_review_visibility": True},
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["draft_reply"], "Fresh draft")
+        self.assertEqual(len(parsed_bodies), 1)
+        self.assertNotIn("<!doctype", parsed_bodies[0].lower())
+        self.assertNotIn("display:none", parsed_bodies[0].lower())
+        self.assertIn("Java Engineer", parsed_bodies[0])
+
+    def test_regenerate_manifest_retry_cleans_legacy_gmail_html_before_detection(self) -> None:
+        with Session(self.engine) as db:
+            user_settings = db.query(UserSettings).one()
+            user_settings.feature_role_manifest_enabled = True
+            email = self._add_email(
+                db,
+                source="gmail",
+                body=(
+                    "<!doctype html><html><head><style>.hidden{display:none}</style></head>"
+                    "<body><h1>Java Engineer</h1><p>Single role requirement</p></body></html>"
+                ),
+            )
+            email.sendability_status = "manifest_review"
+            email.draft_reply = ""
+            email.draft_source = None
+            db.commit()
+            email_id = email.id
+
+        detected_bodies: list[str] = []
+        manifest_result = RoleManifestResult(
+            status="single",
+            manifest=RoleManifest(
+                classification="single",
+                role_count=1,
+                confidence=0.95,
+                shared_constraints=[],
+                roles=[],
+            ),
+        )
+
+        with (
+            patch.object(main, "RoleManifestService") as manifest_service_type,
+            patch.object(main, "extract_and_score_children") as extract_children,
+        ):
+            manifest_service_type.return_value.detect.side_effect = (
+                lambda body: detected_bodies.append(body) or manifest_result
+            )
+            response = self.client.post(
+                f"/candidates/{email_id}/regenerate",
+                json={"preserve_manual_routing": True, "preserve_review_visibility": True},
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(len(detected_bodies), 1)
+        self.assertNotIn("<!doctype", detected_bodies[0].lower())
+        self.assertNotIn("display:none", detected_bodies[0].lower())
+        self.assertIn("Java Engineer", detected_bodies[0])
+        extract_children.assert_called_once()
+
     def test_regenerate_preserves_manual_routing_when_confirmed(self) -> None:
         original_parse_with_details = main.parse_email_with_details
         original_select_best_resume_match = main._select_best_resume_match
@@ -463,6 +603,10 @@ class CandidateRegenerateTests(unittest.TestCase):
             self.assertEqual(payload["decision"], "Reject")
             self.assertEqual(payload["auto_reject_reason"], "ai_score_too_low")
             self.assertIn("no longer qualified", payload["last_error"])
+            self.assertEqual(payload["draft_reply"], "Hi")
+            self.assertEqual(payload["draft_source"], "rules_only")
+            self.assertEqual(payload["draft_resume_context_status"], "rules_only")
+            self.assertEqual(payload["sendability_status"], "score_review")
         finally:
             main.parse_email_with_details = original_parse_with_details
             main._select_best_resume_match = original_select_best_resume_match

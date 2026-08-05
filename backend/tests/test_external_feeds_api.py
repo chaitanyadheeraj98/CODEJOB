@@ -2304,10 +2304,10 @@ Job ID: ENG-2"""
             self.assertGreaterEqual(len(parse_calls), 1)
             first_call = parse_calls[0]
             expected_ai_body = (
-                "Role: Senior Python Developer\n"
-                "Client: ExampleCo\n"
-                "Location: Dallas, Texas, USA\n"
-                "Must have skills\n"
+                "Role: Senior Python Developer\n\n"
+                "Client: ExampleCo\n\n"
+                "Location: Dallas, Texas, USA\n\n"
+                "Must have skills\n\n"
                 "Java, Spring Boot, Kafka, AWS"
             )
             self.assertEqual(first_call["source"], "nvoids")

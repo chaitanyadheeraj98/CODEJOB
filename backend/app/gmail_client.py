@@ -19,6 +19,7 @@ from googleapiclient.errors import HttpError
 
 from app.ai.draft_formatting import draft_text_to_html
 from app.config import settings
+from app.parsing.document_extraction import clean_html_text
 
 logger = logging.getLogger(__name__)
 
@@ -296,16 +297,13 @@ def _extract_from_parts(parts: list[dict[str, Any]]) -> tuple[str, str]:
 
 
 def _strip_html(html: str) -> str:
-    no_scripts = re.sub(r"(?is)<(script|style).*?>.*?</\\1>", " ", html)
-    no_tags = re.sub(r"(?is)<[^>]+>", " ", no_scripts)
-    compact = re.sub(r"[ \t]+", " ", no_tags)
-    return re.sub(r"\n\s*\n+", "\n\n", compact).strip()
+    return clean_html_text(html)
 
 
 def _decode_body(payload: dict[str, Any]) -> str:
     direct = _decode_chunk(payload.get("body", {}).get("data"))
     if direct:
-        return direct
+        return _strip_html(direct) if (payload.get("mimeType") or "").lower() == "text/html" else direct
 
     plain, html = _extract_from_parts(_as_list_of_dicts(payload.get("parts")))
     if plain:

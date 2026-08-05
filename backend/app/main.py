@@ -81,6 +81,7 @@ from app.models import (
 )
 from app.models import RecipientRoutingFeedback
 from app.parsing import build_skills_json_payload
+from app.parsing.document_extraction import clean_html_if_present
 from app.parsing.skill_audit import analyze_skill_candidate, is_safe_for_bulk_skill_approval
 from app.telegram_bot import TelegramBotService, TelegramReply
 from app.taxonomy.job_description_taxonomy import clear_job_intent_signal_embedding_cache
@@ -4662,7 +4663,8 @@ def retry_role_detection(email_id: int, db: Session = Depends(get_db)) -> RoleDe
     if requested.source_parent_email_id:
         source = _get_candidate_for_review(db, requested.source_parent_email_id)
     user_settings = _get_settings(db)
-    manifest_result = RoleManifestService().detect(source.body)
+    manifest_body = clean_html_if_present(source.body) if source.source == "gmail" else source.body
+    manifest_result = RoleManifestService().detect(manifest_body)
     expansion = RequirementExpansionService().expand(
         db,
         source,

@@ -20,6 +20,8 @@ dependencies = [
     "sentence-transformers>=5.1.0",
     "sqlalchemy>=2.0.49",
     "tzdata>=2025.2",
+    "unstructured[pdf,docx]>=0.25.2,<1.0.0",
     "uvicorn[standard]>=0.46.0",
+    "pypdf>=6.14.2,<7.0.0",
     "instructor==1.15.4",
 ]

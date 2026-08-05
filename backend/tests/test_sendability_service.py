@@ -98,6 +98,20 @@ class SendabilityServiceTests(unittest.TestCase):
         self.assertEqual(resolve_sendability_status(email), "manifest_review")
         self.assertEqual(apply_resume_sendability(email), "manifest_review")
 
+    def test_score_review_preserves_draft_but_blocks_sendability(self) -> None:
+        email = self._email(
+            screening_mode="compatibility",
+            decision="Reject",
+            qualification_result="rejected",
+            blocking_rule="score_threshold",
+            sendability_status="score_review",
+        )
+
+        self.assertEqual(resolve_sendability_status(email), "score_review")
+        self.assertEqual(apply_resume_sendability(email), "score_review")
+        self.assertEqual(email.draft_reply, "Please consider my resume.")
+        self.assertEqual(email.resume_asset_id, 42)
+
     def test_compatibility_mode_clears_strict_eligibility_blocker_when_draft_exists(self) -> None:
         email = self._email(
             screening_mode="compatibility",

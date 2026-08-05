@@ -31,6 +31,7 @@ from app.services.policy_service import EffectiveRunInputs
 from app.gmail_client import GmailMessageCandidate, MailAttachment
 from app.models import AttachmentAsset, DraftEditFeedback, GmailRequirementGroup, RecipientRoutingFeedback, RecentRun, RecentRunSkippedItem, RecruiterEmail, ResumeAsset, SyncRun, UserSettings
 from app.parsing import build_skills_json_payload
+from app.parsing.document_extraction import clean_html_if_present
 from app.phase0 import RoutingResult, parse_email_with_details
 from app.recent_runs import (
     RUN_SOURCE_AUTOMATION,
@@ -1077,6 +1078,7 @@ class OrchestrationService:
             "superseded_multi_role",
             "manifest_review",
             "extraction_review",
+            "score_review",
         }
         strict_screening = email.screening_mode == "strict"
         persisted_safety_block = email.screening_mode is None and sendability_status in {
@@ -1306,7 +1308,7 @@ class OrchestrationService:
         enabled_resumes = self.deps.enabled_resumes(db)
 
         parse_subject = email.subject
-        parse_body = email.body
+        parse_body = clean_html_if_present(email.body) if email.source == "gmail" else email.body
         parser_source = "gmail" if email.source == "gmail" else email.source
         parse_kwargs: dict[str, Any] = {
             "source": parser_source,
@@ -1445,6 +1447,35 @@ class OrchestrationService:
             ),
         )
 
+        draft_reply = preparation.draft_reply or ""
+        draft_source = preparation.draft_source
+        draft_model = preparation.draft_model
+        draft_ai_error = preparation.draft_ai_error
+        draft_resume_context_status = preparation.draft_resume_context_status
+        score_review_draft_created = False
+        if (
+            email.source == "gmail"
+            and preparation.outcome == "not_qualified"
+            and preparation.blocking_rule == "score_threshold"
+            and payload.preserve_review_visibility
+            and not draft_reply
+        ):
+            greeting_line = self.deps.greeting_from_to_contact(email.recipient_email or "", parse_body)
+            draft_reply = self.deps.build_user_fallback_draft(
+                db,
+                user_settings,
+                sender=email.sender,
+                role=str(preparation.parsed.get("role") or email.role or parse_subject),
+                parsed=preparation.parsed,
+                greeting_line=greeting_line,
+                resume_file_name=selected_resume.file_name if selected_resume else None,
+            )
+            draft_source = "rules_only"
+            draft_model = None
+            draft_ai_error = None
+            draft_resume_context_status = RESUME_CONTEXT_RULES_ONLY
+            score_review_draft_created = True
+
         email.role = str(preparation.parsed.get("role", email.role or parse_subject))
         email.location = str(preparation.parsed.get("location", email.location or ""))
         email.salary_text = str(preparation.parsed.get("salary_text", email.salary_text or ""))
@@ -1474,11 +1505,11 @@ class OrchestrationService:
         email.keyword_source = getattr(preparation.semantic_diag, "keyword_source", None)
         email.thread_snapshot_used = getattr(preparation.semantic_diag, "thread_snapshot_used", None)
         email.thread_snapshot_email_id = getattr(preparation.semantic_diag, "thread_snapshot_email_id", None)
-        email.draft_reply = preparation.draft_reply or ""
-        email.draft_source = preparation.draft_source
-        email.draft_model = preparation.draft_model
-        email.draft_ai_error = preparation.draft_ai_error
-        email.draft_resume_context_status = preparation.draft_resume_context_status
+        email.draft_reply = draft_reply
+        email.draft_source = draft_source
+        email.draft_model = draft_model
+        email.draft_ai_error = draft_ai_error
+        email.draft_resume_context_status = draft_resume_context_status
         email.resume_asset_id = selected_resume.id if selected_resume else None
         email.resume_file_name = selected_resume.file_name if selected_resume else None
         email.hard_filter_result = preparation.hard_filter_reason
@@ -1520,6 +1551,8 @@ class OrchestrationService:
         email.approval_status = "pending"
         email.sent_status = "not_sent"
         apply_screening_decision(email, screening)
+        if score_review_draft_created:
+            email.sendability_status = "score_review"
         apply_resume_sendability(email)
 
         db.commit()

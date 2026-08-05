@@ -9,6 +9,7 @@ STRUCTURAL_BLOCKING_STATUSES = frozenset(
     {
         "manifest_review",
         "extraction_review",
+        "score_review",
         "superseded_multi_role",
         "source_parent",
     }

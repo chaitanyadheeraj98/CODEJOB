@@ -6,6 +6,7 @@ import re
 from datetime import UTC, datetime
 from urllib.parse import parse_qs, urljoin, urlparse
 
+from app.parsing.document_extraction import clean_html_text
 from app.skill_taxonomy import extract_skills_text, normalize_skills_text
 
 try:
@@ -144,6 +145,26 @@ def _extract_row_text_with_linebreaks(row_html: str, row_text: str) -> str:
         if normalized:
             return normalized
     return _normalize_multiline_text(row_text)
+
+
+def _row_html_to_markdown(row_html: str) -> str:
+    """Render a nvoids table-cell fragment through the same HTML->Markdown
+    pipeline used for gmail bodies, instead of a flat line-joined string.
+
+    unstructured's partition_html collapses bare <br> tags to spaces (they
+    aren't block boundaries), so pseudo-lines are re-wrapped as <p> blocks
+    first to make each one its own markdown block.
+    """
+    if not row_html:
+        return ""
+    text = re.sub(r"(?i)<br\s*/?>", "\x00", row_html)
+    text = re.sub(r"(?i)</(td|tr|div|p|li|ul|ol|h[1-6])>", "\x00", text)
+    text = re.sub(r"<[^>]+>", "", text)
+    pieces = [html.unescape(piece).strip() for piece in text.split("\x00")]
+    fragment = "".join(f"<p>{html.escape(piece)}</p>" for piece in pieces if piece)
+    if not fragment:
+        return ""
+    return clean_html_text(fragment).strip()
 
 
 def _extract_nvoids_table_rows(detail_html: str) -> tuple[list[str], list[str]]:
@@ -315,9 +336,10 @@ def parse_nvoids_detail(detail_html: str, fallback_title: str, fallback_location
     listing_subject = _normalize_line(row_texts[0]) or _normalize_line(fallback_title)
     role, location = _split_role_location_from_row1(row_texts[0])
     recruiter_email = _extract_row_email(row_htmls[1], row_texts[1])
-    jd_body = _extract_row_text_with_linebreaks(row_htmls[2], row_texts[2]).strip()
-    recruiter_phone = _extract_row3_recruiter_phone(jd_body)
-    recruiter_name = _extract_recruiter_name_from_row3(jd_body)
+    jd_body_plain = _extract_row_text_with_linebreaks(row_htmls[2], row_texts[2]).strip()
+    recruiter_phone = _extract_row3_recruiter_phone(jd_body_plain)
+    recruiter_name = _extract_recruiter_name_from_row3(jd_body_plain)
+    jd_body = _row_html_to_markdown(row_htmls[2]).strip() or jd_body_plain
     jd_body_source = "nvoids_detail_table_row_3" if jd_body else ""
     repeated_email = _extract_row_email(row_htmls[3], row_texts[3])
     posted_match = _POSTED_TEXT_RE.search(row_texts[4])

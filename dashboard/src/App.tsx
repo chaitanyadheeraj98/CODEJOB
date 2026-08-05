@@ -5780,6 +5780,7 @@ function App() {
               'superseded_multi_role',
               'manifest_review',
               'extraction_review',
+              'score_review',
             ].includes(item.sendability_status ?? '')
             const historicalSafetyBlock =
               item.screening_mode == null &&
