@@ -29,9 +29,9 @@ from app.job_intent_learning import approved_learning_signals_for_owner, record_
 from app.services import policy_service
 from app.services.policy_service import EffectiveRunInputs
 from app.gmail_client import GmailMessageCandidate, MailAttachment
-from app.models import AttachmentAsset, DraftEditFeedback, GmailRequirementGroup, RecipientRoutingFeedback, RecentRun, RecentRunSkippedItem, RecruiterEmail, ResumeAsset, SyncRun, UserSettings
+from app.models import AttachmentAsset, DraftEditFeedback, EmailConversation, EmailReplyMessage, GmailRequirementGroup, RecipientRoutingFeedback, RecentRun, RecentRunSkippedItem, RecruiterEmail, ResumeAsset, SyncRun, UserSettings
 from app.parsing import build_skills_json_payload
-from app.parsing.document_extraction import clean_html_if_present
+from app.parsing.document_extraction import prepare_gmail_parse_body
 from app.phase0 import RoutingResult, parse_email_with_details
 from app.recent_runs import (
     RUN_SOURCE_AUTOMATION,
@@ -44,10 +44,20 @@ from app.recent_runs import (
     update_recent_run,
 )
 from app.routing import RoutingDecision
-from app.schemas import ApproveSendRequest, AutomationRunRequest, AutomationRunResponse, GmailSyncResponse, RegenerateCandidateRequest, RejectRequest, ResolveRecipientsRequest
+from app.schemas import ApproveSendRequest, AutomationRunRequest, AutomationRunResponse, ConversationDetailResponse, ConversationSummaryResponse, GmailSyncResponse, RegenerateCandidateRequest, RejectRequest, ResolveRecipientsRequest
 from app.config import settings as app_settings
 from app.services.candidate_runtime_service import resolve_resume_display_name
 from app.services.candidate_screening_service import CandidateScreeningService, apply_screening_decision
+from app.services.email_inbox_service import (
+    capture_inbound_reply,
+    conversation_detail,
+    ensure_sent_conversation,
+    generate_tracking_token,
+    list_conversations,
+    mark_conversation_read,
+    send_conversation_reply,
+    tracking_pixel_url,
+)
 from app.services.gmail_group_source_service import ConfiguredRequirementGroup, resolve_trusted_group_context
 from app.services.requirement_expansion_service import RequirementExpansionService
 from app.services.role_manifest_pipeline import extract_and_score_children
@@ -110,6 +120,9 @@ class OrchestrationDeps:
     send_new_email_with_attachment: Callable[..., str]
     mark_message_processed: Callable[[str], None]
     append_tracking_sheet_row: Callable[..., None]
+    mark_reply_processed: Callable[[str, list[str] | None], None] | None = None
+    get_message_thread_id: Callable[[str], str] | None = None
+    get_message_rfc_message_id: Callable[[str], str] | None = None
 
 
 class OrchestrationService:
@@ -260,6 +273,48 @@ class OrchestrationService:
             threshold = self.deps.policy_threshold(user_settings, effective_policy)
             trusted_groups = self._load_enabled_requirement_groups(db) if user_settings.feature_gmail_requirement_groups_enabled else []
             candidates = self.deps.list_unread_candidates_by_query(effective_query)
+            if user_settings.feature_reply_inbox_enabled:
+                sent_thread_ids = {
+                    str(row[0])
+                    for row in db.query(RecruiterEmail.external_thread_id)
+                    .filter(
+                        RecruiterEmail.owner_id == self.deps.owner_id,
+                        RecruiterEmail.sent_status == "sent",
+                        RecruiterEmail.external_thread_id.is_not(None),
+                    )
+                    .all()
+                    if row[0]
+                }
+                sent_thread_ids.update(
+                    str(row[0])
+                    for row in db.query(EmailConversation.external_thread_id)
+                    .filter(EmailConversation.owner_id == self.deps.owner_id)
+                    .all()
+                    if row[0]
+                )
+                sent_rfc_message_ids = {
+                    str(row[0]).strip().lower()
+                    for row in db.query(EmailReplyMessage.external_rfc_message_id)
+                    .filter(
+                        EmailReplyMessage.owner_id == self.deps.owner_id,
+                        EmailReplyMessage.direction == "outbound",
+                        EmailReplyMessage.external_rfc_message_id.is_not(None),
+                    )
+                    .all()
+                    if row[0]
+                }
+                seen_message_ids = {item["external_message_id"] for item in candidates}
+                for item in self.deps.list_unread_candidates_by_query("is:unread in:inbox"):
+                    reply_headers = f"{item.get('in_reply_to_header') or ''} {item.get('references_header') or ''}".lower()
+                    if (
+                        item["external_message_id"] not in seen_message_ids
+                        and (
+                            item.get("external_thread_id") in sent_thread_ids
+                            or any(message_id in reply_headers for message_id in sent_rfc_message_ids)
+                        )
+                    ):
+                        candidates.append(item)
+                        seen_message_ids.add(item["external_message_id"])
             processed_items = 0
             total_items = len(candidates)
 
@@ -300,6 +355,30 @@ class OrchestrationService:
                     )
                     report_item()
                     continue
+
+                if user_settings.feature_reply_inbox_enabled:
+                    matched_reply, created_reply = capture_inbound_reply(
+                        db,
+                        owner_id=self.deps.owner_id,
+                        item=item,
+                    )
+                    if matched_reply:
+                        if created_reply:
+                            imported_count += 1
+                        else:
+                            skipped_count += 1
+                        report_item()
+                        try:
+                            if self.deps.mark_reply_processed is not None:
+                                self.deps.mark_reply_processed(item["external_message_id"], item.get("label_ids"))
+                            else:
+                                self.deps.mark_message_processed(item["external_message_id"])
+                        except Exception:
+                            logger.exception(
+                                "gmail_reply_label_failed external_message_id=%s",
+                                item["external_message_id"],
+                            )
+                        continue
 
                 recruiter_like_warning: str | None = None
                 recruiter_like_mode = policy_service.recruiter_like_rule_mode(effective_policy)
@@ -371,13 +450,14 @@ class OrchestrationService:
                 if recruiter_like_mode in {"block", "warn"} and not is_recruiter_like:
                     recruiter_like_warning = "non_recruiter_like_gmail"
 
-                manifest_result = self._detect_role_manifest_if_enabled(user_settings, item["body"])
+                parse_body = prepare_gmail_parse_body(item["body"])
+                manifest_result = self._detect_role_manifest_if_enabled(user_settings, parse_body)
                 item_ai_extractor_enabled = user_settings.feature_ai_extractor_enabled and (
                     manifest_result is None or manifest_result.status != "multiple"
                 )
                 parsed, parser_details = self.deps.parse_email_with_details(
                     item["subject"],
-                    item["body"],
+                    parse_body,
                     source="gmail",
                     ai_extractor_enabled=item_ai_extractor_enabled,
                 )
@@ -1116,7 +1196,21 @@ class OrchestrationService:
 
         email.last_error = None
         sent_message_id = None
+        sent_thread_id: str | None = None
+        sent_rfc_message_id: str | None = None
         user_settings = self.deps.get_settings(db)
+        tracking_token: str | None = None
+        pixel_url: str | None = None
+        if (
+            user_settings.feature_email_tracking_enabled
+            and app_settings.tracking_secret_key
+            and app_settings.public_base_url
+        ):
+            candidate_token = generate_tracking_token(app_settings.tracking_secret_key, email.id)
+            candidate_url = tracking_pixel_url(app_settings.public_base_url, candidate_token)
+            if candidate_url:
+                tracking_token = candidate_token
+                pixel_url = candidate_url
         if not email.recipient_email:
             raise HTTPException(status_code=400, detail="Recipient email is required before sending")
         if not email.cc_email:
@@ -1177,7 +1271,9 @@ class OrchestrationService:
                     email.draft_reply,
                     draft_text_size=user_settings.draft_text_size,
                     attachments=attachments,
+                    tracking_pixel_url=pixel_url,
                 )
+                sent_thread_id = source_email.external_thread_id
                 if source_email.external_message_id and not source_already_sent:
                     self.deps.mark_message_processed(source_email.external_message_id)
             except Exception as exc:
@@ -1194,12 +1290,33 @@ class OrchestrationService:
                     email.draft_reply,
                     draft_text_size=user_settings.draft_text_size,
                     attachments=attachments,
+                    tracking_pixel_url=pixel_url,
                 )
+                if (
+                    user_settings.feature_reply_inbox_enabled
+                    and sent_message_id
+                    and self.deps.get_message_thread_id is not None
+                ):
+                    try:
+                        sent_thread_id = self.deps.get_message_thread_id(sent_message_id)
+                    except Exception:
+                        logger.exception("gmail_sent_thread_lookup_failed message_id=%s", sent_message_id)
+                sent_thread_id = sent_thread_id or sent_message_id
             except Exception as exc:
                 email.last_error = str(exc)
                 db.commit()
                 db.refresh(email)
                 raise HTTPException(status_code=502, detail=f"Gmail send failed: {exc}") from exc
+
+        if (
+            user_settings.feature_reply_inbox_enabled
+            and sent_message_id
+            and self.deps.get_message_rfc_message_id is not None
+        ):
+            try:
+                sent_rfc_message_id = self.deps.get_message_rfc_message_id(sent_message_id)
+            except Exception:
+                logger.exception("gmail_sent_rfc_lookup_failed message_id=%s", sent_message_id)
 
         email.state = "approved_sent"
         email.decision = "Qualified"
@@ -1207,12 +1324,21 @@ class OrchestrationService:
         email.sent_status = "sent"
         email.sent_at = datetime.now(UTC)
         email.gmail_sent_id = sent_message_id
+        email.tracking_token = tracking_token
         email.sent_attachment_file_names_json = json.dumps(
             [item.file_name for item in extra_attachments],
             separators=(",", ":"),
         )
         if payload.edited_reply and payload.edited_reply.strip() != original_draft.strip():
             db.add(DraftEditFeedback(owner_id=self.deps.owner_id, recruiter_email_id=email.id, original_draft=original_draft, edited_draft=payload.edited_reply))
+        if user_settings.feature_reply_inbox_enabled and sent_thread_id:
+            ensure_sent_conversation(
+                db,
+                owner_id=self.deps.owner_id,
+                root_email=email,
+                thread_id=sent_thread_id,
+                sent_rfc_message_id=sent_rfc_message_id,
+            )
         db.commit()
         db.refresh(email)
         self.deps.record_productivity_event(db, event_type="approved_sent", event_source="action", entity_id=email.id, metadata={"state": email.state, "sent_status": email.sent_status})
@@ -1236,6 +1362,38 @@ class OrchestrationService:
             db.refresh(email)
 
         return email
+
+    def list_inbox_conversations(self, db: Session) -> list[ConversationSummaryResponse]:
+        return list_conversations(db, self.deps.owner_id)
+
+    def get_inbox_conversation(self, conversation_id: int, db: Session) -> ConversationDetailResponse:
+        return conversation_detail(db, self.deps.owner_id, conversation_id)
+
+    def mark_inbox_conversation_read(self, conversation_id: int, db: Session) -> ConversationDetailResponse:
+        return mark_conversation_read(db, self.deps.owner_id, conversation_id)
+
+    def reply_to_inbox_conversation(
+        self,
+        conversation_id: int,
+        body: str,
+        db: Session,
+    ) -> ConversationDetailResponse:
+        user_settings = self.deps.get_settings(db)
+        detail = conversation_detail(db, self.deps.owner_id, conversation_id)
+        root_email = self._get_email_or_raise(db, detail.root_recruiter_email_id)
+        pixel_url = None
+        if user_settings.feature_email_tracking_enabled:
+            pixel_url = tracking_pixel_url(app_settings.public_base_url, root_email.tracking_token)
+        return send_conversation_reply(
+            db,
+            owner_id=self.deps.owner_id,
+            conversation_id=conversation_id,
+            body=body,
+            sender=user_settings.signature_email or "me",
+            draft_text_size=user_settings.draft_text_size,
+            tracking_url=pixel_url,
+            send_reply=self.deps.send_reply_with_attachment,
+        )
 
     def reject_candidate(self, email_id: int, payload: RejectRequest, db: Session) -> RecruiterEmail:
         email = (
@@ -1308,7 +1466,7 @@ class OrchestrationService:
         enabled_resumes = self.deps.enabled_resumes(db)
 
         parse_subject = email.subject
-        parse_body = clean_html_if_present(email.body) if email.source == "gmail" else email.body
+        parse_body = prepare_gmail_parse_body(email.body) if email.source == "gmail" else email.body
         parser_source = "gmail" if email.source == "gmail" else email.source
         parse_kwargs: dict[str, Any] = {
             "source": parser_source,

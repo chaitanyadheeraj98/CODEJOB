@@ -90,6 +90,8 @@ class SettingsRequest(BaseModel):
     feature_gmail_requirement_groups_enabled: bool = False
     feature_role_manifest_enabled: bool = False
     feature_strict_candidate_screening_enabled: bool = False
+    feature_email_tracking_enabled: bool = False
+    feature_reply_inbox_enabled: bool = False
     candidate_work_authorizations: list[str] | None = Field(default_factory=list)
     candidate_total_experience_years: float | None = Field(default=None, ge=0)
     candidate_us_experience_years: float | None = Field(default=None, ge=0)
@@ -732,6 +734,41 @@ class SentItemDetailsResponse(BaseModel):
     to_email: str | None = None
     cc_email: str | None = None
     sent_at: datetime | None = None
+    opened_at: datetime | None = None
+    open_count: int = 0
+    reply_count: int = 0
+
+
+class ConversationSummaryResponse(BaseModel):
+    id: int
+    root_recruiter_email_id: int
+    recruiter: str
+    recruiter_email: str | None = None
+    subject: str
+    status: str
+    last_message_preview: str
+    last_message_at: datetime
+    unread_reply_count: int
+
+
+class ConversationMessageResponse(BaseModel):
+    id: int
+    direction: str
+    sender: str
+    body: str
+    snippet: str
+    occurred_at: datetime
+    read_at: datetime | None = None
+
+
+class ConversationDetailResponse(ConversationSummaryResponse):
+    to_email: str | None = None
+    cc_email: str | None = None
+    messages: list[ConversationMessageResponse] = Field(default_factory=list)
+
+
+class ConversationReplyRequest(BaseModel):
+    body: str = Field(min_length=1, max_length=20000)
 
 
 class PremiumNumberResponse(BaseModel):

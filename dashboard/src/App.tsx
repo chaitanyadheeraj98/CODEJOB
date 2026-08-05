@@ -171,6 +171,8 @@ type SettingsPayload = {
   feature_gmail_requirement_groups_enabled: boolean
   feature_role_manifest_enabled: boolean
   feature_strict_candidate_screening_enabled: boolean
+  feature_email_tracking_enabled: boolean
+  feature_reply_inbox_enabled: boolean
   candidate_work_authorizations: string[]
   candidate_total_experience_years: number | null
   candidate_us_experience_years: number | null
@@ -1285,6 +1287,37 @@ type SentItemDetails = {
   to_email: string | null
   cc_email: string | null
   sent_at: string | null
+  opened_at: string | null
+  open_count: number
+  reply_count: number
+}
+
+type ConversationSummary = {
+  id: number
+  root_recruiter_email_id: number
+  recruiter: string
+  recruiter_email: string | null
+  subject: string
+  status: string
+  last_message_preview: string
+  last_message_at: string
+  unread_reply_count: number
+}
+
+type ConversationMessage = {
+  id: number
+  direction: 'inbound' | 'outbound'
+  sender: string
+  body: string
+  snippet: string
+  occurred_at: string
+  read_at: string | null
+}
+
+type ConversationDetail = ConversationSummary & {
+  to_email: string | null
+  cc_email: string | null
+  messages: ConversationMessage[]
 }
 
 export const sourceListingUrl = (item: Candidate): string | null => {
@@ -2533,6 +2566,8 @@ function App() {
     feature_gmail_requirement_groups_enabled: false,
     feature_role_manifest_enabled: false,
     feature_strict_candidate_screening_enabled: false,
+    feature_email_tracking_enabled: false,
+    feature_reply_inbox_enabled: false,
     candidate_work_authorizations: [],
     candidate_total_experience_years: null,
     candidate_us_experience_years: null,
@@ -2589,7 +2624,14 @@ function App() {
   const [routingFixes, setRoutingFixes] = useState<Record<number, { to: string; cc: string }>>({})
   const [fixingId, setFixingId] = useState<number | null>(null)
   const [deletingFailedId, setDeletingFailedId] = useState<number | null>(null)
-  const [activePage, setActivePage] = useState<'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'premium_numbers' | 'settings'>('run_queue')
+  const [activePage, setActivePage] = useState<'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'inbox' | 'premium_numbers' | 'settings'>('run_queue')
+  const [inboxConversations, setInboxConversations] = useState<ConversationSummary[]>([])
+  const [selectedConversationId, setSelectedConversationId] = useState<number | null>(null)
+  const [selectedConversation, setSelectedConversation] = useState<ConversationDetail | null>(null)
+  const [inboxLoading, setInboxLoading] = useState(false)
+  const [inboxError, setInboxError] = useState('')
+  const [inboxReplyDraft, setInboxReplyDraft] = useState('')
+  const [inboxSending, setInboxSending] = useState(false)
   const [lastSavedSettings, setLastSavedSettings] = useState<SettingsPayload | null>(null)
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null)
   const [dynamicPolicyBeta, setDynamicPolicyBeta] = useState(false)
@@ -3282,6 +3324,66 @@ function App() {
     )
   }
 
+  const loadInboxConversations = async (): Promise<ConversationSummary[]> => {
+    setInboxLoading(true)
+    setInboxError('')
+    try {
+      const res = await fetch(`${apiBase}/inbox/conversations`)
+      if (!res.ok) throw new Error('Failed to load inbox conversations')
+      const payload = (await res.json()) as ConversationSummary[]
+      setInboxConversations(payload)
+      return payload
+    } catch (e) {
+      setInboxError((e as Error).message)
+      return []
+    } finally {
+      setInboxLoading(false)
+    }
+  }
+
+  const openInboxConversation = async (conversationId: number) => {
+    setSelectedConversationId(conversationId)
+    setInboxError('')
+    const res = await fetch(`${apiBase}/inbox/conversations/${conversationId}`)
+    if (!res.ok) {
+      setInboxError('Failed to load conversation')
+      return
+    }
+    let detail = (await res.json()) as ConversationDetail
+    if (detail.unread_reply_count > 0) {
+      const readRes = await fetch(`${apiBase}/inbox/conversations/${conversationId}/read`, { method: 'POST' })
+      if (readRes.ok) detail = (await readRes.json()) as ConversationDetail
+      setInboxConversations((rows) => rows.map((row) => (
+        row.id === conversationId ? { ...row, unread_reply_count: 0 } : row
+      )))
+    }
+    setSelectedConversation(detail)
+  }
+
+  const sendInboxReply = async () => {
+    if (!selectedConversationId || !inboxReplyDraft.trim()) return
+    setInboxSending(true)
+    setInboxError('')
+    try {
+      const res = await fetch(`${apiBase}/inbox/conversations/${selectedConversationId}/reply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ body: inboxReplyDraft.trim() }),
+      })
+      if (!res.ok) {
+        const details = await res.json().catch(() => null)
+        throw new Error(details?.detail ?? 'Failed to send reply')
+      }
+      setSelectedConversation((await res.json()) as ConversationDetail)
+      setInboxReplyDraft('')
+      await loadInboxConversations()
+    } catch (e) {
+      setInboxError((e as Error).message)
+    } finally {
+      setInboxSending(false)
+    }
+  }
+
   const toggleRecentRunItems = async (runKey: string | null | undefined) => {
     if (!runKey) return
     const current = logs.find((item) => item.run_key === runKey)
@@ -3341,6 +3443,7 @@ function App() {
       failed_mapping: 'view_failed_mapping',
       recent_runs: 'view_recent_runs',
       sent_items: 'view_sent_items',
+      inbox: 'view_sent_items',
       premium_numbers: 'view_premium_numbers',
       settings: 'view_run_queue',
     }
@@ -3445,6 +3548,17 @@ function App() {
     if (activePage !== 'premium_numbers') return
     loadPremiumNumbers({ append: false, cursor: 0 }).catch((e) => setPremiumError((e as Error).message))
   }, [activePage, premiumScopeFilter, premiumSearch, settings.mail_date, opportunityStatusFilter, opportunitySourceFilter, settingsBootstrapReady])
+
+  useEffect(() => {
+    if (activePage !== 'inbox') return
+    loadInboxConversations().then((rows) => {
+      const selectedId = rows.some((row) => row.id === selectedConversationId)
+        ? selectedConversationId
+        : rows[0]?.id
+      if (selectedId) openInboxConversation(selectedId).catch((e) => setInboxError((e as Error).message))
+      else setSelectedConversation(null)
+    }).catch((e) => setInboxError((e as Error).message))
+  }, [activePage])
 
   useEffect(() => {
     loadProductivityAnalytics(timeRange).catch((e) => setError((e as Error).message))
@@ -4411,6 +4525,8 @@ function App() {
     })
   }
 
+  const inboxUnreadCount = inboxConversations.reduce((total, row) => total + row.unread_reply_count, 0)
+
   return (
     <main className="gmailShell">
       <Sidebar
@@ -4419,6 +4535,7 @@ function App() {
         failedCount={bucketMeta.failed.total ?? failedQueue.length}
         runCount={logs.length}
         sentCount={bucketMeta.approved_sent.total ?? sentQueue.length}
+        inboxCount={inboxUnreadCount}
         premiumCount={numberReviewCards.length}
         activePage={activePage}
         onNavigate={setActivePage}
@@ -4509,10 +4626,12 @@ function App() {
 
         <div className="pageBody">
           <div className="titleBlock">
-            <h1>{activePage === 'settings' ? 'Settings' : 'Run Queue Dashboard'}</h1>
+            <h1>{activePage === 'settings' ? 'Settings' : activePage === 'inbox' ? 'Reply Inbox' : 'Run Queue Dashboard'}</h1>
             <p>
               {activePage === 'settings'
                 ? 'Manage learning queues, trusted Gmail groups, and resume assets.'
+                : activePage === 'inbox'
+                  ? 'Review recruiter replies and continue Gmail conversations.'
                 : 'Manage and monitor your automated recruitment email operations.'}
             </p>
           </div>
@@ -5460,6 +5579,30 @@ function App() {
                     </span>
                   </label>
                   <p className="subtle">Retry failed candidates and promote sendable ones to Needs Review.</p>
+                  <label className="toggleRow pillRow">
+                    <span>Email Open Tracking</span>
+                    <span className="toggleSwitch">
+                      <input
+                        type="checkbox"
+                        checked={settings.feature_email_tracking_enabled}
+                        onChange={(e) => setSettings({ ...settings, feature_email_tracking_enabled: e.target.checked })}
+                      />
+                      <span className="toggleTrack" />
+                    </span>
+                  </label>
+                  <p className="subtle">Inert until the backend has a public HTTPS base URL and tracking secret. Opens are heuristic because mail clients proxy, cache, or block images.</p>
+                  <label className="toggleRow pillRow">
+                    <span>Reply Inbox</span>
+                    <span className="toggleSwitch">
+                      <input
+                        type="checkbox"
+                        checked={settings.feature_reply_inbox_enabled}
+                        onChange={(e) => setSettings({ ...settings, feature_reply_inbox_enabled: e.target.checked })}
+                      />
+                      <span className="toggleTrack" />
+                    </span>
+                  </label>
+                  <p className="subtle">Checks unread Gmail on the existing polling interval and captures replies from previously sent threads before JD parsing.</p>
                   <label>
                     Batch Limit
                     <input
@@ -6450,6 +6593,92 @@ function App() {
             </section>
           ) : null}
 
+          {activePage === 'inbox' ? (
+            <section className="card pageSection inboxSection">
+              <div className="inboxHeader">
+                <div>
+                  <h2>Reply Inbox</h2>
+                  <p className="subtle">Replies are authoritative. Open counts are only a best-effort image signal.</p>
+                </div>
+                <button type="button" onClick={() => void loadInboxConversations()} disabled={inboxLoading}>
+                  {inboxLoading ? 'Refreshing...' : 'Refresh'}
+                </button>
+              </div>
+              {!settings.feature_reply_inbox_enabled ? (
+                <p className="inboxNotice">Reply capture is off. Enable Reply Inbox in Settings to scan sent Gmail threads.</p>
+              ) : null}
+              {inboxError ? <p className="errorMessage">{inboxError}</p> : null}
+              <div className="inboxLayout">
+                <div className="conversationList" aria-label="Email conversations">
+                  {inboxConversations.length === 0 && !inboxLoading ? (
+                    <p className="subtle">No tracked conversations yet.</p>
+                  ) : null}
+                  {inboxConversations.map((conversation) => (
+                    <button
+                      key={conversation.id}
+                      type="button"
+                      className={`conversationListItem ${selectedConversationId === conversation.id ? 'active' : ''}`}
+                      onClick={() => void openInboxConversation(conversation.id)}
+                    >
+                      <span className="conversationListTopline">
+                        <strong>{conversation.recruiter}</strong>
+                        {conversation.unread_reply_count > 0 ? (
+                          <span className="navCount">{conversation.unread_reply_count}</span>
+                        ) : null}
+                      </span>
+                      <span>{conversation.subject}</span>
+                      <small>{conversation.last_message_preview || 'No message preview'}</small>
+                      <small>{new Date(conversation.last_message_at).toLocaleString()} · {conversation.status}</small>
+                    </button>
+                  ))}
+                </div>
+                <div className="conversationDetail">
+                  {selectedConversation ? (
+                    <>
+                      <div className="conversationDetailHeader">
+                        <div>
+                          <h3>{selectedConversation.subject}</h3>
+                          <p className="subtle">To: {selectedConversation.to_email ?? '-'} · CC: {selectedConversation.cc_email ?? '-'}</p>
+                        </div>
+                        <span className="sourceBadge">{selectedConversation.status}</span>
+                      </div>
+                      <div className="conversationThread">
+                        {selectedConversation.messages.map((message) => (
+                          <article key={message.id} className={`conversationMessage ${message.direction}`}>
+                            <div className="conversationMessageMeta">
+                              <strong>{message.direction === 'outbound' ? 'You' : message.sender}</strong>
+                              <span>{new Date(message.occurred_at).toLocaleString()}</span>
+                            </div>
+                            <p>{message.body}</p>
+                          </article>
+                        ))}
+                      </div>
+                      <label className="inboxComposer">
+                        <span>Send Reply</span>
+                        <textarea
+                          rows={5}
+                          value={inboxReplyDraft}
+                          onChange={(e) => setInboxReplyDraft(e.target.value)}
+                          placeholder="Write your reply..."
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        className="btnPrimary"
+                        onClick={() => void sendInboxReply()}
+                        disabled={inboxSending || !inboxReplyDraft.trim()}
+                      >
+                        {inboxSending ? 'Sending...' : 'Send Reply'}
+                      </button>
+                    </>
+                  ) : (
+                    <p className="subtle">Select a conversation to view the thread.</p>
+                  )}
+                </div>
+              </div>
+            </section>
+          ) : null}
+
           {activePage === 'sent_items' ? (
             <section className="card pageSection">
           <h2>Sent Items</h2>
@@ -6483,6 +6712,17 @@ function App() {
                     {sentDetailError ? <p className="errorMessage">{sentDetailError}</p> : null}
                     {sentDetails ? (
                       <>
+                        <div className="trackingSummary">
+                          <span
+                            className={`trackingBadge ${sentDetails.open_count > 0 ? 'opened' : ''}`}
+                            title="Open tracking is best-effort: Gmail may proxy or cache images, scanners may trigger false opens, and blocked images cause missed opens. Replies are authoritative."
+                          >
+                            {sentDetails.open_count > 0
+                              ? `Opened (heuristic) ${sentDetails.open_count} time${sentDetails.open_count === 1 ? '' : 's'}${sentDetails.opened_at ? ` · First seen ${new Date(sentDetails.opened_at).toLocaleString()}` : ''}`
+                              : 'Not opened (heuristic)'}
+                          </span>
+                          <span className="trackingBadge">Replies: {sentDetails.reply_count}</span>
+                        </div>
                         <div className="parserDetailsSummaryGrid">
                           <ParserDetailsCard title="Source" className="parserDetailsSummaryBlock">
                             <div className="sentItemLinkList">

@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     google_token_path: str = "./data/google_token.json"
     gmail_label_filter: str = ""
     google_login_hint: str = ""
+    public_base_url: str = ""
+    tracking_secret_key: str = ""
     google_sheets_tracking_enabled: bool = False
     google_sheets_tracking_spreadsheet_id: str = "1F73Iax75j2rGGb53GGqTmAkEK0o19nmg"
     google_sheets_tracking_tab_name: str = "Sheet1"

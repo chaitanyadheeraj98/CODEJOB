@@ -1,6 +1,7 @@
 # pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false, reportUnknownVariableType=false
 
 import base64
+import html
 import json
 import logging
 import mimetypes
@@ -40,6 +41,8 @@ class GmailMessageCandidate(TypedDict):
     external_message_id: str
     external_thread_id: str
     external_rfc_message_id: str
+    in_reply_to_header: str
+    references_header: str
     sender: str
     recipient_email: str
     subject: str
@@ -306,10 +309,12 @@ def _decode_body(payload: dict[str, Any]) -> str:
         return _strip_html(direct) if (payload.get("mimeType") or "").lower() == "text/html" else direct
 
     plain, html = _extract_from_parts(_as_list_of_dicts(payload.get("parts")))
+    if html:
+        cleaned_html = _strip_html(html)
+        if cleaned_html.strip():
+            return cleaned_html
     if plain:
         return plain
-    if html:
-        return _strip_html(html)
     return ""
 
 
@@ -360,6 +365,8 @@ def list_unread_candidates_by_query(query: str, max_results_per_page: int = 100)
             cc_header = _get_header(headers, "Cc")
             subject = _get_header(headers, "Subject") or "(No Subject)"
             rfc_message_id = _get_header(headers, "Message-ID")
+            in_reply_to_header = _get_header(headers, "In-Reply-To")
+            references_header = _get_header(headers, "References")
             list_id = _get_header(headers, "List-Id")
             list_post = _get_header(headers, "List-Post")
             list_unsubscribe = _get_header(headers, "List-Unsubscribe")
@@ -381,6 +388,8 @@ def list_unread_candidates_by_query(query: str, max_results_per_page: int = 100)
                     "external_message_id": message_id,
                     "external_thread_id": str(details.get("threadId", "")),
                     "external_rfc_message_id": rfc_message_id,
+                    "in_reply_to_header": in_reply_to_header,
+                    "references_header": references_header,
                     "sender": from_header,
                     "recipient_email": _extract_email_address(from_header),
                     "subject": subject,
@@ -432,6 +441,13 @@ def get_message_rfc_message_id(message_id: str) -> str:
     return _get_header(headers, "Message-ID")
 
 
+def get_message_thread_id(message_id: str) -> str:
+    service = _gmail_service()
+    details = _as_dict(service.users().messages().get(userId="me", id=message_id, format="minimal").execute())
+    thread_id = details.get("threadId")
+    return thread_id if isinstance(thread_id, str) else ""
+
+
 def _resolve_mail_attachments(
     attachments: list[MailAttachment] | None,
     attachment_path: str | None,
@@ -455,6 +471,16 @@ def _add_mail_attachments(message: EmailMessage, attachments: list[MailAttachmen
         message.add_attachment(content, maintype=main_type, subtype=sub_type, filename=safe_name)
 
 
+def _append_tracking_pixel(html_body: str, tracking_pixel_url: str | None) -> str:
+    if not tracking_pixel_url:
+        return html_body
+    url = html.escape(tracking_pixel_url, quote=True)
+    return (
+        f'{html_body}<img src="{url}" width="1" height="1" alt="" '
+        'style="display:none;border:0;outline:none" />'
+    )
+
+
 def send_reply_with_attachment(
     thread_id: str,
     to: str,
@@ -465,6 +491,7 @@ def send_reply_with_attachment(
     attachment_display_name: str | None = None,
     draft_text_size: str = "normal",
     attachments: list[MailAttachment] | None = None,
+    tracking_pixel_url: str | None = None,
 ) -> str:
     service = _gmail_service()
     message = EmailMessage()
@@ -475,7 +502,10 @@ def send_reply_with_attachment(
     plain_body = body or ""
     message.set_content(plain_body)
     try:
-        html_body = draft_text_to_html(plain_body, draft_text_size=draft_text_size)
+        html_body = _append_tracking_pixel(
+            draft_text_to_html(plain_body, draft_text_size=draft_text_size),
+            tracking_pixel_url,
+        )
         message.add_alternative(html_body, subtype="html")
     except Exception:
         # Fallback to plain text if HTML rendering fails.
@@ -499,6 +529,7 @@ def send_new_email_with_attachment(
     attachment_display_name: str | None = None,
     draft_text_size: str = "normal",
     attachments: list[MailAttachment] | None = None,
+    tracking_pixel_url: str | None = None,
 ) -> str:
     service = _gmail_service()
     message = EmailMessage()
@@ -509,7 +540,10 @@ def send_new_email_with_attachment(
     plain_body = body or ""
     message.set_content(plain_body)
     try:
-        html_body = draft_text_to_html(plain_body, draft_text_size=draft_text_size)
+        html_body = _append_tracking_pixel(
+            draft_text_to_html(plain_body, draft_text_size=draft_text_size),
+            tracking_pixel_url,
+        )
         message.add_alternative(html_body, subtype="html")
     except Exception:
         # Fallback to plain text if HTML rendering fails.
@@ -530,6 +564,13 @@ def mark_message_processed(message_id: str) -> None:
     if settings.gmail_label_filter:
         body["addLabelIds"] = [settings.gmail_label_filter]
     service.users().messages().modify(userId="me", id=message_id, body=body).execute()
+
+
+def mark_reply_processed(message_id: str, existing_label_ids: list[str] | None = None) -> None:
+    label_id = ensure_gmail_labels(["CodeJob/Replied"]).get("CodeJob/Replied")
+    if label_id:
+        apply_gmail_label(message_id, label_id, existing_label_ids=existing_label_ids)
+    mark_message_processed(message_id)
 
 
 def list_gmail_labels() -> list[dict[str, str]]:

@@ -13,7 +13,7 @@ from typing import Mapping, TypedDict, TypeVar, cast
 import threading
 from zoneinfo import ZoneInfo
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from sqlalchemy import func, or_
@@ -44,11 +44,13 @@ from app.gates import classify_email_intent
 from app.ai.groq_client import groq_request_mode_for_model
 from app.gmail_client import (
     GmailMessageCandidate,
+    get_message_thread_id,
     get_message_rfc_message_id,
     gmail_auth_status,
     is_gmail_configured,
     list_unread_candidates_by_query,
     mark_message_processed,
+    mark_reply_processed,
     append_tracking_sheet_row,
     oauth_bootstrap_status,
     oauth_authorization_url,
@@ -81,7 +83,7 @@ from app.models import (
 )
 from app.models import RecipientRoutingFeedback
 from app.parsing import build_skills_json_payload
-from app.parsing.document_extraction import clean_html_if_present
+from app.parsing.document_extraction import prepare_gmail_parse_body
 from app.parsing.skill_audit import analyze_skill_candidate, is_safe_for_bulk_skill_approval
 from app.telegram_bot import TelegramBotService, TelegramReply
 from app.taxonomy.job_description_taxonomy import clear_job_intent_signal_embedding_cache
@@ -157,6 +159,7 @@ from app.services.candidate_screening_service import (
     CandidateScreeningService,
     apply_screening_decision,
 )
+from app.services.email_inbox_service import TRANSPARENT_PIXEL_PNG, record_open, reply_count_for_email
 from app.services.orchestration_service import OrchestrationDeps, OrchestrationService
 from app.services.requirement_expansion_service import RequirementExpansionService
 from app.services.role_manifest_pipeline import extract_and_score_children
@@ -188,6 +191,9 @@ from app.schemas import (
     BulkApproveEntitiesResponse,
     BulkRejectRequest,
     CandidateListResponse,
+    ConversationDetailResponse,
+    ConversationReplyRequest,
+    ConversationSummaryResponse,
     CustomSkillTaxonomyEntryResponse,
     CanonicalEntityTaxonomyEntryResponse,
     DismissJobIntentSignalRequest,
@@ -835,6 +841,9 @@ def _build_sent_item_details(db: Session, email: RecruiterEmail) -> SentItemDeta
         to_email=_clean_optional_text(email.recipient_email),
         cc_email=_clean_optional_text(email.cc_email),
         sent_at=email.sent_at,
+        opened_at=email.opened_at,
+        open_count=int(email.open_count or 0),
+        reply_count=reply_count_for_email(db, email.owner_id, email.id),
     )
 
 
@@ -1242,6 +1251,9 @@ def _get_orchestration_service() -> OrchestrationService:
                 send_new_email_with_attachment=lambda *args, **kwargs: send_new_email_with_attachment(*args, **kwargs),
                 mark_message_processed=lambda message_id: mark_message_processed(message_id),
                 append_tracking_sheet_row=lambda **kwargs: append_tracking_sheet_row(**kwargs),
+                mark_reply_processed=lambda message_id, label_ids=None: mark_reply_processed(message_id, label_ids),
+                get_message_thread_id=lambda message_id: get_message_thread_id(message_id),
+                get_message_rfc_message_id=lambda message_id: get_message_rfc_message_id(message_id),
             )
         )
     return orchestration_service
@@ -1978,6 +1990,8 @@ def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
         feature_gmail_requirement_groups_enabled=s.feature_gmail_requirement_groups_enabled,
         feature_role_manifest_enabled=s.feature_role_manifest_enabled,
         feature_strict_candidate_screening_enabled=s.feature_strict_candidate_screening_enabled,
+        feature_email_tracking_enabled=s.feature_email_tracking_enabled,
+        feature_reply_inbox_enabled=s.feature_reply_inbox_enabled,
         candidate_work_authorizations=_json_string_list(s.candidate_work_authorizations_json),
         candidate_total_experience_years=s.candidate_total_experience_years,
         candidate_us_experience_years=s.candidate_us_experience_years,
@@ -2132,6 +2146,25 @@ def health() -> dict[str, str]:
     return {"status": "ok", "env": settings.app_env}
 
 
+@app.get("/track/open/{token}.png")
+def track_email_open(token: str, request: Request, db: Session = Depends(get_db)) -> Response:
+    try:
+        record_open(
+            db,
+            token=token,
+            user_agent=request.headers.get("user-agent", ""),
+            remote_ip=request.client.host if request.client else "",
+        )
+    except Exception:
+        db.rollback()
+        logger.exception("email_open_tracking_failed")
+    return Response(
+        content=TRANSPARENT_PIXEL_PNG,
+        media_type="image/png",
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
+
+
 @app.get("/settings", response_model=SettingsResponse)
 def get_settings(db: Session = Depends(get_db)) -> SettingsResponse:
     s = _get_settings(db)
@@ -2202,6 +2235,8 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
     s.feature_semantic_enabled = payload.feature_semantic_enabled
     s.feature_groq_job_parser_enabled = payload.feature_groq_job_parser_enabled
     s.feature_gmail_requirement_groups_enabled = payload.feature_gmail_requirement_groups_enabled
+    s.feature_email_tracking_enabled = payload.feature_email_tracking_enabled
+    s.feature_reply_inbox_enabled = payload.feature_reply_inbox_enabled
     provided_fields = payload.model_fields_set
     if "feature_role_manifest_enabled" in provided_fields:
         s.feature_role_manifest_enabled = payload.feature_role_manifest_enabled
@@ -4619,6 +4654,33 @@ def get_sent_item_details(email_id: int, db: Session = Depends(get_db)) -> SentI
     return _build_sent_item_details(db, email)
 
 
+@app.get("/inbox/conversations", response_model=list[ConversationSummaryResponse])
+def get_inbox_conversations(db: Session = Depends(get_db)) -> list[ConversationSummaryResponse]:
+    return _get_orchestration_service().list_inbox_conversations(db)
+
+
+@app.get("/inbox/conversations/{conversation_id}", response_model=ConversationDetailResponse)
+def get_inbox_conversation(conversation_id: int, db: Session = Depends(get_db)) -> ConversationDetailResponse:
+    return _get_orchestration_service().get_inbox_conversation(conversation_id, db)
+
+
+@app.post("/inbox/conversations/{conversation_id}/reply", response_model=ConversationDetailResponse)
+def reply_to_inbox_conversation(
+    conversation_id: int,
+    payload: ConversationReplyRequest,
+    db: Session = Depends(get_db),
+) -> ConversationDetailResponse:
+    return _get_orchestration_service().reply_to_inbox_conversation(conversation_id, payload.body, db)
+
+
+@app.post("/inbox/conversations/{conversation_id}/read", response_model=ConversationDetailResponse)
+def mark_inbox_conversation_read(
+    conversation_id: int,
+    db: Session = Depends(get_db),
+) -> ConversationDetailResponse:
+    return _get_orchestration_service().mark_inbox_conversation_read(conversation_id, db)
+
+
 @app.post("/candidates/{email_id}/approve-send", response_model=EmailResponse)
 def approve_and_send(
     email_id: int,
@@ -4663,7 +4725,7 @@ def retry_role_detection(email_id: int, db: Session = Depends(get_db)) -> RoleDe
     if requested.source_parent_email_id:
         source = _get_candidate_for_review(db, requested.source_parent_email_id)
     user_settings = _get_settings(db)
-    manifest_body = clean_html_if_present(source.body) if source.source == "gmail" else source.body
+    manifest_body = prepare_gmail_parse_body(source.body) if source.source == "gmail" else source.body
     manifest_result = RoleManifestService().detect(manifest_body)
     expansion = RequirementExpansionService().expand(
         db,

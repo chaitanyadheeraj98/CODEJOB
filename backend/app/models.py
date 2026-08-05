@@ -114,6 +114,9 @@ class RecruiterEmail(Base):
     sendability_status: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     gmail_sent_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    tracking_token: Mapped[str | None] = mapped_column(String(64), unique=True, index=True, nullable=True)
+    opened_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    open_count: Mapped[int] = mapped_column(Integer, default=0)
     sent_attachment_file_names_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
@@ -189,6 +192,8 @@ class UserSettings(Base):
     feature_gmail_requirement_groups_enabled: Mapped[bool] = mapped_column(default=False)
     feature_role_manifest_enabled: Mapped[bool] = mapped_column(default=False)
     feature_strict_candidate_screening_enabled: Mapped[bool] = mapped_column(default=False)
+    feature_email_tracking_enabled: Mapped[bool] = mapped_column(default=False)
+    feature_reply_inbox_enabled: Mapped[bool] = mapped_column(default=False)
     candidate_work_authorizations_json: Mapped[str] = mapped_column(Text, default="[]")
     candidate_total_experience_years: Mapped[float | None] = mapped_column(Float, nullable=True)
     candidate_us_experience_years: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -273,6 +278,56 @@ class CustomSkillTaxonomyEntry(Base):
     status: Mapped[str] = mapped_column(String(40), default="approved", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+
+class EmailOpenEvent(Base):
+    __tablename__ = "email_open_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), default="default-owner", index=True)
+    recruiter_email_id: Mapped[int] = mapped_column(Integer, index=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    user_agent: Mapped[str] = mapped_column(Text, default="")
+    remote_ip: Mapped[str] = mapped_column(String(100), default="")
+    is_likely_proxy: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class EmailConversation(Base):
+    __tablename__ = "email_conversations"
+    __table_args__ = (
+        UniqueConstraint("owner_id", "external_thread_id", name="ux_email_conversation_owner_thread"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), default="default-owner", index=True)
+    root_recruiter_email_id: Mapped[int] = mapped_column(Integer, index=True)
+    external_thread_id: Mapped[str] = mapped_column(String(255), index=True)
+    status: Mapped[str] = mapped_column(String(40), default="sent", index=True)
+    last_message_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, index=True)
+    unread_reply_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+
+class EmailReplyMessage(Base):
+    __tablename__ = "email_reply_messages"
+    __table_args__ = (
+        UniqueConstraint("owner_id", "external_message_id", name="ux_email_reply_owner_message"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), default="default-owner", index=True)
+    conversation_id: Mapped[int] = mapped_column(Integer, index=True)
+    direction: Mapped[str] = mapped_column(String(20), default="inbound", index=True)
+    external_message_id: Mapped[str] = mapped_column(String(255), index=True)
+    external_rfc_message_id: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    in_reply_to_header: Mapped[str | None] = mapped_column(Text, nullable=True)
+    references_header: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sender: Mapped[str] = mapped_column(String(500), default="")
+    body: Mapped[str] = mapped_column(Text, default="")
+    snippet: Mapped[str] = mapped_column(Text, default="")
+    received_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, index=True)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class CanonicalEntityTaxonomyEntry(Base):

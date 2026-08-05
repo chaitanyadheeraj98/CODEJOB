@@ -1792,3 +1792,139 @@
     flex: 1 1 140px;
   }
 }
+.trackingSummary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.trackingBadge {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #d1d5db;
+  border-radius: 999px;
+  padding: 4px 9px;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 12px;
+}
+
+.trackingBadge.opened {
+  border-color: #86efac;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.inboxHeader,
+.conversationDetailHeader,
+.conversationListTopline,
+.conversationMessageMeta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.inboxNotice {
+  border: 1px solid #fde68a;
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.inboxLayout {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.8fr) minmax(0, 2fr);
+  gap: 16px;
+  min-height: 520px;
+}
+
+.conversationList,
+.conversationDetail {
+  min-width: 0;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.conversationList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.conversationListItem {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: 100%;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 10px;
+  background: #fff;
+  color: inherit;
+  text-align: left;
+}
+
+.conversationListItem.active {
+  border-color: #2563eb;
+  background: #eff6ff;
+}
+
+.conversationListItem small {
+  overflow: hidden;
+  color: #64748b;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversationDetail {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.conversationThread {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 440px;
+  overflow-y: auto;
+}
+
+.conversationMessage {
+  max-width: 82%;
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: #f1f5f9;
+}
+
+.conversationMessage.outbound {
+  align-self: flex-end;
+  background: #dbeafe;
+}
+
+.conversationMessage p {
+  margin-bottom: 0;
+  white-space: pre-wrap;
+}
+
+.conversationMessageMeta {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.inboxComposer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+@media (max-width: 900px) {
+  .inboxLayout {
+    grid-template-columns: 1fr;
+  }
+}

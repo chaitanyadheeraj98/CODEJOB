@@ -33,6 +33,7 @@ describe('Sidebar', () => {
           failedCount={2}
           runCount={3}
           sentCount={4}
+          inboxCount={6}
           premiumCount={5}
           activePage="run_queue"
           onNavigate={vi.fn()}
@@ -40,6 +41,7 @@ describe('Sidebar', () => {
       )
     })
     expect(container.textContent ?? '').toContain('Premium Numbers')
+    expect(container.textContent ?? '').toContain('Inbox6')
   })
 
   it('navigates to Settings from the footer', () => {

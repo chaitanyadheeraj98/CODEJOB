@@ -130,6 +130,8 @@ class SettingsBootstrapService:
                 feature_gmail_requirement_groups_enabled=False,
                 feature_role_manifest_enabled=False,
                 feature_strict_candidate_screening_enabled=False,
+                feature_email_tracking_enabled=False,
+                feature_reply_inbox_enabled=False,
                 draft_text_size="normal",
                 fallback_draft_template=DEFAULT_FALLBACK_DRAFT_TEMPLATE,
                 signature_name=DEFAULT_SIGNATURE_NAME,
