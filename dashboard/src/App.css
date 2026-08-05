@@ -1816,14 +1816,90 @@
   color: #166534;
 }
 
+.inboxSection {
+  --inbox-surface: #ffffff;
+  --inbox-canvas: #f7f8fc;
+  --inbox-border: #e6e9f2;
+  --inbox-border-strong: #d7dcec;
+  --inbox-unread-dot: #2563eb;
+  --inbox-selected-bg: #eff4ff;
+  --inbox-selected-border: #2563eb;
+  --inbox-avatar-bg: #dbe4ff;
+  --inbox-avatar-ink: #1f4dbd;
+  --inbox-muted: #5b6478;
+  border-color: var(--inbox-border-strong);
+  background: var(--inbox-canvas);
+}
+
 .inboxHeader,
 .conversationDetailHeader,
 .conversationListTopline,
-.conversationMessageMeta {
+.conversationMessageMeta,
+.composerToolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.inboxHeader {
+  align-items: flex-start;
+  margin-bottom: 16px;
+}
+
+.inboxHeader h2 {
+  margin: 0 0 6px;
+  border: 0;
+  padding: 0;
+  font-size: 24px;
+}
+
+.inboxHeader p,
+.conversationDetailHeader p {
+  margin: 0;
+}
+
+.inboxHeaderActions {
+  display: flex;
+  align-items: center;
+}
+
+.inboxSection .inboxRefreshBtn {
+  display: inline-grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border: 1px solid var(--inbox-border-strong);
+  border-radius: 999px;
+  padding: 0;
+  background: var(--inbox-surface);
+  color: #475569;
+}
+
+.inboxSection .inboxRefreshBtn:not(:disabled):hover {
+  border-color: #b8c8ea;
+  background: #eef4ff;
+  color: var(--inbox-avatar-ink);
+}
+
+.inboxRefreshBtn svg {
+  width: 19px;
+  height: 19px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.inboxRefreshBtn.loading svg {
+  animation: inbox-spin 900ms linear infinite;
+}
+
+@keyframes inbox-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .inboxNotice {
@@ -1837,16 +1913,17 @@
 .inboxLayout {
   display: grid;
   grid-template-columns: minmax(240px, 0.8fr) minmax(0, 2fr);
-  gap: 16px;
+  gap: 18px;
   min-height: 520px;
 }
 
 .conversationList,
 .conversationDetail {
   min-width: 0;
-  border: 1px solid #e2e8f0;
-  border-radius: 12px;
-  padding: 12px;
+  border: 1px solid var(--inbox-border);
+  border-radius: 14px;
+  padding: 14px;
+  background: var(--inbox-surface);
 }
 
 .conversationList {
@@ -1855,27 +1932,95 @@
   gap: 8px;
 }
 
-.conversationListItem {
+.inboxSection .conversationListItem {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 8px;
   width: 100%;
-  border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  padding: 10px;
-  background: #fff;
+  height: auto;
+  min-width: 0;
+  border: 1px solid var(--inbox-border);
+  border-left: 4px solid transparent;
+  border-radius: 12px;
+  padding: 13px 12px 13px 10px;
+  background: var(--inbox-surface);
   color: inherit;
   text-align: left;
 }
 
-.conversationListItem.active {
-  border-color: #2563eb;
-  background: #eff6ff;
+.inboxSection .conversationListItem:not(.active):hover {
+  border-color: var(--inbox-border-strong);
+  background: #fafbfe;
 }
 
-.conversationListItem small {
+.inboxSection .conversationListItem:focus-visible,
+.inboxRefreshBtn:focus-visible,
+.composerToolBtn:focus-visible,
+.composerSendBtn:focus-visible {
+  outline: 2px solid var(--inbox-selected-border);
+  outline-offset: 2px;
+}
+
+.inboxSection .conversationListItem.active {
+  border-color: var(--inbox-border-strong);
+  border-left-color: var(--inbox-selected-border);
+  background: var(--inbox-selected-bg);
+}
+
+.conversationListTopline {
+  width: 100%;
+  min-width: 0;
+  align-items: flex-start;
+}
+
+.conversationListIdentity {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.conversationListSender,
+.conversationListSubject {
   overflow: hidden;
-  color: #64748b;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversationListSender {
+  font-weight: 400;
+}
+
+.conversationListItem.unread .conversationListSender {
+  font-weight: 700;
+}
+
+.conversationListSubject {
+  color: #334155;
+  font-size: 14px;
+}
+
+.conversationListMeta {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  color: var(--inbox-muted);
+  font-size: 12px;
+}
+
+.unreadDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--inbox-unread-dot);
+}
+
+.conversationPreview {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  color: var(--inbox-muted);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1884,6 +2029,25 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
+  padding: 18px;
+}
+
+.conversationDetailHeader {
+  align-items: flex-start;
+  border-bottom: 1px solid var(--inbox-border);
+  padding-bottom: 14px;
+}
+
+.conversationDetailHeader h3 {
+  margin: 0 0 6px;
+  color: #172033;
+  font-size: 21px;
+  font-weight: 700;
+}
+
+.conversationStatusBadge {
+  flex: 0 0 auto;
+  text-transform: capitalize;
 }
 
 .conversationThread {
@@ -1893,12 +2057,33 @@
   gap: 10px;
   max-height: 440px;
   overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-color: #cdd5e5 transparent;
+  scrollbar-width: thin;
+}
+
+.conversationThread::-webkit-scrollbar {
+  width: 10px;
+}
+
+.conversationThread::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: #cdd5e5;
+  background-clip: content-box;
+}
+
+.conversationThread::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .conversationMessage {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
   max-width: 82%;
-  border-radius: 12px;
-  padding: 10px 12px;
+  border-radius: 14px;
+  padding: 12px 14px;
   background: #f1f5f9;
 }
 
@@ -1907,24 +2092,140 @@
   background: #dbeafe;
 }
 
+.conversationAvatar {
+  display: inline-grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--inbox-avatar-bg);
+  color: var(--inbox-avatar-ink);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.conversationMessageContent {
+  min-width: 0;
+  flex: 1;
+}
+
 .conversationMessage p {
-  margin-bottom: 0;
+  margin: 6px 0 0;
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 
 .conversationMessageMeta {
-  color: #64748b;
+  align-items: baseline;
+  flex-wrap: wrap;
+  color: var(--inbox-muted);
   font-size: 12px;
 }
 
 .inboxComposer {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
+  border-top: 1px solid var(--inbox-border);
+  padding-top: 14px;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.inboxSection .inboxComposer textarea {
+  min-height: 112px;
+  resize: vertical;
+  border-color: var(--inbox-border-strong);
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: var(--inbox-surface);
+  font: inherit;
+  font-weight: 400;
+}
+
+.inboxSection .inboxComposer textarea:focus {
+  border-color: var(--inbox-selected-border);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14);
+}
+
+.composerToolbar {
+  min-height: 40px;
+}
+
+.composerToolGroup {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.composerToolDivider {
+  width: 1px;
+  height: 22px;
+  margin: 0 6px;
+  background: var(--inbox-border-strong);
+}
+
+.inboxSection .composerToolBtn {
+  display: inline-grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  padding: 0;
+  background: transparent;
+  color: #64748b;
+}
+
+.inboxSection .composerToolBtn:disabled {
+  cursor: not-allowed;
+  opacity: 1;
+}
+
+.composerToolBtn svg,
+.composerSendBtn svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.inboxSection .composerSendBtn {
+  display: inline-flex;
+  height: 38px;
+  align-items: center;
+  gap: 8px;
+  border-color: var(--primary);
+  border-radius: 999px;
+  padding: 0 16px;
+  background: var(--primary);
+  color: #fff;
+}
+
+.inboxSection .composerSendBtn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 @media (max-width: 900px) {
   .inboxLayout {
     grid-template-columns: 1fr;
+  }
+
+  .conversationMessage {
+    max-width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .inboxRefreshBtn.loading svg {
+    animation: none;
   }
 }

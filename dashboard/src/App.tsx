@@ -6,6 +6,7 @@ import { getDraftSourceLabel } from './features/ai/ui'
 import QueryBucket from './features/query_bucket/QueryBucket'
 import { type CandidateState, useCandidateBuckets } from './candidateBuckets'
 import { addEmployerDomain, removeEmployerDomain } from './employerDomains'
+import { formatRelativeInboxTime, getInitials } from './inboxFormat'
 import { buildPremiumScopeUrl, defaultPremiumPageMeta, type PremiumScope } from './premiumNumbers'
 
 const GMAIL_OAUTH_POLL_INTERVAL_MS = 2000
@@ -6600,9 +6601,21 @@ function App() {
                   <h2>Reply Inbox</h2>
                   <p className="subtle">Replies are authoritative. Open counts are only a best-effort image signal.</p>
                 </div>
-                <button type="button" onClick={() => void loadInboxConversations()} disabled={inboxLoading}>
-                  {inboxLoading ? 'Refreshing...' : 'Refresh'}
-                </button>
+                <div className="inboxHeaderActions">
+                  <button
+                    type="button"
+                    className={`iconBtn inboxRefreshBtn ${inboxLoading ? 'loading' : ''}`}
+                    onClick={() => void loadInboxConversations()}
+                    disabled={inboxLoading}
+                    aria-label="Refresh conversations"
+                    aria-busy={inboxLoading}
+                    title="Refresh"
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M20 6v5h-5M4 18v-5h5M5.8 9a7 7 0 0 1 11.7-2.6L20 9M4 15l2.5 2.6A7 7 0 0 0 18.2 15" />
+                    </svg>
+                  </button>
+                </div>
               </div>
               {!settings.feature_reply_inbox_enabled ? (
                 <p className="inboxNotice">Reply capture is off. Enable Reply Inbox in Settings to scan sent Gmail threads.</p>
@@ -6613,24 +6626,34 @@ function App() {
                   {inboxConversations.length === 0 && !inboxLoading ? (
                     <p className="subtle">No tracked conversations yet.</p>
                   ) : null}
-                  {inboxConversations.map((conversation) => (
-                    <button
-                      key={conversation.id}
-                      type="button"
-                      className={`conversationListItem ${selectedConversationId === conversation.id ? 'active' : ''}`}
-                      onClick={() => void openInboxConversation(conversation.id)}
-                    >
-                      <span className="conversationListTopline">
-                        <strong>{conversation.recruiter}</strong>
-                        {conversation.unread_reply_count > 0 ? (
-                          <span className="navCount">{conversation.unread_reply_count}</span>
-                        ) : null}
-                      </span>
-                      <span>{conversation.subject}</span>
-                      <small>{conversation.last_message_preview || 'No message preview'}</small>
-                      <small>{new Date(conversation.last_message_at).toLocaleString()} · {conversation.status}</small>
-                    </button>
-                  ))}
+                  {inboxConversations.map((conversation) => {
+                    const isUnread = conversation.unread_reply_count > 0
+                    const absoluteTime = new Date(conversation.last_message_at).toLocaleString()
+                    return (
+                      <button
+                        key={conversation.id}
+                        type="button"
+                        className={`conversationListItem ${isUnread ? 'unread' : ''} ${selectedConversationId === conversation.id ? 'active' : ''}`}
+                        onClick={() => void openInboxConversation(conversation.id)}
+                        aria-label={`${isUnread ? 'Unread: ' : ''}${conversation.recruiter}, ${conversation.subject}, ${absoluteTime}`}
+                        title={absoluteTime}
+                      >
+                        <span className="conversationListTopline">
+                          <span className="conversationListIdentity">
+                            <span className="conversationListSender">{conversation.recruiter}</span>
+                            <span className="conversationListSubject">{conversation.subject}</span>
+                          </span>
+                          <span className="conversationListMeta">
+                            {isUnread ? <span className="unreadDot" aria-hidden="true" /> : null}
+                            <time dateTime={conversation.last_message_at} title={absoluteTime}>
+                              {formatRelativeInboxTime(conversation.last_message_at)}
+                            </time>
+                          </span>
+                        </span>
+                        <small className="conversationPreview">{conversation.last_message_preview || 'No message preview'}</small>
+                      </button>
+                    )
+                  })}
                 </div>
                 <div className="conversationDetail">
                   {selectedConversation ? (
@@ -6640,16 +6663,26 @@ function App() {
                           <h3>{selectedConversation.subject}</h3>
                           <p className="subtle">To: {selectedConversation.to_email ?? '-'} · CC: {selectedConversation.cc_email ?? '-'}</p>
                         </div>
-                        <span className="sourceBadge">{selectedConversation.status}</span>
+                        <span
+                          className="sourceBadge conversationStatusBadge"
+                          title={`Conversation status: ${selectedConversation.status}`}
+                        >
+                          {selectedConversation.status}
+                        </span>
                       </div>
                       <div className="conversationThread">
                         {selectedConversation.messages.map((message) => (
                           <article key={message.id} className={`conversationMessage ${message.direction}`}>
-                            <div className="conversationMessageMeta">
-                              <strong>{message.direction === 'outbound' ? 'You' : message.sender}</strong>
-                              <span>{new Date(message.occurred_at).toLocaleString()}</span>
+                            <span className="conversationAvatar" aria-hidden="true">
+                              {getInitials(message.direction === 'outbound' ? 'You' : message.sender)}
+                            </span>
+                            <div className="conversationMessageContent">
+                              <div className="conversationMessageMeta">
+                                <strong>{message.direction === 'outbound' ? 'You' : message.sender}</strong>
+                                <span>{new Date(message.occurred_at).toLocaleString()}</span>
+                              </div>
+                              <p>{message.body}</p>
                             </div>
-                            <p>{message.body}</p>
                           </article>
                         ))}
                       </div>
@@ -6662,14 +6695,42 @@ function App() {
                           placeholder="Write your reply..."
                         />
                       </label>
-                      <button
-                        type="button"
-                        className="btnPrimary"
-                        onClick={() => void sendInboxReply()}
-                        disabled={inboxSending || !inboxReplyDraft.trim()}
-                      >
-                        {inboxSending ? 'Sending...' : 'Send Reply'}
-                      </button>
+                      <div className="composerToolbar">
+                        <div className="composerToolGroup" role="group" aria-label="Formatting tools">
+                          <button type="button" className="composerToolBtn" disabled aria-disabled="true" aria-label="Bold" title="Coming soon">
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                              <path d="M7 4h6a4 4 0 0 1 0 8H7V4Zm0 8h7a4 4 0 0 1 0 8H7v-8Z" />
+                            </svg>
+                          </button>
+                          <button type="button" className="composerToolBtn" disabled aria-disabled="true" aria-label="Italic" title="Coming soon">
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                              <path d="M10 4h8M6 20h8M14 4l-4 16" />
+                            </svg>
+                          </button>
+                          <span className="composerToolDivider" aria-hidden="true" />
+                          <button type="button" className="composerToolBtn" disabled aria-disabled="true" aria-label="Attach file" title="Coming soon">
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                              <path d="m20.5 11.5-8.7 8.7a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7L9 17.4a2 2 0 0 1-2.8-2.8l8.5-8.5" />
+                            </svg>
+                          </button>
+                          <button type="button" className="composerToolBtn" disabled aria-disabled="true" aria-label="Insert emoji" title="Coming soon">
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                              <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18ZM8.5 10h.01M15.5 10h.01M8 14a5 5 0 0 0 8 0" />
+                            </svg>
+                          </button>
+                        </div>
+                        <button
+                          type="button"
+                          className="btnPrimary composerSendBtn"
+                          onClick={() => void sendInboxReply()}
+                          disabled={inboxSending || !inboxReplyDraft.trim()}
+                        >
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="m3 3 18 9-18 9 4-9-4-9Zm4 9h14" />
+                          </svg>
+                          {inboxSending ? 'Sending...' : 'Send Reply'}
+                        </button>
+                      </div>
                     </>
                   ) : (
                     <p className="subtle">Select a conversation to view the thread.</p>
