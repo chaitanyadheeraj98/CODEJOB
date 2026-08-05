@@ -3,7 +3,7 @@
 Audit date: 2026-05-17  
 Branch: `snowball-md`
 
-## 1) Core entities
+## 1 Core entities
 
 ### `RecruiterEmail`
 
@@ -36,7 +36,7 @@ Versioned resume file metadata + optional semantic embedding cache.
 - `RecipientRoutingFeedback`
 - `ProductivityEvent`
 
-## 2) Phone-intelligence entities
+## 2 Phone-intelligence entities
 
 - `PremiumNumberLead`
 - `NumberReviewQueue`
@@ -44,7 +44,7 @@ Versioned resume file metadata + optional semantic embedding cache.
 - `EmployerNumber`
 - `RecruiterOpportunity`
 
-## 3) State and enum contracts
+## 3 State and enum contracts
 
 Candidate states used in code:
 
@@ -67,7 +67,7 @@ Opportunity statuses:
 
 - `New`, `Called`, `Applied`, `Follow Up`, `Closed`, `Not Interested`
 
-## 4) Duplicate-prevention and uniqueness
+## 4 Duplicate-prevention and uniqueness
 
 Active uniqueness protections include:
 
@@ -77,7 +77,7 @@ Active uniqueness protections include:
 - `ux_recruiter_opportunities_owner_recruiter_msg`
 - `ux_number_review_queue_owner_phone_email`
 
-## 5) Data flow summary
+## 5 Data flow summary
 
 1. Gmail candidate enters orchestration.
 2. `RecruiterEmail` inserted/updated with scoring/routing/draft details.
@@ -88,7 +88,7 @@ Active uniqueness protections include:
 4. Manual approval path updates send state and emits analytics.
 5. Optional Sheets append runs as best-effort side effect.
 
-## 6) Schema/runtime notes
+## 6 Schema/runtime notes
 
 - Schema response contracts are defined in `backend/app/schemas.py`.
 - Routing evidence/candidates are stored as JSON text and parsed in schema validators.

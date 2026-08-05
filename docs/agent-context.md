@@ -17,6 +17,7 @@ For ambiguous or cross-cutting tasks, Codex escalates to the full report.
 - Optional config pointer: `.codex/config.toml`
 
 The `PreToolUse` hook prints a reminder to:
+
 1. read `GRAPH_REPORT_COMPACT.md` first
 2. use `GRAPH_REPORT.md` only when needed
 

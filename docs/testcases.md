@@ -3,7 +3,7 @@
 Audit date: 2026-05-17  
 Branch: `snowball-md`
 
-## 1) Standard repo validation commands
+## 1 Standard repo validation commands
 
 ### Backend (from `backend/`)
 
@@ -16,7 +16,7 @@ Branch: `snowball-md`
 - `npm run build`
 - `npm run test -- --run`
 
-## 2) Command results in this audit session
+## 2 Command results in this audit session
 
 - `cd backend; python -m pytest`
   - **Result:** failed during collection
@@ -48,7 +48,7 @@ Branch: `snowball-md`
   - **Exact failure:** npm cache permission errors (`EPERM` on `npm-cache/_cacache/tmp/*`) and repeated CLI usage-only output in this shell
   - **Blocker class:** incompatible local runtime/tooling invocation
 
-## 3) HR-1 closeout gate mapping
+## 3 HR-1 closeout gate mapping
 
 | Behavior gate | Evidence | Outcome |
 | --- | --- | --- |
@@ -58,12 +58,12 @@ Branch: `snowball-md`
 | telegram interactive behavior | `test_telegram_interactive.py` | Pass |
 | candidate date filtering behavior | `test_candidate_date_filtering.py` | Pass |
 
-## 4) Known stale/mismatched tests
+## 4 Known stale/mismatched tests
 
 - `test_phone_attribution.py` imports `app.phone_attribution`, which is not present in current backend code.
 - `test_run_orchestrator.py` is stale against the current `RunOrchestratorDependencies` contract.
 
-## 5) Reviewer attention
+## 5 Reviewer attention
 
 - Full backend pass cannot be claimed until stale test imports/contracts are fixed.
 - Dashboard tests pass, but lint/build are currently red and should be treated as active debt.
