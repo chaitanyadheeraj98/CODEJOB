@@ -24,9 +24,9 @@
 
 - Status: Still Open
 - Severity: High
-- Remaining issue: extraction, classification, review queue, and opportunity conversion span multiple modules and routes.
-- Evidence: `backend/app/premium_numbers/extraction.py` and `/premium-numbers/*`, `/number-review/*`, `/recruiter-opportunities/*` route set.
-- Recommended next action: expand flow-specific tests for review-card transitions and opportunity lifecycle edges.
+- Remaining issue: extraction, classification, review queue, and opportunity conversion span multiple modules and routes; a focused re-extraction regression currently fails.
+- Evidence: `backend/app/premium_numbers/extraction.py`, `/premium-numbers/*`, `/number-review/*`, `/recruiter-opportunities/*`, and failed `test_reextract_overrides_name_without_to_when_contact_snippet_is_strong` in `tests/test_premium_numbers_api.py`.
+- Recommended next action: fix the recruiter-name override regression, then rerun focused premium-number and lifecycle tests.
 
 ### HR-4: Migration/runtime ownership verification gap
 
@@ -82,9 +82,9 @@
 
 - Status: Needs Re-test
 - Severity: Medium
-- Remaining issue: only targeted tests were run this session.
-- Evidence: `python -m pytest tests/test_premium_numbers_extraction.py` passed; no full-suite evidence in this turn.
-- Recommended next action: execute full suite once blockers are cleared.
+- Remaining issue: full backend validation is absent, and the focused premium-number batch is red.
+- Evidence: dashboard `npm run test` passed (`24 files`, `78 tests`); backend premium/analytics/Telegram batch returned `30 passed, 1 failed`.
+- Recommended next action: repair the failing premium-number test scenario and rerun the focused batch before wider validation.
 
 ## Low-Risk Tickets
 
@@ -122,8 +122,8 @@ stateDiagram-v2
   Done --> [*]
 ```
 
-- Audit date: 2026-05-30
+- Audit date: 2026-08-05
 - Branch: semantic-embeddings
-- Commit: 5991f97
+- Commit: cb68a92737671f5db2546c380205327b4f082b68
 - Evidence basis: both
-- Verification limits: targeted premium-number extraction tests only; no full-suite rerun in this session.
+- Verification limits: dashboard tests passed; focused backend tests include one premium-number failure; no full backend suite or live external integration execution.

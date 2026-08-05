@@ -1,7 +1,7 @@
 # CODEJOB Test and Validation Matrix
 
-Audit date: 2026-05-17  
-Branch: `snowball-md`
+Audit date: 2026-08-05
+Branch: `semantic-embeddings`
 
 ## 1 Standard repo validation commands
 
@@ -18,35 +18,26 @@ Branch: `snowball-md`
 
 ## 2 Command results in this audit session
 
-- `cd backend; python -m pytest`
-  - **Result:** failed during collection
-  - **Exact failure:** `ModuleNotFoundError: No module named 'app.phone_attribution'` from `tests/test_phone_attribution.py`
-  - **Blocker class:** stale test
-
-- `cd backend; python -m pytest tests/test_approve_cc_regression.py tests/test_run_once_hotfix.py tests/test_routing_policy.py tests/test_telegram_interactive.py tests/test_candidate_date_filtering.py`
+- `cd dashboard; npm run test`
   - **Result:** passed
-  - **Exact output:** `29 passed`
+  - **Exact output:** `24 passed files`, `78 passed tests`
   - **Blocker class:** none
 
-- `cd dashboard; npm run lint`
+- `cd backend; .\.venv\Scripts\python.exe -m pytest tests/test_premium_numbers_api.py tests/test_analytics_view_events.py tests/test_telegram_interactive.py`
   - **Result:** failed
-  - **Exact failure:** eslint rule failures in `App.tsx`, `QueryBucket.tsx`, and test files (including missing rule definition and hook/effect violations)
-  - **Blocker class:** stale lint contract / incompatible local rule configuration
+  - **Exact output:** `30 passed`, `1 failed`
+  - **Exact failure:** `test_reextract_overrides_name_without_to_when_contact_snippet_is_strong` expected `Rabbanis` and received `Samshritha Gangula`.
+  - **Blocker class:** stale test or runtime regression
 
-- `cd dashboard; npm run test -- --run`
-  - **Result:** passed
-  - **Exact output:** `7 passed files`, `27 passed tests`
-  - **Blocker class:** none
+- `cd backend; .\.venv\Scripts\python.exe -m pytest tests/test_approve_cc_regression.py tests/test_candidate_screening_service.py tests/test_phase0_routing.py`
+  - **Result:** stopped before completion
+  - **Exact failure:** command stalled after `test_approve_cc_regression.py` began; no pass/fail result was captured.
+  - **Blocker class:** incompatible local runtime timeout
 
-- `cd dashboard; npm run build`
-  - **Result:** failed
-  - **Exact failure:** `EPERM` writing `.tsbuildinfo` under `node_modules/.tmp` plus TS6133 unused-variable errors
-  - **Blocker class:** incompatible local runtime + type/lint debt
-
-- `npx markdownlint-cli docs/architecture.md docs/context.md docs/data.md docs/design.md docs/features.md docs/hardcoded.md docs/problem-fix-log.md docs/snowball.md docs/testcases.md`
-  - **Result:** failed to produce lint report
-  - **Exact failure:** npm cache permission errors (`EPERM` on `npm-cache/_cacache/tmp/*`) and repeated CLI usage-only output in this shell
-  - **Blocker class:** incompatible local runtime/tooling invocation
+- `npx --no-install markdownlint-cli <touched docs files>`
+  - **Result:** failed before linting
+  - **Exact failure:** `npx canceled due to missing packages and no YES option: ["markdownlint-cli@0.49.1"]`.
+  - **Blocker class:** missing dependency
 
 ## 3 HR-1 closeout gate mapping
 
@@ -65,8 +56,10 @@ Branch: `snowball-md`
 
 ## 5 Reviewer attention
 
-- Full backend pass cannot be claimed until stale test imports/contracts are fixed.
-- Dashboard tests pass, but lint/build are currently red and should be treated as active debt.
+- No full backend pass can be claimed in this session.
+- Dashboard tests passed. Markdownlint could not run because the CLI dependency is absent; dashboard lint and build were not run in this audit.
 
-Evidence basis: both  
-Verification limits: full backend and full frontend quality gates are not fully green due stale tests and lint/build blockers.
+- Audit date: 2026-08-05
+- Branch: semantic-embeddings
+- Evidence basis: both
+- Verification limits: focused validation only; one backend premium-number failure and missing markdownlint dependency.

@@ -27,8 +27,8 @@
 
 Mermaid not needed: this update is a constants inventory and risk note only.
 
-- Audit date: 2026-05-30
+- Audit date: 2026-08-05
 - Branch: semantic-embeddings
-- Commit: 5991f97
-- Evidence basis: code inspection + targeted premium-number tests
-- Verification limits: no constant-specific regression suite beyond extraction tests.
+- Commit: cb68a92737671f5db2546c380205327b4f082b68
+- Evidence basis: code inspection
+- Verification limits: no constant-specific regression suite was run; the focused premium-number batch has one unrelated re-extraction failure.

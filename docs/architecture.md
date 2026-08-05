@@ -4,50 +4,34 @@
 
 ## System Shape
 
-- Backend: FastAPI app centered in `backend/app/main.py`, with orchestration and runtime helpers extracted into `backend/app/services/*`.
-- Frontend: React + TypeScript app centered in `dashboard/src/App.tsx`.
-- Persistence: SQLite models in `backend/app/models.py` with startup schema patching through startup service wiring.
-- Integrations: Gmail API, optional Google Sheets append, optional AI providers, Telegram polling bot, optional Nvoids feed sync.
+- Backend: FastAPI route composition remains centered in `backend/app/main.py`.
+- Frontend: React + TypeScript workflow state and API calls remain concentrated in `dashboard/src/App.tsx`.
+- Persistence: SQLAlchemy models are declared in `backend/app/models.py`; route handlers query and mutate those records directly or through services.
+- Integrations: Gmail, optional AI and semantic providers, Telegram, Redis Queue, Nvoids, and optional Google Sheets behavior are configuration-dependent.
 
-## Runtime Ownership
+## Current Runtime Ownership
 
 | Area | Current runtime owner | Evidence |
 | --- | --- | --- |
-| API composition root | `backend/app/main.py` | Route declarations and dependency wiring in `main.py` |
-| Startup lifecycle | `app/services/startup_service.py` via lifespan | `lifespan()` in `main.py` delegates startup actions |
-| Run orchestration | `app/services/orchestration_service.py` + `app/automation/run_orchestrator.py` | `/automation/run-once` and Gmail sync flows |
-| Routing decision path | `app/routing/policy.py` + runtime service | approve-send and queue routing checks |
-| Premium numbers path | `app/premium_numbers/extraction.py` + candidate runtime service | `/premium-numbers/*`, `/number-review/*`, `/recruiter-opportunities/*` |
-| Frontend workflow container | `dashboard/src/App.tsx` | queue actions, settings, premium-number UI flows |
+| API composition | `backend/app/main.py` | FastAPI decorators declare candidate, settings, Gmail, queue, analytics, premium-number, and external-feed routes. |
+| Candidate review actions | `app/services/orchestration_service.py` | `approve_and_send()`, `reject_candidate()`, and `resolve_recipients()` delegate through `_get_orchestration_service()`. |
+| Intake and routing | `backend/app/main.py:ingest_email` | `POST /phase0/emails/ingest` parses, filters, screens, scores, and routes an email. |
+| Automation | `backend/app/main.py:_run_automation` | `POST /automation/run-once` calls `_run_automation()`; queue routes enqueue related background work. |
+| Premium-number operations | `backend/app/main.py` and `app/premium_numbers/*` | Re-extraction, review classification, number buckets, and opportunity endpoints use `PremiumNumberLead`, `NumberReviewQueue`, `RecruiterNumber`, `EmployerNumber`, and `RecruiterOpportunity`. |
+| Frontend workflow container | `dashboard/src/App.tsx` | Dashboard tests cover settings bootstrap, execution control, queue, analytics, recent-runs, and review views. |
 
-## Semantic Embeddings Fallback
+## Intended and Current Runtime
 
-```mermaid
-flowchart LR
-  A[Primary provider from settings] -->|success| E[Vector returned]
-  A -->|failure| B[Fallback provider from settings]
-  B -->|success| E
-  B -->|failure| C[SBERT local model]
-  C -->|success| E
-  C -->|failure| D[Deterministic hash fallback]
-  D --> E
-```
+- Intended architecture: domain-specific route and UI modules own individual workflows.
+- Current runtime: `main.py` and `App.tsx` remain central hubs. `RecruiterEmail` is a broad workflow record, and some AI or embedding status is process-memory state.
 
-Evidence: embedding and fallback metadata fields are exposed in `/ai/status` response handling in `backend/app/main.py`; provider settings are applied by semantic runtime services.
+## Active Coupling Hotspots
 
-## Intended vs Current Runtime
+- Candidate routing and approval are separate gates: intake assigns a queue state, while `POST /candidates/{email_id}/approve-send` invokes the send gate.
+- Settings flags influence automation, AI, semantic scoring, Nvoids, auto-send, and retry behavior through centralized runtime wiring.
+- Integration outcomes depend on credentials, configured feature flags, and external services; source inspection alone cannot establish their operational availability.
 
-- Intended: thinner composition root with narrower route modules.
-- Current: `backend/app/main.py` and `dashboard/src/App.tsx` remain central runtime hubs.
-
-## Key Constraints Still Active
-
-- Routing and approval safety are multi-step (`queue assignment` + `approve-send` gate).
-- Feature flags control behavior but still rely on centralized orchestration wiring.
-- Runtime state for some operational signals remains process-memory scoped.
-
-- Audit date: 2026-05-30
+- Audit date: 2026-08-05
 - Branch: semantic-embeddings
-- Commit: 5991f97
-- Evidence basis: code inspection
-- Verification limits: full backend suite not re-run in this session; premium number extraction tests were re-run only.
+- Evidence basis: both
+- Verification limits: focused backend verification has one premium-number regression; Gmail, Nvoids, Telegram, queue, and Sheets integrations were not exercised against live services.
