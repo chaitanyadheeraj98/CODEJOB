@@ -332,12 +332,75 @@ def _extract_email_address(from_header: str) -> str:
     return from_header.strip()
 
 
-def list_unread_candidates_by_query(query: str, max_results_per_page: int = 100) -> list[GmailMessageCandidate]:
+def _message_details_to_candidate(details: dict[str, Any]) -> GmailMessageCandidate | None:
+    message_id = details.get("id")
+    if not isinstance(message_id, str) or not message_id:
+        return None
+    payload = _as_dict(details.get("payload"))
+    header_items = _as_list_of_dicts(payload.get("headers"))
+    headers: list[dict[str, str]] = [
+        {
+            "name": str(item.get("name", "")),
+            "value": str(item.get("value", "")),
+        }
+        for item in header_items
+    ]
+    from_header = _get_header(headers, "From")
+    to_header = _get_header(headers, "To")
+    cc_header = _get_header(headers, "Cc")
+    subject = _get_header(headers, "Subject") or "(No Subject)"
+    rfc_message_id = _get_header(headers, "Message-ID")
+    in_reply_to_header = _get_header(headers, "In-Reply-To")
+    references_header = _get_header(headers, "References")
+    list_id = _get_header(headers, "List-Id")
+    list_post = _get_header(headers, "List-Post")
+    list_unsubscribe = _get_header(headers, "List-Unsubscribe")
+    delivered_to = _get_header(headers, "Delivered-To")
+    mailing_list = _get_header(headers, "Mailing-List")
+    internal_date_ms = details.get("internalDate")
+    gmail_received_at = None
+    if internal_date_ms:
+        try:
+            gmail_received_at = datetime.fromtimestamp(int(internal_date_ms) / 1000, tz=UTC)
+        except (TypeError, ValueError):
+            gmail_received_at = None
+    body = _decode_body(payload)
+    snippet = (details.get("snippet") or "").strip()
+    if not body.strip() and snippet:
+        body = snippet
+    return {
+        "external_message_id": message_id,
+        "external_thread_id": str(details.get("threadId", "")),
+        "external_rfc_message_id": rfc_message_id,
+        "in_reply_to_header": in_reply_to_header,
+        "references_header": references_header,
+        "sender": from_header,
+        "recipient_email": _extract_email_address(from_header),
+        "subject": subject,
+        "body": body,
+        "snippet": snippet,
+        "gmail_received_at": gmail_received_at,
+        "label_ids": [str(label) for label in details.get("labelIds", []) if isinstance(label, str)],
+        "to_header": to_header,
+        "cc_header": cc_header,
+        "list_id": list_id,
+        "list_post": list_post,
+        "list_unsubscribe": list_unsubscribe,
+        "delivered_to": delivered_to,
+        "mailing_list": mailing_list,
+    }
+
+
+def list_unread_candidates_by_query(
+    query: str, max_results_per_page: int = 100, max_total_results: int | None = None
+) -> list[GmailMessageCandidate]:
     service = _gmail_service()
     page_token: str | None = None
     results: list[GmailMessageCandidate] = []
 
     while True:
+        if max_total_results is not None and len(results) >= max_total_results:
+            break
         req = service.users().messages().list(
             userId="me",
             q=query,
@@ -347,71 +410,53 @@ def list_unread_candidates_by_query(query: str, max_results_per_page: int = 100)
         response = _as_dict(req.execute())
         messages = _as_list_of_dicts(response.get("messages"))
         for message in messages:
+            if max_total_results is not None and len(results) >= max_total_results:
+                break
             message_id = message.get("id")
             if not isinstance(message_id, str) or not message_id:
                 continue
-            details = _as_dict(service.users().messages().get(userId="me", id=message_id, format="full").execute())
-            payload = _as_dict(details.get("payload"))
-            header_items = _as_list_of_dicts(payload.get("headers"))
-            headers: list[dict[str, str]] = [
-                {
-                    "name": str(item.get("name", "")),
-                    "value": str(item.get("value", "")),
-                }
-                for item in header_items
-            ]
-            from_header = _get_header(headers, "From")
-            to_header = _get_header(headers, "To")
-            cc_header = _get_header(headers, "Cc")
-            subject = _get_header(headers, "Subject") or "(No Subject)"
-            rfc_message_id = _get_header(headers, "Message-ID")
-            in_reply_to_header = _get_header(headers, "In-Reply-To")
-            references_header = _get_header(headers, "References")
-            list_id = _get_header(headers, "List-Id")
-            list_post = _get_header(headers, "List-Post")
-            list_unsubscribe = _get_header(headers, "List-Unsubscribe")
-            delivered_to = _get_header(headers, "Delivered-To")
-            mailing_list = _get_header(headers, "Mailing-List")
-            internal_date_ms = details.get("internalDate")
-            gmail_received_at = None
-            if internal_date_ms:
-                try:
-                    gmail_received_at = datetime.fromtimestamp(int(internal_date_ms) / 1000, tz=UTC)
-                except (TypeError, ValueError):
-                    gmail_received_at = None
-            body = _decode_body(payload)
-            snippet = (details.get("snippet") or "").strip()
-            if not body.strip() and snippet:
-                body = snippet
-            results.append(
-                {
-                    "external_message_id": message_id,
-                    "external_thread_id": str(details.get("threadId", "")),
-                    "external_rfc_message_id": rfc_message_id,
-                    "in_reply_to_header": in_reply_to_header,
-                    "references_header": references_header,
-                    "sender": from_header,
-                    "recipient_email": _extract_email_address(from_header),
-                    "subject": subject,
-                    "body": body,
-                    "snippet": snippet,
-                    "gmail_received_at": gmail_received_at,
-                    "label_ids": [str(label) for label in details.get("labelIds", []) if isinstance(label, str)],
-                    "to_header": to_header,
-                    "cc_header": cc_header,
-                    "list_id": list_id,
-                    "list_post": list_post,
-                    "list_unsubscribe": list_unsubscribe,
-                    "delivered_to": delivered_to,
-                    "mailing_list": mailing_list,
-                }
-            )
+            try:
+                details = _as_dict(
+                    service.users().messages().get(userId="me", id=message_id, format="full").execute()
+                )
+            except HttpError:
+                # A message can be deleted/moved between the list() call and this get() call
+                # (e.g. another client archives it concurrently); skip it rather than aborting
+                # the whole batch over one stale id.
+                logger.exception("gmail_message_fetch_failed message_id=%s", message_id)
+                continue
+            candidate = _message_details_to_candidate(details)
+            if candidate is not None:
+                results.append(candidate)
 
         next_token_raw = response.get("nextPageToken")
         next_token = next_token_raw if isinstance(next_token_raw, str) and next_token_raw else None
         if not next_token:
             break
         page_token = next_token
+    return results
+
+
+def list_thread_messages(thread_id: str) -> list[GmailMessageCandidate]:
+    """Fetch every message in a known Gmail thread, regardless of read/unread state.
+
+    Unlike list_unread_candidates_by_query, this doesn't depend on the UNREAD label,
+    so it can still find a reply after it's been opened/read in Gmail (e.g. because
+    the user viewed the thread directly) before a sync ran.
+    """
+    service = _gmail_service()
+    try:
+        thread = _as_dict(service.users().threads().get(userId="me", id=thread_id, format="full").execute())
+    except HttpError as exc:
+        if getattr(exc.resp, "status", None) == 404:
+            return []
+        raise
+    messages = _as_list_of_dicts(thread.get("messages"))
+    results: list[GmailMessageCandidate] = []
+    for message in messages:
+        candidate = _message_details_to_candidate(message)
+        if candidate is not None:
+            results.append(candidate)
     return results
 
 

@@ -5,7 +5,7 @@ import logging
 import os
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Callable, cast
 
 from fastapi import HTTPException
@@ -66,6 +66,9 @@ from app.services.sendability_service import apply_resume_sendability, resolve_s
 
 logger = logging.getLogger(__name__)
 
+REPLY_THREAD_SCAN_LOOKBACK_DAYS = 7
+REPLY_UNREAD_SCAN_MAX_RESULTS = 100
+
 
 @dataclass
 class OrchestrationDeps:
@@ -123,6 +126,7 @@ class OrchestrationDeps:
     mark_reply_processed: Callable[[str, list[str] | None], None] | None = None
     get_message_thread_id: Callable[[str], str] | None = None
     get_message_rfc_message_id: Callable[[str], str] | None = None
+    list_thread_messages: Callable[[str], list[GmailMessageCandidate]] | None = None
 
 
 class OrchestrationService:
@@ -202,6 +206,133 @@ class OrchestrationService:
             raise HTTPException(status_code=404, detail="Candidate not found")
         return email
 
+    def _capture_inbound_replies(self, db: Session, user_settings: UserSettings) -> tuple[int, int]:
+        """Scan for and ingest inbound replies to previously-sent recruiter emails.
+
+        Runs from both sync_gmail and run_once (Sync Now / automation / the
+        auto-poller all end up in one of those two) so reply detection doesn't
+        depend on which entry point triggered the run. Two sources feed the scan,
+        each individually a full Gmail API content-fetch per message, so both are
+        bounded rather than exhaustive:
+
+        - An is:unread search, capped at REPLY_UNREAD_SCAN_MAX_RESULTS most-recent
+          matches (Gmail returns newest-first, and this account's unread count in
+          the low hundreds made an unbounded fetch take minutes on its own).
+        - A direct per-thread fetch of EmailConversation rows updated in the last
+          REPLY_THREAD_SCAN_LOOKBACK_DAYS days — this is what catches a reply that
+          was already opened/read in Gmail before a sync ran (the unread search
+          can never see it again once read), scoped to recent activity rather
+          than every email ever sent, since that set only grows over time.
+
+        A reply landing outside both bounds (old, already-read, thread untouched
+        in a week) will still surface on a later run once send/reply activity on
+        that thread brings its EmailConversation back into the lookback window,
+        or if it happens to still be unread.
+
+        Returns (matched_count, created_count).
+        """
+        if not user_settings.feature_reply_inbox_enabled:
+            return 0, 0
+
+        sent_thread_ids = {
+            str(row[0])
+            for row in db.query(RecruiterEmail.external_thread_id)
+            .filter(
+                RecruiterEmail.owner_id == self.deps.owner_id,
+                RecruiterEmail.sent_status == "sent",
+                RecruiterEmail.external_thread_id.is_not(None),
+            )
+            .all()
+            if row[0]
+        }
+        sent_thread_ids.update(
+            str(row[0])
+            for row in db.query(EmailConversation.external_thread_id)
+            .filter(EmailConversation.owner_id == self.deps.owner_id)
+            .all()
+            if row[0]
+        )
+        sent_rfc_message_ids = {
+            str(row[0]).strip().lower()
+            for row in db.query(EmailReplyMessage.external_rfc_message_id)
+            .filter(
+                EmailReplyMessage.owner_id == self.deps.owner_id,
+                EmailReplyMessage.direction == "outbound",
+                EmailReplyMessage.external_rfc_message_id.is_not(None),
+            )
+            .all()
+            if row[0]
+        }
+
+        candidates: list[GmailMessageCandidate] = []
+        seen_message_ids: set[str] = set()
+
+        for item in self.deps.list_unread_candidates_by_query(
+            "is:unread in:inbox", max_total_results=REPLY_UNREAD_SCAN_MAX_RESULTS
+        ):
+            if item["external_message_id"] in seen_message_ids:
+                continue
+            reply_headers = f"{item.get('in_reply_to_header') or ''} {item.get('references_header') or ''}".lower()
+            if item.get("external_thread_id") in sent_thread_ids or any(
+                message_id in reply_headers for message_id in sent_rfc_message_ids
+            ):
+                candidates.append(item)
+                seen_message_ids.add(item["external_message_id"])
+
+        if self.deps.list_thread_messages is not None:
+            recency_cutoff = datetime.now(UTC) - timedelta(days=REPLY_THREAD_SCAN_LOOKBACK_DAYS)
+            recent_thread_ids = {
+                str(row[0])
+                for row in db.query(EmailConversation.external_thread_id)
+                .filter(
+                    EmailConversation.owner_id == self.deps.owner_id,
+                    EmailConversation.last_message_at >= recency_cutoff,
+                )
+                .all()
+                if row[0]
+            }
+            for thread_id in recent_thread_ids:
+                try:
+                    thread_items = self.deps.list_thread_messages(thread_id)
+                except Exception:
+                    logger.exception("gmail_thread_scan_failed thread_id=%s", thread_id)
+                    continue
+                for item in thread_items:
+                    if item["external_message_id"] in seen_message_ids:
+                        continue
+                    candidates.append(item)
+                    seen_message_ids.add(item["external_message_id"])
+
+        matched_count = 0
+        created_count = 0
+        for item in candidates:
+            existing_candidate_email = (
+                db.query(RecruiterEmail.id)
+                .filter(
+                    RecruiterEmail.owner_id == self.deps.owner_id,
+                    RecruiterEmail.external_message_id == item["external_message_id"],
+                )
+                .first()
+            )
+            if existing_candidate_email:
+                continue
+            matched_reply, created_reply = capture_inbound_reply(db, owner_id=self.deps.owner_id, item=item)
+            if not matched_reply:
+                continue
+            matched_count += 1
+            if created_reply:
+                created_count += 1
+            db.commit()
+            try:
+                if self.deps.mark_reply_processed is not None:
+                    self.deps.mark_reply_processed(item["external_message_id"], item.get("label_ids"))
+                else:
+                    self.deps.mark_message_processed(item["external_message_id"])
+            except Exception:
+                logger.exception("gmail_reply_label_failed external_message_id=%s", item["external_message_id"])
+
+        return matched_count, created_count
+
     def _detect_role_manifest_if_enabled(self, user_settings: UserSettings, body: str) -> RoleManifestResult | None:
         if not user_settings.feature_role_manifest_enabled:
             return None
@@ -273,48 +404,9 @@ class OrchestrationService:
             threshold = self.deps.policy_threshold(user_settings, effective_policy)
             trusted_groups = self._load_enabled_requirement_groups(db) if user_settings.feature_gmail_requirement_groups_enabled else []
             candidates = self.deps.list_unread_candidates_by_query(effective_query)
-            if user_settings.feature_reply_inbox_enabled:
-                sent_thread_ids = {
-                    str(row[0])
-                    for row in db.query(RecruiterEmail.external_thread_id)
-                    .filter(
-                        RecruiterEmail.owner_id == self.deps.owner_id,
-                        RecruiterEmail.sent_status == "sent",
-                        RecruiterEmail.external_thread_id.is_not(None),
-                    )
-                    .all()
-                    if row[0]
-                }
-                sent_thread_ids.update(
-                    str(row[0])
-                    for row in db.query(EmailConversation.external_thread_id)
-                    .filter(EmailConversation.owner_id == self.deps.owner_id)
-                    .all()
-                    if row[0]
-                )
-                sent_rfc_message_ids = {
-                    str(row[0]).strip().lower()
-                    for row in db.query(EmailReplyMessage.external_rfc_message_id)
-                    .filter(
-                        EmailReplyMessage.owner_id == self.deps.owner_id,
-                        EmailReplyMessage.direction == "outbound",
-                        EmailReplyMessage.external_rfc_message_id.is_not(None),
-                    )
-                    .all()
-                    if row[0]
-                }
-                seen_message_ids = {item["external_message_id"] for item in candidates}
-                for item in self.deps.list_unread_candidates_by_query("is:unread in:inbox"):
-                    reply_headers = f"{item.get('in_reply_to_header') or ''} {item.get('references_header') or ''}".lower()
-                    if (
-                        item["external_message_id"] not in seen_message_ids
-                        and (
-                            item.get("external_thread_id") in sent_thread_ids
-                            or any(message_id in reply_headers for message_id in sent_rfc_message_ids)
-                        )
-                    ):
-                        candidates.append(item)
-                        seen_message_ids.add(item["external_message_id"])
+            reply_matched_count, reply_created_count = self._capture_inbound_replies(db, user_settings)
+            imported_count += reply_created_count
+            skipped_count += reply_matched_count - reply_created_count
             processed_items = 0
             total_items = len(candidates)
 
@@ -787,6 +879,11 @@ class OrchestrationService:
             return response
 
         user_settings = self.deps.get_settings(db)
+        try:
+            self._capture_inbound_replies(db, user_settings)
+        except Exception:
+            logger.exception("reply_capture_failed_during_automation_run")
+
         resume = self.deps.active_resume(db)
         if not resume:
             raise HTTPException(status_code=400, detail="No active resume uploaded")

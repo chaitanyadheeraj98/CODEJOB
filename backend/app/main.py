@@ -48,6 +48,7 @@ from app.gmail_client import (
     get_message_rfc_message_id,
     gmail_auth_status,
     is_gmail_configured,
+    list_thread_messages,
     list_unread_candidates_by_query,
     mark_message_processed,
     mark_reply_processed,
@@ -1254,6 +1255,7 @@ def _get_orchestration_service() -> OrchestrationService:
                 mark_reply_processed=lambda message_id, label_ids=None: mark_reply_processed(message_id, label_ids),
                 get_message_thread_id=lambda message_id: get_message_thread_id(message_id),
                 get_message_rfc_message_id=lambda message_id: get_message_rfc_message_id(message_id),
+                list_thread_messages=lambda thread_id: list_thread_messages(thread_id),
             )
         )
     return orchestration_service
