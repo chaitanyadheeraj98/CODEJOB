@@ -1,11 +1,11 @@
 from datetime import UTC, datetime
 from urllib.parse import quote
 
-from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Float, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.ai.draft_quality import assess_draft_quality
-from app.db import Base
+from app.db import Base, UTCDateTime
 
 
 def utc_now() -> datetime:
@@ -81,10 +81,10 @@ class RecruiterEmail(Base):
     external_message_id: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True, index=True)
     external_thread_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     external_rfc_message_id: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    gmail_received_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    gmail_received_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     applied_gmail_label: Mapped[str | None] = mapped_column(String(120), nullable=True)
     applied_gmail_label_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
-    applied_gmail_label_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    applied_gmail_label_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     recipient_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     cc_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     routing_status: Mapped[str] = mapped_column(String(50), default="unverified")
@@ -112,15 +112,15 @@ class RecruiterEmail(Base):
     eligibility_status: Mapped[str | None] = mapped_column(String(40), nullable=True)
     eligibility_details_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     sendability_status: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
-    sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     gmail_sent_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     tracking_token: Mapped[str | None] = mapped_column(String(64), unique=True, index=True, nullable=True)
-    opened_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    opened_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     open_count: Mapped[int] = mapped_column(Integer, default=0)
     sent_attachment_file_names_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
 
     @property
     def gmail_message_url(self) -> str | None:
@@ -206,8 +206,8 @@ class UserSettings(Base):
     preferred_employer_cc_email: Mapped[str] = mapped_column(String(255), default="")
     resume_display_name: Mapped[str] = mapped_column(String(255), default="")
     policy_json: Mapped[str] = mapped_column(Text, default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
 
 
 class ResumeAsset(Base):
@@ -224,8 +224,8 @@ class ResumeAsset(Base):
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     is_current: Mapped[bool] = mapped_column(default=True)
     semantic_embedding: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
 
 
 class GmailRequirementGroup(Base):
@@ -241,8 +241,8 @@ class GmailRequirementGroup(Base):
     normalized_group_email: Mapped[str] = mapped_column(String(255), default="", index=True)
     group_slug: Mapped[str | None] = mapped_column(String(255), nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
 
 
 class AttachmentAsset(Base):
@@ -256,8 +256,8 @@ class AttachmentAsset(Base):
     sha256: Mapped[str] = mapped_column(String(64), index=True)
     file_size: Mapped[int] = mapped_column(Integer, default=0)
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
 
 
 class CustomSkillTaxonomyEntry(Base):
@@ -276,8 +276,8 @@ class CustomSkillTaxonomyEntry(Base):
     embedding_status: Mapped[str] = mapped_column(String(40), default="pending", index=True)
     embedding_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(40), default="approved", index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
 
 
 class EmailOpenEvent(Base):
@@ -286,7 +286,7 @@ class EmailOpenEvent(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     owner_id: Mapped[str] = mapped_column(String(100), default="default-owner", index=True)
     recruiter_email_id: Mapped[int] = mapped_column(Integer, index=True)
-    occurred_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    occurred_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
     user_agent: Mapped[str] = mapped_column(Text, default="")
     remote_ip: Mapped[str] = mapped_column(String(100), default="")
     is_likely_proxy: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -303,10 +303,10 @@ class EmailConversation(Base):
     root_recruiter_email_id: Mapped[int] = mapped_column(Integer, index=True)
     external_thread_id: Mapped[str] = mapped_column(String(255), index=True)
     status: Mapped[str] = mapped_column(String(40), default="sent", index=True)
-    last_message_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, index=True)
+    last_message_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, index=True)
     unread_reply_count: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
 
 
 class EmailReplyMessage(Base):
@@ -326,8 +326,8 @@ class EmailReplyMessage(Base):
     sender: Mapped[str] = mapped_column(String(500), default="")
     body: Mapped[str] = mapped_column(Text, default="")
     snippet: Mapped[str] = mapped_column(Text, default="")
-    received_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, index=True)
-    read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    received_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, index=True)
+    read_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
 
 class CanonicalEntityTaxonomyEntry(Base):
@@ -350,8 +350,8 @@ class CanonicalEntityTaxonomyEntry(Base):
     embedding_status: Mapped[str] = mapped_column(String(40), default="pending", index=True)
     embedding_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(40), default="approved", index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
 
 
 class JobIntentTaxonomyEntry(Base):
@@ -367,8 +367,8 @@ class JobIntentTaxonomyEntry(Base):
     confidence_aggregate: Mapped[float] = mapped_column(Float, default=0.0)
     last_intent_type: Mapped[str | None] = mapped_column(String(80), nullable=True)
     status: Mapped[str] = mapped_column(String(40), default="pending", index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
 
 
 class SyncRun(Base):
@@ -377,13 +377,13 @@ class SyncRun(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     owner_id: Mapped[str] = mapped_column(String(100), index=True)
     sync_batch_id: Mapped[str] = mapped_column(String(100), unique=True, index=True)
-    started_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
-    ended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    ended_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     imported_count: Mapped[int] = mapped_column(Integer, default=0)
     skipped_count: Mapped[int] = mapped_column(Integer, default=0)
     error_count: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
 
 
 class RecentRun(Base):
@@ -411,8 +411,8 @@ class RecentRun(Base):
     processed_items: Mapped[int] = mapped_column(Integer, default=0)
     progress_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     queue_name: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
 
 
 class RecentRunSkippedItem(Base):
@@ -450,7 +450,7 @@ class RecentRunSkippedItem(Base):
     blocking_rule: Mapped[str | None] = mapped_column(String(120), nullable=True)
     qualification_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     qualification_context_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
 
 
 class DraftEditFeedback(Base):
@@ -461,7 +461,7 @@ class DraftEditFeedback(Base):
     recruiter_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     original_draft: Mapped[str] = mapped_column(Text)
     edited_draft: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
 
 
 class RecipientRoutingFeedback(Base):
@@ -476,7 +476,7 @@ class RecipientRoutingFeedback(Base):
     evidence_to_present: Mapped[bool] = mapped_column(Boolean, default=False)
     evidence_cc_present: Mapped[bool] = mapped_column(Boolean, default=False)
     sample_body: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
 
 
 class PremiumNumberLead(Base):
@@ -500,8 +500,8 @@ class PremiumNumberLead(Base):
     source_email_sender: Mapped[str] = mapped_column(String(255), default="")
     source_email_subject: Mapped[str] = mapped_column(String(500), default="")
     source_email_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
 
 
 class RecruiterNumber(Base):
@@ -516,8 +516,8 @@ class RecruiterNumber(Base):
     designation: Mapped[str] = mapped_column(String(255), default="Unknown")
     recruiter_email: Mapped[str] = mapped_column(String(255), default="")
     first_detected_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
 
 
 class EmployerNumber(Base):
@@ -530,8 +530,8 @@ class EmployerNumber(Base):
     owner_name: Mapped[str] = mapped_column(String(255), default="Unknown")
     company: Mapped[str] = mapped_column(String(255), default="Unknown")
     source_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
 
 
 class RecruiterOpportunity(Base):
@@ -548,7 +548,7 @@ class RecruiterOpportunity(Base):
     email_subject: Mapped[str] = mapped_column(String(500), default="")
     email_sender: Mapped[str] = mapped_column(String(255), default="")
     gmail_open_url: Mapped[str] = mapped_column(String(1000), default="")
-    received_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    received_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     job_title: Mapped[str] = mapped_column(String(255), default="")
     client: Mapped[str] = mapped_column(String(255), default="")
     location: Mapped[str] = mapped_column(String(255), default="")
@@ -559,9 +559,9 @@ class RecruiterOpportunity(Base):
     status: Mapped[str] = mapped_column(String(40), default="New")
     notes: Mapped[str] = mapped_column(Text, default="")
     cold_call_script: Mapped[str | None] = mapped_column(Text, nullable=True)
-    cold_call_script_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+    cold_call_script_updated_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
 
 
 class NumberReviewQueue(Base):
@@ -582,8 +582,8 @@ class NumberReviewQueue(Base):
     email_sender: Mapped[str] = mapped_column(String(255), default="")
     gmail_open_url: Mapped[str] = mapped_column(String(1000), default="")
     state: Mapped[str] = mapped_column(String(40), default="pending")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
 
 
 class ProductivityEvent(Base):
@@ -596,8 +596,8 @@ class ProductivityEvent(Base):
     entity_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     weight: Mapped[float] = mapped_column(Float, default=0.0)
     metadata_json: Mapped[str] = mapped_column(Text, default="{}")
-    occurred_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    occurred_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
 
 
 # Register external feed models on shared Base metadata for test create_all flows.

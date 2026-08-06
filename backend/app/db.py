@@ -1,5 +1,8 @@
-from sqlalchemy import create_engine, event
+from datetime import UTC, datetime
+
+from sqlalchemy import DateTime, create_engine, event
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
+from sqlalchemy.types import TypeDecorator
 
 from app.config import settings
 from app.premium_numbers.phone_normalization import canonicalize_phone
@@ -7,6 +10,35 @@ from app.premium_numbers.phone_normalization import canonicalize_phone
 
 class Base(DeclarativeBase):
     pass
+
+
+class UTCDateTime(TypeDecorator):
+    """Stores naive UTC timestamps but always returns UTC-aware datetimes.
+
+    Every timestamp in this app is produced by utc_now(), but the plain
+    DateTime column type drops tzinfo on the round trip through SQLite/Postgres.
+    That naive datetime then serializes to JSON without a timezone marker, which
+    makes the browser's `new Date(...)` parse it as local time instead of UTC —
+    shifting every displayed time by the local UTC offset. Re-attaching UTC
+    tzinfo on read fixes serialization without touching the stored bytes.
+    """
+
+    impl = DateTime
+    cache_ok = True
+
+    def process_bind_param(self, value: datetime | None, dialect: object) -> datetime | None:
+        if value is None:
+            return value
+        if value.tzinfo is not None:
+            value = value.astimezone(UTC).replace(tzinfo=None)
+        return value
+
+    def process_result_value(self, value: datetime | None, dialect: object) -> datetime | None:
+        if value is None:
+            return value
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value
 
 
 is_sqlite = settings.database_url.startswith("sqlite")
