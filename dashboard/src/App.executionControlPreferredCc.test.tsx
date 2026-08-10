@@ -19,20 +19,10 @@ function makeResponse(payload: unknown): MockResponse {
   }
 }
 
-describe('Execution Control preferred employer CC', () => {
-  const cleanups: Array<() => void> = []
-
-  afterEach(() => {
-    while (cleanups.length) cleanups.pop()?.()
-    vi.restoreAllMocks()
-  })
-
-  it('loads and saves the preferred employer CC setting from Execution Control', async () => {
-    const putBodies: unknown[] = []
-
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+function stubSettingsFetch(putBodies: unknown[]) {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input)
         if (url.endsWith('/gmail/status')) return makeResponse({ configured: true, authenticated: true, token_path: 'token.json', last_sync_at: null, detail: 'ok' })
         if (url.endsWith('/ai/status')) return makeResponse({ configured: true, connected: true, running: false, provider: 'mock', model: 'mock', detail: 'ok', last_error: null, last_started_at: null, last_finished_at: null, last_duration_ms: null, last_draft_source: null })
@@ -75,6 +65,8 @@ describe('Execution Control preferred employer CC', () => {
               signature_name: '',
               signature_phone: '',
               signature_email: '',
+              preferred_employer_cc_emails: ['sheshwika@horizonsoftech.net'],
+              default_employer_cc_emails: ['fallback@horizonsoftech.net'],
               preferred_employer_cc_email: 'sheshwika@horizonsoftech.net',
               resume_display_name: '',
               policy: null,
@@ -147,46 +139,75 @@ describe('Execution Control preferred employer CC', () => {
         if (url.includes('/employer-numbers')) return makeResponse({ items: [], next_cursor: null, has_next: false })
         if (url.includes('/recruiter-opportunities')) return makeResponse({ items: [], next_cursor: null, has_next: false })
         throw new Error(`Unhandled fetch: ${url}`)
-      }),
-    )
+    }),
+  )
+}
+
+async function renderToSettingsPage(container: HTMLDivElement): Promise<Root> {
+  const root: Root = createRoot(container)
+  await act(async () => {
+    root.render(<App />)
+  })
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  const settingsButton = Array.from(container.querySelectorAll('button')).find((button) =>
+    button.textContent?.includes('Settings'),
+  ) as HTMLButtonElement | undefined
+  expect(settingsButton).toBeDefined()
+
+  await act(async () => {
+    settingsButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await Promise.resolve()
+  })
+
+  return root
+}
+
+describe('Execution Control employer CC lists', () => {
+  const cleanups: Array<() => void> = []
+
+  afterEach(() => {
+    while (cleanups.length) cleanups.pop()?.()
+    vi.restoreAllMocks()
+  })
+
+  it('loads and saves preferred and default employer CC chips', async () => {
+    const putBodies: unknown[] = []
+    stubSettingsFetch(putBodies)
 
     const container = document.createElement('div')
     document.body.appendChild(container)
-    const root: Root = createRoot(container)
+    const root = await renderToSettingsPage(container)
     cleanups.push(() => {
       act(() => root.unmount())
       container.remove()
     })
 
-    await act(async () => {
-      root.render(<App />)
-    })
-    await act(async () => {
-      await Promise.resolve()
-      await Promise.resolve()
-    })
-
-    const settingsButton = Array.from(container.querySelectorAll('button')).find((button) =>
-      button.textContent?.includes('Settings'),
-    ) as HTMLButtonElement | undefined
-    expect(settingsButton).toBeDefined()
-
-    await act(async () => {
-      settingsButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-      await Promise.resolve()
-    })
-
-    const input = Array.from(container.querySelectorAll('input')).find(
-      (element) => (element as HTMLInputElement).placeholder === 'sheshwika@horizonsoftech.net',
+    const preferredInput = Array.from(container.querySelectorAll('input')).find(
+      (element) => (element as HTMLInputElement).getAttribute('aria-label') === 'Add Preferred Employer CCs',
     ) as HTMLInputElement | undefined
-    expect(input?.value).toBe('sheshwika@horizonsoftech.net')
-    expect(container.textContent ?? '').toContain('Used as the employer CC for Nvoids/external-feed drafts.')
+    const defaultInput = Array.from(container.querySelectorAll('input')).find(
+      (element) => (element as HTMLInputElement).getAttribute('aria-label') === 'Add Default Employer CCs',
+    ) as HTMLInputElement | undefined
+    expect(preferredInput).toBeDefined()
+    expect(defaultInput).toBeDefined()
+    expect(container.textContent ?? '').toContain('sheshwika@horizonsoftech.net')
+    expect(container.textContent ?? '').toContain('fallback@horizonsoftech.net')
+    expect(container.textContent ?? '').toContain('Added after source-derived employer contacts for Gmail, Nvoids, and future sources.')
 
     await act(async () => {
       const setNativeValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
-      setNativeValue?.call(input, 'ops@horizonsoftech.net')
-      input!.dispatchEvent(new Event('input', { bubbles: true }))
-      input!.dispatchEvent(new Event('change', { bubbles: true }))
+      setNativeValue?.call(preferredInput, 'ops@horizonsoftech.net')
+      preferredInput!.dispatchEvent(new Event('input', { bubbles: true }))
+      preferredInput!.dispatchEvent(new Event('change', { bubbles: true }))
+      preferredInput!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+      setNativeValue?.call(defaultInput, 'backup@horizonsoftech.net')
+      defaultInput!.dispatchEvent(new Event('input', { bubbles: true }))
+      defaultInput!.dispatchEvent(new Event('change', { bubbles: true }))
+      defaultInput!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
     })
 
     const saveButton = Array.from(container.querySelectorAll('button')).find((button) =>
@@ -201,6 +222,56 @@ describe('Execution Control preferred employer CC', () => {
     })
 
     expect(putBodies).toHaveLength(1)
-    expect((putBodies[0] as { preferred_employer_cc_email?: string }).preferred_employer_cc_email).toBe('ops@horizonsoftech.net')
+    expect((putBodies[0] as { preferred_employer_cc_emails?: string[] }).preferred_employer_cc_emails).toEqual([
+      'sheshwika@horizonsoftech.net',
+      'ops@horizonsoftech.net',
+    ])
+    expect((putBodies[0] as { default_employer_cc_emails?: string[] }).default_employer_cc_emails).toEqual([
+      'fallback@horizonsoftech.net',
+      'backup@horizonsoftech.net',
+    ])
+  })
+
+  it('keeps a chip typed just before clicking Save, even when blur and the click land in the same batch', async () => {
+    const putBodies: unknown[] = []
+    stubSettingsFetch(putBodies)
+
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = await renderToSettingsPage(container)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+    })
+
+    const preferredInput = Array.from(container.querySelectorAll('input')).find(
+      (element) => (element as HTMLInputElement).getAttribute('aria-label') === 'Add Preferred Employer CCs',
+    ) as HTMLInputElement
+    const saveButton = Array.from(container.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('Save Settings'),
+    ) as HTMLButtonElement
+
+    // A real click on Save while the CC input is still focused fires blur and click
+    // back-to-back in one browser task; React only re-renders after both run. Dispatching
+    // both inside a single synchronous act() reproduces that same-batch ordering.
+    act(() => {
+      const setNativeValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+      setNativeValue?.call(preferredInput, 'ops@horizonsoftech.net')
+      preferredInput.dispatchEvent(new Event('input', { bubbles: true }))
+      preferredInput.dispatchEvent(new Event('change', { bubbles: true }))
+      // React derives onBlur from the bubbling native "focusout" event, not "blur".
+      preferredInput.dispatchEvent(new FocusEvent('focusout', { bubbles: true }))
+      saveButton.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(putBodies).toHaveLength(1)
+    expect((putBodies[0] as { preferred_employer_cc_emails?: string[] }).preferred_employer_cc_emails).toEqual([
+      'sheshwika@horizonsoftech.net',
+      'ops@horizonsoftech.net',
+    ])
   })
 })

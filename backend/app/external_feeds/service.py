@@ -5,7 +5,7 @@ import json
 import logging
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import cast
 
 from sqlalchemy import or_
@@ -21,6 +21,8 @@ from app.models import EmployerNumber, NumberReviewQueue, RecentRun, RecruiterEm
 from app.parsing import build_skills_json_payload
 from app.premium_numbers.phone_normalization import best_display_phone, canonicalize_phone
 from app.phase0 import (
+    EMAIL_RE,
+    RoutingEvidence,
     extract_email_address,
     greeting_from_to_contact,
     hard_filter_check,
@@ -36,7 +38,7 @@ from app.recent_runs import (
     record_skipped_item,
     update_recent_run,
 )
-from app.routing import RoutingDecision
+from app.routing import CcSelectionRequest, RoutingDecision, RoutingPolicyService
 from app.semantic.embeddings_service import generate_embedding
 from app.services import policy_service
 from app.services.candidate_runtime_service import CandidateRuntimeDeps, CandidateRuntimeService
@@ -80,7 +82,9 @@ class ExternalFeedService:
         self.candidate_runtime = CandidateRuntimeService(
             CandidateRuntimeDeps(
                 get_settings=lambda _db: UserSettings(owner_id="default-owner"),
-                evaluate_routing_policy=lambda *_args, **_kwargs: self._fallback_routing_decision(),
+                evaluate_routing_policy=lambda *_args, **_kwargs: RoutingPolicyService().evaluate(
+                    CcSelectionRequest([], [], [], [])
+                ),
                 apply_routing_decision=lambda *_args, **_kwargs: None,
             )
         )
@@ -782,30 +786,43 @@ class ExternalFeedService:
         return None
 
     @staticmethod
-    def _preferred_employer_cc(settings: UserSettings, *, recruiter_to: str) -> str | None:
-        preferred = extract_email_address(getattr(settings, "preferred_employer_cc_email", "") or "")
-        recruiter_normalized = extract_email_address(recruiter_to or "")
-        if not preferred:
-            return None
-        if recruiter_normalized and preferred == recruiter_normalized:
-            return None
-        return preferred
+    def _configured_cc_emails(settings: UserSettings, field: str, legacy_field: str | None = None) -> list[str]:
+        values = [part.strip().lower() for part in str(getattr(settings, field, "") or "").split(",") if part.strip()]
+        if not values and legacy_field:
+            legacy = str(getattr(settings, legacy_field, "") or "").strip().lower()
+            values = [legacy] if legacy else []
+        return values
 
-    @staticmethod
-    def _fallback_routing_decision() -> RoutingDecision:
-        return RoutingDecision(
-            to_email=None,
-            cc_email=None,
-            status="missing",
-            confidence=0.0,
-            reason="Unavailable",
-            evidence=[],
-            candidates=[],
-            recommended_state="failed",
-            recommended_skip_reason="missing_to_or_cc",
-            should_mark_failed=True,
-            is_sendable_candidate=False,
-            needs_manual_confirmation=False,
+    def _nvoids_routing_decision(
+        self,
+        db: Session,
+        *,
+        owner_id: str,
+        item: ExternalOpportunity,
+        settings: UserSettings,
+    ) -> RoutingDecision:
+        recruiter = extract_email_address(item.recruiter_email or "")
+        recruiter = recruiter if EMAIL_RE.fullmatch(recruiter) else ""
+        employer = self._pick_cc_from_employer_pool(db, owner_id=owner_id, exclude=recruiter)
+        to_candidates = (
+            [RoutingEvidence("to", recruiter, "nvoids_listing_recruiter_email", "Nvoids listing recruiter")]
+            if recruiter
+            else []
+        )
+        cc_candidates = (
+            [RoutingEvidence("cc", employer, "nvoids_employer_pool", "Recent employer contact")]
+            if employer
+            else []
+        )
+        return RoutingPolicyService().evaluate(
+            CcSelectionRequest(
+                to_candidates=to_candidates,
+                cc_candidates=cc_candidates,
+                preferred_employer_cc_emails=self._configured_cc_emails(
+                    settings, "preferred_employer_cc_emails", "preferred_employer_cc_email"
+                ),
+                default_employer_cc_emails=self._configured_cc_emails(settings, "default_employer_cc_emails"),
+            )
         )
 
     @staticmethod
@@ -844,7 +861,6 @@ class ExternalFeedService:
         )
 
     def _enqueue_needs_review_candidate(self, db: Session, *, owner_id: str, item: ExternalOpportunity) -> EnqueueResult:
-        recruiter_to = extract_email_address(item.recruiter_email or "")
         external_message_id = f"nvoids:{item.external_post_id}"
         existing = (
             db.query(RecruiterEmail)
@@ -869,30 +885,25 @@ class ExternalFeedService:
         )
         effective_policy = policy_service.read_policy_from_settings(settings.policy_json)
         recipient_mapping_mode = policy_service.recipient_mapping_rule_mode(effective_policy)
-        if not recruiter_to and recipient_mapping_mode == "block":
+        routing_decision = self._nvoids_routing_decision(
+            db,
+            owner_id=owner_id,
+            item=item,
+            settings=settings,
+        )
+        recruiter_to = routing_decision.to_email
+        cc_email = routing_decision.cc_email
+        if routing_decision.should_mark_failed and recipient_mapping_mode == "block":
             logger.info(
-                "nvoids_enqueue_skip reason=no_recruiter_email external_post_id=%r role=%r raw_recruiter_email=%r",
-                item.external_post_id,
-                item.role,
-                item.recruiter_email,
-            )
-            return EnqueueResult(
-                enqueued=False,
-                reason_code="no_recruiter_email",
-                reason_detail="Skipped because no recruiter To email could be extracted from the Nvoids listing.",
-            )
-        preferred_cc_email = self._preferred_employer_cc(settings, recruiter_to=recruiter_to)
-        cc_email = preferred_cc_email or self._pick_cc_from_employer_pool(db, owner_id=owner_id, exclude=recruiter_to)
-        if not cc_email and recipient_mapping_mode == "block":
-            logger.info(
-                "nvoids_enqueue_skip reason=no_cc_pool_match external_post_id=%r recruiter_to=%r",
+                "nvoids_enqueue_skip reason=%s external_post_id=%r recruiter_to=%r",
+                routing_decision.recommended_skip_reason,
                 item.external_post_id,
                 recruiter_to,
             )
             return EnqueueResult(
                 enqueued=False,
-                reason_code="no_cc_pool_match",
-                reason_detail="Skipped because no employer CC email could be resolved for the Nvoids listing.",
+                reason_code=routing_decision.recommended_skip_reason,
+                reason_detail=routing_decision.reason,
             )
         body = item.raw_body or item.role or ""
         subject = item.role or "Nvoids Opportunity"
@@ -905,30 +916,9 @@ class ExternalFeedService:
         active_resume = self._active_resume(db, owner_id=owner_id)
         enabled_resumes = self._enabled_resumes(db, owner_id=owner_id)
         threshold = policy_service.policy_threshold(settings.qualification_threshold, effective_policy)
-        routing_safe = bool(recruiter_to and cc_email)
-        if routing_safe:
-            routing_reason = (
-                "External feed recruiter import with preferred employer CC from Execution Control."
-                if preferred_cc_email
-                else "External feed recruiter import with employer pool cc."
-            )
-        else:
-            routing_reason = "Missing recruiter To or employer CC from external feed import."
         sender_identity = recruiter_to or extract_email_address(item.recruiter_email or "") or item.recruiter_name or "Nvoids Recruiter"
-        routing_decision = RoutingDecision(
-            to_email=recruiter_to or None,
-            cc_email=cc_email,
-            status="safe" if routing_safe else "missing",
-            confidence=0.85 if routing_safe else 0.0,
-            reason=routing_reason,
-            evidence=[],
-            candidates=[],
-            recommended_state="failed" if not routing_safe else "needs_review",
-            recommended_skip_reason="missing_to_or_cc" if not routing_safe else None,
-            should_mark_failed=not routing_safe,
-            is_sendable_candidate=routing_safe,
-            needs_manual_confirmation=not routing_safe,
-        )
+        routing_evidence = json.dumps([asdict(entry) for entry in routing_decision.evidence], separators=(",", ":"))
+        routing_candidates = json.dumps([asdict(entry) for entry in routing_decision.candidates], separators=(",", ":"))
         parsed, parser_details = parse_email_with_details(
             subject,
             body,
@@ -978,8 +968,8 @@ class ExternalFeedService:
                 routing_status=routing_decision.status,
                 routing_confidence=routing_decision.confidence,
                 routing_reason=routing_decision.reason,
-                routing_evidence="[]",
-                routing_candidates="[]",
+                routing_evidence=routing_evidence,
+                routing_candidates=routing_candidates,
                 routing_confirmed=False,
                 parser_details_json=json.dumps(parser_details, separators=(",", ":")),
             )
@@ -1140,13 +1130,13 @@ class ExternalFeedService:
             external_message_id=external_message_id,
             external_thread_id=item.source_url or external_message_id,
             gmail_received_at=item.posted_at or datetime.now(UTC),
-            recipient_email=recruiter_to or None,
+            recipient_email=routing_decision.to_email,
             cc_email=cc_email,
             routing_status=routing_decision.status,
             routing_confidence=routing_decision.confidence,
             routing_reason=routing_decision.reason,
-            routing_evidence="[]",
-            routing_candidates="[]",
+            routing_evidence=routing_evidence,
+            routing_candidates=routing_candidates,
             routing_confirmed=False,
             resume_asset_id=selected_resume.id if selected_resume else None,
             resume_file_name=selected_resume.file_name if selected_resume else None,

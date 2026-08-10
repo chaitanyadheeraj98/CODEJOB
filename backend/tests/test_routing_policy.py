@@ -1,12 +1,8 @@
 import unittest
 
-from app.phase0 import RoutingResult, analyze_recipient_routing
 from app.models import RecruiterEmail
-from app.routing import (
-    HeuristicRoutingAdapter,
-    RoutingPolicyInput,
-    RoutingPolicyService,
-)
+from app.phase0 import RoutingEvidence, analyze_recipient_routing, extract_recipient_routing_candidates
+from app.routing import CcSelectionRequest, RoutingPolicyInput, RoutingPolicyService
 from app.services.routing_runtime_service import RoutingRuntimeDeps, RoutingRuntimeService
 
 
@@ -25,139 +21,148 @@ Email: kprashanth@horizonsoftech.net
 """
 
 
+def evidence(role: str, email: str, source: str = "test") -> RoutingEvidence:
+    return RoutingEvidence(role=role, email=email, source=source, detail="test")
+
+
 class RoutingPolicyTests(unittest.TestCase):
-    def test_safe_distinct_addresses_are_sendable_and_queueable(self) -> None:
-        service = RoutingPolicyService(adapter=HeuristicRoutingAdapter())
-        decision = service.evaluate(
-            RoutingPolicyInput(
-                sender="Prashanth Kinnera <kprashanth@horizonsoftech.net>",
-                subject="Java Microservices RPA Developer",
-                body=EMAIL_30_BODY,
+    def evaluate(
+        self,
+        *,
+        to: list[RoutingEvidence] | None = None,
+        cc: list[RoutingEvidence] | None = None,
+        preferred: list[str] | None = None,
+        default: list[str] | None = None,
+    ):
+        return RoutingPolicyService().evaluate(
+            CcSelectionRequest(
+                to_candidates=to or [],
+                cc_candidates=cc or [],
+                preferred_employer_cc_emails=preferred or [],
+                default_employer_cc_emails=default or [],
             )
         )
-        self.assertEqual(decision.recommended_state, "needs_review")
+
+    def test_single_sender_and_recruiter_equal_sender_are_valid(self) -> None:
+        decision = self.evaluate(
+            to=[evidence("to", "recruiter@example.com", "sender_header")],
+            cc=[
+                evidence("cc", "RECRUITER@example.com"),
+                evidence("cc", "employer@example.com"),
+            ],
+        )
+
+        self.assertEqual(decision.to_email, "recruiter@example.com")
+        self.assertEqual(decision.cc_email, "employer@example.com")
         self.assertTrue(decision.is_sendable_candidate)
-        self.assertFalse(decision.should_mark_failed)
         self.assertFalse(decision.needs_manual_confirmation)
 
-    def test_missing_addresses_recommend_failed_with_skip_reason(self) -> None:
-        service = RoutingPolicyService(adapter=HeuristicRoutingAdapter())
-        decision = service.evaluate(
-            RoutingPolicyInput(
-                sender="Recruiter <r@example.com>",
-                subject="Role",
-                body="No emails in body",
-            )
+    def test_one_distinct_to_wins_but_multiple_distinct_to_candidates_fail(self) -> None:
+        sender = evidence("to", "sender@example.com", "sender_header")
+        selected = self.evaluate(
+            to=[sender, evidence("to", "recruiter@example.com")],
+            preferred=["cc@example.com"],
         )
+        self.assertEqual(selected.to_email, "recruiter@example.com")
+
+        failed = self.evaluate(
+            to=[sender, evidence("to", "one@example.com"), evidence("to", "two@example.com")],
+            preferred=["cc@example.com"],
+        )
+        self.assertIsNone(failed.to_email)
+        self.assertTrue(failed.should_mark_failed)
+        self.assertEqual(failed.recommended_skip_reason, "missing_to_or_cc")
+        self.assertIn("manual selection", failed.reason)
+
+    def test_candidate_and_preferred_cc_are_unioned_deduped_and_capped_in_priority_order(self) -> None:
+        decision = self.evaluate(
+            to=[evidence("to", "recruiter@example.com")],
+            cc=[evidence("cc", "candidate-one@example.com"), evidence("cc", "candidate-two@example.com")],
+            preferred=["candidate-one@example.com", "preferred-one@example.com", "preferred-two@example.com"],
+            default=["default@example.com"],
+        )
+
+        self.assertEqual(
+            decision.cc_email,
+            "candidate-one@example.com, candidate-two@example.com, preferred-one@example.com",
+        )
+        self.assertNotIn("default@example.com", decision.cc_email or "")
+
+    def test_default_only_fires_when_candidate_and_preferred_are_both_empty(self) -> None:
+        defaulted = self.evaluate(
+            to=[evidence("to", "recruiter@example.com")],
+            default=["default-one@example.com", "default-two@example.com"],
+        )
+        self.assertEqual(defaulted.cc_email, "default-one@example.com, default-two@example.com")
+
+        candidate = self.evaluate(
+            to=[evidence("to", "recruiter@example.com")],
+            cc=[evidence("cc", "candidate@example.com")],
+            default=["default@example.com"],
+        )
+        self.assertEqual(candidate.cc_email, "candidate@example.com")
+
+        preferred = self.evaluate(
+            to=[evidence("to", "recruiter@example.com")],
+            preferred=["preferred@example.com"],
+            default=["default@example.com"],
+        )
+        self.assertEqual(preferred.cc_email, "preferred@example.com")
+
+    def test_to_cc_collision_is_removed_without_blocking_when_another_cc_remains(self) -> None:
+        decision = self.evaluate(
+            to=[evidence("to", "hr@horizonsoftech.net", "sender_header")],
+            cc=[
+                evidence("cc", " HR@HorizonSoftech.net "),
+                evidence("cc", "manager@horizonsoftech.net"),
+            ],
+        )
+
+        self.assertEqual(decision.cc_email, "manager@horizonsoftech.net")
+        self.assertEqual(decision.status, "safe")
+        self.assertTrue(decision.is_sendable_candidate)
+        self.assertFalse(decision.needs_manual_confirmation)
+
+    def test_everything_empty_reports_missing_default_hint(self) -> None:
+        decision = self.evaluate()
         self.assertTrue(decision.should_mark_failed)
         self.assertEqual(decision.recommended_state, "failed")
-        self.assertEqual(decision.recommended_skip_reason, "missing_to_or_cc")
+        self.assertEqual(decision.recommended_skip_reason, "missing_default_employer_cc")
+        self.assertIn("Default CC is missing in Execution Control", decision.reason)
 
-    def test_confirmed_override_marks_sendable_even_if_low_confidence(self) -> None:
-        class LowConfidenceAdapter:
-            def evaluate(self, payload: RoutingPolicyInput) -> RoutingResult:
-                _ = payload
-                return RoutingResult(
-                    to_email="to@example.com",
-                    cc_email="cc@example.com",
-                    status="ambiguous",
-                    confidence=0.2,
-                    reason="test",
-                    evidence=[],
-                    candidates=[],
-                )
-
-        service = RoutingPolicyService(adapter=LowConfidenceAdapter())
-        decision = service.evaluate(
-            RoutingPolicyInput(
-                sender="Recruiter <r@example.com>",
-                subject="Role",
-                body="Body",
-                routing_confirmed=True,
-            )
+    def test_gmail_adapter_promotes_forwarded_employer_sender_to_cc(self) -> None:
+        extracted = extract_recipient_routing_candidates(
+            "Recruiter <recruiter@example.com>",
+            "Role",
+            "From: Employer Contact <manager@horizonsoftech.net>\nPlease reply.",
         )
-        self.assertTrue(decision.is_sendable_candidate)
+        forwarded = [item for item in extracted.cc_candidates if item.source == "forwarded_from"]
+        self.assertEqual([item.email for item in forwarded], ["manager@horizonsoftech.net"])
 
-    def test_identical_to_cc_is_downgraded_to_ambiguous_and_not_sendable(self) -> None:
-        class DuplicatePairAdapter:
-            def evaluate(self, payload: RoutingPolicyInput) -> RoutingResult:
-                _ = payload
-                return RoutingResult(
-                    to_email="hr@horizonsoftech.net",
-                    cc_email="hr@horizonsoftech.net",
-                    status="safe",
-                    confidence=0.9,
-                    reason="Found distinct recruiter and employer contacts in the current email.",
-                    evidence=[],
-                    candidates=[],
-                )
-
-        service = RoutingPolicyService(adapter=DuplicatePairAdapter())
-        decision = service.evaluate(
-            RoutingPolicyInput(
-                sender="Recruiter <r@example.com>",
-                subject="Role",
-                body="Body",
-            )
-        )
-        self.assertEqual(decision.status, "ambiguous")
-        self.assertFalse(decision.is_sendable_candidate)
-        self.assertTrue(decision.needs_manual_confirmation)
-        self.assertFalse(decision.should_mark_failed)
-        self.assertEqual(decision.recommended_state, "needs_review")
-        self.assertEqual(decision.reason, "Recruiter To and employer CC resolved to the same address.")
-
-    def test_identical_to_cc_normalization_handles_case_and_whitespace(self) -> None:
-        class DuplicatePairFormattingAdapter:
-            def evaluate(self, payload: RoutingPolicyInput) -> RoutingResult:
-                _ = payload
-                return RoutingResult(
-                    to_email=" HR@HorizonSoftech.net ",
-                    cc_email="hr@horizonsoftech.net",
-                    status="confirmed",
-                    confidence=0.92,
-                    reason="Matched a prior correction and both addresses appear in this email.",
-                    evidence=[],
-                    candidates=[],
-                )
-
-        service = RoutingPolicyService(adapter=DuplicatePairFormattingAdapter())
-        decision = service.evaluate(
-            RoutingPolicyInput(
-                sender="Recruiter <r@example.com>",
-                subject="Role",
-                body="Body",
-            )
-        )
-        self.assertEqual(decision.status, "ambiguous")
-        self.assertFalse(decision.is_sendable_candidate)
-        self.assertTrue(decision.needs_manual_confirmation)
-
-    def test_heuristic_adapter_parity_with_phase0(self) -> None:
-        payload = RoutingPolicyInput(
-            sender="Prashanth Kinnera <kprashanth@horizonsoftech.net>",
-            subject="Java Microservices RPA Developer",
-            body=EMAIL_30_BODY,
-        )
-        expected = analyze_recipient_routing(payload.sender, payload.subject, payload.body, payload.snippet)
-        actual = HeuristicRoutingAdapter().evaluate(payload)
-        self.assertEqual(actual.to_email, expected.to_email)
-        self.assertEqual(actual.cc_email, expected.cc_email)
-        self.assertEqual(actual.status, expected.status)
-        self.assertEqual(actual.confidence, expected.confidence)
-
-    def test_routing_decision_assignment_matches_routing_result_assignment(self) -> None:
-        service = RoutingRuntimeService(
-            RoutingRuntimeDeps(owner_id="default-owner", get_employer_domains=lambda db: [])
-        )
-        decision = RoutingPolicyService(
-            adapter=HeuristicRoutingAdapter()
-        ).evaluate(
+    def test_legacy_gmail_input_and_phase0_wrapper_use_the_shared_core(self) -> None:
+        decision = RoutingPolicyService().evaluate(
             RoutingPolicyInput(
                 sender="Prashanth Kinnera <kprashanth@horizonsoftech.net>",
                 subject="Java Microservices RPA Developer",
                 body=EMAIL_30_BODY,
             )
+        )
+        phase0 = analyze_recipient_routing(
+            "Prashanth Kinnera <kprashanth@horizonsoftech.net>",
+            "Java Microservices RPA Developer",
+            EMAIL_30_BODY,
+        )
+        self.assertEqual((decision.to_email, decision.cc_email), (phase0.to_email, phase0.cc_email))
+        self.assertEqual(decision.to_email, "sudarsan@cystemslogic.com")
+        self.assertEqual(decision.cc_email, "kprashanth@horizonsoftech.net")
+
+    def test_routing_decision_assignment_matches_routing_result_assignment(self) -> None:
+        runtime = RoutingRuntimeService(
+            RoutingRuntimeDeps(owner_id="default-owner", get_employer_domains=lambda db: [])
+        )
+        decision = self.evaluate(
+            to=[evidence("to", "recruiter@example.com")],
+            cc=[evidence("cc", "employer@example.com")],
         )
         from_decision = RecruiterEmail(
             owner_id="default-owner",
@@ -178,8 +183,8 @@ class RoutingPolicyTests(unittest.TestCase):
             source="gmail",
         )
 
-        service.apply_routing_decision(from_decision, decision)
-        service.apply_routing_result(from_result, decision.to_routing_result())
+        runtime.apply_routing_decision(from_decision, decision)
+        runtime.apply_routing_result(from_result, decision.to_routing_result())
 
         fields = (
             "recipient_email",
@@ -194,55 +199,6 @@ class RoutingPolicyTests(unittest.TestCase):
             tuple(getattr(from_decision, field) for field in fields),
             tuple(getattr(from_result, field) for field in fields),
         )
-
-    def test_sop_case1_single_sender_uses_preferred_cc(self) -> None:
-        service = RoutingPolicyService(adapter=HeuristicRoutingAdapter())
-        decision = service.evaluate(
-            RoutingPolicyInput(
-                sender="Shaheen <shaheen4sierra@gmail.com>",
-                subject="Role",
-                body="No other contacts here.",
-                preferred_employer_cc_email="hr@horizonsoftech.net",
-            )
-        )
-        self.assertEqual(decision.to_email, "shaheen4sierra@gmail.com")
-        self.assertEqual(decision.cc_email, "hr@horizonsoftech.net")
-        self.assertFalse(decision.should_mark_failed)
-        self.assertEqual(decision.recommended_state, "needs_review")
-
-    def test_sop_case2_two_body_contacts_picks_the_one_that_differs(self) -> None:
-        service = RoutingPolicyService(adapter=HeuristicRoutingAdapter())
-        decision = service.evaluate(
-            RoutingPolicyInput(
-                sender="Jobs <jobs@everestglobalsolutionsinc.com>",
-                subject="Role",
-                body=(
-                    "Reach out to sushwanth@everestglobalsolutionsinc.com for details.\n"
-                    "Reply-To: jobs@everestglobalsolutionsinc.com"
-                ),
-                preferred_employer_cc_email="hr@horizonsoftech.net",
-            )
-        )
-        self.assertEqual(decision.to_email, "sushwanth@everestglobalsolutionsinc.com")
-        self.assertEqual(decision.cc_email, "hr@horizonsoftech.net")
-        self.assertFalse(decision.should_mark_failed)
-
-    def test_sop_case3_many_body_contacts_forces_failed_mapping(self) -> None:
-        service = RoutingPolicyService(adapter=HeuristicRoutingAdapter())
-        decision = service.evaluate(
-            RoutingPolicyInput(
-                sender="Jobs <jobs@everestglobalsolutionsinc.com>",
-                subject="Role",
-                body=(
-                    "a@recruiters.com b@recruiters.com c@recruiters.com d@recruiters.com"
-                ),
-                preferred_employer_cc_email="hr@horizonsoftech.net",
-            )
-        )
-        self.assertIsNone(decision.to_email)
-        self.assertTrue(decision.should_mark_failed)
-        self.assertEqual(decision.recommended_state, "failed")
-        self.assertIn("manual review", decision.reason)
 
 
 if __name__ == "__main__":

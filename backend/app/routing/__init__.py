@@ -1,4 +1,5 @@
 from .policy import (
+    CcSelectionRequest,
     HeuristicRoutingAdapter,
     RoutingAdapter,
     RoutingDecision,
@@ -7,6 +8,7 @@ from .policy import (
 )
 
 __all__ = [
+    "CcSelectionRequest",
     "HeuristicRoutingAdapter",
     "RoutingAdapter",
     "RoutingDecision",

@@ -101,6 +101,9 @@ class SettingsRequest(BaseModel):
     signature_name: str = ""
     signature_phone: str = ""
     signature_email: str = ""
+    preferred_employer_cc_emails: list[str] = Field(default_factory=list)
+    default_employer_cc_emails: list[str] = Field(default_factory=list)
+    # One-release compatibility for clients that still send the singular field.
     preferred_employer_cc_email: str = ""
     resume_display_name: str = ""
     policy: PolicyDict | None = None
@@ -160,6 +163,18 @@ class SettingsRequest(BaseModel):
             return ""
         if not re.fullmatch(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", normalized):
             raise ValueError("preferred_employer_cc_email must be a valid email address")
+        return normalized
+
+    @field_validator("preferred_employer_cc_emails", "default_employer_cc_emails")
+    @classmethod
+    def validate_employer_cc_emails(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for value in values:
+            email = (value or "").strip().lower()
+            if not re.fullmatch(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", email):
+                raise ValueError("employer CC entries must be valid email addresses")
+            if email not in normalized:
+                normalized.append(email)
         return normalized
 
 

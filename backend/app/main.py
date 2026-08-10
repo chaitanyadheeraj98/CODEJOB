@@ -1151,7 +1151,8 @@ def _get_routing_runtime_service() -> RoutingRuntimeService:
             RoutingRuntimeDeps(
                 owner_id=settings.owner_id,
                 get_employer_domains=lambda db: _csv_to_list(_get_settings(db).employer_domains),
-                get_preferred_employer_cc=lambda db: (_get_settings(db).preferred_employer_cc_email or "").strip().lower(),
+                get_preferred_employer_cc_emails=lambda db: _preferred_employer_cc_emails(_get_settings(db)),
+                get_default_employer_cc_emails=lambda db: _csv_to_list(_get_settings(db).default_employer_cc_emails),
             )
         )
     return routing_runtime_service
@@ -1275,6 +1276,14 @@ def _to_csv(values: list[str]) -> str:
 
 def _csv_to_list(value: str | None) -> list[str]:
     return [part.strip() for part in (value or "").split(",") if part.strip()]
+
+
+def _preferred_employer_cc_emails(user_settings: UserSettings) -> list[str]:
+    configured = _csv_to_list(user_settings.preferred_employer_cc_emails)
+    if configured:
+        return configured
+    legacy = (user_settings.preferred_employer_cc_email or "").strip().lower()
+    return [legacy] if legacy else []
 
 
 def _policy_f2f_block(parsed: dict[str, str | int | bool], policy: PolicyConfig) -> tuple[bool, str]:
@@ -1959,6 +1968,7 @@ def _recent_run_item_response(row: RecentRunSkippedItem) -> RecentRunItemRespons
 
 def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
     policy = policy_service.read_policy_from_settings(s.policy_json)
+    preferred_employer_cc_emails = _preferred_employer_cc_emails(s)
     return SettingsResponse(
         enabled=s.enabled,
         gmail_query=s.gmail_query,
@@ -2003,7 +2013,9 @@ def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
         signature_name=(s.signature_name or "").strip() or DEFAULT_SIGNATURE_NAME,
         signature_phone=(s.signature_phone or "").strip() or DEFAULT_SIGNATURE_PHONE,
         signature_email=(s.signature_email or "").strip() or DEFAULT_SIGNATURE_EMAIL,
-        preferred_employer_cc_email=(s.preferred_employer_cc_email or "").strip().lower(),
+        preferred_employer_cc_emails=preferred_employer_cc_emails,
+        default_employer_cc_emails=_csv_to_list(s.default_employer_cc_emails),
+        preferred_employer_cc_email=preferred_employer_cc_emails[0] if preferred_employer_cc_emails else "",
         resume_display_name=(s.resume_display_name or "").strip(),
         policy=policy,
         policy_profile_options=list(policy_service.policy_profiles().keys()),
@@ -2257,7 +2269,16 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
     s.signature_name = payload.signature_name.strip() if payload.signature_name.strip() else DEFAULT_SIGNATURE_NAME
     s.signature_phone = payload.signature_phone.strip() if payload.signature_phone.strip() else DEFAULT_SIGNATURE_PHONE
     s.signature_email = payload.signature_email.strip() if payload.signature_email.strip() else DEFAULT_SIGNATURE_EMAIL
-    s.preferred_employer_cc_email = (payload.preferred_employer_cc_email or "").strip().lower()
+    if "preferred_employer_cc_emails" in provided_fields:
+        preferred_employer_cc_emails = payload.preferred_employer_cc_emails
+    elif "preferred_employer_cc_email" in provided_fields:
+        preferred_employer_cc_emails = [payload.preferred_employer_cc_email] if payload.preferred_employer_cc_email else []
+    else:
+        preferred_employer_cc_emails = _preferred_employer_cc_emails(s)
+    s.preferred_employer_cc_emails = _to_csv(preferred_employer_cc_emails)
+    s.preferred_employer_cc_email = preferred_employer_cc_emails[0] if preferred_employer_cc_emails else ""
+    if "default_employer_cc_emails" in provided_fields:
+        s.default_employer_cc_emails = _to_csv(payload.default_employer_cc_emails)
     s.resume_display_name = payload.resume_display_name.strip()
     normalized_policy = policy_service.normalize_policy(
         payload.policy if payload.policy is not None else policy_service.read_policy_from_settings(s.policy_json)

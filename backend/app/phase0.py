@@ -224,6 +224,13 @@ class RoutingResult:
 
 
 @dataclass
+class RoutingCandidates:
+    to_candidates: list[RoutingEvidence]
+    cc_candidates: list[RoutingEvidence]
+    candidates: list[RoutingEvidence]
+
+
+@dataclass
 class JDSection:
     heading: str
     bucket: str
@@ -267,21 +274,20 @@ def _append_unique(items: list[RoutingEvidence], item: RoutingEvidence) -> None:
         items.append(item)
 
 
-def analyze_recipient_routing(
+def extract_recipient_routing_candidates(
     sender: str,
     subject: str,
     body: str,
     snippet: str = "",
     learned_pairs: list[tuple[str, str]] | None = None,
     employer_domains: list[str] | tuple[str, ...] | set[str] | None = None,
-) -> RoutingResult:
+) -> RoutingCandidates:
     effective_employer_domains = normalize_employer_domains(employer_domains)
     def is_employer_email(email: str) -> bool:
         return email_domain(email) in effective_employer_domains
 
     sender_email = extract_email_address(sender)
     combined_text = f"{subject}\n{body}\n{snippet}"
-    evidence: list[RoutingEvidence] = []
     candidates: list[RoutingEvidence] = []
 
     unique_emails: list[str] = []
@@ -296,15 +302,11 @@ def analyze_recipient_routing(
 
     # Prefer recruiter address from forwarded headers: "From: Name <recruiter@domain>"
     forwarded_from_matches = re.findall(r"(?im)^\s*from\s*:\s*.*?([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})", combined_text)
-    forwarded_non_employer = [
-        e.lower()
-        for e in forwarded_from_matches
-        if not is_employer_email(e.lower()) and not _is_ignored_email(e.lower())
-    ]
-    for email in forwarded_non_employer:
+    for email in [e.lower() for e in forwarded_from_matches if not _is_ignored_email(e.lower())]:
+        role = "cc" if is_employer_email(email) else "to"
         _append_unique(
             candidates,
-            RoutingEvidence(role="to", email=email, source="forwarded_from", detail="Forwarded From line"),
+            RoutingEvidence(role=role, email=email, source="forwarded_from", detail="Forwarded From line"),
         )
 
     for email in unique_emails:
@@ -314,92 +316,67 @@ def analyze_recipient_routing(
         source = "body_employer_contact" if role == "cc" else "body_recruiter_contact"
         _append_unique(candidates, RoutingEvidence(role=role, email=email, source=source, detail="Email body"))
 
-    to_candidates = [item for item in candidates if item.role == "to"]
-    cc_candidates = [item for item in candidates if item.role == "cc"]
-
-    # SOP: resolve "To" from the sender header vs. body recruiter contacts by shape.
-    sender_candidate = next((item for item in to_candidates if item.source == "sender_header"), None)
-    body_candidates = [item for item in to_candidates if item.source == "body_recruiter_contact"]
-    manual_mapping_reason = ""
-    if sender_candidate and body_candidates:
-        distinct = [item for item in body_candidates if item.email != sender_candidate.email]
-        if len(body_candidates) >= 3:
-            selected_to = None
-            manual_mapping_reason = (
-                f"{len(body_candidates)} distinct recruiter contacts found in the email body; "
-                "routing requires manual review (SOP Case 3)."
-            )
-        elif len(distinct) == 1:
-            selected_to = distinct[0]
-        elif len(distinct) == 0:
-            selected_to = sender_candidate
-        else:
-            selected_to = None
-            manual_mapping_reason = "Body recruiter contacts do not uniquely disambiguate the sender header (SOP Case 2)."
-    else:
-        selected_to = to_candidates[0] if to_candidates else None
-    selected_cc = cc_candidates[0] if cc_candidates else None
-
     learned_pairs = learned_pairs or []
     text_lower = combined_text.lower()
     for learned_to, learned_cc in learned_pairs:
         learned_to = learned_to.strip().lower()
         learned_cc = learned_cc.strip().lower()
         if learned_to in text_lower and learned_cc in text_lower:
-            selected_to = RoutingEvidence(
-                role="to",
-                email=learned_to,
-                source="learned_correction",
-                detail="Prior correction matched current email evidence",
+            _append_unique(
+                candidates,
+                RoutingEvidence(
+                    role="to",
+                    email=learned_to,
+                    source="learned_correction",
+                    detail="Prior correction matched current email evidence",
+                ),
             )
-            selected_cc = RoutingEvidence(
-                role="cc",
-                email=learned_cc,
-                source="learned_correction",
-                detail="Prior correction matched current email evidence",
+            _append_unique(
+                candidates,
+                RoutingEvidence(
+                    role="cc",
+                    email=learned_cc,
+                    source="learned_correction",
+                    detail="Prior correction matched current email evidence",
+                ),
             )
             break
 
-    if selected_to:
-        evidence.append(selected_to)
-    if selected_cc:
-        evidence.append(selected_cc)
-
-    if selected_to and selected_cc:
-        direct_sources = {item.source for item in evidence}
-        if "learned_correction" in direct_sources:
-            status = "confirmed"
-            confidence = 0.92
-            reason = "Matched a prior correction and both addresses appear in this email."
-        elif selected_to.email != selected_cc.email:
-            status = "safe"
-            confidence = 0.9
-            reason = "Found distinct recruiter and employer contacts in the current email."
-        else:
-            status = "ambiguous"
-            confidence = 0.45
-            reason = "To and CC resolved to the same address."
-    elif selected_to or selected_cc:
-        status = "ambiguous"
-        confidence = 0.45
-        reason = "Only one recipient side could be resolved."
-    else:
-        status = "missing"
-        confidence = 0.0
-        reason = "No usable recruiter or employer routing contacts found."
-
-    if manual_mapping_reason and not selected_to:
-        reason = manual_mapping_reason
-
-    return RoutingResult(
-        to_email=selected_to.email if selected_to else None,
-        cc_email=selected_cc.email if selected_cc else None,
-        status=status,
-        confidence=confidence,
-        reason=reason,
-        evidence=evidence,
+    return RoutingCandidates(
+        to_candidates=[item for item in candidates if item.role == "to"],
+        cc_candidates=[item for item in candidates if item.role == "cc"],
         candidates=candidates,
     )
+
+
+def analyze_recipient_routing(
+    sender: str,
+    subject: str,
+    body: str,
+    snippet: str = "",
+    learned_pairs: list[tuple[str, str]] | None = None,
+    employer_domains: list[str] | tuple[str, ...] | set[str] | None = None,
+) -> RoutingResult:
+    # Compatibility wrapper: extraction and decisions still route through the shared core.
+    from app.routing.policy import CcSelectionRequest, RoutingPolicyService
+
+    extracted = extract_recipient_routing_candidates(
+        sender,
+        subject,
+        body,
+        snippet,
+        learned_pairs=learned_pairs,
+        employer_domains=employer_domains,
+    )
+    return RoutingPolicyService().evaluate(
+        CcSelectionRequest(
+            to_candidates=extracted.to_candidates,
+            cc_candidates=extracted.cc_candidates,
+            preferred_employer_cc_emails=[],
+            default_employer_cc_emails=[],
+            learned_pairs=learned_pairs,
+        )
+    ).to_routing_result()
 
 
 def resolve_to_cc(sender: str, subject: str, body: str, snippet: str = "") -> tuple[str | None, str | None]:

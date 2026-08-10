@@ -5,6 +5,7 @@ import TrustedGmailGroupsPanel, { type TrustedGmailGroup } from './features/gmai
 import { getDraftSourceLabel } from './features/ai/ui'
 import QueryBucket from './features/query_bucket/QueryBucket'
 import { type CandidateState, useCandidateBuckets } from './candidateBuckets'
+import { addCcEmail, removeCcEmail } from './ccEmails'
 import { addEmployerDomain, removeEmployerDomain } from './employerDomains'
 import { formatRelativeInboxTime, getInitials } from './inboxFormat'
 import { buildPremiumScopeUrl, defaultPremiumPageMeta, type PremiumScope } from './premiumNumbers'
@@ -183,7 +184,9 @@ type SettingsPayload = {
   signature_name: string
   signature_phone: string
   signature_email: string
-  preferred_employer_cc_email: string
+  preferred_employer_cc_emails: string[]
+  default_employer_cc_emails: string[]
+  preferred_employer_cc_email?: string
   resume_display_name: string
   policy?: DynamicPolicy | null
   policy_profile_options?: string[] | null
@@ -2462,6 +2465,73 @@ function getResumeContextLabel(value: string | null | undefined): string {
   return 'Unknown'
 }
 
+function CcEmailList({
+  label,
+  emails,
+  onChange,
+  placeholder,
+}: {
+  label: string
+  emails: string[]
+  onChange: (emails: string[]) => void
+  placeholder: string
+}) {
+  const [draft, setDraft] = useState('')
+  const [error, setError] = useState('')
+
+  const commit = () => {
+    const result = addCcEmail(emails, draft)
+    setError(result.error ?? '')
+    if (result.added) {
+      onChange(result.next)
+      setDraft('')
+    }
+  }
+
+  return (
+    <label>
+      {label}
+      <div className="skillBox">
+        {emails.map((email) => (
+          <span key={email} className="skillChip">
+            {email}
+            <button
+              type="button"
+              className="chipRemove"
+              onClick={() => onChange(removeCcEmail(emails, email))}
+              aria-label={`Remove ${email}`}
+              title={`Remove ${email}`}
+            >
+              x
+            </button>
+          </span>
+        ))}
+        <input
+          type="email"
+          className="skillInput"
+          value={draft}
+          aria-label={`Add ${label}`}
+          onChange={(event) => {
+            setDraft(event.target.value)
+            if (error) setError('')
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ',') {
+              event.preventDefault()
+              commit()
+            } else if (event.key === 'Backspace' && !draft && emails.length > 0) {
+              onChange(removeCcEmail(emails, emails[emails.length - 1]))
+            }
+          }}
+          onBlur={commit}
+          placeholder={placeholder}
+        />
+      </div>
+      {error ? <span className="subtle">{error}</span> : null}
+    </label>
+  )
+}
+
 function App() {
   const INITIAL_BUCKET_LIMIT = 25
   const PAGE_BUCKET_LIMIT = 25
@@ -2534,7 +2604,7 @@ function App() {
   const [status, setStatus] = useState<GmailStatus | null>(null)
   const [aiStatus, setAiStatus] = useState<AiStatus | null>(null)
   const [telegramStatus, setTelegramStatus] = useState<TelegramStatus | null>(null)
-  const [settings, setSettings] = useState<SettingsPayload>({
+  const [settings, setSettingsState] = useState<SettingsPayload>({
     enabled: true,
     gmail_query: 'is:unread',
     default_gmail_query: 'is:unread',
@@ -2578,10 +2648,17 @@ function App() {
     signature_name: '',
     signature_phone: '',
     signature_email: '',
+    preferred_employer_cc_emails: [],
+    default_employer_cc_emails: [],
     preferred_employer_cc_email: '',
     resume_display_name: '',
     policy: defaultPolicy,
   })
+  const settingsRef = useRef(settings)
+  const setSettings = (value: SettingsPayload) => {
+    settingsRef.current = value
+    setSettingsState(value)
+  }
   const [resumeFile, setResumeFile] = useState<File | null>(null)
   const [resumeSkillsInput, setResumeSkillsInput] = useState('')
   const [resumeSkillEdits, setResumeSkillEdits] = useState<Record<number, string>>({})
@@ -2937,7 +3014,11 @@ function App() {
       nvoids_locations: payload.nvoids_locations ?? [],
       employer_domains: payload.employer_domains ?? [],
       draft_text_size: normalizeDraftTextSize(payload.draft_text_size),
-      preferred_employer_cc_email: payload.preferred_employer_cc_email ?? '',
+      preferred_employer_cc_emails:
+        payload.preferred_employer_cc_emails ?? (payload.preferred_employer_cc_email ? [payload.preferred_employer_cc_email] : []),
+      default_employer_cc_emails: payload.default_employer_cc_emails ?? [],
+      preferred_employer_cc_email:
+        payload.preferred_employer_cc_emails?.[0] ?? payload.preferred_employer_cc_email ?? '',
       resume_display_name: payload.resume_display_name ?? '',
       policy: normalizeDynamicPolicy(payload.policy ?? defaultPolicy, payload),
     }
@@ -3725,7 +3806,7 @@ function App() {
       const res = await fetch(`${apiBase}/settings`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(settings),
+        body: JSON.stringify(settingsRef.current),
       })
       if (!res.ok) throw new Error('Failed to save settings')
       const savedSettings = await loadSettingsBootstrap()
@@ -4913,7 +4994,8 @@ function App() {
                   {configRow('Batch Limit', activeConfigurationPolicy.run.batch_limit)}
                   {configRow('Date Mode', activeConfigurationPolicy.query.date_mode === 'custom' ? 'Use selected date' : 'Ignore selected date')}
                   {configRow('Draft Text Size', activeConfigurationSettings.draft_text_size)}
-                  {configRow('Preferred Employer CC', truncateConfigValue(activeConfigurationSettings.preferred_employer_cc_email))}
+                  {configRow('Preferred Employer CCs', summarizeConfigList(activeConfigurationSettings.preferred_employer_cc_emails))}
+                  {configRow('Default Employer CCs', summarizeConfigList(activeConfigurationSettings.default_employer_cc_emails))}
                   {configRow('Fallback Draft Template', truncateConfigValue(activeConfigurationSettings.fallback_draft_template, 80))}
                 </div>
               </section>
@@ -5652,16 +5734,24 @@ function App() {
                       <option value="huge">Huge</option>
                     </select>
                   </label>
-                  <label>
-                    Preferred Employer CC
-                    <input
-                      type="email"
-                      value={settings.preferred_employer_cc_email}
-                      onChange={(e) => setSettings({ ...settings, preferred_employer_cc_email: e.target.value })}
-                      placeholder="sheshwika@horizonsoftech.net"
-                    />
-                  </label>
-                  <p className="subtle">Used as the employer CC for Nvoids/external-feed drafts. Manual per-candidate recipient fixes still win.</p>
+                  <CcEmailList
+                    label="Preferred Employer CCs"
+                    emails={settings.preferred_employer_cc_emails}
+                    onChange={(emails) => setSettings({
+                      ...settings,
+                      preferred_employer_cc_emails: emails,
+                      preferred_employer_cc_email: emails[0] ?? '',
+                    })}
+                    placeholder="Add preferred CC..."
+                  />
+                  <p className="subtle">Added after source-derived employer contacts for Gmail, Nvoids, and future sources. Outgoing CC is capped at three unique addresses.</p>
+                  <CcEmailList
+                    label="Default Employer CCs"
+                    emails={settings.default_employer_cc_emails}
+                    onChange={(emails) => setSettings({ ...settings, default_employer_cc_emails: emails })}
+                    placeholder="Add default CC..."
+                  />
+                  <p className="subtle">Last resort only when no source-derived or Preferred Employer CC exists. Missing values are shown in Failed Mapping.</p>
                   <label>
                     Fallback Draft Template
                     <textarea

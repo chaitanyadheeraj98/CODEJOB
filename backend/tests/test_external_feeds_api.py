@@ -744,8 +744,10 @@ Job ID: ENG-2"""
                 .all()
             )
             self.assertGreaterEqual(len(rows), 1)
-            self.assertEqual(rows[0].cc_email, "sheshwika@horizonsoftech.net")
-            self.assertEqual(rows[0].routing_reason, "External feed recruiter import with preferred employer CC from Execution Control.")
+            self.assertEqual(rows[0].cc_email, "employer.cc@example.com, sheshwika@horizonsoftech.net")
+            self.assertEqual(rows[0].routing_reason, "Resolved the recruiter To and employer CC recipients.")
+            self.assertIn("nvoids_listing_recruiter_email", rows[0].routing_candidates)
+            self.assertIn("nvoids_employer_pool", rows[0].routing_candidates)
 
     def test_manual_sync_falls_back_to_employer_pool_when_preferred_cc_blank(self) -> None:
         with self.SessionLocal() as db:
@@ -769,7 +771,7 @@ Job ID: ENG-2"""
             )
             assert row is not None
             self.assertEqual(row.cc_email, "employer.cc@example.com")
-            self.assertEqual(row.routing_reason, "External feed recruiter import with employer pool cc.")
+            self.assertEqual(row.routing_reason, "Resolved the recruiter To and employer CC recipients.")
 
     def test_manual_sync_ignores_preferred_cc_when_it_matches_recruiter_to(self) -> None:
         with self.SessionLocal() as db:
@@ -794,7 +796,31 @@ Job ID: ENG-2"""
             )
             assert row is not None
             self.assertEqual(row.cc_email, "employer.cc@example.com")
-            self.assertEqual(row.routing_reason, "External feed recruiter import with employer pool cc.")
+            self.assertEqual(row.routing_reason, "Resolved the recruiter To and employer CC recipients.")
+
+    def test_nvoids_adapter_builds_candidates_and_passes_default_to_shared_core(self) -> None:
+        service = ExternalFeedService()
+        item = ExternalOpportunity(recruiter_email="Recruiter <recruiter@example.com>")
+        settings = UserSettings(
+            owner_id=main.settings.owner_id,
+            preferred_employer_cc_email="",
+            preferred_employer_cc_emails="",
+            default_employer_cc_emails="fallback@example.com",
+        )
+        with self.SessionLocal() as db, patch.object(service, "_pick_cc_from_employer_pool", return_value=None):
+            decision = service._nvoids_routing_decision(
+                db,
+                owner_id=main.settings.owner_id,
+                item=item,
+                settings=settings,
+            )
+
+        self.assertEqual(decision.to_email, "recruiter@example.com")
+        self.assertEqual(decision.cc_email, "fallback@example.com")
+        self.assertEqual(
+            [entry.source for entry in decision.evidence],
+            ["nvoids_listing_recruiter_email", "default_employer_cc"],
+        )
 
     def test_manual_sync_bridges_recruiter_when_row_3_contains_phone_and_name(self) -> None:
         class _PhoneCollector(_FakeCollector):
@@ -960,7 +986,12 @@ Job ID: ENG-2"""
                 "signature_name": "",
                 "signature_phone": "",
                 "signature_email": "",
-                "preferred_employer_cc_email": "Sheshwika@HorizonsOfTech.net",
+                "preferred_employer_cc_emails": [
+                    "Sheshwika@HorizonsOfTech.net",
+                    "Ops@HorizonsOfTech.net",
+                    "sheshwika@horizonsoftech.net",
+                ],
+                "default_employer_cc_emails": ["Fallback@HorizonsOfTech.net"],
                 "resume_display_name": "Chaithanya Dheeraj Resume",
                 "policy": None,
             },
@@ -971,6 +1002,11 @@ Job ID: ENG-2"""
         self.assertEqual(payload["nvoids_locations"], ["texas", "remote"])
         self.assertTrue(payload["feature_ai_extractor_enabled"])
         self.assertEqual(payload["draft_text_size"], "huge")
+        self.assertEqual(
+            payload["preferred_employer_cc_emails"],
+            ["sheshwika@horizonsoftech.net", "ops@horizonsoftech.net"],
+        )
+        self.assertEqual(payload["default_employer_cc_emails"], ["fallback@horizonsoftech.net"])
         self.assertEqual(payload["preferred_employer_cc_email"], "sheshwika@horizonsoftech.net")
         self.assertEqual(payload["resume_display_name"], "Chaithanya Dheeraj Resume")
 
@@ -1104,6 +1140,16 @@ Job ID: ENG-2"""
                 "preferred_employer_cc_email": "not-an-email",
                 "resume_display_name": "",
                 "policy": None,
+            },
+        )
+        self.assertEqual(res.status_code, 422, res.text)
+
+    def test_settings_reject_invalid_multi_value_employer_cc_email(self) -> None:
+        res = self.client.put(
+            "/settings",
+            json={
+                "preferred_employer_cc_emails": ["valid@example.com", "not-an-email"],
+                "default_employer_cc_emails": ["fallback@example.com"],
             },
         )
         self.assertEqual(res.status_code, 422, res.text)
