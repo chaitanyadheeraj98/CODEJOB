@@ -112,12 +112,23 @@ def _taxonomy_to_decision(
     )
 
 
+_SKIP_INTENT_TYPES = {
+    "candidate_marketing_or_hotlist",
+    "job_board_alert",
+    "linkedin_platform_notification",
+    "general_newsletter",
+    "security_alert",
+}
+
+
 def _coerce_groq_payload(payload: dict[str, Any]) -> EmailIntentDecision | None:
     intent_type = str(payload.get("intent_type") or "").strip()
     action = str(payload.get("action") or "").strip()
     reason = str(payload.get("reason") or "").strip()
     if not intent_type or not action or not reason:
         return None
+    if intent_type in _SKIP_INTENT_TYPES:
+        action = "skip"
     evidence = [str(item).strip() for item in payload.get("evidence", []) if str(item).strip()]
     negative_evidence = [str(item).strip() for item in payload.get("negative_evidence", []) if str(item).strip()]
     learned_signals: list[JobIntentLearningSignal] = []
@@ -199,6 +210,10 @@ def classify_email_intent(
             "Treat unsubscribe text, Google Groups footers, and reply prefixes as weak evidence only unless the rest of the email is clearly non-job. "
             "If a trusted group message is clearly a hotlist or candidate marketing, still classify it as candidate_marketing_or_hotlist. "
             "If the message is candidate marketing or a hotlist, classify it as candidate_marketing_or_hotlist instead of newsletter. "
+            "If the body repeats the same set of candidate-profile fields (for example Full Legal Name, Current Location, Rate, "
+            "Work Authorization) for two or more different people, this is a consultant hotlist being marketed to recruiters, not a job "
+            "requirement being posted by one. Classify it as candidate_marketing_or_hotlist even when C2C/W2/visa/rate/resume-attached "
+            "language is present -- repeated multi-candidate profile blocks always outweigh that positive evidence. "
             "Return 0-5 reusable learning_signals with concise phrases that would improve fallback classification later."
         ),
         user_prompt=(

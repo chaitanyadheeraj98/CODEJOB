@@ -143,6 +143,11 @@ POSITIVE_ROLE_RE = re.compile(
     re.IGNORECASE,
 )
 
+CANDIDATE_PROFILE_LABEL_RE = re.compile(
+    r"\b(full legal name|candidate name|consultant name)\s*:",
+    re.IGNORECASE,
+)
+
 
 @dataclass(frozen=True)
 class JobDescriptionTaxonomyDecision:
@@ -235,6 +240,10 @@ def _semantic_signal_scores(
     return scores
 
 
+def _count_candidate_profile_blocks(body: str) -> int:
+    return len(CANDIDATE_PROFILE_LABEL_RE.findall(body or ""))
+
+
 def _footer_zone(body: str) -> str:
     raw = (body or "").strip().lower()
     if not raw:
@@ -277,6 +286,20 @@ def classify_job_description_taxonomy(
             reason="Matched account-security language rather than recruiter or job-description content.",
             evidence=[],
             negative_evidence=[f"security_alert:{item}" for item in security_hits],
+        )
+
+    profile_block_count = _count_candidate_profile_blocks(body)
+    if profile_block_count >= 2:
+        return JobDescriptionTaxonomyDecision(
+            intent_type="candidate_marketing_or_hotlist",
+            action="skip",
+            confidence=min(0.80 + 0.03 * profile_block_count, 0.97),
+            reason=(
+                f"Found {profile_block_count} repeated candidate-profile blocks (e.g., 'Full Legal Name'), "
+                "indicating a consultant hotlist rather than a single job requirement."
+            ),
+            evidence=[],
+            negative_evidence=[f"repeated_candidate_profile_block:{profile_block_count}"],
         )
 
     structure_hits = _collect_matches(body_text, JOB_STRUCTURE_TERMS)
