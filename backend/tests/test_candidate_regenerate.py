@@ -467,6 +467,18 @@ class CandidateRegenerateTests(unittest.TestCase):
                 resume = self._add_resume(db)
                 selected_resume = self._resume_like(resume)
                 email = self._add_email(db, routing_confirmed=True)
+                # routing_confirmed=True alone isn't a genuine manual-confirmation signal (it's
+                # also set as a side effect of a prior successful auto-derived routing pass) --
+                # only routing_evidence sourced "manual_edit" (written by the real
+                # resolve-recipients endpoint) should make regenerate preserve routing verbatim.
+                email.routing_evidence = json.dumps(
+                    [
+                        {"role": "to", "email": "saved-to@example.com", "source": "manual_edit", "detail": "Confirmed by user"},
+                        {"role": "cc", "email": "saved-cc@example.com", "source": "manual_edit", "detail": "Confirmed by user"},
+                    ]
+                )
+                db.commit()
+                db.refresh(email)
 
             def _unexpected_routing(*_args, **_kwargs):
                 raise AssertionError("routing evaluation should be skipped for confirmed routing")
@@ -624,7 +636,7 @@ class CandidateRegenerateTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400, response.text)
         self.assertEqual(response.json()["detail"], "Candidate is in terminal state")
 
-    def test_regenerate_nvoids_reuses_external_context_and_preserves_safe_routing(self) -> None:
+    def test_regenerate_nvoids_reuses_external_context_and_recomputes_unconfirmed_routing(self) -> None:
         original_parse_with_details = main.parse_email_with_details
         original_select_best_resume_match = main._select_best_resume_match
         original_compute_blended = main._compute_blended_ai_score
@@ -704,8 +716,24 @@ class CandidateRegenerateTests(unittest.TestCase):
                 ai_error=None,
                 resume_context_status="full",
             )
-            main._evaluate_routing_policy = lambda *_args, **_kwargs: (_ for _ in ()).throw(
-                AssertionError("routing evaluation should be skipped for safe Nvoids routing")
+            # Stored routing here is system-derived (routing_confirmed=False, no manual_edit
+            # evidence), not a genuine human confirmation, so regenerate must recompute it fresh
+            # rather than blindly preserving it forever -- preserving unconfirmed nvoids routing
+            # unconditionally is exactly what let a stale/unrelated CC address survive regenerate
+            # indefinitely (Email 6159).
+            main._evaluate_routing_policy = lambda *_args, **_kwargs: RoutingDecision(
+                to_email="fresh-nvoids-to@example.com",
+                cc_email="fresh-nvoids-cc@example.com",
+                status="safe",
+                confidence=0.95,
+                reason="fresh nvoids routing",
+                evidence=[],
+                candidates=[],
+                recommended_state="needs_review",
+                recommended_skip_reason=None,
+                should_mark_failed=False,
+                is_sendable_candidate=True,
+                needs_manual_confirmation=False,
             )
 
             response = self.client.post(
@@ -720,8 +748,8 @@ class CandidateRegenerateTests(unittest.TestCase):
             assert isinstance(source_hints, dict)
             self.assertEqual(source_hints.get("canonical_title"), "Senior Java Developer")
             self.assertEqual(source_hints.get("ai_input_source"), "nvoids_detail_table_row_3")
-            self.assertEqual(response.json()["recipient_email"], "saved-to@example.com")
-            self.assertEqual(response.json()["cc_email"], "saved-cc@example.com")
+            self.assertEqual(response.json()["recipient_email"], "fresh-nvoids-to@example.com")
+            self.assertEqual(response.json()["cc_email"], "fresh-nvoids-cc@example.com")
             self.assertEqual(response.json()["state"], "needs_review")
         finally:
             main.parse_email_with_details = original_parse_with_details

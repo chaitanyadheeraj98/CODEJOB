@@ -155,6 +155,16 @@ class OrchestrationService:
         )
 
     @staticmethod
+    def _has_manual_routing_edit(email: RecruiterEmail) -> bool:
+        try:
+            evidence = json.loads(email.routing_evidence or "[]")
+        except (TypeError, ValueError):
+            return False
+        if not isinstance(evidence, list):
+            return False
+        return any(isinstance(item, dict) and item.get("source") == "manual_edit" for item in evidence)
+
+    @staticmethod
     def _manual_routing_decision(email: RecruiterEmail) -> RoutingDecision:
         to_email = (email.recipient_email or "").strip() or None
         cc_email = (email.cc_email or "").strip() or None
@@ -1646,10 +1656,16 @@ class OrchestrationService:
         resume_picker_breakdown_json = cast(str | None, getattr(resume_selection, "picker_breakdown_json", None))
 
         existing_routing_usable = bool((email.recipient_email or "").strip() and (email.cc_email or "").strip())
+        # Only ever preserve routing that a human actually set via the resolve-recipients endpoint
+        # (routing_evidence source="manual_edit"). `routing_confirmed` alone isn't a safe signal for
+        # that: it also gets set as a side effect of a prior successful auto-derived routing pass
+        # (see below), which previously made system-derived CC values -- including stale/incorrect
+        # ones -- stick forever across every subsequent regenerate.
+        manually_confirmed_routing = self._has_manual_routing_edit(email)
         routing_decision = None
-        if payload.preserve_manual_routing and email.routing_confirmed:
+        if payload.preserve_manual_routing and email.routing_confirmed and manually_confirmed_routing:
             routing_decision = self._manual_routing_decision(email)
-        elif email.source == "nvoids" and existing_routing_usable:
+        elif email.source == "nvoids" and existing_routing_usable and manually_confirmed_routing:
             routing_decision = self._manual_routing_decision(email)
 
         preparation = prepare_candidate_for_queue(

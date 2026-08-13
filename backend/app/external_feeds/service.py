@@ -23,9 +23,11 @@ from app.premium_numbers.phone_normalization import best_display_phone, canonica
 from app.phase0 import (
     EMAIL_RE,
     RoutingEvidence,
+    email_domain,
     extract_email_address,
     greeting_from_to_contact,
     hard_filter_check,
+    normalize_employer_domains,
     parse_email,
     parse_email_with_details,
     should_block_f2f,
@@ -767,24 +769,6 @@ class ExternalFeedService:
             return None
         return best_display_phone(raw_display or canonical, fallback=raw_display)
 
-    def _pick_cc_from_employer_pool(self, db: Session, *, owner_id: str, exclude: str) -> str | None:
-        pool = (
-            db.query(RecruiterEmail.sender)
-            .join(EmployerNumber, EmployerNumber.source_email_id == RecruiterEmail.id)
-            .filter(
-                EmployerNumber.owner_id == owner_id,
-                RecruiterEmail.owner_id == owner_id,
-            )
-            .order_by(EmployerNumber.updated_at.desc())
-            .all()
-        )
-        exclude_l = exclude.strip().lower()
-        for (email,) in pool:
-            candidate = extract_email_address(str(email or ""))
-            if candidate and candidate != exclude_l:
-                return candidate
-        return None
-
     @staticmethod
     def _configured_cc_emails(settings: UserSettings, field: str, legacy_field: str | None = None) -> list[str]:
         values = [part.strip().lower() for part in str(getattr(settings, field, "") or "").split(",") if part.strip()]
@@ -792,6 +776,11 @@ class ExternalFeedService:
             legacy = str(getattr(settings, legacy_field, "") or "").strip().lower()
             values = [legacy] if legacy else []
         return values
+
+    @staticmethod
+    def _configured_employer_domains(settings: UserSettings) -> set[str]:
+        raw = [part.strip() for part in str(settings.employer_domains or "").split(",") if part.strip()]
+        return normalize_employer_domains(raw)
 
     def _nvoids_routing_decision(
         self,
@@ -801,17 +790,25 @@ class ExternalFeedService:
         item: ExternalOpportunity,
         settings: UserSettings,
     ) -> RoutingDecision:
+        _ = (db, owner_id)
         recruiter = extract_email_address(item.recruiter_email or "")
         recruiter = recruiter if EMAIL_RE.fullmatch(recruiter) else ""
-        employer = self._pick_cc_from_employer_pool(db, owner_id=owner_id, exclude=recruiter)
         to_candidates = (
             [RoutingEvidence("to", recruiter, "nvoids_listing_recruiter_email", "Nvoids listing recruiter")]
             if recruiter
             else []
         )
+        employer_domains = self._configured_employer_domains(settings)
         cc_candidates = (
-            [RoutingEvidence("cc", employer, "nvoids_employer_pool", "Recent employer contact")]
-            if employer
+            [
+                RoutingEvidence(
+                    "cc",
+                    recruiter,
+                    "sender_employer_domain_match",
+                    "Sender domain matches a configured Employer Domain",
+                )
+            ]
+            if recruiter and email_domain(recruiter) in employer_domains
             else []
         )
         return RoutingPolicyService().evaluate(

@@ -120,32 +120,7 @@ class ExternalFeedsApiTests(unittest.TestCase):
                     nvoids_detail_title_mode="job_details",
                     nvoids_locations="",
                     qualification_threshold=0.0,
-                )
-            )
-            employer_source_email = RecruiterEmail(
-                owner_id=main.settings.owner_id,
-                sender="Employer Contact <employer.cc@example.com>",
-                subject="Employer thread",
-                body="Employer contact seed",
-                role="",
-                location="",
-                salary_text="",
-                skills_text="",
-                score=0,
-                decision="auto_rejected",
-                state="failed",
-                source="gmail",
-            )
-            db.add(employer_source_email)
-            db.flush()
-            db.add(
-                EmployerNumber(
-                    owner_id=main.settings.owner_id,
-                    normalized_phone_number="+12145550199",
-                    display_phone_number="+1 214 555 0199",
-                    owner_name="Employer Contact",
-                    company="PoolCo",
-                    source_email_id=employer_source_email.id,
+                    default_employer_cc_emails="employer.cc@example.com",
                 )
             )
             db.commit()
@@ -744,12 +719,12 @@ Job ID: ENG-2"""
                 .all()
             )
             self.assertGreaterEqual(len(rows), 1)
-            self.assertEqual(rows[0].cc_email, "employer.cc@example.com, sheshwika@horizonsoftech.net")
+            self.assertEqual(rows[0].cc_email, "sheshwika@horizonsoftech.net")
             self.assertEqual(rows[0].routing_reason, "Resolved the recruiter To and employer CC recipients.")
             self.assertIn("nvoids_listing_recruiter_email", rows[0].routing_candidates)
-            self.assertIn("nvoids_employer_pool", rows[0].routing_candidates)
+            self.assertIn("preferred_employer_cc", rows[0].routing_candidates)
 
-    def test_manual_sync_falls_back_to_employer_pool_when_preferred_cc_blank(self) -> None:
+    def test_manual_sync_falls_back_to_default_employer_cc_when_preferred_blank(self) -> None:
         with self.SessionLocal() as db:
             settings = db.query(UserSettings).filter(UserSettings.owner_id == main.settings.owner_id).first()
             assert settings is not None
@@ -777,7 +752,9 @@ Job ID: ENG-2"""
         with self.SessionLocal() as db:
             settings = db.query(UserSettings).filter(UserSettings.owner_id == main.settings.owner_id).first()
             assert settings is not None
-            settings.preferred_employer_cc_email = "recruiter_1@example.com"
+            # Two preferred CCs: one duplicates the recruiter's own "to" address (must be excluded so
+            # a recipient never appears in both To and CC), the other is a genuine employer contact.
+            settings.preferred_employer_cc_emails = "recruiter_1@example.com,employer.cc@example.com"
             db.commit()
 
         sync = self.client.post("/external-feeds/nvoids/sync")
@@ -807,7 +784,7 @@ Job ID: ENG-2"""
             preferred_employer_cc_emails="",
             default_employer_cc_emails="fallback@example.com",
         )
-        with self.SessionLocal() as db, patch.object(service, "_pick_cc_from_employer_pool", return_value=None):
+        with self.SessionLocal() as db:
             decision = service._nvoids_routing_decision(
                 db,
                 owner_id=main.settings.owner_id,
@@ -821,6 +798,59 @@ Job ID: ENG-2"""
             [entry.source for entry in decision.evidence],
             ["nvoids_listing_recruiter_email", "default_employer_cc"],
         )
+
+    def test_nvoids_adapter_ignores_unrelated_employer_domain_address_not_present_on_this_listing(self) -> None:
+        # Regression test for the Email 6135/6159-shaped bug: the CC pool used to pull in a stale,
+        # unrelated employer contact from a past, unrelated email. The recruiter here is a genuine
+        # external sender (not on a configured Employer Domain), so no employer-domain CC candidate
+        # should be synthesized -- CC should resolve purely from the configured preferred list.
+        service = ExternalFeedService()
+        item = ExternalOpportunity(recruiter_email="eshwar@neodymtechnologies.com")
+        settings = UserSettings(
+            owner_id=main.settings.owner_id,
+            employer_domains="horizonsoftech.net,horizonsofttech.net",
+            preferred_employer_cc_email="",
+            preferred_employer_cc_emails="kartheek@horizonsoftech.net,hr@horizonsoftech.net",
+            default_employer_cc_emails="",
+        )
+        with self.SessionLocal() as db:
+            decision = service._nvoids_routing_decision(
+                db,
+                owner_id=main.settings.owner_id,
+                item=item,
+                settings=settings,
+            )
+
+        self.assertEqual(decision.to_email, "eshwar@neodymtechnologies.com")
+        self.assertEqual(decision.cc_email, "kartheek@horizonsoftech.net, hr@horizonsoftech.net")
+        self.assertEqual(
+            [entry.source for entry in decision.evidence],
+            ["nvoids_listing_recruiter_email", "preferred_employer_cc", "preferred_employer_cc"],
+        )
+
+    def test_nvoids_adapter_adds_sender_to_cc_when_sender_domain_matches_employer_domain(self) -> None:
+        service = ExternalFeedService()
+        item = ExternalOpportunity(recruiter_email="Sheshwika Kukkala <sheshwika@horizonsoftech.net>")
+        settings = UserSettings(
+            owner_id=main.settings.owner_id,
+            employer_domains="horizonsoftech.net,horizonsofttech.net",
+            preferred_employer_cc_email="",
+            preferred_employer_cc_emails="kartheek@horizonsoftech.net",
+            default_employer_cc_emails="",
+        )
+        with self.SessionLocal() as db:
+            decision = service._nvoids_routing_decision(
+                db,
+                owner_id=main.settings.owner_id,
+                item=item,
+                settings=settings,
+            )
+
+        # Sheshwika's domain matches an Employer Domain, but she is also the sole "to" recipient
+        # for this listing, so the existing to/cc-exclusivity rule in routing/policy.py keeps her
+        # out of CC (already addressed directly) -- only the configured preferred CC remains.
+        self.assertEqual(decision.to_email, "sheshwika@horizonsoftech.net")
+        self.assertEqual(decision.cc_email, "kartheek@horizonsoftech.net")
 
     def test_manual_sync_bridges_recruiter_when_row_3_contains_phone_and_name(self) -> None:
         class _PhoneCollector(_FakeCollector):
@@ -2076,7 +2106,8 @@ Job ID: ENG-2"""
             settings = db.query(UserSettings).filter(UserSettings.owner_id == main.settings.owner_id).first()
             assert settings is not None
             settings.preferred_employer_cc_email = ""
-            db.query(EmployerNumber).delete()
+            settings.preferred_employer_cc_emails = ""
+            settings.default_employer_cc_emails = ""
             db.commit()
 
         sync = self.client.post("/external-feeds/nvoids/sync")
@@ -2095,6 +2126,8 @@ Job ID: ENG-2"""
             settings = db.query(UserSettings).filter(UserSettings.owner_id == main.settings.owner_id).first()
             assert settings is not None
             settings.preferred_employer_cc_email = ""
+            settings.preferred_employer_cc_emails = ""
+            settings.default_employer_cc_emails = ""
             settings.policy_json = json.dumps(
                 {
                     "qualification": {
@@ -2104,7 +2137,6 @@ Job ID: ENG-2"""
                     }
                 }
             )
-            db.query(EmployerNumber).delete()
             db.commit()
 
         sync = self.client.post("/external-feeds/nvoids/sync")
@@ -2504,9 +2536,13 @@ Job ID: ENG-2"""
         finally:
             external_feed_service_module.parse_external_post = original_parse_external_post
 
-    def test_sync_skips_queue_creation_when_employer_pool_cc_missing(self) -> None:
+    def test_sync_skips_queue_creation_when_no_cc_configured(self) -> None:
         with self.SessionLocal() as db:
-            db.query(EmployerNumber).delete()
+            settings = db.query(UserSettings).filter(UserSettings.owner_id == main.settings.owner_id).first()
+            assert settings is not None
+            settings.preferred_employer_cc_email = ""
+            settings.preferred_employer_cc_emails = ""
+            settings.default_employer_cc_emails = ""
             db.commit()
 
         sync = self.client.post("/external-feeds/nvoids/sync")
@@ -2897,7 +2933,7 @@ Job ID: ENG-2"""
         self.assertEqual(res.status_code, 200, res.text)
         payload = res.json()
         self.assertEqual(payload["recruiter_numbers_reformatted"], 1)
-        self.assertEqual(payload["employer_numbers_reformatted"], 2)
+        self.assertEqual(payload["employer_numbers_reformatted"], 1)
         self.assertEqual(payload["review_numbers_reformatted"], 1)
 
         with self.SessionLocal() as db:
