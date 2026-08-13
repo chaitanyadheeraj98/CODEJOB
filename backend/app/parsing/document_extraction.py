@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 import zipfile
 from dataclasses import dataclass
@@ -12,6 +13,8 @@ from unstructured.documents.elements import Element
 from unstructured.partition.auto import partition
 from unstructured.partition.html import partition_html
 
+
+logger = logging.getLogger(__name__)
 
 _DROPPED_CATEGORIES = {"Footer", "Header", "Page-footer", "Page-header", "PageBreak", "PageNumber"}
 _HTML_MARKUP_PATTERN = re.compile(
@@ -206,21 +209,34 @@ def extract_document_text(
 
 def _legacy_strip_html(html: str) -> str:
     no_scripts = re.sub(r"(?is)<(script|style).*?>.*?</\1>", " ", html)
-    no_tags = re.sub(r"(?is)<[^>]+>", " ", no_scripts)
+    line_broken = re.sub(r"(?is)<(br\s*/?|/p|/div|/li|/tr|/h[1-6])\s*>", "\n", no_scripts)
+    no_tags = re.sub(r"(?is)<[^>]+>", " ", line_broken)
     compact = re.sub(r"[ \t]+", " ", no_tags)
     return re.sub(r"\n\s*\n+", "\n\n", compact).strip()
+
+
+_BR_TAG_PATTERN = re.compile(r"(?is)<br\s*/?>")
+
+
+def _normalize_line_breaks_for_partitioning(html: str) -> str:
+    # unstructured's partition_html only splits into separate elements at block-container
+    # boundaries (<div>, <p>, ...) -- a run of text separated only by <br> inside a single
+    # container (very common: Gmail/Outlook compose, mailing-list relays) comes back as one
+    # element with <br> collapsed to a space, and elements_to_markdown then has nothing to
+    # join on. Splitting on <br> into sibling <div>s gives partition_html a boundary to segment.
+    return _BR_TAG_PATTERN.sub("</div><div>", html)
 
 
 def clean_html_text(html: str, *, max_chars: int | None = None) -> str:
     if not html.strip():
         return ""
     try:
-        elements = list(partition_html(text=html))
+        elements = list(partition_html(text=_normalize_line_breaks_for_partitioning(html)))
         markdown, _plain, _truncated = _render_with_limit(elements, max_chars)
         if markdown:
             return markdown
     except Exception:
-        pass
+        logger.warning("clean_html_text partition_html failed, using legacy fallback", exc_info=True)
     fallback = _legacy_strip_html(html)
     return _clip_text(fallback, max_chars) if max_chars is not None else fallback
 

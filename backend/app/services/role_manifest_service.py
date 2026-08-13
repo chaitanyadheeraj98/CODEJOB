@@ -41,6 +41,7 @@ class DetectedRole(BaseModel):
     start_line: int = Field(ge=1)
     end_line: int = Field(ge=1)
     confidence: float = Field(ge=0.0, le=1.0)
+    start_snippet: str = ""
 
 
 class RoleManifest(BaseModel):
@@ -91,7 +92,11 @@ ManifestProvider = Callable[[str, str], dict[str, object] | DeepSeekJSONResult]
 
 SYSTEM_PROMPT = """Identify whether the supplied recruiting source contains one or multiple distinct job requirements.
 Return JSON only with classification, role_count, confidence, shared_constraints, and roles.
-Every role requires title_hint, requisition_id, start_line, end_line, confidence. Preserve the supplied line numbers.
+Every role requires title_hint, requisition_id, start_line, end_line, start_snippet, confidence. Preserve the supplied line numbers.
+start_snippet must be an exact verbatim copy of the first 6-12 words of that role's own description as it appears in the
+source content -- do not include the "N: " line-number prefix, do not paraphrase or summarize. When multiple roles fall on
+the same line (the source has no real line breaks between them), start_snippet is the only way to tell them apart, so it
+must point at that specific role's own opening words, not another role's.
 Treat quoted or forwarded text as source content. Subsection headings inside one job description are not separate roles without a distinct title or requisition ID.
 Do not infer boundaries or constraints without direct source evidence."""
 
@@ -138,6 +143,39 @@ def _default_provider(system_prompt: str, user_prompt: str) -> DeepSeekJSONResul
 
 def _numbered_source(lines: list[str], start_line: int = 1) -> str:
     return "\n".join(f"{start_line + idx}: {line}" for idx, line in enumerate(lines))
+
+
+def _resolve_roles_by_snippet(roles: list[DetectedRole], lines: list[str]) -> dict[int, str] | None:
+    """Best-effort role-boundary resolution via each role's verbatim start_snippet.
+
+    Line-number boundaries collapse when a source has no real paragraph/line structure (e.g.
+    an HTML email whose <br>-only line breaks got flattened before this pipeline ever saw it):
+    two genuinely distinct roles can both get start_line == end_line == 1, which line-based
+    overlap validation correctly rejects rather than materialize duplicate/garbled requirement
+    text. When every role instead supplies a verbatim snippet marking where its own description
+    begins, roles can be split by their actual character position in the source text instead,
+    independent of line structure. Returns None (caller falls back to line-based validation)
+    whenever a snippet is missing, not found verbatim, or two roles resolve to the same spot --
+    this is deliberately conservative, since a wrong split silently corrupts requirement text.
+    """
+    full_text = "\n".join(lines)
+    positions: dict[int, int] = {}
+    for role in roles:
+        snippet = role.start_snippet.strip()
+        if not snippet:
+            return None
+        offset = full_text.find(snippet)
+        if offset < 0:
+            return None
+        positions[role.index] = offset
+    if len(set(positions.values())) != len(positions):
+        return None
+    ordered = sorted(positions.items(), key=lambda item: item[1])
+    sources: dict[int, str] = {}
+    for position, (role_index, offset) in enumerate(ordered):
+        end = ordered[position + 1][1] if position + 1 < len(ordered) else len(full_text)
+        sources[role_index] = full_text[offset:end].strip()
+    return sources
 
 
 def _normalize_title(value: str) -> str:
@@ -398,6 +436,7 @@ class RoleManifestService:
                         start_line=min(existing.start_line, role.start_line) if role_boundary_valid else existing.start_line,
                         end_line=max(existing.end_line, role.end_line) if role_boundary_valid else existing.end_line,
                         confidence=max(existing.confidence, role.confidence),
+                        start_snippet=existing.start_snippet or role.start_snippet,
                     )
             for constraint in manifest.shared_constraints:
                 key = (constraint.type, constraint.value.casefold(), constraint.start_line, constraint.end_line)
@@ -458,16 +497,42 @@ class RoleManifestService:
         if [role.index for role in manifest.roles] != list(range(1, manifest.role_count + 1)):
             raise ValueError("Role indexes must be continuous")
 
+        # For multiple-role manifests, prefer splitting roles by their verbatim start_snippet
+        # over line numbers when every role supplies one that resolves cleanly -- this is the
+        # only way to separate genuinely distinct roles that a flattened/line-less source
+        # forced onto identical start_line/end_line values. Falls back to None (line-based
+        # validation, unchanged) whenever the model didn't supply usable snippets.
+        snippet_sources = (
+            _resolve_roles_by_snippet(manifest.roles, lines) if manifest.classification == "multiple" else None
+        )
+
         previous_end = 0
         requirements: list[MaterializedRequirement] = []
         for role in manifest.roles:
             if role.confidence < self._confidence_threshold:
                 raise ValueError("Role confidence is below threshold")
-            if role.end_line < role.start_line or role.end_line > len(lines) or role.start_line <= previous_end:
-                raise ValueError("Role boundaries are invalid or overlapping")
-            bounded = "\n".join(lines[role.start_line - 1 : role.end_line]).strip()
-            if not bounded:
-                raise ValueError("Role boundary contains no source evidence")
+            if manifest.classification == "single":
+                # A single-role manifest has no other role to conflict with, so a model
+                # that miscounts line spans on short/collapsed sources (e.g. an HTML email
+                # whose whole body lands on one line) can be clamped to the real source
+                # bounds instead of being rejected outright.
+                role = role.model_copy(
+                    update={
+                        "start_line": max(1, min(role.start_line, len(lines))),
+                        "end_line": max(1, min(role.end_line, len(lines))),
+                    }
+                )
+            if snippet_sources is not None:
+                bounded = snippet_sources[role.index]
+                if not bounded:
+                    raise ValueError("Role boundary contains no source evidence")
+            else:
+                if role.end_line < role.start_line or role.end_line > len(lines) or role.start_line <= previous_end:
+                    raise ValueError("Role boundaries are invalid or overlapping")
+                bounded = "\n".join(lines[role.start_line - 1 : role.end_line]).strip()
+                if not bounded:
+                    raise ValueError("Role boundary contains no source evidence")
+                previous_end = role.end_line
             requirements.append(
                 MaterializedRequirement(
                     index=role.index,
@@ -479,7 +544,6 @@ class RoleManifestService:
                     requirement_key=_requirement_key(role, bounded),
                 )
             )
-            previous_end = role.end_line
 
         for constraint in list(manifest.shared_constraints):
             if constraint.end_line < constraint.start_line or constraint.end_line > len(lines):

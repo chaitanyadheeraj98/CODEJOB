@@ -405,6 +405,114 @@ class RoleManifestServiceTests(unittest.TestCase):
         self.assertEqual(result.status, "invalid")
         self.assertEqual(result.requirements, ())
 
+    def test_flattened_single_line_roles_split_by_verbatim_snippet(self) -> None:
+        # Regression test for Email 6164: an HTML-flattening ingestion artifact collapsed two
+        # genuinely distinct roles onto one physical line, so the model reports identical
+        # start_line/end_line for both. Line-based validation correctly can't disambiguate that
+        # (see test_overlapping_boundaries_fail_closed), but each role's own verbatim
+        # start_snippet lets the roles be split by character position instead.
+        source = (
+            "Senior Java Developer with Spring Boot required 10 years experience. "
+            "Role Overview: We are seeking a highly skilled AIML Engineer to design AI systems."
+        )
+        payload = {
+            "classification": "multiple",
+            "role_count": 2,
+            "confidence": 0.95,
+            "roles": [
+                {
+                    "index": 1,
+                    "title_hint": "Senior Java Developer",
+                    "start_line": 1,
+                    "end_line": 1,
+                    "confidence": 0.95,
+                    "start_snippet": "Senior Java Developer with Spring Boot",
+                },
+                {
+                    "index": 2,
+                    "title_hint": "AIML Engineer",
+                    "start_line": 1,
+                    "end_line": 1,
+                    "confidence": 0.95,
+                    "start_snippet": "Role Overview: We are seeking",
+                },
+            ],
+        }
+
+        result = RoleManifestService(provider=lambda system, user: payload).detect(source)
+
+        self.assertEqual(result.status, "multiple")
+        self.assertEqual(len(result.requirements), 2)
+        self.assertEqual([item.title_hint for item in result.requirements], ["Senior Java Developer", "AIML Engineer"])
+        self.assertIn("Senior Java Developer with Spring Boot", result.requirements[0].source_text)
+        self.assertNotIn("AIML Engineer", result.requirements[0].source_text)
+        self.assertIn("Role Overview: We are seeking a highly skilled AIML Engineer", result.requirements[1].source_text)
+        self.assertNotIn("Senior Java Developer", result.requirements[1].source_text)
+
+    def test_snippet_resolution_falls_back_to_line_validation_when_snippet_not_found(self) -> None:
+        source = "Senior Java Developer required. Role Overview: seeking an AIML Engineer."
+        payload = {
+            "classification": "multiple",
+            "role_count": 2,
+            "confidence": 0.95,
+            "roles": [
+                {
+                    "index": 1,
+                    "title_hint": "Senior Java Developer",
+                    "start_line": 1,
+                    "end_line": 1,
+                    "confidence": 0.95,
+                    "start_snippet": "Senior Java Developer required.",
+                },
+                {
+                    "index": 2,
+                    "title_hint": "AIML Engineer",
+                    "start_line": 1,
+                    "end_line": 1,
+                    "confidence": 0.95,
+                    # Paraphrased, not a verbatim substring -- resolution must not use it.
+                    "start_snippet": "We need an AI/ML engineer",
+                },
+            ],
+        }
+
+        result = RoleManifestService(provider=lambda system, user: payload).detect(source)
+
+        self.assertEqual(result.status, "invalid")
+        self.assertEqual(result.requirements, ())
+
+    def test_snippet_resolution_falls_back_when_two_roles_resolve_to_same_offset(self) -> None:
+        source = "Senior Java Developer required. Role Overview: seeking an AIML Engineer."
+        payload = {
+            "classification": "multiple",
+            "role_count": 2,
+            "confidence": 0.95,
+            "roles": [
+                {
+                    "index": 1,
+                    "title_hint": "Senior Java Developer",
+                    "start_line": 1,
+                    "end_line": 1,
+                    "confidence": 0.95,
+                    "start_snippet": "Senior Java Developer required.",
+                },
+                {
+                    "index": 2,
+                    "title_hint": "AIML Engineer",
+                    "start_line": 1,
+                    "end_line": 1,
+                    "confidence": 0.95,
+                    # Same snippet as role one -- can't be disambiguated safely.
+                    "start_snippet": "Senior Java Developer required.",
+                },
+            ],
+        }
+
+        result = RoleManifestService(provider=lambda system, user: payload).detect(source)
+
+        self.assertEqual(result.status, "invalid")
+        self.assertEqual(result.requirements, ())
+
     def test_truncated_json_gets_one_in_memory_repair_attempt(self) -> None:
         calls: list[str] = []
         repaired = {
