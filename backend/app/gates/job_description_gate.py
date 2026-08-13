@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 import json
 import logging
+import re
 from dataclasses import dataclass, field, replace
 from typing import Any, Sequence
 
@@ -16,6 +17,7 @@ from app.job_intent_learning import (
 from app.runtime_state import runtime_state
 from app.taxonomy.job_description_taxonomy import (
     JobDescriptionTaxonomyDecision,
+    _count_candidate_profile_blocks,
     classify_job_description_taxonomy,
 )
 from app.services.gmail_group_source_service import TrustedGroupContext
@@ -111,6 +113,8 @@ def _taxonomy_to_decision(
         learned_signals=[],
     )
 
+
+_PROFILE_BLOCK_CLAIM_RE = re.compile(r"repeated.{0,40}profile block|profile block.{0,40}repeated", re.IGNORECASE)
 
 _SKIP_INTENT_TYPES = {
     "candidate_marketing_or_hotlist",
@@ -241,6 +245,15 @@ def classify_email_intent(
     if payload is not None:
         decision = _coerce_groq_payload(payload)
         if decision is not None:
+            if (
+                decision.action == "skip"
+                and _PROFILE_BLOCK_CLAIM_RE.search(decision.reason)
+                and _count_candidate_profile_blocks(body) < 2
+            ):
+                # ponytail: the LLM's own stated reason claims repeated candidate-profile
+                # blocks -- that specific claim is mechanically checkable, so verify it
+                # rather than trusting whichever skip-intent label the LLM attached to it.
+                decision = replace(decision, intent_type=taxonomy.intent_type, action=taxonomy.action)
             disagreed = taxonomy.intent_type != decision.intent_type or taxonomy.action != decision.action
             if not disagreed:
                 decision = replace(decision, learned_signals=[])
