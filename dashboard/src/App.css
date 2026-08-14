@@ -143,9 +143,14 @@
   padding: 0 28px;
 }
 
-.topSearch {
+.headerSearches {
   flex: 1;
-  max-width: 560px;
+  min-width: 340px;
+  max-width: 760px;
+}
+
+.topSearch {
+  min-width: 0;
 }
 
 .topSearch input {
@@ -157,6 +162,123 @@
   font-size: 33px;
   color: #4b556b;
   padding: 0 16px;
+}
+
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.emailSearch {
+  position: relative;
+  min-width: 0;
+}
+
+.emailSearchInput {
+  width: 100%;
+  height: 50px;
+  border: 1px solid #d8deea;
+  border-radius: 8px;
+  background: #fff;
+  padding: 0 14px;
+  font-size: 16px;
+}
+
+.emailSearchPanel {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  z-index: 40;
+  max-height: min(440px, calc(100vh - 120px));
+  overflow-y: auto;
+  border: 1px solid #cfd7e6;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 16px 36px rgb(24 39 75 / 18%);
+}
+
+.emailSearchResult {
+  width: 100%;
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 0;
+  border-bottom: 1px solid #e4e8f0;
+  border-radius: 0;
+  background: #fff;
+  color: #1d2636;
+  text-align: left;
+  font: inherit;
+}
+
+button.emailSearchResult {
+  cursor: pointer;
+}
+
+button.emailSearchResult:hover,
+button.emailSearchResult:focus-visible {
+  background: #f2f6ff;
+  outline: none;
+}
+
+.emailSearchResultStatic {
+  background: #f7f8fb;
+}
+
+.emailSearchResultTopline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.emailSearchSectionBadge {
+  display: inline-flex;
+  width: fit-content;
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: #e8efff;
+  color: #244c9d;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.emailSearchSectionBadge.section-failed_mapping,
+.emailSearchSectionBadge.section-other {
+  background: #fff0e1;
+  color: #884c0d;
+}
+
+.emailSearchSectionBadge.section-sent_items,
+.emailSearchSectionBadge.section-inbox {
+  background: #e7f6ed;
+  color: #17653a;
+}
+
+.emailSearchResultState,
+.emailSearchResult small,
+.emailSearchStatus {
+  color: #68758b;
+  font-size: 12px;
+}
+
+.emailSearchStatus {
+  margin: 0;
+  padding: 14px;
+}
+
+.emailSearchHighlight {
+  border-color: #3f73d8 !important;
+  box-shadow: 0 0 0 3px rgb(63 115 216 / 22%);
+  background: #f4f7ff !important;
 }
 
 .topActions {
@@ -1706,12 +1828,14 @@
     flex-wrap: wrap;
   }
 
-  .topSearch {
-    max-width: none;
+  .headerSearches {
     flex-basis: 100%;
+    min-width: 0;
+    max-width: none;
   }
 
-  .topSearch input {
+  .topSearch input,
+  .emailSearchInput {
     font-size: 20px;
     height: 42px;
   }

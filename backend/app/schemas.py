@@ -786,6 +786,22 @@ class ConversationReplyRequest(BaseModel):
     body: str = Field(min_length=1, max_length=20000)
 
 
+class EmailSearchHitResponse(BaseModel):
+    section: str
+    recruiter_email_id: int | None
+    sender: str
+    subject: str
+    state: str
+    detail: dict[str, object]
+    occurred_at: datetime
+
+
+class EmailSearchResponse(BaseModel):
+    query: str
+    hits: list[EmailSearchHitResponse]
+    truncated: bool
+
+
 class PremiumNumberResponse(BaseModel):
     id: int
     recruiter_email_id: int

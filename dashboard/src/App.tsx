@@ -4,17 +4,48 @@ import Sidebar from './components/Sidebar'
 import TrustedGmailGroupsPanel, { type TrustedGmailGroup } from './features/gmail_groups/TrustedGmailGroupsPanel'
 import { getDraftSourceLabel } from './features/ai/ui'
 import QueryBucket from './features/query_bucket/QueryBucket'
+import EmailSearch from './features/email_search/EmailSearch'
 import { type CandidateState, useCandidateBuckets } from './candidateBuckets'
 import { addCcEmail, removeCcEmail } from './ccEmails'
 import { addEmployerDomain, removeEmployerDomain } from './employerDomains'
 import { formatRelativeInboxTime, getInitials } from './inboxFormat'
 import { buildPremiumScopeUrl, defaultPremiumPageMeta, type PremiumScope } from './premiumNumbers'
+import type { EmailSearchHit } from './emailSearch'
 
 const GMAIL_OAUTH_POLL_INTERVAL_MS = 2000
 const GMAIL_OAUTH_POLL_TIMEOUT_MS = 180000
 const VIEW_EVENT_THROTTLE_MS = 60000
 const PREMIUM_PAGE_LIMIT = 25
 const SETTINGS_REVIEW_BATCH_SIZE = 50
+
+function emailSearchPremiumScope(hit: EmailSearchHit): PremiumScope | null {
+  if (hit.section !== 'premium_numbers') return null
+  if (hit.detail.number_review_id != null) return 'all_review'
+  if (hit.detail.recruiter_number_id != null) return 'recruiter_numbers'
+  if (hit.detail.employer_number_id != null) return 'employer_numbers'
+  if (hit.detail.recruiter_opportunity_id != null) return 'recruiter_opportunities'
+  return null
+}
+
+function emailSearchRelatedId(hit: EmailSearchHit): string | null {
+  if (hit.section === 'inbox') {
+    return hit.detail.conversation_id == null ? null : String(hit.detail.conversation_id)
+  }
+  if (hit.section === 'recent_runs') {
+    const related = hit.detail.run_key ?? hit.detail.recent_run_skipped_item_id
+    return related == null ? null : String(related)
+  }
+  if (hit.section === 'premium_numbers') {
+    const related =
+      hit.detail.number_review_id ??
+      hit.detail.recruiter_number_id ??
+      hit.detail.employer_number_id ??
+      hit.detail.recruiter_opportunity_id
+    return related == null ? null : String(related)
+  }
+  return hit.recruiter_email_id == null ? null : String(hit.recruiter_email_id)
+}
+
 export const DRAFT_TEXT_SIZE_OPTIONS = ['small', 'normal', 'large', 'huge'] as const
 export type DraftTextSize = (typeof DRAFT_TEXT_SIZE_OPTIONS)[number]
 type NvoidsDetailTitleMode = 'job_details' | 'hotlist_details' | 'all'
@@ -2703,6 +2734,7 @@ function App() {
   const [fixingId, setFixingId] = useState<number | null>(null)
   const [deletingFailedId, setDeletingFailedId] = useState<number | null>(null)
   const [activePage, setActivePage] = useState<'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'inbox' | 'premium_numbers' | 'settings'>('run_queue')
+  const [emailSearchTarget, setEmailSearchTarget] = useState<EmailSearchHit | null>(null)
   const [inboxConversations, setInboxConversations] = useState<ConversationSummary[]>([])
   const [selectedConversationId, setSelectedConversationId] = useState<number | null>(null)
   const [selectedConversation, setSelectedConversation] = useState<ConversationDetail | null>(null)
@@ -2749,6 +2781,7 @@ function App() {
   const oauthPollingStartedAtRef = useRef<number | null>(null)
   const refreshTimerRef = useRef<number | null>(null)
   const premiumRequestTrackerRef = useRef(0)
+  const premiumLoadingRef = useRef(false)
 
   const {
     queue,
@@ -3192,6 +3225,7 @@ function App() {
     const scope = premiumScopeFilter
     const requestId = premiumRequestTrackerRef.current + 1
     premiumRequestTrackerRef.current = requestId
+    premiumLoadingRef.current = true
     setPremiumLoading(true)
     setPremiumError('')
     try {
@@ -3253,6 +3287,7 @@ function App() {
       }
     } finally {
       if (requestId === premiumRequestTrackerRef.current) {
+        premiumLoadingRef.current = false
         setPremiumLoading(false)
       }
     }
@@ -3626,10 +3661,51 @@ function App() {
   }, [activePage, settings.mail_date, bucketMeta.failed.loaded, bucketMeta.needs_review.loaded, bucketMeta.approved_sent.loaded, settingsBootstrapReady])
 
   useEffect(() => {
+    if (!emailSearchTarget) return
+    const relatedId = emailSearchRelatedId(emailSearchTarget)
+    if (relatedId == null) return
+    const section = emailSearchTarget.section
+    if (section === 'needs_review' && bucketMeta.needs_review.hasNext && !queue.some((item) => String(item.id) === relatedId)) {
+      loadMoreCandidates('needs_review', settings.mail_date ?? null)
+    } else if (section === 'failed_mapping' && bucketMeta.failed.hasNext && !failedQueue.some((item) => String(item.id) === relatedId)) {
+      loadMoreCandidates('failed', settings.mail_date ?? null)
+    } else if (section === 'sent_items' && bucketMeta.approved_sent.hasNext && !sentQueue.some((item) => String(item.id) === relatedId)) {
+      loadMoreCandidates('approved_sent', settings.mail_date ?? null)
+    }
+  }, [emailSearchTarget, queue, failedQueue, sentQueue, bucketMeta, settings.mail_date])
+
+  useEffect(() => {
     if (!hasBootstrappedCandidatesRef.current || !settingsBootstrapReady) return
     if (activePage !== 'premium_numbers') return
     loadPremiumNumbers({ append: false, cursor: 0 }).catch((e) => setPremiumError((e as Error).message))
   }, [activePage, premiumScopeFilter, premiumSearch, settings.mail_date, opportunityStatusFilter, opportunitySourceFilter, settingsBootstrapReady])
+
+  useEffect(() => {
+    if (activePage !== 'premium_numbers' || !emailSearchTarget || emailSearchTarget.section !== 'premium_numbers') return
+    if (premiumLoadingRef.current) return
+    const scope = emailSearchPremiumScope(emailSearchTarget)
+    if (!scope || scope !== premiumScopeFilter) return
+    const relatedId = emailSearchRelatedId(emailSearchTarget)
+    if (relatedId == null) return
+    const cards =
+      scope === 'all_review' ? numberReviewCards
+      : scope === 'recruiter_numbers' ? recruiterNumberCards
+      : scope === 'employer_numbers' ? employerNumberCards
+      : opportunityCards
+    if (cards.some((item) => String(item.id) === relatedId)) return
+    const meta = premiumPageMeta[scope]
+    if (!meta.hasNext || meta.nextCursor == null) return
+    loadPremiumNumbers({ append: true, cursor: meta.nextCursor }).catch((e) => setPremiumError((e as Error).message))
+  }, [
+    activePage,
+    emailSearchTarget,
+    premiumScopeFilter,
+    premiumPageMeta,
+    numberReviewCards,
+    recruiterNumberCards,
+    employerNumberCards,
+    opportunityCards,
+  ])
 
   useEffect(() => {
     if (activePage !== 'inbox') return
@@ -3659,6 +3735,32 @@ function App() {
     trackViewEvent(activePage)
       .catch((e) => setError((e as Error).message))
   }, [activePage])
+
+  useEffect(() => {
+    if (!emailSearchTarget) return
+    const relatedId = emailSearchRelatedId(emailSearchTarget)
+    if (relatedId == null) return
+    const timerId = window.setTimeout(() => {
+      const target = Array.from(document.querySelectorAll<HTMLElement>('[data-email-search-section]')).find((element) => (
+        element.dataset.emailSearchSection === emailSearchTarget.section &&
+        element.dataset.emailSearchRelatedId === relatedId
+      ))
+      target?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
+    }, 0)
+    return () => window.clearTimeout(timerId)
+  }, [
+    activePage,
+    emailSearchTarget,
+    queue,
+    failedQueue,
+    sentQueue,
+    logs,
+    numberReviewCards,
+    recruiterNumberCards,
+    employerNumberCards,
+    opportunityCards,
+    inboxConversations,
+  ])
 
   useEffect(() => {
     if (!running) return
@@ -4607,6 +4709,25 @@ function App() {
     })
   }
 
+  const isEmailSearchHighlight = (section: EmailSearchHit['section'], relatedId: string | number | null | undefined) => (
+    emailSearchTarget?.section === section &&
+    relatedId != null &&
+    emailSearchRelatedId(emailSearchTarget) === String(relatedId)
+  )
+
+  const navigateFromEmailSearch = (hit: EmailSearchHit) => {
+    if (hit.section === 'other') return
+    setEmailSearchTarget(hit)
+    if (hit.section === 'inbox' && typeof hit.detail.conversation_id === 'number') {
+      setSelectedConversationId(hit.detail.conversation_id)
+    }
+    if (hit.section === 'premium_numbers') {
+      const scope = emailSearchPremiumScope(hit)
+      if (scope) setPremiumScopeFilter(scope)
+    }
+    setActivePage(hit.section)
+  }
+
   const inboxUnreadCount = inboxConversations.reduce((total, row) => total + row.unread_reply_count, 0)
 
   return (
@@ -4625,14 +4746,18 @@ function App() {
 
       <section className="mainPane">
         <header className="topHeader">
-          <div className="topSearch">
-            <input
-              className="search"
-              value={hasLoadedSettingsBootstrap ? settings.gmail_query : ''}
-              onChange={(e) => setSettings({ ...settings, gmail_query: e.target.value })}
-              placeholder={hasLoadedSettingsBootstrap ? 'Search Dashboard...' : 'Loading saved settings...'}
-              disabled={!hasLoadedSettingsBootstrap}
-            />
+          <div className="headerSearches">
+            <div className="topSearch">
+              <label htmlFor="gmail-sync-query" className="visuallyHidden">Gmail sync query</label>
+              <input
+                id="gmail-sync-query"
+                className="search"
+                value={hasLoadedSettingsBootstrap ? settings.gmail_query : ''}
+                onChange={(e) => setSettings({ ...settings, gmail_query: e.target.value })}
+                placeholder={hasLoadedSettingsBootstrap ? 'Gmail sync query...' : 'Loading saved settings...'}
+                disabled={!hasLoadedSettingsBootstrap}
+              />
+            </div>
           </div>
           <div className="topActions">
             <button type="button" className="btnMuted">Batch Queue</button>
@@ -4751,6 +4876,7 @@ function App() {
             >
               {running ? 'Running...' : status?.authenticated ? 'Sync + Queue' : oauthInProgress ? 'OAuth In Progress...' : 'Connect Gmail'}
             </button>
+            <EmailSearch apiBase={apiBase} onNavigate={navigateFromEmailSearch} currentSection={activePage} />
             <button
               type="button"
               className="syncBtn topBarAction"
@@ -6046,7 +6172,11 @@ function App() {
                   </button>
                 </div>
               ) : null}
-              <article className="emailItem">
+              <article
+                className={`emailItem ${isEmailSearchHighlight('needs_review', item.id) ? 'emailSearchHighlight' : ''}`}
+                data-email-search-section="needs_review"
+                data-email-search-related-id={item.id}
+              >
                 <p><strong>Email ID:</strong> {item.id}</p>
                 {item.is_multi_role_child ? (
                   <p><strong>Requirement:</strong> {item.requirement_index ?? '-'} of {item.requirement_count ?? '-'}</p>
@@ -6218,7 +6348,12 @@ function App() {
             const fix = routingFixes[item.id] ?? { to: '', cc: '' }
             const openUrl = sourceListingUrl(item) ?? item.gmail_message_url
             return (
-              <article key={`failed-${item.id}`} className="emailItem">
+              <article
+                key={`failed-${item.id}`}
+                className={`emailItem ${isEmailSearchHighlight('failed_mapping', item.id) ? 'emailSearchHighlight' : ''}`}
+                data-email-search-section="failed_mapping"
+                data-email-search-related-id={item.id}
+              >
                 <p><strong>Email ID:</strong> {item.id}</p>
                 <p><strong>From:</strong> {item.sender}</p>
                 <p><strong>Subject:</strong> {item.subject}</p>
@@ -6292,7 +6427,12 @@ function App() {
           <h2>Recent Runs</h2>
           {logs.length === 0 ? <p className="subtle">No runs yet.</p> : null}
           {logs.map((item, index) => (
-            <article key={item.run_key ?? `${item.email_id ?? 'none'}-${index}`} className="emailItem">
+            <article
+              key={item.run_key ?? `${item.email_id ?? 'none'}-${index}`}
+              className={`emailItem ${isEmailSearchHighlight('recent_runs', item.run_key) ? 'emailSearchHighlight' : ''}`}
+              data-email-search-section="recent_runs"
+              data-email-search-related-id={item.run_key ?? undefined}
+            >
               <p><strong>Status:</strong> {item.status}</p>
               <p><strong>Detail:</strong> {item.detail}</p>
               {item.run_source ? <p><strong>Run Source:</strong> {item.run_source}</p> : null}
@@ -6358,7 +6498,12 @@ function App() {
                           const intentEvidence = skipped.intent_evidence ?? []
                           const intentNegativeEvidence = skipped.intent_negative_evidence ?? []
                           return (
-                          <article key={`${item.run_key}-${skipped.id}`} className="emailItem">
+                          <article
+                            key={`${item.run_key}-${skipped.id}`}
+                            className={`emailItem ${isEmailSearchHighlight('recent_runs', skipped.id) ? 'emailSearchHighlight' : ''}`}
+                            data-email-search-section="recent_runs"
+                            data-email-search-related-id={skipped.id}
+                          >
                             <p><strong>Source:</strong> {getSourceLabel(skipped.source_type)}</p>
                             <p><strong>Title:</strong> {renderTextOrDash(skipped.title_or_subject)}</p>
                             <p><strong>Why:</strong> {renderTextOrDash(skipped.reason_detail || skipped.reason_code)}</p>
@@ -6481,7 +6626,12 @@ function App() {
               ) : null}
               {premiumScopeFilter === 'all_review'
                 ? numberReviewCards.map((item) => (
-                    <article key={`review-${item.id}`} className="emailItem">
+                    <article
+                      key={`review-${item.id}`}
+                      className={`emailItem ${isEmailSearchHighlight('premium_numbers', item.id) ? 'emailSearchHighlight' : ''}`}
+                      data-email-search-section="premium_numbers"
+                      data-email-search-related-id={item.id}
+                    >
                       <p><strong>Phone:</strong> {item.display_phone_number}</p>
                       <p><strong>Owner:</strong> {item.owner_name}</p>
                       <p><strong>Company:</strong> {item.company}</p>
@@ -6526,7 +6676,12 @@ function App() {
               ) : null}
               {premiumScopeFilter === 'recruiter_numbers'
                 ? recruiterNumberCards.map((item) => (
-                    <article key={`recruiter-number-${item.id}`} className="emailItem">
+                    <article
+                      key={`recruiter-number-${item.id}`}
+                      className={`emailItem ${isEmailSearchHighlight('premium_numbers', item.id) ? 'emailSearchHighlight' : ''}`}
+                      data-email-search-section="premium_numbers"
+                      data-email-search-related-id={item.id}
+                    >
                       <p><strong>Recruiter:</strong> {item.recruiter_name}</p>
                       <p><strong>Phone:</strong> {item.display_phone_number}</p>
                       <p><strong>Company:</strong> {item.company}</p>
@@ -6552,7 +6707,12 @@ function App() {
               ) : null}
               {premiumScopeFilter === 'employer_numbers'
                 ? employerNumberCards.map((item) => (
-                    <article key={`employer-number-${item.id}`} className="emailItem">
+                    <article
+                      key={`employer-number-${item.id}`}
+                      className={`emailItem ${isEmailSearchHighlight('premium_numbers', item.id) ? 'emailSearchHighlight' : ''}`}
+                      data-email-search-section="premium_numbers"
+                      data-email-search-related-id={item.id}
+                    >
                       <p><strong>Phone:</strong> {item.display_phone_number}</p>
                       <p><strong>Owner:</strong> {item.owner_name}</p>
                       <p><strong>Company:</strong> {item.company}</p>
@@ -6575,7 +6735,12 @@ function App() {
               ) : null}
               {premiumScopeFilter === 'recruiter_opportunities'
                 ? opportunityCards.map((item) => (
-                    <article key={`opportunity-${item.id}`} className="emailItem">
+                    <article
+                      key={`opportunity-${item.id}`}
+                      className={`emailItem ${isEmailSearchHighlight('premium_numbers', item.id) ? 'emailSearchHighlight' : ''}`}
+                      data-email-search-section="premium_numbers"
+                      data-email-search-related-id={item.id}
+                    >
                       <p><strong>Subject:</strong> {item.email_subject}</p>
                       <p><strong>Source:</strong> {(item.source_type || 'gmail').toUpperCase()}</p>
                       <p><strong>Recruiter Name:</strong> {item.recruiter_name || '-'}</p>
@@ -6723,7 +6888,9 @@ function App() {
                       <button
                         key={conversation.id}
                         type="button"
-                        className={`conversationListItem ${isUnread ? 'unread' : ''} ${selectedConversationId === conversation.id ? 'active' : ''}`}
+                        className={`conversationListItem ${isUnread ? 'unread' : ''} ${selectedConversationId === conversation.id ? 'active' : ''} ${isEmailSearchHighlight('inbox', conversation.id) ? 'emailSearchHighlight' : ''}`}
+                        data-email-search-section="inbox"
+                        data-email-search-related-id={conversation.id}
                         onClick={() => void openInboxConversation(conversation.id)}
                         aria-label={`${isUnread ? 'Unread: ' : ''}${conversation.recruiter}, ${conversation.subject}, ${absoluteTime}`}
                         title={absoluteTime}
@@ -6842,7 +7009,12 @@ function App() {
             const parserExpanded = Boolean(expandedParserDetailIds[item.id])
             const listingUrl = sourceListingUrl(item)
             return (
-              <article key={`sent-${item.id}`} className="emailItem sentItemCard">
+              <article
+                key={`sent-${item.id}`}
+                className={`emailItem sentItemCard ${isEmailSearchHighlight('sent_items', item.id) ? 'emailSearchHighlight' : ''}`}
+                data-email-search-section="sent_items"
+                data-email-search-related-id={item.id}
+              >
                 <div className="sentItemHeader">
                   <div className="sentItemHeaderText">
                     <p><strong>Email ID:</strong> {item.id}</p>

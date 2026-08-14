@@ -146,7 +146,7 @@ from app.job_intent_learning import (
     normalize_job_intent_phrase,
     prioritized_learning_signals,
 )
-from app.services import analytics_service, policy_service
+from app.services import analytics_service, email_lookup_service, policy_service
 from app.services.auto_runner_service import AutoRunnerService
 from app.services.candidate_runtime_service import CandidateRuntimeDeps, CandidateRuntimeService, resolve_resume_display_name
 from app.services.gmail_group_source_service import (
@@ -202,6 +202,8 @@ from app.schemas import (
     DismissEntityRequest,
     EmbedPendingSkillsResponse,
     EmbeddedJobIntentSignalResponse,
+    EmailSearchHitResponse,
+    EmailSearchResponse,
     EmbeddingStatusResponse,
     EmailResponse,
     GmailStatusResponse,
@@ -3955,6 +3957,24 @@ def get_premium_number(lead_id: int, db: Session = Depends(get_db)) -> PremiumNu
     if not lead:
         raise HTTPException(status_code=404, detail="Premium number lead not found")
     return lead
+
+
+@app.get("/search/email", response_model=EmailSearchResponse)
+def search_email(
+    q: str = Query(..., min_length=1, max_length=255),
+    section: str | None = Query(default=None, max_length=32),
+    db: Session = Depends(get_db),
+) -> EmailSearchResponse:
+    normalized = q.strip()
+    if len(normalized) < 2 and not normalized.isdecimal():
+        raise HTTPException(status_code=422, detail="q must be a numeric Email ID or contain at least 2 characters")
+    hits = email_lookup_service.search_email(db, owner_id=settings.owner_id, query=normalized, current_section=section)
+    visible = hits[: email_lookup_service.MAX_EMAIL_SEARCH_HITS]
+    return EmailSearchResponse(
+        query=normalized,
+        hits=[EmailSearchHitResponse(**hit.__dict__) for hit in visible],
+        truncated=len(hits) > email_lookup_service.MAX_EMAIL_SEARCH_HITS,
+    )
 
 
 @app.post("/premium-numbers/reextract/{recruiter_email_id}", response_model=dict[str, int])
