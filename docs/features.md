@@ -23,6 +23,7 @@
 | Nvoids sync | Sync rejects requests when `feature_nvoids_enabled` is false and requires the external integration. | `POST /external-feeds/nvoids/sync` checks `feature_nvoids_enabled`. |
 | Telegram | Bot configuration and polling runtime are required. | `GET /telegram/status` and `app/telegram_bot.py`. |
 | Google Sheets append | The send-side integration requires configuration and was not exercised in this audit. | Send orchestration integration path. |
+| In-app assistant | `FEATURE_CHAT_ENABLED=true` and a reachable local Ollama daemon are required. The widget remains visible with an explanatory disabled state otherwise. | `/chat/*`, `/mcp`, `app/ai/chat/*`, and `dashboard/src/features/chat/*`. |
 
 ## Persisted Flags With Runtime Effect
 
@@ -32,9 +33,9 @@
 
 - The current sidebar includes presentational `New Campaign`, `Settings`, and `Help Center` controls in `dashboard/src/components/Sidebar.tsx`.
 
-Mermaid not needed: this is a feature inventory, not a changed workflow description.
+The in-app assistant flow is documented in `docs/mermaids-features.md`.
 
-- Audit date: 2026-08-05
+- Audit date: 2026-08-14
 - Branch: semantic-embeddings
 - Evidence basis: both
-- Verification limits: dashboard tests passed; focused backend tests include one premium-number failure, and external integrations were not executed.
+- Verification limits: focused chat tests and a live tool-backed Ollama exchange passed; unrelated external integrations were not executed.

@@ -33,6 +33,13 @@ class Settings(BaseSettings):
     groq_gate_body_char_limit: int = 6000
     groq_gate_max_retries: int = 2
     groq_gate_redact_contact_info: bool = True
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_chat_model: str = "gemma4:31b-cloud"
+    ollama_timeout_seconds: float = 60.0
+    ollama_max_tool_iterations: int = 6
+    feature_chat_enabled: bool = False
+    chat_history_max_messages: int = 20
+    chat_message_char_limit: int = 4000
     google_client_id: str = ""
     google_client_secret: str = ""
     google_redirect_uri: str = "http://localhost:8080/"

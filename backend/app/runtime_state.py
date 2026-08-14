@@ -28,6 +28,15 @@ class AppRuntimeState:
     groq_last_duration_ms: int | None = None
     groq_last_provider_result: str | None = None
     groq_request_mode: str = ""
+    ollama_last_error: str | None = None
+    ollama_last_attempted_at: datetime | None = None
+    ollama_last_success_at: datetime | None = None
+    ollama_last_duration_ms: int | None = None
+    chat_last_error: str | None = None
+    chat_last_attempted_at: datetime | None = None
+    chat_last_success_at: datetime | None = None
+    chat_last_duration_ms: int | None = None
+    chat_mcp_status: str = "disabled"
     telegram_service: TelegramBotService | None = None
     telegram_action_lock: threading.Lock = field(default_factory=threading.Lock)
     telegram_auth_sessions: dict[int, datetime] = field(default_factory=dict)

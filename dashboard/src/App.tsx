@@ -5,6 +5,7 @@ import TrustedGmailGroupsPanel, { type TrustedGmailGroup } from './features/gmai
 import { getDraftSourceLabel } from './features/ai/ui'
 import QueryBucket from './features/query_bucket/QueryBucket'
 import EmailSearch from './features/email_search/EmailSearch'
+import ChatWidget from './features/chat/ChatWidget'
 import { type CandidateState, useCandidateBuckets } from './candidateBuckets'
 import { addCcEmail, removeCcEmail } from './ccEmails'
 import { addEmployerDomain, removeEmployerDomain } from './employerDomains'
@@ -7155,6 +7156,7 @@ function App() {
           ) : null}
         </div>
       </section>
+      <ChatWidget apiBase={apiBase} />
     </main>
   )
 }

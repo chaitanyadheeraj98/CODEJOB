@@ -1,6 +1,8 @@
+<!-- markdownlint-configure-file {"MD013": false} -->
+
 # CODEJOB Test and Validation Matrix
 
-Audit date: 2026-08-05
+Audit date: 2026-08-14
 Branch: `semantic-embeddings`
 
 ## 1 Standard repo validation commands
@@ -18,26 +20,35 @@ Branch: `semantic-embeddings`
 
 ## 2 Command results in this audit session
 
-- `cd dashboard; npm run test`
+- `cd backend; .\.venv\Scripts\python.exe -m pytest tests/test_mcp_server.py tests/test_chat_service.py tests/test_chat_routes.py tests/test_migration_0015.py -q`
   - **Result:** passed
-  - **Exact output:** `24 passed files`, `78 passed tests`
+  - **Exact output:** `6 passed`
   - **Blocker class:** none
 
-- `cd backend; .\.venv\Scripts\python.exe -m pytest tests/test_premium_numbers_api.py tests/test_analytics_view_events.py tests/test_telegram_interactive.py`
-  - **Result:** failed
-  - **Exact output:** `30 passed`, `1 failed`
-  - **Exact failure:** `test_reextract_overrides_name_without_to_when_contact_snippet_is_strong` expected `Rabbanis` and received `Samshritha Gangula`.
-  - **Blocker class:** stale test or runtime regression
+- Affected backend batch covering AI status, inbox, schemas, startup lifespan, chat, MCP, and migration behavior
+  - **Result:** passed
+  - **Exact output:** `19 passed`
+  - **Blocker class:** none
 
-- `cd backend; .\.venv\Scripts\python.exe -m pytest tests/test_approve_cc_regression.py tests/test_candidate_screening_service.py tests/test_phase0_routing.py`
-  - **Result:** stopped before completion
-  - **Exact failure:** command stalled after `test_approve_cc_regression.py` began; no pass/fail result was captured.
-  - **Blocker class:** incompatible local runtime timeout
+- `cd dashboard; npm run test -- --run`
+  - **Result:** passed
+  - **Exact output:** `29 passed files`, `89 passed tests`
+  - **Blocker class:** none
 
-- `npx --no-install markdownlint-cli <touched docs files>`
-  - **Result:** failed before linting
-  - **Exact failure:** `npx canceled due to missing packages and no YES option: ["markdownlint-cli@0.49.1"]`.
-  - **Blocker class:** missing dependency
+- Clean Docker backend/dashboard builds and live chat validation
+  - **Result:** passed
+  - **Exact behavior:** migration reached `20260814_0015`; `/mcp` listed eight tools; `search_candidates` fired through LangGraph; `gemma4:31b-cloud` streamed an SSE answer; user, tool, and assistant rows persisted.
+  - **Blocker class:** none
+
+- `npx --no-install markdownlint-cli2 docs/architecture.md docs/features.md docs/data.md docs/testcases.md docs/mermaids-features.md`
+  - **Result:** passed
+  - **Exact output:** `Summary: 0 error(s)`
+  - **Blocker class:** none
+
+- Full backend suite
+  - **Result:** stopped during collection
+  - **Exact failure:** `tests/test_phone_attribution.py` imports missing module `app.phone_attribution`.
+  - **Blocker class:** known stale test
 
 ## 3 HR-1 closeout gate mapping
 
@@ -57,9 +68,10 @@ Branch: `semantic-embeddings`
 ## 5 Reviewer attention
 
 - No full backend pass can be claimed in this session.
-- Dashboard tests passed. Markdownlint could not run because the CLI dependency is absent; dashboard lint and build were not run in this audit.
+- The chat implementation passed focused backend tests, the full dashboard suite, container builds, migration checks, and a live tool-backed answer.
+- Host dashboard build remains affected by the known `.tsbuildinfo` permission issue; the clean Docker build passed.
 
-- Audit date: 2026-08-05
+- Audit date: 2026-08-14
 - Branch: semantic-embeddings
 - Evidence basis: both
-- Verification limits: focused validation only; one backend premium-number failure and missing markdownlint dependency.
+- Verification limits: the unrelated stale backend import prevents an all-green broad backend-suite claim.

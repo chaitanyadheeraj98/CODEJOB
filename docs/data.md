@@ -1,6 +1,8 @@
+<!-- markdownlint-configure-file {"MD013": false} -->
+
 # CODEJOB Data Models and Data Flow
 
-Audit date: 2026-08-05
+Audit date: 2026-08-14
 Branch: `semantic-embeddings`
 
 ## 1 Core entities
@@ -35,6 +37,11 @@ Versioned resume file metadata + optional semantic embedding cache.
 - `DraftEditFeedback`
 - `RecipientRoutingFeedback`
 - `ProductivityEvent`
+
+### Chat history
+
+- `ChatSession`: owner-scoped conversation title plus created and updated timestamps.
+- `ChatMessage`: ordered user, assistant, and tool audit rows linked to a session. Tool rows retain the tool name and compact call metadata.
 
 ## 2 Phone-intelligence entities
 
@@ -88,14 +95,21 @@ Active uniqueness protections include:
 4. Manual approval path updates send state and emits analytics.
 5. Optional Sheets append runs as best-effort side effect.
 
+Chat uses a separate read-only flow:
+
+1. A user message is validated and persisted under an owner-scoped `ChatSession`.
+2. LangGraph may call an owner-scoped MCP tool for candidates, runs, inbox, AI health, or settings.
+3. Tool and assistant audit rows are persisted, while assistant text streams to the dashboard over SSE.
+
 ## 6 Schema/runtime notes
 
 - Schema response contracts are defined in `backend/app/schemas.py`.
 - Routing evidence/candidates are stored as JSON text and parsed in schema validators.
 - SQLite schema evolution is currently additive at startup via `ensure_sqlite_phase0_columns()`.
 - Query bucket persistence is in `UserSettings.saved_gmail_queries_json` (not a standalone table).
+- Alembic revision `20260814_0015` creates `chat_sessions` and `chat_messages`; upgrade and downgrade are covered by a focused migration test.
 
-- Audit date: 2026-08-05
+- Audit date: 2026-08-14
 - Branch: semantic-embeddings
-- Evidence basis: code inspection
-- Verification limits: model and flow mapping reviewed from source; no full backend suite was run, and one focused premium-number regression failed.
+- Evidence basis: both
+- Verification limits: chat persistence and migration round trips were tested; the full backend suite remains blocked during collection by the stale `app.phone_attribution` import.

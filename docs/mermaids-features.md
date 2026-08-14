@@ -2,11 +2,11 @@
 
 # CODEJOB Mermaid Feature Flows
 
-- Audit date: 2026-08-05
+- Audit date: 2026-08-14
 - Branch: semantic-embeddings
-- Commit: cb68a92737671f5db2546c380205327b4f082b68
+- Commit: f521c049b417ee09228a198769914c9dc595a478
 - Evidence basis: both
-- Verification limits: dashboard tests passed; focused premium-number tests contain one failure. External integrations were not executed.
+- Verification limits: chat was exercised live; unrelated external integrations were not re-executed, and the broad backend suite retains a known stale-import blocker.
 
 ## Feature Coverage Summary
 
@@ -32,6 +32,7 @@
 | HR-5 auto-send and retry queue behavior | toggles and run summary display in UI | runtime orchestration paths using `feature_auto_send` and `feature_retry_queue` | Live (optional) | Yes |
 | Telegram operations | telegram status shown in UI | `GET /telegram/status`, runtime telegram command/callback handling | Live (optional) | Yes |
 | Google Sheets append | no dedicated UI; send side-effect only | orchestration send path integration | Unknown | Yes |
+| In-app assistant | always-mounted `ChatWidget` | `/chat/*`, `/mcp`, LangGraph, and Ollama | Live (optional) | Yes |
 
 ## Gmail OAuth and Inbox Sync
 
@@ -478,14 +479,40 @@ flowchart TD
 | Tests | No direct test found |
 | Verification limit | no direct sheet append command or assertion in this session |
 
+## In-App Assistant
+
+```mermaid
+flowchart TD
+  A[Open always-mounted ChatWidget] --> B[GET chat status]
+  B -->|disabled or Ollama unavailable| C[Show explanatory disabled state]
+  B -->|ready| D[Create or load persisted session]
+  D --> E[POST message and consume SSE]
+  E --> F[LangGraph agent]
+  F -->|application data needed| G[Read-only MCP tool]
+  G --> H[Owner-scoped database query]
+  H --> F
+  F --> I[Ollama gemma4 cloud response]
+  I --> J[Persist tool and assistant audit rows]
+  J --> K[Render streamed answer]
+```
+
+| Evidence type | Source |
+| --- | --- |
+| Frontend entry | `dashboard/src/features/chat/ChatWidget.tsx` mounted in `dashboard/src/App.tsx` |
+| API endpoint | `GET /chat/status`, `/chat/sessions*`, and `POST /chat/sessions/{id}/messages` |
+| Backend logic | `backend/app/ai/chat/*`, `backend/app/services/chat_service.py`, and `backend/app/mcp_server/*` |
+| Data touched | owner-scoped `chat_sessions` and `chat_messages`; all MCP application-data access is read-only |
+| Tests | focused backend chat/MCP/migration tests and frontend widget/SSE tests passed |
+| Verification limit | feature is disabled by default and requires a reachable local Ollama daemon when enabled |
+
 ## Reviewer Attention
 
 - Runtime flows not executed in this session: OAuth completion, Telegram interactions, run-once full-cycle send, Nvoids sync, and Google Sheets append.
-- Tests run in this session: `dashboard` suite (`24 files`, `78 tests` passed); premium/analytics/Telegram backend batch (`30 passed`, `1 failed`).
+- Chat validation: focused tests, Docker builds, exact `/mcp` negotiation, tool invocation, Ollama streaming, and persistence passed.
 - Human validation still needed for integration-dependent flows (Gmail, Telegram, optional sheets).
 
-- Audit date: 2026-08-05
+- Audit date: 2026-08-14
 - Branch: semantic-embeddings
-- Commit: cb68a92737671f5db2546c380205327b4f082b68
+- Commit: f521c049b417ee09228a198769914c9dc595a478
 - Evidence basis: both
-- Verification limits: external integrations and full end-to-end runtime flows were not executed; one premium-number test failed.
+- Verification limits: unrelated external integrations were not re-executed; the broad backend suite retains one stale import.

@@ -725,6 +725,48 @@ class CandidateListResponse(BaseModel):
     total: int
 
 
+class ChatSessionResponse(BaseModel):
+    id: int
+    title: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ChatMessageResponse(BaseModel):
+    id: int
+    role: str
+    content: str
+    tool_name: str | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ChatSessionDetailResponse(ChatSessionResponse):
+    messages: list[ChatMessageResponse] = Field(default_factory=list)
+
+
+class ChatMessageRequest(BaseModel):
+    text: str
+
+
+class ChatDeleteResponse(BaseModel):
+    id: int
+    deleted: bool
+
+
+class ChatStatusResponse(BaseModel):
+    enabled: bool
+    ollama_running: bool
+    ollama_last_error: str | None = None
+    ollama_last_success_at: datetime | None = None
+    chat_last_error: str | None = None
+    mcp_status: str
+    model: str
+
+
 class SentItemDetailsResponse(BaseModel):
     email_id: int
     source_type: str

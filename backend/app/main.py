@@ -3,8 +3,8 @@ import json
 import logging
 import re
 import uuid
-from collections.abc import Callable, Generator
-from contextlib import asynccontextmanager
+from collections.abc import Callable
+from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from dataclasses import dataclass
 from email.utils import parseaddr
@@ -39,7 +39,7 @@ from app.automation import (
     RunOrchestratorDependencies,
     RunOrchestratorRequest,
 )
-from app.db import Base, SessionLocal, engine, ensure_sqlite_phase0_columns
+from app.db import Base, SessionLocal, engine, ensure_sqlite_phase0_columns, get_db
 from app.gates import classify_email_intent
 from app.ai.groq_client import groq_request_mode_for_model
 from app.gmail_client import (
@@ -139,6 +139,7 @@ from app.premium_numbers.intelligence import OPPORTUNITY_STATUS_VALUES
 from app.premium_numbers.phone_normalization import best_display_phone, canonicalize_phone
 from app.query_bucket import sanitize_saved_queries
 from app.runtime_state import runtime_state
+from app.routers.chat import get_chat_service as _get_chat_service, router as chat_router
 from app.job_intent_learning import (
     NEGATIVE_NEWSLETTER,
     POSITIVE_RECRUITER_JD,
@@ -271,24 +272,33 @@ from app.semantic.embeddings_service import (
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     global auto_runner_thread, telegram_service, gmail_labeling_service
-    startup_service = StartupService(
-        ensure_default_settings=_ensure_default_settings,
-        ensure_labeling_service=gmail_labeling_runtime_service.ensure_service,
-        init_telegram_service=_init_telegram_service,
-        auto_runner_loop=_auto_runner_loop,
-    )
-    startup_service.startup()
-    auto_runner_thread = runtime_state.auto_runner_thread
-    telegram_service = runtime_state.telegram_service
-    gmail_labeling_service = runtime_state.gmail_labeling_service
-    yield
-    startup_service.shutdown()
-    auto_runner_thread = runtime_state.auto_runner_thread
-    telegram_service = runtime_state.telegram_service
-    gmail_labeling_service = runtime_state.gmail_labeling_service
+    async with AsyncExitStack() as stack:
+        if settings.feature_chat_enabled:
+            await stack.enter_async_context(chat_mcp.session_manager.run())
+            runtime_state.chat_mcp_status = "ready"
+        startup_service = StartupService(
+            ensure_default_settings=_ensure_default_settings,
+            ensure_labeling_service=gmail_labeling_runtime_service.ensure_service,
+            init_telegram_service=_init_telegram_service,
+            auto_runner_loop=_auto_runner_loop,
+        )
+        startup_service.startup()
+        auto_runner_thread = runtime_state.auto_runner_thread
+        telegram_service = runtime_state.telegram_service
+        gmail_labeling_service = runtime_state.gmail_labeling_service
+        yield
+        startup_service.shutdown()
+        auto_runner_thread = runtime_state.auto_runner_thread
+        telegram_service = runtime_state.telegram_service
+        gmail_labeling_service = runtime_state.gmail_labeling_service
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
+if settings.feature_chat_enabled:
+    from app.mcp_server.server import mcp as chat_mcp, mcp_app as chat_mcp_app
+else:
+    chat_mcp = None
+app.include_router(chat_router)
 logger = logging.getLogger(__name__)
 last_gmail_sync_at: datetime | None = None
 ai_running: bool = False
@@ -436,14 +446,6 @@ ALLOWED_VIEW_EVENTS = {
 RANGE_OPTIONS = {"last_1h", "current_day", "current_week", "current_month", "current_year", "last_5y"}
 BUSINESS_TZ = ZoneInfo("America/Chicago")
 BUCKET_OPTIONS = {"five_min", "hour", "day", "month", "quarter"}
-
-
-def get_db() -> Generator[Session, None, None]:
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
 def _record_productivity_event(
@@ -4834,3 +4836,9 @@ def resolve_recipients(
     db: Session = Depends(get_db),
 ) -> RecruiterEmail:
     return _get_orchestration_service().resolve_recipients(email_id, payload, db)
+
+
+# Root mounting preserves FastMCP's exact /mcp endpoint. It must remain last so
+# the existing FastAPI routes keep precedence over the catch-all mount.
+if settings.feature_chat_enabled:
+    app.mount("/", chat_mcp_app)
