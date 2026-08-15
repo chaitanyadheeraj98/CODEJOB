@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     deepseek_api_key: str = Field(default="", validation_alias="Deepseek_API_KEY")
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model_fast: str = "deepseek-v4-flash"
+    deepseek_model_pro: str = Field(default="deepseek-v4-pro", validation_alias="DEEPSEEK_MODEL_PRO")
     deepseek_timeout_seconds: float = 20.0
     feature_deepseek_enabled: bool = False
     role_manifest_child_creation_enabled: bool = Field(
@@ -33,6 +34,13 @@ class Settings(BaseSettings):
     groq_gate_body_char_limit: int = 6000
     groq_gate_max_retries: int = 2
     groq_gate_redact_contact_info: bool = True
+    role_manifest_groq_model: str = "llama-3.1-8b-instant"
+    role_manifest_extraction_passes_deterministic: int = 1
+    role_manifest_extraction_passes_variance: int = 2
+    role_manifest_retry_temperature: float = 0.4
+    role_manifest_max_tokens_groq: int = 1600
+    role_manifest_max_calls_per_email: int = 12
+    role_manifest_max_source_chars: int = 12000
     ollama_base_url: str = "http://localhost:11434"
     ollama_chat_model: str = "gemma4:31b-cloud"
     ollama_timeout_seconds: float = 60.0

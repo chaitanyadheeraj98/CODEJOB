@@ -52,13 +52,13 @@ class RequirementExpansionService:
             db.commit()
             return ExpansionResult(parent.id, manifest_result.status, 0)
 
-        if manifest_result.status == "single":
+        if manifest_result.status in {"single", "single_fallback"}:
             parent.requirement_count = 1
             parent.requirement_index = 1
             if parent.sendability_status == "manifest_review":
                 parent.sendability_status = None
             db.commit()
-            return ExpansionResult(parent.id, "single", 1)
+            return ExpansionResult(parent.id, manifest_result.status, 1)
 
         if not materialize:
             db.commit()

@@ -1053,7 +1053,7 @@ class RunOrchestratorTests(unittest.TestCase):
             with patch(
                 "app.automation.run_orchestrator.RoleManifestService",
                 return_value=SimpleNamespace(detect=lambda body: two_role_manifest()),
-            ):
+            ) as manifest_service_type:
                 result = RunOrchestrator().execute(
                     RunOrchestratorRequest(
                         db=db,
@@ -1074,6 +1074,7 @@ class RunOrchestratorTests(unittest.TestCase):
                 )
 
             self.assertEqual(result.queued_count, 1)
+            manifest_service_type.assert_called_once_with(max_rung=2)
             parent = db.query(RecruiterEmail).filter(RecruiterEmail.external_message_id == "m-multi-run-1").first()
             self.assertIsNotNone(parent)
             assert parent is not None

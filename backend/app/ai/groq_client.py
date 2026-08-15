@@ -75,7 +75,7 @@ def _validate_schema_subset(value: object, schema: dict[str, object]) -> bool:
     if schema_type == "string":
         if not isinstance(value, str):
             return False
-    elif schema_type == "number":
+    elif schema_type in ("number", "integer"):
         if not _is_number(value):
             return False
     elif schema_type is not None:
@@ -100,6 +100,7 @@ def groq_chat_json(
     schema: dict[str, object],
     model: str | None = None,
     strict: bool = True,
+    max_tokens: int = 500,
 ) -> tuple[dict[str, object] | None, str | None]:
     if not settings.groq_api_key:
         return None, "missing_groq_api_key"
@@ -137,7 +138,7 @@ def groq_chat_json(
                     },
                 ],
                 "temperature": 0.0,
-                "max_tokens": 500,
+                "max_tokens": max(1, int(max_tokens)),
             }
             if request_mode == "json_schema":
                 request_kwargs["response_format"] = {

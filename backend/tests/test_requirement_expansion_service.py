@@ -104,6 +104,42 @@ class RequirementExpansionServiceTests(unittest.TestCase):
             self.assertEqual(result.manifest_status, "single")
             self.assertIsNone(parent.sendability_status)
 
+    def test_single_fallback_clears_manifest_review_and_remains_observable(self) -> None:
+        engine = create_engine("sqlite+pysqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        manifest = RoleManifestService(
+            provider=lambda system, user: {
+                "classification": "uncertain",
+                "role_count": 0,
+                "confidence": 0.2,
+                "roles": [],
+            }
+        ).detect("Senior Engineer role")
+
+        with Session(engine) as db:
+            parent = RecruiterEmail(
+                owner_id="default-owner",
+                sender="recruiter@example.com",
+                subject="Unsplit role",
+                body="Senior Engineer role",
+                role="Senior Engineer",
+                state="needs_review",
+                decision="Qualified",
+                external_message_id="gmail-message-fallback-1",
+                source="gmail",
+                sendability_status="manifest_review",
+                role_manifest_status="invalid",
+            )
+            db.add(parent)
+            db.commit()
+
+            result = RequirementExpansionService().expand(db, parent, manifest, materialize=True)
+
+            self.assertEqual(result.manifest_status, "single_fallback")
+            self.assertEqual(result.requirement_count, 1)
+            self.assertEqual(parent.role_manifest_status, "single_fallback")
+            self.assertIsNone(parent.sendability_status)
+
     def test_reprocessing_multi_role_parent_does_not_duplicate_children(self) -> None:
         engine = create_engine("sqlite+pysqlite:///:memory:")
         Base.metadata.create_all(engine)

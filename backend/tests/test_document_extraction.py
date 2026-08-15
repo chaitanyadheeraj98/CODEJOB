@@ -303,7 +303,7 @@ class DocumentExtractionTests(unittest.TestCase):
                 ],
             }
 
-        result = RoleManifestService(provider=provider, repair_attempts=0).detect(cleaned)
+        result = RoleManifestService(provider=provider).detect(cleaned)
 
         self.assertEqual(result.status, "single")
         self.assertIn("1: ", captured["prompt"])

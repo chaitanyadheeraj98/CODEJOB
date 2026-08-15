@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 import httpx
 os.environ["DEBUG"] = "false"
@@ -326,6 +326,7 @@ Job ID: ENG-2"""
         self.assertEqual(first.status_code, 200, first.text)
         self.assertEqual(second.status_code, 200, second.text)
         self.assertEqual(first.json()["child_ids"], second.json()["child_ids"])
+        self.assertEqual(manifest_service_type.call_args_list, [call(max_rung=4), call(max_rung=4)])
         with self.SessionLocal() as db:
             self.assertEqual(
                 db.query(RecruiterEmail)
@@ -333,6 +334,54 @@ Job ID: ENG-2"""
                 .count(),
                 2,
             )
+
+    def test_retry_role_detection_processes_single_fallback_as_a_normal_source(self) -> None:
+        source_text = "Senior Engineer role"
+        manifest = RoleManifestService(
+            provider=lambda system, user: {
+                "classification": "uncertain",
+                "role_count": 0,
+                "confidence": 0.2,
+                "roles": [],
+            }
+        ).detect(source_text)
+        with self.SessionLocal() as db:
+            parent = RecruiterEmail(
+                owner_id=main.settings.owner_id,
+                sender="recruiter@example.com",
+                subject="One unresolved role",
+                body=source_text,
+                role="",
+                location="",
+                salary_text="",
+                skills_text="",
+                score=0,
+                decision="Qualified",
+                state="needs_review",
+                source="gmail",
+                external_message_id="gmail-fallback-role-1",
+                sendability_status="manifest_review",
+            )
+            db.add(parent)
+            db.commit()
+            parent_id = parent.id
+
+        with (
+            patch.object(main, "RoleManifestService") as manifest_service_type,
+            patch.object(main, "extract_and_score_children") as extract_children,
+        ):
+            manifest_service_type.return_value.detect.return_value = manifest
+            response = self.client.post(f"/candidates/{parent_id}/retry-role-detection")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["manifest_status"], "single_fallback")
+        self.assertEqual(response.json()["requirement_count"], 1)
+        manifest_service_type.assert_called_once_with(max_rung=4)
+        self.assertEqual(extract_children.call_args.args[1], [parent_id])
+        with self.SessionLocal() as db:
+            parent = db.get(RecruiterEmail, parent_id)
+            self.assertEqual(parent.role_manifest_status, "single_fallback")
+            self.assertIsNone(parent.sendability_status)
 
     def test_retry_role_detection_processes_each_role_from_both_real_nvoids_shapes(self) -> None:
         cases = [
@@ -512,7 +561,8 @@ Job ID: ENG-2"""
 
         detection_calls: list[int] = []
 
-        def retry_role_detection(email_id: int, _db):
+        def retry_role_detection(email_id: int, _db, *, max_rung: int):
+            self.assertEqual(max_rung, 2)
             detection_calls.append(email_id)
             if len(detection_calls) == 1:
                 raise RuntimeError("first row failed")
@@ -520,7 +570,7 @@ Job ID: ENG-2"""
 
         with (
             patch.object(main.external_feed_service, "sync_nvoids", side_effect=sync_nvoids),
-            patch.object(main, "retry_role_detection", side_effect=retry_role_detection),
+            patch.object(main, "_retry_role_detection", side_effect=retry_role_detection),
             self.assertLogs(main.logger.name, level="ERROR") as captured_logs,
         ):
             sync = self.client.post("/external-feeds/nvoids/sync")

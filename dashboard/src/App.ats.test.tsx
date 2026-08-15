@@ -105,6 +105,16 @@ describe('ATS review UI', () => {
       created_at: '2026-06-24T00:00:00Z',
       updated_at: '2026-06-24T00:00:00Z',
     }
+    const fallbackCandidate = {
+      ...candidate,
+      id: 43,
+      subject: 'Unsplit source role',
+      source_parent_email_id: null,
+      is_multi_role_child: false,
+      requirement_index: 1,
+      requirement_count: 1,
+      role_manifest_status: 'single_fallback',
+    }
 
     vi.stubGlobal(
       'fetch',
@@ -210,7 +220,7 @@ describe('ATS review UI', () => {
         if (url.includes('/recent-runs/')) return makeResponse({ items: [], next_cursor: null, has_next: false })
         if (url.includes('/recent-runs')) return makeResponse({ items: [], next_cursor: null, has_next: false })
         if (url.includes('/candidates?')) {
-          if (url.includes('state=needs_review')) return makeResponse({ items: [candidate], next_cursor: null, has_next: false })
+          if (url.includes('state=needs_review')) return makeResponse({ items: [candidate, fallbackCandidate], next_cursor: null, has_next: false })
           return makeResponse({ items: [], next_cursor: null, has_next: false })
         }
         if (url.includes('/analytics/events?')) return makeResponse([])
@@ -259,5 +269,6 @@ describe('ATS review UI', () => {
     expect(container.textContent ?? '').toContain('6 roles detected')
     expect(container.textContent ?? '').toContain('Requirement: 1 of 6')
     expect(container.textContent ?? '').toContain('Sendability: sendable')
+    expect(container.textContent ?? '').toContain('Auto-resolved as one role because a confident split was unavailable.')
   })
 })

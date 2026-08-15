@@ -185,10 +185,11 @@ class SyncGmailRoleManifestOrderingTests(unittest.TestCase):
             with patch(
                 "app.services.orchestration_service.RoleManifestService",
                 return_value=SimpleNamespace(detect=lambda body: _two_role_manifest()),
-            ):
+            ) as manifest_service_type:
                 response = service.sync_gmail(db)
 
             self.assertEqual(response.imported_count, 1)
+            manifest_service_type.assert_called_once_with(max_rung=2)
 
             parent = db.query(RecruiterEmail).filter(RecruiterEmail.external_message_id == "m-multi-1").first()
             self.assertIsNotNone(parent)

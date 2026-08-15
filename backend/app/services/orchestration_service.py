@@ -346,7 +346,7 @@ class OrchestrationService:
     def _detect_role_manifest_if_enabled(self, user_settings: UserSettings, body: str) -> RoleManifestResult | None:
         if not user_settings.feature_role_manifest_enabled:
             return None
-        return RoleManifestService().detect(body)
+        return RoleManifestService(max_rung=2).detect(body)
 
     def _expand_and_extract_children(
         self, db: Session, email: RecruiterEmail, manifest_result: RoleManifestResult, user_settings: UserSettings

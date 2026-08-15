@@ -67,12 +67,14 @@ class GroqClientTests(unittest.TestCase):
                 "additionalProperties": False,
             },
             model="llama-3.1-8b-instant",
+            max_tokens=1600,
         )
 
         self.assertIsNone(error)
         self.assertEqual(payload["intent_type"], "unknown")
         request_kwargs = mock_client.chat.completions.create.call_args.kwargs
         self.assertEqual(request_kwargs["response_format"], {"type": "json_object"})
+        self.assertEqual(request_kwargs["max_tokens"], 1600)
 
     @patch("app.ai.groq_client._build_client")
     def test_json_schema_mode_is_used_for_supported_models(self, mock_build_client) -> None:

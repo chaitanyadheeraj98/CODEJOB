@@ -3279,7 +3279,7 @@ def _run_gmail_sync(
             # new detect-before-parse ordering handled; this loop is now only a safety net.
             if not row.is_multi_role_child and row.role_manifest_status is None:
                 try:
-                    retry_role_detection(row.id, db)
+                    _retry_role_detection(row.id, db, max_rung=2)
                 except Exception:
                     db.rollback()
                     logger.exception(
@@ -3317,7 +3317,7 @@ def _run_automation(
             # new detect-before-parse ordering handled; only call retry as a safety net.
             if source_row.role_manifest_status is None:
                 try:
-                    detection = retry_role_detection(source_row.id, db)
+                    detection = _retry_role_detection(source_row.id, db, max_rung=2)
                 except Exception:
                     db.rollback()
                     logger.exception(
@@ -3329,7 +3329,7 @@ def _run_automation(
                 manifest_status = detection.manifest_status
             else:
                 manifest_status = source_row.role_manifest_status
-            if user_settings.feature_auto_send and not dry_run and manifest_status == "single":
+            if user_settings.feature_auto_send and not dry_run and manifest_status in {"single", "single_fallback"}:
                 try:
                     _get_orchestration_service().approve_send(
                         source_row.id,
@@ -3380,7 +3380,7 @@ def _run_nvoids_sync(
         rows = [row for row in rows if row.id not in existing_source_ids and not row.is_multi_role_child]
         for row in rows:
             try:
-                retry_role_detection(row.id, db)
+                _retry_role_detection(row.id, db, max_rung=2)
             except Exception:
                 db.rollback()
                 logger.exception(
@@ -4765,13 +4765,17 @@ def regenerate_candidate(
 
 @app.post("/candidates/{email_id}/retry-role-detection", response_model=RoleDetectionRetryResponse)
 def retry_role_detection(email_id: int, db: Session = Depends(get_db)) -> RoleDetectionRetryResponse:
+    return _retry_role_detection(email_id, db, max_rung=4)
+
+
+def _retry_role_detection(email_id: int, db: Session, *, max_rung: int) -> RoleDetectionRetryResponse:
     requested = _get_candidate_for_review(db, email_id)
     source = requested
     if requested.source_parent_email_id:
         source = _get_candidate_for_review(db, requested.source_parent_email_id)
     user_settings = _get_settings(db)
     manifest_body = prepare_gmail_parse_body(source.body) if source.source == "gmail" else source.body
-    manifest_result = RoleManifestService().detect(manifest_body)
+    manifest_result = RoleManifestService(max_rung=max_rung).detect(manifest_body)
     expansion = RequirementExpansionService().expand(
         db,
         source,
@@ -4780,7 +4784,7 @@ def retry_role_detection(email_id: int, db: Session = Depends(get_db)) -> RoleDe
     )
 
     processing_ids = list(expansion.child_ids)
-    if manifest_result.status == "single":
+    if manifest_result.status in {"single", "single_fallback"}:
         processing_ids = [source.id]
     if processing_ids:
         extract_and_score_children(

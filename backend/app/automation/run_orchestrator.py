@@ -217,7 +217,7 @@ class RunOrchestrator:
             parse_body = prepare_gmail_parse_body(body)
             manifest_result: RoleManifestResult | None = None
             if request.user_settings.feature_role_manifest_enabled:
-                manifest_result = RoleManifestService().detect(parse_body)
+                manifest_result = RoleManifestService(max_rung=2).detect(parse_body)
             item_ai_extractor_enabled = request.user_settings.feature_ai_extractor_enabled and (
                 manifest_result is None or manifest_result.status != "multiple"
             )
