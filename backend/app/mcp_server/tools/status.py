@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from app.config import settings
 from app.db import SessionLocal
-from app.models import UserSettings
+from app.models import AttachmentAsset, GmailRequirementGroup, UserSettings
 from app.runtime_state import runtime_state
 
 
@@ -30,6 +30,18 @@ def get_settings_summary() -> dict[str, object]:
         row = db.query(UserSettings).filter(UserSettings.owner_id == settings.owner_id).first()
         if row is None:
             return {"error": "Settings not initialized"}
+        attachments = (
+            db.query(AttachmentAsset)
+            .filter(AttachmentAsset.owner_id == settings.owner_id)
+            .order_by(AttachmentAsset.created_at.desc())
+            .all()
+        )
+        groups = (
+            db.query(GmailRequirementGroup)
+            .filter(GmailRequirementGroup.owner_id == settings.owner_id)
+            .order_by(GmailRequirementGroup.display_name.asc())
+            .all()
+        )
         return {
             "enabled": row.enabled,
             "qualification_threshold": row.qualification_threshold,
@@ -42,6 +54,11 @@ def get_settings_summary() -> dict[str, object]:
             "feature_retry_queue": row.feature_retry_queue,
             "feature_groq_job_parser_enabled": row.feature_groq_job_parser_enabled,
             "feature_reply_inbox_enabled": row.feature_reply_inbox_enabled,
+            "attachments": [{"file_name": a.file_name, "is_enabled": a.is_enabled} for a in attachments],
+            "trusted_sender_groups": [
+                {"display_name": g.display_name, "group_email": g.group_email, "enabled": g.enabled}
+                for g in groups
+            ],
         }
     finally:
         db.close()

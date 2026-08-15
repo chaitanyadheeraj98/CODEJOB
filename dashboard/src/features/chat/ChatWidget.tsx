@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 
 import { getChatStatus } from './api'
 import type { ChatStatus } from './types'
@@ -7,6 +7,82 @@ import { useChatSession } from './useChatSession'
 
 type ChatWidgetProps = {
   apiBase: string
+}
+
+function renderInline(line: string) {
+  return line.split(/(\*\*[^*]+\*\*|\*[^*]+\*)/).map((chunk, i) => {
+    if (chunk.startsWith('**') && chunk.endsWith('**')) return <strong key={i}>{chunk.slice(2, -2)}</strong>
+    if (chunk.startsWith('*') && chunk.endsWith('*') && chunk.length > 1) return <em key={i}>{chunk.slice(1, -1)}</em>
+    return chunk
+  })
+}
+
+// ponytail: headings/bold/italic/bullets only, not full markdown. Swap for a real parser if tables/links/code blocks show up.
+function renderMarkdownLite(text: string) {
+  const blocks: ReactNode[] = []
+  let paragraph: string[] = []
+  let list: string[] = []
+
+  const flushParagraph = () => {
+    if (!paragraph.length) return
+    blocks.push(
+      <p key={blocks.length}>
+        {paragraph.map((line, i) => (
+          <span key={i}>
+            {renderInline(line)}
+            {i < paragraph.length - 1 ? <br /> : null}
+          </span>
+        ))}
+      </p>,
+    )
+    paragraph = []
+  }
+  const flushList = () => {
+    if (!list.length) return
+    blocks.push(
+      <ul key={blocks.length}>
+        {list.map((line, i) => (
+          <li key={i}>{renderInline(line)}</li>
+        ))}
+      </ul>,
+    )
+    list = []
+  }
+
+  for (const raw of text.split('\n')) {
+    const line = raw.trim()
+    if (!line) {
+      flushParagraph()
+      flushList()
+      continue
+    }
+    const heading = line.match(/^(#{1,6})\s+(.*)/)
+    const listItem = line.match(/^[-*]\s+(.*)/)
+    if (heading) {
+      flushParagraph()
+      flushList()
+      const level = Math.min(heading[1].length, 3)
+      const headingContent = renderInline(heading[2])
+      blocks.push(
+        level === 1 ? (
+          <h4 key={blocks.length}>{headingContent}</h4>
+        ) : level === 2 ? (
+          <h5 key={blocks.length}>{headingContent}</h5>
+        ) : (
+          <h6 key={blocks.length}>{headingContent}</h6>
+        ),
+      )
+    } else if (listItem) {
+      flushParagraph()
+      list.push(listItem[1])
+    } else {
+      flushList()
+      paragraph.push(line)
+    }
+  }
+  flushParagraph()
+  flushList()
+  return blocks
 }
 
 export default function ChatWidget({ apiBase }: ChatWidgetProps) {
@@ -125,7 +201,9 @@ export default function ChatWidget({ apiBase }: ChatWidgetProps) {
                 ) : null}
                 {chat.messages.map((message) => (
                   <div key={message.id} className={`chatBubble ${message.role}`}>
-                    {message.content || (chat.busy && message.role === 'assistant' ? 'Thinking...' : '')}
+                    {message.content
+                      ? renderMarkdownLite(message.content)
+                      : chat.busy && message.role === 'assistant' ? 'Thinking...' : ''}
                   </div>
                 ))}
                 <div ref={messagesEndRef} />

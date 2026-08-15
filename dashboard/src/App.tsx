@@ -6211,6 +6211,9 @@ function App() {
                 {renderRoutingPanel(item)}
                 <p><strong>Resume:</strong> {item.resume_file_name ?? '-'}</p>
                 <p><strong>Sendability:</strong> {item.sendability_status ?? 'legacy evaluation'}</p>
+                {item.role_manifest_status === 'single_fallback' ? (
+                  <p className="subtle">Auto-resolved as one role because a confident split was unavailable.</p>
+                ) : null}
                 <p><strong>Screening Mode:</strong> {item.screening_mode ?? 'historical / not recorded'}</p>
                 {item.eligibility_status ? <p><strong>Eligibility:</strong> {item.eligibility_status}</p> : null}
                 {item.eligibility_details ? (
