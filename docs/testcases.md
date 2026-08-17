@@ -1,9 +1,11 @@
+<!-- markdownlint-configure-file {"MD013": false} -->
+
 # CODEJOB Test and Validation Matrix
 
-Audit date: 2026-05-17  
-Branch: `snowball-md`
+Audit date: 2026-08-14
+Branch: `semantic-embeddings`
 
-## 1) Standard repo validation commands
+## 1 Standard repo validation commands
 
 ### Backend (from `backend/`)
 
@@ -16,39 +18,39 @@ Branch: `snowball-md`
 - `npm run build`
 - `npm run test -- --run`
 
-## 2) Command results in this audit session
+## 2 Command results in this audit session
 
-- `cd backend; python -m pytest`
-  - **Result:** failed during collection
-  - **Exact failure:** `ModuleNotFoundError: No module named 'app.phone_attribution'` from `tests/test_phone_attribution.py`
-  - **Blocker class:** stale test
-
-- `cd backend; python -m pytest tests/test_approve_cc_regression.py tests/test_run_once_hotfix.py tests/test_routing_policy.py tests/test_telegram_interactive.py tests/test_candidate_date_filtering.py`
+- `cd backend; .\.venv\Scripts\python.exe -m pytest tests/test_mcp_server.py tests/test_chat_service.py tests/test_chat_routes.py tests/test_migration_0015.py -q`
   - **Result:** passed
-  - **Exact output:** `29 passed`
+  - **Exact output:** `6 passed`
   - **Blocker class:** none
 
-- `cd dashboard; npm run lint`
-  - **Result:** failed
-  - **Exact failure:** eslint rule failures in `App.tsx`, `QueryBucket.tsx`, and test files (including missing rule definition and hook/effect violations)
-  - **Blocker class:** stale lint contract / incompatible local rule configuration
+- Affected backend batch covering AI status, inbox, schemas, startup lifespan, chat, MCP, and migration behavior
+  - **Result:** passed
+  - **Exact output:** `19 passed`
+  - **Blocker class:** none
 
 - `cd dashboard; npm run test -- --run`
   - **Result:** passed
-  - **Exact output:** `7 passed files`, `27 passed tests`
+  - **Exact output:** `29 passed files`, `89 passed tests`
   - **Blocker class:** none
 
-- `cd dashboard; npm run build`
-  - **Result:** failed
-  - **Exact failure:** `EPERM` writing `.tsbuildinfo` under `node_modules/.tmp` plus TS6133 unused-variable errors
-  - **Blocker class:** incompatible local runtime + type/lint debt
+- Clean Docker backend/dashboard builds and live chat validation
+  - **Result:** passed
+  - **Exact behavior:** migration reached `20260814_0015`; `/mcp` listed eight tools; `search_candidates` fired through LangGraph; `gemma4:31b-cloud` streamed an SSE answer; user, tool, and assistant rows persisted.
+  - **Blocker class:** none
 
-- `npx markdownlint-cli docs/architecture.md docs/context.md docs/data.md docs/design.md docs/features.md docs/hardcoded.md docs/problem-fix-log.md docs/snowball.md docs/testcases.md`
-  - **Result:** failed to produce lint report
-  - **Exact failure:** npm cache permission errors (`EPERM` on `npm-cache/_cacache/tmp/*`) and repeated CLI usage-only output in this shell
-  - **Blocker class:** incompatible local runtime/tooling invocation
+- `npx --no-install markdownlint-cli2 docs/architecture.md docs/features.md docs/data.md docs/testcases.md docs/mermaids-features.md`
+  - **Result:** passed
+  - **Exact output:** `Summary: 0 error(s)`
+  - **Blocker class:** none
 
-## 3) HR-1 closeout gate mapping
+- Full backend suite
+  - **Result:** stopped during collection
+  - **Exact failure:** `tests/test_phone_attribution.py` imports missing module `app.phone_attribution`.
+  - **Blocker class:** known stale test
+
+## 3 HR-1 closeout gate mapping
 
 | Behavior gate | Evidence | Outcome |
 | --- | --- | --- |
@@ -58,15 +60,18 @@ Branch: `snowball-md`
 | telegram interactive behavior | `test_telegram_interactive.py` | Pass |
 | candidate date filtering behavior | `test_candidate_date_filtering.py` | Pass |
 
-## 4) Known stale/mismatched tests
+## 4 Known stale/mismatched tests
 
 - `test_phone_attribution.py` imports `app.phone_attribution`, which is not present in current backend code.
 - `test_run_orchestrator.py` is stale against the current `RunOrchestratorDependencies` contract.
 
-## 5) Reviewer attention
+## 5 Reviewer attention
 
-- Full backend pass cannot be claimed until stale test imports/contracts are fixed.
-- Dashboard tests pass, but lint/build are currently red and should be treated as active debt.
+- No full backend pass can be claimed in this session.
+- The chat implementation passed focused backend tests, the full dashboard suite, container builds, migration checks, and a live tool-backed answer.
+- Host dashboard build remains affected by the known `.tsbuildinfo` permission issue; the clean Docker build passed.
 
-Evidence basis: both  
-Verification limits: full backend and full frontend quality gates are not fully green due stale tests and lint/build blockers.
+- Audit date: 2026-08-14
+- Branch: semantic-embeddings
+- Evidence basis: both
+- Verification limits: the unrelated stale backend import prevents an all-green broad backend-suite claim.

@@ -1,43 +1,58 @@
 import hashlib
 import json
 import logging
+import re
 import uuid
-from collections.abc import Generator
-from contextlib import asynccontextmanager
+from collections.abc import Callable
+from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from dataclasses import dataclass
+from email.utils import parseaddr
 from pathlib import Path
 from typing import Mapping, TypedDict, TypeVar, cast
 import threading
 from zoneinfo import ZoneInfo
 
-from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 from sqlalchemy import func, or_
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
+from rq import Retry
+from rq.registry import StartedJobRegistry
+from rq.command import send_stop_job_command
+from rq.job import Job, JobStatus
+from rq.exceptions import NoSuchJobError
 
 from app.config import settings
 from app.ai.reply_service import generate_reply_with_ai_or_fallback
+from app.ai.draft_formatting import normalize_draft_text_size
 from app.ai.resume_context_attribution import (
     RESUME_CONTEXT_MISSING,
     RESUME_CONTEXT_RULES_ONLY,
 )
 from app.ai.resume_context import extract_resume_context
-from app.cold_call import ColdCallContext, generate_cold_call_script
+from app.cold_call import ColdCallContext, find_allowed_cold_call_skills, generate_cold_call_script
 from app.automation import (
     RunOrchestrator,
     RunOrchestratorDependencies,
     RunOrchestratorRequest,
 )
-from app.db import Base, SessionLocal, engine, ensure_sqlite_phase0_columns
+from app.db import SessionLocal, get_db
+from app.gates import classify_email_intent
+from app.ai.groq_client import groq_request_mode_for_model
 from app.gmail_client import (
     GmailMessageCandidate,
+    get_message_thread_id,
     get_message_rfc_message_id,
     gmail_auth_status,
     is_gmail_configured,
+    list_thread_messages,
     list_unread_candidates_by_query,
+    list_unread_thread_ids,
     mark_message_processed,
+    mark_reply_processed,
     append_tracking_sheet_row,
     oauth_bootstrap_status,
     oauth_authorization_url,
@@ -47,13 +62,20 @@ from app.gmail_client import (
 )
 from app.gmail_labeling import GmailLabelingService, LabelRuleInput
 from app.external_feeds.service import ExternalFeedService
-from app.external_feeds.models import ExternalScrapeRun
+from app.external_feeds.models import ExternalOpportunity, ExternalScrapeRun
 from app.models import (
+    AttachmentAsset,
+    CanonicalEntityTaxonomyEntry,
+    CustomSkillTaxonomyEntry,
     DraftEditFeedback,
     EmployerNumber,
+    GmailRequirementGroup,
+    JobIntentTaxonomyEntry,
     NumberReviewQueue,
     PremiumNumberLead,
     ProductivityEvent,
+    RecentRun,
+    RecentRunSkippedItem,
     RecruiterEmail,
     RecruiterNumber,
     RecruiterOpportunity,
@@ -62,7 +84,11 @@ from app.models import (
     UserSettings,
 )
 from app.models import RecipientRoutingFeedback
+from app.parsing import build_skills_json_payload
+from app.parsing.document_extraction import prepare_gmail_parse_body
+from app.parsing.skill_audit import analyze_skill_candidate, is_safe_for_bulk_skill_approval
 from app.telegram_bot import TelegramBotService, TelegramReply
+from app.taxonomy.job_description_taxonomy import clear_job_intent_signal_embedding_cache
 from app.phase0 import (
     DEFAULT_FALLBACK_DRAFT_TEMPLATE,
     DEFAULT_SIGNATURE_EMAIL,
@@ -75,44 +101,137 @@ from app.phase0 import (
     greeting_from_to_contact,
     hard_filter_check,
     is_recruiter_like,
+    jd_entity_fields_from_parsed,
     normalize_employer_domains,
     parse_email,
+    parse_email_with_details,
     should_block_f2f,
 )
 from app.routing import RoutingDecision
+from app.recent_runs import (
+    RUN_SOURCE_AUTOMATION,
+    RUN_SOURCE_GMAIL_SYNC,
+    RUN_SOURCE_NVOIDS_SYNC,
+    automation_run_key,
+    build_gmail_message_url,
+    create_recent_run,
+    gmail_sync_run_key,
+    row_to_recent_run_dict,
+)
+from app.jobs.queues import (
+    AUTOMATION_RUN_QUEUE,
+    GMAIL_SYNC_QUEUE,
+    NVOIDS_SYNC_QUEUE,
+    active_job_id,
+    get_queue,
+    get_redis_connection,
+    redis_is_ready,
+)
+from app.jobs.tasks import run_automation_job, run_gmail_sync_job, run_nvoids_sync_job
+from app.skill_taxonomy import (
+    TAXONOMY_PLACEHOLDER_KEYS,
+    clear_skill_taxonomy_cache,
+    extract_skills_text,
+    load_skill_taxonomy,
+    normalize_skill_token,
+    normalize_skills_text,
+    normalize_taxonomy_text,
+)
 from app.premium_numbers.intelligence import OPPORTUNITY_STATUS_VALUES
 from app.premium_numbers.phone_normalization import best_display_phone, canonicalize_phone
 from app.query_bucket import sanitize_saved_queries
 from app.runtime_state import runtime_state
-from app.services import analytics_service, policy_service
+from app.routers.chat import get_chat_service as _get_chat_service, router as chat_router
+from app.job_intent_learning import (
+    NEGATIVE_NEWSLETTER,
+    POSITIVE_RECRUITER_JD,
+    approved_learning_signals_for_owner,
+    normalize_job_intent_phrase,
+    prioritized_learning_signals,
+)
+from app.services import analytics_service, email_lookup_service, policy_service
 from app.services.auto_runner_service import AutoRunnerService
-from app.services.candidate_runtime_service import CandidateRuntimeDeps, CandidateRuntimeService
+from app.services.candidate_runtime_service import CandidateRuntimeDeps, CandidateRuntimeService, resolve_resume_display_name
+from app.services.phone_intelligence_workflow_service import (
+    derive_company_from_email_domain,
+    derive_name_from_contact_email,
+)
+from app.services.gmail_group_source_service import (
+    canonical_group_display_name,
+    normalize_google_group_email,
+    normalize_google_group_slug,
+    parse_group_inputs,
+)
 from app.services.gmail_labeling_runtime_service import GmailLabelingRuntimeService
+from app.services.candidate_screening_service import (
+    CandidateScreeningService,
+    apply_screening_decision,
+)
+from app.services.email_inbox_service import TRANSPARENT_PIXEL_PNG, record_open, reply_count_for_email
 from app.services.orchestration_service import OrchestrationDeps, OrchestrationService
+from app.services.requirement_expansion_service import RequirementExpansionService
+from app.services.role_manifest_pipeline import extract_and_score_children
+from app.services.role_manifest_service import RoleManifestService
+from app.services.sendability_service import apply_resume_sendability, resolve_sendability_status
 from app.services.routing_runtime_service import RoutingRuntimeDeps, RoutingRuntimeService
 from app.services.scoring_runtime_service import ScoringRuntimeDeps, ScoringRuntimeService
 from app.services.settings_bootstrap_service import SettingsBootstrapService
 from app.services.startup_service import StartupService
+from app.services.taxonomy_learning_service import (
+    BULK_APPROVAL_MIN_OCCURRENCES,
+    embed_pending_skills,
+    is_safe_for_bulk_entity_approval,
+    list_pending_entities,
+    upsert_entity,
+)
 from app.services.telegram_runtime_service import TelegramRuntime, TelegramRuntimeDeps
 from app.schemas import (
     AIStatusResponse,
+    ApproveJobIntentSignalRequest,
     ApproveSendRequest,
+    ApproveSkillRequest,
+    AttachmentAssetResponse,
+    AttachmentAssetUpdateRequest,
     AutomationRunRequest,
     AutomationRunResponse,
+    BulkApproveJobIntentSignalsResponse,
+    BulkApproveSkillsResponse,
+    BulkApproveEntitiesResponse,
     BulkRejectRequest,
     CandidateListResponse,
+    ConversationDetailResponse,
+    ConversationReplyRequest,
+    ConversationSummaryResponse,
+    CustomSkillTaxonomyEntryResponse,
+    CanonicalEntityTaxonomyEntryResponse,
+    DismissJobIntentSignalRequest,
+    DismissSkillRequest,
+    DismissEntityRequest,
+    EmbedPendingSkillsResponse,
+    EmbeddedJobIntentSignalResponse,
+    EmailSearchHitResponse,
+    EmailSearchResponse,
+    EmbeddingStatusResponse,
     EmailResponse,
     GmailStatusResponse,
     GmailSyncResponse,
     GmailLabelingPreviewRequest,
     GmailLabelingPreviewResponse,
     IngestEmailRequest,
+    JobIntentTaxonomyEntryResponse,
+    JobEnqueueResponse,
+    JobQueueSummaryResponse,
+    LiveReplyStatusResponse,
+    JobStatusResponse,
     OAuthStartResponse,
     OAuthUrlResponse,
     EmployerNumberResponse,
     EmployerNumberListResponse,
     PremiumNumberListResponse,
     PremiumNumberResponse,
+    PendingSkillResponse,
+    PendingEntityResponse,
+    ApproveEntityRequest,
     RecruiterNumberResponse,
     RecruiterNumberListResponse,
     RecruiterOpportunityDeleteResponse,
@@ -122,6 +241,9 @@ from app.schemas import (
     RejectRequest,
     ResolveRecipientsRequest,
     ResumeResponse,
+    ResumeUpdateRequest,
+    SentItemDetailsResponse,
+    SettingsBootstrapResponse,
     SettingsRequest,
     SettingsResponse,
     UnknownNumberReviewCardListResponse,
@@ -130,43 +252,60 @@ from app.schemas import (
     ProductivityEventResponse,
     ProductivityBarPoint,
     ProductivityTrendResponse,
+    RecentRunItemListResponse,
+    RecentRunItemResponse,
+    RecentRunListResponse,
+    RecentRunResponse,
+    RegenerateCandidateRequest,
+    RoleDetectionRetryResponse,
     TelegramStatusResponse,
+    TaxonomyMetricsResponse,
     ExternalFeedSyncResponse,
     ExternalScrapeRunResponse,
+    GmailRequirementGroupBulkCreateRequest,
+    GmailRequirementGroupCreateRequest,
+    GmailRequirementGroupResponse,
+    GmailRequirementGroupUpdateRequest,
 )
 from app.semantic.embeddings_service import (
     begin_embedding_latency_capture,
     embedding_to_json,
     end_embedding_latency_capture,
     generate_embedding,
+    generate_embeddings,
 )
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     global auto_runner_thread, telegram_service, gmail_labeling_service
-    StartupService(
-        ensure_default_settings=_ensure_default_settings,
-        ensure_labeling_service=gmail_labeling_runtime_service.ensure_service,
-        init_telegram_service=_init_telegram_service,
-        auto_runner_loop=_auto_runner_loop,
-    ).startup()
-    auto_runner_thread = runtime_state.auto_runner_thread
-    telegram_service = runtime_state.telegram_service
-    gmail_labeling_service = runtime_state.gmail_labeling_service
-    yield
-    StartupService(
-        ensure_default_settings=_ensure_default_settings,
-        ensure_labeling_service=gmail_labeling_runtime_service.ensure_service,
-        init_telegram_service=_init_telegram_service,
-        auto_runner_loop=_auto_runner_loop,
-    ).shutdown()
-    auto_runner_thread = runtime_state.auto_runner_thread
-    telegram_service = runtime_state.telegram_service
-    gmail_labeling_service = runtime_state.gmail_labeling_service
+    async with AsyncExitStack() as stack:
+        if settings.feature_chat_enabled:
+            await stack.enter_async_context(chat_mcp.session_manager.run())
+            runtime_state.chat_mcp_status = "ready"
+        startup_service = StartupService(
+            ensure_default_settings=_ensure_default_settings,
+            ensure_labeling_service=gmail_labeling_runtime_service.ensure_service,
+            init_telegram_service=_init_telegram_service,
+            auto_runner_loop=_auto_runner_loop,
+        )
+        startup_service.startup()
+        auto_runner_thread = runtime_state.auto_runner_thread
+        telegram_service = runtime_state.telegram_service
+        gmail_labeling_service = runtime_state.gmail_labeling_service
+        yield
+        startup_service.shutdown()
+        auto_runner_thread = runtime_state.auto_runner_thread
+        telegram_service = runtime_state.telegram_service
+        gmail_labeling_service = runtime_state.gmail_labeling_service
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
+if settings.feature_chat_enabled:
+    from app.mcp_server.server import mcp as chat_mcp, mcp_app as chat_mcp_app
+else:
+    chat_mcp = None
+app.include_router(chat_router)
 logger = logging.getLogger(__name__)
 last_gmail_sync_at: datetime | None = None
 ai_running: bool = False
@@ -178,6 +317,11 @@ embedding_last_error: str | None = None
 embedding_last_attempted_at: datetime | None = None
 embedding_last_success_at: datetime | None = None
 embedding_last_duration_ms: int | None = None
+groq_last_error: str | None = None
+groq_last_attempted_at: datetime | None = None
+groq_last_success_at: datetime | None = None
+groq_last_duration_ms: int | None = None
+groq_last_provider_result: str | None = None
 semantic_input_source: str | None = None
 semantic_input_chars: int | None = None
 semantic_chunks: int | None = None
@@ -282,6 +426,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 EVENT_WEIGHTS: dict[str, float] = {
     "approved_sent": 4.0,
@@ -308,14 +453,6 @@ ALLOWED_VIEW_EVENTS = {
 RANGE_OPTIONS = {"last_1h", "current_day", "current_week", "current_month", "current_year", "last_5y"}
 BUSINESS_TZ = ZoneInfo("America/Chicago")
 BUCKET_OPTIONS = {"five_min", "hour", "day", "month", "quarter"}
-
-
-def get_db() -> Generator[Session, None, None]:
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
 def _record_productivity_event(
@@ -430,6 +567,298 @@ def _mail_date_filter_field(states: list[str]) -> str:
     return "gmail_received_at"
 
 
+def _is_approved_sent_only(states: list[str]) -> bool:
+    normalized = {s.strip().lower() for s in states if s.strip()}
+    return normalized == {"approved_sent"}
+
+
+def _source_label(source: str | None) -> str:
+    normalized = (source or "").strip().lower()
+    if normalized == "gmail":
+        return "Gmail"
+    if normalized == "nvoids":
+        return "Nvoids"
+    if normalized == "manual":
+        return "Manual"
+    return normalized or "Unknown"
+
+
+def _clean_optional_text(value: object) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.lower() == "unknown":
+        return None
+    return text
+
+
+def _json_object(value: str | None) -> dict[str, object]:
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    return cast(dict[str, object], parsed) if isinstance(parsed, dict) else {}
+
+
+def _json_string_list(value: str | None) -> list[str]:
+    if not value:
+        return []
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    items: list[str] = []
+    for item in parsed:
+        text = _clean_optional_text(item)
+        if text and text not in items:
+            items.append(text)
+    return items
+
+
+def _record_string_list(record: Mapping[str, object] | None, key: str) -> list[str]:
+    if not record:
+        return []
+    value = record.get(key)
+    if not isinstance(value, list):
+        return []
+    items: list[str] = []
+    for item in value:
+        text = _clean_optional_text(item)
+        if text and text not in items:
+            items.append(text)
+    return items
+
+
+def _unique_strings(*groups: list[str]) -> list[str]:
+    result: list[str] = []
+    for group in groups:
+        for item in group:
+            text = _clean_optional_text(item)
+            if text and text not in result:
+                result.append(text)
+    return result
+
+
+def _parse_sender_contact(sender: str) -> tuple[str | None, str | None]:
+    name, email_address = parseaddr(sender or "")
+    clean_email = _clean_optional_text(email_address)
+    clean_name = _clean_optional_text(name)
+    return clean_name, clean_email
+
+
+def _extract_external_post_id(external_message_id: str | None) -> str | None:
+    message_id = (external_message_id or "").strip()
+    match = re.match(r"^nvoids:(?:nvoids:)?(.+)$", message_id, re.IGNORECASE)
+    if not match:
+        return None
+    return _clean_optional_text(match.group(1))
+
+
+def _extract_labeled_value(text: str, *labels: str) -> str | None:
+    if not text.strip():
+        return None
+    for label in labels:
+        pattern = rf"(?im)^\s*{re.escape(label)}\s*[:\-]\s*(.+?)\s*$"
+        match = re.search(pattern, text)
+        if match:
+            return _clean_optional_text(match.group(1))
+    return None
+
+
+def _extract_experience_required(text: str) -> str | None:
+    labeled = _extract_labeled_value(text, "experience", "experience required", "required experience")
+    if labeled:
+        return labeled
+    match = re.search(r"(?i)\b(\d{1,2}\+?\s*(?:years?|yrs?)\s+(?:of\s+)?experience)\b", text)
+    if match:
+        return _clean_optional_text(match.group(1))
+    return None
+
+
+def _load_external_opportunity_for_sent_details(db: Session, email: RecruiterEmail) -> ExternalOpportunity | None:
+    external_post_id = _extract_external_post_id(email.external_message_id)
+    if not external_post_id:
+        return None
+    return (
+        db.query(ExternalOpportunity)
+        .filter(
+            ExternalOpportunity.owner_id == settings.owner_id,
+            ExternalOpportunity.external_post_id == external_post_id,
+        )
+        .first()
+    )
+
+
+def _load_recruiter_opportunity_for_sent_details(db: Session, email: RecruiterEmail) -> RecruiterOpportunity | None:
+    row = (
+        db.query(RecruiterOpportunity)
+        .filter(
+            RecruiterOpportunity.owner_id == settings.owner_id,
+            RecruiterOpportunity.source_email_id == email.id,
+        )
+        .first()
+    )
+    if row:
+        return row
+    if not email.external_message_id:
+        return None
+    return (
+        db.query(RecruiterOpportunity)
+        .filter(
+            RecruiterOpportunity.owner_id == settings.owner_id,
+            RecruiterOpportunity.gmail_message_id == email.external_message_id,
+        )
+        .first()
+    )
+
+
+def _load_recruiter_number_for_sent_details(db: Session, email: RecruiterEmail, recruiter_email: str | None) -> RecruiterNumber | None:
+    row = (
+        db.query(RecruiterNumber)
+        .filter(
+            RecruiterNumber.owner_id == settings.owner_id,
+            RecruiterNumber.first_detected_email_id == email.id,
+        )
+        .first()
+    )
+    if row:
+        return row
+    if not recruiter_email:
+        return None
+    return (
+        db.query(RecruiterNumber)
+        .filter(
+            RecruiterNumber.owner_id == settings.owner_id,
+            RecruiterNumber.recruiter_email == recruiter_email,
+        )
+        .order_by(RecruiterNumber.updated_at.desc(), RecruiterNumber.id.desc())
+        .first()
+    )
+
+
+def _load_premium_lead_for_sent_details(db: Session, email: RecruiterEmail) -> PremiumNumberLead | None:
+    return (
+        db.query(PremiumNumberLead)
+        .filter(
+            PremiumNumberLead.owner_id == settings.owner_id,
+            PremiumNumberLead.recruiter_email_id == email.id,
+        )
+        .order_by(
+            PremiumNumberLead.is_recruiter_relevant.desc(),
+            PremiumNumberLead.recruiter_relevance_score.desc(),
+            PremiumNumberLead.id.desc(),
+        )
+        .first()
+    )
+
+
+def _sent_item_requirement_link(email: RecruiterEmail, external: ExternalOpportunity | None) -> str | None:
+    if email.source == "nvoids":
+        return _clean_optional_text((external.source_url if external else None) or email.external_thread_id)
+    return email.gmail_message_url
+
+
+def _sent_item_mandatory_skills(
+    parser_details: Mapping[str, object] | None,
+    ats_breakdown: Mapping[str, object] | None,
+) -> list[str]:
+    matched_raw = _record_string_list(ats_breakdown, "matched_raw_skills")
+    missing_raw = _record_string_list(ats_breakdown, "missing_raw_skills")
+    if matched_raw or missing_raw:
+        return _unique_strings(matched_raw, missing_raw)
+    skills_audit = parser_details.get("skills_audit") if parser_details else None
+    if isinstance(skills_audit, Mapping):
+        return _unique_strings(_record_string_list(skills_audit, "known"), _record_string_list(skills_audit, "unknown"))
+    return []
+
+
+def _sent_item_missing_skills(
+    parser_details: Mapping[str, object] | None,
+    ats_breakdown: Mapping[str, object] | None,
+) -> list[str]:
+    missing_raw = _record_string_list(ats_breakdown, "missing_raw_skills")
+    if missing_raw:
+        return missing_raw
+    skills_audit = parser_details.get("skills_audit") if parser_details else None
+    if isinstance(skills_audit, Mapping):
+        unknown = _record_string_list(skills_audit, "unknown")
+        if unknown:
+            return unknown
+    unknown_skills = parser_details.get("unknown_skills") if parser_details else None
+    if isinstance(unknown_skills, list):
+        return _unique_strings([str(item) for item in unknown_skills])
+    return []
+
+
+def _build_sent_item_details(db: Session, email: RecruiterEmail) -> SentItemDetailsResponse:
+    parser_details = _json_object(email.parser_details_json)
+    ats_breakdown = _json_object(email.ats_breakdown_json)
+    body_text = email.body or ""
+    sender_name, sender_email = _parse_sender_contact(email.sender)
+    external = _load_external_opportunity_for_sent_details(db, email) if email.source == "nvoids" else None
+    recruiter_opportunity = _load_recruiter_opportunity_for_sent_details(db, email)
+    premium_lead = _load_premium_lead_for_sent_details(db, email)
+    recruiter_email = (
+        _clean_optional_text(external.recruiter_email if external else None)
+        or _clean_optional_text(email.recipient_email)
+        or sender_email
+    )
+    recruiter_number = _load_recruiter_number_for_sent_details(db, email, recruiter_email)
+    company = (
+        _clean_optional_text(external.company if external else None)
+        or _clean_optional_text(recruiter_opportunity.client if recruiter_opportunity else None)
+        or _clean_optional_text(recruiter_number.company if recruiter_number else None)
+        or _clean_optional_text(premium_lead.company if premium_lead else None)
+    )
+    return SentItemDetailsResponse(
+        email_id=email.id,
+        source_type=email.source,
+        source_label=_source_label(email.source),
+        requirement_received_link=_sent_item_requirement_link(email, external),
+        sent_gmail_message_link=email.gmail_sent_message_url,
+        resume_variant_sent=_clean_optional_text(email.resume_file_name),
+        attached_files=_json_string_list(email.sent_attachment_file_names_json),
+        company=company,
+        recruiter_name=(
+            _clean_optional_text(external.recruiter_name if external else None)
+            or _clean_optional_text(recruiter_number.recruiter_name if recruiter_number else None)
+            or _clean_optional_text(premium_lead.owner_name if premium_lead else None)
+            or sender_name
+        ),
+        recruiter_email=recruiter_email,
+        recruiter_phone=(
+            _clean_optional_text(external.recruiter_phone if external else None)
+            or _clean_optional_text(recruiter_number.display_phone_number if recruiter_number else None)
+            or _clean_optional_text(premium_lead.phone_number_display if premium_lead else None)
+        ),
+        end_client=(
+            _extract_labeled_value(body_text, "end client", "end-client")
+            or _extract_labeled_value(body_text, "client")
+        ),
+        implementation_partner=_extract_labeled_value(body_text, "implementation partner", "implementor"),
+        vendor=_extract_labeled_value(body_text, "vendor"),
+        domain_mentioned=(
+            _extract_labeled_value(body_text, "domain", "domain mentioned")
+            or _extract_labeled_value(body_text, "industry")
+        ),
+        experience_required=_extract_experience_required(body_text),
+        mandatory_skills=_sent_item_mandatory_skills(parser_details, ats_breakdown),
+        missing_skills=_sent_item_missing_skills(parser_details, ats_breakdown),
+        ats_score=email.ats_score,
+        ats_summary=_clean_optional_text(email.ats_summary),
+        to_email=_clean_optional_text(email.recipient_email),
+        cc_email=_clean_optional_text(email.cc_email),
+        sent_at=email.sent_at,
+        opened_at=email.opened_at,
+        open_count=int(email.open_count or 0),
+        reply_count=reply_count_for_email(db, email.owner_id, email.id),
+    )
+
+
 def _build_telegram_digest(prefix: str, result: AutomationRunResponse) -> str:
     return (
         f"{prefix}\n"
@@ -517,18 +946,128 @@ def _maybe_generate_cold_call_script(email: object, *, resume: ResumeAsset | Non
         return
 
 
+def _enqueue_background_job(
+    db: Session,
+    *,
+    queue_name: str,
+    run_source: str,
+    run_key: str,
+    task: Callable[..., object],
+    task_kwargs: dict[str, object],
+    total_items: int | None = None,
+    sync_batch_id: str | None = None,
+) -> JobEnqueueResponse:
+    try:
+        current_job_id = active_job_id(queue_name)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"job_queue_unavailable: {exc}") from exc
+    if current_job_id:
+        existing_row = (
+            db.query(RecentRun)
+            .filter(RecentRun.owner_id == settings.owner_id, RecentRun.job_backend_id == current_job_id)
+            .first()
+        )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "another_job_in_progress",
+                "job_id": current_job_id,
+                "run_key": existing_row.run_key if existing_row else None,
+            },
+        )
+
+    job_id = uuid.uuid4().hex
+    recent_run = create_recent_run(
+        db,
+        owner_id=settings.owner_id,
+        run_source=run_source,
+        run_key=run_key,
+        status="queued",
+        detail=f"Queued on {queue_name}.",
+        job_backend_id=job_id,
+        total_items=total_items,
+        processed_items=0,
+        progress_pct=0.0,
+        queue_name=queue_name,
+        sync_batch_id=sync_batch_id,
+    )
+    db.commit()
+    try:
+        queue = get_queue(queue_name)
+        queue.enqueue(
+            task,
+            kwargs=task_kwargs,
+            job_id=job_id,
+            retry=Retry(max=2, interval=[15, 60]),
+            job_timeout=1800,
+            result_ttl=86400,
+            failure_ttl=604800,
+        )
+    except Exception as exc:
+        recent_run.status = "failed"
+        recent_run.detail = f"Failed to enqueue background job: {exc}"
+        db.commit()
+        raise HTTPException(status_code=503, detail=f"job_enqueue_failed: {exc}") from exc
+    return JobEnqueueResponse(run_key=run_key, job_id=job_id, status="queued")
+
+
+def _enqueue_gmail_sync(db: Session) -> JobEnqueueResponse:
+    sync_batch_id = str(uuid.uuid4())
+    run_key = gmail_sync_run_key(sync_batch_id)
+    return _enqueue_background_job(
+        db,
+        queue_name=GMAIL_SYNC_QUEUE,
+        run_source=RUN_SOURCE_GMAIL_SYNC,
+        run_key=run_key,
+        task=run_gmail_sync_job,
+        task_kwargs={"run_key": run_key, "sync_batch_id": sync_batch_id},
+        sync_batch_id=sync_batch_id,
+    )
+
+
+def _enqueue_nvoids_sync(db: Session, *, max_items: int) -> JobEnqueueResponse:
+    run_key = f"nvoids_sync:job-{uuid.uuid4().hex}"
+    return _enqueue_background_job(
+        db,
+        queue_name=NVOIDS_SYNC_QUEUE,
+        run_source=RUN_SOURCE_NVOIDS_SYNC,
+        run_key=run_key,
+        task=run_nvoids_sync_job,
+        task_kwargs={"run_key": run_key, "max_items": max_items},
+        total_items=max_items,
+    )
+
+
+def _enqueue_automation(payload: AutomationRunRequest | None, db: Session) -> JobEnqueueResponse:
+    run_key = automation_run_key(uuid.uuid4().hex)
+    return _enqueue_background_job(
+        db,
+        queue_name=AUTOMATION_RUN_QUEUE,
+        run_source=RUN_SOURCE_AUTOMATION,
+        run_key=run_key,
+        task=run_automation_job,
+        task_kwargs={"run_key": run_key, "payload": payload.model_dump() if payload else None},
+        total_items=1,
+    )
+
+
+def _check_live_replies(db: Session) -> None:
+    _, authenticated, _ = gmail_auth_status()
+    if not authenticated:
+        return
+    runtime_state.live_reply_count = _get_orchestration_service().count_live_unread_replies(db)
+    runtime_state.live_reply_checked_at = datetime.now(UTC)
+
+
 def _get_auto_runner_service() -> AutoRunnerService:
     global auto_runner_service
     if auto_runner_service is None:
         auto_runner_service = AutoRunnerService(
             session_factory=SessionLocal,
             get_settings=_get_settings,
-            run_once=automation_run_once,
-            run_nvoids_once=lambda db, max_items: external_feed_service.sync_nvoids(
-                db,
-                owner_id=settings.owner_id,
-                max_items=max_items,
-            ),
+            run_once=_enqueue_automation,
+            run_nvoids_once=lambda db, max_items: _enqueue_nvoids_sync(db, max_items=max_items),
+            check_live_replies=_check_live_replies,
             action_lock=telegram_action_lock,
             stop_event=auto_runner_stop_event,
         )
@@ -632,6 +1171,8 @@ def _get_routing_runtime_service() -> RoutingRuntimeService:
             RoutingRuntimeDeps(
                 owner_id=settings.owner_id,
                 get_employer_domains=lambda db: _csv_to_list(_get_settings(db).employer_domains),
+                get_preferred_employer_cc_emails=lambda db: _preferred_employer_cc_emails(_get_settings(db)),
+                get_default_employer_cc_emails=lambda db: _csv_to_list(_get_settings(db).default_employer_cc_emails),
             )
         )
     return routing_runtime_service
@@ -670,6 +1211,8 @@ def _get_orchestration_service() -> OrchestrationService:
                 model_name=settings.deepseek_model_fast,
                 get_settings=_get_settings,
                 active_resume=_active_resume,
+                enabled_resumes=_enabled_resumes,
+                enabled_attachment_assets=_enabled_attachment_assets,
                 effective_run_inputs=lambda user_settings, requested_mail_date: policy_service.effective_run_inputs(
                     gmail_query=user_settings.gmail_query,
                     default_gmail_query=user_settings.default_gmail_query,
@@ -679,6 +1222,7 @@ def _get_orchestration_service() -> OrchestrationService:
                     requested_mail_date=requested_mail_date,
                 ),
                 compute_blended_ai_score=lambda **kwargs: _compute_blended_ai_score(**kwargs),
+                select_best_resume_match=lambda **kwargs: _select_best_resume_match(**kwargs),
                 analyze_email_routing=lambda db, sender, subject, body, snippet: _analyze_email_routing(db, sender, subject, body, snippet),
                 build_user_fallback_draft=lambda db, user_settings, sender, role, parsed, greeting_line, resume_file_name: _build_user_fallback_draft(
                     db,
@@ -706,7 +1250,7 @@ def _get_orchestration_service() -> OrchestrationService:
                 end_embedding_latency_capture=end_embedding_latency_capture,
                 embedding_latency_log_enabled=lambda: settings.semantic_embedding_latency_log_enabled,
                 embedding_provider=lambda: settings.effective_semantic_embedding_provider,
-                embedding_model=lambda: settings.semantic_embedding_model or "text-embedding-3-small",
+                embedding_model=lambda: settings.effective_semantic_embedding_model,
                 evaluate_routing_for_email=_evaluate_routing_for_email,
                 is_terminal_state=_is_terminal_state,
                 email_domain=_email_domain,
@@ -719,15 +1263,21 @@ def _get_orchestration_service() -> OrchestrationService:
                 oauth_bootstrap_status=lambda: oauth_bootstrap_status(),
                 list_unread_candidates_by_query=lambda *args, **kwargs: list_unread_candidates_by_query(*args, **kwargs),
                 is_recruiter_like=lambda sender, subject, body: is_recruiter_like(sender, subject, body),
+                classify_email_intent=lambda **kwargs: classify_email_intent(**kwargs),
                 parse_email=lambda subject, body: parse_email(subject, body),
-                hard_filter_check=lambda parsed, user_settings: hard_filter_check(parsed, user_settings),
-                should_block_f2f=lambda parsed: should_block_f2f(parsed),
+                parse_email_with_details=lambda subject, body, **kwargs: parse_email_with_details(subject, body, **kwargs),
+                hard_filter_check=lambda parsed, user_settings, effective_policy, parser_details=None: hard_filter_check(parsed, user_settings, effective_policy, parser_details),
                 greeting_from_to_contact=lambda to_email, body: greeting_from_to_contact(to_email, body),
                 generate_reply_with_ai_or_fallback=lambda **kwargs: generate_reply_with_ai_or_fallback(**kwargs),
                 send_reply_with_attachment=lambda *args, **kwargs: send_reply_with_attachment(*args, **kwargs),
                 send_new_email_with_attachment=lambda *args, **kwargs: send_new_email_with_attachment(*args, **kwargs),
                 mark_message_processed=lambda message_id: mark_message_processed(message_id),
                 append_tracking_sheet_row=lambda **kwargs: append_tracking_sheet_row(**kwargs),
+                mark_reply_processed=lambda message_id, label_ids=None: mark_reply_processed(message_id, label_ids),
+                get_message_thread_id=lambda message_id: get_message_thread_id(message_id),
+                get_message_rfc_message_id=lambda message_id: get_message_rfc_message_id(message_id),
+                list_thread_messages=lambda thread_id: list_thread_messages(thread_id),
+                list_unread_thread_ids=lambda: list_unread_thread_ids(),
             )
         )
     return orchestration_service
@@ -749,20 +1299,31 @@ def _csv_to_list(value: str | None) -> list[str]:
     return [part.strip() for part in (value or "").split(",") if part.strip()]
 
 
+def _preferred_employer_cc_emails(user_settings: UserSettings) -> list[str]:
+    configured = _csv_to_list(user_settings.preferred_employer_cc_emails)
+    if configured:
+        return configured
+    legacy = (user_settings.preferred_employer_cc_email or "").strip().lower()
+    return [legacy] if legacy else []
+
+
 def _policy_f2f_block(parsed: dict[str, str | int | bool], policy: PolicyConfig) -> tuple[bool, str]:
     normalized = policy_service.normalize_policy(policy)
     qualification = normalized["qualification"]
     strictness = policy_service.as_str(qualification.get("location_strictness", "balanced"), "balanced")
+    f2f_blocked, f2f_reason = should_block_f2f(parsed)
     if strictness == "lenient":
-        return False, ""
-    blocked, reason = should_block_f2f(parsed)
+        f2f_blocked = False
+        f2f_reason = ""
+    blocked, reason = policy_service.should_block_non_texas_f2f(
+        parsed,
+        normalized,
+        f2f_blocked=f2f_blocked,
+        f2f_reason=f2f_reason,
+    )
     if blocked:
         return True, reason
-    if strictness == "strict":
-        location_text = str(parsed.get("job_location_text", "")).strip().lower()
-        if not location_text or location_text == "unknown":
-            return True, "Location is unclear under strict location policy"
-    return False, ""
+    return policy_service.should_block_unknown_location_under_strict(parsed, normalized)
 
 def _active_resume(db: Session) -> ResumeAsset | None:
     return (
@@ -773,16 +1334,435 @@ def _active_resume(db: Session) -> ResumeAsset | None:
     )
 
 
-def _semantic_text_for_email(subject: str, body: str, role: str, skills_text: str) -> str:
-    return _get_scoring_runtime_service().semantic_text_for_email(subject, body, role, skills_text)
+def _list_resumes(db: Session) -> list[ResumeAsset]:
+    return (
+        db.query(ResumeAsset)
+        .filter(ResumeAsset.owner_id == settings.owner_id)
+        .order_by(ResumeAsset.version.desc(), ResumeAsset.updated_at.desc())
+        .all()
+    )
+
+
+def _enabled_resumes(db: Session) -> list[ResumeAsset]:
+    return (
+        db.query(ResumeAsset)
+        .filter(ResumeAsset.owner_id == settings.owner_id, ResumeAsset.is_enabled.is_(True))
+        .order_by(ResumeAsset.is_current.desc(), ResumeAsset.updated_at.desc(), ResumeAsset.version.desc(), ResumeAsset.id.desc())
+        .all()
+    )
+
+
+def _most_recent_enabled_resume(db: Session, *, exclude_resume_id: int | None = None) -> ResumeAsset | None:
+    query = (
+        db.query(ResumeAsset)
+        .filter(ResumeAsset.owner_id == settings.owner_id, ResumeAsset.is_enabled.is_(True))
+    )
+    if exclude_resume_id is not None:
+        query = query.filter(ResumeAsset.id != exclude_resume_id)
+    return query.order_by(ResumeAsset.updated_at.desc(), ResumeAsset.version.desc(), ResumeAsset.id.desc()).first()
+
+
+def _set_legacy_current_resume(
+    db: Session,
+    *,
+    target_resume: ResumeAsset | None,
+) -> None:
+    current_items = (
+        db.query(ResumeAsset)
+        .filter(ResumeAsset.owner_id == settings.owner_id, ResumeAsset.is_current.is_(True))
+        .all()
+    )
+    target_id = target_resume.id if target_resume else None
+    for item in current_items:
+        if item.id != target_id:
+            item.is_current = False
+    if target_resume:
+        target_resume.is_current = True
+
+
+def _normalize_resume_skills_text(raw: str | None) -> str:
+    return normalize_skills_text(raw, preserve_unknown=True)
+
+
+def _resume_skills_text_for_cold_call(resume: ResumeAsset | None, resume_text: str) -> str:
+    stored = str(getattr(resume, "skills_text", "") or "").strip()
+    if stored and stored.lower() != "none_detected":
+        return stored
+    derived = extract_skills_text(resume_text)
+    return "" if derived == "none_detected" else derived
+
+
+def _refresh_resume_embedding(resume: ResumeAsset) -> None:
+    try:
+        resume_text = _semantic_text_for_resume(resume)
+        if resume_text.strip():
+            resume_vector, _provider = _generate_embedding_with_health(resume_text)
+            resume.semantic_embedding = embedding_to_json(resume_vector)
+        else:
+            resume.semantic_embedding = None
+    except Exception as exc:
+        logger.warning("Resume semantic embedding skipped: %s", exc)
+
+
+def _select_best_resume_match(
+    *,
+    subject: str,
+    body: str,
+    parsed: dict[str, str | int],
+    parser_details: dict[str, object] | None = None,
+    user_settings: UserSettings,
+    email_row: RecruiterEmail | None,
+    resumes: list[ResumeAsset] | None = None,
+    fallback_resume: ResumeAsset | None = None,
+    db: Session,
+    owner_id: str | None,
+    external_thread_id: str | None,
+) -> object:
+    return _get_scoring_runtime_service().select_best_resume_match(
+        subject=subject,
+        body=body,
+        parsed=parsed,
+        parser_details=parser_details,
+        user_settings=user_settings,
+        email_row=email_row,
+        resumes=resumes if resumes is not None else _enabled_resumes(db),
+        fallback_resume=fallback_resume if fallback_resume is not None else _active_resume(db),
+        db=db,
+        owner_id=owner_id,
+        external_thread_id=external_thread_id,
+    )
+
+
+def _list_attachment_assets(db: Session) -> list[AttachmentAsset]:
+    return (
+        db.query(AttachmentAsset)
+        .filter(AttachmentAsset.owner_id == settings.owner_id)
+        .order_by(AttachmentAsset.created_at.desc(), AttachmentAsset.id.desc())
+        .all()
+    )
+
+
+def _enabled_attachment_assets(db: Session) -> list[AttachmentAsset]:
+    return (
+        db.query(AttachmentAsset)
+        .filter(AttachmentAsset.owner_id == settings.owner_id, AttachmentAsset.is_enabled.is_(True))
+        .order_by(AttachmentAsset.created_at.asc(), AttachmentAsset.id.asc())
+        .all()
+    )
+
+
+def _enabled_attachment_file_names(db: Session) -> list[str]:
+    return [item.file_name for item in _enabled_attachment_assets(db)]
+
+
+def _clean_custom_skill_name(value: str | None) -> str:
+    return " ".join(str(value or "").strip().split())
+
+
+def _canonicalize_custom_skill_name(value: str | None) -> str:
+    cleaned = _clean_custom_skill_name(value)
+    if not cleaned:
+        return ""
+    return normalize_skill_token(cleaned, preserve_unknown=False) or cleaned
+
+
+def _normalize_custom_skill_aliases(aliases: list[str] | None, *, canonical_name: str) -> list[str]:
+    ordered: list[str] = []
+    seen: set[str] = {normalize_taxonomy_text(canonical_name)}
+    for item in aliases or []:
+        alias = _clean_custom_skill_name(item)
+        if not alias:
+            continue
+        normalized = normalize_taxonomy_text(alias)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        ordered.append(alias)
+    return ordered
+
+
+def _serialize_custom_skill_entry(entry: CustomSkillTaxonomyEntry) -> CustomSkillTaxonomyEntryResponse:
+    payload = CustomSkillTaxonomyEntryResponse.model_validate(entry).model_dump()
+    try:
+        aliases = json.loads(entry.aliases_json or "[]")
+    except json.JSONDecodeError:
+        aliases = []
+    payload["aliases"] = [str(item).strip() for item in aliases if str(item).strip()]
+    return CustomSkillTaxonomyEntryResponse.model_validate(payload)
+
+
+def _serialize_canonical_entity(entry: CanonicalEntityTaxonomyEntry) -> CanonicalEntityTaxonomyEntryResponse:
+    payload = CanonicalEntityTaxonomyEntryResponse.model_validate(entry).model_dump()
+    try:
+        aliases = json.loads(entry.aliases_json or "[]")
+    except json.JSONDecodeError:
+        aliases = []
+    payload["aliases"] = [str(item).strip() for item in aliases if str(item).strip()]
+    return CanonicalEntityTaxonomyEntryResponse.model_validate(payload)
+
+
+def _list_approved_custom_skill_entries(db: Session) -> list[CustomSkillTaxonomyEntry]:
+    return (
+        db.query(CustomSkillTaxonomyEntry)
+        .filter(
+            CustomSkillTaxonomyEntry.owner_id == settings.owner_id,
+            CustomSkillTaxonomyEntry.status == "approved",
+        )
+        .order_by(CustomSkillTaxonomyEntry.canonical_name.asc(), CustomSkillTaxonomyEntry.id.asc())
+        .all()
+    )
+
+
+def _known_or_suppressed_pending_skill_keys(db: Session) -> set[str]:
+    suppressed = {
+        normalize_taxonomy_text(row.canonical_name)
+        for row in db.query(CustomSkillTaxonomyEntry)
+        .filter(
+            CustomSkillTaxonomyEntry.owner_id == settings.owner_id,
+            CustomSkillTaxonomyEntry.status.in_(("approved", "dismissed")),
+        )
+        .all()
+        if normalize_taxonomy_text(row.canonical_name)
+    }
+    suppressed.update(load_skill_taxonomy().exact_lookup.keys())
+    return suppressed
+
+
+def _list_pending_unknown_skills(db: Session) -> list[PendingSkillResponse]:
+    suppressed = _known_or_suppressed_pending_skill_keys(db)
+    aggregated: dict[str, dict[str, object]] = {}
+    rows = (
+        db.query(RecruiterEmail.id, RecruiterEmail.skills_json, RecruiterEmail.parser_details_json)
+        .filter(
+            RecruiterEmail.owner_id == settings.owner_id,
+            or_(
+                RecruiterEmail.skills_json.is_not(None),
+                RecruiterEmail.parser_details_json.is_not(None),
+            ),
+        )
+        .order_by(RecruiterEmail.id.desc())
+        .all()
+    )
+    for email_id, skills_json, parser_details_json in rows:
+        unknown_skills: list[object] = []
+        unknown_source = "legacy"
+        if skills_json:
+            try:
+                skills_payload = json.loads(skills_json)
+            except json.JSONDecodeError:
+                skills_payload = None
+            if isinstance(skills_payload, dict):
+                raw_unknown = skills_payload.get("unknown", [])
+                if isinstance(raw_unknown, list):
+                    unknown_skills = raw_unknown
+                    stored_source = str(skills_payload.get("unknown_source") or "legacy")
+                    unknown_source = stored_source if stored_source in {"ai", "base", "legacy"} else "legacy"
+        if not unknown_skills and parser_details_json:
+            try:
+                payload = json.loads(parser_details_json)
+            except json.JSONDecodeError:
+                payload = None
+            if isinstance(payload, dict):
+                raw_unknown = payload.get("unknown_skills", [])
+                if isinstance(raw_unknown, list):
+                    unknown_skills = raw_unknown
+        if not unknown_skills:
+            continue
+        seen_for_candidate: set[str] = set()
+        for item in unknown_skills:
+            skill_name = _clean_custom_skill_name(str(item))
+            normalized = normalize_taxonomy_text(skill_name)
+            analysis = analyze_skill_candidate(skill_name)
+            if (
+                not skill_name
+                or not normalized
+                or normalized in TAXONOMY_PLACEHOLDER_KEYS
+                or normalized in suppressed
+                or normalized in seen_for_candidate
+            ):
+                continue
+            seen_for_candidate.add(normalized)
+            bucket = aggregated.setdefault(
+                normalized,
+                {
+                    "skill_name": skill_name,
+                    "normalized_name": normalized,
+                    "occurrence_count": 0,
+                    "candidate_ids": [],
+                    "suspicious": False,
+                    "recoverable_skills": set(),
+                    "source_tags": set(),
+                },
+            )
+            bucket["occurrence_count"] = int(bucket["occurrence_count"]) + 1
+            bucket["suspicious"] = bool(bucket["suspicious"]) or analysis.suspicious or bool(analysis.recovered_skills)
+            candidate_ids = cast(list[int], bucket["candidate_ids"])
+            candidate_ids.append(int(email_id))
+            recoverable = cast(set[str], bucket["recoverable_skills"])
+            recoverable.update(analysis.recovered_skills)
+            source_tags = cast(set[str], bucket["source_tags"])
+            source_tags.add(unknown_source)
+    results: list[PendingSkillResponse] = []
+    for item in aggregated.values():
+        candidate_ids = sorted(set(cast(list[int], item["candidate_ids"])), reverse=True)
+        results.append(
+            PendingSkillResponse(
+                skill_name=str(item["skill_name"]),
+                normalized_name=str(item["normalized_name"]),
+                occurrence_count=int(item["occurrence_count"]),
+                candidate_ids=candidate_ids,
+                suspicious=bool(item["suspicious"]),
+                recoverable_skills=sorted(cast(set[str], item["recoverable_skills"]), key=str.casefold),
+                source_tags=sorted(cast(set[str], item["source_tags"])),
+            )
+        )
+    results.sort(key=lambda item: (-item.occurrence_count, item.skill_name.lower(), item.normalized_name))
+    return results
+
+
+def _upsert_custom_skill_entry(
+    db: Session,
+    *,
+    skill_name: str,
+    canonical_name: str | None = None,
+    aliases: list[str] | None = None,
+    category: str = "custom",
+    cluster_hint: str | None = None,
+    occurrence_count: int = 0,
+    status: str,
+    auto_commit: bool = True,
+) -> CustomSkillTaxonomyEntry:
+    effective_canonical_name = _canonicalize_custom_skill_name(canonical_name or skill_name)
+    if not effective_canonical_name:
+        raise HTTPException(status_code=400, detail="Skill name required")
+    normalized_target = normalize_taxonomy_text(effective_canonical_name)
+    normalized_category = normalize_taxonomy_text(category) or "custom"
+    normalized_aliases = _normalize_custom_skill_aliases(aliases, canonical_name=effective_canonical_name)
+    existing = (
+        db.query(CustomSkillTaxonomyEntry)
+        .filter(CustomSkillTaxonomyEntry.owner_id == settings.owner_id)
+        .order_by(CustomSkillTaxonomyEntry.id.asc())
+        .all()
+    )
+    for row in existing:
+        if normalize_taxonomy_text(row.canonical_name) != normalized_target:
+            continue
+        row.canonical_name = effective_canonical_name
+        row.aliases_json = json.dumps(normalized_aliases, separators=(",", ":"))
+        row.category = normalized_category
+        row.cluster_hint = _clean_custom_skill_name(cluster_hint) or None
+        row.occurrence_count = max(int(row.occurrence_count or 0), max(0, occurrence_count))
+        if status == "approved":
+            row.embedding_status = "pending"
+        row.status = status
+        if auto_commit:
+            clear_skill_taxonomy_cache()
+            db.commit()
+            db.refresh(row)
+        return row
+    created = CustomSkillTaxonomyEntry(
+        owner_id=settings.owner_id,
+        canonical_name=effective_canonical_name,
+        aliases_json=json.dumps(normalized_aliases, separators=(",", ":")),
+        category=normalized_category,
+        cluster_hint=_clean_custom_skill_name(cluster_hint) or None,
+        occurrence_count=max(0, occurrence_count),
+        embedding_status="pending",
+        status=status,
+    )
+    db.add(created)
+    if auto_commit:
+        clear_skill_taxonomy_cache()
+        db.commit()
+        db.refresh(created)
+    return created
+
+
+def _serialize_job_intent_entry(entry: JobIntentTaxonomyEntry) -> JobIntentTaxonomyEntryResponse:
+    payload = JobIntentTaxonomyEntryResponse.model_validate(entry).model_dump()
+    try:
+        sample_evidence = json.loads(entry.sample_evidence_json or "[]")
+    except json.JSONDecodeError:
+        sample_evidence = []
+    payload["sample_evidence"] = [str(item).strip() for item in sample_evidence if str(item).strip()]
+    return JobIntentTaxonomyEntryResponse.model_validate(payload)
+
+
+def _list_job_intent_entries(db: Session, *, status: str) -> list[JobIntentTaxonomyEntry]:
+    return (
+        db.query(JobIntentTaxonomyEntry)
+        .filter(
+            JobIntentTaxonomyEntry.owner_id == settings.owner_id,
+            JobIntentTaxonomyEntry.status == status,
+        )
+        .order_by(
+            JobIntentTaxonomyEntry.source_examples_count.desc(),
+            JobIntentTaxonomyEntry.confidence_aggregate.desc(),
+            JobIntentTaxonomyEntry.phrase.asc(),
+            JobIntentTaxonomyEntry.id.asc(),
+        )
+        .all()
+    )
+
+
+def _upsert_job_intent_entry(
+    db: Session,
+    *,
+    phrase: str,
+    polarity: str,
+    status: str,
+    auto_commit: bool = True,
+) -> JobIntentTaxonomyEntry:
+    cleaned_phrase = str(phrase or "").strip()
+    normalized_phrase = normalize_job_intent_phrase(cleaned_phrase)
+    cleaned_polarity = str(polarity or "").strip().lower()
+    if not normalized_phrase:
+        raise HTTPException(status_code=400, detail="Intent-learning phrase required")
+    if not cleaned_polarity:
+        raise HTTPException(status_code=400, detail="Intent-learning polarity required")
+    existing = (
+        db.query(JobIntentTaxonomyEntry)
+        .filter(
+            JobIntentTaxonomyEntry.owner_id == settings.owner_id,
+            JobIntentTaxonomyEntry.normalized_phrase == normalized_phrase,
+            JobIntentTaxonomyEntry.polarity == cleaned_polarity,
+        )
+        .order_by(JobIntentTaxonomyEntry.id.asc())
+        .first()
+    )
+    if existing:
+        existing.phrase = cleaned_phrase or existing.phrase
+        existing.status = status
+        if auto_commit:
+            db.commit()
+            db.refresh(existing)
+        else:
+            db.flush()
+        clear_job_intent_signal_embedding_cache()
+        return existing
+    created = JobIntentTaxonomyEntry(
+        owner_id=settings.owner_id,
+        phrase=cleaned_phrase,
+        normalized_phrase=normalized_phrase,
+        polarity=cleaned_polarity,
+        source_examples_count=0,
+        sample_evidence_json="[]",
+        confidence_aggregate=0.0,
+        last_intent_type=None,
+        status=status,
+    )
+    db.add(created)
+    if auto_commit:
+        db.commit()
+        db.refresh(created)
+    else:
+        db.flush()
+    clear_job_intent_signal_embedding_cache()
+    return created
 
 
 def _semantic_text_for_resume(resume: ResumeAsset | None) -> str:
     return _get_scoring_runtime_service().semantic_text_for_resume(resume)
-
-
-def _ensure_embedding_cached(current_payload: str | None, text: str) -> tuple[list[float], str | None, str]:
-    return _get_scoring_runtime_service().ensure_embedding_cached(current_payload, text)
 
 
 def _compute_blended_ai_score(
@@ -822,10 +1802,6 @@ def _email_domain(address: str) -> str:
     return email_domain(address)
 
 
-def _learned_recipient_pairs(db: Session, sender: str) -> list[tuple[str, str]]:
-    return _get_routing_runtime_service().learned_recipient_pairs(db, sender)
-
-
 def _apply_routing_result(email: RecruiterEmail, routing: RoutingResult) -> None:
     _get_routing_runtime_service().apply_routing_result(email, routing)
 
@@ -836,10 +1812,6 @@ def _apply_routing_decision(email: RecruiterEmail, routing: RoutingDecision) -> 
 
 def _capture_premium_numbers(db: Session, email: RecruiterEmail) -> None:
     _get_candidate_runtime_service().capture_premium_numbers(db, email)
-
-
-def _routing_is_sendable(email: RecruiterEmail) -> bool:
-    return _get_routing_runtime_service().routing_is_sendable(email)
 
 
 def _evaluate_routing_for_email(email: RecruiterEmail) -> RoutingDecision:
@@ -869,10 +1841,6 @@ def _evaluate_routing_policy(
         routing_confirmed,
         precomputed=precomputed,
     )
-
-
-def _apply_draft_learning(db: Session, draft: str) -> str:
-    return _get_candidate_runtime_service().apply_draft_learning(db, draft)
 
 
 def _build_user_fallback_draft(
@@ -920,6 +1888,7 @@ def _build_run_response(
     detail: str,
     email: RecruiterEmail | None = None,
     *,
+    run_key: str | None = None,
     effective_query: str | None = None,
     matched_count: int | None = None,
     queued_count: int | None = None,
@@ -929,11 +1898,14 @@ def _build_run_response(
     auto_send_failed_count: int | None = None,
     retry_promoted_count: int | None = None,
     retry_skipped_count: int | None = None,
+    queued_email_ids: list[int] | None = None,
 ) -> AutomationRunResponse:
     if not email:
         return AutomationRunResponse(
             status=status,
             detail=detail,
+            run_key=run_key,
+            queued_email_ids=queued_email_ids or [],
             effective_query=effective_query,
             matched_count=matched_count,
             queued_count=queued_count,
@@ -947,7 +1919,9 @@ def _build_run_response(
     return AutomationRunResponse(
         status=status,
         detail=detail,
+        run_key=run_key,
         email_id=email.id,
+        queued_email_ids=queued_email_ids or [],
         gmail_message_url=email.gmail_message_url,
         decision_reason=email.decision_reason,
         skip_reason=email.skip_reason,
@@ -966,8 +1940,56 @@ def _build_run_response(
     )
 
 
+def _recent_run_response(row: RecentRun) -> RecentRunResponse:
+    return RecentRunResponse.model_validate(row_to_recent_run_dict(row))
+
+
+def _recent_run_item_response(row: RecentRunSkippedItem) -> RecentRunItemResponse:
+    gmail_message_url = row.gmail_message_url
+    if row.source_type == "gmail" and not gmail_message_url:
+        gmail_message_url = build_gmail_message_url(
+            external_message_id=row.external_message_id,
+            external_thread_id=row.external_thread_id,
+        )
+    return RecentRunItemResponse(
+        id=row.id,
+        run_key=row.run_key,
+        run_source=row.run_source,
+        source_type=row.source_type,
+        outcome=row.outcome,
+        reason_code=row.reason_code,
+        reason_detail=row.reason_detail,
+        external_message_id=row.external_message_id,
+        external_thread_id=row.external_thread_id,
+        candidate_email_id=row.candidate_email_id,
+        external_opportunity_id=row.external_opportunity_id,
+        title_or_subject=row.title_or_subject,
+        sender=row.sender,
+        location=row.location,
+        source_url=row.source_url,
+        gmail_message_url=gmail_message_url,
+        intent_type=row.intent_type,
+        intent_confidence=row.intent_confidence,
+        intent_reason=row.intent_reason,
+        intent_evidence=_json_string_list(row.intent_evidence_json),
+        intent_negative_evidence=_json_string_list(row.intent_negative_evidence_json),
+        gate_action=row.gate_action,
+        gate_provider=row.gate_provider,
+        source_group_name=row.source_group_name,
+        source_group_email=row.source_group_email,
+        source_group_match_method=row.source_group_match_method,
+        source_group_trusted=row.source_group_trusted,
+        qualification_result=row.qualification_result,
+        blocking_rule=row.blocking_rule,
+        qualification_detail=row.qualification_detail,
+        qualification_context=_json_object(row.qualification_context_json),
+        created_at=row.created_at,
+    )
+
+
 def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
     policy = policy_service.read_policy_from_settings(s.policy_json)
+    preferred_employer_cc_emails = _preferred_employer_cc_emails(s)
     return SettingsResponse(
         enabled=s.enabled,
         gmail_query=s.gmail_query,
@@ -990,15 +2012,32 @@ def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
         feature_nvoids_auto_sync=s.feature_nvoids_auto_sync,
         feature_nvoids_poll_interval_minutes=_nvoids_poll_interval_minutes(s),
         nvoids_batch_limit=_nvoids_batch_limit(s),
+        nvoids_detail_title_mode=(s.nvoids_detail_title_mode or "job_details").strip().lower() or "job_details",
         nvoids_locations=_csv_to_list(s.nvoids_locations),
         feature_auto_send=s.feature_auto_send,
         feature_retry_queue=s.feature_retry_queue,
         feature_ai_enabled=s.feature_ai_enabled,
+        feature_ai_extractor_enabled=s.feature_ai_extractor_enabled,
         feature_semantic_enabled=s.feature_semantic_enabled,
+        feature_groq_job_parser_enabled=s.feature_groq_job_parser_enabled,
+        feature_gmail_requirement_groups_enabled=s.feature_gmail_requirement_groups_enabled,
+        feature_role_manifest_enabled=s.feature_role_manifest_enabled,
+        feature_strict_candidate_screening_enabled=s.feature_strict_candidate_screening_enabled,
+        feature_email_tracking_enabled=s.feature_email_tracking_enabled,
+        feature_reply_inbox_enabled=s.feature_reply_inbox_enabled,
+        candidate_work_authorizations=_json_string_list(s.candidate_work_authorizations_json),
+        candidate_total_experience_years=s.candidate_total_experience_years,
+        candidate_us_experience_years=s.candidate_us_experience_years,
+        candidate_current_location=s.candidate_current_location or "",
+        draft_text_size=normalize_draft_text_size(s.draft_text_size),
         fallback_draft_template=s.fallback_draft_template or DEFAULT_FALLBACK_DRAFT_TEMPLATE,
         signature_name=(s.signature_name or "").strip() or DEFAULT_SIGNATURE_NAME,
         signature_phone=(s.signature_phone or "").strip() or DEFAULT_SIGNATURE_PHONE,
         signature_email=(s.signature_email or "").strip() or DEFAULT_SIGNATURE_EMAIL,
+        preferred_employer_cc_emails=preferred_employer_cc_emails,
+        default_employer_cc_emails=_csv_to_list(s.default_employer_cc_emails),
+        preferred_employer_cc_email=preferred_employer_cc_emails[0] if preferred_employer_cc_emails else "",
+        resume_display_name=(s.resume_display_name or "").strip(),
         policy=policy,
         policy_profile_options=list(policy_service.policy_profiles().keys()),
         policy_profile_selected=policy_service.selected_policy_profile(policy),
@@ -1006,6 +2045,71 @@ def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
         created_at=s.created_at,
         updated_at=s.updated_at,
     )
+
+
+def _json_object(raw: str | None) -> dict[str, object] | None:
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _list_gmail_requirement_groups(db: Session) -> list[GmailRequirementGroup]:
+    return (
+        db.query(GmailRequirementGroup)
+        .filter(GmailRequirementGroup.owner_id == settings.owner_id)
+        .order_by(GmailRequirementGroup.display_name.asc(), GmailRequirementGroup.id.asc())
+        .all()
+    )
+
+
+def _gmail_requirement_group_response(row: GmailRequirementGroup) -> GmailRequirementGroupResponse:
+    return GmailRequirementGroupResponse.model_validate(row)
+
+
+def _create_gmail_requirement_group(
+    db: Session,
+    *,
+    value: str,
+    display_name: str | None = None,
+    enabled: bool = True,
+) -> GmailRequirementGroup:
+    normalized_group_email = normalize_google_group_email(value)
+    if not normalized_group_email:
+        raise HTTPException(status_code=400, detail="Could not normalize this group value into a Google Groups address.")
+    group_slug = normalize_google_group_slug(value) or normalized_group_email.split("@", 1)[0]
+    existing = (
+        db.query(GmailRequirementGroup)
+        .filter(
+            GmailRequirementGroup.owner_id == settings.owner_id,
+            GmailRequirementGroup.normalized_group_email == normalized_group_email,
+        )
+        .first()
+    )
+    if existing:
+        if display_name is not None and display_name.strip():
+            existing.display_name = display_name.strip()
+        existing.group_email = normalized_group_email
+        existing.group_slug = group_slug
+        existing.enabled = enabled
+        db.commit()
+        db.refresh(existing)
+        return existing
+    row = GmailRequirementGroup(
+        owner_id=settings.owner_id,
+        display_name=canonical_group_display_name(normalized_group_email, display_name),
+        group_email=normalized_group_email,
+        normalized_group_email=normalized_group_email,
+        group_slug=group_slug,
+        enabled=enabled,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
 
 
 def _repair_unknown_role_drafts(db: Session, emails: list[RecruiterEmail]) -> None:
@@ -1024,9 +2128,37 @@ def _hydrate_candidates_for_review(db: Session, emails: list[RecruiterEmail]) ->
     _fill_missing_gmail_rfc_ids(db, emails)
 
 
+def _compact_resume_picker_candidates(value: object) -> dict[str, object] | None:
+    if not isinstance(value, Mapping):
+        return None
+    compact: dict[str, object] = {}
+    selected = value.get("selected_resume_file_name")
+    if isinstance(selected, str):
+        compact["selected_resume_file_name"] = selected
+    rankings = value.get("rankings")
+    if isinstance(rankings, list):
+        ranking_fields = (
+            "resume_file_name",
+            "final_resume_score",
+            "ai_score",
+            "ats_score",
+            "selection_reason",
+        )
+        compact["rankings"] = [
+            {field: ranking[field] for field in ranking_fields if field in ranking}
+            for ranking in rankings
+            if isinstance(ranking, Mapping)
+        ]
+    return compact
+
+
 def _serialize_candidate_for_review(db: Session, email: RecruiterEmail) -> EmailResponse:
     _hydrate_candidates_for_review(db, [email])
-    return EmailResponse.model_validate(email)
+    payload = EmailResponse.model_validate(email).model_dump()
+    payload["attachment_file_names"] = _enabled_attachment_file_names(db)
+    payload["parser_details"] = email.parser_details_json
+    payload["sendability_status"] = resolve_sendability_status(email)
+    return EmailResponse.model_validate(payload)
 
 
 def _get_candidate_for_review(db: Session, email_id: int) -> RecruiterEmail:
@@ -1049,10 +2181,60 @@ def health() -> dict[str, str]:
     return {"status": "ok", "env": settings.app_env}
 
 
+@app.get("/track/open/{token}.png")
+def track_email_open(token: str, request: Request, db: Session = Depends(get_db)) -> Response:
+    try:
+        record_open(
+            db,
+            token=token,
+            user_agent=request.headers.get("user-agent", ""),
+            remote_ip=request.client.host if request.client else "",
+        )
+    except Exception:
+        db.rollback()
+        logger.exception("email_open_tracking_failed")
+    return Response(
+        content=TRANSPARENT_PIXEL_PNG,
+        media_type="image/png",
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
+
+
 @app.get("/settings", response_model=SettingsResponse)
 def get_settings(db: Session = Depends(get_db)) -> SettingsResponse:
     s = _get_settings(db)
     return _settings_response_from_model(s)
+
+
+@app.get("/settings/bootstrap", response_model=SettingsBootstrapResponse)
+def get_settings_bootstrap(
+    include_learning_data: bool = Query(True),
+    db: Session = Depends(get_db),
+) -> SettingsBootstrapResponse:
+    user_settings = _get_settings(db)
+    pending_skills = _list_pending_unknown_skills(db) if include_learning_data else []
+    pending_job_intent_signals = (
+        [_serialize_job_intent_entry(item) for item in _list_job_intent_entries(db, status="pending")]
+        if include_learning_data
+        else []
+    )
+    approved_job_intent_signals = (
+        [_serialize_job_intent_entry(item) for item in _list_job_intent_entries(db, status="approved")]
+        if include_learning_data
+        else []
+    )
+    return SettingsBootstrapResponse(
+        settings=_settings_response_from_model(user_settings),
+        role_manifest_child_creation_enabled=settings.role_manifest_child_creation_enabled,
+        gmail_requirement_groups=[_gmail_requirement_group_response(item) for item in _list_gmail_requirement_groups(db)],
+        resumes=[ResumeResponse.model_validate(item) for item in _list_resumes(db)],
+        attachments=[AttachmentAssetResponse.model_validate(item) for item in _list_attachment_assets(db)],
+        pending_skills=pending_skills,
+        pending_job_intent_signals=pending_job_intent_signals,
+        approved_job_intent_signals=approved_job_intent_signals,
+        loaded_at=datetime.now(UTC),
+        owner_id=user_settings.owner_id,
+    )
 
 
 @app.put("/settings", response_model=SettingsResponse)
@@ -1079,15 +2261,46 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
     s.feature_nvoids_auto_sync = payload.feature_nvoids_auto_sync
     s.feature_nvoids_poll_interval_minutes = max(1, min(int(payload.feature_nvoids_poll_interval_minutes), 1440))
     s.nvoids_batch_limit = max(1, min(int(payload.nvoids_batch_limit), 50))
+    s.nvoids_detail_title_mode = payload.nvoids_detail_title_mode
     s.nvoids_locations = _to_csv(payload.nvoids_locations)
     s.feature_auto_send = payload.feature_auto_send
     s.feature_retry_queue = payload.feature_retry_queue
     s.feature_ai_enabled = payload.feature_ai_enabled
+    s.feature_ai_extractor_enabled = payload.feature_ai_extractor_enabled
     s.feature_semantic_enabled = payload.feature_semantic_enabled
+    s.feature_groq_job_parser_enabled = payload.feature_groq_job_parser_enabled
+    s.feature_gmail_requirement_groups_enabled = payload.feature_gmail_requirement_groups_enabled
+    s.feature_email_tracking_enabled = payload.feature_email_tracking_enabled
+    s.feature_reply_inbox_enabled = payload.feature_reply_inbox_enabled
+    provided_fields = payload.model_fields_set
+    if "feature_role_manifest_enabled" in provided_fields:
+        s.feature_role_manifest_enabled = payload.feature_role_manifest_enabled
+    if "feature_strict_candidate_screening_enabled" in provided_fields:
+        s.feature_strict_candidate_screening_enabled = payload.feature_strict_candidate_screening_enabled
+    if "candidate_work_authorizations" in provided_fields:
+        s.candidate_work_authorizations_json = json.dumps(payload.candidate_work_authorizations or [], separators=(",", ":"))
+    if "candidate_total_experience_years" in provided_fields:
+        s.candidate_total_experience_years = payload.candidate_total_experience_years
+    if "candidate_us_experience_years" in provided_fields:
+        s.candidate_us_experience_years = payload.candidate_us_experience_years
+    if "candidate_current_location" in provided_fields:
+        s.candidate_current_location = (payload.candidate_current_location or "").strip()
+    s.draft_text_size = normalize_draft_text_size(payload.draft_text_size)
     s.fallback_draft_template = payload.fallback_draft_template.strip() if payload.fallback_draft_template.strip() else DEFAULT_FALLBACK_DRAFT_TEMPLATE
     s.signature_name = payload.signature_name.strip() if payload.signature_name.strip() else DEFAULT_SIGNATURE_NAME
     s.signature_phone = payload.signature_phone.strip() if payload.signature_phone.strip() else DEFAULT_SIGNATURE_PHONE
     s.signature_email = payload.signature_email.strip() if payload.signature_email.strip() else DEFAULT_SIGNATURE_EMAIL
+    if "preferred_employer_cc_emails" in provided_fields:
+        preferred_employer_cc_emails = payload.preferred_employer_cc_emails
+    elif "preferred_employer_cc_email" in provided_fields:
+        preferred_employer_cc_emails = [payload.preferred_employer_cc_email] if payload.preferred_employer_cc_email else []
+    else:
+        preferred_employer_cc_emails = _preferred_employer_cc_emails(s)
+    s.preferred_employer_cc_emails = _to_csv(preferred_employer_cc_emails)
+    s.preferred_employer_cc_email = preferred_employer_cc_emails[0] if preferred_employer_cc_emails else ""
+    if "default_employer_cc_emails" in provided_fields:
+        s.default_employer_cc_emails = _to_csv(payload.default_employer_cc_emails)
+    s.resume_display_name = payload.resume_display_name.strip()
     normalized_policy = policy_service.normalize_policy(
         payload.policy if payload.policy is not None else policy_service.read_policy_from_settings(s.policy_json)
     )
@@ -1097,8 +2310,89 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
     return _settings_response_from_model(s)
 
 
+@app.get("/settings/gmail-groups", response_model=list[GmailRequirementGroupResponse])
+def list_gmail_requirement_groups(db: Session = Depends(get_db)) -> list[GmailRequirementGroupResponse]:
+    return [_gmail_requirement_group_response(item) for item in _list_gmail_requirement_groups(db)]
+
+
+@app.post("/settings/gmail-groups", response_model=GmailRequirementGroupResponse)
+def create_gmail_requirement_group(payload: GmailRequirementGroupCreateRequest, db: Session = Depends(get_db)) -> GmailRequirementGroupResponse:
+    row = _create_gmail_requirement_group(
+        db,
+        value=payload.value,
+        display_name=payload.display_name,
+        enabled=payload.enabled,
+    )
+    return _gmail_requirement_group_response(row)
+
+
+@app.post("/settings/gmail-groups/bulk", response_model=list[GmailRequirementGroupResponse])
+def bulk_create_gmail_requirement_groups(
+    payload: GmailRequirementGroupBulkCreateRequest,
+    db: Session = Depends(get_db),
+) -> list[GmailRequirementGroupResponse]:
+    rows: list[GmailRequirementGroupResponse] = []
+    for normalized_group_email, display_name in parse_group_inputs(payload.values):
+        row = _create_gmail_requirement_group(
+            db,
+            value=normalized_group_email,
+            display_name=display_name,
+            enabled=True,
+        )
+        rows.append(_gmail_requirement_group_response(row))
+    return rows
+
+
+@app.patch("/settings/gmail-groups/{group_id}", response_model=GmailRequirementGroupResponse)
+def update_gmail_requirement_group(
+    group_id: int,
+    payload: GmailRequirementGroupUpdateRequest,
+    db: Session = Depends(get_db),
+) -> GmailRequirementGroupResponse:
+    row = (
+        db.query(GmailRequirementGroup)
+        .filter(
+            GmailRequirementGroup.owner_id == settings.owner_id,
+            GmailRequirementGroup.id == group_id,
+        )
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Gmail requirement group not found")
+    if payload.display_name is not None:
+        normalized_display_name = payload.display_name.strip()
+        row.display_name = normalized_display_name or canonical_group_display_name(row.group_email, None)
+    if payload.enabled is not None:
+        row.enabled = payload.enabled
+    db.commit()
+    db.refresh(row)
+    return _gmail_requirement_group_response(row)
+
+
+@app.delete("/settings/gmail-groups/{group_id}", response_model=GmailRequirementGroupResponse)
+def delete_gmail_requirement_group(group_id: int, db: Session = Depends(get_db)) -> GmailRequirementGroupResponse:
+    row = (
+        db.query(GmailRequirementGroup)
+        .filter(
+            GmailRequirementGroup.owner_id == settings.owner_id,
+            GmailRequirementGroup.id == group_id,
+        )
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Gmail requirement group not found")
+    response = _gmail_requirement_group_response(row)
+    db.delete(row)
+    db.commit()
+    return response
+
+
 @app.post("/settings/resume", response_model=ResumeResponse)
-def upload_resume(file: UploadFile = File(...), db: Session = Depends(get_db)) -> ResumeResponse:
+def upload_resume(
+    file: UploadFile = File(...),
+    skills_text: str = Form(""),
+    db: Session = Depends(get_db),
+) -> ResumeResponse:
     if not file.filename:
         raise HTTPException(status_code=400, detail="File name required")
     content = file.file.read()
@@ -1133,15 +2427,11 @@ def upload_resume(file: UploadFile = File(...), db: Session = Depends(get_db)) -
         mime_type=file.content_type or "application/pdf",
         sha256=sha256,
         version=next_version,
+        skills_text=_normalize_resume_skills_text(skills_text),
+        is_enabled=True,
         is_current=True,
     )
-    try:
-        resume_text = _semantic_text_for_resume(resume)
-        if resume_text.strip():
-            resume_vector, _provider = _generate_embedding_with_health(resume_text)
-            resume.semantic_embedding = embedding_to_json(resume_vector)
-    except Exception as exc:
-        logger.warning("Resume semantic embedding skipped: %s", exc)
+    _refresh_resume_embedding(resume)
     db.add(resume)
     db.commit()
     db.refresh(resume)
@@ -1150,12 +2440,497 @@ def upload_resume(file: UploadFile = File(...), db: Session = Depends(get_db)) -
 
 @app.get("/settings/resumes", response_model=list[ResumeResponse])
 def list_resumes(db: Session = Depends(get_db)) -> list[ResumeAsset]:
-    return (
+    return _list_resumes(db)
+
+
+@app.patch("/settings/resumes/{resume_id}", response_model=ResumeResponse)
+def update_resume(resume_id: int, payload: ResumeUpdateRequest, db: Session = Depends(get_db)) -> ResumeResponse:
+    resume = (
         db.query(ResumeAsset)
-        .filter(ResumeAsset.owner_id == settings.owner_id)
-        .order_by(ResumeAsset.version.desc())
+        .filter(ResumeAsset.owner_id == settings.owner_id, ResumeAsset.id == resume_id)
+        .first()
+    )
+    if not resume:
+        raise HTTPException(status_code=404, detail="Resume not found")
+
+    if payload.is_enabled is None and payload.skills_text is None:
+        raise HTTPException(status_code=400, detail="At least one resume update field is required")
+
+    if payload.skills_text is not None:
+        resume.skills_text = _normalize_resume_skills_text(payload.skills_text)
+        _refresh_resume_embedding(resume)
+
+    if payload.is_enabled is not None:
+        resume.is_enabled = payload.is_enabled
+        if payload.is_enabled:
+            _set_legacy_current_resume(db, target_resume=resume)
+        elif resume.is_current:
+            replacement = _most_recent_enabled_resume(db, exclude_resume_id=resume.id)
+            resume.is_current = False
+            _set_legacy_current_resume(db, target_resume=replacement)
+    db.commit()
+    db.refresh(resume)
+    return ResumeResponse.model_validate(resume)
+
+
+@app.delete("/settings/resumes/{resume_id}")
+def delete_resume(resume_id: int, db: Session = Depends(get_db)) -> dict[str, object]:
+    resume = (
+        db.query(ResumeAsset)
+        .filter(ResumeAsset.owner_id == settings.owner_id, ResumeAsset.id == resume_id)
+        .first()
+    )
+    if not resume:
+        raise HTTPException(status_code=404, detail="Resume not found")
+
+    file_path = Path(resume.file_path)
+    deleted_was_current = bool(resume.is_current)
+    db.delete(resume)
+    db.flush()
+    if deleted_was_current:
+        replacement = _most_recent_enabled_resume(db, exclude_resume_id=resume_id)
+        _set_legacy_current_resume(db, target_resume=replacement)
+    db.commit()
+    try:
+        if file_path.exists():
+            file_path.unlink()
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Resume deleted from database but not disk: {exc}") from exc
+    return {"id": resume_id, "deleted": True}
+
+
+@app.post("/settings/attachments", response_model=list[AttachmentAssetResponse])
+def upload_attachment_files(files: list[UploadFile] = File(...), db: Session = Depends(get_db)) -> list[AttachmentAssetResponse]:
+    if not files:
+        raise HTTPException(status_code=400, detail="At least one file is required")
+    Path(settings.attachment_storage_dir).mkdir(parents=True, exist_ok=True)
+    created: list[AttachmentAsset] = []
+    for file in files:
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="File name required")
+        content = file.file.read()
+        if not content:
+            raise HTTPException(status_code=400, detail=f"Empty file not allowed: {file.filename}")
+        sha256 = hashlib.sha256(content).hexdigest()
+        target_path = Path(settings.attachment_storage_dir) / f"{sha256}_{uuid.uuid4().hex}_{file.filename}"
+        target_path.write_bytes(content)
+        created.append(
+            AttachmentAsset(
+                owner_id=settings.owner_id,
+                file_path=str(target_path),
+                file_name=file.filename,
+                mime_type=file.content_type or "application/octet-stream",
+                sha256=sha256,
+                file_size=len(content),
+                is_enabled=True,
+            )
+        )
+    db.add_all(created)
+    db.commit()
+    for item in created:
+        db.refresh(item)
+    return [AttachmentAssetResponse.model_validate(item) for item in created]
+
+
+@app.get("/settings/attachments", response_model=list[AttachmentAssetResponse])
+def list_attachment_files(db: Session = Depends(get_db)) -> list[AttachmentAssetResponse]:
+    return [AttachmentAssetResponse.model_validate(item) for item in _list_attachment_assets(db)]
+
+
+@app.patch("/settings/attachments/{attachment_id}", response_model=AttachmentAssetResponse)
+def update_attachment_file(
+    attachment_id: int,
+    payload: AttachmentAssetUpdateRequest,
+    db: Session = Depends(get_db),
+) -> AttachmentAssetResponse:
+    attachment = (
+        db.query(AttachmentAsset)
+        .filter(AttachmentAsset.owner_id == settings.owner_id, AttachmentAsset.id == attachment_id)
+        .first()
+    )
+    if not attachment:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+    attachment.is_enabled = payload.is_enabled
+    db.commit()
+    db.refresh(attachment)
+    return AttachmentAssetResponse.model_validate(attachment)
+
+
+@app.delete("/settings/attachments/{attachment_id}")
+def delete_attachment_file(attachment_id: int, db: Session = Depends(get_db)) -> dict[str, object]:
+    attachment = (
+        db.query(AttachmentAsset)
+        .filter(AttachmentAsset.owner_id == settings.owner_id, AttachmentAsset.id == attachment_id)
+        .first()
+    )
+    if not attachment:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+    file_path = Path(attachment.file_path)
+    db.delete(attachment)
+    db.commit()
+    try:
+        if file_path.exists():
+            file_path.unlink()
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Attachment deleted from database but not disk: {exc}") from exc
+    return {"id": attachment_id, "deleted": True}
+
+
+@app.get("/settings/skills/pending", response_model=list[PendingSkillResponse])
+def list_pending_skills(db: Session = Depends(get_db)) -> list[PendingSkillResponse]:
+    return _list_pending_unknown_skills(db)
+
+
+@app.get("/settings/skills/approved", response_model=list[CustomSkillTaxonomyEntryResponse])
+def list_approved_skills(db: Session = Depends(get_db)) -> list[CustomSkillTaxonomyEntryResponse]:
+    return [_serialize_custom_skill_entry(item) for item in _list_approved_custom_skill_entries(db)]
+
+
+@app.post("/settings/skills/approve", response_model=CustomSkillTaxonomyEntryResponse)
+def approve_skill(payload: ApproveSkillRequest, db: Session = Depends(get_db)) -> CustomSkillTaxonomyEntryResponse:
+    pending = {item.normalized_name: item for item in _list_pending_unknown_skills(db)}
+    pending_item = pending.get(normalize_taxonomy_text(payload.skill_name))
+    entry = _upsert_custom_skill_entry(
+        db,
+        skill_name=payload.skill_name,
+        canonical_name=payload.canonical_name,
+        aliases=payload.aliases,
+        category=payload.category,
+        cluster_hint=payload.cluster_hint,
+        occurrence_count=pending_item.occurrence_count if pending_item else 0,
+        status="approved",
+    )
+    return _serialize_custom_skill_entry(entry)
+
+
+@app.post("/settings/skills/approve-all", response_model=BulkApproveSkillsResponse)
+def approve_all_skills(db: Session = Depends(get_db)) -> BulkApproveSkillsResponse:
+    pending = _list_pending_unknown_skills(db)
+    approved_names: list[str] = []
+    suppressed = _known_or_suppressed_pending_skill_keys(db)
+    for item in pending:
+        normalized = normalize_taxonomy_text(item.skill_name)
+        if (
+            not normalized
+            or normalized in suppressed
+            or item.occurrence_count < BULK_APPROVAL_MIN_OCCURRENCES
+            or not is_safe_for_bulk_skill_approval(item.skill_name)
+        ):
+            continue
+        _upsert_custom_skill_entry(
+            db,
+            skill_name=item.skill_name,
+            canonical_name=item.skill_name,
+            aliases=[],
+            category="custom",
+            cluster_hint=None,
+            occurrence_count=item.occurrence_count,
+            status="approved",
+            auto_commit=False,
+        )
+        approved_names.append(item.skill_name)
+        suppressed.add(normalized)
+    if approved_names:
+        clear_skill_taxonomy_cache()
+        db.commit()
+    processed_count = len(pending)
+    approved_count = len(approved_names)
+    return BulkApproveSkillsResponse(
+        processed_count=processed_count,
+        approved_count=approved_count,
+        skipped_count=max(0, processed_count - approved_count),
+        approved_skill_names=approved_names,
+    )
+
+
+@app.post("/settings/skills/dismiss", response_model=CustomSkillTaxonomyEntryResponse)
+def dismiss_skill(payload: DismissSkillRequest, db: Session = Depends(get_db)) -> CustomSkillTaxonomyEntryResponse:
+    entry = _upsert_custom_skill_entry(
+        db,
+        skill_name=payload.skill_name,
+        canonical_name=payload.canonical_name,
+        aliases=[],
+        category="custom",
+        cluster_hint=None,
+        status="dismissed",
+    )
+    return _serialize_custom_skill_entry(entry)
+
+
+@app.get("/settings/skills/embedding-status", response_model=EmbeddingStatusResponse)
+def skill_embedding_status(db: Session = Depends(get_db)) -> EmbeddingStatusResponse:
+    pending_count = (
+        db.query(CustomSkillTaxonomyEntry)
+        .filter(
+            CustomSkillTaxonomyEntry.owner_id == settings.owner_id,
+            CustomSkillTaxonomyEntry.status == "approved",
+            CustomSkillTaxonomyEntry.embedding_status == "pending",
+        )
+        .count()
+    )
+    return EmbeddingStatusResponse(pending_count=pending_count)
+
+
+@app.post("/settings/skills/embed-pending", response_model=EmbedPendingSkillsResponse)
+def embed_approved_skills(db: Session = Depends(get_db)) -> EmbedPendingSkillsResponse:
+    if not runtime_state.taxonomy_embedding_lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="A taxonomy embedding batch is already running")
+    try:
+        return EmbedPendingSkillsResponse.model_validate(
+            embed_pending_skills(db, owner_id=settings.owner_id)
+        )
+    finally:
+        runtime_state.taxonomy_embedding_lock.release()
+
+
+@app.get("/settings/entities/{entity_type}/pending", response_model=list[PendingEntityResponse])
+def list_pending_taxonomy_entities(
+    entity_type: str,
+    db: Session = Depends(get_db),
+) -> list[PendingEntityResponse]:
+    try:
+        rows = list_pending_entities(db, owner_id=settings.owner_id, entity_type=entity_type)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return [PendingEntityResponse.model_validate(row) for row in rows]
+
+
+@app.get("/settings/entities/{entity_type}/approved", response_model=list[CanonicalEntityTaxonomyEntryResponse])
+def list_approved_taxonomy_entities(
+    entity_type: str,
+    db: Session = Depends(get_db),
+) -> list[CanonicalEntityTaxonomyEntryResponse]:
+    if entity_type not in {"company", "location"}:
+        raise HTTPException(status_code=404, detail="entity_type must be company or location")
+    rows = (
+        db.query(CanonicalEntityTaxonomyEntry)
+        .filter(
+            CanonicalEntityTaxonomyEntry.owner_id == settings.owner_id,
+            CanonicalEntityTaxonomyEntry.entity_type == entity_type,
+            CanonicalEntityTaxonomyEntry.status == "approved",
+        )
+        .order_by(CanonicalEntityTaxonomyEntry.canonical_name.asc())
         .all()
     )
+    return [_serialize_canonical_entity(row) for row in rows]
+
+
+@app.post("/settings/entities/{entity_type}/approve", response_model=CanonicalEntityTaxonomyEntryResponse)
+def approve_taxonomy_entity(
+    entity_type: str,
+    payload: ApproveEntityRequest,
+    db: Session = Depends(get_db),
+) -> CanonicalEntityTaxonomyEntryResponse:
+    try:
+        pending = {
+            str(item["normalized_name"]): item
+            for item in list_pending_entities(db, owner_id=settings.owner_id, entity_type=entity_type)
+        }
+        item = pending.get(normalize_taxonomy_text(payload.display_name), {})
+        row = upsert_entity(
+            db,
+            owner_id=settings.owner_id,
+            entity_type=entity_type,
+            display_name=payload.display_name,
+            canonical_name=payload.canonical_name,
+            aliases=payload.aliases,
+            occurrence_count=int(item.get("occurrence_count", 0)),
+            status="approved",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _serialize_canonical_entity(row)
+
+
+@app.post("/settings/entities/{entity_type}/approve-all", response_model=BulkApproveEntitiesResponse)
+def approve_all_taxonomy_entities(
+    entity_type: str,
+    db: Session = Depends(get_db),
+) -> BulkApproveEntitiesResponse:
+    try:
+        pending = list_pending_entities(db, owner_id=settings.owner_id, entity_type=entity_type)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    approved: list[str] = []
+    for item in pending:
+        if (
+            int(item["occurrence_count"]) < BULK_APPROVAL_MIN_OCCURRENCES
+            or not is_safe_for_bulk_entity_approval(str(item["display_name"]))
+        ):
+            continue
+        upsert_entity(
+            db,
+            owner_id=settings.owner_id,
+            entity_type=entity_type,
+            display_name=str(item["display_name"]),
+            canonical_name=None,
+            aliases=[],
+            occurrence_count=int(item["occurrence_count"]),
+            status="approved",
+            auto_commit=False,
+        )
+        approved.append(str(item["display_name"]))
+    if approved:
+        db.commit()
+    return BulkApproveEntitiesResponse(
+        processed_count=len(pending),
+        approved_count=len(approved),
+        skipped_count=len(pending) - len(approved),
+        approved_names=approved,
+    )
+
+
+@app.post("/settings/entities/{entity_type}/dismiss", response_model=CanonicalEntityTaxonomyEntryResponse)
+def dismiss_taxonomy_entity(
+    entity_type: str,
+    payload: DismissEntityRequest,
+    db: Session = Depends(get_db),
+) -> CanonicalEntityTaxonomyEntryResponse:
+    try:
+        row = upsert_entity(
+            db,
+            owner_id=settings.owner_id,
+            entity_type=entity_type,
+            display_name=payload.display_name,
+            canonical_name=None,
+            aliases=[],
+            occurrence_count=0,
+            status="dismissed",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _serialize_canonical_entity(row)
+
+
+@app.get("/settings/taxonomy/metrics", response_model=TaxonomyMetricsResponse)
+def taxonomy_learning_metrics(db: Session = Depends(get_db)) -> TaxonomyMetricsResponse:
+    rows = (
+        db.query(RecruiterEmail.skills_json, RecruiterEmail.parser_details_json)
+        .filter(RecruiterEmail.owner_id == settings.owner_id)
+        .all()
+    )
+    unknown_emails = 0
+    for skills_json, parser_details_json in rows:
+        skills_payload = _json_object(skills_json) or {}
+        parser_payload = _json_object(parser_details_json) or {}
+        unknown = skills_payload.get("unknown") or parser_payload.get("unknown_skills")
+        if isinstance(unknown, list) and unknown:
+            unknown_emails += 1
+    parsed_count = len(rows)
+    return TaxonomyMetricsResponse(
+        parsed_email_count=parsed_count,
+        emails_with_unknown_skills=unknown_emails,
+        unknown_skill_rate=round(unknown_emails / parsed_count, 4) if parsed_count else 0.0,
+        pending_skill_count=len(_list_pending_unknown_skills(db)),
+        pending_company_count=len(list_pending_entities(db, owner_id=settings.owner_id, entity_type="company")),
+        pending_location_count=len(list_pending_entities(db, owner_id=settings.owner_id, entity_type="location")),
+        alias_collision_count=len(load_skill_taxonomy().ambiguous_aliases),
+    )
+
+
+@app.get("/settings/job-intent-learning/pending", response_model=list[JobIntentTaxonomyEntryResponse])
+def list_pending_job_intent_learning(db: Session = Depends(get_db)) -> list[JobIntentTaxonomyEntryResponse]:
+    return [_serialize_job_intent_entry(item) for item in _list_job_intent_entries(db, status="pending")]
+
+
+@app.get("/settings/job-intent-learning/approved", response_model=list[JobIntentTaxonomyEntryResponse])
+def list_approved_job_intent_learning(db: Session = Depends(get_db)) -> list[JobIntentTaxonomyEntryResponse]:
+    return [_serialize_job_intent_entry(item) for item in _list_job_intent_entries(db, status="approved")]
+
+
+@app.post("/settings/job-intent-learning/approve", response_model=JobIntentTaxonomyEntryResponse)
+def approve_job_intent_learning(
+    payload: ApproveJobIntentSignalRequest,
+    db: Session = Depends(get_db),
+) -> JobIntentTaxonomyEntryResponse:
+    entry = _upsert_job_intent_entry(
+        db,
+        phrase=payload.phrase,
+        polarity=payload.polarity,
+        status="approved",
+    )
+    return _serialize_job_intent_entry(entry)
+
+
+@app.post("/settings/job-intent-learning/approve-all", response_model=BulkApproveJobIntentSignalsResponse)
+def approve_all_job_intent_learning(db: Session = Depends(get_db)) -> BulkApproveJobIntentSignalsResponse:
+    pending = _list_job_intent_entries(db, status="pending")
+    approved_signals: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in pending:
+        key = (item.normalized_phrase or normalize_job_intent_phrase(item.phrase), item.polarity)
+        if not key[0] or not key[1] or key in seen:
+            continue
+        entry = _upsert_job_intent_entry(
+            db,
+            phrase=item.phrase,
+            polarity=item.polarity,
+            status="approved",
+            auto_commit=False,
+        )
+        approved_signals.append({"phrase": entry.phrase, "polarity": entry.polarity})
+        seen.add(key)
+    if approved_signals:
+        db.commit()
+    processed_count = len(pending)
+    approved_count = len(approved_signals)
+    return BulkApproveJobIntentSignalsResponse(
+        processed_count=processed_count,
+        approved_count=approved_count,
+        skipped_count=max(0, processed_count - approved_count),
+        approved_signals=approved_signals,
+    )
+
+
+@app.post("/settings/job-intent-learning/dismiss", response_model=JobIntentTaxonomyEntryResponse)
+def dismiss_job_intent_learning(
+    payload: DismissJobIntentSignalRequest,
+    db: Session = Depends(get_db),
+) -> JobIntentTaxonomyEntryResponse:
+    entry = _upsert_job_intent_entry(
+        db,
+        phrase=payload.phrase,
+        polarity=payload.polarity,
+        status="dismissed",
+    )
+    return _serialize_job_intent_entry(entry)
+
+
+@app.post("/settings/job-intent-learning/{entry_id}/toggle-polarity", response_model=JobIntentTaxonomyEntryResponse)
+def toggle_job_intent_polarity(entry_id: int, db: Session = Depends(get_db)) -> JobIntentTaxonomyEntryResponse:
+    entry = (
+        db.query(JobIntentTaxonomyEntry)
+        .filter(JobIntentTaxonomyEntry.id == entry_id, JobIntentTaxonomyEntry.owner_id == settings.owner_id)
+        .first()
+    )
+    if entry is None:
+        raise HTTPException(status_code=404, detail="job_intent_entry_not_found")
+    entry.polarity = NEGATIVE_NEWSLETTER if entry.polarity == POSITIVE_RECRUITER_JD else POSITIVE_RECRUITER_JD
+    db.commit()
+    db.refresh(entry)
+    clear_job_intent_signal_embedding_cache()
+    return _serialize_job_intent_entry(entry)
+
+
+@app.get("/settings/job-intent-learning/embedded", response_model=list[EmbeddedJobIntentSignalResponse])
+def list_embedded_job_intent_signals(db: Session = Depends(get_db)) -> list[EmbeddedJobIntentSignalResponse]:
+    approved = approved_learning_signals_for_owner(db, settings.owner_id)
+    positive, negative = prioritized_learning_signals(approved)
+    selected = [*positive, *negative]
+    if not selected:
+        return []
+    _vectors, provider = generate_embeddings([signal.phrase for signal in selected])
+    embedded = provider == "sbert"
+    return [
+        EmbeddedJobIntentSignalResponse(
+            id=signal.id,
+            phrase=signal.phrase,
+            polarity=signal.polarity,
+            confidence=signal.confidence,
+            embedded=embedded,
+        )
+        for signal in selected
+    ]
 
 
 @app.get("/gmail/status", response_model=GmailStatusResponse)
@@ -1171,12 +2946,13 @@ def gmail_status() -> GmailStatusResponse:
 
 
 @app.get("/ai/status", response_model=AIStatusResponse)
-def ai_status() -> AIStatusResponse:
+def ai_status(db: Session = Depends(get_db)) -> AIStatusResponse:
+    user_settings = _get_settings(db) if hasattr(db, "query") else None
     connected = bool(settings.deepseek_api_key)
     configured = connected and bool(settings.deepseek_base_url) and bool(settings.deepseek_model_fast)
     detail = "Ready" if connected else "DeepSeek API key missing (set Deepseek_API_KEY)."
     embedding_provider = settings.effective_semantic_embedding_provider
-    embedding_model = settings.semantic_embedding_model or "text-embedding-3-small"
+    embedding_model = settings.effective_semantic_embedding_model
     embedding_configured = False
     embedding_connected = False
     embedding_runtime_healthy: bool | None = None
@@ -1185,39 +2961,10 @@ def ai_status() -> AIStatusResponse:
         embedding_configured = True
         embedding_connected = True
         embedding_detail = "Ready (local hash embeddings)."
-    elif embedding_provider == "gemini":
-        embedding_configured = bool(settings.google_embedding_api_key)
-        embedding_connected = embedding_configured
-        fallback_provider = (settings.semantic_embedding_fallback_provider or "openrouter").strip().lower()
-        fallback_model = settings.semantic_embedding_fallback_model or "openai/text-embedding-3-small"
-        sbert_model = settings.semantic_embedding_sbert_model or "sentence-transformers/all-MiniLM-L6-v2"
-        embedding_detail = (
-            f"Ready (gemini primary; fallback={fallback_provider}/{fallback_model}; tertiary=sbert/{sbert_model}; terminal=hash)."
-            if embedding_configured
-            else "GOOGLE_EMBEDDING_API_KEY (or GoogleEmbedding_API_KEY) is missing for semantic embedding provider=gemini."
-        )
-    elif embedding_provider == "openai":
-        embedding_configured = bool(settings.openai_api_key)
-        embedding_connected = embedding_configured
-        embedding_detail = (
-            "Ready"
-            if embedding_configured
-            else "OPENAI_API_KEY is missing for semantic embedding provider=openai."
-        )
-    elif embedding_provider == "openrouter":
-        embedding_configured = bool(settings.openrouter_api_key) and bool(settings.openrouter_base_url)
-        embedding_connected = embedding_configured
-        sbert_model = settings.semantic_embedding_sbert_model or "sentence-transformers/all-MiniLM-L6-v2"
-        embedding_detail = (
-            f"Ready (openrouter primary; tertiary=sbert/{sbert_model}; terminal=hash)."
-            if embedding_configured
-            else "OPENROUTER_API_KEY or OPENROUTER_BASE_URL is missing for semantic embedding provider=openrouter."
-        )
     elif embedding_provider == "sbert":
         embedding_configured = True
         embedding_connected = True
-        sbert_model = settings.semantic_embedding_sbert_model or "sentence-transformers/all-MiniLM-L6-v2"
-        embedding_detail = f"Ready (local sbert primary; model={sbert_model}; terminal=hash)."
+        embedding_detail = f"Ready (local sbert primary; model={embedding_model}; fallback=hash)."
     else:
         embedding_configured = False
         embedding_connected = False
@@ -1247,12 +2994,43 @@ def ai_status() -> AIStatusResponse:
         embedding_connected = False
         embedding_detail = f"No runtime signal yet (no embedding attempts in this process). {embedding_detail}"
 
+    groq_configured = bool(settings.groq_api_key) and bool(settings.groq_base_url) and bool(settings.groq_gate_model)
+    groq_enabled_in_settings = bool(getattr(user_settings, "feature_groq_job_parser_enabled", False))
+    groq_request_mode = runtime_state.groq_request_mode or groq_request_mode_for_model(settings.groq_gate_model)
+    groq_runtime_healthy: bool | None
+    if runtime_state.groq_last_success_at and (
+        runtime_state.groq_last_attempted_at is None
+        or runtime_state.groq_last_success_at >= runtime_state.groq_last_attempted_at
+    ) and not runtime_state.groq_last_error:
+        groq_runtime_healthy = True
+    elif runtime_state.groq_last_error:
+        groq_runtime_healthy = False
+    else:
+        groq_runtime_healthy = None
+
+    if not groq_enabled_in_settings:
+        groq_detail = "Groq smart job parser is turned off in settings."
+    elif not groq_configured:
+        groq_detail = "Groq is enabled in settings, but backend config is missing API key, model, or base URL."
+    elif groq_runtime_healthy is True:
+        groq_detail = f"Groq runtime healthy for recent Gmail intent-gate calls (mode: {groq_request_mode})."
+    elif groq_runtime_healthy is False:
+        groq_detail = (
+            f"Groq fallback active due to recent runtime failure: {runtime_state.groq_last_error} (mode: {groq_request_mode})."
+            if runtime_state.groq_last_error
+            else f"Groq fallback active due to a recent runtime failure (mode: {groq_request_mode})."
+        )
+    elif groq_request_mode == "json_object":
+        groq_detail = "Groq is configured in json_object compatibility mode for the current model."
+    else:
+        groq_detail = "Groq is configured in structured json_schema mode, but no Groq attempt has been recorded in this process yet."
+
     return AIStatusResponse(
         configured=configured,
         connected=connected,
         running=ai_running,
         provider="deepseek",
-        model=settings.deepseek_model_fast or "deepseek-chat",
+        model=settings.deepseek_model_fast or "deepseek-v4-flash",
         detail=detail,
         embedding_provider=embedding_provider,
         embedding_model=embedding_model,
@@ -1264,6 +3042,17 @@ def ai_status() -> AIStatusResponse:
         embedding_last_attempted_at=embedding_last_attempted_at,
         embedding_last_success_at=embedding_last_success_at,
         embedding_last_duration_ms=embedding_last_duration_ms,
+        groq_configured=groq_configured,
+        groq_enabled_in_settings=groq_enabled_in_settings,
+        groq_model=(settings.groq_gate_model or "llama-3.1-8b-instant"),
+        groq_base_url_present=bool(settings.groq_base_url),
+        groq_runtime_healthy=groq_runtime_healthy,
+        groq_last_error=runtime_state.groq_last_error,
+        groq_detail=groq_detail,
+        groq_request_mode=groq_request_mode,
+        groq_last_attempted_at=runtime_state.groq_last_attempted_at,
+        groq_last_success_at=runtime_state.groq_last_success_at,
+        groq_last_duration_ms=runtime_state.groq_last_duration_ms,
         semantic_input_source=semantic_input_source,
         semantic_input_chars=semantic_input_chars,
         semantic_chunks=semantic_chunks,
@@ -1471,9 +3260,303 @@ def productivity_trend(
     )
 
 
+def _update_manifest_run_counts(db: Session, run_key: str | None, source_rows: list[RecruiterEmail]) -> None:
+    if not run_key:
+        return
+    recent_run = db.query(RecentRun).filter(RecentRun.owner_id == settings.owner_id, RecentRun.run_key == run_key).first()
+    if recent_run is None:
+        return
+    recent_run.source_count = len(source_rows)
+    recent_run.requirement_count = sum(
+        max(1, int(row.requirement_count or 1)) for row in source_rows
+    )
+    recent_run.multi_role_source_count = sum(1 for row in source_rows if row.role_manifest_status == "multiple")
+    recent_run.manifest_review_count = sum(
+        1 for row in source_rows if row.role_manifest_status in {"invalid", "uncertain"}
+    )
+    db.commit()
+
+
+def _run_gmail_sync(
+    db: Session,
+    *,
+    sync_batch_id: str | None = None,
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> GmailSyncResponse:
+    response = _get_orchestration_service().sync_gmail(
+        db,
+        sync_batch_id=sync_batch_id,
+        progress_callback=progress_callback,
+    )
+    user_settings = _get_settings(db)
+    if user_settings.feature_role_manifest_enabled:
+        rows = db.query(RecruiterEmail).filter(RecruiterEmail.sync_batch_id == response.sync_batch_id).all()
+        for row in rows:
+            # role_manifest_status is already stamped inline during sync_gmail for rows the
+            # new detect-before-parse ordering handled; this loop is now only a safety net.
+            if not row.is_multi_role_child and row.role_manifest_status is None:
+                try:
+                    _retry_role_detection(row.id, db, max_rung=2)
+                except Exception:
+                    db.rollback()
+                    logger.exception(
+                        "role_manifest_retry_failed source=gmail email_id=%s sync_batch_id=%r",
+                        row.id,
+                        response.sync_batch_id,
+                    )
+        _update_manifest_run_counts(db, response.run_key, rows)
+    return response
+
+
+def _run_automation(
+    payload: AutomationRunRequest | None,
+    db: Session,
+    *,
+    run_key_override: str | None = None,
+) -> AutomationRunResponse:
+    response = _get_orchestration_service().run_once(payload, db, run_key_override=run_key_override)
+    user_settings = _get_settings(db)
+    if user_settings.feature_role_manifest_enabled and response.queued_email_ids:
+        source_rows = (
+            db.query(RecruiterEmail)
+            .filter(RecruiterEmail.id.in_(response.queued_email_ids))
+            .all()
+        )
+        auto_sent_count = response.auto_sent_count or 0
+        auto_send_failed_count = response.auto_send_failed_count or 0
+        dry_run = policy_service.policy_dry_run(
+            policy_service.read_policy_from_settings(user_settings.policy_json)
+        )
+        for source_row in source_rows:
+            if source_row.is_multi_role_child:
+                continue
+            # role_manifest_status is already stamped inline during run_once for rows the
+            # new detect-before-parse ordering handled; only call retry as a safety net.
+            if source_row.role_manifest_status is None:
+                try:
+                    detection = _retry_role_detection(source_row.id, db, max_rung=2)
+                except Exception:
+                    db.rollback()
+                    logger.exception(
+                        "role_manifest_retry_failed source=automation email_id=%s run_key=%r",
+                        source_row.id,
+                        response.run_key,
+                    )
+                    continue
+                manifest_status = detection.manifest_status
+            else:
+                manifest_status = source_row.role_manifest_status
+            if user_settings.feature_auto_send and not dry_run and manifest_status in {"single", "single_fallback"}:
+                try:
+                    _get_orchestration_service().approve_send(
+                        source_row.id,
+                        ApproveSendRequest(),
+                        db,
+                    )
+                    auto_sent_count += 1
+                except HTTPException:
+                    auto_send_failed_count += 1
+        if user_settings.feature_auto_send:
+            response.auto_sent_count = auto_sent_count
+            response.auto_send_failed_count = auto_send_failed_count
+        _update_manifest_run_counts(db, response.run_key, source_rows)
+    return response
+
+
+def _run_nvoids_sync(
+    db: Session,
+    *,
+    max_items: int,
+    run_key_override: str | None = None,
+    progress_callback: Callable[[int, int], None] | None = None,
+    role_manifest_enabled: bool | None = None,
+):
+    if role_manifest_enabled is None:
+        role_manifest_enabled = bool(_get_settings(db).feature_role_manifest_enabled)
+    existing_source_ids = {
+        row_id
+        for (row_id,) in (
+            db.query(RecruiterEmail.id)
+            .filter(RecruiterEmail.source == "nvoids")
+            .all()
+        )
+    }
+    result = external_feed_service.sync_nvoids(
+        db,
+        owner_id=settings.owner_id,
+        max_items=max_items,
+        run_key_override=run_key_override,
+        progress_callback=progress_callback,
+    )
+    if role_manifest_enabled:
+        rows = (
+            db.query(RecruiterEmail)
+            .filter(RecruiterEmail.source == "nvoids")
+            .all()
+        )
+        rows = [row for row in rows if row.id not in existing_source_ids and not row.is_multi_role_child]
+        for row in rows:
+            try:
+                _retry_role_detection(row.id, db, max_rung=2)
+            except Exception:
+                db.rollback()
+                logger.exception(
+                    "role_manifest_retry_failed source=nvoids email_id=%s external_message_id=%r run_key=%r",
+                    row.id,
+                    row.external_message_id,
+                    result.run_key,
+                )
+        _update_manifest_run_counts(db, result.run_key, rows)
+    return result
+
+
+@app.get("/jobs/health")
+def jobs_health() -> dict[str, object]:
+    try:
+        ready = redis_is_ready()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"job_queue_unavailable: {exc}") from exc
+    return {"status": "ok" if ready else "unavailable", "redis_ready": ready}
+
+
+@app.get("/jobs/summary", response_model=JobQueueSummaryResponse)
+def jobs_summary(db: Session = Depends(get_db)) -> JobQueueSummaryResponse:
+    queued = 0
+    processing = 0
+    try:
+        connection = get_redis_connection()
+        for name in (GMAIL_SYNC_QUEUE, NVOIDS_SYNC_QUEUE, AUTOMATION_RUN_QUEUE):
+            queue = get_queue(name, connection=connection)
+            queued += queue.count
+            processing += StartedJobRegistry(name=name, connection=connection).count
+    except Exception:
+        logger.exception("jobs_summary_redis_unavailable")
+    succeeded = (
+        db.query(RecentRun)
+        .filter(RecentRun.owner_id == settings.owner_id, RecentRun.status == "ok")
+        .count()
+    )
+    failed = (
+        db.query(RecentRun)
+        .filter(RecentRun.owner_id == settings.owner_id, RecentRun.status == "failed")
+        .count()
+    )
+    return JobQueueSummaryResponse(queued=queued, processing=processing, succeeded=succeeded, failed=failed)
+
+
+@app.get("/gmail/live-replies", response_model=LiveReplyStatusResponse)
+def live_replies() -> LiveReplyStatusResponse:
+    return LiveReplyStatusResponse(
+        count=runtime_state.live_reply_count,
+        checked_at=runtime_state.live_reply_checked_at,
+    )
+
+
+@app.post("/jobs/gmail-sync", response_model=JobEnqueueResponse, status_code=202)
+def enqueue_gmail_sync(db: Session = Depends(get_db)) -> JobEnqueueResponse:
+    return _enqueue_gmail_sync(db)
+
+
+@app.post("/jobs/nvoids-sync", response_model=JobEnqueueResponse, status_code=202)
+def enqueue_nvoids_sync(
+    batch_limit: int | None = Query(default=None, ge=1, le=50),
+    db: Session = Depends(get_db),
+) -> JobEnqueueResponse:
+    user_settings = _get_settings(db)
+    if not user_settings.feature_nvoids_enabled:
+        raise HTTPException(status_code=400, detail="Nvoids sync is disabled in settings")
+    resolved_batch_limit = batch_limit if batch_limit is not None else _nvoids_batch_limit(user_settings)
+    return _enqueue_nvoids_sync(db, max_items=resolved_batch_limit)
+
+
+@app.post("/jobs/automation-run", response_model=JobEnqueueResponse, status_code=202)
+def enqueue_automation_run(
+    payload: AutomationRunRequest | None = None,
+    db: Session = Depends(get_db),
+) -> JobEnqueueResponse:
+    return _enqueue_automation(payload, db)
+
+
+@app.get("/jobs/{run_key}", response_model=JobStatusResponse)
+def job_status(run_key: str, db: Session = Depends(get_db)) -> JobStatusResponse:
+    row = (
+        db.query(RecentRun)
+        .filter(RecentRun.owner_id == settings.owner_id, RecentRun.run_key == run_key)
+        .first()
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="job_not_found")
+    payload = row_to_recent_run_dict(row)
+    if row.job_backend_id:
+        try:
+            backend_status = Job.fetch(
+                row.job_backend_id,
+                connection=get_redis_connection(),
+            ).get_status(refresh=True)
+            if backend_status == JobStatus.STARTED:
+                payload["status"] = "running"
+            elif backend_status in {
+                JobStatus.QUEUED,
+                JobStatus.DEFERRED,
+                JobStatus.SCHEDULED,
+            }:
+                payload["status"] = "queued"
+            elif backend_status in {JobStatus.CANCELED, JobStatus.STOPPED}:
+                payload["status"] = "canceled"
+            elif backend_status == JobStatus.FAILED:
+                payload["status"] = "failed"
+        except NoSuchJobError:
+            logger.warning("job_status_backend_record_missing run_key=%r job_id=%r", run_key, row.job_backend_id)
+        except Exception:
+            logger.exception("job_status_backend_lookup_failed run_key=%r job_id=%r", run_key, row.job_backend_id)
+    return JobStatusResponse(**payload, job_id=row.job_backend_id)
+
+
+@app.post("/jobs/{run_key}/cancel", response_model=JobStatusResponse)
+def cancel_job(run_key: str, db: Session = Depends(get_db)) -> JobStatusResponse:
+    row = (
+        db.query(RecentRun)
+        .filter(RecentRun.owner_id == settings.owner_id, RecentRun.run_key == run_key)
+        .first()
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="job_not_found")
+    job: Job | None = None
+    backend_status: JobStatus | None = None
+    if row.job_backend_id:
+        try:
+            job = Job.fetch(row.job_backend_id, connection=get_redis_connection())
+            backend_status = job.get_status(refresh=True)
+        except NoSuchJobError:
+            logger.warning("job_cancel_backend_record_missing run_key=%r job_id=%r", run_key, row.job_backend_id)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"job_cancel_failed: {exc}") from exc
+    backend_cancelable = backend_status in {
+        JobStatus.QUEUED,
+        JobStatus.DEFERRED,
+        JobStatus.SCHEDULED,
+        JobStatus.STARTED,
+    }
+    if row.status not in {"queued", "running"} and not backend_cancelable:
+        raise HTTPException(status_code=409, detail=f"job_not_cancelable:{row.status}")
+    if job is not None:
+        try:
+            if backend_status == JobStatus.STARTED:
+                send_stop_job_command(job.connection, job.id)
+            else:
+                job.cancel()
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"job_cancel_failed: {exc}") from exc
+    row.status = "canceled"
+    row.detail = "Background job canceled."
+    db.commit()
+    db.refresh(row)
+    return JobStatusResponse(**row_to_recent_run_dict(row), job_id=row.job_backend_id)
+
+
 @app.post("/gmail/sync", response_model=GmailSyncResponse)
 def gmail_sync(db: Session = Depends(get_db)) -> GmailSyncResponse:
-    return _get_orchestration_service().sync_gmail(db)
+    return _run_gmail_sync(db)
 
 
 @app.post("/gmail/oauth/start", response_model=OAuthStartResponse)
@@ -1548,28 +3631,84 @@ def _recruiter_opportunity_response(row: RecruiterOpportunity, recruiter: Recrui
 
 @app.post("/automation/run-once", response_model=AutomationRunResponse)
 def automation_run_once(payload: AutomationRunRequest | None = None, db: Session = Depends(get_db)) -> AutomationRunResponse:
-    return _get_orchestration_service().run_once(payload, db)
+    return _run_automation(payload, db)
 
 
 @app.post("/phase0/emails/ingest", response_model=EmailResponse)
 def ingest_email(payload: IngestEmailRequest, db: Session = Depends(get_db)) -> RecruiterEmail:
     user_settings = _get_settings(db)
-    parsed = parse_email(payload.subject, payload.body)
-    hard_pass, hard_reason = hard_filter_check(parsed, user_settings)
+    parsed, parser_details = parse_email_with_details(payload.subject, payload.body, source="manual")
+    effective_policy = policy_service.read_policy_from_settings(user_settings.policy_json)
+    hard_pass, hard_reason = hard_filter_check(parsed, user_settings, effective_policy, parser_details)
+    screening = CandidateScreeningService().evaluate_parser_details(parser_details, user_settings)
+    if hard_pass and not screening.proceed_to_scoring:
+        email = RecruiterEmail(
+            owner_id=settings.owner_id,
+            sender=payload.sender,
+            subject=payload.subject,
+            body=payload.body,
+            role=str(parsed["role"]),
+            location=str(parsed["location"]),
+            salary_text=str(parsed["salary_text"]),
+            skills_text=str(parsed["skills_text"]),
+            skills_json=json.dumps(
+                build_skills_json_payload(parser_details, fallback_skills_text=str(parsed["skills_text"])),
+                separators=(",", ":"),
+            ),
+            **jd_entity_fields_from_parsed(parsed),
+            decision="Qualified",
+            state="needs_review",
+            decision_reason="strict_candidate_screening",
+            hard_filter_result=hard_reason,
+            approval_status="pending",
+            sent_status="not_sent",
+            source="manual",
+            parser_details_json=json.dumps(parser_details, separators=(",", ":")),
+        )
+        apply_screening_decision(email, screening)
+        db.add(email)
+        db.commit()
+        db.refresh(email)
+        if user_settings.feature_role_manifest_enabled:
+            retry_role_detection(email.id, db)
+            db.refresh(email)
+        return email
     active_resume = _active_resume(db)
-    ai_score, ai_summary, ai_score_source, email_embedding_json, resume_embedding_json, semantic_diag = _compute_blended_ai_score(
+    resume_selection = _select_best_resume_match(
         subject=payload.subject,
         body=payload.body,
         parsed=parsed,
+        parser_details=parser_details,
         user_settings=user_settings,
         email_row=None,
-        resume=active_resume,
         db=db,
         owner_id=settings.owner_id,
         external_thread_id=None,
     )
-    threshold = user_settings.qualification_threshold
-    state = "needs_review" if hard_pass and ai_score >= threshold else "auto_rejected"
+    selected_resume = cast(ResumeAsset | None, getattr(resume_selection, "resume", None)) or active_resume
+    ai_score = cast(float, getattr(resume_selection, "ai_score"))
+    ai_summary = cast(str, getattr(resume_selection, "ai_summary"))
+    ai_score_source = cast(str, getattr(resume_selection, "ai_score_source"))
+    ats_score = cast(float | None, getattr(resume_selection, "ats_score", None))
+    ats_summary = cast(str | None, getattr(resume_selection, "ats_summary", None))
+    ats_score_source = cast(str | None, getattr(resume_selection, "ats_score_source", None))
+    ats_breakdown_json = cast(str | None, getattr(resume_selection, "ats_breakdown_json", None))
+    resume_picker_score = cast(float | None, getattr(resume_selection, "final_resume_score", None))
+    resume_picker_reason = cast(str | None, getattr(resume_selection, "selection_reason", None))
+    resume_picker_candidates_json = cast(str | None, getattr(resume_selection, "candidate_rankings_json", None))
+    resume_picker_breakdown_json = cast(str | None, getattr(resume_selection, "picker_breakdown_json", None))
+    email_embedding_json = cast(str | None, getattr(resume_selection, "email_embedding_json"))
+    resume_embedding_json = cast(str | None, getattr(resume_selection, "resume_embedding_json"))
+    semantic_diag = getattr(resume_selection, "semantic_diag")
+    threshold = policy_service.policy_threshold(user_settings.qualification_threshold, effective_policy)
+    score_mode = policy_service.draft_rule_mode(effective_policy, "score_threshold")
+    score_blocked = score_mode == "block" and ai_score < threshold
+    warnings: list[str] = []
+    if hard_pass and hard_reason.startswith("warnings: "):
+        warnings.append(hard_reason.removeprefix("warnings: ").strip())
+    if score_mode == "warn" and ai_score < threshold:
+        warnings.append(f"score_below_threshold:{ai_score:.2f}<{threshold:.2f}")
+    state = "needs_review" if hard_pass and not score_blocked else "auto_rejected"
     decision = "Qualified" if state == "needs_review" else "Reject"
     fallback_draft = _build_user_fallback_draft(
         db,
@@ -1578,7 +3717,7 @@ def ingest_email(payload: IngestEmailRequest, db: Session = Depends(get_db)) -> 
         role=str(parsed["role"]),
         parsed=parsed,
         greeting_line=greeting_from_to_contact(None, payload.body),
-        resume_file_name=active_resume.file_name if active_resume else None,
+        resume_file_name=resolve_resume_display_name(user_settings, selected_resume.file_name if selected_resume else None),
     )
 
     email = RecruiterEmail(
@@ -1590,15 +3729,28 @@ def ingest_email(payload: IngestEmailRequest, db: Session = Depends(get_db)) -> 
         location=str(parsed["location"]),
         salary_text=str(parsed["salary_text"]),
         skills_text=str(parsed["skills_text"]),
+        skills_json=json.dumps(
+            build_skills_json_payload(parser_details, fallback_skills_text=str(parsed["skills_text"])),
+            separators=(",", ":"),
+        ),
+        **jd_entity_fields_from_parsed(parsed),
         score=int(ai_score * 100),
         decision=decision,
         state=state,
-        decision_reason="manual_ingest",
-        hard_filter_result=hard_reason,
+        decision_reason="manual_ingest_with_warnings" if state == "needs_review" and warnings else "manual_ingest",
+        hard_filter_result=policy_service.combine_rule_messages(warnings) if state == "needs_review" else hard_reason,
         auto_reject_reason=None if state == "needs_review" else "manual_ingest_not_qualified",
         ai_score=ai_score,
         ai_score_source=ai_score_source,
         ai_summary=ai_summary,
+        ats_score=ats_score,
+        ats_score_source=ats_score_source,
+        ats_summary=ats_summary,
+        ats_breakdown_json=ats_breakdown_json,
+        resume_picker_score=resume_picker_score,
+        resume_picker_reason=resume_picker_reason,
+        resume_picker_candidates_json=resume_picker_candidates_json,
+        resume_picker_breakdown_json=resume_picker_breakdown_json,
         semantic_input_source=getattr(semantic_diag, "input_source", None),
         semantic_input_chars=getattr(semantic_diag, "input_chars", None),
         semantic_chunks=getattr(semantic_diag, "chunks", None),
@@ -1607,6 +3759,8 @@ def ingest_email(payload: IngestEmailRequest, db: Session = Depends(get_db)) -> 
         thread_snapshot_used=getattr(semantic_diag, "thread_snapshot_used", None),
         thread_snapshot_email_id=getattr(semantic_diag, "thread_snapshot_email_id", None),
         semantic_embedding=email_embedding_json,
+        resume_asset_id=selected_resume.id if selected_resume else None,
+        resume_file_name=selected_resume.file_name if selected_resume else None,
         draft_reply=fallback_draft
         if state == "needs_review"
         else "",
@@ -1617,12 +3771,19 @@ def ingest_email(payload: IngestEmailRequest, db: Session = Depends(get_db)) -> 
         approval_status="pending",
         sent_status="not_sent",
         source="manual",
+        parser_details_json=json.dumps(parser_details, separators=(",", ":")),
     )
+    apply_screening_decision(email, screening)
+    if email.state == "needs_review":
+        apply_resume_sendability(email)
     db.add(email)
-    if active_resume and resume_embedding_json and active_resume.semantic_embedding != resume_embedding_json:
-        active_resume.semantic_embedding = resume_embedding_json
+    if selected_resume and resume_embedding_json and selected_resume.semantic_embedding != resume_embedding_json:
+        selected_resume.semantic_embedding = resume_embedding_json
     db.commit()
     db.refresh(email)
+    if user_settings.feature_role_manifest_enabled:
+        retry_role_detection(email.id, db)
+        db.refresh(email)
     if state == "needs_review":
         _record_productivity_event(
             db,
@@ -1671,8 +3832,16 @@ def list_candidates(
                 )
             )
 
+    total = query.count()
+
     if sort == "highest_score":
         query = query.order_by(RecruiterEmail.score.desc(), RecruiterEmail.created_at.desc())
+    elif _is_approved_sent_only(states):
+        query = query.order_by(
+            RecruiterEmail.sent_at.is_(None),
+            RecruiterEmail.sent_at.desc(),
+            RecruiterEmail.created_at.desc(),
+        )
     else:
         query = query.order_by(RecruiterEmail.created_at.desc())
 
@@ -1681,19 +3850,25 @@ def list_candidates(
     visible = items[:limit]
     _hydrate_candidates_for_review(db, visible)
     next_cursor = cursor + limit if has_next else None
+    attachment_file_names = _enabled_attachment_file_names(db)
+    serialized_items: list[EmailResponse] = []
+    for item in visible:
+        payload = EmailResponse.model_validate(item).model_dump()
+        payload["attachment_file_names"] = attachment_file_names
+        payload["parser_details"] = item.parser_details_json
+        payload["resume_picker_candidates"] = _compact_resume_picker_candidates(payload["resume_picker_candidates"])
+        payload["sendability_status"] = resolve_sendability_status(item)
+        serialized_items.append(EmailResponse.model_validate(payload))
     return CandidateListResponse(
-        items=[EmailResponse.model_validate(item) for item in visible],
+        items=serialized_items,
         next_cursor=next_cursor,
         has_next=has_next,
+        total=total,
     )
 
 
 def _ensure_gmail_labeling_service() -> GmailLabelingService:
     return gmail_labeling_runtime_service.ensure_service()
-
-
-def _build_label_rule_input_from_email(email: RecruiterEmail) -> LabelRuleInput:
-    return gmail_labeling_runtime_service.build_label_rule_input(email)
 
 
 def _apply_gmail_label_for_email(
@@ -1813,6 +3988,24 @@ def get_premium_number(lead_id: int, db: Session = Depends(get_db)) -> PremiumNu
     return lead
 
 
+@app.get("/search/email", response_model=EmailSearchResponse)
+def search_email(
+    q: str = Query(..., min_length=1, max_length=255),
+    section: str | None = Query(default=None, max_length=32),
+    db: Session = Depends(get_db),
+) -> EmailSearchResponse:
+    normalized = q.strip()
+    if len(normalized) < 2 and not normalized.isdecimal():
+        raise HTTPException(status_code=422, detail="q must be a numeric Email ID or contain at least 2 characters")
+    hits = email_lookup_service.search_email(db, owner_id=settings.owner_id, query=normalized, current_section=section)
+    visible = hits[: email_lookup_service.MAX_EMAIL_SEARCH_HITS]
+    return EmailSearchResponse(
+        query=normalized,
+        hits=[EmailSearchHitResponse(**hit.__dict__) for hit in visible],
+        truncated=len(hits) > email_lookup_service.MAX_EMAIL_SEARCH_HITS,
+    )
+
+
 @app.post("/premium-numbers/reextract/{recruiter_email_id}", response_model=dict[str, int])
 def reextract_premium_numbers(recruiter_email_id: int, db: Session = Depends(get_db)) -> dict[str, int]:
     email = (
@@ -1884,6 +4077,16 @@ def mark_number_as_recruiter(review_id: int, db: Session = Depends(get_db)) -> d
         .first()
     )
     candidate_email = extract_email_address(card.email_sender or "")
+    resolved_name = (
+        card.owner_name
+        if card.owner_name and card.owner_name.strip().lower() != "unknown"
+        else derive_name_from_contact_email(candidate_email)
+    )
+    resolved_company = (
+        card.company
+        if card.company and card.company.strip().lower() != "unknown"
+        else derive_company_from_email_domain(candidate_email)
+    )
     if not recruiter:
         recruiter = RecruiterNumber(
             owner_id=settings.owner_id,
@@ -1892,8 +4095,8 @@ def mark_number_as_recruiter(review_id: int, db: Session = Depends(get_db)) -> d
                 card.display_phone_number or card.normalized_phone_number,
                 canonical_phone,
             ),
-            recruiter_name=card.owner_name or "Unknown",
-            company=card.company or "Unknown",
+            recruiter_name=resolved_name or "Unknown",
+            company=resolved_company or "Unknown",
             designation=card.designation or "Unknown",
             recruiter_email=candidate_email,
             first_detected_email_id=card.source_email_id,
@@ -1902,10 +4105,10 @@ def mark_number_as_recruiter(review_id: int, db: Session = Depends(get_db)) -> d
         db.flush()
     else:
         # Preserve higher-quality existing identity; only enrich missing/unknown fields.
-        if (not recruiter.recruiter_name or recruiter.recruiter_name.strip().lower() == "unknown") and card.owner_name:
-            recruiter.recruiter_name = card.owner_name
-        if (not recruiter.company or recruiter.company.strip().lower() == "unknown") and card.company:
-            recruiter.company = card.company
+        if (not recruiter.recruiter_name or recruiter.recruiter_name.strip().lower() == "unknown") and resolved_name:
+            recruiter.recruiter_name = resolved_name
+        if (not recruiter.company or recruiter.company.strip().lower() == "unknown") and resolved_company:
+            recruiter.company = resolved_company
         if (not recruiter.designation or recruiter.designation.strip().lower() == "unknown") and card.designation:
             recruiter.designation = card.designation
         if not recruiter.recruiter_email and candidate_email:
@@ -2255,17 +4458,25 @@ def sync_external_nvoids(
     if not telegram_action_lock.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="another_run_in_progress")
     try:
-        result = external_feed_service.sync_nvoids(
+        result = _run_nvoids_sync(
             db,
-            owner_id=settings.owner_id,
             max_items=resolved_batch_limit,
+            role_manifest_enabled=bool(user_settings.feature_role_manifest_enabled),
         )
     except Exception as exc:
+        logger.exception(
+            "nvoids_sync_endpoint_failed owner_id=%r batch_limit=%s semantic_enabled=%s ai_enabled=%s",
+            settings.owner_id,
+            resolved_batch_limit,
+            getattr(user_settings, "feature_semantic_enabled", None),
+            getattr(user_settings, "feature_ai_enabled", None),
+        )
         raise HTTPException(status_code=502, detail=f"nvoids_sync_failed: {exc}") from exc
     finally:
         telegram_action_lock.release()
     return ExternalFeedSyncResponse(
         source_type=result.source_type,
+        run_key=result.run_key,
         fetched_count=result.fetched_count,
         created_count=result.created_count,
         deduped_count=result.deduped_count,
@@ -2307,6 +4518,54 @@ def list_external_feed_runs(limit: int = Query(default=20, ge=1, le=200), db: Se
         )
         for row in rows
     ]
+
+
+@app.get("/recent-runs", response_model=RecentRunListResponse)
+def list_recent_runs(
+    cursor: int = Query(0, ge=0),
+    limit: int = Query(25, ge=1, le=100),
+    mail_date: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    db: Session = Depends(get_db),
+) -> RecentRunListResponse:
+    query = (
+        db.query(RecentRun)
+        .filter(RecentRun.owner_id == settings.owner_id)
+    )
+    if mail_date:
+        try:
+            selected = date.fromisoformat(mail_date)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="mail_date must be a valid YYYY-MM-DD date") from exc
+        start, end = _mail_date_utc_window(selected)
+        query = query.filter(RecentRun.created_at >= start, RecentRun.created_at < end)
+    rows = query.order_by(RecentRun.created_at.desc(), RecentRun.id.desc()).all()
+    items = [_recent_run_response(row) for row in rows]
+    visible, next_cursor, has_next = _paginate_items(items, cursor=cursor, limit=limit)
+    return RecentRunListResponse(items=visible, next_cursor=next_cursor, has_next=has_next)
+
+
+@app.get("/recent-runs/{run_key}/items", response_model=RecentRunItemListResponse)
+def list_recent_run_items(
+    run_key: str,
+    cursor: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    outcome: str = Query(default="skipped"),
+    db: Session = Depends(get_db),
+) -> RecentRunItemListResponse:
+    query = (
+        db.query(RecentRunSkippedItem)
+        .filter(
+            RecentRunSkippedItem.owner_id == settings.owner_id,
+            RecentRunSkippedItem.run_key == run_key,
+        )
+        .order_by(RecentRunSkippedItem.created_at.desc(), RecentRunSkippedItem.id.desc())
+    )
+    if outcome:
+        query = query.filter(RecentRunSkippedItem.outcome == outcome)
+    rows = query.all()
+    items = [_recent_run_item_response(row) for row in rows]
+    visible, next_cursor, has_next = _paginate_items(items, cursor=cursor, limit=limit)
+    return RecentRunItemListResponse(items=visible, next_cursor=next_cursor, has_next=has_next)
 
 
 @app.patch("/recruiter-opportunities/{opportunity_id}", response_model=RecruiterOpportunityResponse)
@@ -2387,6 +4646,29 @@ def delete_recruiter_opportunity(
     )
 
 
+def _requirement_text_for_opportunity(db: Session, row: RecruiterOpportunity) -> str:
+    parts: list[str] = []
+    if row.source_email_id:
+        email = (
+            db.query(RecruiterEmail)
+            .filter(RecruiterEmail.owner_id == settings.owner_id, RecruiterEmail.id == row.source_email_id)
+            .first()
+        )
+        if email:
+            parts.extend([email.subject or "", email.body or "", email.skills_text or ""])
+    elif row.external_opportunity_id:
+        external = (
+            db.query(ExternalOpportunity)
+            .filter(ExternalOpportunity.owner_id == settings.owner_id, ExternalOpportunity.id == row.external_opportunity_id)
+            .first()
+        )
+        if external:
+            parts.extend([external.role or "", external.skills_text or "", external.raw_body or ""])
+    if not any(part.strip() for part in parts):
+        parts.extend([row.job_title or "", row.email_subject or "", row.extracted_skills or "", row.evidence or ""])
+    return "\n".join(part for part in parts if part and part.strip())
+
+
 @app.post("/recruiter-opportunities/{opportunity_id}/generate-cold-call-script", response_model=RecruiterOpportunityResponse)
 def generate_recruiter_opportunity_cold_call_script(
     opportunity_id: int,
@@ -2407,6 +4689,14 @@ def generate_recruiter_opportunity_cold_call_script(
             resume_text = extract_resume_context(resume.file_path, resume.file_name)
         except Exception:
             resume_text = ""
+    resume_skills_text = _resume_skills_text_for_cold_call(resume, resume_text)
+    requirement_text = _requirement_text_for_opportunity(db, row)
+    allowed_matches = find_allowed_cold_call_skills(
+        requirement_text=requirement_text,
+        resume_skills_text=resume_skills_text,
+        resume_text=resume_text,
+        max_skills=2,
+    )
     recruiter = (
         db.query(RecruiterNumber)
         .filter(RecruiterNumber.owner_id == settings.owner_id, RecruiterNumber.id == row.recruiter_number_id)
@@ -2418,7 +4708,8 @@ def generate_recruiter_opportunity_cold_call_script(
         recruiter_email=((recruiter.recruiter_email if recruiter else "") or row.email_sender or ""),
         job_title=row.job_title or row.email_subject or "this role",
         location=row.location or "unknown",
-        skills=row.extracted_skills or "",
+        allowed_skill_highlights=", ".join(match.display for match in allowed_matches),
+        allowed_skill_canonicals=tuple(match.canonical for match in allowed_matches),
         evidence=row.evidence or "",
     )
     row.cold_call_script = generate_cold_call_script(
@@ -2435,6 +4726,41 @@ def generate_recruiter_opportunity_cold_call_script(
 @app.get("/candidates/{email_id}", response_model=EmailResponse)
 def get_candidate(email_id: int, db: Session = Depends(get_db)) -> EmailResponse:
     return _get_candidate_review(email_id, db)
+
+
+@app.get("/candidates/{email_id}/sent-details", response_model=SentItemDetailsResponse)
+def get_sent_item_details(email_id: int, db: Session = Depends(get_db)) -> SentItemDetailsResponse:
+    email = _get_candidate_for_review(db, email_id)
+    if email.state != "approved_sent":
+        raise HTTPException(status_code=400, detail="Sent item details are only available for approved_sent candidates")
+    return _build_sent_item_details(db, email)
+
+
+@app.get("/inbox/conversations", response_model=list[ConversationSummaryResponse])
+def get_inbox_conversations(db: Session = Depends(get_db)) -> list[ConversationSummaryResponse]:
+    return _get_orchestration_service().list_inbox_conversations(db)
+
+
+@app.get("/inbox/conversations/{conversation_id}", response_model=ConversationDetailResponse)
+def get_inbox_conversation(conversation_id: int, db: Session = Depends(get_db)) -> ConversationDetailResponse:
+    return _get_orchestration_service().get_inbox_conversation(conversation_id, db)
+
+
+@app.post("/inbox/conversations/{conversation_id}/reply", response_model=ConversationDetailResponse)
+def reply_to_inbox_conversation(
+    conversation_id: int,
+    payload: ConversationReplyRequest,
+    db: Session = Depends(get_db),
+) -> ConversationDetailResponse:
+    return _get_orchestration_service().reply_to_inbox_conversation(conversation_id, payload.body, db)
+
+
+@app.post("/inbox/conversations/{conversation_id}/read", response_model=ConversationDetailResponse)
+def mark_inbox_conversation_read(
+    conversation_id: int,
+    db: Session = Depends(get_db),
+) -> ConversationDetailResponse:
+    return _get_orchestration_service().mark_inbox_conversation_read(conversation_id, db)
 
 
 @app.post("/candidates/{email_id}/approve-send", response_model=EmailResponse)
@@ -2458,6 +4784,66 @@ def reject_candidate(
 @app.post("/candidates/{email_id}/send-to-failed-mapping", response_model=EmailResponse)
 def send_to_failed_mapping(email_id: int, db: Session = Depends(get_db)) -> RecruiterEmail:
     return _get_orchestration_service().send_to_failed_mapping(email_id, db)
+
+
+@app.post("/candidates/{email_id}/regenerate", response_model=EmailResponse)
+def regenerate_candidate(
+    email_id: int,
+    payload: RegenerateCandidateRequest,
+    db: Session = Depends(get_db),
+) -> RecruiterEmail:
+    requested = _get_candidate_for_review(db, email_id)
+    user_settings = _get_settings(db)
+    if user_settings.feature_role_manifest_enabled and not requested.is_multi_role_child:
+        retry_role_detection(requested.id, db)
+        return _get_candidate_for_review(db, requested.id)
+    return _get_orchestration_service().regenerate_candidate(email_id, payload, db)
+
+
+@app.post("/candidates/{email_id}/retry-role-detection", response_model=RoleDetectionRetryResponse)
+def retry_role_detection(email_id: int, db: Session = Depends(get_db)) -> RoleDetectionRetryResponse:
+    return _retry_role_detection(email_id, db, max_rung=4)
+
+
+def _retry_role_detection(email_id: int, db: Session, *, max_rung: int) -> RoleDetectionRetryResponse:
+    requested = _get_candidate_for_review(db, email_id)
+    source = requested
+    if requested.source_parent_email_id:
+        source = _get_candidate_for_review(db, requested.source_parent_email_id)
+    user_settings = _get_settings(db)
+    manifest_body = prepare_gmail_parse_body(source.body) if source.source == "gmail" else source.body
+    manifest_result = RoleManifestService(max_rung=max_rung).detect(manifest_body)
+    expansion = RequirementExpansionService().expand(
+        db,
+        source,
+        manifest_result,
+        materialize=settings.role_manifest_child_creation_enabled,
+    )
+
+    processing_ids = list(expansion.child_ids)
+    if manifest_result.status in {"single", "single_fallback"}:
+        processing_ids = [source.id]
+    if processing_ids:
+        extract_and_score_children(
+            db,
+            processing_ids,
+            user_settings=user_settings,
+            get_candidate=_get_candidate_for_review,
+            parse_email_with_details=parse_email_with_details,
+            regenerate_candidate=_get_orchestration_service().regenerate_candidate,
+        )
+
+    return RoleDetectionRetryResponse(
+        source_parent_id=expansion.source_parent_id,
+        manifest_status=expansion.manifest_status,
+        requirement_count=expansion.requirement_count,
+        child_ids=list(expansion.child_ids),
+    )
+
+
+@app.delete("/candidates/{email_id}", response_model=dict[str, int | bool | str])
+def dismiss_failed_candidate(email_id: int, db: Session = Depends(get_db)) -> dict[str, int | bool | str]:
+    return _get_orchestration_service().dismiss_failed_candidate(email_id, db)
 
 
 @app.post("/candidates/reject-bulk")
@@ -2491,3 +4877,9 @@ def resolve_recipients(
     db: Session = Depends(get_db),
 ) -> RecruiterEmail:
     return _get_orchestration_service().resolve_recipients(email_id, payload, db)
+
+
+# Root mounting preserves FastMCP's exact /mcp endpoint. It must remain last so
+# the existing FastAPI routes keep precedence over the catch-all mount.
+if settings.feature_chat_enabled:
+    app.mount("/", chat_mcp_app)

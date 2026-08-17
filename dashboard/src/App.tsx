@@ -1,19 +1,61 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import './App.css'
 import Sidebar from './components/Sidebar'
-import { withAiToggle } from './features/ai/state'
+import TrustedGmailGroupsPanel, { type TrustedGmailGroup } from './features/gmail_groups/TrustedGmailGroupsPanel'
 import { getDraftSourceLabel } from './features/ai/ui'
-import { withSavedQueries } from './features/query_bucket/api'
 import QueryBucket from './features/query_bucket/QueryBucket'
+import EmailSearch from './features/email_search/EmailSearch'
+import ChatWidget from './features/chat/ChatWidget'
 import { type CandidateState, useCandidateBuckets } from './candidateBuckets'
+import { addCcEmail, removeCcEmail } from './ccEmails'
 import { addEmployerDomain, removeEmployerDomain } from './employerDomains'
+import { formatRelativeInboxTime, getInitials } from './inboxFormat'
 import { buildPremiumScopeUrl, defaultPremiumPageMeta, type PremiumScope } from './premiumNumbers'
+import type { EmailSearchHit } from './emailSearch'
 
 const GMAIL_OAUTH_POLL_INTERVAL_MS = 2000
 const GMAIL_OAUTH_POLL_TIMEOUT_MS = 180000
 const VIEW_EVENT_THROTTLE_MS = 60000
 const PREMIUM_PAGE_LIMIT = 25
-let hasBootstrappedAppOnce = false
+const SETTINGS_REVIEW_BATCH_SIZE = 50
+
+function emailSearchPremiumScope(hit: EmailSearchHit): PremiumScope | null {
+  if (hit.section !== 'premium_numbers') return null
+  if (hit.detail.number_review_id != null) return 'all_review'
+  if (hit.detail.recruiter_number_id != null) return 'recruiter_numbers'
+  if (hit.detail.employer_number_id != null) return 'employer_numbers'
+  if (hit.detail.recruiter_opportunity_id != null) return 'recruiter_opportunities'
+  return null
+}
+
+function emailSearchRelatedId(hit: EmailSearchHit): string | null {
+  if (hit.section === 'inbox') {
+    return hit.detail.conversation_id == null ? null : String(hit.detail.conversation_id)
+  }
+  if (hit.section === 'recent_runs') {
+    const related = hit.detail.run_key ?? hit.detail.recent_run_skipped_item_id
+    return related == null ? null : String(related)
+  }
+  if (hit.section === 'premium_numbers') {
+    const related =
+      hit.detail.number_review_id ??
+      hit.detail.recruiter_number_id ??
+      hit.detail.employer_number_id ??
+      hit.detail.recruiter_opportunity_id
+    return related == null ? null : String(related)
+  }
+  return hit.recruiter_email_id == null ? null : String(hit.recruiter_email_id)
+}
+
+export const DRAFT_TEXT_SIZE_OPTIONS = ['small', 'normal', 'large', 'huge'] as const
+export type DraftTextSize = (typeof DRAFT_TEXT_SIZE_OPTIONS)[number]
+type NvoidsDetailTitleMode = 'job_details' | 'hotlist_details' | 'all'
+const DRAFT_TEXT_SIZE_STYLES: Record<DraftTextSize, { fontSize: string; lineHeight: string }> = {
+  small: { fontSize: '12px', lineHeight: '1.5' },
+  normal: { fontSize: '16px', lineHeight: '1.5' },
+  large: { fontSize: '20px', lineHeight: '1.5' },
+  huge: { fontSize: '28px', lineHeight: '1.4' },
+}
 
 export function shouldTrackViewEvent(
   lastTrackedAtByKey: Record<string, number>,
@@ -40,7 +82,21 @@ function renderInline(text: string): string {
   return escaped.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
 }
 
-function draftToPreviewHtml(draftText: string): string {
+export function normalizeDraftTextSize(value: string | null | undefined): DraftTextSize {
+  const normalized = (value ?? '').trim().toLowerCase()
+  return (DRAFT_TEXT_SIZE_OPTIONS as readonly string[]).includes(normalized) ? (normalized as DraftTextSize) : 'normal'
+}
+
+function normalizeNvoidsDetailTitleMode(value: string | null | undefined): NvoidsDetailTitleMode {
+  const normalized = (value ?? '').trim().toLowerCase()
+  return normalized === 'hotlist_details' || normalized === 'all' ? normalized : 'job_details'
+}
+
+export function draftTextSizeToPreviewStyle(draftTextSize: string | null | undefined): { fontSize: string; lineHeight: string } {
+  return DRAFT_TEXT_SIZE_STYLES[normalizeDraftTextSize(draftTextSize)]
+}
+
+export function draftToPreviewHtml(draftText: string): string {
   const normalized = (draftText ?? '').replaceAll('\r\n', '\n').trim()
   if (!normalized) return '<p></p>'
   const blocks = normalized.split(/\n\s*\n/).map((part) => part.trim()).filter(Boolean)
@@ -90,6 +146,17 @@ type AiStatus = {
   embedding_last_attempted_at?: string | null
   embedding_last_success_at?: string | null
   embedding_last_duration_ms?: number | null
+  groq_configured?: boolean
+  groq_enabled_in_settings?: boolean
+  groq_model?: string
+  groq_base_url_present?: boolean
+  groq_runtime_healthy?: boolean | null
+  groq_last_error?: string | null
+  groq_detail?: string
+  groq_request_mode?: string
+  groq_last_attempted_at?: string | null
+  groq_last_success_at?: string | null
+  groq_last_duration_ms?: number | null
   last_error: string | null
   last_started_at: string | null
   last_finished_at: string | null
@@ -127,15 +194,32 @@ type SettingsPayload = {
   feature_nvoids_auto_sync: boolean
   feature_nvoids_poll_interval_minutes: number
   nvoids_batch_limit: number
+  nvoids_detail_title_mode: NvoidsDetailTitleMode
   nvoids_locations: string[]
   feature_auto_send: boolean
   feature_retry_queue: boolean
   feature_ai_enabled: boolean
+  feature_ai_extractor_enabled: boolean
   feature_semantic_enabled: boolean
+  feature_groq_job_parser_enabled: boolean
+  feature_gmail_requirement_groups_enabled: boolean
+  feature_role_manifest_enabled: boolean
+  feature_strict_candidate_screening_enabled: boolean
+  feature_email_tracking_enabled: boolean
+  feature_reply_inbox_enabled: boolean
+  candidate_work_authorizations: string[]
+  candidate_total_experience_years: number | null
+  candidate_us_experience_years: number | null
+  candidate_current_location: string
+  draft_text_size: DraftTextSize
   fallback_draft_template: string
   signature_name: string
   signature_phone: string
   signature_email: string
+  preferred_employer_cc_emails: string[]
+  default_employer_cc_emails: string[]
+  preferred_employer_cc_email?: string
+  resume_display_name: string
   policy?: DynamicPolicy | null
   policy_profile_options?: string[] | null
   policy_profile_selected?: string | null
@@ -158,14 +242,148 @@ type DynamicPolicy = {
     location_strictness: 'lenient' | 'balanced' | 'strict'
     score_threshold_override_enabled: boolean
     score_threshold_override_value: number
+    draft_rules: DraftRules
   }
 }
 
-type PolicyProfileName = 'Aggressive' | 'Balanced' | 'Strict'
+export type RuleMode = 'ignore' | 'warn' | 'block'
+
+export type DraftRule = {
+  mode: RuleMode
+}
+
+export type AcceptedLocationRule = DraftRule & {
+  locations?: string[]
+}
+
+export type MinimumSalaryRule = DraftRule & {
+  value?: number | null
+}
+
+export type MustHaveSkillsRule = DraftRule & {
+  skills?: string[]
+}
+
+export type ScoreThresholdRule = DraftRule & {
+  value?: number | null
+}
+
+export type DraftRules = {
+  recruiter_like_gmail: DraftRule
+  accepted_location: AcceptedLocationRule
+  minimum_salary: MinimumSalaryRule
+  must_have_skills: MustHaveSkillsRule
+  score_threshold: ScoreThresholdRule
+  f2f_non_texas: DraftRule
+  unknown_location: DraftRule
+  recipient_mapping: DraftRule
+}
+
+type PolicyProfileName = 'Flexible Drafting' | 'Balanced' | 'Strict'
+
+export const defaultDraftRules = (): DraftRules => ({
+  recruiter_like_gmail: { mode: 'block' },
+  accepted_location: { mode: 'block', locations: [] },
+  minimum_salary: { mode: 'block', value: null },
+  must_have_skills: { mode: 'block', skills: [] },
+  score_threshold: { mode: 'block', value: null },
+  f2f_non_texas: { mode: 'block' },
+  unknown_location: { mode: 'block' },
+  recipient_mapping: { mode: 'block' },
+})
+
+export const buildDefaultPolicy = (): DynamicPolicy => ({
+  version: 1,
+  query: {
+    force_unread: true,
+    include_labels: [],
+    exclude_labels: [],
+    date_mode: 'custom',
+  },
+  run: {
+    run_mode: 'all',
+    batch_limit: 20,
+    dry_run: false,
+  },
+  qualification: {
+    location_strictness: 'balanced',
+    score_threshold_override_enabled: false,
+    score_threshold_override_value: 0.6,
+    draft_rules: defaultDraftRules(),
+  },
+})
+
+type PolicySeed = Pick<SettingsPayload, 'accepted_locations' | 'min_salary' | 'must_have_skills' | 'qualification_threshold'> | undefined
+
+export function normalizeDynamicPolicy(policy?: DynamicPolicy | null, seed?: PolicySeed): DynamicPolicy {
+  const defaultPolicy = buildDefaultPolicy()
+  const qualification = policy?.qualification
+  const ruleSeed = seed ?? {
+    accepted_locations: [],
+    min_salary: null,
+    must_have_skills: [],
+    qualification_threshold: 0.6,
+  }
+  const rawQualification = (qualification ?? {}) as Record<string, unknown>
+  const legacyDraftFilters = (rawQualification.draft_filters ?? {}) as Record<string, boolean>
+  const rawDraftRules = (rawQualification.draft_rules ?? {}) as Record<string, unknown>
+  const legacyMode = (key: string): RuleMode => (legacyDraftFilters[key] === false ? 'warn' : 'block')
+  const normalizedDraftRules: DraftRules = {
+    recruiter_like_gmail: {
+      mode: ((rawDraftRules.recruiter_like_gmail as DraftRule | undefined)?.mode ?? legacyMode('recruiter_like_filter_enabled')) as RuleMode,
+    },
+    accepted_location: {
+      mode: ((rawDraftRules.accepted_location as AcceptedLocationRule | undefined)?.mode ?? legacyMode('accepted_location_filter_enabled')) as RuleMode,
+      locations: (rawDraftRules.accepted_location as AcceptedLocationRule | undefined)?.locations ?? ruleSeed.accepted_locations ?? [],
+    },
+    minimum_salary: {
+      mode: ((rawDraftRules.minimum_salary as MinimumSalaryRule | undefined)?.mode ?? legacyMode('minimum_salary_filter_enabled')) as RuleMode,
+      value: (rawDraftRules.minimum_salary as MinimumSalaryRule | undefined)?.value ?? ruleSeed.min_salary ?? null,
+    },
+    must_have_skills: {
+      mode: ((rawDraftRules.must_have_skills as MustHaveSkillsRule | undefined)?.mode ?? legacyMode('must_have_skills_filter_enabled')) as RuleMode,
+      skills: (rawDraftRules.must_have_skills as MustHaveSkillsRule | undefined)?.skills ?? ruleSeed.must_have_skills ?? [],
+    },
+    score_threshold: {
+      mode: ((rawDraftRules.score_threshold as ScoreThresholdRule | undefined)?.mode ?? legacyMode('score_threshold_filter_enabled')) as RuleMode,
+      value: (rawDraftRules.score_threshold as ScoreThresholdRule | undefined)?.value ?? ruleSeed.qualification_threshold ?? 0.6,
+    },
+    f2f_non_texas: {
+      mode: ((rawDraftRules.f2f_non_texas as DraftRule | undefined)?.mode ?? legacyMode('f2f_non_texas_filter_enabled')) as RuleMode,
+    },
+    unknown_location: {
+      mode: ((rawDraftRules.unknown_location as DraftRule | undefined)?.mode ?? legacyMode('strict_unknown_location_filter_enabled')) as RuleMode,
+    },
+    recipient_mapping: {
+      mode: ((rawDraftRules.recipient_mapping as DraftRule | undefined)?.mode ?? legacyMode('require_to_and_cc_before_draft_enabled')) as RuleMode,
+    },
+  }
+  return {
+    ...defaultPolicy,
+    ...(policy ?? {}),
+    query: {
+      ...defaultPolicy.query,
+      ...(policy?.query ?? {}),
+    },
+    run: {
+      ...defaultPolicy.run,
+      ...(policy?.run ?? {}),
+    },
+    qualification: {
+      ...defaultPolicy.qualification,
+      ...(qualification ?? {}),
+      draft_rules: normalizedDraftRules,
+    },
+  }
+}
 
 type AutomationRunResponse = {
   status: string
   detail: string
+  run_key?: string | null
+  run_source?: string | null
+  skipped_item_count?: number | null
+  created_at?: string | null
   email_id: number | null
   gmail_message_url?: string | null
   decision_reason?: string | null
@@ -180,6 +398,85 @@ type AutomationRunResponse = {
   auto_send_failed_count?: number | null
   retry_promoted_count?: number | null
   retry_skipped_count?: number | null
+  source_count?: number | null
+  requirement_count?: number | null
+  multi_role_source_count?: number | null
+  manifest_review_count?: number | null
+}
+
+type RecentRunItem = {
+  id: number
+  run_key: string
+  run_source: string
+  source_type: string
+  outcome: string
+  reason_code: string
+  reason_detail: string
+  external_message_id?: string | null
+  external_thread_id?: string | null
+  candidate_email_id?: number | null
+  external_opportunity_id?: number | null
+  title_or_subject: string
+  sender: string
+  location?: string | null
+  source_url?: string | null
+  gmail_message_url?: string | null
+  intent_type?: string | null
+  intent_confidence?: number | null
+  intent_reason?: string | null
+  intent_evidence: string[]
+  intent_negative_evidence: string[]
+  gate_action?: string | null
+  gate_provider?: string | null
+  source_group_name?: string | null
+  source_group_email?: string | null
+  source_group_match_method?: string | null
+  source_group_trusted?: boolean | null
+  qualification_result?: string | null
+  blocking_rule?: string | null
+  qualification_detail?: string | null
+  qualification_context?: Record<string, unknown> | null
+  created_at: string
+}
+
+type RecentRunCard = AutomationRunResponse & {
+  run_key?: string | null
+  run_source?: string | null
+  skipped_item_count?: number | null
+  created_at?: string | null
+  skipped_items?: RecentRunItem[]
+  skipped_items_loaded?: boolean
+  skipped_items_loading?: boolean
+  skipped_items_error?: string | null
+}
+
+type BackgroundJob = {
+  run_key: string
+  job_id: string | null
+  status: string
+  detail: string
+  processed_items: number
+  total_items: number | null
+  progress_pct: number | null
+  queue_name: string | null
+}
+
+type JobEnqueueResponse = {
+  run_key: string
+  job_id: string
+  status: string
+}
+
+type RecentRunListResponse = {
+  items: RecentRunCard[]
+  next_cursor?: number | null
+  has_next?: boolean
+}
+
+type RecentRunItemListResponse = {
+  items: RecentRunItem[]
+  next_cursor: number | null
+  has_next: boolean
 }
 
 type OAuthStartResponse = {
@@ -200,9 +497,745 @@ type ResumeAsset = {
   mime_type: string
   sha256: string
   version: number
+  skills_text: string
+  is_enabled: boolean
   is_current: boolean
   created_at: string
   updated_at: string
+}
+
+type AttachmentAsset = {
+  id: number
+  file_name: string
+  mime_type: string
+  sha256: string
+  file_size: number
+  is_enabled: boolean
+  created_at: string
+  updated_at: string
+}
+
+type PendingSkill = {
+  skill_name: string
+  normalized_name: string
+  occurrence_count: number
+  candidate_ids: number[]
+  suspicious: boolean
+  recoverable_skills: string[]
+  source_tags: string[]
+}
+
+type PendingEntity = {
+  entity_type: 'company' | 'location'
+  display_name: string
+  normalized_name: string
+  occurrence_count: number
+  candidate_ids: number[]
+}
+
+type EmbedPendingSkillsResponse = {
+  embedded_count: number
+  remaining_count: number
+  duration_ms: number
+}
+
+type JobIntentLearningSignal = {
+  id: number
+  owner_id: string
+  phrase: string
+  normalized_phrase: string
+  polarity: string
+  source_examples_count: number
+  sample_evidence: string[]
+  confidence_aggregate: number
+  last_intent_type?: string | null
+  status: string
+  created_at: string
+  updated_at: string
+}
+
+type EmbeddedJobIntentSignal = {
+  id: number
+  phrase: string
+  polarity: string
+  confidence: number
+  embedded: boolean
+}
+
+type SettingsBootstrapPayload = {
+  settings: SettingsPayload
+  role_manifest_child_creation_enabled: boolean
+  gmail_requirement_groups: TrustedGmailGroup[]
+  resumes: ResumeAsset[]
+  attachments: AttachmentAsset[]
+  pending_skills: PendingSkill[]
+  pending_job_intent_signals: JobIntentLearningSignal[]
+  approved_job_intent_signals: JobIntentLearningSignal[]
+  loaded_at: string
+  owner_id: string
+}
+
+type BootstrapStatus = 'idle' | 'loading' | 'ready' | 'error'
+
+type ResumeDatabaseSectionProps = {
+  activeResume: ResumeAsset | null
+  resumeFile: File | null
+  resumeSkillsInput: string
+  resumeSkillEdits: Record<number, string>
+  resumeAssets: ResumeAsset[]
+  setResumeFile: (file: File | null) => void
+  setResumeSkillsInput: (value: string) => void
+  setResumeSkillEdits: React.Dispatch<React.SetStateAction<Record<number, string>>>
+  uploadResume: () => void
+  saveResumeSkills: (resumeId: number) => void
+  toggleResumeAsset: (resumeId: number, isEnabled: boolean) => void
+  deleteResumeAsset: (resumeId: number) => void
+}
+
+export function ResumeDatabaseSection({
+  activeResume,
+  resumeFile,
+  resumeSkillsInput,
+  resumeSkillEdits,
+  resumeAssets,
+  setResumeFile,
+  setResumeSkillsInput,
+  setResumeSkillEdits,
+  uploadResume,
+  saveResumeSkills,
+  toggleResumeAsset,
+  deleteResumeAsset,
+}: ResumeDatabaseSectionProps) {
+  const [expandedResumeIds, setExpandedResumeIds] = useState<Record<number, boolean>>({})
+
+  const toggleResumeExpanded = (resumeId: number) => {
+    setExpandedResumeIds((prev) => ({
+      ...prev,
+      [resumeId]: !prev[resumeId],
+    }))
+  }
+
+  const previewSkills = (skillsText: string) => {
+    const normalized = (skillsText || '').trim()
+    if (!normalized) return 'No manual skills saved yet. File extraction will be used as fallback.'
+    const items = normalized.split(',').map((item) => item.trim()).filter(Boolean)
+    if (items.length <= 5) return items.join(', ')
+    return `${items.slice(0, 5).join(', ')} +${items.length - 5} more`
+  }
+
+  return (
+    <section className="card resumeDatabaseCard">
+      <h2>Resume Database</h2>
+      <div className="stack resumeDatabaseStack">
+        <p className="subtle resumeDatabaseFallback">
+          {activeResume
+            ? `Legacy current fallback: ${activeResume.file_name} (v${activeResume.version})`
+            : 'No legacy current fallback resume is available yet.'}
+        </p>
+        <div className="stack resumeDatabaseUpload">
+          <input
+            type="file"
+            accept=".pdf,.doc,.docx"
+            aria-label="Upload resume file"
+            onChange={(e) => setResumeFile(e.target.files?.[0] ?? null)}
+          />
+          <label className="resumeDatabaseField">
+            <span>Resume Skills</span>
+            <textarea
+              className="resumeDatabaseTextarea"
+              rows={3}
+              value={resumeSkillsInput}
+              onChange={(e) => setResumeSkillsInput(e.target.value)}
+              placeholder="java, spring boot, microservices, aws"
+            />
+          </label>
+          <p className="subtle resumeDatabaseHelp">Use clean comma-separated skills for faster and more accurate resume matching.</p>
+          <button type="button" onClick={uploadResume} disabled={!resumeFile}>
+            Upload Resume To Database
+          </button>
+        </div>
+        {resumeAssets.length === 0 ? (
+          <p className="subtle">No resumes stored yet.</p>
+        ) : (
+          <div className="resumeDatabaseList">
+            {resumeAssets.map((resume) => {
+              const isExpanded = !!expandedResumeIds[resume.id]
+              return (
+                <article key={resume.id} className="resumeDatabaseItem pillRow">
+                  <div className="resumeDatabaseHeader">
+                    <div className="resumeDatabaseTitleBlock">
+                      <strong className="resumeDatabaseFileName">{resume.file_name}</strong>
+                      <div className="resumeDatabaseBadges">
+                        <span className="resumeDatabaseVersion">{`v${resume.version}`}</span>
+                        {resume.is_current ? <span className="resumeDatabaseBadge">Legacy current fallback</span> : null}
+                        <span className="resumeDatabaseBadge">{resume.is_enabled ? 'Enabled' : 'Disabled'}</span>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="resumeDatabaseExpandButton"
+                      onClick={() => toggleResumeExpanded(resume.id)}
+                      aria-expanded={isExpanded}
+                    >
+                      {isExpanded ? 'Collapse' : 'Expand'}
+                    </button>
+                  </div>
+                  <p className="subtle resumeDatabaseMeta">Added: {formatSettingsDate(resume.created_at)}</p>
+                  <p className="subtle resumeDatabaseSummary">
+                    Matching skills preview: {previewSkills(resume.skills_text)}
+                  </p>
+                  {isExpanded ? (
+                    <div className="resumeDatabaseBody">
+                      <label className="resumeDatabaseField">
+                        <span>Stored Skills</span>
+                        <textarea
+                          className="resumeDatabaseTextarea"
+                          rows={3}
+                          value={resumeSkillEdits[resume.id] ?? ''}
+                          onChange={(e) =>
+                            setResumeSkillEdits((prev) => ({
+                              ...prev,
+                              [resume.id]: e.target.value,
+                            }))
+                          }
+                          placeholder="java, spring boot, microservices, aws"
+                        />
+                      </label>
+                      <p className="subtle resumeDatabaseMatch">
+                        {resume.skills_text
+                          ? `Matching skills: ${resume.skills_text}`
+                          : 'No manual skills saved yet. File extraction will be used as fallback.'}
+                      </p>
+                      <div className="resumeDatabaseActions">
+                        <label className="toggleRow pillRow resumeDatabaseToggle">
+                          <span>{resume.is_enabled ? 'Enabled' : 'Disabled'}</span>
+                          <span className="toggleSwitch">
+                            <input
+                              type="checkbox"
+                              checked={resume.is_enabled}
+                              onChange={(e) => toggleResumeAsset(resume.id, e.target.checked)}
+                            />
+                            <span className="toggleTrack" />
+                          </span>
+                        </label>
+                        <div className="resumeDatabaseButtons">
+                          <button type="button" onClick={() => saveResumeSkills(resume.id)}>
+                            Save Skills
+                          </button>
+                          <button type="button" onClick={() => deleteResumeAsset(resume.id)}>
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+                </article>
+              )
+            })}
+          </div>
+        )}
+      </div>
+    </section>
+  )
+}
+
+type SkillUpgradeSectionProps = {
+  pendingSkills: PendingSkill[]
+  loading: boolean
+  busySkillKey: string | null
+  approveAllSkills: () => void
+  approveSkill: (skill: PendingSkill) => void
+  dismissSkill: (skill: PendingSkill) => void
+  embeddingPendingCount?: number
+  embeddingSummary?: string
+  embedSkills?: () => void
+}
+
+export function SkillUpgradeSection({
+  pendingSkills,
+  loading,
+  busySkillKey,
+  approveAllSkills,
+  approveSkill,
+  dismissSkill,
+  embeddingPendingCount = 0,
+  embeddingSummary = '',
+  embedSkills = () => {},
+}: SkillUpgradeSectionProps) {
+  const [visibleSkillCount, setVisibleSkillCount] = useState(SETTINGS_REVIEW_BATCH_SIZE)
+  const actionablePendingSkills = useMemo(
+    () => pendingSkills.filter(
+      (skill) => skill.occurrence_count >= 2 && !skill.suspicious,
+    ),
+    [pendingSkills],
+  )
+  const visibleSkills = pendingSkills.slice(0, visibleSkillCount)
+  const remainingSkills = pendingSkills.length - visibleSkills.length
+  return (
+    <section className="card skillUpgradeCard">
+      <h2>Upgrade Skills</h2>
+      <div className="stack skillUpgradeStack">
+        <p className="subtle skillUpgradeIntro">
+          Review parser-extracted unknown skills here. Approve adds them to your
+          custom taxonomy; dismiss removes them from this queue. Approve all only
+          includes skills seen at least twice.
+        </p>
+
+        <section className="skillUpgradeColumn">
+          <div className="skillUpgradeColumnHeader">
+            <h3>Pending Unknown Skills</h3>
+            <div className="rowBtns">
+              {!loading && actionablePendingSkills.length > 0 ? (
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={approveAllSkills}
+                  disabled={busySkillKey !== null}
+                >
+                  {busySkillKey === 'approve-all-skills' ? 'Approving all...' : 'Approve all'}
+                </button>
+              ) : null}
+              <span className="skillUpgradeCount">{pendingSkills.length}</span>
+            </div>
+          </div>
+          {loading ? (
+            <p className="subtle">Loading skills...</p>
+          ) : pendingSkills.length === 0 ? (
+            <p className="subtle">No pending unknown skills right now.</p>
+          ) : (
+            <div className="skillUpgradeList">
+              {visibleSkills.map((skill) => {
+                const approveKey = `approve:${skill.normalized_name}`
+                const dismissKey = `dismiss:${skill.normalized_name}`
+                const isSuspicious = skill.suspicious
+                return (
+                  <article key={skill.normalized_name} className="skillUpgradeItem">
+                    <div className="skillUpgradeItemHeader">
+                      <strong className="skillUpgradeName">{skill.skill_name}</strong>
+                      <span className="skillUpgradeBadge">{skill.occurrence_count} hit{skill.occurrence_count === 1 ? '' : 's'}</span>
+                    </div>
+                    <p className="subtle skillUpgradeMeta">
+                      Normalized key: {skill.normalized_name}
+                    </p>
+                    <p className="subtle skillUpgradeMeta">
+                      Candidate IDs: {skill.candidate_ids.length > 0 ? skill.candidate_ids.join(', ') : '-'}
+                    </p>
+                    <p className="subtle skillUpgradeMeta">
+                      Source: {skill.source_tags.length > 0 ? skill.source_tags.join(', ') : 'legacy'}
+                    </p>
+                    {isSuspicious ? (
+                      <p className="skillUpgradeWarning">
+                        This looks malformed or contains known skills
+                        {skill.recoverable_skills.length > 0 ? ` (${skill.recoverable_skills.join(', ')})` : ''}.
+                        {' '}Approve is disabled; use Dismiss to remove it.
+                      </p>
+                    ) : null}
+                    <div className="skillUpgradeActions">
+                      <button
+                        type="button"
+                        className="primary"
+                        onClick={() => approveSkill(skill)}
+                        disabled={busySkillKey !== null || isSuspicious}
+                      >
+                        {busySkillKey === approveKey ? 'Approving...' : 'Approve'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => dismissSkill(skill)}
+                        disabled={busySkillKey !== null}
+                      >
+                        {busySkillKey === dismissKey ? 'Dismissing...' : 'Dismiss'}
+                      </button>
+                    </div>
+                  </article>
+                )
+              })}
+              {remainingSkills > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => setVisibleSkillCount((count) => count + SETTINGS_REVIEW_BATCH_SIZE)}
+                >
+                  Show {Math.min(SETTINGS_REVIEW_BATCH_SIZE, remainingSkills)} more
+                </button>
+              ) : null}
+            </div>
+          )}
+        </section>
+
+        <section className="skillUpgradeColumn" aria-label="Approved skills embedding">
+          <div className="skillUpgradeColumnHeader">
+            <h3>Approved Skills — Embedding</h3>
+            <div className="rowBtns">
+              <button
+                type="button"
+                className="primary"
+                onClick={embedSkills}
+                disabled={busySkillKey !== null || embeddingPendingCount === 0}
+              >
+                {busySkillKey === 'embed-skills' ? 'Embedding...' : 'Embed Skills'}
+              </button>
+              <span className="skillUpgradeCount">{embeddingPendingCount}</span>
+            </div>
+          </div>
+          <p className="subtle skillUpgradeMeta">
+            {embeddingPendingCount} approved skill{embeddingPendingCount === 1 ? '' : 's'} pending embedding.
+          </p>
+          {embeddingPendingCount >= 150 ? (
+            <p className="subtle skillUpgradeMeta">A large batch is ready. Run it when mail sync is idle.</p>
+          ) : null}
+          {embeddingSummary ? <p className="subtle skillUpgradeMeta">{embeddingSummary}</p> : null}
+        </section>
+      </div>
+    </section>
+  )
+}
+
+type EntityUpgradeSectionProps = {
+  title: string
+  pendingEntities: PendingEntity[]
+  loading: boolean
+  busyKey: string | null
+  approveAll: () => void
+  approve: (entity: PendingEntity) => void
+  dismiss: (entity: PendingEntity) => void
+}
+
+export function EntityUpgradeSection({
+  title,
+  pendingEntities,
+  loading,
+  busyKey,
+  approveAll,
+  approve,
+  dismiss,
+}: EntityUpgradeSectionProps) {
+  const [visibleCount, setVisibleCount] = useState(SETTINGS_REVIEW_BATCH_SIZE)
+  const visibleEntities = pendingEntities.slice(0, visibleCount)
+  const remainingCount = pendingEntities.length - visibleEntities.length
+  const actionableEntities = useMemo(
+    () => pendingEntities.filter((entity) => entity.occurrence_count >= 2),
+    [pendingEntities],
+  )
+  return (
+    <section className="card skillUpgradeCard">
+      <h2>{title}</h2>
+      <div className="skillUpgradeColumn">
+        <div className="skillUpgradeColumnHeader">
+          <p className="subtle skillUpgradeIntro">
+            Review AI-extracted canonical-name candidates. Approve all only includes values seen at least twice.
+          </p>
+          <div className="rowBtns">
+            {!loading && actionableEntities.length > 0 ? (
+              <button type="button" className="primary" onClick={approveAll} disabled={busyKey !== null}>
+                {busyKey === 'approve-all' ? 'Approving all...' : `Approve all (${actionableEntities.length})`}
+              </button>
+            ) : null}
+            <span className="skillUpgradeCount">{pendingEntities.length}</span>
+          </div>
+        </div>
+        {loading ? <p className="subtle">Loading candidates...</p> : null}
+        {!loading && pendingEntities.length === 0 ? <p className="subtle">No pending candidates.</p> : null}
+        {!loading && pendingEntities.length > 0 ? (
+          <div className="skillUpgradeList">
+            {visibleEntities.map((entity) => (
+              <article key={entity.normalized_name} className="skillUpgradeItem">
+                <div className="skillUpgradeItemHeader">
+                  <strong className="skillUpgradeName">{entity.display_name}</strong>
+                  <span className="skillUpgradeBadge">{entity.occurrence_count} hit{entity.occurrence_count === 1 ? '' : 's'}</span>
+                </div>
+                <p className="subtle skillUpgradeMeta">Candidate IDs: {entity.candidate_ids.join(', ') || '-'}</p>
+                <div className="skillUpgradeActions">
+                  <button type="button" className="primary" onClick={() => approve(entity)} disabled={busyKey !== null}>Approve</button>
+                  <button type="button" onClick={() => dismiss(entity)} disabled={busyKey !== null}>Dismiss</button>
+                </div>
+              </article>
+            ))}
+            {remainingCount > 0 ? (
+              <button type="button" onClick={() => setVisibleCount((count) => count + SETTINGS_REVIEW_BATCH_SIZE)}>
+                Show {Math.min(SETTINGS_REVIEW_BATCH_SIZE, remainingCount)} more
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    </section>
+  )
+}
+
+const isPositiveIntentPolarity = (polarity: string) => polarity === 'positive_recruiter_jd'
+
+type JobIntentLearningSectionProps = {
+  pendingSignals: JobIntentLearningSignal[]
+  approvedSignals: JobIntentLearningSignal[]
+  embeddedSignals?: EmbeddedJobIntentSignal[]
+  loading: boolean
+  busySignalKey: string | null
+  approveAllSignals: () => void
+  approveSignal: (signal: JobIntentLearningSignal) => void
+  dismissSignal: (signal: JobIntentLearningSignal) => void
+  togglePolarity: (signal: { id: number }) => void
+}
+
+export function JobIntentLearningSection({
+  pendingSignals,
+  approvedSignals,
+  embeddedSignals = [],
+  loading,
+  busySignalKey,
+  approveAllSignals,
+  approveSignal,
+  dismissSignal,
+  togglePolarity,
+}: JobIntentLearningSectionProps) {
+  const [visiblePendingCount, setVisiblePendingCount] = useState(SETTINGS_REVIEW_BATCH_SIZE)
+  const [visiblePositiveApprovedCount, setVisiblePositiveApprovedCount] = useState(SETTINGS_REVIEW_BATCH_SIZE)
+  const [visibleNegativeApprovedCount, setVisibleNegativeApprovedCount] = useState(SETTINGS_REVIEW_BATCH_SIZE)
+  const visiblePendingSignals = pendingSignals.slice(0, visiblePendingCount)
+  const positiveApprovedSignals = useMemo(
+    () => approvedSignals.filter((signal) => isPositiveIntentPolarity(signal.polarity)),
+    [approvedSignals],
+  )
+  const negativeApprovedSignals = useMemo(
+    () => approvedSignals.filter((signal) => !isPositiveIntentPolarity(signal.polarity)),
+    [approvedSignals],
+  )
+  const visiblePositiveApprovedSignals = positiveApprovedSignals.slice(0, visiblePositiveApprovedCount)
+  const visibleNegativeApprovedSignals = negativeApprovedSignals.slice(0, visibleNegativeApprovedCount)
+  const remainingPendingSignals = pendingSignals.length - visiblePendingSignals.length
+  const remainingPositiveApprovedSignals = positiveApprovedSignals.length - visiblePositiveApprovedSignals.length
+  const remainingNegativeApprovedSignals = negativeApprovedSignals.length - visibleNegativeApprovedSignals.length
+  const [activeIntentTab, setActiveIntentTab] = useState<'pending' | 'positive' | 'negative' | 'embedded'>('pending')
+  const [visibleEmbeddedCount, setVisibleEmbeddedCount] = useState(SETTINGS_REVIEW_BATCH_SIZE)
+  const visibleEmbeddedSignals = embeddedSignals.slice(0, visibleEmbeddedCount)
+  const remainingEmbeddedSignals = embeddedSignals.length - visibleEmbeddedSignals.length
+  return (
+    <section className="card skillUpgradeCard">
+      <h2>Job Intent Learning</h2>
+      <div className="stack skillUpgradeStack">
+        <p className="subtle skillUpgradeIntro">
+          Groq-suggested Gmail intent phrases land here for review. Approve lets fallback mode use them later; dismiss keeps them suppressed.
+        </p>
+
+        <div className="intentTabBar" role="tablist">
+          <button type="button" role="tab" aria-selected={activeIntentTab === 'pending'} className={activeIntentTab === 'pending' ? 'intentTab intentTab--active' : 'intentTab'} onClick={() => setActiveIntentTab('pending')}>
+            Pending ({pendingSignals.length})
+          </button>
+          <button type="button" role="tab" aria-selected={activeIntentTab === 'positive'} className={activeIntentTab === 'positive' ? 'intentTab intentTab--active' : 'intentTab'} onClick={() => setActiveIntentTab('positive')}>
+            Positive ({positiveApprovedSignals.length})
+          </button>
+          <button type="button" role="tab" aria-selected={activeIntentTab === 'negative'} className={activeIntentTab === 'negative' ? 'intentTab intentTab--active' : 'intentTab'} onClick={() => setActiveIntentTab('negative')}>
+            Negative ({negativeApprovedSignals.length})
+          </button>
+          <button type="button" role="tab" aria-selected={activeIntentTab === 'embedded'} className={activeIntentTab === 'embedded' ? 'intentTab intentTab--active' : 'intentTab'} onClick={() => setActiveIntentTab('embedded')}>
+            Embedded ({embeddedSignals.length})
+          </button>
+        </div>
+
+        {activeIntentTab === 'pending' ? (
+        <section className="skillUpgradeColumn">
+          <div className="skillUpgradeColumnHeader">
+            <h3>Pending Intent Signals</h3>
+            <div className="rowBtns">
+              {!loading && pendingSignals.length > 0 ? (
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={approveAllSignals}
+                  disabled={busySignalKey !== null}
+                >
+                  {busySignalKey === 'approve-all-intents' ? 'Approving all...' : 'Approve all'}
+                </button>
+              ) : null}
+              <span className="skillUpgradeCount">{pendingSignals.length}</span>
+            </div>
+          </div>
+          {loading ? (
+            <p className="subtle">Loading intent signals...</p>
+          ) : pendingSignals.length === 0 ? (
+            <p className="subtle">No pending job-intent learning right now.</p>
+          ) : (
+            <div className="skillUpgradeList">
+              {visiblePendingSignals.map((signal) => {
+                const approveKey = `approve-intent:${signal.id}`
+                const dismissKey = `dismiss-intent:${signal.id}`
+                return (
+                  <article key={`${signal.id}-${signal.normalized_phrase}-${signal.polarity}`} className="skillUpgradeItem">
+                    <div className="skillUpgradeItemHeader">
+                      <strong className="skillUpgradeName">{signal.phrase}</strong>
+                      <span className="skillUpgradeBadge">{signal.source_examples_count} hit{signal.source_examples_count === 1 ? '' : 's'}</span>
+                    </div>
+                    <p className="subtle skillUpgradeMeta">Polarity: {signal.polarity}</p>
+                    <p className="subtle skillUpgradeMeta">Fallback confidence: {signal.confidence_aggregate.toFixed(2)}</p>
+                    {signal.last_intent_type ? <p className="subtle skillUpgradeMeta">Last intent: {signal.last_intent_type}</p> : null}
+                    {signal.sample_evidence.length > 0 ? (
+                      <div className="automationMetrics">
+                        <strong>Samples:</strong>
+                        {signal.sample_evidence.map((entry) => (
+                          <span key={`${signal.id}-${entry}`} className="tag">{entry}</span>
+                        ))}
+                      </div>
+                    ) : null}
+                    <div className="skillUpgradeActions">
+                      <button
+                        type="button"
+                        className="primary"
+                        onClick={() => approveSignal(signal)}
+                        disabled={busySignalKey !== null}
+                      >
+                        {busySignalKey === approveKey ? 'Approving...' : 'Approve'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => dismissSignal(signal)}
+                        disabled={busySignalKey !== null}
+                      >
+                        {busySignalKey === dismissKey ? 'Dismissing...' : 'Dismiss'}
+                      </button>
+                    </div>
+                  </article>
+                )
+              })}
+              {remainingPendingSignals > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => setVisiblePendingCount((count) => count + SETTINGS_REVIEW_BATCH_SIZE)}
+                >
+                  Show {Math.min(SETTINGS_REVIEW_BATCH_SIZE, remainingPendingSignals)} more pending signals
+                </button>
+              ) : null}
+            </div>
+          )}
+        </section>
+        ) : null}
+
+        {activeIntentTab === 'positive' ? (
+        <section className="skillUpgradeColumn">
+          <div className="skillUpgradeColumnHeader">
+            <h4>Approved — Positive</h4>
+            <span className="skillUpgradeCount">{positiveApprovedSignals.length}</span>
+          </div>
+          {!loading && positiveApprovedSignals.length === 0 ? (
+            <p className="subtle">No approved positive signals yet.</p>
+          ) : !loading ? (
+            <div className="skillUpgradeList">
+              {visiblePositiveApprovedSignals.map((signal) => (
+                <article key={`approved-${signal.id}`} className="skillUpgradeItem">
+                  <div className="skillUpgradeItemHeader">
+                    <strong className="skillUpgradeName">{signal.phrase}</strong>
+                    <button
+                      type="button"
+                      className="intentPolarityLight intentPolarityLight--positive"
+                      onClick={() => togglePolarity(signal)}
+                      disabled={busySignalKey !== null}
+                      title="Positive signal — click to mark negative"
+                    >
+                      {busySignalKey === `toggle-polarity:${signal.id}` ? '...' : 'Positive'}
+                    </button>
+                  </div>
+                  <p className="subtle skillUpgradeMeta">Examples: {signal.source_examples_count}</p>
+                  <p className="subtle skillUpgradeMeta">Confidence: {signal.confidence_aggregate.toFixed(2)}</p>
+                </article>
+              ))}
+              {remainingPositiveApprovedSignals > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => setVisiblePositiveApprovedCount((count) => count + SETTINGS_REVIEW_BATCH_SIZE)}
+                >
+                  Show {Math.min(SETTINGS_REVIEW_BATCH_SIZE, remainingPositiveApprovedSignals)} more positive signals
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+        </section>
+        ) : null}
+
+        {activeIntentTab === 'negative' ? (
+        <section className="skillUpgradeColumn">
+          <div className="skillUpgradeColumnHeader">
+            <h4>Approved — Negative</h4>
+            <span className="skillUpgradeCount">{negativeApprovedSignals.length}</span>
+          </div>
+          {!loading && negativeApprovedSignals.length === 0 ? (
+            <p className="subtle">No approved negative signals yet.</p>
+          ) : !loading ? (
+            <div className="skillUpgradeList">
+              {visibleNegativeApprovedSignals.map((signal) => (
+                <article key={`approved-${signal.id}`} className="skillUpgradeItem">
+                  <div className="skillUpgradeItemHeader">
+                    <strong className="skillUpgradeName">{signal.phrase}</strong>
+                    <button
+                      type="button"
+                      className="intentPolarityLight intentPolarityLight--negative"
+                      onClick={() => togglePolarity(signal)}
+                      disabled={busySignalKey !== null}
+                      title="Negative signal — click to mark positive"
+                    >
+                      {busySignalKey === `toggle-polarity:${signal.id}` ? '...' : 'Negative'}
+                    </button>
+                  </div>
+                  <p className="subtle skillUpgradeMeta">Examples: {signal.source_examples_count}</p>
+                  <p className="subtle skillUpgradeMeta">Confidence: {signal.confidence_aggregate.toFixed(2)}</p>
+                </article>
+              ))}
+              {remainingNegativeApprovedSignals > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => setVisibleNegativeApprovedCount((count) => count + SETTINGS_REVIEW_BATCH_SIZE)}
+                >
+                  Show {Math.min(SETTINGS_REVIEW_BATCH_SIZE, remainingNegativeApprovedSignals)} more negative signals
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+        </section>
+        ) : null}
+
+        {activeIntentTab === 'embedded' ? (
+        <section className="skillUpgradeColumn">
+          <div className="skillUpgradeColumnHeader">
+            <h4>Currently Embedded Signals</h4>
+            <span className="skillUpgradeCount">{embeddedSignals.length}</span>
+          </div>
+          <p className="subtle skillUpgradeIntro">
+            These are the top-ranked approved signals Groq and semantic matching actually use right now (capped at 15 per polarity).
+          </p>
+          {!loading && embeddedSignals.length === 0 ? (
+            <p className="subtle">No signals are currently embedded.</p>
+          ) : !loading ? (
+            <div className="skillUpgradeList">
+              {visibleEmbeddedSignals.map((signal) => (
+                <article key={`embedded-${signal.id}`} className="skillUpgradeItem">
+                  <div className="skillUpgradeItemHeader">
+                    <strong className="skillUpgradeName">{signal.phrase}</strong>
+                    <button
+                      type="button"
+                      className={isPositiveIntentPolarity(signal.polarity) ? 'intentPolarityLight intentPolarityLight--positive' : 'intentPolarityLight intentPolarityLight--negative'}
+                      onClick={() => togglePolarity(signal)}
+                      disabled={busySignalKey !== null}
+                      title={isPositiveIntentPolarity(signal.polarity) ? 'Positive signal — click to mark negative' : 'Negative signal — click to mark positive'}
+                    >
+                      {busySignalKey === `toggle-polarity:${signal.id}` ? '...' : isPositiveIntentPolarity(signal.polarity) ? 'Positive' : 'Negative'}
+                    </button>
+                  </div>
+                  <p className="subtle skillUpgradeMeta">Confidence: {signal.confidence.toFixed(2)}</p>
+                  <p className="subtle skillUpgradeMeta">{signal.embedded ? 'Embedded via SBERT' : 'Fallback (hash embedding — SBERT unavailable)'}</p>
+                </article>
+              ))}
+              {remainingEmbeddedSignals > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => setVisibleEmbeddedCount((count) => count + SETTINGS_REVIEW_BATCH_SIZE)}
+                >
+                  Show {Math.min(SETTINGS_REVIEW_BATCH_SIZE, remainingEmbeddedSignals)} more embedded signals
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+        </section>
+        ) : null}
+      </div>
+    </section>
+  )
 }
 
 type Candidate = {
@@ -210,6 +1243,10 @@ type Candidate = {
   subject: string
   sender: string
   body: string
+  role: string
+  location: string
+  salary_text: string
+  skills_text: string
   sent_at?: string | null
   gmail_message_url: string | null
   recipient_email: string | null
@@ -221,6 +1258,14 @@ type Candidate = {
   routing_candidates: RoutingEvidence[]
   routing_confirmed: boolean
   ai_score?: number | null
+  ats_score?: number | null
+  ats_score_source?: string | null
+  ats_summary?: string | null
+  ats_breakdown?: Record<string, unknown> | null
+  resume_picker_score?: number | null
+  resume_picker_reason?: string | null
+  resume_picker_candidates?: Record<string, unknown> | null
+  resume_picker_breakdown?: Record<string, unknown> | null
   draft_reply: string
   draft_source: string | null
   draft_model: string | null
@@ -228,11 +1273,87 @@ type Candidate = {
   draft_resume_context_status: string | null
   draft_quality?: DraftQuality | null
   resume_file_name: string | null
+  parser_details: Record<string, unknown> | null
+  attachment_file_names: string[]
   state: string
   last_error: string | null
   source: string
   external_message_id: string | null
   external_thread_id: string | null
+  gmail_sent_id?: string | null
+  source_parent_email_id?: number | null
+  is_source_parent?: boolean
+  is_multi_role_child?: boolean
+  requirement_index?: number | null
+  requirement_count?: number | null
+  requirement_key?: string | null
+  requirement_source_text?: string | null
+  inherited_constraints?: Array<Record<string, unknown>>
+  role_manifest_status?: string
+  role_manifest_confidence?: number | null
+  role_manifest?: Record<string, unknown> | null
+  role_manifest_diagnostics?: Record<string, unknown> | null
+  eligibility_status?: string | null
+  eligibility_details?: Record<string, unknown> | null
+  sendability_status?: string | null
+  screening_mode?: 'compatibility' | 'strict' | null
+}
+
+type SentItemDetails = {
+  email_id: number
+  source_type: string
+  source_label: string
+  requirement_received_link: string | null
+  sent_gmail_message_link: string | null
+  resume_variant_sent: string | null
+  attached_files: string[]
+  company: string | null
+  recruiter_name: string | null
+  recruiter_email: string | null
+  recruiter_phone: string | null
+  end_client: string | null
+  implementation_partner: string | null
+  vendor: string | null
+  domain_mentioned: string | null
+  experience_required: string | null
+  mandatory_skills: string[]
+  missing_skills: string[]
+  ats_score: number | null
+  ats_summary: string | null
+  to_email: string | null
+  cc_email: string | null
+  sent_at: string | null
+  opened_at: string | null
+  open_count: number
+  reply_count: number
+}
+
+type ConversationSummary = {
+  id: number
+  root_recruiter_email_id: number
+  recruiter: string
+  recruiter_email: string | null
+  subject: string
+  status: string
+  last_message_preview: string
+  last_message_at: string
+  unread_reply_count: number
+}
+
+type ConversationMessage = {
+  id: number
+  direction: 'inbound' | 'outbound'
+  sender: string
+  body: string
+  snippet: string
+  occurred_at: string
+  read_at: string | null
+}
+
+type ConversationDetail = ConversationSummary & {
+  to_email: string | null
+  cc_email: string | null
+  messages: ConversationMessage[]
 }
 
 export const sourceListingUrl = (item: Candidate): string | null => {
@@ -245,6 +1366,89 @@ export const sourceListingUrl = (item: Candidate): string | null => {
     return `https://nvoids.com/job_details.jsp?id=${nvoidsIdMatch[1]}`
   }
   return null
+}
+
+function getSourceLabel(source: string | null | undefined): string {
+  const normalized = (source ?? '').trim().toLowerCase()
+  if (normalized === 'gmail') return 'Gmail'
+  if (normalized === 'nvoids') return 'Nvoids'
+  if (normalized === 'manual') return 'Manual'
+  return normalized || 'Unknown'
+}
+
+function renderTextOrDash(value: string | null | undefined): string {
+  const text = (value ?? '').trim()
+  return text || '-'
+}
+
+function jdSummarySkills(item: Candidate): string[] {
+  const breakdown = item.resume_picker_breakdown ?? {}
+  const matchedPriority = Array.isArray(breakdown.matched_priority_skills)
+    ? breakdown.matched_priority_skills.filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
+    : []
+  if (matchedPriority.length > 0) return matchedPriority.slice(0, 3)
+  return (item.skills_text ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 3)
+}
+
+function renderListOrDash(values: string[] | null | undefined): string {
+  const items = (values ?? []).map((value) => value.trim()).filter(Boolean)
+  return items.length > 0 ? items.join(', ') : '-'
+}
+
+function formatPickerScore(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) return '-'
+  return `${Math.round(value * 100)}`
+}
+
+type ResumePickerPanelProps = {
+  candidate: Candidate
+}
+
+export function ResumePickerPanel({ candidate }: ResumePickerPanelProps) {
+  const breakdown = candidate.resume_picker_breakdown ?? {}
+  const candidatesPayload = candidate.resume_picker_candidates ?? {}
+  const matchedPriority = Array.isArray(breakdown.matched_priority_skills) ? breakdown.matched_priority_skills.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : []
+  const missingPriority = Array.isArray(breakdown.missing_priority_skills) ? breakdown.missing_priority_skills.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : []
+  const rankingsRaw = Array.isArray(candidatesPayload.rankings) ? candidatesPayload.rankings : []
+  const alternatives = rankingsRaw
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+    .filter((item) => (item.resume_file_name as string | undefined) !== candidate.resume_file_name)
+    .slice(0, 2)
+
+  if (
+    candidate.resume_picker_score == null &&
+    !candidate.resume_picker_reason &&
+    matchedPriority.length === 0 &&
+    missingPriority.length === 0 &&
+    alternatives.length === 0
+  ) {
+    return null
+  }
+
+  return (
+    <div className="parserDetailsPanel">
+      <p><strong>Resume Picker:</strong> {candidate.resume_file_name ?? '-'}</p>
+      <p><strong>Final Score:</strong> {formatPickerScore(candidate.resume_picker_score)}</p>
+      <p><strong>Why:</strong> {candidate.resume_picker_reason ?? '-'}</p>
+      <p><strong>Matched Priority Skills:</strong> {matchedPriority.join(', ') || '-'}</p>
+      <p><strong>Missing Priority Skills:</strong> {missingPriority.join(', ') || '-'}</p>
+      <p><strong>Top Alternatives:</strong></p>
+      {alternatives.length === 0 ? <p className="subtle">No alternatives logged.</p> : null}
+      {alternatives.length > 0 ? (
+        <ul>
+          {alternatives.map((item, index) => (
+            <li key={`${String(item.resume_file_name ?? index)}-${index}`}>
+              {String(item.resume_file_name ?? '-')} ({formatPickerScore(typeof item.final_resume_score === 'number' ? item.final_resume_score : null)}): {String(item.selection_reason ?? '-')}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  )
 }
 
 type PremiumNumberConfidence = 'high' | 'medium' | 'low'
@@ -330,6 +1534,12 @@ type RecruiterOpportunityDeleteResponse = {
   recruiter_number_deleted: boolean
 }
 
+type CandidateDeleteResponse = {
+  id: number
+  deleted: boolean
+  state: string
+}
+
 type RoutingEvidence = {
   role: string
   email: string
@@ -379,6 +1589,18 @@ type ProductivityTrendResponse = {
   bars: ProductivityBarPoint[]
 }
 
+type JobQueueSummary = {
+  queued: number
+  processing: number
+  succeeded: number
+  failed: number
+}
+
+type LiveReplyStatus = {
+  count: number
+  checked_at: string | null
+}
+
 type VerdictLabel = 'Excellent' | 'Strong' | 'Good' | 'Review' | 'Risky'
 type VerdictTone = 'excellent' | 'strong' | 'good' | 'review' | 'risky'
 
@@ -401,6 +1623,833 @@ export function clamp01(value: number | null | undefined): number {
 export function clamp100(value: number): number {
   if (Number.isNaN(value)) return 0
   return Math.max(0, Math.min(Math.round(value), 100))
+}
+
+function formatAtsScore(value: number | null | undefined): string {
+  if (typeof value !== 'number' || Number.isNaN(value)) return '-'
+  return String(Math.round(value))
+}
+
+function getAtsStrengthLabel(value: number | null | undefined): string {
+  if (typeof value !== 'number' || Number.isNaN(value)) return 'Unknown'
+  if (value >= 80) return 'Strong'
+  if (value >= 60) return 'Moderate'
+  return 'Weak'
+}
+
+type ParserDetailsPayload = {
+  parser_version?: string
+  source?: string
+  parser_mode?: string
+  base_parser_result?: Record<string, unknown>
+  ai_extractor_result?: Record<string, unknown> | null
+  skills_audit?: Record<string, unknown>
+  approved_skills_text?: string
+  unknown_skills?: unknown[]
+  merged_result?: Record<string, unknown>
+  parser_warning?: string | null
+  fallback_used?: boolean
+  source_hints?: Record<string, unknown>
+  structured_requirements?: StructuredRequirementsPayload | Record<string, unknown> | null
+  requirements_schema_version?: number
+}
+
+type StructuredRequirementSkill = {
+  canonical_name: string
+  versions: string[]
+}
+
+type StructuredRequirementGroup = {
+  group_id: string
+  level: string
+  mode: 'all' | 'any'
+  skills: StructuredRequirementSkill[]
+}
+
+type StructuredRequirementsPayload = {
+  schema_version?: number
+  required_groups: StructuredRequirementGroup[]
+  preferred_groups: StructuredRequirementGroup[]
+  informational_groups: StructuredRequirementGroup[]
+  experience_years_min?: number | null
+  local_required?: boolean
+  work_mode?: string | null
+  locations: string[]
+  preferred_domains: string[]
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function normalizeParserDetails(value: unknown): ParserDetailsPayload | null {
+  if (!isRecord(value)) return null
+  return value as ParserDetailsPayload
+}
+
+function readStructuredRequirementSkill(value: unknown): StructuredRequirementSkill | null {
+  if (!isRecord(value)) return null
+  const canonicalName = recordStringValue(value, 'canonical_name')
+  if (!canonicalName) return null
+  return {
+    canonical_name: canonicalName,
+    versions: recordStringArray(value, 'versions'),
+  }
+}
+
+function readStructuredRequirementGroup(value: unknown): StructuredRequirementGroup | null {
+  if (!isRecord(value)) return null
+  const mode = recordStringValue(value, 'mode').toLowerCase() === 'any' ? 'any' : 'all'
+  const skills = Array.isArray(value.skills)
+    ? value.skills.map(readStructuredRequirementSkill).filter((item): item is StructuredRequirementSkill => item != null)
+    : []
+  if (skills.length === 0) return null
+  return {
+    group_id: recordStringValue(value, 'group_id'),
+    level: recordStringValue(value, 'level'),
+    mode,
+    skills,
+  }
+}
+
+function normalizeStructuredRequirements(value: unknown): StructuredRequirementsPayload | null {
+  if (!isRecord(value)) return null
+  const readGroups = (key: string) => {
+    const raw = value[key]
+    if (!Array.isArray(raw)) return []
+    return raw.map(readStructuredRequirementGroup).filter((item): item is StructuredRequirementGroup => item != null)
+  }
+  return {
+    schema_version: typeof value.schema_version === 'number' ? value.schema_version : undefined,
+    required_groups: readGroups('required_groups'),
+    preferred_groups: readGroups('preferred_groups'),
+    informational_groups: readGroups('informational_groups'),
+    experience_years_min: typeof value.experience_years_min === 'number' ? value.experience_years_min : null,
+    local_required: typeof value.local_required === 'boolean' ? value.local_required : undefined,
+    work_mode: recordStringValue(value, 'work_mode') || null,
+    locations: recordStringArray(value, 'locations'),
+    preferred_domains: recordStringArray(value, 'preferred_domains'),
+  }
+}
+
+function renderParserValue(value: unknown): string {
+  if (value === null || value === undefined) return '-'
+  if (typeof value === 'string') return value || '-'
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (Array.isArray(value)) {
+    return value.length === 0 ? '-' : value.map((item) => renderParserValue(item)).join(', ')
+  }
+  if (isRecord(value)) {
+    const pairs = Object.entries(value)
+    if (pairs.length === 0) return '-'
+    return pairs.map(([key, item]) => `${key}: ${renderParserValue(item)}`).join('\n')
+  }
+  return String(value)
+}
+
+function recordStringValue(record: Record<string, unknown> | null | undefined, key: string): string {
+  if (!record) return ''
+  const value = record[key]
+  if (typeof value === 'string') return value.trim()
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  return ''
+}
+
+function recordStringArray(record: Record<string, unknown> | null | undefined, key: string): string[] {
+  if (!record) return []
+  const value = record[key]
+  if (!Array.isArray(value)) return []
+  return value.map((item) => renderParserValue(item).trim()).filter(Boolean).filter((item) => item !== '-')
+}
+
+function parserTitleCase(value: string): string {
+  return value
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(' ')
+    .map((part) => {
+      const lowered = part.toLowerCase()
+      if (lowered === 'ai') return 'AI'
+      if (lowered === 'ats') return 'ATS'
+      if (lowered === 'api') return 'API'
+      if (lowered === 'id') return 'ID'
+      if (lowered === 'jd') return 'JD'
+      return part.charAt(0).toUpperCase() + part.slice(1)
+    })
+    .join(' ')
+}
+
+function parserTokensFromValue(value: unknown): string[] {
+  const seen = new Set<string>()
+  const items: string[] = []
+
+  const push = (raw: string) => {
+    const text = raw.trim()
+    if (!text || text === '-') return
+    const key = text.toLowerCase()
+    if (seen.has(key)) return
+    seen.add(key)
+    items.push(text)
+  }
+
+  const visit = (current: unknown) => {
+    if (current == null) return
+    if (Array.isArray(current)) {
+      current.forEach(visit)
+      return
+    }
+    if (typeof current === 'string') {
+      current
+        .split(/[,;\n]+/)
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .forEach(push)
+      return
+    }
+    if (typeof current === 'number' || typeof current === 'boolean') {
+      push(String(current))
+      return
+    }
+    if (isRecord(current)) {
+      Object.values(current).forEach(visit)
+    }
+  }
+
+  visit(value)
+  return items
+}
+
+function formatStructuredSkill(skill: StructuredRequirementSkill): string {
+  if (skill.versions.length === 0) return skill.canonical_name
+  return `${skill.canonical_name} ${skill.versions.join('/')}`
+}
+
+function formatRequirementGroupSkills(group: StructuredRequirementGroup): string {
+  const items = group.skills.map(formatStructuredSkill)
+  return group.mode === 'any' ? items.join(' or ') : items.join(', ')
+}
+
+function requirementModeLabel(group: StructuredRequirementGroup, preferred = false): string {
+  if (preferred) return group.mode === 'any' ? 'Preferred' : 'Preferred'
+  return group.mode === 'any' ? 'One required' : 'All required'
+}
+
+function normalizeLocationValue(value: string): string {
+  return value.replace(/\s+/g, ' ').trim()
+}
+
+function isCleanLocationValue(value: string): boolean {
+  const text = normalizeLocationValue(value)
+  if (!text || text.includes('\n')) return false
+  if (/send resume|education|spring boot|kafka|docker|merchant|permanent resident/i.test(text)) return false
+  return /remote|onsite|hybrid|[A-Za-z][A-Za-z .'-]+,\s*[A-Za-z0-9]{2,}/i.test(text)
+}
+
+function pickDisplayLocation(locations: string[]): string {
+  const cleanLocations = Array.from(new Set(locations.map(normalizeLocationValue).filter(isCleanLocationValue)))
+  return cleanLocations[0] ?? '-'
+}
+
+function readRequirementGroupLabels(value: unknown, key: string): string[] {
+  if (!isRecord(value)) return []
+  return recordStringArray(value, key)
+}
+
+function readMatchedAlternatives(value: unknown): Record<string, string> {
+  if (!isRecord(value)) return {}
+  return Object.fromEntries(
+    Object.entries(value)
+      .map(([key, raw]) => [key.trim(), renderParserValue(raw).trim()] as const)
+      .filter(([key, raw]) => key && raw && raw !== '-'),
+  )
+}
+
+function summarizePickerGroupResult(
+  label: string,
+  matchedAlternatives: Record<string, string>,
+): string {
+  const matchedAlternative = matchedAlternatives[label]
+  if (matchedAlternative) return `${label} through ${matchedAlternative}`
+  return label
+}
+
+function rawRequirementGroupLines(groups: StructuredRequirementGroup[], preferred = false): string {
+  if (groups.length === 0) return '-'
+  return groups
+    .map((group) => `${requirementModeLabel(group, preferred)}: ${formatRequirementGroupSkills(group)}`)
+    .join('\n')
+}
+
+function rawConstraintsSummary(structuredRequirements: StructuredRequirementsPayload | null): string {
+  if (!structuredRequirements) return '-'
+  const lines = [
+    `Experience: ${structuredRequirements.experience_years_min != null ? `${structuredRequirements.experience_years_min}+ years` : '-'}`,
+    `Location: ${pickDisplayLocation(structuredRequirements.locations)}`,
+    `Local candidate: ${
+      structuredRequirements.local_required == null
+        ? '-'
+        : structuredRequirements.local_required
+          ? 'Required'
+          : 'Not required'
+    }`,
+    `Work mode: ${structuredRequirements.work_mode || '-'}`,
+    `Preferred experience/domain: ${structuredRequirements.preferred_domains.length > 0 ? structuredRequirements.preferred_domains.join(', ') : '-'}`,
+  ]
+  return lines.join('\n')
+}
+
+function rawResumePickerSummary(args: {
+  mandatoryStatus: string
+  mandatoryCoverage: string
+  satisfiedRequiredGroups: string[]
+  unmetRequiredGroups: string[]
+  matchedAlternatives: Record<string, string>
+  versionUnverified: string[]
+}): string {
+  const {
+    mandatoryStatus,
+    mandatoryCoverage,
+    satisfiedRequiredGroups,
+    unmetRequiredGroups,
+    matchedAlternatives,
+    versionUnverified,
+  } = args
+  return [
+    `Mandatory gate status: ${mandatoryStatus || '-'}`,
+    `Mandatory coverage: ${mandatoryCoverage}`,
+    `Satisfied: ${satisfiedRequiredGroups.length > 0 ? satisfiedRequiredGroups.join('; ') : '-'}`,
+    `Unmet: ${unmetRequiredGroups.length > 0 ? unmetRequiredGroups.join('; ') : '-'}`,
+    `Matched alternatives: ${Object.keys(matchedAlternatives).length > 0 ? Object.values(matchedAlternatives).join('; ') : '-'}`,
+    `Version not verified: ${versionUnverified.length > 0 ? versionUnverified.join('; ') : '-'}`,
+  ].join('\n')
+}
+
+function formatParserMetricValue(value: unknown, options?: { percent?: boolean }): string {
+  const percent = options?.percent ?? false
+  if (value == null) return '-'
+  if (typeof value === 'number') {
+    if (Number.isNaN(value)) return '-'
+    if (percent) return `${Math.round(value * 100)}%`
+    if (Number.isInteger(value)) return String(value)
+    return value.toFixed(2)
+  }
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No'
+  const text = renderParserValue(value).trim()
+  return text || '-'
+}
+
+function parserMetricRowsFromAts(
+  atsScore: number | null | undefined,
+  atsSource: string | null | undefined,
+  atsSummary: string | null | undefined,
+  atsBreakdown: Record<string, unknown> | null | undefined,
+): Array<{ label: string; value: string }> {
+  return [
+    { label: 'Score', value: atsScore == null ? '-' : `${formatAtsScore(atsScore)} (${getAtsStrengthLabel(atsScore)})` },
+    { label: 'Source', value: renderTextOrDash(atsSource) },
+    { label: 'Raw Overlap', value: formatParserMetricValue(atsBreakdown?.raw_overlap, { percent: true }) },
+    { label: 'Intent Match', value: formatParserMetricValue(atsBreakdown?.intent_match, { percent: true }) },
+    { label: 'Role Alignment', value: formatParserMetricValue(atsBreakdown?.role_alignment, { percent: true }) },
+    { label: 'Semantic Similarity', value: formatParserMetricValue(atsBreakdown?.semantic_similarity, { percent: true }) },
+    { label: 'Foundation Coverage', value: formatParserMetricValue(atsBreakdown?.foundation_coverage, { percent: true }) },
+    { label: 'Summary', value: renderTextOrDash(atsSummary) },
+  ]
+}
+
+function parserDisplayValue(value: unknown): string {
+  if (value == null) return '-'
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No'
+  return renderParserValue(value)
+}
+
+function ParserChipList({ items, empty = '-' }: { items: string[]; empty?: string }) {
+  if (items.length === 0) return <p className="subtle">{empty}</p>
+  return (
+    <div className="parserChipList">
+      {items.map((item) => (
+        <span key={item} className="parserChip">{item}</span>
+      ))}
+    </div>
+  )
+}
+
+function ParserMetricGrid({ rows }: { rows: Array<{ label: string; value: string }> }) {
+  const filtered = rows.filter((row) => row.value.trim() && row.value.trim() !== '-')
+  const effective = filtered.length > 0 ? filtered : rows
+  return (
+    <div className="parserMetricGrid">
+      {effective.map((row) => (
+        <div key={row.label} className="parserMetricRow">
+          <span className="parserLabel">{row.label}</span>
+          <span className="parserValue">{row.value}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function ParserFieldValue({ value }: { value: unknown }) {
+  if (value == null || value === '') return <span className="parserValue">-</span>
+
+  if (Array.isArray(value)) {
+    const items = parserTokensFromValue(value)
+    if (items.length > 0) return <ParserChipList items={items} />
+    return <span className="parserValue">{renderParserValue(value)}</span>
+  }
+
+  if (isRecord(value)) {
+    const entries = Object.entries(value)
+    if (entries.length === 0) return <span className="parserValue">-</span>
+    return (
+      <div className="parserNestedBlock">
+        <ParserKeyValueList record={value} />
+      </div>
+    )
+  }
+
+  if (typeof value === 'string') {
+    const text = value.trim()
+    if (!text) return <span className="parserValue">-</span>
+    if (text.includes('\n') || text.length > 120) {
+      return <div className="parserTextBlock">{text}</div>
+    }
+    return <span className="parserValue">{text}</span>
+  }
+
+  return <span className="parserValue">{parserDisplayValue(value)}</span>
+}
+
+function ParserKeyValueList({ record }: { record: Record<string, unknown> }) {
+  const entries = Object.entries(record)
+  if (entries.length === 0) return <p className="subtle">-</p>
+  return (
+    <div className="parserKeyValueList">
+      {entries.map(([key, value]) => (
+        <div key={key} className="parserKeyValueRow">
+          <span className="parserLabel">{parserTitleCase(key)}</span>
+          <ParserFieldValue value={value} />
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function ParserRawDebug({ value }: { value: unknown }) {
+  return (
+    <details className="parserRawDebug">
+      <summary>Raw Debug</summary>
+      <pre className="parserRawBlock">{renderParserValue(value)}</pre>
+    </details>
+  )
+}
+
+function ParserDetailsCard({
+  title,
+  className,
+  bodyClassName,
+  children,
+}: {
+  title: string
+  className?: string
+  bodyClassName?: string
+  children: React.ReactNode
+}) {
+  const classes = ['parserDetailsBlock', className].filter(Boolean).join(' ')
+  const bodyClasses = ['parserDetailsCardBody', bodyClassName].filter(Boolean).join(' ')
+  return (
+    <section className={classes}>
+      <h3>{title}</h3>
+      <div className={bodyClasses}>{children}</div>
+    </section>
+  )
+}
+
+function ParserStructuredSection({
+  title,
+  data,
+  rawData,
+}: {
+  title: string
+  data: Record<string, unknown> | null | undefined
+  rawData?: unknown
+}) {
+  const effectiveData = data ?? {}
+  return (
+    <ParserDetailsCard title={title}>
+      <ParserKeyValueList record={effectiveData} />
+      <ParserRawDebug value={rawData ?? effectiveData} />
+    </ParserDetailsCard>
+  )
+}
+
+type ParserDetailsPanelProps = {
+  candidateId: number
+  source: string
+  parserDetails: Record<string, unknown> | null
+  atsScore?: number | null
+  atsSource?: string | null
+  atsSummary?: string | null
+  atsBreakdown?: Record<string, unknown> | null
+  resumePickerBreakdown?: Record<string, unknown> | null
+  expanded: boolean
+  onToggle: (candidateId: number) => void
+}
+
+export function ParserDetailsPanel({
+  candidateId,
+  source,
+  parserDetails,
+  atsScore,
+  atsSource,
+  atsSummary,
+  atsBreakdown,
+  resumePickerBreakdown,
+  expanded,
+  onToggle,
+}: ParserDetailsPanelProps) {
+  const [viewMode, setViewMode] = useState<'v3' | 'v1'>('v3')
+  const normalized = normalizeParserDetails(parserDetails)
+  if (!normalized) return null
+  const legacyFinalResult = normalized.merged_result ?? {}
+  const legacyBaseResult = normalized.base_parser_result ?? {}
+  const finalResult = isRecord(legacyFinalResult) ? legacyFinalResult : {}
+  const baseResult = isRecord(legacyBaseResult) ? legacyBaseResult : {}
+  const skillsAudit = isRecord(normalized.skills_audit) ? normalized.skills_audit : null
+  const legacyApprovedSkillsText = (() => {
+    const audited = skillsAudit ? recordStringArray(skillsAudit, 'known').join(', ') : ''
+    if (audited) return audited
+    return (normalized.approved_skills_text || recordStringValue(finalResult, 'skills_text')).trim()
+  })()
+  const approvedSkills = (() => {
+    const audited = skillsAudit ? recordStringArray(skillsAudit, 'known') : []
+    if (audited.length > 0) return audited
+    return parserTokensFromValue(normalized.approved_skills_text || recordStringValue(finalResult, 'skills_text'))
+  })()
+  const unknownSkills = (() => {
+    if (skillsAudit) {
+      const audited = recordStringArray(skillsAudit, 'unknown')
+      if (audited.length > 0) return audited
+    }
+    return Array.isArray(normalized.unknown_skills)
+      ? normalized.unknown_skills.map((item) => renderParserValue(item).trim()).filter(Boolean).filter((item) => item !== '-')
+      : []
+  })()
+  const aiExtractor = isRecord(normalized.ai_extractor_result) ? normalized.ai_extractor_result : null
+  const structuredRequirements = normalizeStructuredRequirements(normalized.structured_requirements)
+  const sourceHints = isRecord(normalized.source_hints) ? normalized.source_hints : null
+  const parserMode = normalized.parser_mode || (aiExtractor ? 'ai_primary' : 'base_only')
+  const parserWarning = renderParserValue(normalized.parser_warning)
+  const fallbackUsed = Boolean(normalized.fallback_used)
+  const parserStatus = {
+    mode: parserMode,
+    fallback_used: fallbackUsed,
+    warning: parserWarning === '-' ? null : parserWarning,
+  }
+  const legacyAtsSummary = atsSummary || `ATS Score: ${formatAtsScore(atsScore)} (${getAtsStrengthLabel(atsScore)})`
+  const finalSkills = parserTokensFromValue(recordStringValue(finalResult, 'skills_text'))
+  const atsMetricRows = parserMetricRowsFromAts(atsScore, atsSource, atsSummary, atsBreakdown)
+  const atsBreakdownRecord = {
+    score: atsScore == null ? '-' : `${formatAtsScore(atsScore)} (${getAtsStrengthLabel(atsScore)})`,
+    source: atsSource ?? '-',
+    ...(atsBreakdown ?? {}),
+  }
+  const aiEvidenceRecord = aiExtractor
+    ? {
+        confidence: aiExtractor.confidence,
+        evidence: aiExtractor.evidence,
+        error: aiExtractor.error,
+      }
+    : {}
+  const matchedRawSkills = isRecord(atsBreakdown) ? recordStringArray(atsBreakdown, 'matched_raw_skills') : []
+  const missingRawSkills = isRecord(atsBreakdown) ? recordStringArray(atsBreakdown, 'missing_raw_skills') : []
+  const pickerBreakdown = isRecord(resumePickerBreakdown) ? resumePickerBreakdown : null
+  const mandatoryStatus = pickerBreakdown ? recordStringValue(pickerBreakdown, 'mandatory_gate_status') : ''
+  const mandatoryCoverageRaw = pickerBreakdown?.mandatory_coverage
+  const mandatoryCoverage =
+    typeof mandatoryCoverageRaw === 'number' && Number.isFinite(mandatoryCoverageRaw)
+      ? `${Math.round(mandatoryCoverageRaw * 100)}%`
+      : '-'
+  const matchedAlternatives = readMatchedAlternatives(pickerBreakdown?.matched_alternatives)
+  const satisfiedRequiredGroups = readRequirementGroupLabels(pickerBreakdown, 'satisfied_required_groups').map((label) =>
+    summarizePickerGroupResult(label, matchedAlternatives),
+  )
+  const unmetRequiredGroups = readRequirementGroupLabels(pickerBreakdown, 'unmet_required_groups')
+  const versionUnverified = readRequirementGroupLabels(pickerBreakdown, 'version_unverified')
+  const displayLocation = pickDisplayLocation(structuredRequirements?.locations ?? [])
+  const isRawView = viewMode === 'v1'
+  return (
+    <div className="parserDetailsSection">
+      <button type="button" className="parserDetailsToggle" onClick={() => onToggle(candidateId)}>
+        {expanded ? 'Hide Details' : 'View Details'}
+      </button>
+      {expanded ? (
+        <div className="parserDetailsPanel">
+          <div className="parserDetailsHeader">
+            <div className="parserDetailsMeta">
+              <span><strong>Parser Version:</strong> {normalized.parser_version ?? '-'}</span>
+              <span><strong>Source:</strong> {normalized.source ?? source}</span>
+              <span><strong>Mode:</strong> {parserMode}</span>
+              <span><strong>Fallback Used:</strong> {fallbackUsed ? 'Yes' : 'No'}</span>
+            </div>
+            <div className="parserViewToggle" role="tablist" aria-label="Details view mode">
+              <button
+                type="button"
+                className={!isRawView ? 'parserViewToggleButton parserViewToggleButtonActive' : 'parserViewToggleButton'}
+                aria-pressed={!isRawView}
+                onClick={() => setViewMode('v3')}
+              >
+                Readable v3
+              </button>
+              <button
+                type="button"
+                className={isRawView ? 'parserViewToggleButton parserViewToggleButtonActive' : 'parserViewToggleButton'}
+                aria-pressed={isRawView}
+                onClick={() => setViewMode('v1')}
+              >
+                Raw v1
+              </button>
+            </div>
+          </div>
+          {isRawView ? (
+            <>
+              <div className="parserDetailsSummaryGrid">
+                <ParserDetailsCard title="Parser Status" className="parserDetailsSummaryBlock">
+                  <pre className="parserLegacyPre">{renderParserValue(parserStatus)}</pre>
+                </ParserDetailsCard>
+                <ParserDetailsCard title="Final Skills Text" className="parserDetailsSummaryBlock">
+                  <pre className="parserLegacyPre">{recordStringValue(isRecord(legacyFinalResult) ? legacyFinalResult : null, 'skills_text') || '-'}</pre>
+                </ParserDetailsCard>
+                <ParserDetailsCard title="Approved Skills" className="parserDetailsSummaryBlock">
+                  <pre className="parserLegacyPre">{legacyApprovedSkillsText || '-'}</pre>
+                </ParserDetailsCard>
+                <ParserDetailsCard title="Unknown Skills" className="parserDetailsSummaryBlock">
+                  <pre className="parserLegacyPre">{unknownSkills.length > 0 ? unknownSkills.join(', ') : '-'}</pre>
+                </ParserDetailsCard>
+                <ParserDetailsCard title="ATS Summary" className="parserDetailsSummaryBlock">
+                  <pre className="parserLegacyPre">{legacyAtsSummary}</pre>
+                </ParserDetailsCard>
+              </div>
+              <div className="parserDetailsGrid">
+                <ParserDetailsCard title="Final Extracted Result">
+                  <pre className="parserLegacyPre">{renderParserValue(legacyFinalResult)}</pre>
+                </ParserDetailsCard>
+                <ParserDetailsCard title={fallbackUsed ? 'Base Fallback Result' : 'Base Parser Result'}>
+                  <pre className="parserLegacyPre">{renderParserValue(legacyBaseResult)}</pre>
+                </ParserDetailsCard>
+                <ParserDetailsCard title="AI Extractor Result">
+                  <pre className="parserLegacyPre">{renderParserValue(aiExtractor ?? {})}</pre>
+                </ParserDetailsCard>
+                <ParserDetailsCard title="Skills Audit">
+                  <pre className="parserLegacyPre">{renderParserValue(skillsAudit ?? {})}</pre>
+                </ParserDetailsCard>
+                <ParserDetailsCard title="ATS Breakdown">
+                  <pre className="parserLegacyPre">{renderParserValue(atsBreakdownRecord)}</pre>
+                </ParserDetailsCard>
+                <ParserDetailsCard title="Source Hints">
+                  <pre className="parserLegacyPre">{renderParserValue(sourceHints ?? {})}</pre>
+                </ParserDetailsCard>
+                <ParserDetailsCard title="AI Evidence" className="parserDetailsBlockWide">
+                  <pre className="parserLegacyPre">{renderParserValue(aiEvidenceRecord)}</pre>
+                </ParserDetailsCard>
+                <ParserDetailsCard title="Required Requirements">
+                  <pre className="parserLegacyPre">{rawRequirementGroupLines(structuredRequirements?.required_groups ?? [])}</pre>
+                  <ParserRawDebug value={structuredRequirements?.required_groups ?? []} />
+                </ParserDetailsCard>
+                <ParserDetailsCard title="Preferred Requirements">
+                  <pre className="parserLegacyPre">{rawRequirementGroupLines(structuredRequirements?.preferred_groups ?? [], true)}</pre>
+                  <ParserRawDebug value={structuredRequirements?.preferred_groups ?? []} />
+                </ParserDetailsCard>
+                <ParserDetailsCard title="Constraints">
+                  <pre className="parserLegacyPre">{rawConstraintsSummary(structuredRequirements)}</pre>
+                  <ParserRawDebug
+                    value={{
+                      experience_years_min: structuredRequirements?.experience_years_min,
+                      locations: structuredRequirements?.locations ?? [],
+                      local_required: structuredRequirements?.local_required,
+                      work_mode: structuredRequirements?.work_mode,
+                      preferred_domains: structuredRequirements?.preferred_domains ?? [],
+                    }}
+                  />
+                </ParserDetailsCard>
+                <ParserDetailsCard title="Resume-Picker Result">
+                  <pre className="parserLegacyPre">
+                    {rawResumePickerSummary({
+                      mandatoryStatus,
+                      mandatoryCoverage,
+                      satisfiedRequiredGroups,
+                      unmetRequiredGroups,
+                      matchedAlternatives,
+                      versionUnverified,
+                    })}
+                  </pre>
+                  <ParserRawDebug value={pickerBreakdown ?? {}} />
+                </ParserDetailsCard>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="parserDetailsSummaryGrid">
+                <ParserDetailsCard title="Parser Status" className="parserDetailsSummaryBlock">
+                  <div className="parserStatusBadges">
+                    <span className="parserStatusBadge">{`Mode: ${parserMode}`}</span>
+                    <span className="parserStatusBadge">{`Fallback: ${fallbackUsed ? 'Yes' : 'No'}`}</span>
+                    {parserStatus.warning ? <span className="parserStatusBadge parserStatusBadgeWarning">{`Warning: ${parserStatus.warning}`}</span> : null}
+                  </div>
+                  <ParserRawDebug value={parserStatus} />
+                </ParserDetailsCard>
+                <ParserDetailsCard title="Final Skills Text" className="parserDetailsSummaryBlock">
+                  <ParserChipList items={finalSkills} />
+                </ParserDetailsCard>
+                <ParserDetailsCard title="Approved Skills" className="parserDetailsSummaryBlock">
+                  <ParserChipList items={approvedSkills} />
+                </ParserDetailsCard>
+                <ParserDetailsCard title="Unknown Skills" className="parserDetailsSummaryBlock">
+                  <ParserChipList items={unknownSkills} />
+                </ParserDetailsCard>
+                <ParserDetailsCard title="ATS Summary" className="parserDetailsSummaryBlock">
+                  <ParserMetricGrid rows={atsMetricRows} />
+                </ParserDetailsCard>
+              </div>
+              <div className="parserDetailsGrid">
+                <ParserStructuredSection title="Final Extracted Result" data={finalResult} />
+                <ParserStructuredSection title={fallbackUsed ? 'Base Fallback Result' : 'Base Parser Result'} data={baseResult} />
+                <ParserStructuredSection title="AI Extractor Result" data={aiExtractor ?? {}} />
+                <ParserStructuredSection title="Skills Audit" data={skillsAudit ?? {}} />
+                <ParserDetailsCard title="Required Requirements">
+                  {structuredRequirements && structuredRequirements.required_groups.length > 0 ? (
+                    <div className="parserKeyValueList">
+                      {structuredRequirements.required_groups.map((group, index) => (
+                        <div key={group.group_id || `required-${index}`} className="parserKeyValueRow">
+                          <span className="parserLabel">{requirementModeLabel(group)}</span>
+                          <span className="parserValue">{formatRequirementGroupSkills(group)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="subtle">-</p>
+                  )}
+                  <ParserRawDebug value={structuredRequirements?.required_groups ?? []} />
+                </ParserDetailsCard>
+                <ParserDetailsCard title="Preferred Requirements">
+                  {structuredRequirements && structuredRequirements.preferred_groups.length > 0 ? (
+                    <div className="parserKeyValueList">
+                      {structuredRequirements.preferred_groups.map((group, index) => (
+                        <div key={group.group_id || `preferred-${index}`} className="parserKeyValueRow">
+                          <span className="parserLabel">{requirementModeLabel(group, true)}</span>
+                          <span className="parserValue">{formatRequirementGroupSkills(group)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="subtle">-</p>
+                  )}
+                  <ParserRawDebug value={structuredRequirements?.preferred_groups ?? []} />
+                </ParserDetailsCard>
+                <ParserDetailsCard title="Constraints">
+                  <ParserKeyValueList
+                    record={{
+                      experience:
+                        structuredRequirements?.experience_years_min != null ? `${structuredRequirements.experience_years_min}+ years` : '-',
+                      location: displayLocation,
+                      local_candidate:
+                        structuredRequirements?.local_required == null
+                          ? '-'
+                          : structuredRequirements.local_required
+                            ? 'Required'
+                            : 'Not required',
+                      work_mode: structuredRequirements?.work_mode || '-',
+                      preferred_experience_domain:
+                        structuredRequirements && structuredRequirements.preferred_domains.length > 0
+                          ? structuredRequirements.preferred_domains.join(', ')
+                          : '-',
+                    }}
+                  />
+                  <ParserRawDebug
+                    value={{
+                      experience_years_min: structuredRequirements?.experience_years_min,
+                      locations: structuredRequirements?.locations ?? [],
+                      local_required: structuredRequirements?.local_required,
+                      work_mode: structuredRequirements?.work_mode,
+                      preferred_domains: structuredRequirements?.preferred_domains ?? [],
+                    }}
+                  />
+                </ParserDetailsCard>
+                <ParserDetailsCard title="Resume-Picker Result">
+                  <ParserKeyValueList
+                    record={{
+                      mandatory_gate_status: mandatoryStatus || '-',
+                      mandatory_coverage: mandatoryCoverage,
+                    }}
+                  />
+                  <div className="parserSectionGroup">
+                    <div>
+                      <p className="parserSectionLabel">Satisfied</p>
+                      <ParserChipList items={satisfiedRequiredGroups} />
+                    </div>
+                    <div>
+                      <p className="parserSectionLabel">Unmet</p>
+                      <ParserChipList items={unmetRequiredGroups} />
+                    </div>
+                  </div>
+                  <div className="parserSectionGroup">
+                    <div>
+                      <p className="parserSectionLabel">Matched Alternatives</p>
+                      <ParserChipList items={Object.values(matchedAlternatives)} />
+                    </div>
+                    <div>
+                      <p className="parserSectionLabel">Version Not Verified</p>
+                      <ParserChipList items={versionUnverified} />
+                    </div>
+                  </div>
+                  <ParserRawDebug value={pickerBreakdown ?? {}} />
+                </ParserDetailsCard>
+                <ParserDetailsCard title="ATS Breakdown">
+                  <ParserMetricGrid rows={atsMetricRows.slice(0, 7)} />
+                  <div className="parserSectionGroup">
+                    <div>
+                      <p className="parserSectionLabel">Matched Raw Skills</p>
+                      <ParserChipList items={matchedRawSkills} />
+                    </div>
+                    <div>
+                      <p className="parserSectionLabel">Missing Raw Skills</p>
+                      <ParserChipList items={missingRawSkills} />
+                    </div>
+                  </div>
+                  <ParserKeyValueList
+                    record={Object.fromEntries(
+                      Object.entries(atsBreakdownRecord).filter(([key]) => !['matched_raw_skills', 'missing_raw_skills', 'raw_overlap', 'intent_match', 'role_alignment', 'semantic_similarity', 'foundation_coverage'].includes(key)),
+                    )}
+                  />
+                  <ParserRawDebug value={atsBreakdownRecord} />
+                </ParserDetailsCard>
+                <ParserStructuredSection title="Source Hints" data={sourceHints ?? {}} />
+                <ParserDetailsCard title="AI Evidence" className="parserDetailsBlockWide">
+                  <ParserKeyValueList record={aiEvidenceRecord} />
+                  <ParserRawDebug value={aiEvidenceRecord} />
+                </ParserDetailsCard>
+              </div>
+            </>
+          )}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+export function formatAttachmentSize(size: number | null | undefined): string {
+  const value = typeof size === 'number' && Number.isFinite(size) ? size : 0
+  if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`
+  if (value >= 1024) return `${Math.round(value / 1024)} KB`
+  return `${value} B`
+}
+
+export function formatSettingsDate(value: string | null | undefined): string {
+  if (!value) return 'Unknown'
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return value
+  return parsed.toLocaleDateString()
 }
 
 export function getOverallVerdict(
@@ -453,58 +2502,146 @@ function getResumeContextLabel(value: string | null | undefined): string {
   return 'Unknown'
 }
 
+function CcEmailList({
+  label,
+  emails,
+  onChange,
+  placeholder,
+}: {
+  label: string
+  emails: string[]
+  onChange: (emails: string[]) => void
+  placeholder: string
+}) {
+  const [draft, setDraft] = useState('')
+  const [error, setError] = useState('')
+
+  const commit = () => {
+    const result = addCcEmail(emails, draft)
+    setError(result.error ?? '')
+    if (result.added) {
+      onChange(result.next)
+      setDraft('')
+    }
+  }
+
+  return (
+    <label>
+      {label}
+      <div className="skillBox">
+        {emails.map((email) => (
+          <span key={email} className="skillChip">
+            {email}
+            <button
+              type="button"
+              className="chipRemove"
+              onClick={() => onChange(removeCcEmail(emails, email))}
+              aria-label={`Remove ${email}`}
+              title={`Remove ${email}`}
+            >
+              x
+            </button>
+          </span>
+        ))}
+        <input
+          type="email"
+          className="skillInput"
+          value={draft}
+          aria-label={`Add ${label}`}
+          onChange={(event) => {
+            setDraft(event.target.value)
+            if (error) setError('')
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ',') {
+              event.preventDefault()
+              commit()
+            } else if (event.key === 'Backspace' && !draft && emails.length > 0) {
+              onChange(removeCcEmail(emails, emails[emails.length - 1]))
+            }
+          }}
+          onBlur={commit}
+          placeholder={placeholder}
+        />
+      </div>
+      {error ? <span className="subtle">{error}</span> : null}
+    </label>
+  )
+}
+
 function App() {
   const INITIAL_BUCKET_LIMIT = 25
   const PAGE_BUCKET_LIMIT = 25
   const RECENT_RUNS_LIMIT = 100
   const apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
-  const defaultPolicy: DynamicPolicy = {
-    version: 1,
-    query: {
-      force_unread: true,
-      include_labels: [],
-      exclude_labels: [],
-      date_mode: 'custom',
-    },
-    run: {
-      run_mode: 'all',
-      batch_limit: 20,
-      dry_run: false,
-    },
-    qualification: {
-      location_strictness: 'balanced',
-      score_threshold_override_enabled: false,
-      score_threshold_override_value: 0.6,
-    },
-  }
+  const defaultPolicy: DynamicPolicy = buildDefaultPolicy()
   const policyProfiles: Record<PolicyProfileName, DynamicPolicy> = {
-    Aggressive: {
-      version: 1,
+    'Flexible Drafting': {
+      version: 2,
       query: { force_unread: true, include_labels: [], exclude_labels: [], date_mode: 'any' },
       run: { run_mode: 'all', batch_limit: 100, dry_run: false },
       qualification: {
         location_strictness: 'lenient',
         score_threshold_override_enabled: true,
         score_threshold_override_value: 0.5,
+        draft_rules: {
+          recruiter_like_gmail: { mode: 'warn' },
+          accepted_location: { mode: 'warn', locations: [] },
+          minimum_salary: { mode: 'ignore', value: null },
+          must_have_skills: { mode: 'warn', skills: [] },
+          score_threshold: { mode: 'warn', value: 0.5 },
+          f2f_non_texas: { mode: 'warn' },
+          unknown_location: { mode: 'warn' },
+          recipient_mapping: { mode: 'warn' },
+        },
       },
     },
-    Balanced: defaultPolicy,
+    Balanced: {
+      version: 2,
+      query: { force_unread: true, include_labels: [], exclude_labels: [], date_mode: 'custom' },
+      run: { run_mode: 'all', batch_limit: 20, dry_run: false },
+      qualification: {
+        location_strictness: 'balanced',
+        score_threshold_override_enabled: false,
+        score_threshold_override_value: 0.6,
+        draft_rules: {
+          recruiter_like_gmail: { mode: 'block' },
+          accepted_location: { mode: 'warn', locations: [] },
+          minimum_salary: { mode: 'warn', value: null },
+          must_have_skills: { mode: 'warn', skills: [] },
+          score_threshold: { mode: 'warn', value: 0.6 },
+          f2f_non_texas: { mode: 'block' },
+          unknown_location: { mode: 'warn' },
+          recipient_mapping: { mode: 'block' },
+        },
+      },
+    },
     Strict: {
-      version: 1,
+      version: 2,
       query: { force_unread: true, include_labels: [], exclude_labels: [], date_mode: 'custom' },
       run: { run_mode: 'all', batch_limit: 10, dry_run: false },
       qualification: {
         location_strictness: 'strict',
         score_threshold_override_enabled: true,
         score_threshold_override_value: 0.75,
+        draft_rules: {
+          recruiter_like_gmail: { mode: 'block' },
+          accepted_location: { mode: 'block', locations: [] },
+          minimum_salary: { mode: 'block', value: null },
+          must_have_skills: { mode: 'block', skills: [] },
+          score_threshold: { mode: 'block', value: 0.75 },
+          f2f_non_texas: { mode: 'block' },
+          unknown_location: { mode: 'block' },
+          recipient_mapping: { mode: 'block' },
+        },
       },
     },
   }
-  const profileNames: PolicyProfileName[] = ['Aggressive', 'Balanced', 'Strict']
+  const profileNames: PolicyProfileName[] = ['Flexible Drafting', 'Balanced', 'Strict']
   const [status, setStatus] = useState<GmailStatus | null>(null)
   const [aiStatus, setAiStatus] = useState<AiStatus | null>(null)
   const [telegramStatus, setTelegramStatus] = useState<TelegramStatus | null>(null)
-  const [settings, setSettings] = useState<SettingsPayload>({
+  const [settings, setSettingsState] = useState<SettingsPayload>({
     enabled: true,
     gmail_query: 'is:unread',
     default_gmail_query: 'is:unread',
@@ -526,36 +2663,101 @@ function App() {
     feature_nvoids_auto_sync: false,
     feature_nvoids_poll_interval_minutes: 30,
     nvoids_batch_limit: 10,
+    nvoids_detail_title_mode: 'job_details',
     nvoids_locations: [],
     feature_auto_send: false,
     feature_retry_queue: false,
     feature_ai_enabled: false,
+    feature_ai_extractor_enabled: false,
     feature_semantic_enabled: false,
+    feature_groq_job_parser_enabled: false,
+    feature_gmail_requirement_groups_enabled: false,
+    feature_role_manifest_enabled: false,
+    feature_strict_candidate_screening_enabled: false,
+    feature_email_tracking_enabled: false,
+    feature_reply_inbox_enabled: false,
+    candidate_work_authorizations: [],
+    candidate_total_experience_years: null,
+    candidate_us_experience_years: null,
+    candidate_current_location: '',
+    draft_text_size: 'normal',
     fallback_draft_template: '',
     signature_name: '',
     signature_phone: '',
     signature_email: '',
+    preferred_employer_cc_emails: [],
+    default_employer_cc_emails: [],
+    preferred_employer_cc_email: '',
+    resume_display_name: '',
     policy: defaultPolicy,
   })
+  const settingsRef = useRef(settings)
+  const setSettings = (value: SettingsPayload) => {
+    settingsRef.current = value
+    setSettingsState(value)
+  }
   const [resumeFile, setResumeFile] = useState<File | null>(null)
-  const [activeResume, setActiveResume] = useState<ResumeAsset | null>(null)
+  const [resumeSkillsInput, setResumeSkillsInput] = useState('')
+  const [resumeSkillEdits, setResumeSkillEdits] = useState<Record<number, string>>({})
+  const [attachmentUploadFiles, setAttachmentUploadFiles] = useState<File[]>([])
+  const [gmailRequirementGroups, setGmailRequirementGroups] = useState<TrustedGmailGroup[]>([])
+  const [gmailGroupsBusy, setGmailGroupsBusy] = useState(false)
+  const [resumeAssets, setResumeAssets] = useState<ResumeAsset[]>([])
+  const [attachmentFiles, setAttachmentFiles] = useState<AttachmentAsset[]>([])
+  const [pendingSkills, setPendingSkills] = useState<PendingSkill[]>([])
+  const [pendingCompanies, setPendingCompanies] = useState<PendingEntity[]>([])
+  const [pendingLocations, setPendingLocations] = useState<PendingEntity[]>([])
+  const [embeddingPendingCount, setEmbeddingPendingCount] = useState(0)
+  const [embeddingSummary, setEmbeddingSummary] = useState('')
+  const [skillsLoading, setSkillsLoading] = useState(false)
+  const [skillActionKey, setSkillActionKey] = useState<string | null>(null)
+  const [entityActionKey, setEntityActionKey] = useState<string | null>(null)
+  const [pendingJobIntentSignals, setPendingJobIntentSignals] = useState<JobIntentLearningSignal[]>([])
+  const [approvedJobIntentSignals, setApprovedJobIntentSignals] = useState<JobIntentLearningSignal[]>([])
+  const [embeddedJobIntentSignals, setEmbeddedJobIntentSignals] = useState<EmbeddedJobIntentSignal[]>([])
+  const [jobIntentLoading, setJobIntentLoading] = useState(false)
+  const [jobIntentActionKey, setJobIntentActionKey] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
   const [nvoidsRunning, setNvoidsRunning] = useState(false)
+  const [automationJob, setAutomationJob] = useState<BackgroundJob | null>(null)
+  const [nvoidsJob, setNvoidsJob] = useState<BackgroundJob | null>(null)
   const [oauthInProgress, setOauthInProgress] = useState(false)
   const [oauthAuthorizationUrl, setOauthAuthorizationUrl] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
-  const [logs, setLogs] = useState<AutomationRunResponse[]>([])
+  const [logs, setLogs] = useState<RecentRunCard[]>([])
   const [sendingId, setSendingId] = useState<number | null>(null)
   const [rejectingId, setRejectingId] = useState<number | null>(null)
+  const [regeneratingId, setRegeneratingId] = useState<number | null>(null)
   const [movingToFailedId, setMovingToFailedId] = useState<number | null>(null)
   const [draftEdits, setDraftEdits] = useState<Record<number, string>>({})
+  const [expandedParserDetailIds, setExpandedParserDetailIds] = useState<Record<number, boolean>>({})
+  const [expandedSentDetailIds, setExpandedSentDetailIds] = useState<Record<number, boolean>>({})
+  const [sentDetailsById, setSentDetailsById] = useState<Record<number, SentItemDetails | undefined>>({})
+  const [sentDetailLoadingIds, setSentDetailLoadingIds] = useState<Record<number, boolean>>({})
+  const [sentDetailErrors, setSentDetailErrors] = useState<Record<number, string | undefined>>({})
   const [routingFixes, setRoutingFixes] = useState<Record<number, { to: string; cc: string }>>({})
   const [fixingId, setFixingId] = useState<number | null>(null)
-  const [activePage, setActivePage] = useState<'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'premium_numbers'>('run_queue')
+  const [deletingFailedId, setDeletingFailedId] = useState<number | null>(null)
+  const [activePage, setActivePage] = useState<'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'inbox' | 'premium_numbers' | 'settings'>('run_queue')
+  const [emailSearchTarget, setEmailSearchTarget] = useState<EmailSearchHit | null>(null)
+  const [inboxConversations, setInboxConversations] = useState<ConversationSummary[]>([])
+  const [selectedConversationId, setSelectedConversationId] = useState<number | null>(null)
+  const [selectedConversation, setSelectedConversation] = useState<ConversationDetail | null>(null)
+  const [inboxLoading, setInboxLoading] = useState(false)
+  const [inboxError, setInboxError] = useState('')
+  const [inboxReplyDraft, setInboxReplyDraft] = useState('')
+  const [inboxSending, setInboxSending] = useState(false)
+  const [lastSavedSettings, setLastSavedSettings] = useState<SettingsPayload | null>(null)
+  const [lastSavedAt, setLastSavedAt] = useState<string | null>(null)
   const [dynamicPolicyBeta, setDynamicPolicyBeta] = useState(false)
   const [selectedProfileToApply, setSelectedProfileToApply] = useState<PolicyProfileName>('Balanced')
   const [lastAppliedProfile, setLastAppliedProfile] = useState<PolicyProfileName | null>(null)
+  const [settingsBootstrapStatus, setSettingsBootstrapStatus] = useState<BootstrapStatus>('idle')
+  const [settingsBootstrapError, setSettingsBootstrapError] = useState('')
+  const [hasLoadedSettingsBootstrap, setHasLoadedSettingsBootstrap] = useState(false)
+  const [hasLoadedLearningData, setHasLoadedLearningData] = useState(false)
+  const [roleManifestChildCreationEnabled, setRoleManifestChildCreationEnabled] = useState(false)
   const [skillDraft, setSkillDraft] = useState('')
   const [nvoidsLocationDraft, setNvoidsLocationDraft] = useState('')
   const [employerDomainDraft, setEmployerDomainDraft] = useState('')
@@ -578,12 +2780,15 @@ function App() {
   const [timeRange, setTimeRange] = useState<TimeRangeKey>('current_day')
   const [productivityEvents, setProductivityEvents] = useState<ProductivityEvent[]>([])
   const [productivityTrend, setProductivityTrend] = useState<ProductivityTrendResponse | null>(null)
+  const [jobSummary, setJobSummary] = useState<JobQueueSummary | null>(null)
+  const [liveReplyStatus, setLiveReplyStatus] = useState<LiveReplyStatus | null>(null)
   const datePickerRef = useRef<HTMLInputElement | null>(null)
   const lastTrackedViewRef = useRef<Record<string, number>>({})
   const hasBootstrappedCandidatesRef = useRef(false)
   const oauthPollingStartedAtRef = useRef<number | null>(null)
   const refreshTimerRef = useRef<number | null>(null)
   const premiumRequestTrackerRef = useRef(0)
+  const premiumLoadingRef = useRef(false)
 
   const {
     queue,
@@ -626,7 +2831,121 @@ function App() {
     },
   })
 
-  const currentPolicy: DynamicPolicy = settings.policy ?? defaultPolicy
+  const currentPolicy: DynamicPolicy = normalizeDynamicPolicy(settings.policy ?? defaultPolicy, settings)
+  const draftRules = currentPolicy.qualification.draft_rules
+  const applyPolicyProfile = (profileName: PolicyProfileName) => {
+    const profilePolicy = normalizeDynamicPolicy(policyProfiles[profileName], settings)
+    setSettings({
+      ...settings,
+      accepted_locations: profilePolicy.qualification.draft_rules.accepted_location.locations ?? [],
+      min_salary: profilePolicy.qualification.draft_rules.minimum_salary.value ?? null,
+      must_have_skills: profilePolicy.qualification.draft_rules.must_have_skills.skills ?? [],
+      qualification_threshold: profilePolicy.qualification.draft_rules.score_threshold.value ?? 0.6,
+      policy: profilePolicy,
+    })
+    setLastAppliedProfile(profileName)
+  }
+  const updateRuleMode = (key: keyof DraftRules, mode: RuleMode) => {
+    setSettings({
+      ...settings,
+      policy: {
+        ...currentPolicy,
+        qualification: {
+          ...currentPolicy.qualification,
+          draft_rules: {
+            ...draftRules,
+            [key]: {
+              ...draftRules[key],
+              mode,
+            },
+          },
+        },
+      },
+    })
+  }
+  const updateRuleValue = (key: 'accepted_location' | 'minimum_salary' | 'must_have_skills' | 'score_threshold', value: string) => {
+    if (key === 'accepted_location') {
+      const locations = value.split(',').map((part) => part.trim()).filter(Boolean)
+      setSettings({
+        ...settings,
+        accepted_locations: locations,
+        policy: {
+          ...currentPolicy,
+          qualification: {
+            ...currentPolicy.qualification,
+            draft_rules: {
+              ...draftRules,
+              accepted_location: {
+                ...draftRules.accepted_location,
+                locations,
+              },
+            },
+          },
+        },
+      })
+      return
+    }
+    if (key === 'minimum_salary') {
+      const nextValue = value.trim() === '' ? null : Number(value)
+      setSettings({
+        ...settings,
+        min_salary: Number.isNaN(nextValue as number) ? null : nextValue,
+        policy: {
+          ...currentPolicy,
+          qualification: {
+            ...currentPolicy.qualification,
+            draft_rules: {
+              ...draftRules,
+              minimum_salary: {
+                ...draftRules.minimum_salary,
+                value: Number.isNaN(nextValue as number) ? null : nextValue,
+              },
+            },
+          },
+        },
+      })
+      return
+    }
+    if (key === 'must_have_skills') {
+      const skills = value.split(',').map((part) => part.trim()).filter(Boolean)
+      setSettings({
+        ...settings,
+        must_have_skills: skills,
+        policy: {
+          ...currentPolicy,
+          qualification: {
+            ...currentPolicy.qualification,
+            draft_rules: {
+              ...draftRules,
+              must_have_skills: {
+                ...draftRules.must_have_skills,
+                skills,
+              },
+            },
+          },
+        },
+      })
+      return
+    }
+    const nextValue = value.trim() === '' ? null : Number(value)
+    setSettings({
+      ...settings,
+      qualification_threshold: Number.isNaN(nextValue as number) || nextValue == null ? settings.qualification_threshold : nextValue,
+      policy: {
+        ...currentPolicy,
+        qualification: {
+          ...currentPolicy.qualification,
+          draft_rules: {
+            ...draftRules,
+            score_threshold: {
+              ...draftRules.score_threshold,
+              value: Number.isNaN(nextValue as number) ? null : nextValue,
+            },
+          },
+        },
+      },
+    })
+  }
   const detectProfileFromPolicy = (policy: DynamicPolicy): PolicyProfileName | null => {
     for (const profileName of profileNames) {
       if (JSON.stringify(policyProfiles[profileName]) === JSON.stringify(policy)) return profileName
@@ -636,9 +2955,42 @@ function App() {
   const exactSelectedProfile = detectProfileFromPolicy(currentPolicy)
   const profileStatusLabel = exactSelectedProfile
     ? exactSelectedProfile
-    : lastAppliedProfile
-      ? `Custom (from ${lastAppliedProfile})`
-      : 'Custom'
+      : lastAppliedProfile
+        ? `Custom (from ${lastAppliedProfile})`
+        : 'Custom'
+  const activeConfigurationSettings = lastSavedSettings ?? settings
+  const activeConfigurationPolicy = normalizeDynamicPolicy(
+    activeConfigurationSettings.policy ?? defaultPolicy,
+    activeConfigurationSettings,
+  )
+  const activeConfigurationDraftRules = activeConfigurationPolicy.qualification.draft_rules
+  const activeConfigurationProfile = activeConfigurationSettings.policy_profile_selected
+    ?? detectProfileFromPolicy(activeConfigurationPolicy)
+    ?? 'Custom'
+  const formatRuleMode = (mode: RuleMode) => `${mode.charAt(0).toUpperCase()}${mode.slice(1)}`
+  const formatBool = (value: boolean) => (value ? 'On' : 'Off')
+  const truncateConfigValue = (value: string, max = 60) => {
+    const trimmed = (value ?? '').trim()
+    if (!trimmed) return '(none)'
+    return trimmed.length > max ? `${trimmed.slice(0, max)}…` : trimmed
+  }
+  const summarizeConfigList = (values: string[], max = 6) => {
+    if (!values || values.length === 0) return '(none)'
+    const shown = values.slice(0, max).join(', ')
+    return values.length > max ? `${shown} +${values.length - max} more` : shown
+  }
+  const configRow = (label: string, value: ReactNode) => (
+    <div className="configSummaryRow" key={label}>
+      <span className="configSummaryLabel">{label}:</span>
+      <span className="configSummaryValue">{value}</span>
+    </div>
+  )
+  const nvoidsDetailTitleModeLabel = activeConfigurationSettings.nvoids_detail_title_mode === 'hotlist_details'
+    ? 'Hotlist Details'
+    : activeConfigurationSettings.nvoids_detail_title_mode === 'all'
+      ? 'All'
+      : 'Job Details'
+  const settingsBootstrapReady = settingsBootstrapStatus === 'ready'
 
   const loadStatus = async (): Promise<GmailStatus> => {
     const res = await fetch(`${apiBase}/gmail/status`)
@@ -677,13 +3029,19 @@ function App() {
     window.open(url, '_blank', 'noopener,noreferrer')
   }
 
-  const loadSettings = async (): Promise<SettingsPayload> => {
-    const res = await fetch(`${apiBase}/settings`)
-    if (!res.ok) throw new Error('Failed to load settings')
-    const payload = (await res.json()) as SettingsPayload
-    const normalized: SettingsPayload = {
+  const normalizeSettingsPayload = (payload: SettingsPayload): SettingsPayload => {
+    return {
       ...payload,
+      feature_ai_extractor_enabled: Boolean(payload.feature_ai_extractor_enabled),
       feature_semantic_enabled: Boolean(payload.feature_semantic_enabled),
+      feature_groq_job_parser_enabled: Boolean(payload.feature_groq_job_parser_enabled),
+      feature_gmail_requirement_groups_enabled: Boolean(payload.feature_gmail_requirement_groups_enabled),
+      feature_role_manifest_enabled: Boolean(payload.feature_role_manifest_enabled),
+      feature_strict_candidate_screening_enabled: Boolean(payload.feature_strict_candidate_screening_enabled),
+      candidate_work_authorizations: payload.candidate_work_authorizations ?? [],
+      candidate_total_experience_years: payload.candidate_total_experience_years ?? null,
+      candidate_us_experience_years: payload.candidate_us_experience_years ?? null,
+      candidate_current_location: payload.candidate_current_location ?? '',
       default_gmail_query: payload.default_gmail_query || payload.gmail_query || 'is:unread',
       saved_gmail_queries: payload.saved_gmail_queries ?? [],
       default_date_mode: payload.default_date_mode === 'off' ? 'off' : 'today',
@@ -692,14 +3050,36 @@ function App() {
       feature_nvoids_auto_sync: Boolean(payload.feature_nvoids_auto_sync ?? false),
       feature_nvoids_poll_interval_minutes: Math.max(1, Math.min(payload.feature_nvoids_poll_interval_minutes || 30, 1440)),
       nvoids_batch_limit: Math.max(1, Math.min(payload.nvoids_batch_limit || 10, 50)),
+      nvoids_detail_title_mode: normalizeNvoidsDetailTitleMode(payload.nvoids_detail_title_mode),
       nvoids_locations: payload.nvoids_locations ?? [],
       employer_domains: payload.employer_domains ?? [],
-      policy: payload.policy ?? defaultPolicy,
+      draft_text_size: normalizeDraftTextSize(payload.draft_text_size),
+      preferred_employer_cc_emails:
+        payload.preferred_employer_cc_emails ?? (payload.preferred_employer_cc_email ? [payload.preferred_employer_cc_email] : []),
+      default_employer_cc_emails: payload.default_employer_cc_emails ?? [],
+      preferred_employer_cc_email:
+        payload.preferred_employer_cc_emails?.[0] ?? payload.preferred_employer_cc_email ?? '',
+      resume_display_name: payload.resume_display_name ?? '',
+      policy: normalizeDynamicPolicy(payload.policy ?? defaultPolicy, payload),
     }
+  }
+
+  const applySettingsBootstrapPayload = (payload: SettingsBootstrapPayload): SettingsPayload => {
+    const normalized = normalizeSettingsPayload(payload.settings)
     setSettings(normalized)
-    if (payload.policy_profile_selected && profileNames.includes(payload.policy_profile_selected as PolicyProfileName)) {
-      setSelectedProfileToApply(payload.policy_profile_selected as PolicyProfileName)
-      setLastAppliedProfile(payload.policy_profile_selected as PolicyProfileName)
+    setRoleManifestChildCreationEnabled(Boolean(payload.role_manifest_child_creation_enabled))
+    setGmailRequirementGroups(payload.gmail_requirement_groups ?? [])
+    setResumeAssets(payload.resumes ?? [])
+    setResumeSkillEdits(Object.fromEntries((payload.resumes ?? []).map((resume) => [resume.id, resume.skills_text ?? ''])))
+    setAttachmentFiles(payload.attachments ?? [])
+    setPendingSkills(payload.pending_skills ?? [])
+    setPendingJobIntentSignals(payload.pending_job_intent_signals ?? [])
+    setApprovedJobIntentSignals(payload.approved_job_intent_signals ?? [])
+    setSkillsLoading(false)
+    setJobIntentLoading(false)
+    if (payload.settings.policy_profile_selected && profileNames.includes(payload.settings.policy_profile_selected as PolicyProfileName)) {
+      setSelectedProfileToApply(payload.settings.policy_profile_selected as PolicyProfileName)
+      setLastAppliedProfile(payload.settings.policy_profile_selected as PolicyProfileName)
       return normalized
     }
     const detected = detectProfileFromPolicy(normalized.policy ?? defaultPolicy)
@@ -710,20 +3090,149 @@ function App() {
     return normalized
   }
 
-  const loadActiveResume = async () => {
-    const res = await fetch(`${apiBase}/settings/resumes`)
-    if (!res.ok) throw new Error('Failed to load resumes')
-    const items = (await res.json()) as ResumeAsset[]
-    const current = items.find((item) => item.is_current) ?? null
-    setActiveResume(current)
+  const loadLearningData = useCallback(async (): Promise<void> => {
+    // Only show the blanking "Loading..." placeholder on the first load — a background
+    // refresh after Approve/Dismiss/Toggle should update data in place, not collapse the
+    // list and reset scroll position while data the user is looking at is still valid.
+    if (!hasLoadedLearningData) {
+      setSkillsLoading(true)
+      setJobIntentLoading(true)
+    }
+    try {
+      const [
+        skillsResponse,
+        embeddingResponse,
+        companiesResponse,
+        locationsResponse,
+        pendingIntentResponse,
+        approvedIntentResponse,
+        embeddedIntentResponse,
+      ] = await Promise.all([
+        fetch(`${apiBase}/settings/skills/pending`),
+        fetch(`${apiBase}/settings/skills/embedding-status`),
+        fetch(`${apiBase}/settings/entities/company/pending`),
+        fetch(`${apiBase}/settings/entities/location/pending`),
+        fetch(`${apiBase}/settings/job-intent-learning/pending`),
+        fetch(`${apiBase}/settings/job-intent-learning/approved`),
+        fetch(`${apiBase}/settings/job-intent-learning/embedded`),
+      ])
+      if (
+        !skillsResponse.ok ||
+        !embeddingResponse.ok ||
+        !companiesResponse.ok ||
+        !locationsResponse.ok ||
+        !pendingIntentResponse.ok ||
+        !approvedIntentResponse.ok ||
+        !embeddedIntentResponse.ok
+      ) {
+        throw new Error('Failed to load learning queues')
+      }
+      const [skills, embeddingStatus, companies, locations, pendingSignals, approvedSignals, embeddedSignals] = await Promise.all([
+        skillsResponse.json() as Promise<PendingSkill[]>,
+        embeddingResponse.json() as Promise<{ pending_count: number }>,
+        companiesResponse.json() as Promise<PendingEntity[]>,
+        locationsResponse.json() as Promise<PendingEntity[]>,
+        pendingIntentResponse.json() as Promise<JobIntentLearningSignal[]>,
+        approvedIntentResponse.json() as Promise<JobIntentLearningSignal[]>,
+        embeddedIntentResponse.json() as Promise<EmbeddedJobIntentSignal[]>,
+      ])
+      setPendingSkills(skills)
+      setEmbeddingPendingCount(embeddingStatus.pending_count)
+      setPendingCompanies(companies)
+      setPendingLocations(locations)
+      setPendingJobIntentSignals(pendingSignals)
+      setApprovedJobIntentSignals(approvedSignals)
+      setEmbeddedJobIntentSignals(embeddedSignals)
+      setHasLoadedLearningData(true)
+    } finally {
+      setSkillsLoading(false)
+      setJobIntentLoading(false)
+    }
+  }, [apiBase, hasLoadedLearningData])
+
+  const loadSettingsBootstrap = async (): Promise<SettingsPayload> => {
+    setSettingsBootstrapStatus('loading')
+    setSettingsBootstrapError('')
+    const res = await fetch(`${apiBase}/settings/bootstrap?include_learning_data=false`)
+    if (!res.ok) {
+      const message = 'Failed to load saved settings'
+      setSettingsBootstrapStatus('error')
+      setSettingsBootstrapError(message)
+      throw new Error(message)
+    }
+    const payload = (await res.json()) as SettingsBootstrapPayload
+    const normalized = applySettingsBootstrapPayload(payload)
+    setSettingsBootstrapStatus('ready')
+    setHasLoadedSettingsBootstrap(true)
+    return normalized
   }
 
-  const loadPremiumNumbers = async (opts?: { append?: boolean; cursor?: number | null }) => {
+  const addTrustedGmailGroup = async (value: string, displayName: string) => {
+    setGmailGroupsBusy(true)
+    try {
+      const res = await fetch(`${apiBase}/settings/gmail-groups`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value, display_name: displayName, enabled: true }),
+      })
+      if (!res.ok) throw new Error('Failed to add trusted Gmail group')
+      await loadSettingsBootstrap()
+    } finally {
+      setGmailGroupsBusy(false)
+    }
+  }
+
+  const bulkAddTrustedGmailGroups = async (values: string) => {
+    setGmailGroupsBusy(true)
+    try {
+      const res = await fetch(`${apiBase}/settings/gmail-groups/bulk`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ values }),
+      })
+      if (!res.ok) throw new Error('Failed to bulk add trusted Gmail groups')
+      await loadSettingsBootstrap()
+    } finally {
+      setGmailGroupsBusy(false)
+    }
+  }
+
+  const updateTrustedGmailGroup = async (groupId: number, patch: { display_name?: string; enabled?: boolean }) => {
+    setGmailGroupsBusy(true)
+    try {
+      const res = await fetch(`${apiBase}/settings/gmail-groups/${groupId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      })
+      if (!res.ok) throw new Error('Failed to update trusted Gmail group')
+      await loadSettingsBootstrap()
+    } finally {
+      setGmailGroupsBusy(false)
+    }
+  }
+
+  const deleteTrustedGmailGroup = async (groupId: number) => {
+    setGmailGroupsBusy(true)
+    try {
+      const res = await fetch(`${apiBase}/settings/gmail-groups/${groupId}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error('Failed to delete trusted Gmail group')
+      await loadSettingsBootstrap()
+    } finally {
+      setGmailGroupsBusy(false)
+    }
+  }
+
+  const activeResume = resumeAssets.find((item) => item.is_current) ?? null
+
+  const loadPremiumNumbers = async (opts?: { append?: boolean; cursor?: number | null; mailDate?: string | null }) => {
     const append = Boolean(opts?.append)
     const cursor = opts?.cursor ?? 0
+    const mailDate = opts?.mailDate ?? settings.mail_date
     const scope = premiumScopeFilter
     const requestId = premiumRequestTrackerRef.current + 1
     premiumRequestTrackerRef.current = requestId
+    premiumLoadingRef.current = true
     setPremiumLoading(true)
     setPremiumError('')
     try {
@@ -733,7 +3242,7 @@ function App() {
         cursor,
         limit: PREMIUM_PAGE_LIMIT,
         q: premiumSearch,
-        mailDate: settings.mail_date,
+        mailDate,
         opportunityStatus: opportunityStatusFilter,
         opportunitySource: opportunitySourceFilter,
       })
@@ -785,6 +3294,7 @@ function App() {
       }
     } finally {
       if (requestId === premiumRequestTrackerRef.current) {
+        premiumLoadingRef.current = false
         setPremiumLoading(false)
       }
     }
@@ -913,6 +3423,149 @@ function App() {
     setProductivityTrend((await trendRes.json()) as ProductivityTrendResponse)
   }
 
+  const loadJobsSummary = async () => {
+    const res = await fetch(`${apiBase}/jobs/summary`)
+    if (!res.ok) return
+    setJobSummary((await res.json()) as JobQueueSummary)
+  }
+
+  const loadLiveReplyStatus = async () => {
+    const res = await fetch(`${apiBase}/gmail/live-replies`)
+    if (!res.ok) return
+    setLiveReplyStatus((await res.json()) as LiveReplyStatus)
+  }
+
+  const loadRecentRuns = async (mailDate: string | null = settings.mail_date ?? null) => {
+    const params = new URLSearchParams()
+    params.set('limit', String(RECENT_RUNS_LIMIT))
+    if (mailDate) params.set('mail_date', mailDate)
+    const res = await fetch(`${apiBase}/recent-runs?${params.toString()}`)
+    if (!res.ok) throw new Error('Failed to load recent runs')
+    const payload = (await res.json()) as RecentRunListResponse
+    setLogs(
+      (payload.items ?? []).map((item) => ({
+        ...item,
+        email_id: item.email_id ?? null,
+        skipped_items: item.skipped_items ?? [],
+        skipped_items_loaded: false,
+        skipped_items_loading: false,
+        skipped_items_error: null,
+      })),
+    )
+  }
+
+  const loadInboxConversations = async (): Promise<ConversationSummary[]> => {
+    setInboxLoading(true)
+    setInboxError('')
+    try {
+      const res = await fetch(`${apiBase}/inbox/conversations`)
+      if (!res.ok) throw new Error('Failed to load inbox conversations')
+      const payload = (await res.json()) as ConversationSummary[]
+      setInboxConversations(payload)
+      return payload
+    } catch (e) {
+      setInboxError((e as Error).message)
+      return []
+    } finally {
+      setInboxLoading(false)
+    }
+  }
+
+  const openInboxConversation = async (conversationId: number) => {
+    setSelectedConversationId(conversationId)
+    setInboxError('')
+    const res = await fetch(`${apiBase}/inbox/conversations/${conversationId}`)
+    if (!res.ok) {
+      setInboxError('Failed to load conversation')
+      return
+    }
+    let detail = (await res.json()) as ConversationDetail
+    if (detail.unread_reply_count > 0) {
+      const readRes = await fetch(`${apiBase}/inbox/conversations/${conversationId}/read`, { method: 'POST' })
+      if (readRes.ok) detail = (await readRes.json()) as ConversationDetail
+      setInboxConversations((rows) => rows.map((row) => (
+        row.id === conversationId ? { ...row, unread_reply_count: 0 } : row
+      )))
+    }
+    setSelectedConversation(detail)
+  }
+
+  const sendInboxReply = async () => {
+    if (!selectedConversationId || !inboxReplyDraft.trim()) return
+    setInboxSending(true)
+    setInboxError('')
+    try {
+      const res = await fetch(`${apiBase}/inbox/conversations/${selectedConversationId}/reply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ body: inboxReplyDraft.trim() }),
+      })
+      if (!res.ok) {
+        const details = await res.json().catch(() => null)
+        throw new Error(details?.detail ?? 'Failed to send reply')
+      }
+      setSelectedConversation((await res.json()) as ConversationDetail)
+      setInboxReplyDraft('')
+      await loadInboxConversations()
+    } catch (e) {
+      setInboxError((e as Error).message)
+    } finally {
+      setInboxSending(false)
+    }
+  }
+
+  const toggleRecentRunItems = async (runKey: string | null | undefined) => {
+    if (!runKey) return
+    const current = logs.find((item) => item.run_key === runKey)
+    if (current?.skipped_items_loaded) {
+      setLogs((prev) =>
+        prev.map((item) =>
+          item.run_key === runKey
+            ? { ...item, skipped_items_loaded: false }
+            : item,
+        ),
+      )
+      return
+    }
+    setLogs((prev) =>
+      prev.map((item) =>
+        item.run_key === runKey
+          ? { ...item, skipped_items_loading: true, skipped_items_error: null }
+          : item,
+      ),
+    )
+    try {
+      const res = await fetch(`${apiBase}/recent-runs/${encodeURIComponent(runKey)}/items?outcome=skipped&limit=50`)
+      if (!res.ok) throw new Error('Failed to load skipped run items')
+      const payload = (await res.json()) as RecentRunItemListResponse
+      setLogs((prev) =>
+        prev.map((item) =>
+          item.run_key === runKey
+            ? {
+                ...item,
+                skipped_items: payload.items ?? [],
+                skipped_items_loaded: true,
+                skipped_items_loading: false,
+                skipped_items_error: null,
+              }
+            : item,
+        ),
+      )
+    } catch (e) {
+      setLogs((prev) =>
+        prev.map((item) =>
+          item.run_key === runKey
+            ? {
+                ...item,
+                skipped_items_loading: false,
+                skipped_items_error: (e as Error).message,
+              }
+            : item,
+        ),
+      )
+    }
+  }
+
   const trackViewEvent = async (page: typeof activePage) => {
     const eventMap: Record<typeof activePage, string> = {
       run_queue: 'view_run_queue',
@@ -920,7 +3573,9 @@ function App() {
       failed_mapping: 'view_failed_mapping',
       recent_runs: 'view_recent_runs',
       sent_items: 'view_sent_items',
+      inbox: 'view_sent_items',
       premium_numbers: 'view_premium_numbers',
+      settings: 'view_run_queue',
     }
     const eventType = eventMap[page]
     const throttleKey = `${page}:${timeRange}`
@@ -954,24 +3609,38 @@ function App() {
       loadPremiumNumbers({ append: false, cursor: 0 }).catch(() => {
         // Keep UI responsive if premium numbers refresh fails transiently.
       })
+      loadJobsSummary().catch(() => {
+        // Keep UI responsive if job summary refresh fails transiently.
+      })
     }, 200)
   }
 
-  useEffect(() => {
-    if (hasBootstrappedAppOnce) return
-    hasBootstrappedAppOnce = true
+  const retrySettingsBootstrap = async () => {
+    setError('')
+    try {
+      const normalizedSettings = await loadSettingsBootstrap()
+      await loadRecentRuns(normalizedSettings.mail_date ?? null)
+      await refreshVisibleCandidates(normalizedSettings.mail_date ?? null, { activeOnly: true, initialLoad: true })
+      await loadPremiumNumbers({ append: false, cursor: 0, mailDate: normalizedSettings.mail_date ?? null })
+      hasBootstrappedCandidatesRef.current = true
+    } catch {
+      // The bootstrap loader owns the user-facing error state for this path.
+    }
+  }
 
+  useEffect(() => {
     const bootstrap = async () => {
       try {
-        await Promise.all([
+        const [, , , normalizedSettings] = await Promise.all([
           loadStatus(),
-          loadActiveResume(),
           loadAiStatus(),
           loadTelegramStatus(),
+          loadSettingsBootstrap(),
         ])
-        const normalizedSettings = await loadSettings()
+        loadJobsSummary().catch(() => {})
+        await loadRecentRuns(normalizedSettings.mail_date ?? null)
         await refreshVisibleCandidates(normalizedSettings.mail_date ?? null, { activeOnly: true, initialLoad: true })
-        await loadPremiumNumbers({ append: false, cursor: 0 })
+        await loadPremiumNumbers({ append: false, cursor: 0, mailDate: normalizedSettings.mail_date ?? null })
         hasBootstrappedCandidatesRef.current = true
       } catch (e) {
         setError((e as Error).message)
@@ -981,12 +3650,18 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (!hasBootstrappedCandidatesRef.current) return
-    refreshVisibleCandidates(settings.mail_date ?? null, { activeOnly: true, includeLoaded: true }).catch((e) => setError((e as Error).message))
-  }, [settings.mail_date])
+    if (activePage !== 'settings' || hasLoadedLearningData) return
+    loadLearningData().catch((e) => setError((e as Error).message))
+  }, [activePage, hasLoadedLearningData, loadLearningData])
 
   useEffect(() => {
-    if (!hasBootstrappedCandidatesRef.current) return
+    if (!hasBootstrappedCandidatesRef.current || !settingsBootstrapReady) return
+    refreshVisibleCandidates(settings.mail_date ?? null, { activeOnly: true, includeLoaded: true }).catch((e) => setError((e as Error).message))
+    loadRecentRuns(settings.mail_date ?? null).catch((e) => setError((e as Error).message))
+  }, [settings.mail_date, settingsBootstrapReady])
+
+  useEffect(() => {
+    if (!hasBootstrappedCandidatesRef.current || !settingsBootstrapReady) return
     const key = bucketForPage(activePage)
     if (!key) return
     if (bucketMeta[key].loaded) return
@@ -996,22 +3671,117 @@ function App() {
       limit: INITIAL_BUCKET_LIMIT,
       markRefreshing: true,
     }).catch((e) => setError((e as Error).message))
-  }, [activePage, settings.mail_date, bucketMeta.failed.loaded, bucketMeta.needs_review.loaded, bucketMeta.approved_sent.loaded])
+  }, [activePage, settings.mail_date, bucketMeta.failed.loaded, bucketMeta.needs_review.loaded, bucketMeta.approved_sent.loaded, settingsBootstrapReady])
 
   useEffect(() => {
-    if (!hasBootstrappedCandidatesRef.current) return
+    if (!emailSearchTarget) return
+    const relatedId = emailSearchRelatedId(emailSearchTarget)
+    if (relatedId == null) return
+    const section = emailSearchTarget.section
+    if (section === 'needs_review' && bucketMeta.needs_review.hasNext && !queue.some((item) => String(item.id) === relatedId)) {
+      loadMoreCandidates('needs_review', settings.mail_date ?? null)
+    } else if (section === 'failed_mapping' && bucketMeta.failed.hasNext && !failedQueue.some((item) => String(item.id) === relatedId)) {
+      loadMoreCandidates('failed', settings.mail_date ?? null)
+    } else if (section === 'sent_items' && bucketMeta.approved_sent.hasNext && !sentQueue.some((item) => String(item.id) === relatedId)) {
+      loadMoreCandidates('approved_sent', settings.mail_date ?? null)
+    }
+  }, [emailSearchTarget, queue, failedQueue, sentQueue, bucketMeta, settings.mail_date])
+
+  useEffect(() => {
+    if (!hasBootstrappedCandidatesRef.current || !settingsBootstrapReady) return
     if (activePage !== 'premium_numbers') return
     loadPremiumNumbers({ append: false, cursor: 0 }).catch((e) => setPremiumError((e as Error).message))
-  }, [activePage, premiumScopeFilter, premiumSearch, settings.mail_date, opportunityStatusFilter, opportunitySourceFilter])
+  }, [activePage, premiumScopeFilter, premiumSearch, settings.mail_date, opportunityStatusFilter, opportunitySourceFilter, settingsBootstrapReady])
+
+  useEffect(() => {
+    if (activePage !== 'premium_numbers' || !emailSearchTarget || emailSearchTarget.section !== 'premium_numbers') return
+    if (premiumLoadingRef.current) return
+    const scope = emailSearchPremiumScope(emailSearchTarget)
+    if (!scope || scope !== premiumScopeFilter) return
+    const relatedId = emailSearchRelatedId(emailSearchTarget)
+    if (relatedId == null) return
+    const cards =
+      scope === 'all_review' ? numberReviewCards
+      : scope === 'recruiter_numbers' ? recruiterNumberCards
+      : scope === 'employer_numbers' ? employerNumberCards
+      : opportunityCards
+    if (cards.some((item) => String(item.id) === relatedId)) return
+    const meta = premiumPageMeta[scope]
+    if (!meta.hasNext || meta.nextCursor == null) return
+    loadPremiumNumbers({ append: true, cursor: meta.nextCursor }).catch((e) => setPremiumError((e as Error).message))
+  }, [
+    activePage,
+    emailSearchTarget,
+    premiumScopeFilter,
+    premiumPageMeta,
+    numberReviewCards,
+    recruiterNumberCards,
+    employerNumberCards,
+    opportunityCards,
+  ])
+
+  useEffect(() => {
+    if (activePage !== 'inbox') return
+    loadInboxConversations().then((rows) => {
+      const selectedId = rows.some((row) => row.id === selectedConversationId)
+        ? selectedConversationId
+        : rows[0]?.id
+      if (selectedId) openInboxConversation(selectedId).catch((e) => setInboxError((e as Error).message))
+      else setSelectedConversation(null)
+    }).catch((e) => setInboxError((e as Error).message))
+  }, [activePage])
 
   useEffect(() => {
     loadProductivityAnalytics(timeRange).catch((e) => setError((e as Error).message))
   }, [timeRange])
 
   useEffect(() => {
+    if (activePage !== 'run_queue') return
+    loadJobsSummary().catch(() => {})
+    const intervalId = window.setInterval(() => {
+      loadJobsSummary().catch(() => {})
+    }, 5000)
+    return () => window.clearInterval(intervalId)
+  }, [activePage])
+
+  useEffect(() => {
+    loadLiveReplyStatus().catch(() => {})
+    const intervalId = window.setInterval(() => {
+      loadLiveReplyStatus().catch(() => {})
+    }, 15000)
+    return () => window.clearInterval(intervalId)
+  }, [])
+
+  useEffect(() => {
     trackViewEvent(activePage)
       .catch((e) => setError((e as Error).message))
   }, [activePage])
+
+  useEffect(() => {
+    if (!emailSearchTarget) return
+    const relatedId = emailSearchRelatedId(emailSearchTarget)
+    if (relatedId == null) return
+    const timerId = window.setTimeout(() => {
+      const target = Array.from(document.querySelectorAll<HTMLElement>('[data-email-search-section]')).find((element) => (
+        element.dataset.emailSearchSection === emailSearchTarget.section &&
+        element.dataset.emailSearchRelatedId === relatedId
+      ))
+      target?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
+    }, 0)
+    return () => window.clearTimeout(timerId)
+  }, [
+    activePage,
+    emailSearchTarget,
+    queue,
+    failedQueue,
+    sentQueue,
+    logs,
+    numberReviewCards,
+    recruiterNumberCards,
+    employerNumberCards,
+    opportunityCards,
+    inboxConversations,
+  ])
 
   useEffect(() => {
     if (!running) return
@@ -1036,6 +3806,66 @@ function App() {
       }
     }
   }, [running])
+
+  useEffect(() => {
+    const pendingJobs = [
+      automationJob ? { kind: 'automation' as const, job: automationJob } : null,
+      nvoidsJob ? { kind: 'nvoids' as const, job: nvoidsJob } : null,
+    ].filter((item): item is { kind: 'automation' | 'nvoids'; job: BackgroundJob } => item !== null)
+      .filter(({ job }) => job.status === 'queued' || job.status === 'running')
+    if (pendingJobs.length === 0) return
+
+    let canceled = false
+    let timerId: number | null = null
+    const poll = async () => {
+      const results = await Promise.all(pendingJobs.map(async ({ kind, job }) => {
+        const response = await fetch(`${apiBase}/jobs/${encodeURIComponent(job.run_key)}`)
+        if (!response.ok) throw new Error(`Failed to load ${kind} job progress`)
+        return { kind, job: (await response.json()) as BackgroundJob }
+      }))
+      if (canceled) return
+
+      let terminal = false
+      for (const result of results) {
+        const isTerminal = result.job.status !== 'queued' && result.job.status !== 'running'
+        if (result.kind === 'automation') {
+          setAutomationJob(result.job)
+          if (isTerminal) setRunning(false)
+        } else {
+          setNvoidsJob(result.job)
+          if (isTerminal) setNvoidsRunning(false)
+        }
+        terminal = terminal || isTerminal
+        if (result.job.status === 'failed' || result.job.status === 'canceled') {
+          setError(result.job.detail)
+        }
+      }
+
+      if (terminal) {
+        await Promise.all([
+          loadStatus(),
+          loadAiStatus(),
+          refreshVisibleCandidates(settings.mail_date ?? null, { activeOnly: false }),
+          loadPremiumNumbers(),
+          loadRecentRuns(settings.mail_date ?? null),
+          loadSettingsBootstrap(),
+        ])
+      }
+      if (!canceled && results.some(({ job }) => job.status === 'queued' || job.status === 'running')) {
+        timerId = window.setTimeout(() => {
+          poll().catch((e) => setError((e as Error).message))
+        }, 1500)
+      }
+    }
+
+    poll().catch((e) => setError((e as Error).message))
+    return () => {
+      canceled = true
+      if (timerId !== null) window.clearTimeout(timerId)
+    }
+    // Polling intentionally keys only on job identity; the loop carries each fresh status forward.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [automationJob?.run_key, nvoidsJob?.run_key])
 
   useEffect(() => {
     return () => {
@@ -1099,10 +3929,13 @@ function App() {
       const res = await fetch(`${apiBase}/settings`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(settings),
+        body: JSON.stringify(settingsRef.current),
       })
       if (!res.ok) throw new Error('Failed to save settings')
-      await loadSettings()
+      const savedSettings = await loadSettingsBootstrap()
+      setLastSavedSettings(savedSettings)
+      setLastSavedAt(new Date().toISOString())
+      setActivePage('run_queue')
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -1115,13 +3948,260 @@ function App() {
     setError('')
     const fd = new FormData()
     fd.append('file', resumeFile)
+    fd.append('skills_text', resumeSkillsInput)
     try {
       const res = await fetch(`${apiBase}/settings/resume`, { method: 'POST', body: fd })
       if (!res.ok) throw new Error('Failed to upload resume')
       setResumeFile(null)
-      await loadActiveResume()
+      setResumeSkillsInput('')
+      await loadSettingsBootstrap()
     } catch (e) {
       setError((e as Error).message)
+    }
+  }
+
+  const saveResumeSkills = async (resumeId: number) => {
+    setError('')
+    try {
+      const res = await fetch(`${apiBase}/settings/resumes/${resumeId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skills_text: resumeSkillEdits[resumeId] ?? '' }),
+      })
+      if (!res.ok) throw new Error('Failed to save resume skills')
+      await loadSettingsBootstrap()
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }
+
+  const toggleResumeAsset = async (resumeId: number, isEnabled: boolean) => {
+    setError('')
+    try {
+      const res = await fetch(`${apiBase}/settings/resumes/${resumeId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_enabled: isEnabled }),
+      })
+      if (!res.ok) throw new Error('Failed to update resume')
+      await loadSettingsBootstrap()
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }
+
+  const deleteResumeAsset = async (resumeId: number) => {
+    setError('')
+    try {
+      const res = await fetch(`${apiBase}/settings/resumes/${resumeId}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error('Failed to delete resume')
+      await loadSettingsBootstrap()
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }
+
+  const uploadAttachmentFiles = async () => {
+    if (attachmentUploadFiles.length === 0) return
+    setError('')
+    const fd = new FormData()
+    for (const file of attachmentUploadFiles) {
+      fd.append('files', file)
+    }
+    try {
+      const res = await fetch(`${apiBase}/settings/attachments`, { method: 'POST', body: fd })
+      if (!res.ok) throw new Error('Failed to upload attachment files')
+      setAttachmentUploadFiles([])
+      await loadSettingsBootstrap()
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }
+
+  const toggleAttachmentFile = async (attachmentId: number, isEnabled: boolean) => {
+    setError('')
+    try {
+      const res = await fetch(`${apiBase}/settings/attachments/${attachmentId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_enabled: isEnabled }),
+      })
+      if (!res.ok) throw new Error('Failed to update attachment file')
+      await loadSettingsBootstrap()
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }
+
+  const deleteAttachmentFile = async (attachmentId: number) => {
+    setError('')
+    try {
+      const res = await fetch(`${apiBase}/settings/attachments/${attachmentId}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error('Failed to delete attachment file')
+      await loadSettingsBootstrap()
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }
+
+  const approvePendingSkill = async (skill: PendingSkill) => {
+    setSkillActionKey(`approve:${skill.normalized_name}`)
+    setError('')
+    try {
+      const res = await fetch(`${apiBase}/settings/skills/approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skill_name: skill.skill_name }),
+      })
+      if (!res.ok) throw new Error('Failed to approve skill')
+      await loadLearningData()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setSkillActionKey(null)
+    }
+  }
+
+  const approveAllPendingSkills = async () => {
+    setSkillActionKey('approve-all-skills')
+    setError('')
+    try {
+      const res = await fetch(`${apiBase}/settings/skills/approve-all`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      })
+      if (!res.ok) throw new Error('Failed to approve all skills')
+      await loadLearningData()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setSkillActionKey(null)
+    }
+  }
+
+  const dismissPendingSkill = async (skill: PendingSkill) => {
+    setSkillActionKey(`dismiss:${skill.normalized_name}`)
+    setError('')
+    try {
+      const res = await fetch(`${apiBase}/settings/skills/dismiss`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skill_name: skill.skill_name }),
+      })
+      if (!res.ok) throw new Error('Failed to dismiss skill')
+      await loadLearningData()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setSkillActionKey(null)
+    }
+  }
+
+  const embedPendingSkills = async () => {
+    setSkillActionKey('embed-skills')
+    setEmbeddingSummary('')
+    setError('')
+    try {
+      const res = await fetch(`${apiBase}/settings/skills/embed-pending`, { method: 'POST' })
+      if (!res.ok) throw new Error('Failed to embed approved skills')
+      const result = (await res.json()) as EmbedPendingSkillsResponse
+      setEmbeddingSummary(`Embedded ${result.embedded_count} entries in ${(result.duration_ms / 1000).toFixed(1)}s.`)
+      await loadLearningData()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setSkillActionKey(null)
+    }
+  }
+
+  const runEntityAction = async (
+    entityType: PendingEntity['entity_type'],
+    action: 'approve' | 'approve-all' | 'dismiss',
+    entity?: PendingEntity,
+  ) => {
+    setEntityActionKey(`${entityType}:${action === 'approve-all' ? 'approve-all' : entity?.normalized_name ?? action}`)
+    setError('')
+    try {
+      const res = await fetch(`${apiBase}/settings/entities/${entityType}/${action}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: action === 'approve-all' ? undefined : JSON.stringify({ display_name: entity?.display_name }),
+      })
+      if (!res.ok) throw new Error(`Failed to ${action} ${entityType} candidate`)
+      await loadLearningData()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setEntityActionKey(null)
+    }
+  }
+
+  const approvePendingJobIntentSignal = async (signal: JobIntentLearningSignal) => {
+    setJobIntentActionKey(`approve-intent:${signal.id}`)
+    setError('')
+    try {
+      const res = await fetch(`${apiBase}/settings/job-intent-learning/approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phrase: signal.phrase, polarity: signal.polarity }),
+      })
+      if (!res.ok) throw new Error('Failed to approve job-intent signal')
+      await loadLearningData()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setJobIntentActionKey(null)
+    }
+  }
+
+  const dismissPendingJobIntentSignal = async (signal: JobIntentLearningSignal) => {
+    setJobIntentActionKey(`dismiss-intent:${signal.id}`)
+    setError('')
+    try {
+      const res = await fetch(`${apiBase}/settings/job-intent-learning/dismiss`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phrase: signal.phrase, polarity: signal.polarity }),
+      })
+      if (!res.ok) throw new Error('Failed to dismiss job-intent signal')
+      await loadLearningData()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setJobIntentActionKey(null)
+    }
+  }
+
+  const toggleJobIntentSignalPolarity = async (signal: { id: number }) => {
+    setJobIntentActionKey(`toggle-polarity:${signal.id}`)
+    setError('')
+    try {
+      const res = await fetch(`${apiBase}/settings/job-intent-learning/${signal.id}/toggle-polarity`, {
+        method: 'POST',
+      })
+      if (!res.ok) throw new Error('Failed to change the intent signal polarity')
+      await loadLearningData()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setJobIntentActionKey(null)
+    }
+  }
+
+  const approveAllPendingJobIntentSignals = async () => {
+    setJobIntentActionKey('approve-all-intents')
+    setError('')
+    try {
+      const res = await fetch(`${apiBase}/settings/job-intent-learning/approve-all`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      })
+      if (!res.ok) throw new Error('Failed to approve all job-intent signals')
+      await loadLearningData()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setJobIntentActionKey(null)
     }
   }
 
@@ -1129,46 +4209,43 @@ function App() {
     setRunning(true)
     setError('')
     try {
-      const controller = new AbortController()
-      const timeoutMs = settings.feature_ai_enabled ? 90000 : 45000
-      const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs)
-      const res = await fetch(`${apiBase}/automation/run-once`, {
+      const res = await fetch(`${apiBase}/jobs/automation-run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mail_date: settings.mail_date || null }),
-        signal: controller.signal,
       })
-      window.clearTimeout(timeoutId)
       if (!res.ok) {
         const details = await res.json().catch(() => null)
-        throw new Error(details?.detail ?? 'Automation run failed')
-      }
-      const data = (await res.json()) as AutomationRunResponse
-      setLogs((prev) => [data, ...prev].slice(0, RECENT_RUNS_LIMIT))
-      if (data.status === 'oauth_required' || data.status === 'oauth_in_progress') {
-        setError(data.detail)
-      }
-      await loadStatus()
-      await loadAiStatus()
-      await loadTelegramStatus()
-      await refreshVisibleCandidates(settings.mail_date ?? null, { activeOnly: false })
-      await loadProductivityAnalytics(timeRange)
-    } catch (e) {
-      if ((e as Error).name === 'AbortError') {
-        if (!status?.authenticated) {
-          setError('Request timed out. Gmail OAuth may be waiting in backend logs. Complete Google sign-in, then retry.')
-        } else if (settings.feature_ai_enabled && aiStatus?.connected) {
-          setError('AI reply generation is taking longer than expected. The backend may still finish; wait a moment, then refresh the queue.')
-        } else {
-          setError('Sync is taking longer than expected. Wait a moment, then retry Sync + Queue.')
+        const runKey = details?.detail?.run_key as string | undefined
+        if (details?.detail?.code === 'another_job_in_progress' && runKey) {
+          // Already-running job: attach to it so the existing poller shows real progress
+          // instead of a raw "another_job_in_progress" error string.
+          setAutomationJob({
+            run_key: runKey, job_id: details.detail.job_id ?? null, status: 'running',
+            detail: 'Attaching to the automation run already in progress.',
+            processed_items: 0, total_items: null, progress_pct: null, queue_name: 'automation_run',
+          })
+          return
         }
-      } else {
-        setError((e as Error).message)
+        throw new Error(typeof details?.detail === 'string' ? details.detail : 'Automation run failed')
       }
-    } finally {
+      const data = (await res.json()) as JobEnqueueResponse
+      setAutomationJob({
+        ...data,
+        detail: 'Waiting for the automation worker.',
+        processed_items: 0,
+        total_items: 1,
+        progress_pct: 0,
+        queue_name: 'automation_run',
+      })
+      await loadRecentRuns(settings.mail_date ?? null)
+    } catch (e) {
+      setError((e as Error).message)
       setRunning(false)
     }
   }
+
+  const enabledAttachmentNames = attachmentFiles.filter((item) => item.is_enabled).map((item) => item.file_name)
 
   const runNvoidsSync = async () => {
     setNvoidsRunning(true)
@@ -1176,27 +4253,36 @@ function App() {
     try {
       const params = new URLSearchParams()
       params.set('batch_limit', String(Math.max(1, Math.min(settings.nvoids_batch_limit || 10, 50))))
-      const res = await fetch(`${apiBase}/external-feeds/nvoids/sync?${params.toString()}`, {
+      const res = await fetch(`${apiBase}/jobs/nvoids-sync?${params.toString()}`, {
         method: 'POST',
       })
       if (!res.ok) {
         const details = await res.json().catch(() => null)
-        throw new Error(details?.detail ?? 'Nvoids sync failed')
+        const runKey = details?.detail?.run_key as string | undefined
+        if (details?.detail?.code === 'another_job_in_progress' && runKey) {
+          // Already-running job: attach to it so the existing poller shows real progress
+          // instead of a raw "another_job_in_progress" error string.
+          setNvoidsJob({
+            run_key: runKey, job_id: details.detail.job_id ?? null, status: 'running',
+            detail: 'Attaching to the Nvoids sync already in progress.',
+            processed_items: 0, total_items: null, progress_pct: null, queue_name: 'nvoids_sync',
+          })
+          return
+        }
+        throw new Error(typeof details?.detail === 'string' ? details.detail : 'Nvoids sync failed')
       }
-      const data = (await res.json()) as { source_type: string; fetched_count: number; created_count: number; deduped_count: number; failed_count: number; skipped_location_count: number }
-      setLogs((prev) => [
-        {
-          status: 'ok',
-          detail: `nvoids sync complete: fetched=${data.fetched_count} created=${data.created_count} deduped=${data.deduped_count} skipped_location=${data.skipped_location_count} failed=${data.failed_count}`,
-          email_id: null,
-        },
-        ...prev,
-      ].slice(0, RECENT_RUNS_LIMIT))
-      await refreshVisibleCandidates(settings.mail_date ?? null, { activeOnly: false })
-      await loadPremiumNumbers()
+      const data = (await res.json()) as JobEnqueueResponse
+      setNvoidsJob({
+        ...data,
+        detail: 'Waiting for the Nvoids worker.',
+        processed_items: 0,
+        total_items: Math.max(1, Math.min(settings.nvoids_batch_limit || 10, 50)),
+        progress_pct: 0,
+        queue_name: 'nvoids_sync',
+      })
+      await loadRecentRuns(settings.mail_date ?? null)
     } catch (e) {
       setError((e as Error).message)
-    } finally {
       setNvoidsRunning(false)
     }
   }
@@ -1246,17 +4332,28 @@ function App() {
     }
   }
 
-  const approveSend = async (candidate: Candidate) => {
+  const approveSend = async (candidate: Candidate, confirmAdditionalSend = false) => {
     setSendingId(candidate.id)
     setError('')
     try {
       const res = await fetch(`${apiBase}/candidates/${candidate.id}/approve-send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ edited_reply: draftEdits[candidate.id] ?? candidate.draft_reply }),
+        body: JSON.stringify({
+          edited_reply: draftEdits[candidate.id] ?? candidate.draft_reply,
+          confirm_same_source_additional_send: confirmAdditionalSend,
+        }),
       })
       if (!res.ok) {
         const details = await res.json().catch(() => null)
+        if (
+          res.status === 409 &&
+          candidate.is_multi_role_child &&
+          window.confirm(`${details?.detail ?? 'Another role from this source was already sent.'}\n\nSend this additional role anyway?`)
+        ) {
+          await approveSend(candidate, true)
+          return
+        }
         throw new Error(details?.detail ?? 'Approve & send failed')
       }
       schedulePostMutationRefresh()
@@ -1288,6 +4385,49 @@ function App() {
     }
   }
 
+  const regenerateCandidate = async (candidateId: number) => {
+    setRegeneratingId(candidateId)
+    setError('')
+    try {
+      const res = await fetch(`${apiBase}/candidates/${candidateId}/regenerate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          preserve_manual_routing: true,
+          preserve_review_visibility: true,
+        }),
+      })
+      if (!res.ok) {
+        const details = await res.json().catch(() => null)
+        throw new Error(details?.detail ?? 'Regenerate failed')
+      }
+      const updated = (await res.json()) as Candidate
+      setDraftEdits((prev) => ({ ...prev, [updated.id]: updated.draft_reply ?? '' }))
+      schedulePostMutationRefresh()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setRegeneratingId(null)
+    }
+  }
+
+  const retryRoleDetection = async (candidateId: number) => {
+    setRegeneratingId(candidateId)
+    setError('')
+    try {
+      const res = await fetch(`${apiBase}/candidates/${candidateId}/retry-role-detection`, { method: 'POST' })
+      if (!res.ok) {
+        const details = await res.json().catch(() => null)
+        throw new Error(details?.detail ?? 'Retry Detection failed')
+      }
+      schedulePostMutationRefresh()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setRegeneratingId(null)
+    }
+  }
+
   const saveRoutingAndRequeue = async (candidateId: number) => {
     const fix = routingFixes[candidateId]
     if (!fix?.to || !fix?.cc) return
@@ -1311,9 +4451,67 @@ function App() {
     }
   }
 
+  const deleteFailedMapping = async (candidateId: number) => {
+    const confirmed = window.confirm(
+      'Delete this failed mapping card from the dashboard? This will hide it from Failed Mapping without deleting the original Gmail or Nvoids source item.',
+    )
+    if (!confirmed) return
+    setDeletingFailedId(candidateId)
+    setError('')
+    try {
+      const res = await fetch(`${apiBase}/candidates/${candidateId}`, {
+        method: 'DELETE',
+      })
+      if (!res.ok) {
+        const details = await res.json().catch(() => null)
+        throw new Error(details?.detail ?? 'Failed to delete failed mapping card')
+      }
+      await res.json() as CandidateDeleteResponse
+      setRoutingFixes((prev) => {
+        const next = { ...prev }
+        delete next[candidateId]
+        return next
+      })
+      schedulePostMutationRefresh()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setDeletingFailedId(null)
+    }
+  }
+
   const canTrustRouting = (candidate: Candidate) =>
     candidate.routing_confirmed ||
     (['safe', 'confirmed'].includes(candidate.routing_status) && candidate.routing_confidence >= 0.8)
+
+  const fetchSentDetails = async (candidateId: number): Promise<SentItemDetails> => {
+    const res = await fetch(`${apiBase}/candidates/${candidateId}/sent-details`)
+    if (!res.ok) {
+      const details = await res.json().catch(() => null)
+      throw new Error(details?.detail ?? 'Failed to load sent item details')
+    }
+    return (await res.json()) as SentItemDetails
+  }
+
+  const toggleSentDetails = async (candidateId: number) => {
+    const isExpanded = Boolean(expandedSentDetailIds[candidateId])
+    if (isExpanded) {
+      setExpandedSentDetailIds((prev) => ({ ...prev, [candidateId]: false }))
+      return
+    }
+    setExpandedSentDetailIds((prev) => ({ ...prev, [candidateId]: true }))
+    if (sentDetailsById[candidateId] || sentDetailLoadingIds[candidateId]) return
+    setSentDetailLoadingIds((prev) => ({ ...prev, [candidateId]: true }))
+    setSentDetailErrors((prev) => ({ ...prev, [candidateId]: undefined }))
+    try {
+      const payload = await fetchSentDetails(candidateId)
+      setSentDetailsById((prev) => ({ ...prev, [candidateId]: payload }))
+    } catch (e) {
+      setSentDetailErrors((prev) => ({ ...prev, [candidateId]: (e as Error).message }))
+    } finally {
+      setSentDetailLoadingIds((prev) => ({ ...prev, [candidateId]: false }))
+    }
+  }
 
   const sourceLabel = (source: string) =>
     source
@@ -1345,23 +4543,19 @@ function App() {
   const embeddingLastDuration = aiStatus?.embedding_last_duration_ms
     ? `${(aiStatus.embedding_last_duration_ms / 1000).toFixed(1)}s`
     : null
-  const trendBars = useMemo<ProductivityBarPoint[]>(
-    () => (productivityTrend?.bars ?? []),
-    [productivityTrend?.bars],
-  )
+  const groqLastDuration = aiStatus?.groq_last_duration_ms
+    ? `${(aiStatus.groq_last_duration_ms / 1000).toFixed(1)}s`
+    : null
+  const trendBars: ProductivityBarPoint[] = productivityTrend?.bars ?? []
   const latestScore = productivityTrend?.kpi_total_sent ?? trendBars.reduce((sum, bar) => sum + bar.sent_count, 0)
   const trendDelta = productivityTrend?.trend_delta_pct ?? 0
   const liveDirection = productivityTrend?.trend_direction === 'down' ? 'down' : (productivityTrend?.trend_direction ?? 'flat')
-  const realtimeSignals = useMemo(
-    () =>
-      productivityEvents.slice(0, 8).map((event) => {
-        const when = new Date(event.occurred_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-        return `${when} ${event.event_type.replaceAll('_', ' ')}`
-      }),
-    [productivityEvents],
-  )
-  const visibleBars = useMemo(() => [...trendBars].reverse(), [trendBars])
-  const maxSentInBars = useMemo(() => Math.max(1, ...visibleBars.map((bar) => bar.sent_count)), [visibleBars])
+  const realtimeSignals = productivityEvents.slice(0, 8).map((event) => {
+    const when = new Date(event.occurred_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    return `${when} ${event.event_type.replaceAll('_', ' ')}`
+  })
+  const visibleBars = [...trendBars].reverse()
+  const maxSentInBars = Math.max(1, ...visibleBars.map((bar) => bar.sent_count))
 
   const formatBucketLabel = (timestamp: string, range: TimeRangeKey) => {
     const dt = new Date(timestamp)
@@ -1422,14 +4616,45 @@ function App() {
       setSkillDraft('')
       return
     }
-    setSettings({ ...settings, must_have_skills: [...settings.must_have_skills, skill] })
+    const nextSkills = [...settings.must_have_skills, skill]
+    setSettings({
+      ...settings,
+      must_have_skills: nextSkills,
+      policy: {
+        ...currentPolicy,
+        qualification: {
+          ...currentPolicy.qualification,
+          draft_rules: {
+            ...draftRules,
+            must_have_skills: {
+              ...draftRules.must_have_skills,
+              skills: nextSkills,
+            },
+          },
+        },
+      },
+    })
     setSkillDraft('')
   }
 
   const removeMustHaveSkill = (skillToRemove: string) => {
+    const nextSkills = settings.must_have_skills.filter((s) => s.toLowerCase() !== skillToRemove.toLowerCase())
     setSettings({
       ...settings,
-      must_have_skills: settings.must_have_skills.filter((s) => s.toLowerCase() !== skillToRemove.toLowerCase()),
+      must_have_skills: nextSkills,
+      policy: {
+        ...currentPolicy,
+        qualification: {
+          ...currentPolicy.qualification,
+          draft_rules: {
+            ...draftRules,
+            must_have_skills: {
+              ...draftRules.must_have_skills,
+              skills: nextSkills,
+            },
+          },
+        },
+      },
     })
   }
 
@@ -1472,7 +4697,7 @@ function App() {
   }
 
   const updateSavedQueries = async (nextSavedQueries: string[]) => {
-    const nextSettings = withSavedQueries(settings, nextSavedQueries)
+    const nextSettings = { ...settings, saved_gmail_queries: nextSavedQueries }
     setSettings(nextSettings)
     const res = await fetch(`${apiBase}/settings`, {
       method: 'PUT',
@@ -1483,7 +4708,7 @@ function App() {
       setError('Failed to save query bucket')
       return
     }
-    await loadSettings()
+    await loadSettingsBootstrap()
   }
 
   const addEmployerDomainChip = (raw: string) => {
@@ -1505,14 +4730,36 @@ function App() {
     })
   }
 
+  const isEmailSearchHighlight = (section: EmailSearchHit['section'], relatedId: string | number | null | undefined) => (
+    emailSearchTarget?.section === section &&
+    relatedId != null &&
+    emailSearchRelatedId(emailSearchTarget) === String(relatedId)
+  )
+
+  const navigateFromEmailSearch = (hit: EmailSearchHit) => {
+    if (hit.section === 'other') return
+    setEmailSearchTarget(hit)
+    if (hit.section === 'inbox' && typeof hit.detail.conversation_id === 'number') {
+      setSelectedConversationId(hit.detail.conversation_id)
+    }
+    if (hit.section === 'premium_numbers') {
+      const scope = emailSearchPremiumScope(hit)
+      if (scope) setPremiumScopeFilter(scope)
+    }
+    setActivePage(hit.section)
+  }
+
+  const inboxUnreadCount = inboxConversations.reduce((total, row) => total + row.unread_reply_count, 0)
+
   return (
     <main className="gmailShell">
       <Sidebar
         running={running}
-        queueCount={queue.length}
-        failedCount={failedQueue.length}
+        queueCount={bucketMeta.needs_review.total ?? queue.length}
+        failedCount={bucketMeta.failed.total ?? failedQueue.length}
         runCount={logs.length}
-        sentCount={sentQueue.length}
+        sentCount={bucketMeta.approved_sent.total ?? sentQueue.length}
+        inboxCount={inboxUnreadCount}
         premiumCount={numberReviewCards.length}
         activePage={activePage}
         onNavigate={setActivePage}
@@ -1520,13 +4767,18 @@ function App() {
 
       <section className="mainPane">
         <header className="topHeader">
-          <div className="topSearch">
-            <input
-              className="search"
-              value={settings.gmail_query}
-              onChange={(e) => setSettings({ ...settings, gmail_query: e.target.value })}
-              placeholder="Search Dashboard..."
-            />
+          <div className="headerSearches">
+            <div className="topSearch">
+              <label htmlFor="gmail-sync-query" className="visuallyHidden">Gmail sync query</label>
+              <input
+                id="gmail-sync-query"
+                className="search"
+                value={hasLoadedSettingsBootstrap ? settings.gmail_query : ''}
+                onChange={(e) => setSettings({ ...settings, gmail_query: e.target.value })}
+                placeholder={hasLoadedSettingsBootstrap ? 'Gmail sync query...' : 'Loading saved settings...'}
+                disabled={!hasLoadedSettingsBootstrap}
+              />
+            </div>
           </div>
           <div className="topActions">
             <button type="button" className="btnMuted">Batch Queue</button>
@@ -1534,18 +4786,28 @@ function App() {
               type="button"
               className="btnMuted"
               onClick={runNvoidsSync}
-              disabled={nvoidsRunning || running || !settings.feature_nvoids_enabled}
+              disabled={nvoidsRunning || !settings.feature_nvoids_enabled}
             >
               {nvoidsRunning ? 'Nvoids Syncing...' : 'Sync Nvoids'}
             </button>
-            <button
-              type="button"
-              className="btnPrimary"
-              onClick={status?.authenticated ? runAutomation : connectGmail}
-              disabled={running || oauthInProgress}
-            >
-              {running ? 'Running...' : status?.authenticated ? 'Sync Now' : oauthInProgress ? 'OAuth In Progress...' : 'Connect Gmail'}
-            </button>
+            <span className="syncNowWrap">
+              <button
+                type="button"
+                className="btnPrimary"
+                onClick={status?.authenticated ? runAutomation : connectGmail}
+                disabled={running || oauthInProgress}
+              >
+                {running ? 'Running...' : status?.authenticated ? 'Sync Now' : oauthInProgress ? 'OAuth In Progress...' : 'Connect Gmail'}
+              </button>
+              {!running && liveReplyStatus && liveReplyStatus.count > 0 ? (
+                <span
+                  className="liveReplyBadge"
+                  title={`${liveReplyStatus.count} unread in Primary inbox (approx., not confirmed recruiter replies)${liveReplyStatus.checked_at ? ` — checked ${liveReplyStatus.checked_at}` : ''}`}
+                >
+                  {liveReplyStatus.count > 99 ? '99+' : liveReplyStatus.count}
+                </span>
+              ) : null}
+            </span>
             {oauthInProgress && oauthAuthorizationUrl ? (
               <a href={oauthAuthorizationUrl} target="_blank" rel="noreferrer" className="btnMuted">
                 Open OAuth URL
@@ -1584,6 +4846,7 @@ function App() {
                 value={settings.mail_date ?? ''}
                 onChange={(e) => setSettings({ ...settings, mail_date: e.target.value || null })}
                 aria-label="Mail date filter"
+                disabled={!hasLoadedSettingsBootstrap}
               />
             </span>
             {settings.mail_date ? (
@@ -1601,18 +4864,24 @@ function App() {
 
         <div className="pageBody">
           <div className="titleBlock">
-            <h1>Run Queue Dashboard</h1>
-            <p>Manage and monitor your automated recruitment email operations.</p>
+            <h1>{activePage === 'settings' ? 'Settings' : activePage === 'inbox' ? 'Reply Inbox' : 'Run Queue Dashboard'}</h1>
+            <p>
+              {activePage === 'settings'
+                ? 'Manage learning queues, trusted Gmail groups, and resume assets.'
+                : activePage === 'inbox'
+                  ? 'Review recruiter replies and continue Gmail conversations.'
+                : 'Manage and monitor your automated recruitment email operations.'}
+            </p>
           </div>
 
           <section className="statsGrid">
             <article className="statCard">
               <p>Needs Review</p>
-              <strong>{queue.length}</strong>
+              <strong>{bucketMeta.needs_review.total ?? queue.length}</strong>
             </article>
             <article className="statCard error">
               <p>Failed Mapping</p>
-              <strong>{failedQueue.length}</strong>
+              <strong>{bucketMeta.failed.total ?? failedQueue.length}</strong>
             </article>
             <article className="statCard">
               <p>Recent Runs</p>
@@ -1638,15 +4907,32 @@ function App() {
             >
               {running ? 'Running...' : status?.authenticated ? 'Sync + Queue' : oauthInProgress ? 'OAuth In Progress...' : 'Connect Gmail'}
             </button>
+            <EmailSearch apiBase={apiBase} onNavigate={navigateFromEmailSearch} currentSection={activePage} />
             <button
               type="button"
               className="syncBtn topBarAction"
               onClick={runNvoidsSync}
-              disabled={nvoidsRunning || running || !settings.feature_nvoids_enabled}
+              disabled={nvoidsRunning || !settings.feature_nvoids_enabled}
             >
               {nvoidsRunning ? 'Syncing Nvoids...' : 'Sync + Queue Nvoids'}
             </button>
           </section>
+          {automationJob || nvoidsJob ? (
+            <section className="jobProgressGrid" aria-label="Background job progress">
+              {[automationJob, nvoidsJob].filter((job): job is BackgroundJob => job !== null).map((job) => (
+                <article className="jobProgressCard" key={job.run_key}>
+                  <div>
+                    <strong>{job.queue_name === 'nvoids_sync' ? 'Nvoids sync' : 'Gmail automation'}</strong>
+                    <span>{job.status} · {job.processed_items}/{job.total_items ?? '?'}</span>
+                  </div>
+                  <progress max={100} value={job.progress_pct ?? 0}>
+                    {job.progress_pct ?? 0}%
+                  </progress>
+                  <p>{job.detail}</p>
+                </article>
+              ))}
+            </section>
+          ) : null}
 
           {activePage === 'run_queue' ? (
             <section className="liveMonitorCard">
@@ -1707,6 +4993,13 @@ function App() {
                 <span>Previous period sent: {productivityTrend?.previous_period_total_sent ?? 0}</span>
                 <span>Trend: {productivityTrend?.trend_direction ?? 'flat'} ({trendDelta >= 0 ? '+' : ''}{trendDelta.toFixed(1)}%)</span>
               </div>
+              <h3 className="monitorSectionTitle">Worker Queue</h3>
+              <div className="monitorMeta">
+                <span>Queued: {jobSummary?.queued ?? 0}</span>
+                <span>Processing: {jobSummary?.processing ?? 0}</span>
+                <span>Succeeded: {jobSummary?.succeeded ?? 0}</span>
+                <span>Failed: {jobSummary?.failed ?? 0}</span>
+              </div>
               <h3 className="monitorSectionTitle">Activity Log</h3>
               <div className="monitorHistory">
                 {productivityEvents.slice(0, 12).map((event) => (
@@ -1721,8 +5014,195 @@ function App() {
             </section>
           ) : null}
 
-          {activePage === 'run_queue' ? (
-            <form className="configGrid" onSubmit={saveSettings}>
+          {activePage === 'run_queue' && hasLoadedSettingsBootstrap ? (
+            <section className="liveMonitorCard configSummaryIntro" aria-label="Active Configuration Summary">
+              <div className="liveMonitorHeader">
+                <div>
+                  <h2>Active Configuration Summary</h2>
+                  <p>Every saved setting, by panel, currently loaded for automation.</p>
+                </div>
+              </div>
+              <h3 className="monitorSectionTitle">
+                {lastSavedAt ? `Last saved: ${new Date(lastSavedAt).toLocaleString()}` : 'Loaded from saved settings'}
+              </h3>
+            </section>
+          ) : null}
+
+          {activePage === 'run_queue' && hasLoadedSettingsBootstrap ? (
+            <div className="configGrid runQueueGrid configSummaryGrid">
+              <section className="liveMonitorCard configSummaryCard">
+                <h3>Gmail Access</h3>
+                <div className="configSummaryList">
+                  {configRow('Status', status?.authenticated ? 'Authenticated' : 'Not authenticated')}
+                  {configRow('Configured', status?.configured ? 'Yes' : 'No')}
+                  {configRow('Account', status?.token_path ?? '-')}
+                  {configRow('Last Sync', status?.last_sync_at ?? 'Never')}
+                  {configRow('Telegram', telegramStatus?.polling ? 'Connected' : telegramStatus?.enabled ? 'Starting' : 'Disabled')}
+                  {configRow('Authorized Chats', telegramStatus?.authorized_chats ?? 0)}
+                </div>
+              </section>
+
+              <section className="liveMonitorCard configSummaryCard">
+                <h3>AI Access</h3>
+                <div className="configSummaryList">
+                  {configRow('Provider', aiStatus?.provider ?? 'DeepSeek')}
+                  {configRow('Model', aiStatus?.model ?? 'deepseek-v4-flash')}
+                  {configRow('Connection', aiStatus?.connected ? 'Healthy' : 'Disconnected')}
+                  {configRow('Groq Enabled', formatBool(!!aiStatus?.groq_enabled_in_settings))}
+                  {configRow('Groq Config', typeof aiStatus?.groq_configured === 'boolean' ? (aiStatus.groq_configured ? 'Configured' : 'Missing setup') : 'Unknown')}
+                  {configRow('Groq Model', aiStatus?.groq_model ?? 'llama-3.1-8b-instant')}
+                  {configRow('Groq Request Mode', aiStatus?.groq_request_mode || 'Unknown')}
+                  {configRow('Groq Runtime', typeof aiStatus?.groq_runtime_healthy === 'boolean' ? (aiStatus.groq_runtime_healthy ? 'Healthy' : 'Fallback') : 'Unknown')}
+                  {aiStatus?.groq_last_error ? configRow('Groq Error', aiStatus.groq_last_error) : null}
+                  {aiStatus?.groq_detail ? configRow('Groq Detail', aiStatus.groq_detail) : null}
+                  {aiStatus?.groq_last_success_at ? configRow('Groq Last Success', aiStatus.groq_last_success_at) : null}
+                  {groqLastDuration ? configRow('Groq Duration', groqLastDuration) : null}
+                  {configRow(
+                    'Embedding',
+                    (typeof aiStatus?.embedding_runtime_healthy === 'boolean'
+                      ? (aiStatus.embedding_runtime_healthy ? 'Healthy' : 'Disconnected')
+                      : typeof aiStatus?.embedding_connected === 'boolean'
+                        ? (aiStatus.embedding_connected ? 'Healthy' : 'Unknown')
+                        : 'Unknown')
+                    + (aiStatus?.embedding_provider ? ` (${aiStatus.embedding_provider}${aiStatus.embedding_model ? ` / ${aiStatus.embedding_model}` : ''})` : ''),
+                  )}
+                  {configRow('Embedding Config', typeof aiStatus?.embedding_configured === 'boolean' ? (aiStatus.embedding_configured ? 'Configured' : 'Missing setup') : 'Unknown')}
+                  {aiStatus?.embedding_last_error ? configRow('Embedding Error', aiStatus.embedding_last_error) : null}
+                  {aiStatus?.embedding_last_success_at ? configRow('Embedding Last Success', aiStatus.embedding_last_success_at) : null}
+                  {embeddingLastDuration ? configRow('Embedding Duration', embeddingLastDuration) : null}
+                  {aiStatus?.last_draft_source ? configRow('Draft Source', getDraftSourceLabel(aiStatus.last_draft_source)) : null}
+                  {aiLastDuration ? configRow('Last Duration', aiLastDuration) : null}
+                </div>
+              </section>
+
+              <section className="liveMonitorCard configSummaryCard">
+                <h3>Automation Filters</h3>
+                <div className="configSummaryList">
+                  {configRow('Enable AI Features', formatBool(activeConfigurationSettings.feature_ai_enabled))}
+                  {configRow('Enable AI Extractor', formatBool(activeConfigurationSettings.feature_ai_extractor_enabled))}
+                  {configRow('Enable Role Manifest Detection', formatBool(activeConfigurationSettings.feature_role_manifest_enabled))}
+                  {configRow('Enable Semantic Matching', formatBool(activeConfigurationSettings.feature_semantic_enabled))}
+                  {configRow('Enable Groq Smart Job Parser', formatBool(activeConfigurationSettings.feature_groq_job_parser_enabled))}
+                  {configRow('Qualification Threshold', activeConfigurationSettings.qualification_threshold.toFixed(2))}
+                  {configRow('Must-have Skills', summarizeConfigList(activeConfigurationSettings.must_have_skills))}
+                </div>
+              </section>
+
+              <section className="liveMonitorCard configSummaryCard">
+                <h3>Employer Domains</h3>
+                <div className="configSummaryList">
+                  {configRow('Employer Domains', summarizeConfigList(activeConfigurationSettings.employer_domains))}
+                </div>
+              </section>
+
+              <section className="liveMonitorCard configSummaryCard">
+                <h3>Dynamic Policy</h3>
+                <div className="configSummaryList">
+                  {configRow('Policy Profile', activeConfigurationProfile)}
+                  {configRow('Force Unread In Query', formatBool(activeConfigurationPolicy.query.force_unread))}
+                  {configRow('Include Labels', summarizeConfigList(activeConfigurationPolicy.query.include_labels))}
+                  {configRow('Exclude Labels', summarizeConfigList(activeConfigurationPolicy.query.exclude_labels))}
+                </div>
+              </section>
+
+              <section className="liveMonitorCard configSummaryCard">
+                <h3>Draft Qualification Rules</h3>
+                <div className="configSummaryList">
+                  {configRow('Recruiter-like Gmail Rule', formatRuleMode(activeConfigurationDraftRules.recruiter_like_gmail.mode))}
+                  {configRow('Accepted Location Rule', formatRuleMode(activeConfigurationDraftRules.accepted_location.mode))}
+                  {configRow('Accepted Locations', summarizeConfigList(activeConfigurationDraftRules.accepted_location.locations ?? activeConfigurationSettings.accepted_locations))}
+                  {configRow('Minimum Salary Rule', formatRuleMode(activeConfigurationDraftRules.minimum_salary.mode))}
+                  {configRow('Minimum Salary Or Rate', activeConfigurationDraftRules.minimum_salary.value ?? activeConfigurationSettings.min_salary ?? '(none)')}
+                  {configRow('Must-have Skills Rule', formatRuleMode(activeConfigurationDraftRules.must_have_skills.mode))}
+                  {configRow('Must-have Skills', summarizeConfigList(activeConfigurationDraftRules.must_have_skills.skills ?? activeConfigurationSettings.must_have_skills))}
+                  {configRow('Score Threshold Rule', formatRuleMode(activeConfigurationDraftRules.score_threshold.mode))}
+                  {configRow('Score Threshold Value', activeConfigurationDraftRules.score_threshold.value ?? activeConfigurationSettings.qualification_threshold)}
+                  {configRow('F2F Non-Texas Rule', formatRuleMode(activeConfigurationDraftRules.f2f_non_texas.mode))}
+                  {configRow('Unknown Location Rule', formatRuleMode(activeConfigurationDraftRules.unknown_location.mode))}
+                  {configRow('Recipient Mapping Rule', formatRuleMode(activeConfigurationDraftRules.recipient_mapping.mode))}
+                </div>
+              </section>
+
+              <section className="liveMonitorCard configSummaryCard">
+                <h3>Profile Settings</h3>
+                <div className="configSummaryList">
+                  {configRow('Enforce Strict Candidate Screening', formatBool(activeConfigurationSettings.feature_strict_candidate_screening_enabled))}
+                  {configRow('Candidate Work Authorizations', summarizeConfigList(activeConfigurationSettings.candidate_work_authorizations))}
+                  {configRow('Total Experience Years', activeConfigurationSettings.candidate_total_experience_years ?? '(none)')}
+                  {configRow('U.S. Experience Years', activeConfigurationSettings.candidate_us_experience_years ?? '(none)')}
+                  {configRow('Current Location', truncateConfigValue(activeConfigurationSettings.candidate_current_location))}
+                  {configRow('Default Query', truncateConfigValue(activeConfigurationSettings.default_gmail_query))}
+                  {configRow('Default Date', activeConfigurationSettings.default_date_mode === 'today' ? 'Today (auto)' : 'Off')}
+                  {configRow('Auto Run Every N Minutes', formatBool(activeConfigurationSettings.feature_auto_polling))}
+                  {configRow('Auto Run Interval (minutes)', activeConfigurationSettings.feature_auto_poll_interval_minutes)}
+                  {configRow('Signature Name', truncateConfigValue(activeConfigurationSettings.signature_name))}
+                  {configRow('Signature Phone', truncateConfigValue(activeConfigurationSettings.signature_phone))}
+                  {configRow('Signature Email', truncateConfigValue(activeConfigurationSettings.signature_email))}
+                  {configRow('Resume Name', truncateConfigValue(activeConfigurationSettings.resume_display_name))}
+                </div>
+              </section>
+
+              <section className="liveMonitorCard configSummaryCard">
+                <h3>Execution Control</h3>
+                <div className="configSummaryList">
+                  {configRow('Dry Run Mode', formatBool(activeConfigurationPolicy.run.dry_run))}
+                  {configRow('Auto Send Current Run Queue', formatBool(activeConfigurationSettings.feature_auto_send))}
+                  {configRow('Retry Failed Queue', formatBool(activeConfigurationSettings.feature_retry_queue))}
+                  {configRow('Batch Limit', activeConfigurationPolicy.run.batch_limit)}
+                  {configRow('Date Mode', activeConfigurationPolicy.query.date_mode === 'custom' ? 'Use selected date' : 'Ignore selected date')}
+                  {configRow('Draft Text Size', activeConfigurationSettings.draft_text_size)}
+                  {configRow('Preferred Employer CCs', summarizeConfigList(activeConfigurationSettings.preferred_employer_cc_emails))}
+                  {configRow('Default Employer CCs', summarizeConfigList(activeConfigurationSettings.default_employer_cc_emails))}
+                  {configRow('Fallback Draft Template', truncateConfigValue(activeConfigurationSettings.fallback_draft_template, 80))}
+                </div>
+              </section>
+
+              <section className="liveMonitorCard configSummaryCard">
+                <h3>Nvoids Control</h3>
+                <div className="configSummaryList">
+                  {configRow('Enable Nvoids Pipeline', activeConfigurationSettings.feature_nvoids_enabled ? 'Enabled' : 'Disabled')}
+                  {configRow('Auto Sync Nvoids', formatBool(activeConfigurationSettings.feature_nvoids_auto_sync))}
+                  {configRow('Nvoids Detail Page Type', nvoidsDetailTitleModeLabel)}
+                  {configRow('Preferred Nvoids Locations', summarizeConfigList(activeConfigurationSettings.nvoids_locations))}
+                </div>
+              </section>
+            </div>
+          ) : null}
+
+          {settingsBootstrapError ? (
+            <section className="card">
+              <h2>Settings Load Status</h2>
+              <p className="errorMessage">{settingsBootstrapError}</p>
+              {!settingsBootstrapReady ? (
+                <button type="button" onClick={() => retrySettingsBootstrap().catch(() => {
+                  // The retry helper owns bootstrap-specific error state.
+                })}>
+                  Retry Loading Settings
+                </button>
+              ) : null}
+            </section>
+          ) : null}
+
+          {activePage === 'run_queue' && !hasLoadedSettingsBootstrap ? (
+            <section className="card pageSection">
+              <h2>Settings Bootstrap</h2>
+              <p className="subtle">
+                {settingsBootstrapStatus === 'loading'
+                  ? 'Loading saved settings, resumes, attachments, and learning data...'
+                  : 'Saved settings are not loaded yet. Retry loading settings to avoid showing empty defaults.'}
+              </p>
+              {settingsBootstrapStatus === 'error' ? (
+                <button type="button" onClick={() => retrySettingsBootstrap().catch(() => {
+                  // The retry helper owns bootstrap-specific error state.
+                })}>
+                  Retry Loading Settings
+                </button>
+              ) : null}
+            </section>
+          ) : null}
+
+          {activePage === 'settings' && hasLoadedSettingsBootstrap ? (
+            <form className="configGrid runQueueGrid" onSubmit={saveSettings}>
               <section className="card">
                 <h2>Gmail Access</h2>
                 <div className="stack">
@@ -1739,8 +5219,17 @@ function App() {
                 <h2>AI Access</h2>
                 <div className="stack">
                   <div className="row"><span className="label">Provider</span><span>{aiStatus?.provider ?? 'DeepSeek'}</span></div>
-                  <div className="row"><span className="label">Model</span><span className="tag">{aiStatus?.model ?? 'deepseek-chat'}</span></div>
+                  <div className="row"><span className="label">Model</span><span className="tag">{aiStatus?.model ?? 'deepseek-v4-flash'}</span></div>
                   <div className="row"><span className="label">Connection</span><span className="dotOk">{aiStatus?.connected ? 'Healthy' : 'Disconnected'}</span></div>
+                  <div className="row"><span className="label">Groq Enabled</span><span>{aiStatus?.groq_enabled_in_settings ? 'On' : 'Off'}</span></div>
+                  <div className="row"><span className="label">Groq Config</span><span>{typeof aiStatus?.groq_configured === 'boolean' ? (aiStatus.groq_configured ? 'Configured' : 'Missing setup') : 'Unknown'}</span></div>
+                  <div className="row"><span className="label">Groq Model</span><span className="tag">{aiStatus?.groq_model ?? 'llama-3.1-8b-instant'}</span></div>
+                  <div className="row"><span className="label">Groq Request Mode</span><span>{aiStatus?.groq_request_mode || 'Unknown'}</span></div>
+                  <div className="row"><span className="label">Groq Runtime</span><span>{typeof aiStatus?.groq_runtime_healthy === 'boolean' ? (aiStatus.groq_runtime_healthy ? 'Healthy' : 'Fallback') : 'Unknown'}</span></div>
+                  {aiStatus?.groq_last_error ? <div className="row"><span className="label">Groq Error</span><span>{aiStatus.groq_last_error}</span></div> : null}
+                  {aiStatus?.groq_detail ? <div className="row"><span className="label">Groq Detail</span><span>{aiStatus.groq_detail}</span></div> : null}
+                  {aiStatus?.groq_last_success_at ? <div className="row"><span className="label">Groq Last Success</span><span>{aiStatus.groq_last_success_at}</span></div> : null}
+                  {groqLastDuration ? <div className="row"><span className="label">Groq Duration</span><span>{groqLastDuration}</span></div> : null}
                   <div className="row"><span className="label">Embedding</span><span className="dotOk">{typeof aiStatus?.embedding_runtime_healthy === 'boolean' ? (aiStatus.embedding_runtime_healthy ? 'Healthy' : 'Disconnected') : typeof aiStatus?.embedding_connected === 'boolean' ? (aiStatus.embedding_connected ? 'Healthy' : 'Unknown') : 'Unknown'}{aiStatus?.embedding_provider ? ` (${aiStatus.embedding_provider}${aiStatus.embedding_model ? ` / ${aiStatus.embedding_model}` : ''})` : ''}</span></div>
                   <div className="row"><span className="label">Embedding Config</span><span>{typeof aiStatus?.embedding_configured === 'boolean' ? (aiStatus.embedding_configured ? 'Configured' : 'Missing setup') : 'Unknown'}</span></div>
                   {aiStatus?.embedding_last_error ? <div className="row"><span className="label">Embedding Error</span><span>{aiStatus.embedding_last_error}</span></div> : null}
@@ -1760,11 +5249,38 @@ function App() {
                       <input
                         type="checkbox"
                         checked={settings.feature_ai_enabled}
-                        onChange={(e) => setSettings(withAiToggle(settings, e.target.checked))}
+                        onChange={(e) => setSettings({ ...settings, feature_ai_enabled: e.target.checked })}
                       />
                       <span className="toggleTrack" />
                     </span>
                   </label>
+                  <label className="toggleRow">
+                    <span>Enable AI Extractor</span>
+                    <span className="toggleSwitch">
+                      <input
+                        type="checkbox"
+                        checked={settings.feature_ai_extractor_enabled}
+                        onChange={(e) => setSettings({ ...settings, feature_ai_extractor_enabled: e.target.checked })}
+                      />
+                      <span className="toggleTrack" />
+                    </span>
+                  </label>
+                  <label className="toggleRow">
+                    <span>Enable Role Manifest Detection</span>
+                    <span className="toggleSwitch">
+                      <input
+                        type="checkbox"
+                        checked={settings.feature_role_manifest_enabled}
+                        onChange={(e) => setSettings({ ...settings, feature_role_manifest_enabled: e.target.checked })}
+                      />
+                      <span className="toggleTrack" />
+                    </span>
+                  </label>
+                  <p className="subtle">
+                    {roleManifestChildCreationEnabled
+                      ? 'Detection and child drafting are active at the deployment level.'
+                      : 'Detection only (dark-run). Child drafts are disabled at the deployment level.'}
+                  </p>
                   <label className="toggleRow">
                     <span>Enable Semantic Matching</span>
                     <span className="toggleSwitch">
@@ -1772,6 +5288,17 @@ function App() {
                         type="checkbox"
                         checked={settings.feature_semantic_enabled}
                         onChange={(e) => setSettings({ ...settings, feature_semantic_enabled: e.target.checked })}
+                      />
+                      <span className="toggleTrack" />
+                    </span>
+                  </label>
+                  <label className="toggleRow">
+                    <span>Enable Groq Smart Job Parser</span>
+                    <span className="toggleSwitch">
+                      <input
+                        type="checkbox"
+                        checked={settings.feature_groq_job_parser_enabled}
+                        onChange={(e) => setSettings({ ...settings, feature_groq_job_parser_enabled: e.target.checked })}
                       />
                       <span className="toggleTrack" />
                     </span>
@@ -1784,7 +5311,7 @@ function App() {
                       max={1}
                       step={0.01}
                       value={settings.qualification_threshold}
-                      onChange={(e) => setSettings({ ...settings, qualification_threshold: Number(e.target.value) })}
+                      onChange={(e) => updateRuleValue('score_threshold', e.target.value)}
                     />
                   </label>
                   <label>
@@ -1895,11 +5422,7 @@ function App() {
                   </label>
                   <button
                     type="button"
-                    onClick={() => {
-                      const profilePolicy = policyProfiles[selectedProfileToApply]
-                      setSettings({ ...settings, policy: profilePolicy })
-                      setLastAppliedProfile(selectedProfileToApply)
-                    }}
+                    onClick={() => applyPolicyProfile(selectedProfileToApply)}
                   >
                     Apply Profile
                   </button>
@@ -1967,8 +5490,208 @@ function App() {
               </section>
 
               <section className="card">
+                <h2>Draft Qualification Rules</h2>
+                <div className="stack">
+                  <label>
+                    Recruiter-like Gmail rule
+                    <select
+                      value={draftRules.recruiter_like_gmail.mode}
+                      onChange={(e) => updateRuleMode('recruiter_like_gmail', e.target.value as RuleMode)}
+                    >
+                      <option value="ignore">Ignore</option>
+                      <option value="warn">Warn Only</option>
+                      <option value="block">Block Draft</option>
+                    </select>
+                  </label>
+                  <p className="subtle">Controls what happens when a Gmail message does not look recruiter or staffing related.</p>
+
+                  <label>
+                    Accepted location rule
+                    <select
+                      value={draftRules.accepted_location.mode}
+                      onChange={(e) => updateRuleMode('accepted_location', e.target.value as RuleMode)}
+                    >
+                      <option value="ignore">Ignore</option>
+                      <option value="warn">Warn Only</option>
+                      <option value="block">Block Draft</option>
+                    </select>
+                  </label>
+                  <label>
+                    Accepted locations
+                    <input
+                      value={(draftRules.accepted_location.locations ?? settings.accepted_locations).join(', ')}
+                      onChange={(e) => updateRuleValue('accepted_location', e.target.value)}
+                      placeholder="texas, remote"
+                    />
+                  </label>
+                  <p className="subtle">Uses your accepted location list and can ignore, warn, or block when parsed locations do not match.</p>
+
+                  <label>
+                    Minimum salary rule
+                    <select
+                      value={draftRules.minimum_salary.mode}
+                      onChange={(e) => updateRuleMode('minimum_salary', e.target.value as RuleMode)}
+                    >
+                      <option value="ignore">Ignore</option>
+                      <option value="warn">Warn Only</option>
+                      <option value="block">Block Draft</option>
+                    </select>
+                  </label>
+                  <label>
+                    Minimum salary or rate
+                    <input
+                      type="number"
+                      value={draftRules.minimum_salary.value ?? settings.min_salary ?? ''}
+                      onChange={(e) => updateRuleValue('minimum_salary', e.target.value)}
+                      placeholder="60"
+                    />
+                  </label>
+                  <p className="subtle">Controls whether low rates are ignored, surfaced as warnings, or block draft creation.</p>
+
+                  <label>
+                    Must-have skills rule
+                    <select
+                      value={draftRules.must_have_skills.mode}
+                      onChange={(e) => updateRuleMode('must_have_skills', e.target.value as RuleMode)}
+                    >
+                      <option value="ignore">Ignore</option>
+                      <option value="warn">Warn Only</option>
+                      <option value="block">Block Draft</option>
+                    </select>
+                  </label>
+                  <label>
+                    Must-have skills
+                    <input
+                      value={(draftRules.must_have_skills.skills ?? settings.must_have_skills).join(', ')}
+                      onChange={(e) => updateRuleValue('must_have_skills', e.target.value)}
+                      placeholder="java, spring"
+                    />
+                  </label>
+                  <p className="subtle">Controls whether missing required skills are ignored, shown as warnings, or block drafting.</p>
+
+                  <label>
+                    Score threshold rule
+                    <select
+                      value={draftRules.score_threshold.mode}
+                      onChange={(e) => updateRuleMode('score_threshold', e.target.value as RuleMode)}
+                    >
+                      <option value="ignore">Ignore</option>
+                      <option value="warn">Warn Only</option>
+                      <option value="block">Block Draft</option>
+                    </select>
+                  </label>
+                  <label>
+                    Score threshold value
+                    <input
+                      type="number"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      value={draftRules.score_threshold.value ?? settings.qualification_threshold}
+                      onChange={(e) => updateRuleValue('score_threshold', e.target.value)}
+                    />
+                  </label>
+                  <p className="subtle">Low scores can be ignored, surfaced as warnings, or block drafting.</p>
+
+                  <label>
+                    F2F non-Texas rule
+                    <select
+                      value={draftRules.f2f_non_texas.mode}
+                      onChange={(e) => updateRuleMode('f2f_non_texas', e.target.value as RuleMode)}
+                    >
+                      <option value="ignore">Ignore</option>
+                      <option value="warn">Warn Only</option>
+                      <option value="block">Block Draft</option>
+                    </select>
+                  </label>
+                  <p className="subtle">Controls how face-to-face roles outside Texas are handled.</p>
+
+                  <label>
+                    Unknown location rule
+                    <select
+                      value={draftRules.unknown_location.mode}
+                      onChange={(e) => updateRuleMode('unknown_location', e.target.value as RuleMode)}
+                    >
+                      <option value="ignore">Ignore</option>
+                      <option value="warn">Warn Only</option>
+                      <option value="block">Block Draft</option>
+                    </select>
+                  </label>
+                  <p className="subtle">When strict location policy is active, unclear locations can be ignored, warned, or blocked.</p>
+
+                  <label>
+                    Recipient mapping rule
+                    <select
+                      value={draftRules.recipient_mapping.mode}
+                      onChange={(e) => updateRuleMode('recipient_mapping', e.target.value as RuleMode)}
+                    >
+                      <option value="ignore">Ignore</option>
+                      <option value="warn">Warn Only</option>
+                      <option value="block">Block Draft</option>
+                    </select>
+                  </label>
+                  <p className="subtle">If set to Warn Only or Ignore, drafts can still reach Needs Review with missing recipients, but approval-time send safety still blocks sending.</p>
+                </div>
+              </section>
+
+              <section className="card">
                 <h2>Profile Settings</h2>
                 <div className="stack">
+                  <h3>Candidate Eligibility Profile</h3>
+                  <label className="toggleRow">
+                    <span>Enforce Strict Candidate Screening</span>
+                    <span className="toggleSwitch">
+                      <input
+                        type="checkbox"
+                        checked={settings.feature_strict_candidate_screening_enabled}
+                        onChange={(e) => setSettings({
+                          ...settings,
+                          feature_strict_candidate_screening_enabled: e.target.checked,
+                        })}
+                      />
+                      <span className="toggleTrack" />
+                    </span>
+                  </label>
+                  <p className="subtle">
+                    Off keeps eligibility and mandatory-resume mismatches advisory so otherwise-qualified opportunities still receive ATS scoring and drafts. On blocks mismatches before scoring and sending.
+                  </p>
+                  <label>
+                    Candidate Work Authorizations (comma separated)
+                    <input
+                      value={settings.candidate_work_authorizations.join(', ')}
+                      onChange={(e) => setSettings({
+                        ...settings,
+                        candidate_work_authorizations: e.target.value.split(',').map((value) => value.trim()).filter(Boolean),
+                      })}
+                    />
+                  </label>
+                  <label>
+                    Total Experience Years
+                    <input
+                      type="number"
+                      min={0}
+                      step={0.5}
+                      value={settings.candidate_total_experience_years ?? ''}
+                      onChange={(e) => setSettings({ ...settings, candidate_total_experience_years: e.target.value === '' ? null : Number(e.target.value) })}
+                    />
+                  </label>
+                  <label>
+                    U.S. Experience Years
+                    <input
+                      type="number"
+                      min={0}
+                      step={0.5}
+                      value={settings.candidate_us_experience_years ?? ''}
+                      onChange={(e) => setSettings({ ...settings, candidate_us_experience_years: e.target.value === '' ? null : Number(e.target.value) })}
+                    />
+                  </label>
+                  <label>
+                    Current Location
+                    <input
+                      value={settings.candidate_current_location}
+                      onChange={(e) => setSettings({ ...settings, candidate_current_location: e.target.value })}
+                    />
+                  </label>
                   <label>
                     Default Query
                     <input
@@ -2037,6 +5760,15 @@ function App() {
                       placeholder="you@example.com"
                     />
                   </label>
+                  <label>
+                    Resume Name
+                    <input
+                      value={settings.resume_display_name}
+                      onChange={(e) => setSettings({ ...settings, resume_display_name: e.target.value })}
+                      placeholder="Chaithanya Dheeraj Resume"
+                    />
+                  </label>
+                  <p className="subtle">Used as the sent attachment name for resume variants. Review and database cards will still show the real selected variant file name.</p>
                   <p className="subtle">These defaults are shared with Telegram and used by <code>/run</code>. Auto-run settings are also synced to Telegram.</p>
                 </div>
               </section>
@@ -2087,6 +5819,30 @@ function App() {
                     </span>
                   </label>
                   <p className="subtle">Retry failed candidates and promote sendable ones to Needs Review.</p>
+                  <label className="toggleRow pillRow">
+                    <span>Email Open Tracking</span>
+                    <span className="toggleSwitch">
+                      <input
+                        type="checkbox"
+                        checked={settings.feature_email_tracking_enabled}
+                        onChange={(e) => setSettings({ ...settings, feature_email_tracking_enabled: e.target.checked })}
+                      />
+                      <span className="toggleTrack" />
+                    </span>
+                  </label>
+                  <p className="subtle">Inert until the backend has a public HTTPS base URL and tracking secret. Opens are heuristic because mail clients proxy, cache, or block images.</p>
+                  <label className="toggleRow pillRow">
+                    <span>Reply Inbox</span>
+                    <span className="toggleSwitch">
+                      <input
+                        type="checkbox"
+                        checked={settings.feature_reply_inbox_enabled}
+                        onChange={(e) => setSettings({ ...settings, feature_reply_inbox_enabled: e.target.checked })}
+                      />
+                      <span className="toggleTrack" />
+                    </span>
+                  </label>
+                  <p className="subtle">Checks unread Gmail on the existing polling interval and captures replies from previously sent threads before JD parsing.</p>
                   <label>
                     Batch Limit
                     <input
@@ -2124,6 +5880,36 @@ function App() {
                     </select>
                   </label>
                   <label>
+                    Draft Text Size
+                    <select
+                      value={settings.draft_text_size}
+                      onChange={(e) => setSettings({ ...settings, draft_text_size: normalizeDraftTextSize(e.target.value) })}
+                    >
+                      <option value="small">Small</option>
+                      <option value="normal">Normal</option>
+                      <option value="large">Large</option>
+                      <option value="huge">Huge</option>
+                    </select>
+                  </label>
+                  <CcEmailList
+                    label="Preferred Employer CCs"
+                    emails={settings.preferred_employer_cc_emails}
+                    onChange={(emails) => setSettings({
+                      ...settings,
+                      preferred_employer_cc_emails: emails,
+                      preferred_employer_cc_email: emails[0] ?? '',
+                    })}
+                    placeholder="Add preferred CC..."
+                  />
+                  <p className="subtle">Added after source-derived employer contacts for Gmail, Nvoids, and future sources. Outgoing CC is capped at three unique addresses.</p>
+                  <CcEmailList
+                    label="Default Employer CCs"
+                    emails={settings.default_employer_cc_emails}
+                    onChange={(emails) => setSettings({ ...settings, default_employer_cc_emails: emails })}
+                    placeholder="Add default CC..."
+                  />
+                  <p className="subtle">Last resort only when no source-derived or Preferred Employer CC exists. Missing values are shown in Failed Mapping.</p>
+                  <label>
                     Fallback Draft Template
                     <textarea
                       className="fallbackTemplateTextarea"
@@ -2136,14 +5922,45 @@ function App() {
                   <p className="subtle">
                     Available tokens: {'{{greeting}}'}, {'{{role}}'}, {'{{sender}}'}, {'{{location}}'}, {'{{salary_text}}'}, {'{{skills_list}}'}, {'{{skills_inline}}'}, {'{{resume_file_name}}'}, {'{{signature_name}}'}, {'{{signature_phone}}'}, {'{{signature_email}}'}, {'{{requested_details_block}}'}.
                   </p>
-                  <button type="submit" disabled={saving}>{saving ? 'Saving...' : 'Save Filters'}</button>
-                  <p className="subtle">
-                    {activeResume ? `Active resume: ${activeResume.file_name} (v${activeResume.version})` : 'No active resume uploaded yet.'}
-                  </p>
-                  <input type="file" accept=".pdf,.doc,.docx" onChange={(e) => setResumeFile(e.target.files?.[0] ?? null)} />
-                  <button type="button" onClick={uploadResume} disabled={!resumeFile}>
-                    {activeResume ? 'Replace Resume' : 'Upload Resume'}
-                  </button>
+                  <button type="submit" disabled={saving}>{saving ? 'Saving...' : 'Save Settings'}</button>
+                  <div className="stack">
+                    <strong>Attachment files</strong>
+                    <p className="subtle">Upload global reusable files that will be sent alongside the active resume.</p>
+                    <input
+                      type="file"
+                      multiple
+                      aria-label="Upload attachment files"
+                      onChange={(e) => setAttachmentUploadFiles(Array.from(e.target.files ?? []))}
+                    />
+                    <button type="button" onClick={uploadAttachmentFiles} disabled={attachmentUploadFiles.length === 0}>
+                      Upload Attachment Files
+                    </button>
+                    {attachmentFiles.length === 0 ? (
+                      <p className="subtle">No extra attachment files uploaded yet.</p>
+                    ) : (
+                      attachmentFiles.map((attachment) => (
+                        <div key={attachment.id} className="pillRow">
+                          <label className="toggleRow" style={{ flex: 1 }}>
+                            <span>
+                              {attachment.file_name}
+                              {` (${formatAttachmentSize(attachment.file_size)})`}
+                            </span>
+                            <span className="toggleSwitch">
+                              <input
+                                type="checkbox"
+                                checked={attachment.is_enabled}
+                                onChange={(e) => toggleAttachmentFile(attachment.id, e.target.checked)}
+                              />
+                              <span className="toggleTrack" />
+                            </span>
+                          </label>
+                          <button type="button" onClick={() => deleteAttachmentFile(attachment.id)}>
+                            Delete
+                          </button>
+                        </div>
+                      ))
+                    )}
+                  </div>
                 </div>
               </section>
 
@@ -2171,6 +5988,22 @@ function App() {
                       />
                       <span className="toggleTrack" />
                     </span>
+                  </label>
+                  <label>
+                    Nvoids Detail Page Type
+                    <select
+                      value={settings.nvoids_detail_title_mode}
+                      onChange={(e) =>
+                        setSettings({
+                          ...settings,
+                          nvoids_detail_title_mode: normalizeNvoidsDetailTitleMode(e.target.value),
+                        })
+                      }
+                    >
+                      <option value="job_details">Job Details</option>
+                      <option value="hotlist_details">Hotlist Details</option>
+                      <option value="all">All</option>
+                    </select>
                   </label>
                   <label>
                     Preferred Nvoids Locations
@@ -2239,16 +6072,85 @@ function App() {
                   <button
                     type="button"
                     onClick={runNvoidsSync}
-                    disabled={nvoidsRunning || running || !settings.feature_nvoids_enabled}
+                    disabled={nvoidsRunning || !settings.feature_nvoids_enabled}
                   >
                     {nvoidsRunning ? 'Running Nvoids Sync...' : 'Run Nvoids Sync Now'}
                   </button>
                   <p className="subtle">
-                    Nvoids sync is isolated from Gmail run queue, filters by the saved Nvoids locations, and is serialized to avoid concurrent DB load.
+                    Nvoids sync is isolated from Gmail run queue, filters by the saved Nvoids locations and detail-page title type, and is serialized to avoid concurrent DB load.
                   </p>
                 </div>
               </section>
             </form>
+          ) : null}
+
+          {activePage === 'settings' ? (
+            <div className="configGrid runQueueGrid">
+              <SkillUpgradeSection
+                pendingSkills={pendingSkills}
+                loading={skillsLoading}
+                busySkillKey={skillActionKey}
+                approveAllSkills={approveAllPendingSkills}
+                approveSkill={approvePendingSkill}
+                dismissSkill={dismissPendingSkill}
+                embeddingPendingCount={embeddingPendingCount}
+                embeddingSummary={embeddingSummary}
+                embedSkills={embedPendingSkills}
+              />
+              <EntityUpgradeSection
+                title="Upgrade Companies"
+                pendingEntities={pendingCompanies}
+                loading={skillsLoading}
+                busyKey={entityActionKey?.startsWith('company:') ? entityActionKey.slice('company:'.length) : null}
+                approveAll={() => runEntityAction('company', 'approve-all')}
+                approve={(entity) => runEntityAction('company', 'approve', entity)}
+                dismiss={(entity) => runEntityAction('company', 'dismiss', entity)}
+              />
+              <EntityUpgradeSection
+                title="Upgrade Locations"
+                pendingEntities={pendingLocations}
+                loading={skillsLoading}
+                busyKey={entityActionKey?.startsWith('location:') ? entityActionKey.slice('location:'.length) : null}
+                approveAll={() => runEntityAction('location', 'approve-all')}
+                approve={(entity) => runEntityAction('location', 'approve', entity)}
+                dismiss={(entity) => runEntityAction('location', 'dismiss', entity)}
+              />
+              <JobIntentLearningSection
+                pendingSignals={pendingJobIntentSignals}
+                approvedSignals={approvedJobIntentSignals}
+                embeddedSignals={embeddedJobIntentSignals}
+                loading={jobIntentLoading}
+                busySignalKey={jobIntentActionKey}
+                approveAllSignals={approveAllPendingJobIntentSignals}
+                approveSignal={approvePendingJobIntentSignal}
+                dismissSignal={dismissPendingJobIntentSignal}
+                togglePolarity={toggleJobIntentSignalPolarity}
+              />
+              <TrustedGmailGroupsPanel
+                featureEnabled={settings.feature_gmail_requirement_groups_enabled}
+                groups={gmailRequirementGroups}
+                busy={gmailGroupsBusy}
+                onFeatureToggle={(enabled) => setSettings({ ...settings, feature_gmail_requirement_groups_enabled: enabled })}
+                onAddGroup={addTrustedGmailGroup}
+                onBulkAdd={bulkAddTrustedGmailGroups}
+                onUpdateGroup={updateTrustedGmailGroup}
+                onDeleteGroup={deleteTrustedGmailGroup}
+              />
+              <ResumeDatabaseSection
+                activeResume={activeResume}
+                resumeFile={resumeFile}
+                resumeSkillsInput={resumeSkillsInput}
+                resumeSkillEdits={resumeSkillEdits}
+                resumeAssets={resumeAssets}
+                setResumeFile={setResumeFile}
+                setResumeSkillsInput={setResumeSkillsInput}
+                setResumeSkillEdits={setResumeSkillEdits}
+                uploadResume={uploadResume}
+                saveResumeSkills={saveResumeSkills}
+                toggleResumeAsset={toggleResumeAsset}
+                deleteResumeAsset={deleteResumeAsset}
+              />
+            </div>
           ) : null}
 
           {error ? <p className="errorMessage">{error}</p> : null}
@@ -2256,23 +6158,68 @@ function App() {
           {activePage === 'needs_review' ? (
             <section className="card pageSection">
           <h2>Needs Review (Manual Approval Required)</h2>
-          {queue.length === 0 ? <p className="subtle">No queued emails.</p> : null}
-          {queue.map((item) => {
+          {queue.filter((item) => !item.is_source_parent).length === 0 ? <p className="subtle">No queued emails.</p> : null}
+          {queue.filter((item) => !item.is_source_parent).map((item, index, visibleQueue) => {
             const effectiveDraft = draftEdits[item.id] ?? item.draft_reply
             const routingTrusted = canTrustRouting(item)
             const verdict = getOverallVerdict(item, effectiveDraft, routingTrusted)
+            const parserDetails = normalizeParserDetails(item.parser_details)
+            const parserExpanded = Boolean(expandedParserDetailIds[item.id])
             const requiresResumeForApproval = item.source === 'gmail'
+            const structuralSendabilityBlock = [
+              'source_parent',
+              'superseded_multi_role',
+              'manifest_review',
+              'extraction_review',
+              'score_review',
+            ].includes(item.sendability_status ?? '')
+            const historicalSafetyBlock =
+              item.screening_mode == null &&
+              ['blocked_ineligible', 'eligibility_review', 'mandatory_resume_fail', 'mandatory_resume_review']
+                .includes(item.sendability_status ?? '')
+            const screeningAllowsApproval =
+              !structuralSendabilityBlock &&
+              !historicalSafetyBlock &&
+              (item.screening_mode !== 'strict' || item.sendability_status === 'sendable')
             const canApprove =
+              screeningAllowsApproval &&
               Boolean(item.recipient_email) &&
               Boolean(item.cc_email) &&
               Boolean(effectiveDraft?.trim()) &&
               (!requiresResumeForApproval || Boolean(item.resume_file_name)) &&
               routingTrusted
+            const showSourceHeader = Boolean(
+              item.source_parent_email_id &&
+              visibleQueue[index - 1]?.source_parent_email_id !== item.source_parent_email_id,
+            )
             return (
-              <article key={item.id} className="emailItem">
+              <div key={item.id} className="multiRoleCandidateGroup">
+              {showSourceHeader ? (
+                <div className="card">
+                  <h3>Email {item.source_parent_email_id} — {item.requirement_count ?? 0} roles detected</h3>
+                  <p className="subtle">Each role is processed, scored, drafted, and approved independently.</p>
+                  <button type="button" onClick={() => retryRoleDetection(item.source_parent_email_id!)}>
+                    Retry Detection
+                  </button>
+                </div>
+              ) : null}
+              <article
+                className={`emailItem ${isEmailSearchHighlight('needs_review', item.id) ? 'emailSearchHighlight' : ''}`}
+                data-email-search-section="needs_review"
+                data-email-search-related-id={item.id}
+              >
                 <p><strong>Email ID:</strong> {item.id}</p>
+                {item.is_multi_role_child ? (
+                  <p><strong>Requirement:</strong> {item.requirement_index ?? '-'} of {item.requirement_count ?? '-'}</p>
+                ) : null}
                 <p><strong>From:</strong> {item.sender}</p>
                 <p><strong>Subject:</strong> {item.subject}</p>
+                <p className="jdSummary">
+                  <strong>{item.role || 'Unknown Role'}</strong>
+                  {' · '}{item.location || '-'}
+                  {' · '}{item.salary_text || 'Salary not specified'}
+                  {' · '}{jdSummarySkills(item).join(', ') || '-'}
+                </p>
                 {sourceListingUrl(item) ? (
                   <p>
                     <strong>Source Listing:</strong>{' '}
@@ -2289,15 +6236,58 @@ function App() {
                     </a>
                   </p>
                 ) : null}
-                <p><strong>To:</strong> {item.recipient_email ?? '-'}</p>
-                <p><strong>CC:</strong> {item.cc_email ?? '-'}</p>
+                <p><strong>To/CC:</strong> {item.recipient_email ?? '-'} / {item.cc_email ?? '-'}</p>
+                <p><strong>ATS Score:</strong> {formatAtsScore(item.ats_score)} {item.ats_score != null ? `(${getAtsStrengthLabel(item.ats_score)})` : ''}</p>
                 {renderRoutingPanel(item)}
                 <p><strong>Resume:</strong> {item.resume_file_name ?? '-'}</p>
+                <p><strong>Sendability:</strong> {item.sendability_status ?? 'legacy evaluation'}</p>
+                {item.role_manifest_status === 'single_fallback' ? (
+                  <p className="subtle">Auto-resolved as one role because a confident split was unavailable.</p>
+                ) : null}
+                <p><strong>Screening Mode:</strong> {item.screening_mode ?? 'historical / not recorded'}</p>
+                {item.eligibility_status ? <p><strong>Eligibility:</strong> {item.eligibility_status}</p> : null}
+                {item.eligibility_details ? (
+                  <details>
+                    <summary>Eligibility diagnostics</summary>
+                    <pre>{JSON.stringify(item.eligibility_details, null, 2)}</pre>
+                  </details>
+                ) : null}
+                {item.inherited_constraints?.length ? (
+                  <details>
+                    <summary>Inherited source constraints</summary>
+                    <pre>{JSON.stringify(item.inherited_constraints, null, 2)}</pre>
+                  </details>
+                ) : null}
+                {item.role_manifest_diagnostics ? (
+                  <details>
+                    <summary>Role manifest diagnostics</summary>
+                    <pre>{JSON.stringify(item.role_manifest_diagnostics, null, 2)}</pre>
+                  </details>
+                ) : null}
+                <ResumePickerPanel candidate={item} />
+                <p><strong>Attachment files:</strong> {(enabledAttachmentNames.length > 0 ? enabledAttachmentNames : item.attachment_file_names ?? []).join(', ') || '-'}</p>
                 <p>
                   <strong>Draft source:</strong> {getDraftSourceLabel(item.draft_source)}
                   {item.draft_model ? ` (${item.draft_model})` : ''}
                 </p>
                 <p><strong>Resume Context:</strong> {getResumeContextLabel(item.draft_resume_context_status)}</p>
+                <ParserDetailsPanel
+                  candidateId={item.id}
+                  source={item.source}
+                  parserDetails={parserDetails}
+                  atsScore={item.ats_score}
+                  atsSource={item.ats_score_source}
+                  atsSummary={item.ats_summary}
+                  atsBreakdown={item.ats_breakdown}
+                  resumePickerBreakdown={item.resume_picker_breakdown}
+                  expanded={parserExpanded}
+                  onToggle={(candidateId) =>
+                    setExpandedParserDetailIds((prev) => ({
+                      ...prev,
+                      [candidateId]: !prev[candidateId],
+                    }))
+                  }
+                />
                 {item.draft_ai_error ? <p className="subtle"><strong>AI fallback:</strong> {item.draft_ai_error}</p> : null}
                 <p><strong>Draft:</strong></p>
                 <div className="draftUnified">
@@ -2310,6 +6300,7 @@ function App() {
                   <label className="draftPaneLabel">Live Preview</label>
                   <div
                     className="draftPreview"
+                    style={draftTextSizeToPreviewStyle(settings.draft_text_size)}
                     dangerouslySetInnerHTML={{ __html: draftToPreviewHtml(effectiveDraft) }}
                   />
                 </div>
@@ -2333,6 +6324,23 @@ function App() {
                   </button>
                   <button
                     type="button"
+                    onClick={() => regenerateCandidate(item.id)}
+                    disabled={regeneratingId === item.id || sendingId === item.id || rejectingId === item.id || movingToFailedId === item.id}
+                    title="Re-run parser, resume match, ATS and semantic scoring, routing, and draft generation with current settings"
+                  >
+                    {regeneratingId === item.id ? 'Regenerating...' : 'Regenerate'}
+                  </button>
+                  {['invalid', 'uncertain'].includes(item.role_manifest_status ?? '') || item.sendability_status === 'superseded_multi_role' ? (
+                    <button
+                      type="button"
+                      onClick={() => retryRoleDetection(item.source_parent_email_id ?? item.id)}
+                      disabled={regeneratingId === item.id}
+                    >
+                      {regeneratingId === item.id ? 'Detecting...' : 'Retry Detection'}
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
                     onClick={() => rejectSend(item.id)}
                     disabled={rejectingId === item.id}
                   >
@@ -2351,6 +6359,7 @@ function App() {
                   </span>
                 </div>
               </article>
+              </div>
             )
           })}
           {bucketMeta.needs_review.hasNext ? (
@@ -2371,16 +6380,22 @@ function App() {
           {failedQueue.length === 0 ? <p className="subtle">No failed emails.</p> : null}
           {failedQueue.map((item) => {
             const fix = routingFixes[item.id] ?? { to: '', cc: '' }
+            const openUrl = sourceListingUrl(item) ?? item.gmail_message_url
             return (
-              <article key={`failed-${item.id}`} className="emailItem">
+              <article
+                key={`failed-${item.id}`}
+                className={`emailItem ${isEmailSearchHighlight('failed_mapping', item.id) ? 'emailSearchHighlight' : ''}`}
+                data-email-search-section="failed_mapping"
+                data-email-search-related-id={item.id}
+              >
                 <p><strong>Email ID:</strong> {item.id}</p>
                 <p><strong>From:</strong> {item.sender}</p>
                 <p><strong>Subject:</strong> {item.subject}</p>
-                {item.gmail_message_url ? (
+                {openUrl ? (
                   <p>
                     <strong>Open:</strong>{' '}
-                    <a href={item.gmail_message_url} target="_blank" rel="noreferrer">
-                      Open exact email in Gmail
+                    <a href={openUrl} target="_blank" rel="noreferrer">
+                      {item.source === 'nvoids' ? 'Open Original Post' : 'Open exact email in Gmail'}
                     </a>
                   </p>
                 ) : null}
@@ -2409,13 +6424,23 @@ function App() {
                     }
                   />
                 </label>
-                <button
-                  type="button"
-                  onClick={() => saveRoutingAndRequeue(item.id)}
-                  disabled={fixingId === item.id || !fix.to || !fix.cc}
-                >
-                  {fixingId === item.id ? 'Saving...' : 'Save Mapping & Move to Review'}
-                </button>
+                <div className="rowBtns">
+                  <button
+                    type="button"
+                    onClick={() => saveRoutingAndRequeue(item.id)}
+                    disabled={fixingId === item.id || deletingFailedId === item.id || !fix.to || !fix.cc}
+                  >
+                    {fixingId === item.id ? 'Saving...' : 'Save Mapping & Move to Review'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => deleteFailedMapping(item.id)}
+                    disabled={deletingFailedId === item.id || fixingId === item.id}
+                    title="Delete this failed mapping card from the dashboard"
+                  >
+                    {deletingFailedId === item.id ? 'Deleting...' : 'Delete'}
+                  </button>
+                </div>
               </article>
             )
           })}
@@ -2436,9 +6461,15 @@ function App() {
           <h2>Recent Runs</h2>
           {logs.length === 0 ? <p className="subtle">No runs yet.</p> : null}
           {logs.map((item, index) => (
-            <article key={`${item.email_id ?? 'none'}-${index}`} className="emailItem">
+            <article
+              key={item.run_key ?? `${item.email_id ?? 'none'}-${index}`}
+              className={`emailItem ${isEmailSearchHighlight('recent_runs', item.run_key) ? 'emailSearchHighlight' : ''}`}
+              data-email-search-section="recent_runs"
+              data-email-search-related-id={item.run_key ?? undefined}
+            >
               <p><strong>Status:</strong> {item.status}</p>
               <p><strong>Detail:</strong> {item.detail}</p>
+              {item.run_source ? <p><strong>Run Source:</strong> {item.run_source}</p> : null}
               <p><strong>Email ID:</strong> {item.email_id ?? '-'}</p>
               {item.gmail_message_url ? (
                 <p>
@@ -2460,7 +6491,7 @@ function App() {
                     .join(' | ')}
                 </p>
               ) : null}
-              {item.effective_query || item.matched_count != null || item.queued_count != null || item.skipped_count != null || item.failed_count != null ? (
+              {item.effective_query || item.matched_count != null || item.queued_count != null || item.skipped_count != null || item.failed_count != null || item.source_count != null || item.requirement_count != null ? (
                 <p className="subtle">
                   <strong>Summary:</strong>{' '}
                   {[
@@ -2469,6 +6500,10 @@ function App() {
                     item.queued_count != null ? `Queued: ${item.queued_count}` : null,
                     item.skipped_count != null ? `Skipped: ${item.skipped_count}` : null,
                     item.failed_count != null ? `Failed: ${item.failed_count}` : null,
+                    item.source_count != null ? `Sources: ${item.source_count}` : null,
+                    item.requirement_count != null ? `Requirements: ${item.requirement_count}` : null,
+                    item.multi_role_source_count != null ? `Multi-role: ${item.multi_role_source_count}` : null,
+                    item.manifest_review_count != null ? `Manifest review: ${item.manifest_review_count}` : null,
                   ]
                     .filter(Boolean)
                     .join(' | ')}
@@ -2481,6 +6516,93 @@ function App() {
                   {item.auto_send_failed_count != null ? <span className="tag">Auto Send Failed: {item.auto_send_failed_count}</span> : null}
                   {item.retry_promoted_count != null ? <span className="tag">Retry Promoted: {item.retry_promoted_count}</span> : null}
                   {item.retry_skipped_count != null ? <span className="tag">Retry Skipped: {item.retry_skipped_count}</span> : null}
+                </div>
+              ) : null}
+              {((item.skipped_item_count ?? 0) > 0 || (item.skipped_items?.length ?? 0) > 0) ? (
+                <div className="stack">
+                  <button type="button" onClick={() => void toggleRecentRunItems(item.run_key)}>
+                    {item.skipped_items_loaded ? `Hide Skipped Items (${item.skipped_item_count ?? item.skipped_items?.length ?? 0})` : `Skipped Items (${item.skipped_item_count ?? 0})`}
+                  </button>
+                  {item.skipped_items_loading ? <p className="subtle">Loading skipped items...</p> : null}
+                  {item.skipped_items_error ? <p className="errorMessage">{item.skipped_items_error}</p> : null}
+                  {item.skipped_items_loaded ? (
+                    item.skipped_items && item.skipped_items.length > 0 ? (
+                      <div className="stack">
+                        {item.skipped_items.map((skipped) => {
+                          const intentEvidence = skipped.intent_evidence ?? []
+                          const intentNegativeEvidence = skipped.intent_negative_evidence ?? []
+                          return (
+                          <article
+                            key={`${item.run_key}-${skipped.id}`}
+                            className={`emailItem ${isEmailSearchHighlight('recent_runs', skipped.id) ? 'emailSearchHighlight' : ''}`}
+                            data-email-search-section="recent_runs"
+                            data-email-search-related-id={skipped.id}
+                          >
+                            <p><strong>Source:</strong> {getSourceLabel(skipped.source_type)}</p>
+                            <p><strong>Title:</strong> {renderTextOrDash(skipped.title_or_subject)}</p>
+                            <p><strong>Why:</strong> {renderTextOrDash(skipped.reason_detail || skipped.reason_code)}</p>
+                            {skipped.source_group_name || skipped.source_group_email ? (
+                              <p>
+                                <strong>Source Group:</strong>{' '}
+                                {[skipped.source_group_name, skipped.source_group_email].filter(Boolean).join(' | ')}
+                              </p>
+                            ) : null}
+                            {skipped.source_group_match_method ? (
+                              <p><strong>Matched Through:</strong> {skipped.source_group_match_method}</p>
+                            ) : null}
+                            {skipped.intent_type || skipped.gate_action || skipped.gate_provider ? (
+                              <p>
+                                <strong>Gate:</strong>{' '}
+                                {[skipped.intent_type, skipped.gate_action, skipped.gate_provider].filter(Boolean).join(' | ')}
+                              </p>
+                            ) : null}
+                            {skipped.intent_confidence != null ? (
+                              <p><strong>Confidence:</strong> {skipped.intent_confidence.toFixed(2)}</p>
+                            ) : null}
+                            {skipped.intent_reason && skipped.intent_reason !== skipped.reason_detail ? (
+                              <p><strong>Intent Reason:</strong> {skipped.intent_reason}</p>
+                            ) : null}
+                            {skipped.qualification_result ? (
+                              <p><strong>Qualification Result:</strong> {skipped.qualification_result}</p>
+                            ) : null}
+                            {skipped.blocking_rule ? (
+                              <p><strong>Blocking Rule:</strong> {skipped.blocking_rule}</p>
+                            ) : null}
+                            {skipped.qualification_detail && skipped.qualification_detail !== skipped.reason_detail ? (
+                              <p><strong>Qualification Detail:</strong> {skipped.qualification_detail}</p>
+                            ) : null}
+                            {intentEvidence.length > 0 ? (
+                              <div className="automationMetrics">
+                                <strong>Evidence:</strong>
+                                {intentEvidence.map((entry) => (
+                                  <span key={`${skipped.id}-${entry}`} className="tag">{entry}</span>
+                                ))}
+                              </div>
+                            ) : null}
+                            {intentNegativeEvidence.length > 0 ? (
+                              <div className="automationMetrics">
+                                <strong>Negative Evidence:</strong>
+                                {intentNegativeEvidence.map((entry) => (
+                                  <span key={`${skipped.id}-neg-${entry}`} className="tag">{entry}</span>
+                                ))}
+                              </div>
+                            ) : null}
+                            {skipped.source_url || skipped.gmail_message_url ? (
+                              <p>
+                                <strong>Open:</strong>{' '}
+                                <a href={skipped.source_url ?? skipped.gmail_message_url ?? undefined} target="_blank" rel="noreferrer">
+                                  {skipped.source_type === 'nvoids' ? 'Open Original Post' : 'Open exact email in Gmail'}
+                                </a>
+                              </p>
+                            ) : null}
+                          </article>
+                          )
+                        })}
+                      </div>
+                    ) : (
+                      <p className="subtle">No skipped items found for this run.</p>
+                    )
+                  ) : null}
                 </div>
               ) : null}
             </article>
@@ -2538,7 +6660,12 @@ function App() {
               ) : null}
               {premiumScopeFilter === 'all_review'
                 ? numberReviewCards.map((item) => (
-                    <article key={`review-${item.id}`} className="emailItem">
+                    <article
+                      key={`review-${item.id}`}
+                      className={`emailItem ${isEmailSearchHighlight('premium_numbers', item.id) ? 'emailSearchHighlight' : ''}`}
+                      data-email-search-section="premium_numbers"
+                      data-email-search-related-id={item.id}
+                    >
                       <p><strong>Phone:</strong> {item.display_phone_number}</p>
                       <p><strong>Owner:</strong> {item.owner_name}</p>
                       <p><strong>Company:</strong> {item.company}</p>
@@ -2583,7 +6710,12 @@ function App() {
               ) : null}
               {premiumScopeFilter === 'recruiter_numbers'
                 ? recruiterNumberCards.map((item) => (
-                    <article key={`recruiter-number-${item.id}`} className="emailItem">
+                    <article
+                      key={`recruiter-number-${item.id}`}
+                      className={`emailItem ${isEmailSearchHighlight('premium_numbers', item.id) ? 'emailSearchHighlight' : ''}`}
+                      data-email-search-section="premium_numbers"
+                      data-email-search-related-id={item.id}
+                    >
                       <p><strong>Recruiter:</strong> {item.recruiter_name}</p>
                       <p><strong>Phone:</strong> {item.display_phone_number}</p>
                       <p><strong>Company:</strong> {item.company}</p>
@@ -2609,7 +6741,12 @@ function App() {
               ) : null}
               {premiumScopeFilter === 'employer_numbers'
                 ? employerNumberCards.map((item) => (
-                    <article key={`employer-number-${item.id}`} className="emailItem">
+                    <article
+                      key={`employer-number-${item.id}`}
+                      className={`emailItem ${isEmailSearchHighlight('premium_numbers', item.id) ? 'emailSearchHighlight' : ''}`}
+                      data-email-search-section="premium_numbers"
+                      data-email-search-related-id={item.id}
+                    >
                       <p><strong>Phone:</strong> {item.display_phone_number}</p>
                       <p><strong>Owner:</strong> {item.owner_name}</p>
                       <p><strong>Company:</strong> {item.company}</p>
@@ -2632,7 +6769,12 @@ function App() {
               ) : null}
               {premiumScopeFilter === 'recruiter_opportunities'
                 ? opportunityCards.map((item) => (
-                    <article key={`opportunity-${item.id}`} className="emailItem">
+                    <article
+                      key={`opportunity-${item.id}`}
+                      className={`emailItem ${isEmailSearchHighlight('premium_numbers', item.id) ? 'emailSearchHighlight' : ''}`}
+                      data-email-search-section="premium_numbers"
+                      data-email-search-related-id={item.id}
+                    >
                       <p><strong>Subject:</strong> {item.email_subject}</p>
                       <p><strong>Source:</strong> {(item.source_type || 'gmail').toUpperCase()}</p>
                       <p><strong>Recruiter Name:</strong> {item.recruiter_name || '-'}</p>
@@ -2741,26 +6883,299 @@ function App() {
             </section>
           ) : null}
 
+          {activePage === 'inbox' ? (
+            <section className="card pageSection inboxSection">
+              <div className="inboxHeader">
+                <div>
+                  <h2>Reply Inbox</h2>
+                  <p className="subtle">Replies are authoritative. Open counts are only a best-effort image signal.</p>
+                </div>
+                <div className="inboxHeaderActions">
+                  <button
+                    type="button"
+                    className={`iconBtn inboxRefreshBtn ${inboxLoading ? 'loading' : ''}`}
+                    onClick={() => void loadInboxConversations()}
+                    disabled={inboxLoading}
+                    aria-label="Refresh conversations"
+                    aria-busy={inboxLoading}
+                    title="Refresh"
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M20 6v5h-5M4 18v-5h5M5.8 9a7 7 0 0 1 11.7-2.6L20 9M4 15l2.5 2.6A7 7 0 0 0 18.2 15" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+              {!settings.feature_reply_inbox_enabled ? (
+                <p className="inboxNotice">Reply capture is off. Enable Reply Inbox in Settings to scan sent Gmail threads.</p>
+              ) : null}
+              {inboxError ? <p className="errorMessage">{inboxError}</p> : null}
+              <div className="inboxLayout">
+                <div className="conversationList" aria-label="Email conversations">
+                  {inboxConversations.length === 0 && !inboxLoading ? (
+                    <p className="subtle">No tracked conversations yet.</p>
+                  ) : null}
+                  {inboxConversations.map((conversation) => {
+                    const isUnread = conversation.unread_reply_count > 0
+                    const absoluteTime = new Date(conversation.last_message_at).toLocaleString()
+                    return (
+                      <button
+                        key={conversation.id}
+                        type="button"
+                        className={`conversationListItem ${isUnread ? 'unread' : ''} ${selectedConversationId === conversation.id ? 'active' : ''} ${isEmailSearchHighlight('inbox', conversation.id) ? 'emailSearchHighlight' : ''}`}
+                        data-email-search-section="inbox"
+                        data-email-search-related-id={conversation.id}
+                        onClick={() => void openInboxConversation(conversation.id)}
+                        aria-label={`${isUnread ? 'Unread: ' : ''}${conversation.recruiter}, ${conversation.subject}, ${absoluteTime}`}
+                        title={absoluteTime}
+                      >
+                        <span className="conversationListTopline">
+                          <span className="conversationListIdentity">
+                            <span className="conversationListSender">{conversation.recruiter}</span>
+                            <span className="conversationListSubject">{conversation.subject}</span>
+                          </span>
+                          <span className="conversationListMeta">
+                            {isUnread ? <span className="unreadDot" aria-hidden="true" /> : null}
+                            <time dateTime={conversation.last_message_at} title={absoluteTime}>
+                              {formatRelativeInboxTime(conversation.last_message_at)}
+                            </time>
+                          </span>
+                        </span>
+                        <small className="conversationPreview">{conversation.last_message_preview || 'No message preview'}</small>
+                      </button>
+                    )
+                  })}
+                </div>
+                <div className="conversationDetail">
+                  {selectedConversation ? (
+                    <>
+                      <div className="conversationDetailHeader">
+                        <div>
+                          <h3>{selectedConversation.subject}</h3>
+                          <p className="subtle">To: {selectedConversation.to_email ?? '-'} · CC: {selectedConversation.cc_email ?? '-'}</p>
+                        </div>
+                        <span
+                          className="sourceBadge conversationStatusBadge"
+                          title={`Conversation status: ${selectedConversation.status}`}
+                        >
+                          {selectedConversation.status}
+                        </span>
+                      </div>
+                      <div className="conversationThread">
+                        {selectedConversation.messages.map((message) => (
+                          <article key={message.id} className={`conversationMessage ${message.direction}`}>
+                            <span className="conversationAvatar" aria-hidden="true">
+                              {getInitials(message.direction === 'outbound' ? 'You' : message.sender)}
+                            </span>
+                            <div className="conversationMessageContent">
+                              <div className="conversationMessageMeta">
+                                <strong>{message.direction === 'outbound' ? 'You' : message.sender}</strong>
+                                <span>{new Date(message.occurred_at).toLocaleString()}</span>
+                              </div>
+                              <p>{message.body}</p>
+                            </div>
+                          </article>
+                        ))}
+                      </div>
+                      <label className="inboxComposer">
+                        <span>Send Reply</span>
+                        <textarea
+                          rows={5}
+                          value={inboxReplyDraft}
+                          onChange={(e) => setInboxReplyDraft(e.target.value)}
+                          placeholder="Write your reply..."
+                        />
+                      </label>
+                      <div className="composerToolbar">
+                        <div className="composerToolGroup" role="group" aria-label="Formatting tools">
+                          <button type="button" className="composerToolBtn" disabled aria-disabled="true" aria-label="Bold" title="Coming soon">
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                              <path d="M7 4h6a4 4 0 0 1 0 8H7V4Zm0 8h7a4 4 0 0 1 0 8H7v-8Z" />
+                            </svg>
+                          </button>
+                          <button type="button" className="composerToolBtn" disabled aria-disabled="true" aria-label="Italic" title="Coming soon">
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                              <path d="M10 4h8M6 20h8M14 4l-4 16" />
+                            </svg>
+                          </button>
+                          <span className="composerToolDivider" aria-hidden="true" />
+                          <button type="button" className="composerToolBtn" disabled aria-disabled="true" aria-label="Attach file" title="Coming soon">
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                              <path d="m20.5 11.5-8.7 8.7a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7L9 17.4a2 2 0 0 1-2.8-2.8l8.5-8.5" />
+                            </svg>
+                          </button>
+                          <button type="button" className="composerToolBtn" disabled aria-disabled="true" aria-label="Insert emoji" title="Coming soon">
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                              <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18ZM8.5 10h.01M15.5 10h.01M8 14a5 5 0 0 0 8 0" />
+                            </svg>
+                          </button>
+                        </div>
+                        <button
+                          type="button"
+                          className="btnPrimary composerSendBtn"
+                          onClick={() => void sendInboxReply()}
+                          disabled={inboxSending || !inboxReplyDraft.trim()}
+                        >
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="m3 3 18 9-18 9 4-9-4-9Zm4 9h14" />
+                          </svg>
+                          {inboxSending ? 'Sending...' : 'Send Reply'}
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <p className="subtle">Select a conversation to view the thread.</p>
+                  )}
+                </div>
+              </div>
+            </section>
+          ) : null}
+
           {activePage === 'sent_items' ? (
             <section className="card pageSection">
           <h2>Sent Items</h2>
           {sentQueue.length === 0 ? <p className="subtle">No approved and sent emails yet.</p> : null}
-          {sentQueue.map((item) => (
-            <article key={`sent-${item.id}`} className="emailItem">
-              <p><strong>Email ID:</strong> {item.id}</p>
-              <p><strong>From:</strong> {item.sender}</p>
-              <p><strong>Subject:</strong> {item.subject}</p>
-              <p><strong>Sent at:</strong> {item.sent_at ? new Date(item.sent_at).toLocaleString() : '-'}</p>
-              {item.gmail_message_url ? (
-                <p>
-                  <strong>Open:</strong>{' '}
-                  <a href={item.gmail_message_url} target="_blank" rel="noreferrer">
-                    Open exact email in Gmail
-                  </a>
-                </p>
-              ) : null}
-            </article>
-          ))}
+          {sentQueue.map((item) => {
+            const isExpanded = Boolean(expandedSentDetailIds[item.id])
+            const sentDetails = sentDetailsById[item.id]
+            const sentDetailError = sentDetailErrors[item.id]
+            const sentDetailLoading = Boolean(sentDetailLoadingIds[item.id])
+            const parserExpanded = Boolean(expandedParserDetailIds[item.id])
+            const listingUrl = sourceListingUrl(item)
+            return (
+              <article
+                key={`sent-${item.id}`}
+                className={`emailItem sentItemCard ${isEmailSearchHighlight('sent_items', item.id) ? 'emailSearchHighlight' : ''}`}
+                data-email-search-section="sent_items"
+                data-email-search-related-id={item.id}
+              >
+                <div className="sentItemHeader">
+                  <div className="sentItemHeaderText">
+                    <p><strong>Email ID:</strong> {item.id}</p>
+                    <p><strong>From:</strong> {item.sender}</p>
+                    <p><strong>Subject:</strong> {item.subject}</p>
+                    <p><strong>Sent at:</strong> {item.sent_at ? new Date(item.sent_at).toLocaleString() : '-'}</p>
+                  </div>
+                  <div className="sentItemHeaderActions">
+                    <span className="sourceBadge">{getSourceLabel(item.source)}</span>
+                    <button type="button" onClick={() => void toggleSentDetails(item.id)}>
+                      {isExpanded ? 'Hide Details' : 'View Details'}
+                    </button>
+                  </div>
+                </div>
+                {isExpanded ? (
+                  <div className="parserDetailsPanel sentItemDetailsPanel">
+                    {sentDetailLoading ? <p className="subtle">Loading sent item details...</p> : null}
+                    {sentDetailError ? <p className="errorMessage">{sentDetailError}</p> : null}
+                    {sentDetails ? (
+                      <>
+                        <div className="trackingSummary">
+                          <span
+                            className={`trackingBadge ${sentDetails.open_count > 0 ? 'opened' : ''}`}
+                            title="Open tracking is best-effort: Gmail may proxy or cache images, scanners may trigger false opens, and blocked images cause missed opens. Replies are authoritative."
+                          >
+                            {sentDetails.open_count > 0
+                              ? `Opened (heuristic) ${sentDetails.open_count} time${sentDetails.open_count === 1 ? '' : 's'}${sentDetails.opened_at ? ` · First seen ${new Date(sentDetails.opened_at).toLocaleString()}` : ''}`
+                              : 'Not opened (heuristic)'}
+                          </span>
+                          <span className="trackingBadge">Replies: {sentDetails.reply_count}</span>
+                        </div>
+                        <div className="parserDetailsSummaryGrid">
+                          <ParserDetailsCard title="Source" className="parserDetailsSummaryBlock">
+                            <div className="sentItemLinkList">
+                              <p><strong>Source:</strong> {renderTextOrDash(sentDetails.source_label)}</p>
+                              <p>
+                                <strong>Requirement Link:</strong>{' '}
+                                {sentDetails.requirement_received_link ? (
+                                  <a href={sentDetails.requirement_received_link} target="_blank" rel="noreferrer">
+                                    Open requirement
+                                  </a>
+                                ) : '-'}
+                              </p>
+                              <p>
+                                <strong>Original Gmail Link:</strong>{' '}
+                                {item.gmail_message_url ? (
+                                  <a href={item.gmail_message_url} target="_blank" rel="noreferrer">
+                                    Open original email
+                                  </a>
+                                ) : '-'}
+                              </p>
+                              <p>
+                                <strong>Source Listing Link:</strong>{' '}
+                                {listingUrl ? (
+                                  <a href={listingUrl} target="_blank" rel="noreferrer">
+                                    Open source listing
+                                  </a>
+                                ) : '-'}
+                              </p>
+                              <p>
+                                <strong>Sent Gmail Link:</strong>{' '}
+                                {sentDetails.sent_gmail_message_link ? (
+                                  <a href={sentDetails.sent_gmail_message_link} target="_blank" rel="noreferrer">
+                                  Open sent message
+                                </a>
+                              ) : '-'}
+                              </p>
+                            </div>
+                          </ParserDetailsCard>
+                          <ParserDetailsCard title="Requirement" className="parserDetailsSummaryBlock">
+                            <pre className="parserCardPre">{[
+                              `Role: ${renderTextOrDash(item.role)}`,
+                              `Location: ${renderTextOrDash(item.location)}`,
+                              `Salary: ${renderTextOrDash(item.salary_text)}`,
+                              `Skills: ${renderTextOrDash(item.skills_text)}`,
+                              `Company: ${renderTextOrDash(sentDetails.company)}`,
+                              `End Client: ${renderTextOrDash(sentDetails.end_client)}`,
+                              `Implementation Partner: ${renderTextOrDash(sentDetails.implementation_partner)}`,
+                              `Vendor: ${renderTextOrDash(sentDetails.vendor)}`,
+                              `Domain Mentioned: ${renderTextOrDash(sentDetails.domain_mentioned)}`,
+                              `Experience Required: ${renderTextOrDash(sentDetails.experience_required)}`,
+                              `Mandatory Skills: ${renderListOrDash(sentDetails.mandatory_skills)}`,
+                              `Missing Skills: ${renderListOrDash(sentDetails.missing_skills)}`,
+                            ].join('\n')}</pre>
+                          </ParserDetailsCard>
+                          <ParserDetailsCard title="Resume / Send Audit" className="parserDetailsSummaryBlock">
+                            <pre className="parserCardPre">{[
+                              `Resume Variant Sent: ${renderTextOrDash(sentDetails.resume_variant_sent ?? item.resume_file_name)}`,
+                              `Attached Files: ${renderListOrDash(sentDetails.attached_files)}`,
+                              `To: ${renderTextOrDash(sentDetails.to_email ?? item.recipient_email)}`,
+                              `CC: ${renderTextOrDash(sentDetails.cc_email ?? item.cc_email)}`,
+                              `ATS Score: ${formatAtsScore(sentDetails.ats_score ?? item.ats_score)}${(sentDetails.ats_score ?? item.ats_score) != null ? ` (${getAtsStrengthLabel(sentDetails.ats_score ?? item.ats_score)})` : ''}`,
+                              `ATS Summary: ${renderTextOrDash(sentDetails.ats_summary ?? item.ats_summary)}`,
+                            ].join('\n')}</pre>
+                          </ParserDetailsCard>
+                          <ParserDetailsCard title="Recruiter" className="parserDetailsSummaryBlock">
+                            <pre className="parserCardPre">{[
+                              `Recruiter Name: ${renderTextOrDash(sentDetails.recruiter_name)}`,
+                              `Recruiter Email: ${renderTextOrDash(sentDetails.recruiter_email)}`,
+                              `Recruiter Phone: ${renderTextOrDash(sentDetails.recruiter_phone)}`,
+                            ].join('\n')}</pre>
+                          </ParserDetailsCard>
+                        </div>
+                        <ParserDetailsPanel
+                          candidateId={item.id}
+                          source={item.source}
+                          parserDetails={item.parser_details}
+                          atsScore={item.ats_score}
+                          atsSource={item.ats_score_source}
+                          atsSummary={item.ats_summary}
+                          atsBreakdown={item.ats_breakdown}
+                          resumePickerBreakdown={item.resume_picker_breakdown}
+                          expanded={parserExpanded}
+                          onToggle={(candidateId) =>
+                            setExpandedParserDetailIds((prev) => ({
+                              ...prev,
+                              [candidateId]: !prev[candidateId],
+                            }))
+                          }
+                        />
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
+              </article>
+            )
+          })}
           {bucketMeta.approved_sent.hasNext ? (
             <button
               type="button"
@@ -2774,6 +7189,7 @@ function App() {
           ) : null}
         </div>
       </section>
+      <ChatWidget apiBase={apiBase} />
     </main>
   )
 }

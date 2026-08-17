@@ -2,6 +2,7 @@ import os
 import tempfile
 import unittest
 from datetime import UTC, datetime
+import json
 from types import SimpleNamespace
 
 os.environ["DEBUG"] = "false"
@@ -13,7 +14,7 @@ from sqlalchemy.pool import StaticPool
 
 from app import main
 from app.db import Base
-from app.models import RecruiterEmail, ResumeAsset, UserSettings
+from app.models import AttachmentAsset, RecruiterEmail, ResumeAsset, UserSettings
 
 
 class ApproveCcRegressionTests(unittest.TestCase):
@@ -73,7 +74,30 @@ class ApproveCcRegressionTests(unittest.TestCase):
             mime_type="application/pdf",
             sha256="abc123",
             version=1,
+            is_enabled=True,
             is_current=True,
+            semantic_embedding=None,
+        )
+        db.add(resume)
+        db.commit()
+        db.refresh(resume)
+        return resume
+
+    def _add_secondary_resume(self, db: Session, *, file_name: str = "resume-alt.pdf") -> ResumeAsset:
+        fd, path = tempfile.mkstemp(suffix=".pdf")
+        os.close(fd)
+        with open(path, "wb") as handle:
+            handle.write(b"%PDF-1.4 alt")
+        resume = ResumeAsset(
+            owner_id=main.settings.owner_id,
+            file_path=path,
+            file_name=file_name,
+            mime_type="application/pdf",
+            sha256=f"sha-{file_name}",
+            version=2,
+            skills_text="java, spring",
+            is_enabled=True,
+            is_current=False,
             semantic_embedding=None,
         )
         db.add(resume)
@@ -163,6 +187,25 @@ class ApproveCcRegressionTests(unittest.TestCase):
         db.refresh(email)
         return email
 
+    def _add_attachment(self, db: Session, *, file_name: str = "cover-letter.pdf", enabled: bool = True) -> AttachmentAsset:
+        fd, path = tempfile.mkstemp(suffix=".pdf")
+        os.close(fd)
+        with open(path, "wb") as handle:
+            handle.write(b"%PDF-1.4 extra")
+        attachment = AttachmentAsset(
+            owner_id=main.settings.owner_id,
+            file_path=path,
+            file_name=file_name,
+            mime_type="application/pdf",
+            sha256=f"sha-{file_name}",
+            file_size=14,
+            is_enabled=enabled,
+        )
+        db.add(attachment)
+        db.commit()
+        db.refresh(attachment)
+        return attachment
+
     def test_approve_send_returns_400_when_cc_missing_even_if_routing_looks_safe(self) -> None:
         with Session(self.engine) as db:
             self._add_resume(db)
@@ -172,6 +215,32 @@ class ApproveCcRegressionTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400, response.text)
         self.assertEqual(response.json()["detail"], "CC email is required before sending")
 
+    def test_second_multi_role_sibling_requires_explicit_confirmation(self) -> None:
+        with Session(self.engine) as db:
+            parent = self._add_needs_review_email(db, cc_email="vaishnavi@horizonsoftech.net")
+            parent.is_source_parent = True
+            parent.sendability_status = "source_parent"
+            first_sibling = self._add_needs_review_email(db, cc_email="vaishnavi@horizonsoftech.net")
+            first_sibling.source_parent_email_id = parent.id
+            first_sibling.is_multi_role_child = True
+            first_sibling.state = "approved_sent"
+            first_sibling.sent_status = "sent"
+            first_sibling.sendability_status = "sendable"
+            second_sibling = self._add_needs_review_email(db, cc_email="vaishnavi@horizonsoftech.net")
+            second_sibling.source_parent_email_id = parent.id
+            second_sibling.is_multi_role_child = True
+            second_sibling.sendability_status = "sendable"
+            db.commit()
+            second_id = second_sibling.id
+
+        response = self.client.post(
+            f"/candidates/{second_id}/approve-send",
+            json={"edited_reply": None, "confirm_same_source_additional_send": False},
+        )
+
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertIn("explicit confirmation", response.json()["detail"])
+
     def test_gmail_sync_persists_routing_to_and_cc_for_needs_review_candidate(self) -> None:
         original_is_gmail_configured = main.is_gmail_configured
         original_list_unread = main.list_unread_candidates_by_query
@@ -179,6 +248,7 @@ class ApproveCcRegressionTests(unittest.TestCase):
         original_parse_email = main.parse_email
         original_hard_filter_check = main.hard_filter_check
         original_compute_blended = main._compute_blended_ai_score
+        original_select_best_resume_match = main._select_best_resume_match
         original_should_block_f2f = main.should_block_f2f
         original_analyze_routing = main._analyze_email_routing
         original_build_fallback = main._build_user_fallback_draft
@@ -204,7 +274,7 @@ class ApproveCcRegressionTests(unittest.TestCase):
                 "salary_text": "$60/hr",
                 "skills_text": "java,angular,microservices",
             }
-            main.hard_filter_check = lambda _p, _u: (True, "pass")
+            main.hard_filter_check = lambda *_args, **_kwargs: (True, "pass")
             main._compute_blended_ai_score = lambda **kwargs: (
                 0.95,
                 "ok",
@@ -212,6 +282,15 @@ class ApproveCcRegressionTests(unittest.TestCase):
                 None,
                 None,
                 SimpleNamespace(input_source="latest_block", input_chars=100, chunks=1, fallback_reason=None),
+            )
+            main._select_best_resume_match = lambda **kwargs: SimpleNamespace(
+                resume=None,
+                ai_score=0.95,
+                ai_summary="ok",
+                ai_score_source="v1_rules_plus_ai",
+                email_embedding_json=None,
+                resume_embedding_json=None,
+                semantic_diag=SimpleNamespace(input_source="latest_block", input_chars=100, chunks=1, fallback_reason=None),
             )
             main.should_block_f2f = lambda _p: (False, None)
             main._analyze_email_routing = lambda _db, _sender, _subject, _body, _snippet="": main.RoutingResult(
@@ -245,6 +324,7 @@ class ApproveCcRegressionTests(unittest.TestCase):
             main.parse_email = original_parse_email
             main.hard_filter_check = original_hard_filter_check
             main._compute_blended_ai_score = original_compute_blended
+            main._select_best_resume_match = original_select_best_resume_match
             main.should_block_f2f = original_should_block_f2f
             main._analyze_email_routing = original_analyze_routing
             main._build_user_fallback_draft = original_build_fallback
@@ -254,13 +334,15 @@ class ApproveCcRegressionTests(unittest.TestCase):
         original_send_new = main.send_new_email_with_attachment
         original_mark_processed = main.mark_message_processed
         original_append_tracking = main.append_tracking_sheet_row
+        sent_reply_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
         try:
-            main.send_reply_with_attachment = lambda *_args, **_kwargs: "sent-123"
+            main.send_reply_with_attachment = lambda *args, **kwargs: (sent_reply_calls.append((args, kwargs)), "sent-123")[1]
             main.send_new_email_with_attachment = lambda *_args, **_kwargs: "new-123"
             main.mark_message_processed = lambda *_args, **_kwargs: None
             main.append_tracking_sheet_row = lambda **_kwargs: None
             with Session(self.engine) as db:
                 self._add_resume(db)
+                self._add_attachment(db)
                 email = self._add_needs_review_email(db, cc_email="vaishnavi@horizonsoftech.net")
 
             response = self.client.post(f"/candidates/{email.id}/approve-send", json={"edited_reply": None})
@@ -268,6 +350,86 @@ class ApproveCcRegressionTests(unittest.TestCase):
             payload = response.json()
             self.assertEqual(payload["state"], "approved_sent")
             self.assertEqual(payload["sent_status"], "sent")
+            self.assertEqual(len(sent_reply_calls), 1)
+            attachments = sent_reply_calls[0][1].get("attachments")
+            self.assertIsInstance(attachments, list)
+            assert isinstance(attachments, list)
+            self.assertEqual(len(attachments), 2)
+            with Session(self.engine) as db:
+                refreshed = db.get(RecruiterEmail, email.id)
+                assert refreshed is not None
+                self.assertEqual(json.loads(refreshed.sent_attachment_file_names_json or "[]"), ["cover-letter.pdf"])
+        finally:
+            main.send_reply_with_attachment = original_send_reply
+            main.send_new_email_with_attachment = original_send_new
+            main.mark_message_processed = original_mark_processed
+            main.append_tracking_sheet_row = original_append_tracking
+
+    def test_approve_send_uses_candidate_pinned_resume_when_present(self) -> None:
+        original_send_reply = main.send_reply_with_attachment
+        original_send_new = main.send_new_email_with_attachment
+        original_mark_processed = main.mark_message_processed
+        original_append_tracking = main.append_tracking_sheet_row
+        sent_reply_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+        try:
+            main.send_reply_with_attachment = lambda *args, **kwargs: (sent_reply_calls.append((args, kwargs)), "sent-456")[1]
+            main.send_new_email_with_attachment = lambda *_args, **_kwargs: "new-123"
+            main.mark_message_processed = lambda *_args, **_kwargs: None
+            main.append_tracking_sheet_row = lambda **_kwargs: None
+            email_id = None
+            with Session(self.engine) as db:
+                self._add_resume(db)
+                pinned_resume = self._add_secondary_resume(db, file_name="resume-best-match.pdf")
+                email = self._add_needs_review_email(db, cc_email="vaishnavi@horizonsoftech.net")
+                email.resume_asset_id = pinned_resume.id
+                email.resume_file_name = pinned_resume.file_name
+                db.commit()
+                email_id = email.id
+
+            response = self.client.post(f"/candidates/{email_id}/approve-send", json={"edited_reply": None})
+            self.assertEqual(response.status_code, 200, response.text)
+            attachments = sent_reply_calls[0][1].get("attachments")
+            self.assertIsInstance(attachments, list)
+            assert isinstance(attachments, list)
+            self.assertEqual(attachments[0].display_name, "resume-best-match.pdf")
+        finally:
+            main.send_reply_with_attachment = original_send_reply
+            main.send_new_email_with_attachment = original_send_new
+            main.mark_message_processed = original_mark_processed
+            main.append_tracking_sheet_row = original_append_tracking
+
+    def test_approve_send_uses_configured_resume_display_name_but_keeps_selected_variant_record(self) -> None:
+        original_send_reply = main.send_reply_with_attachment
+        original_send_new = main.send_new_email_with_attachment
+        original_mark_processed = main.mark_message_processed
+        original_append_tracking = main.append_tracking_sheet_row
+        sent_reply_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+        try:
+            main.send_reply_with_attachment = lambda *args, **kwargs: (sent_reply_calls.append((args, kwargs)), "sent-789")[1]
+            main.send_new_email_with_attachment = lambda *_args, **_kwargs: "new-123"
+            main.mark_message_processed = lambda *_args, **_kwargs: None
+            main.append_tracking_sheet_row = lambda **_kwargs: None
+            email_id = None
+            with Session(self.engine) as db:
+                settings_row = db.query(UserSettings).filter(UserSettings.owner_id == main.settings.owner_id).first()
+                assert settings_row is not None
+                settings_row.resume_display_name = "Chaithanya Dheeraj Resume"
+                self._add_resume(db)
+                pinned_resume = self._add_secondary_resume(db, file_name="resume-best-match.pdf")
+                email = self._add_needs_review_email(db, cc_email="vaishnavi@horizonsoftech.net")
+                email.resume_asset_id = pinned_resume.id
+                email.resume_file_name = pinned_resume.file_name
+                db.commit()
+                email_id = email.id
+
+            response = self.client.post(f"/candidates/{email_id}/approve-send", json={"edited_reply": None})
+            self.assertEqual(response.status_code, 200, response.text)
+            attachments = sent_reply_calls[0][1].get("attachments")
+            self.assertIsInstance(attachments, list)
+            assert isinstance(attachments, list)
+            self.assertEqual(attachments[0].display_name, "Chaithanya Dheeraj Resume.pdf")
+            payload = response.json()
+            self.assertEqual(payload["resume_file_name"], "resume-best-match.pdf")
         finally:
             main.send_reply_with_attachment = original_send_reply
             main.send_new_email_with_attachment = original_send_new
@@ -279,13 +441,14 @@ class ApproveCcRegressionTests(unittest.TestCase):
         original_send_new = main.send_new_email_with_attachment
         original_append_tracking = main.append_tracking_sheet_row
         sent_reply_calls: list[tuple[object, ...]] = []
-        sent_new_calls: list[tuple[object, ...]] = []
+        sent_new_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
         try:
             main.send_reply_with_attachment = lambda *args, **_kwargs: (sent_reply_calls.append(args), "reply-123")[1]
-            main.send_new_email_with_attachment = lambda *args, **_kwargs: (sent_new_calls.append(args), "new-456")[1]
+            main.send_new_email_with_attachment = lambda *args, **kwargs: (sent_new_calls.append((args, kwargs)), "new-456")[1]
             main.append_tracking_sheet_row = lambda **_kwargs: None
             with Session(self.engine) as db:
                 self._add_resume(db)
+                self._add_attachment(db, file_name="portfolio.zip")
                 email = self._add_needs_review_nvoids_email(db, cc_email="vaishnavi@horizonsoftech.net")
 
             response = self.client.post(f"/candidates/{email.id}/approve-send", json={"edited_reply": None})
@@ -296,6 +459,14 @@ class ApproveCcRegressionTests(unittest.TestCase):
             self.assertEqual(payload["gmail_sent_id"], "new-456")
             self.assertEqual(len(sent_reply_calls), 0)
             self.assertEqual(len(sent_new_calls), 1)
+            attachments = sent_new_calls[0][1].get("attachments")
+            self.assertIsInstance(attachments, list)
+            assert isinstance(attachments, list)
+            self.assertEqual(len(attachments), 2)
+            with Session(self.engine) as db:
+                refreshed = db.get(RecruiterEmail, email.id)
+                assert refreshed is not None
+                self.assertEqual(json.loads(refreshed.sent_attachment_file_names_json or "[]"), ["portfolio.zip"])
         finally:
             main.send_reply_with_attachment = original_send_reply
             main.send_new_email_with_attachment = original_send_new
@@ -353,6 +524,46 @@ class ApproveCcRegressionTests(unittest.TestCase):
         self.assertEqual(payload["state"], "failed")
         self.assertFalse(payload["routing_confirmed"])
         self.assertEqual(payload["routing_status"], "ambiguous")
+
+    def test_delete_failed_candidate_soft_dismisses_card(self) -> None:
+        with Session(self.engine) as db:
+            email = self._add_needs_review_email(db, cc_email="vaishnavi@horizonsoftech.net")
+            email.state = "failed"
+            email.last_error = "Could not resolve recruiter To and employer CC"
+            db.commit()
+            db.refresh(email)
+
+        response = self.client.delete(f"/candidates/{email.id}")
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertTrue(payload["deleted"])
+        self.assertEqual(payload["state"], "dismissed")
+
+        with Session(self.engine) as db:
+            refreshed = db.query(RecruiterEmail).filter(RecruiterEmail.id == email.id).first()
+            assert refreshed is not None
+            self.assertEqual(refreshed.state, "dismissed")
+            self.assertEqual(refreshed.skip_reason, "failed_mapping_dismissed")
+            self.assertEqual(refreshed.decision_reason, "Dismissed from failed mapping by user")
+            self.assertEqual(refreshed.last_error, "Failed mapping card dismissed by user")
+
+        failed_list = self.client.get("/candidates?state=failed")
+        self.assertEqual(failed_list.status_code, 200, failed_list.text)
+        failed_ids = [item["id"] for item in failed_list.json()["items"]]
+        self.assertNotIn(email.id, failed_ids)
+
+    def test_delete_failed_candidate_rejects_non_failed_state(self) -> None:
+        with Session(self.engine) as db:
+            email = self._add_needs_review_email(db, cc_email="vaishnavi@horizonsoftech.net")
+
+        response = self.client.delete(f"/candidates/{email.id}")
+        self.assertEqual(response.status_code, 400, response.text)
+        self.assertEqual(response.json()["detail"], "Only failed candidates can be dismissed")
+
+    def test_delete_failed_candidate_returns_404_when_missing(self) -> None:
+        response = self.client.delete("/candidates/999999")
+        self.assertEqual(response.status_code, 404, response.text)
+        self.assertEqual(response.json()["detail"], "Candidate not found")
 
 
 if __name__ == "__main__":

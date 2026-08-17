@@ -29,6 +29,7 @@ class ParsedExternalPost:
 @dataclass(frozen=True)
 class ExternalFeedSyncResult:
     source_type: str
+    run_key: str
     fetched_count: int
     created_count: int
     deduped_count: int
@@ -43,3 +44,20 @@ class ParsedListingRow:
     location: str
     posted_text: str
     href: str
+
+
+@dataclass(frozen=True)
+class ParsedNvoidsDetail:
+    listing_subject: str
+    recruiter_email: str
+    recruiter_phone: str
+    recruiter_name: str
+    body: str
+    jd_body: str
+    jd_body_source: str
+    repeated_email: str
+    posted_text: str
+    role: str
+    location: str
+    raw_table_text: str
+    parse_confidence: float

@@ -23,7 +23,7 @@
 
 Mermaid not needed: this is a static UI capability alignment update.
 
-- Audit date: 2026-05-22
-- Branch: external-recruiter-feed-ingestion
-- Evidence basis: code inspection
-- Verification limits: UI behavior inferred from source and frontend test run; lint/build checks were not rerun in this session.
+- Audit date: 2026-08-05
+- Branch: semantic-embeddings
+- Evidence basis: both
+- Verification limits: dashboard tests passed; lint was not run because `markdownlint-cli` is not installed, and live browser/API integration was not exercised.

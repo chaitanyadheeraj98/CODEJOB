@@ -6,6 +6,7 @@ from collections.abc import Callable
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from app.ai.draft_formatting import normalize_draft_text_size
 from app.config import settings
 from app.models import UserSettings
 from app.phase0 import DEFAULT_FALLBACK_DRAFT_TEMPLATE, DEFAULT_SIGNATURE_EMAIL, DEFAULT_SIGNATURE_NAME, DEFAULT_SIGNATURE_PHONE, normalize_employer_domains
@@ -30,6 +31,13 @@ class SettingsBootstrapService:
         return max(1, min(int(user_settings.nvoids_batch_limit or 10), 50))
 
     @staticmethod
+    def _nvoids_detail_title_mode(user_settings: UserSettings) -> str:
+        normalized = str(user_settings.nvoids_detail_title_mode or "").strip().lower()
+        if normalized in {"job_details", "hotlist_details", "all"}:
+            return normalized
+        return "job_details"
+
+    @staticmethod
     def _read_saved_gmail_queries(raw: str | None) -> list[str]:
         if not raw:
             return []
@@ -51,6 +59,11 @@ class SettingsBootstrapService:
                     existing.saved_gmail_queries_json = normalized_saved_queries_json
                 if not existing.policy_json:
                     existing.policy_json = json.dumps(policy_service.default_policy(), separators=(",", ":"))
+                normalized_draft_text_size = normalize_draft_text_size(existing.draft_text_size)
+                raw_nvoids_detail_title_mode = existing.nvoids_detail_title_mode
+                normalized_nvoids_detail_title_mode = self._nvoids_detail_title_mode(existing)
+                if existing.draft_text_size != normalized_draft_text_size:
+                    existing.draft_text_size = normalized_draft_text_size
                 if not existing.fallback_draft_template:
                     existing.fallback_draft_template = DEFAULT_FALLBACK_DRAFT_TEMPLATE
                 if not existing.signature_name:
@@ -59,18 +72,24 @@ class SettingsBootstrapService:
                     existing.signature_phone = DEFAULT_SIGNATURE_PHONE
                 if not existing.signature_email:
                     existing.signature_email = DEFAULT_SIGNATURE_EMAIL
+                if existing.preferred_employer_cc_email is None:
+                    existing.preferred_employer_cc_email = ""
                 if not (existing.default_gmail_query or "").strip():
                     existing.default_gmail_query = (existing.gmail_query or "").strip() or "is:unread in:inbox recruiter"
                 existing.default_date_mode = policy_service.normalize_default_date_mode(existing.default_date_mode)
                 existing.feature_auto_poll_interval_minutes = self._poll_interval_minutes(existing)
                 existing.feature_nvoids_poll_interval_minutes = self._nvoids_poll_interval_minutes(existing)
                 existing.nvoids_batch_limit = self._nvoids_batch_limit(existing)
+                existing.nvoids_detail_title_mode = normalized_nvoids_detail_title_mode
                 if (
                     not existing.policy_json
+                    or existing.draft_text_size != normalized_draft_text_size
+                    or raw_nvoids_detail_title_mode != normalized_nvoids_detail_title_mode
                     or not existing.fallback_draft_template
                     or not existing.signature_name
                     or not existing.signature_phone
                     or not existing.signature_email
+                    or existing.preferred_employer_cc_email is None
                     or not (existing.default_gmail_query or "").strip()
                     or existing.saved_gmail_queries_json != normalized_saved_queries_json
                 ):
@@ -100,15 +119,25 @@ class SettingsBootstrapService:
                 feature_nvoids_auto_sync=False,
                 feature_nvoids_poll_interval_minutes=30,
                 nvoids_batch_limit=10,
+                nvoids_detail_title_mode="job_details",
                 nvoids_locations="",
                 feature_auto_send=settings.feature_auto_send,
                 feature_retry_queue=settings.feature_retry_queue,
                 feature_ai_enabled=False,
+                feature_ai_extractor_enabled=False,
                 feature_semantic_enabled=False,
+                feature_groq_job_parser_enabled=False,
+                feature_gmail_requirement_groups_enabled=False,
+                feature_role_manifest_enabled=False,
+                feature_strict_candidate_screening_enabled=False,
+                feature_email_tracking_enabled=False,
+                feature_reply_inbox_enabled=False,
+                draft_text_size="normal",
                 fallback_draft_template=DEFAULT_FALLBACK_DRAFT_TEMPLATE,
                 signature_name=DEFAULT_SIGNATURE_NAME,
                 signature_phone=DEFAULT_SIGNATURE_PHONE,
                 signature_email=DEFAULT_SIGNATURE_EMAIL,
+                preferred_employer_cc_email="",
                 policy_json=json.dumps(policy_service.default_policy()),
             )
             db.add(default_settings)

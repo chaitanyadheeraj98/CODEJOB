@@ -24,6 +24,11 @@ class DraftFormattingTests(unittest.TestCase):
         html = draft_text_to_html(text)
         self.assertIn("Best regards,<br>Chaithanya Dheeraj N<br>[PHONE] +1 940-629-6920", html)
 
+    def test_size_wrapper_applies_requested_font_size(self) -> None:
+        html = draft_text_to_html("Hello", draft_text_size="large")
+        self.assertTrue(html.startswith('<div style="font-size:20px;line-height:1.5;">'))
+        self.assertIn("<p>Hello</p>", html)
+
 
 if __name__ == "__main__":
     unittest.main()

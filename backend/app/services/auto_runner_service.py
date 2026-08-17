@@ -9,9 +9,9 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models import UserSettings
-from app.schemas import AutomationRunResponse
-
 logger = logging.getLogger(__name__)
+
+LIVE_REPLY_CHECK_INTERVAL_SECONDS = 60
 
 
 class AutoRunnerService:
@@ -20,8 +20,9 @@ class AutoRunnerService:
         *,
         session_factory: Callable[[], Session],
         get_settings: Callable[[Session], UserSettings],
-        run_once: Callable[[object | None, Session], AutomationRunResponse],
+        run_once: Callable[[object | None, Session], object],
         run_nvoids_once: Callable[[Session, int], object],
+        check_live_replies: Callable[[Session], None],
         action_lock: Lock,
         stop_event: Event,
     ) -> None:
@@ -29,6 +30,7 @@ class AutoRunnerService:
         self._get_settings = get_settings
         self._run_once = run_once
         self._run_nvoids_once = run_nvoids_once
+        self._check_live_replies = check_live_replies
         self._action_lock = action_lock
         self._stop_event = stop_event
 
@@ -47,6 +49,7 @@ class AutoRunnerService:
     def run_loop(self) -> None:
         next_run_at = datetime.now(UTC)
         next_nvoids_run_at = datetime.now(UTC)
+        next_live_check_at = datetime.now(UTC)
         while not self._stop_event.wait(5):
             db = self._session_factory()
             try:
@@ -54,17 +57,26 @@ class AutoRunnerService:
                 if not user_settings.enabled or not user_settings.feature_auto_polling:
                     next_run_at = datetime.now(UTC)
                 now_utc = datetime.now(UTC)
+
+                # Runs on its own cadence, outside action_lock, so a live count is
+                # visible even while a full sync is in progress under that lock.
+                if user_settings.enabled and now_utc >= next_live_check_at:
+                    try:
+                        self._check_live_replies(db)
+                    except Exception:
+                        logger.exception("Live reply check crashed")
+                    next_live_check_at = datetime.now(UTC) + timedelta(seconds=LIVE_REPLY_CHECK_INTERVAL_SECONDS)
+
                 if user_settings.enabled and user_settings.feature_auto_polling and now_utc >= next_run_at:
                     interval_minutes = self.poll_interval_minutes(user_settings)
                     with self._action_lock:
                         try:
                             result = self._run_once(None, db)
                             logger.info(
-                                "Auto runner completed: status=%s matched=%s queued=%s failed=%s",
-                                result.status,
-                                result.matched_count,
-                                result.queued_count,
-                                result.failed_count,
+                                "Auto runner enqueued: status=%s job_id=%s run_key=%s",
+                                getattr(result, "status", None),
+                                getattr(result, "job_id", None),
+                                getattr(result, "run_key", None),
                             )
                         except HTTPException as exc:
                             logger.warning("Auto runner skipped/failed: status=%s detail=%s", exc.status_code, exc.detail)
@@ -79,11 +91,10 @@ class AutoRunnerService:
                         try:
                             result = self._run_nvoids_once(db, nvoids_limit)
                             logger.info(
-                                "Auto nvoids sync completed: fetched=%s created=%s deduped=%s failed=%s",
-                                getattr(result, "fetched_count", None),
-                                getattr(result, "created_count", None),
-                                getattr(result, "deduped_count", None),
-                                getattr(result, "failed_count", None),
+                                "Auto nvoids sync enqueued: status=%s job_id=%s run_key=%s",
+                                getattr(result, "status", None),
+                                getattr(result, "job_id", None),
+                                getattr(result, "run_key", None),
                             )
                         except HTTPException as exc:
                             logger.warning("Auto nvoids sync skipped/failed: status=%s detail=%s", exc.status_code, exc.detail)

@@ -2,11 +2,11 @@
 
 # CODEJOB Mermaid Feature Flows
 
-- Audit date: 2026-05-30
+- Audit date: 2026-08-14
 - Branch: semantic-embeddings
-- Commit: 5991f97
-- Evidence basis: code inspection + targeted test run
-- Verification limits: full end-to-end runtime execution was not performed in this session.
+- Commit: f521c049b417ee09228a198769914c9dc595a478
+- Evidence basis: both
+- Verification limits: chat was exercised live; unrelated external integrations were not re-executed, and the broad backend suite retains a known stale-import blocker.
 
 ## Feature Coverage Summary
 
@@ -17,7 +17,7 @@
 | Candidate scoring, routing, and queue state assignment | queue rendering in `App.tsx` | `POST /phase0/emails/ingest`, routing services | Live | Yes |
 | Needs Review approval and send gate | approve action in needs-review list | `POST /candidates/{id}/approve-send` | Live | Yes |
 | Reject and bulk reject | reject actions in queue UI | `POST /candidates/{id}/reject`, `POST /candidates/reject-bulk` | Live | Yes |
-| Failed Mapping recovery | failed mapping UI action | `POST /candidates/{id}/send-to-failed-mapping`, `POST /candidates/{id}/resolve-recipients` | Live | Yes |
+| Failed Mapping recovery | failed mapping UI action | `POST /candidates/{id}/resolve-recipients`, `POST /candidates/{id}/retry-role-detection`, `DELETE /candidates/{id}` | Live | Yes |
 | Premium number extraction | premium tab + run/reextract behavior | `POST /premium-numbers/reextract/{id}` + extraction workflow | Live | Yes |
 | Unknown number review classification | premium review cards | `/number-review/*` endpoints | Live | Yes |
 | Recruiter and employer number buckets | premium scope filters in `App.tsx` | `GET /recruiter-numbers`, `GET /employer-numbers` | Live | Yes |
@@ -26,12 +26,13 @@
 | Gmail labeling | no dedicated UI surface; backend runtime side effect | `POST /gmail/labeling/preview` + runtime apply service | Live (optional) | Yes |
 | Productivity analytics | analytics panel in `App.tsx` | `/analytics/events/view`, `/analytics/events`, `/analytics/trend` | Live | Yes |
 | Query bucket saved searches | query bucket component in `App.tsx` | `GET/PUT /settings` saved query fields | Live | Yes |
-| Resume upload and active resume selection | resume upload controls in settings UI | `POST /settings/resume`, `GET /settings/resumes` | Live | Yes |
+| Resume upload and active resume selection | resume upload controls in settings UI | `POST /settings/resumes`, `GET /settings/resumes` | Live | Yes |
 | Settings and execution controls | settings form in `App.tsx` | `GET/PUT /settings` | Live | Yes |
 | Auto polling | settings auto-poll toggle | auto runner loop + settings interval controls | Live (optional) | Yes |
 | HR-5 auto-send and retry queue behavior | toggles and run summary display in UI | runtime orchestration paths using `feature_auto_send` and `feature_retry_queue` | Live (optional) | Yes |
 | Telegram operations | telegram status shown in UI | `GET /telegram/status`, runtime telegram command/callback handling | Live (optional) | Yes |
 | Google Sheets append | no dedicated UI; send side-effect only | orchestration send path integration | Unknown | Yes |
+| In-app assistant | always-mounted `ChatWidget` | `/chat/*`, `/mcp`, LangGraph, and Ollama | Live (optional) | Yes |
 
 ## Gmail OAuth and Inbox Sync
 
@@ -155,17 +156,16 @@ sequenceDiagram
   participant U as User
   participant FE as App.tsx
   participant BE as main.py
-  U->>FE: Send to Failed Mapping
-  FE->>BE: POST /candidates/{id}/send-to-failed-mapping
-  U->>FE: Resolve recipients
+  U->>FE: Repair candidate details
   FE->>BE: POST /candidates/{id}/resolve-recipients
+  FE->>BE: POST /candidates/{id}/retry-role-detection
 ```
 
 | Evidence type | Source |
 | --- | --- |
 | Frontend entry | `dashboard/src/App.tsx:1440` |
-| API endpoint | `POST /candidates/{id}/send-to-failed-mapping`, `POST /candidates/{id}/resolve-recipients` |
-| Backend logic | `backend/app/main.py:send_to_failed_mapping,resolve_recipients` |
+| API endpoint | `POST /candidates/{id}/resolve-recipients`, `POST /candidates/{id}/retry-role-detection`, `DELETE /candidates/{id}` |
+| Backend logic | `backend/app/main.py:resolve_recipients,retry_role_detection,dismiss_failed_candidate` |
 | Data touched | candidate routing/recipient fields |
 | Tests | No direct test found |
 | Verification limit | flow not replayed in session |
@@ -339,7 +339,7 @@ sequenceDiagram
   participant FE as App.tsx
   participant BE as main.py
   U->>FE: Upload resume
-  FE->>BE: POST /settings/resume
+  FE->>BE: POST /settings/resumes
   FE->>BE: GET /settings/resumes
   BE-->>FE: active resume list
 ```
@@ -347,7 +347,7 @@ sequenceDiagram
 | Evidence type | Source |
 | --- | --- |
 | Frontend entry | `dashboard/src/App.tsx:1119` |
-| API endpoint | `POST /settings/resume`, `GET /settings/resumes` |
+| API endpoint | `POST /settings/resumes`, `GET /settings/resumes` |
 | Backend logic | `backend/app/main.py:upload_resume,list_resumes` |
 | Data touched | resume asset and semantic embedding fields |
 | Tests | No direct test found |
@@ -479,14 +479,40 @@ flowchart TD
 | Tests | No direct test found |
 | Verification limit | no direct sheet append command or assertion in this session |
 
+## In-App Assistant
+
+```mermaid
+flowchart TD
+  A[Open always-mounted ChatWidget] --> B[GET chat status]
+  B -->|disabled or Ollama unavailable| C[Show explanatory disabled state]
+  B -->|ready| D[Create or load persisted session]
+  D --> E[POST message and consume SSE]
+  E --> F[LangGraph agent]
+  F -->|application data needed| G[Read-only MCP tool]
+  G --> H[Owner-scoped database query]
+  H --> F
+  F --> I[Ollama gemma4 cloud response]
+  I --> J[Persist tool and assistant audit rows]
+  J --> K[Render streamed answer]
+```
+
+| Evidence type | Source |
+| --- | --- |
+| Frontend entry | `dashboard/src/features/chat/ChatWidget.tsx` mounted in `dashboard/src/App.tsx` |
+| API endpoint | `GET /chat/status`, `/chat/sessions*`, and `POST /chat/sessions/{id}/messages` |
+| Backend logic | `backend/app/ai/chat/*`, `backend/app/services/chat_service.py`, and `backend/app/mcp_server/*` |
+| Data touched | owner-scoped `chat_sessions` and `chat_messages`; all MCP application-data access is read-only |
+| Tests | focused backend chat/MCP/migration tests and frontend widget/SSE tests passed |
+| Verification limit | feature is disabled by default and requires a reachable local Ollama daemon when enabled |
+
 ## Reviewer Attention
 
 - Runtime flows not executed in this session: OAuth completion, Telegram interactions, run-once full-cycle send, Nvoids sync, and Google Sheets append.
-- Tests re-run in this session: only `backend/tests/test_premium_numbers_extraction.py` (`17 passed`).
+- Chat validation: focused tests, Docker builds, exact `/mcp` negotiation, tool invocation, Ollama streaming, and persistence passed.
 - Human validation still needed for integration-dependent flows (Gmail, Telegram, optional sheets).
 
-- Audit date: 2026-05-30
+- Audit date: 2026-08-14
 - Branch: semantic-embeddings
-- Commit: 5991f97
-- Evidence basis: code inspection + targeted test run
-- Verification limits: external integrations and full end-to-end runtime flows were not executed in this session.
+- Commit: f521c049b417ee09228a198769914c9dc595a478
+- Evidence basis: both
+- Verification limits: unrelated external integrations were not re-executed; the broad backend suite retains one stale import.

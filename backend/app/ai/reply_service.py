@@ -10,6 +10,7 @@ from app.ai.resume_context_attribution import (
 from app.ai.deepseek_client import deepseek_chat_completion
 from app.ai.prompting import build_reply_prompts
 from app.ai.resume_context import extract_resume_context
+from app.phase0 import DEFAULT_SIGNATURE_EMAIL, DEFAULT_SIGNATURE_NAME, DEFAULT_SIGNATURE_PHONE
 
 
 @dataclass
@@ -21,6 +22,16 @@ class ReplyGenerationResult:
     resume_context_status: DraftResumeContextStatus
 
 
+DEFAULT_SIGNATURE_BLOCK = "\n".join(
+    [
+        "Best regards,",
+        DEFAULT_SIGNATURE_NAME,
+        f"[PHONE] {DEFAULT_SIGNATURE_PHONE}",
+        f"[EMAIL] {DEFAULT_SIGNATURE_EMAIL}",
+    ]
+)
+
+
 def _sanitize_plain_text_reply(text: str) -> str:
     cleaned_lines: list[str] = []
     for raw in text.splitlines():
@@ -29,36 +40,78 @@ def _sanitize_plain_text_reply(text: str) -> str:
     return cleaned
 
 
-def _enforce_greeting_line(draft_text: str, expected_greeting: str) -> str:
-    lines = draft_text.splitlines()
-    subject_idx: int | None = None
-    first_greeting_idx: int | None = None
-
-    for idx, raw in enumerate(lines):
+def _extract_subject_line(text: str) -> str | None:
+    for raw in text.splitlines():
         stripped = raw.strip()
-        if not stripped:
-            continue
-        if subject_idx is None and stripped.lower().startswith("subject:"):
-            subject_idx = idx
-        if stripped.lower().startswith("hi"):
-            first_greeting_idx = idx
+        if stripped.lower().startswith("subject:"):
+            return stripped
+    return None
+
+
+def _extract_signature_block(fallback_draft: str) -> str:
+    lines = fallback_draft.splitlines()
+    for idx in range(len(lines) - 1, -1, -1):
+        if lines[idx].strip().lower() == "best regards,":
+            block = "\n".join(line.strip() for line in lines[idx:] if line.strip()).strip()
+            if block:
+                return block
+    return DEFAULT_SIGNATURE_BLOCK
+
+
+def _is_greeting_like(stripped: str) -> bool:
+    lowered = stripped.lower()
+    return lowered.startswith("hi ") or lowered == "hi" or lowered.startswith("hello") or lowered.startswith("dear ")
+
+
+def _extract_body_only(ai_text: str, expected_greeting: str) -> str:
+    body_lines: list[str] = []
+    started_body = False
+    expected_greeting_lower = expected_greeting.strip().lower()
+
+    for raw in ai_text.splitlines():
+        stripped = raw.strip()
+        lowered = stripped.lower()
+        if not started_body:
+            if not stripped:
+                continue
+            if lowered.startswith("subject:"):
+                continue
+            if lowered.startswith("nvoids listing:"):
+                continue
+            if lowered == expected_greeting_lower or _is_greeting_like(stripped):
+                continue
+            started_body = True
+
+        if lowered == "best regards," or lowered.startswith("best regards"):
             break
+        if lowered.startswith("nvoids listing:"):
+            continue
+        body_lines.append(stripped)
 
-    # Remove all greeting-like lines to avoid duplicates, then insert a single canonical greeting.
-    cleaned_lines = [line for line in lines if not line.strip().lower().startswith("hi")]
+    return "\n".join(body_lines).strip()
 
-    if first_greeting_idx is not None:
-        insert_at = first_greeting_idx
-    elif subject_idx is not None:
-        insert_at = min(subject_idx + 1, len(cleaned_lines))
-    else:
-        insert_at = 0
 
-    while insert_at > 0 and insert_at <= len(cleaned_lines) and cleaned_lines[insert_at - 1].strip() == "":
-        insert_at -= 1
+def _compose_reply_with_fixed_wrapper(
+    ai_text: str,
+    *,
+    expected_greeting: str,
+    fallback_draft: str,
+) -> str:
+    subject_line = _extract_subject_line(ai_text) or _extract_subject_line(fallback_draft)
+    body_text = _extract_body_only(ai_text, expected_greeting)
+    signature_block = _extract_signature_block(fallback_draft)
 
-    normalized = cleaned_lines[:insert_at] + [expected_greeting] + cleaned_lines[insert_at:]
-    return "\n".join(normalized).strip()
+    if not subject_line or not body_text:
+        return fallback_draft.strip()
+
+    return "\n\n".join(
+        [
+            subject_line.strip(),
+            expected_greeting.strip(),
+            body_text,
+            signature_block,
+        ]
+    ).strip()
 
 
 def generate_reply_with_ai_or_fallback(
@@ -99,7 +152,13 @@ def generate_reply_with_ai_or_fallback(
     try:
         generated = deepseek_chat_completion(system_prompt, user_prompt)
         sanitized = _sanitize_plain_text_reply(generated)
-        sanitized = _enforce_greeting_line(sanitized, greeting_line)
+        sanitized = _compose_reply_with_fixed_wrapper(
+            sanitized,
+            expected_greeting=greeting_line,
+            fallback_draft=fallback_draft,
+        )
+        if sanitized == fallback_draft.strip():
+            raise RuntimeError("AI returned unusable draft after sanitation")
         if not sanitized:
             raise RuntimeError("AI returned empty draft after sanitation")
         return ReplyGenerationResult(

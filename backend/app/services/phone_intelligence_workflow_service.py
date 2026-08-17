@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from sqlalchemy.orm import Session
 
 from app.models import EmployerNumber, NumberReviewQueue, PremiumNumberLead, RecruiterEmail, RecruiterNumber, RecruiterOpportunity
+from app.phase0 import email_domain
 from app.premium_numbers.domain_guard import should_capture_premium_numbers
 from app.premium_numbers.extraction import ExtractedPhoneLead, extract_phone_leads
 
@@ -15,6 +16,28 @@ logger = logging.getLogger(__name__)
 TARGET_CONTACT_SIGNAL_RE = re.compile(r"\b(?:share|send|submit|mail|email)[\s\S]{0,120}\bto\b", re.IGNORECASE)
 TARGET_CONTACT_INTENT_RE = re.compile(r"\b(?:share|send|submit|mail|email|contact|reach|call)\b", re.IGNORECASE)
 EMAIL_LOCAL_PART_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9._-]*$")
+
+
+def derive_name_from_contact_email(contact_email: str | None) -> str:
+    email = (contact_email or "").strip().lower()
+    if "@" not in email:
+        return ""
+    local_part = email.split("@", 1)[0].strip()
+    if not local_part or not EMAIL_LOCAL_PART_RE.match(local_part):
+        return ""
+    clean = re.sub(r"[._-]+", " ", local_part).strip()
+    if not clean:
+        return ""
+    parts = [part for part in clean.split() if part]
+    if not parts:
+        return ""
+    return " ".join(part.capitalize() for part in parts)
+
+
+def derive_company_from_email_domain(email: str | None) -> str:
+    domain = email_domain(email or "")
+    base = domain.split(".", 1)[0].strip() if domain else ""
+    return base.title() if base else ""
 
 
 @dataclass(frozen=True)
@@ -228,19 +251,7 @@ class PhoneIntelligenceWorkflowService:
         return has_owner_name and has_phone_digits and (has_contact_email or has_mailto or has_contact_intent)
 
     def _derive_name_from_contact_email(self, contact_email: str | None) -> str:
-        email = (contact_email or "").strip().lower()
-        if "@" not in email:
-            return ""
-        local_part = email.split("@", 1)[0].strip()
-        if not local_part or not EMAIL_LOCAL_PART_RE.match(local_part):
-            return ""
-        clean = re.sub(r"[._-]+", " ", local_part).strip()
-        if not clean:
-            return ""
-        parts = [part for part in clean.split() if part]
-        if not parts:
-            return ""
-        return " ".join(part.capitalize() for part in parts)
+        return derive_name_from_contact_email(contact_email)
 
     def _extract_leads(self, db: Session, email: RecruiterEmail) -> list[ExtractedPhoneLead] | None:
         allowed, sender_domain, configured_domains = should_capture_premium_numbers(db, email)

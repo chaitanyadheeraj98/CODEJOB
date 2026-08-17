@@ -1,11 +1,13 @@
 # pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false, reportUnknownVariableType=false
 
 import base64
+import html
 import json
 import logging
 import mimetypes
 import re
 import threading
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.message import EmailMessage
 from pathlib import Path
@@ -18,6 +20,7 @@ from googleapiclient.errors import HttpError
 
 from app.ai.draft_formatting import draft_text_to_html
 from app.config import settings
+from app.parsing.document_extraction import clean_html_text
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +41,8 @@ class GmailMessageCandidate(TypedDict):
     external_message_id: str
     external_thread_id: str
     external_rfc_message_id: str
+    in_reply_to_header: str
+    references_header: str
     sender: str
     recipient_email: str
     subject: str
@@ -45,6 +50,20 @@ class GmailMessageCandidate(TypedDict):
     snippet: str
     gmail_received_at: datetime | None
     label_ids: list[str]
+    to_header: str
+    cc_header: str
+    list_id: str
+    list_post: str
+    list_unsubscribe: str
+    delivered_to: str
+    mailing_list: str
+
+
+@dataclass(frozen=True)
+class MailAttachment:
+    path: str
+    display_name: str | None = None
+    mime_type: str | None = None
 
 
 def _as_dict(value: Any) -> dict[str, Any]:
@@ -281,22 +300,21 @@ def _extract_from_parts(parts: list[dict[str, Any]]) -> tuple[str, str]:
 
 
 def _strip_html(html: str) -> str:
-    no_scripts = re.sub(r"(?is)<(script|style).*?>.*?</\\1>", " ", html)
-    no_tags = re.sub(r"(?is)<[^>]+>", " ", no_scripts)
-    compact = re.sub(r"[ \t]+", " ", no_tags)
-    return re.sub(r"\n\s*\n+", "\n\n", compact).strip()
+    return clean_html_text(html)
 
 
 def _decode_body(payload: dict[str, Any]) -> str:
     direct = _decode_chunk(payload.get("body", {}).get("data"))
     if direct:
-        return direct
+        return _strip_html(direct) if (payload.get("mimeType") or "").lower() == "text/html" else direct
 
     plain, html = _extract_from_parts(_as_list_of_dicts(payload.get("parts")))
+    if html:
+        cleaned_html = _strip_html(html)
+        if cleaned_html.strip():
+            return cleaned_html
     if plain:
         return plain
-    if html:
-        return _strip_html(html)
     return ""
 
 
@@ -314,12 +332,75 @@ def _extract_email_address(from_header: str) -> str:
     return from_header.strip()
 
 
-def list_unread_candidates_by_query(query: str, max_results_per_page: int = 100) -> list[GmailMessageCandidate]:
+def _message_details_to_candidate(details: dict[str, Any]) -> GmailMessageCandidate | None:
+    message_id = details.get("id")
+    if not isinstance(message_id, str) or not message_id:
+        return None
+    payload = _as_dict(details.get("payload"))
+    header_items = _as_list_of_dicts(payload.get("headers"))
+    headers: list[dict[str, str]] = [
+        {
+            "name": str(item.get("name", "")),
+            "value": str(item.get("value", "")),
+        }
+        for item in header_items
+    ]
+    from_header = _get_header(headers, "From")
+    to_header = _get_header(headers, "To")
+    cc_header = _get_header(headers, "Cc")
+    subject = _get_header(headers, "Subject") or "(No Subject)"
+    rfc_message_id = _get_header(headers, "Message-ID")
+    in_reply_to_header = _get_header(headers, "In-Reply-To")
+    references_header = _get_header(headers, "References")
+    list_id = _get_header(headers, "List-Id")
+    list_post = _get_header(headers, "List-Post")
+    list_unsubscribe = _get_header(headers, "List-Unsubscribe")
+    delivered_to = _get_header(headers, "Delivered-To")
+    mailing_list = _get_header(headers, "Mailing-List")
+    internal_date_ms = details.get("internalDate")
+    gmail_received_at = None
+    if internal_date_ms:
+        try:
+            gmail_received_at = datetime.fromtimestamp(int(internal_date_ms) / 1000, tz=UTC)
+        except (TypeError, ValueError):
+            gmail_received_at = None
+    body = _decode_body(payload)
+    snippet = (details.get("snippet") or "").strip()
+    if not body.strip() and snippet:
+        body = snippet
+    return {
+        "external_message_id": message_id,
+        "external_thread_id": str(details.get("threadId", "")),
+        "external_rfc_message_id": rfc_message_id,
+        "in_reply_to_header": in_reply_to_header,
+        "references_header": references_header,
+        "sender": from_header,
+        "recipient_email": _extract_email_address(from_header),
+        "subject": subject,
+        "body": body,
+        "snippet": snippet,
+        "gmail_received_at": gmail_received_at,
+        "label_ids": [str(label) for label in details.get("labelIds", []) if isinstance(label, str)],
+        "to_header": to_header,
+        "cc_header": cc_header,
+        "list_id": list_id,
+        "list_post": list_post,
+        "list_unsubscribe": list_unsubscribe,
+        "delivered_to": delivered_to,
+        "mailing_list": mailing_list,
+    }
+
+
+def list_unread_candidates_by_query(
+    query: str, max_results_per_page: int = 100, max_total_results: int | None = None
+) -> list[GmailMessageCandidate]:
     service = _gmail_service()
     page_token: str | None = None
     results: list[GmailMessageCandidate] = []
 
     while True:
+        if max_total_results is not None and len(results) >= max_total_results:
+            break
         req = service.users().messages().list(
             userId="me",
             q=query,
@@ -329,53 +410,77 @@ def list_unread_candidates_by_query(query: str, max_results_per_page: int = 100)
         response = _as_dict(req.execute())
         messages = _as_list_of_dicts(response.get("messages"))
         for message in messages:
+            if max_total_results is not None and len(results) >= max_total_results:
+                break
             message_id = message.get("id")
             if not isinstance(message_id, str) or not message_id:
                 continue
-            details = _as_dict(service.users().messages().get(userId="me", id=message_id, format="full").execute())
-            payload = _as_dict(details.get("payload"))
-            header_items = _as_list_of_dicts(payload.get("headers"))
-            headers: list[dict[str, str]] = [
-                {
-                    "name": str(item.get("name", "")),
-                    "value": str(item.get("value", "")),
-                }
-                for item in header_items
-            ]
-            from_header = _get_header(headers, "From")
-            subject = _get_header(headers, "Subject") or "(No Subject)"
-            rfc_message_id = _get_header(headers, "Message-ID")
-            internal_date_ms = details.get("internalDate")
-            gmail_received_at = None
-            if internal_date_ms:
-                try:
-                    gmail_received_at = datetime.fromtimestamp(int(internal_date_ms) / 1000, tz=UTC)
-                except (TypeError, ValueError):
-                    gmail_received_at = None
-            body = _decode_body(payload)
-            snippet = (details.get("snippet") or "").strip()
-            if not body.strip() and snippet:
-                body = snippet
-            results.append(
-                {
-                    "external_message_id": message_id,
-                    "external_thread_id": str(details.get("threadId", "")),
-                    "external_rfc_message_id": rfc_message_id,
-                    "sender": from_header,
-                    "recipient_email": _extract_email_address(from_header),
-                    "subject": subject,
-                    "body": body,
-                    "snippet": snippet,
-                    "gmail_received_at": gmail_received_at,
-                    "label_ids": [str(label) for label in details.get("labelIds", []) if isinstance(label, str)],
-                }
-            )
+            try:
+                details = _as_dict(
+                    service.users().messages().get(userId="me", id=message_id, format="full").execute()
+                )
+            except HttpError:
+                # A message can be deleted/moved between the list() call and this get() call
+                # (e.g. another client archives it concurrently); skip it rather than aborting
+                # the whole batch over one stale id.
+                logger.exception("gmail_message_fetch_failed message_id=%s", message_id)
+                continue
+            candidate = _message_details_to_candidate(details)
+            if candidate is not None:
+                results.append(candidate)
 
         next_token_raw = response.get("nextPageToken")
         next_token = next_token_raw if isinstance(next_token_raw, str) and next_token_raw else None
         if not next_token:
             break
         page_token = next_token
+    return results
+
+
+def list_unread_thread_ids(max_results: int = 500) -> set[str]:
+    """Cheap: one list() call, no per-message get(). Thread ids of unread inbox mail.
+
+    A message's threadId comes back from list() for free, no format="full" get()
+    needed, so callers can intersect against known sent-thread ids for an accurate
+    "unread replies to threads I sent" count without the per-message fetch cost
+    that makes the full sync (list_unread_candidates_by_query) slow.
+
+    ponytail: bounded to max_results (Gmail's own list() page-size ceiling is 500),
+    not exhaustive for accounts with more unread inbox mail than that. Good enough
+    for a live poll; the full sync's per-thread scan has no such bound.
+    """
+    service = _gmail_service()
+    response = _as_dict(
+        service.users().messages().list(userId="me", q="is:unread in:inbox", maxResults=max_results).execute()
+    )
+    messages = _as_list_of_dicts(response.get("messages"))
+    return {
+        str(message["threadId"])
+        for message in messages
+        if isinstance(message.get("threadId"), str) and message["threadId"]
+    }
+
+
+def list_thread_messages(thread_id: str) -> list[GmailMessageCandidate]:
+    """Fetch every message in a known Gmail thread, regardless of read/unread state.
+
+    Unlike list_unread_candidates_by_query, this doesn't depend on the UNREAD label,
+    so it can still find a reply after it's been opened/read in Gmail (e.g. because
+    the user viewed the thread directly) before a sync ran.
+    """
+    service = _gmail_service()
+    try:
+        thread = _as_dict(service.users().threads().get(userId="me", id=thread_id, format="full").execute())
+    except HttpError as exc:
+        if getattr(exc.resp, "status", None) == 404:
+            return []
+        raise
+    messages = _as_list_of_dicts(thread.get("messages"))
+    results: list[GmailMessageCandidate] = []
+    for message in messages:
+        candidate = _message_details_to_candidate(message)
+        if candidate is not None:
+            results.append(candidate)
     return results
 
 
@@ -405,6 +510,46 @@ def get_message_rfc_message_id(message_id: str) -> str:
     return _get_header(headers, "Message-ID")
 
 
+def get_message_thread_id(message_id: str) -> str:
+    service = _gmail_service()
+    details = _as_dict(service.users().messages().get(userId="me", id=message_id, format="minimal").execute())
+    thread_id = details.get("threadId")
+    return thread_id if isinstance(thread_id, str) else ""
+
+
+def _resolve_mail_attachments(
+    attachments: list[MailAttachment] | None,
+    attachment_path: str | None,
+    attachment_display_name: str | None,
+) -> list[MailAttachment]:
+    resolved = list(attachments or [])
+    if attachment_path:
+        resolved.append(MailAttachment(path=attachment_path, display_name=attachment_display_name))
+    return resolved
+
+
+def _add_mail_attachments(message: EmailMessage, attachments: list[MailAttachment]) -> None:
+    for attachment in attachments:
+        file_path = Path(attachment.path)
+        safe_name = (attachment.display_name or "").strip() or file_path.name
+        if not file_path.exists():
+            raise FileNotFoundError(f"Attachment file missing on disk: {safe_name}")
+        content = file_path.read_bytes()
+        mime_type = attachment.mime_type or mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
+        main_type, sub_type = mime_type.split("/", 1)
+        message.add_attachment(content, maintype=main_type, subtype=sub_type, filename=safe_name)
+
+
+def _append_tracking_pixel(html_body: str, tracking_pixel_url: str | None) -> str:
+    if not tracking_pixel_url:
+        return html_body
+    url = html.escape(tracking_pixel_url, quote=True)
+    return (
+        f'{html_body}<img src="{url}" width="1" height="1" alt="" '
+        'style="display:none;border:0;outline:none" />'
+    )
+
+
 def send_reply_with_attachment(
     thread_id: str,
     to: str,
@@ -413,6 +558,9 @@ def send_reply_with_attachment(
     body: str,
     attachment_path: str | None = None,
     attachment_display_name: str | None = None,
+    draft_text_size: str = "normal",
+    attachments: list[MailAttachment] | None = None,
+    tracking_pixel_url: str | None = None,
 ) -> str:
     service = _gmail_service()
     message = EmailMessage()
@@ -423,20 +571,16 @@ def send_reply_with_attachment(
     plain_body = body or ""
     message.set_content(plain_body)
     try:
-        html_body = draft_text_to_html(plain_body)
+        html_body = _append_tracking_pixel(
+            draft_text_to_html(plain_body, draft_text_size=draft_text_size),
+            tracking_pixel_url,
+        )
         message.add_alternative(html_body, subtype="html")
     except Exception:
         # Fallback to plain text if HTML rendering fails.
         pass
 
-    if attachment_path:
-        file_path = Path(attachment_path)
-        if file_path.exists():
-            content = file_path.read_bytes()
-            mime_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
-            main_type, sub_type = mime_type.split("/", 1)
-            safe_name = (attachment_display_name or "").strip() or file_path.name
-            message.add_attachment(content, maintype=main_type, subtype=sub_type, filename=safe_name)
+    _add_mail_attachments(message, _resolve_mail_attachments(attachments, attachment_path, attachment_display_name))
 
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
     payload = {"raw": raw, "threadId": thread_id}
@@ -452,6 +596,9 @@ def send_new_email_with_attachment(
     body: str,
     attachment_path: str | None = None,
     attachment_display_name: str | None = None,
+    draft_text_size: str = "normal",
+    attachments: list[MailAttachment] | None = None,
+    tracking_pixel_url: str | None = None,
 ) -> str:
     service = _gmail_service()
     message = EmailMessage()
@@ -462,20 +609,16 @@ def send_new_email_with_attachment(
     plain_body = body or ""
     message.set_content(plain_body)
     try:
-        html_body = draft_text_to_html(plain_body)
+        html_body = _append_tracking_pixel(
+            draft_text_to_html(plain_body, draft_text_size=draft_text_size),
+            tracking_pixel_url,
+        )
         message.add_alternative(html_body, subtype="html")
     except Exception:
         # Fallback to plain text if HTML rendering fails.
         pass
 
-    if attachment_path:
-        file_path = Path(attachment_path)
-        if file_path.exists():
-            content = file_path.read_bytes()
-            mime_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
-            main_type, sub_type = mime_type.split("/", 1)
-            safe_name = (attachment_display_name or "").strip() or file_path.name
-            message.add_attachment(content, maintype=main_type, subtype=sub_type, filename=safe_name)
+    _add_mail_attachments(message, _resolve_mail_attachments(attachments, attachment_path, attachment_display_name))
 
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
     payload = {"raw": raw}
@@ -490,6 +633,13 @@ def mark_message_processed(message_id: str) -> None:
     if settings.gmail_label_filter:
         body["addLabelIds"] = [settings.gmail_label_filter]
     service.users().messages().modify(userId="me", id=message_id, body=body).execute()
+
+
+def mark_reply_processed(message_id: str, existing_label_ids: list[str] | None = None) -> None:
+    label_id = ensure_gmail_labels(["CodeJob/Replied"]).get("CodeJob/Replied")
+    if label_id:
+        apply_gmail_label(message_id, label_id, existing_label_ids=existing_label_ids)
+    mark_message_processed(message_id)
 
 
 def list_gmail_labels() -> list[dict[str, str]]:

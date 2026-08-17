@@ -8,7 +8,7 @@ services:
     environment:
       DATABASE_URL: sqlite:///./data/codejob.db
       REDIS_URL: redis://redis:6379/0
-      ALLOW_RUNTIME_SCHEMA_PATCH: "false"
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
     command: >
       sh -c "alembic upgrade head &&
       uvicorn app.main:app --host 0.0.0.0 --port 8000"
@@ -18,6 +18,24 @@ services:
     volumes:
       - backend_data:/app/data
     depends_on:
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: ./backend
+    container_name: codejob-worker
+    env_file:
+      - ./backend/.env
+    environment:
+      DATABASE_URL: sqlite:///./data/codejob.db
+      REDIS_URL: redis://redis:6379/0
+    command: rq worker gmail_sync nvoids_sync automation_run --url redis://redis:6379/0 --with-scheduler
+    volumes:
+      - backend_data:/app/data
+    depends_on:
+      backend:
+        condition: service_started
       redis:
         condition: service_healthy
 

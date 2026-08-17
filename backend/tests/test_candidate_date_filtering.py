@@ -1,3 +1,4 @@
+import json
 import os
 import unittest
 from datetime import UTC, date, datetime
@@ -225,6 +226,83 @@ class CandidateDateFilteringTests(unittest.TestCase):
         )
 
         self.assertEqual(self.candidate_subjects("approved_sent"), ["sent-at-start-boundary"])
+
+    def test_approved_sent_list_orders_by_sent_at_desc_then_created_at_desc(self) -> None:
+        self.add_email(
+            "older-created-but-most-recently-sent",
+            "approved_sent",
+            gmail_received_at=datetime(2026, 5, 10, 15, 0, tzinfo=UTC),
+            sent_at=datetime(2026, 5, 12, 18, 0, tzinfo=UTC),
+            created_at=datetime(2026, 5, 10, 15, 0, tzinfo=UTC),
+        )
+        self.add_email(
+            "newer-created-but-earlier-sent",
+            "approved_sent",
+            gmail_received_at=datetime(2026, 5, 12, 16, 0, tzinfo=UTC),
+            sent_at=datetime(2026, 5, 12, 17, 0, tzinfo=UTC),
+            created_at=datetime(2026, 5, 12, 16, 0, tzinfo=UTC),
+        )
+
+        self.assertEqual(
+            self.candidate_subjects("approved_sent"),
+            ["older-created-but-most-recently-sent", "newer-created-but-earlier-sent"],
+        )
+
+    def test_candidate_list_compacts_nested_resume_picker_diagnostics(self) -> None:
+        self.add_email(
+            "compact-picker-payload",
+            "needs_review",
+            gmail_received_at=datetime(2026, 5, 12, 16, 0, tzinfo=UTC),
+        )
+        with Session(self.engine) as db:
+            row = db.query(RecruiterEmail).filter(RecruiterEmail.subject == "compact-picker-payload").one()
+            row.resume_picker_candidates_json = json.dumps(
+                {
+                    "selected_resume_file_name": "resume.docx",
+                    "rankings": [
+                        {
+                            "resume_file_name": "resume.docx",
+                            "final_resume_score": 0.81,
+                            "ai_score": 0.82,
+                            "ats_score": 79,
+                            "selection_reason": "Best match",
+                            "picker_breakdown": {"large_evidence": "x" * 10_000},
+                        }
+                    ],
+                }
+            )
+            db.commit()
+            email_id = row.id
+
+        listed = self.client.get("/candidates", params={"state": "needs_review", "limit": 1})
+        self.assertEqual(listed.status_code, 200, listed.text)
+        list_picker = listed.json()["items"][0]["resume_picker_candidates"]
+        self.assertEqual(list_picker["selected_resume_file_name"], "resume.docx")
+        self.assertEqual(list_picker["rankings"][0]["selection_reason"], "Best match")
+        self.assertNotIn("picker_breakdown", list_picker["rankings"][0])
+
+        detail = self.client.get(f"/candidates/{email_id}")
+        self.assertEqual(detail.status_code, 200, detail.text)
+        self.assertIn("picker_breakdown", detail.json()["resume_picker_candidates"]["rankings"][0])
+
+    def test_large_candidate_list_response_is_gzipped(self) -> None:
+        self.add_email(
+            "gzip-candidate-payload",
+            "needs_review",
+            gmail_received_at=datetime(2026, 5, 12, 16, 0, tzinfo=UTC),
+        )
+        with Session(self.engine) as db:
+            row = db.query(RecruiterEmail).filter(RecruiterEmail.subject == "gzip-candidate-payload").one()
+            row.body = "compressible body " * 500
+            db.commit()
+
+        response = self.client.get(
+            "/candidates",
+            params={"state": "needs_review", "limit": 1},
+            headers={"Accept-Encoding": "gzip"},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.headers.get("content-encoding"), "gzip")
 
 
 if __name__ == "__main__":

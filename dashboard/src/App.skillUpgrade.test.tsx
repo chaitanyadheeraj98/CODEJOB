@@ -1,0 +1,365 @@
+// @vitest-environment jsdom
+import { act } from 'react'
+import { createRoot, type Root } from 'react-dom/client'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+
+import { JobIntentLearningSection, SkillUpgradeSection } from './App'
+
+;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+describe('SkillUpgradeSection', () => {
+  const cleanups: Array<() => void> = []
+
+  afterEach(() => {
+    while (cleanups.length) cleanups.pop()?.()
+  })
+
+  it('renders pending skills only and forwards approve/dismiss actions', () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+    })
+
+    const approveSkill = vi.fn()
+    const approveAllSkills = vi.fn()
+    const dismissSkill = vi.fn()
+    const embedSkills = vi.fn()
+    const pendingSkill = {
+      skill_name: 'Temporal Workflow',
+      normalized_name: 'temporal workflow',
+      occurrence_count: 2,
+      candidate_ids: [44, 12],
+      suspicious: false,
+      recoverable_skills: [],
+      source_tags: ['ai'],
+    }
+
+    act(() => {
+      root.render(
+        <SkillUpgradeSection
+          pendingSkills={[pendingSkill]}
+          loading={false}
+          busySkillKey={null}
+          approveAllSkills={approveAllSkills}
+          approveSkill={approveSkill}
+          dismissSkill={dismissSkill}
+          embeddingPendingCount={342}
+          embedSkills={embedSkills}
+        />,
+      )
+    })
+
+    expect(container.textContent ?? '').toContain('Upgrade Skills')
+    expect(container.textContent ?? '').toContain('Pending Unknown Skills')
+    expect(container.textContent ?? '').toContain('Approve all')
+    expect(container.textContent ?? '').toContain('Temporal Workflow')
+    expect(container.textContent ?? '').toContain('Candidate IDs: 44, 12')
+    expect(container.textContent ?? '').toContain('Approve adds them to your custom taxonomy')
+    expect(container.textContent ?? '').toContain('342 approved skills pending embedding')
+    expect(container.textContent ?? '').not.toContain('Approved Custom Skills')
+
+    const buttons = Array.from(container.querySelectorAll('button'))
+    const approveAllButton = buttons.find((button) => button.textContent === 'Approve all') as HTMLButtonElement | undefined
+    const approveButton = buttons.find((button) => button.textContent === 'Approve') as HTMLButtonElement | undefined
+    const dismissButton = buttons.find((button) => button.textContent === 'Dismiss') as HTMLButtonElement | undefined
+    const embedButton = buttons.find((button) => button.textContent === 'Embed Skills') as HTMLButtonElement | undefined
+
+    act(() => {
+      approveAllButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      approveButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      dismissButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      embedButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(approveAllSkills).toHaveBeenCalledTimes(1)
+    expect(approveSkill).toHaveBeenCalledWith(pendingSkill)
+    expect(dismissSkill).toHaveBeenCalledWith(pendingSkill)
+    expect(embedSkills).toHaveBeenCalledTimes(1)
+  })
+
+  it('disables approve all while bulk action is running', () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+    })
+
+    act(() => {
+      root.render(
+        <SkillUpgradeSection
+          pendingSkills={[{
+            skill_name: 'Temporal Workflow',
+            normalized_name: 'temporal workflow',
+            occurrence_count: 2,
+            candidate_ids: [44],
+            suspicious: false,
+            recoverable_skills: [],
+            source_tags: ['legacy'],
+          }]}
+          loading={false}
+          busySkillKey="approve-all-skills"
+          approveAllSkills={() => {}}
+          approveSkill={() => {}}
+          dismissSkill={() => {}}
+        />,
+      )
+    })
+
+    const approveAllButton = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'Approving all...') as HTMLButtonElement | undefined
+    expect(approveAllButton).toBeDefined()
+    expect(approveAllButton?.disabled).toBe(true)
+  })
+
+  it('disables approve for suspicious skill blobs while keeping dismiss available', () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+    })
+
+    const approveSkill = vi.fn()
+    const dismissSkill = vi.fn()
+
+    act(() => {
+      root.render(
+        <SkillUpgradeSection
+          pendingSkills={[
+            {
+              skill_name: 'with a focus on IAM',
+              normalized_name: 'with a focus on iam',
+              occurrence_count: 2,
+              candidate_ids: [4045, 4044],
+              suspicious: true,
+              recoverable_skills: ['IAM'],
+              source_tags: ['ai'],
+            },
+          ]}
+          loading={false}
+          busySkillKey={null}
+          approveAllSkills={() => {}}
+          approveSkill={approveSkill}
+          dismissSkill={dismissSkill}
+        />,
+      )
+    })
+
+    expect(container.textContent ?? '').toContain('Approve is disabled')
+    expect(container.textContent ?? '').toContain('IAM')
+
+    const buttons = Array.from(container.querySelectorAll('button'))
+    expect(buttons.find((button) => button.textContent === 'Approve all')).toBeUndefined()
+    const approveButton = buttons.find((button) => button.textContent === 'Approve') as HTMLButtonElement | undefined
+    const dismissButton = buttons.find((button) => button.textContent === 'Dismiss') as HTMLButtonElement | undefined
+
+    expect(approveButton?.disabled).toBe(true)
+    expect(dismissButton?.disabled).toBe(false)
+
+    act(() => {
+      approveButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      dismissButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(approveSkill).not.toHaveBeenCalled()
+    expect(dismissSkill).toHaveBeenCalledTimes(1)
+  })
+
+  it('renders pending skills in small batches instead of mounting the entire queue', () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+    })
+    const pendingSkills = Array.from({ length: 55 }, (_, index) => ({
+      skill_name: `Skill ${index + 1}`,
+      normalized_name: `skill ${index + 1}`,
+      occurrence_count: 1,
+      candidate_ids: [index + 1],
+      suspicious: false,
+      recoverable_skills: [],
+      source_tags: ['legacy'],
+    }))
+
+    act(() => {
+      root.render(
+        <SkillUpgradeSection
+          pendingSkills={pendingSkills}
+          loading={false}
+          busySkillKey={null}
+          approveAllSkills={() => {}}
+          approveSkill={() => {}}
+          dismissSkill={() => {}}
+        />,
+      )
+    })
+
+    expect(container.querySelectorAll('article.skillUpgradeItem')).toHaveLength(50)
+    const showMore = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Show 5 more',
+    )
+    expect(showMore).toBeDefined()
+    act(() => showMore?.click())
+    expect(container.querySelectorAll('article.skillUpgradeItem')).toHaveLength(55)
+  })
+
+  it('renders pending and approved intent signals in small batches', () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+    })
+    const signals = Array.from({ length: 55 }, (_, index) => ({
+      id: index + 1,
+      owner_id: 'default-owner',
+      phrase: `Signal ${index + 1}`,
+      normalized_phrase: `signal ${index + 1}`,
+      polarity: 'positive_recruiter_jd',
+      source_examples_count: 1,
+      sample_evidence: [],
+      confidence_aggregate: 0.8,
+      last_intent_type: 'job_title',
+      status: 'pending',
+      created_at: '2026-07-31T00:00:00Z',
+      updated_at: '2026-07-31T00:00:00Z',
+    }))
+
+    act(() => {
+      root.render(
+        <JobIntentLearningSection
+          pendingSignals={signals}
+          approvedSignals={signals.map((signal) => ({ ...signal, status: 'approved' }))}
+          loading={false}
+          busySignalKey={null}
+          approveAllSignals={() => {}}
+          approveSignal={() => {}}
+          dismissSignal={() => {}}
+          togglePolarity={() => {}}
+        />,
+      )
+    })
+
+    expect(container.querySelectorAll('article.skillUpgradeItem')).toHaveLength(50)
+    expect(container.textContent ?? '').toContain('Show 5 more pending signals')
+
+    const positiveTab = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.startsWith('Positive ('))
+    act(() => positiveTab?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+
+    expect(container.querySelectorAll('article.skillUpgradeItem')).toHaveLength(50)
+    expect(container.textContent ?? '').toContain('Show 5 more positive signals')
+    expect(container.textContent ?? '').not.toContain('more negative signals')
+  })
+
+  it('renders a colored polarity toggle per approved signal and forwards clicks', () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+    })
+
+    const togglePolarity = vi.fn()
+    const positiveSignal = {
+      id: 1,
+      owner_id: 'default-owner',
+      phrase: 'share updated resume',
+      normalized_phrase: 'share updated resume',
+      polarity: 'positive_recruiter_jd',
+      source_examples_count: 3,
+      sample_evidence: [],
+      confidence_aggregate: 0.9,
+      last_intent_type: 'recruiter_job_requirement',
+      status: 'approved',
+      created_at: '2026-07-31T00:00:00Z',
+      updated_at: '2026-07-31T00:00:00Z',
+    }
+    const negativeSignal = { ...positiveSignal, id: 2, phrase: 'unsubscribe', polarity: 'negative_newsletter' }
+
+    act(() => {
+      root.render(
+        <JobIntentLearningSection
+          pendingSignals={[]}
+          approvedSignals={[positiveSignal, negativeSignal]}
+          loading={false}
+          busySignalKey={null}
+          approveAllSignals={() => {}}
+          approveSignal={() => {}}
+          dismissSignal={() => {}}
+          togglePolarity={togglePolarity}
+        />,
+      )
+    })
+
+    const clickTab = (label: string) => {
+      const tab = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.startsWith(label))
+      act(() => tab?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    }
+
+    clickTab('Positive (')
+    expect(container.textContent ?? '').toContain('PositiveExamples: 3')
+    const positiveButton = container.querySelector('.intentPolarityLight--positive') as HTMLButtonElement | null
+    expect(positiveButton?.textContent).toBe('Positive')
+    act(() => positiveButton?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    expect(togglePolarity).toHaveBeenCalledTimes(1)
+    expect(togglePolarity).toHaveBeenCalledWith(positiveSignal)
+
+    clickTab('Negative (')
+    expect(container.textContent ?? '').toContain('NegativeExamples: 3')
+    const negativeButton = container.querySelector('.intentPolarityLight--negative') as HTMLButtonElement | null
+    expect(negativeButton?.textContent).toBe('Negative')
+  })
+
+  it('renders an Embedded tab showing which top-ranked signals are currently embedded', () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+    })
+
+    const togglePolarity = vi.fn()
+    act(() => {
+      root.render(
+        <JobIntentLearningSection
+          pendingSignals={[]}
+          approvedSignals={[]}
+          embeddedSignals={[
+            { id: 11, phrase: 'share updated resume', polarity: 'positive_recruiter_jd', confidence: 0.9, embedded: true },
+            { id: 12, phrase: 'unsubscribe', polarity: 'negative_newsletter', confidence: 0.8, embedded: false },
+          ]}
+          loading={false}
+          busySignalKey={null}
+          approveAllSignals={() => {}}
+          approveSignal={() => {}}
+          dismissSignal={() => {}}
+          togglePolarity={togglePolarity}
+        />,
+      )
+    })
+
+    const embeddedTab = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.startsWith('Embedded ('))
+    expect(embeddedTab?.textContent).toBe('Embedded (2)')
+    act(() => embeddedTab?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+
+    expect(container.textContent ?? '').toContain('share updated resume')
+    expect(container.textContent ?? '').toContain('Embedded via SBERT')
+    expect(container.textContent ?? '').toContain('unsubscribe')
+    expect(container.textContent ?? '').toContain('Fallback (hash embedding — SBERT unavailable)')
+
+    const positiveToggle = container.querySelector('.intentPolarityLight--positive') as HTMLButtonElement | null
+    expect(positiveToggle?.tagName).toBe('BUTTON')
+    act(() => positiveToggle?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    expect(togglePolarity).toHaveBeenCalledWith({ id: 11, phrase: 'share updated resume', polarity: 'positive_recruiter_jd', confidence: 0.9, embedded: true })
+  })
+})

@@ -7,14 +7,16 @@ from typing import Callable
 from sqlalchemy.orm import Session
 
 from app.models import RecipientRoutingFeedback, RecruiterEmail
-from app.phase0 import RoutingEvidence, RoutingResult, analyze_recipient_routing, email_domain
-from app.routing import HeuristicRoutingAdapter, LearnedRoutingAdapter, RoutingDecision, RoutingPolicyInput, RoutingPolicyService
+from app.phase0 import RoutingEvidence, RoutingResult, email_domain
+from app.routing import HeuristicRoutingAdapter, RoutingDecision, RoutingPolicyInput, RoutingPolicyService
 
 
 @dataclass
 class RoutingRuntimeDeps:
     owner_id: str
     get_employer_domains: Callable[[Session], list[str]]
+    get_preferred_employer_cc_emails: Callable[[Session], list[str]] = lambda db: []
+    get_default_employer_cc_emails: Callable[[Session], list[str]] = lambda db: []
 
 
 class RoutingRuntimeService:
@@ -50,23 +52,10 @@ class RoutingRuntimeService:
         email.routing_candidates = self.routing_payload_json(routing.candidates)
 
     def apply_routing_decision(self, email: RecruiterEmail, routing: RoutingDecision) -> None:
-        email.recipient_email = routing.to_email
-        email.cc_email = routing.cc_email
-        email.routing_status = routing.status
-        email.routing_confidence = routing.confidence
-        email.routing_reason = routing.reason
-        email.routing_evidence = self.routing_payload_json(routing.evidence)
-        email.routing_candidates = self.routing_payload_json(routing.candidates)
+        self.apply_routing_result(email, routing.to_routing_result())
 
     def analyze_email_routing(self, db: Session, sender: str, subject: str, body: str, snippet: str = "") -> RoutingResult:
-        return analyze_recipient_routing(
-            sender,
-            subject,
-            body,
-            snippet,
-            learned_pairs=self.learned_recipient_pairs(db, sender),
-            employer_domains=self.deps.get_employer_domains(db),
-        )
+        return self.evaluate_routing_policy(db, sender, subject, body, snippet).to_routing_result()
 
     def evaluate_routing_policy(
         self,
@@ -97,13 +86,20 @@ class RoutingRuntimeService:
                     snippet=snippet,
                     learned_pairs=[],
                     routing_confirmed=routing_confirmed,
+                    preferred_employer_cc_emails=(
+                        self.deps.get_preferred_employer_cc_emails(db) if db is not None else []
+                    ),
+                    default_employer_cc_emails=(
+                        self.deps.get_default_employer_cc_emails(db) if db is not None else []
+                    ),
                 )
             )
 
         learned_pairs = self.learned_recipient_pairs(db, sender) if db else []
         employer_domains = self.deps.get_employer_domains(db) if db is not None else None
-        adapter = LearnedRoutingAdapter(fallback=HeuristicRoutingAdapter())
-        service = RoutingPolicyService(adapter=adapter)
+        preferred_employer_cc_emails = self.deps.get_preferred_employer_cc_emails(db) if db is not None else []
+        default_employer_cc_emails = self.deps.get_default_employer_cc_emails(db) if db is not None else []
+        service = RoutingPolicyService(adapter=HeuristicRoutingAdapter())
         return service.evaluate(
             RoutingPolicyInput(
                 sender=sender,
@@ -113,6 +109,8 @@ class RoutingRuntimeService:
                 learned_pairs=learned_pairs,
                 employer_domains=employer_domains,
                 routing_confirmed=routing_confirmed,
+                preferred_employer_cc_emails=preferred_employer_cc_emails,
+                default_employer_cc_emails=default_employer_cc_emails,
             )
         )
 

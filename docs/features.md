@@ -6,43 +6,36 @@
 
 | Feature | Runtime behavior | Evidence |
 | --- | --- | --- |
-| Gmail OAuth and inbox sync | OAuth start/url/status and sync endpoints are live | `GET /gmail/status`, `POST /gmail/oauth/start`, `GET /gmail/oauth/url`, `POST /gmail/sync` in `backend/app/main.py` |
-| Run-once automation | Run-once processing endpoint is live | `POST /automation/run-once` in `backend/app/main.py` and frontend call in `dashboard/src/App.tsx` |
-| Candidate queue workflow | Needs review, failed, sent queues with approve/reject/fail actions | `/candidates*` endpoints in backend and queue actions in `App.tsx` |
-| Premium number workflow | Re-extract, review classification, recruiter/employer buckets, opportunity CRUD and script generation are live | `/premium-numbers/*`, `/number-review/*`, `/recruiter-numbers/*`, `/employer-numbers/*`, `/recruiter-opportunities/*` |
-| Productivity analytics | View-event write and trend/event read endpoints are live | `/analytics/events/view`, `/analytics/events`, `/analytics/trend` |
-| Nvoids feed sync | External feed sync and run listing routes are live | `/external-feeds/nvoids/sync`, `/external-feeds/runs` |
+| Gmail controls | The dashboard calls status, OAuth bootstrap/URL, sync, and labeling-preview routes. | `GET /gmail/status`, `POST /gmail/oauth/start`, `GET /gmail/oauth/url`, `POST /gmail/sync`, and `POST /gmail/labeling/preview` in `backend/app/main.py`. |
+| Candidate workflow | Candidate lists support review, approve-send, reject, regenerate, bulk reject, recipient resolution, and dismissal. | `GET /candidates` and `/candidates/{email_id}/*` handlers in `backend/app/main.py`; focused approval and routing tests were run. |
+| Intake and routing | Manual email intake parses, filters, screens, scores, and routes a candidate. | `POST /phase0/emails/ingest` in `backend/app/main.py:ingest_email`. |
+| Premium-number workflow | Re-extraction, review classification, recruiter/employer buckets, opportunity CRUD, and cold-call script generation have routes and UI callers. | `/premium-numbers/*`, `/number-review/*`, `/recruiter-numbers/*`, `/employer-numbers/*`, and `/recruiter-opportunities/*`. |
+| Analytics | The UI records view events and requests event lists and trends. | `POST /analytics/events/view`, `GET /analytics/events`, and `GET /analytics/trend`. |
+| Settings and assets | Settings bootstrap/save plus resume and attachment CRUD routes are implemented. | `GET /settings/bootstrap`, `GET/PUT /settings`, and `/settings/resumes*` and `/settings/attachments*`. |
+| Recent runs and jobs | The dashboard reads recent runs and can enqueue/cancel RQ work. | `/recent-runs*` and `/jobs/*` routes. |
 
 ## Live (Optional) Behavior
 
 | Feature | Optional condition | Evidence |
 | --- | --- | --- |
-| AI drafting | Requires `feature_ai_enabled` and provider configuration | AI status and settings flags in `backend/app/main.py`, toggle/UI in `App.tsx` |
-| Semantic embeddings and blended scoring | Requires semantic feature/provider settings | semantic settings fields and AI status metadata in `main.py`; semantic toggle in `App.tsx` |
-| Telegram operations | Requires bot token/allowed chats and polling runtime | `/telegram/status` and runtime wiring in `main.py`; status display in `App.tsx` |
-| Google Sheets append | Best-effort append path on send flows when configured | integration hooks in orchestration path (backend service wiring) |
+| AI drafting and semantic embeddings | Provider configuration and relevant settings flags are required. | `GET /ai/status`, settings schema, and semantic service paths. |
+| Automation and auto polling | Execution depends on settings and running backend workers. | `POST /automation/run-once`, `POST /jobs/automation-run`, and settings-driven runtime loop. |
+| Nvoids sync | Sync rejects requests when `feature_nvoids_enabled` is false and requires the external integration. | `POST /external-feeds/nvoids/sync` checks `feature_nvoids_enabled`. |
+| Telegram | Bot configuration and polling runtime are required. | `GET /telegram/status` and `app/telegram_bot.py`. |
+| Google Sheets append | The send-side integration requires configuration and was not exercised in this audit. | Send orchestration integration path. |
+| In-app assistant | `FEATURE_CHAT_ENABLED=true` and a reachable local Ollama daemon are required. The widget remains visible with an explanatory disabled state otherwise. | `/chat/*`, `/mcp`, `app/ai/chat/*`, and `dashboard/src/features/chat/*`. |
 
 ## Persisted Flags With Runtime Effect
 
-| Setting | Runtime effect |
-| --- | --- |
-| `feature_auto_polling` | Enables periodic automation loop |
-| `feature_auto_poll_interval_minutes` | Controls auto-run interval bounds |
-| `feature_nvoids_enabled` | Enables manual Nvoids sync endpoint usage |
-| `feature_nvoids_auto_sync` | Enables periodic Nvoids sync behavior |
-| `feature_auto_send` | Enables auto-send phase behavior |
-| `feature_retry_queue` | Enables retry/promote behavior for failed items |
-| `feature_ai_enabled` | Enables AI draft generation paths |
-| `feature_semantic_enabled` | Enables semantic scoring paths |
+`feature_auto_polling`, `feature_nvoids_enabled`, `feature_nvoids_auto_sync`, `feature_auto_send`, `feature_retry_queue`, `feature_ai_enabled`, and `feature_semantic_enabled` are persisted settings used by runtime paths. Their configured values do not by themselves prove an external integration is operational.
 
 ## Placeholder Signals
 
-- Sidebar actions `New Campaign`, `Settings`, and `Help Center` remain presentational in current shell (`dashboard/src/components/Sidebar.tsx`).
+- The current sidebar includes presentational `New Campaign`, `Settings`, and `Help Center` controls in `dashboard/src/components/Sidebar.tsx`.
 
-Mermaid not needed: this update is feature inventory and status normalization, not a flow change.
+The in-app assistant flow is documented in `docs/mermaids-features.md`.
 
-- Audit date: 2026-05-30
+- Audit date: 2026-08-14
 - Branch: semantic-embeddings
-- Commit: 5991f97
-- Evidence basis: code inspection
-- Verification limits: no end-to-end runtime integration test run in this session.
+- Evidence basis: both
+- Verification limits: focused chat tests and a live tool-backed Ollama exchange passed; unrelated external integrations were not executed.

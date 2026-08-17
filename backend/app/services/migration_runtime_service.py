@@ -42,12 +42,7 @@ class MigrationRuntimeService:
         if current == head:
             return
 
-        logger.error(
-            "schema_migration_required current=%s head=%s allow_runtime_schema_patch=%s",
-            current,
-            head,
-            settings.allow_runtime_schema_patch,
-        )
+        logger.error("schema_migration_required current=%s head=%s", current, head)
 
         raise RuntimeError(
             "Database migration is required before startup. "

@@ -33,6 +33,7 @@ describe('Sidebar', () => {
           failedCount={2}
           runCount={3}
           sentCount={4}
+          inboxCount={6}
           premiumCount={5}
           activePage="run_queue"
           onNavigate={vi.fn()}
@@ -40,5 +41,39 @@ describe('Sidebar', () => {
       )
     })
     expect(container.textContent ?? '').toContain('Premium Numbers')
+    expect(container.textContent ?? '').toContain('Inbox6')
+  })
+
+  it('navigates to Settings from the footer', () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    const onNavigate = vi.fn()
+    cleanups.push(() => {
+      act(() => {
+        root.unmount()
+      })
+      container.remove()
+    })
+    act(() => {
+      root.render(
+        <Sidebar
+          running={false}
+          queueCount={0}
+          failedCount={0}
+          runCount={0}
+          sentCount={0}
+          premiumCount={0}
+          activePage="run_queue"
+          onNavigate={onNavigate}
+        />,
+      )
+    })
+
+    const settingsButton = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Settings',
+    )
+    act(() => settingsButton?.click())
+    expect(onNavigate).toHaveBeenCalledWith('settings')
   })
 })

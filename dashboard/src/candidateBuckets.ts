@@ -13,24 +13,19 @@ export type CandidateListResponse = {
   items: Candidate[]
   next_cursor: number | null
   has_next: boolean
-}
-
-export type CandidateBuckets = {
-  queue: Candidate[]
-  failed: Candidate[]
-  sent: Candidate[]
+  total: number
 }
 
 type RequestTracker = { current: number }
 
-export type BucketMeta = { nextCursor: number | null; hasNext: boolean; loaded: boolean }
+export type BucketMeta = { nextCursor: number | null; hasNext: boolean; loaded: boolean; total: number | null }
 export type BucketMetaMap = Record<CandidateState, BucketMeta>
 
 export function defaultBucketMeta(): BucketMetaMap {
   return {
-    needs_review: { nextCursor: null, hasNext: false, loaded: false },
-    failed: { nextCursor: null, hasNext: false, loaded: false },
-    approved_sent: { nextCursor: null, hasNext: false, loaded: false },
+    needs_review: { nextCursor: null, hasNext: false, loaded: false, total: null },
+    failed: { nextCursor: null, hasNext: false, loaded: false, total: null },
+    approved_sent: { nextCursor: null, hasNext: false, loaded: false, total: null },
   }
 }
 
@@ -55,6 +50,7 @@ export type CandidatePage = {
   items: Candidate[]
   nextCursor: number | null
   hasNext: boolean
+  total: number
 }
 
 export async function fetchCandidatesPageByState(
@@ -75,55 +71,7 @@ export async function fetchCandidatesPageByState(
     items: data.items,
     nextCursor: data.next_cursor,
     hasNext: data.has_next,
-  }
-}
-
-export async function fetchCandidatesByState(
-  apiBase: string,
-  state: CandidateState,
-  limit: number,
-  mailDate: string | null,
-  fetchImpl: typeof fetch,
-  signal?: AbortSignal,
-): Promise<Candidate[]> {
-  const page = await fetchCandidatesPageByState(apiBase, state, limit, mailDate, fetchImpl, undefined, signal)
-  return page.items
-}
-
-export async function refreshCandidateBuckets(args: {
-  apiBase: string
-  limit: number
-  mailDate: string | null
-  fetchImpl?: typeof fetch
-  tracker: RequestTracker
-  onStart?: () => void
-  onSuccess: (buckets: CandidateBuckets) => void
-  onError?: (error: Error) => void
-  onFinally?: () => void
-}): Promise<{ applied: boolean }> {
-  const fetchFn = args.fetchImpl ?? fetch
-  const requestId = args.tracker.current + 1
-  args.tracker.current = requestId
-  args.onStart?.()
-
-  try {
-    const [queue, failed, sent] = await Promise.all([
-      fetchCandidatesByState(args.apiBase, 'needs_review', args.limit, args.mailDate, fetchFn),
-      fetchCandidatesByState(args.apiBase, 'failed', args.limit, args.mailDate, fetchFn),
-      fetchCandidatesByState(args.apiBase, 'approved_sent', args.limit, args.mailDate, fetchFn),
-    ])
-    if (requestId !== args.tracker.current) return { applied: false }
-    args.onSuccess({ queue, failed, sent })
-    return { applied: true }
-  } catch (error) {
-    if (requestId === args.tracker.current) {
-      args.onError?.(error as Error)
-    }
-    return { applied: false }
-  } finally {
-    if (requestId === args.tracker.current) {
-      args.onFinally?.()
-    }
+    total: data.total,
   }
 }
 
@@ -203,7 +151,7 @@ export function useCandidateBuckets<TCandidate extends Candidate>(
         applyQueueForBucket(state, page.items as TCandidate[], append)
         setBucketMeta((prev) => ({
           ...prev,
-          [state]: { nextCursor: page.nextCursor, hasNext: page.hasNext, loaded: true },
+          [state]: { nextCursor: page.nextCursor, hasNext: page.hasNext, loaded: true, total: page.total },
         }))
       } catch (error) {
         if (requestId === candidateRefreshTrackerRef.current.current) {

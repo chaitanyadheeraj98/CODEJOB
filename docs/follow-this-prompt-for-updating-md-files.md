@@ -30,6 +30,7 @@ Do not edit these files during docs audit/update execution:
 1. `D:\My Websites\CodeJob\docs\agent-context.md`
 2. `D:\My Websites\CodeJob\docs\follow-this-prompt-for-updating-md-files.md`
 3. `D:\My Websites\CodeJob\docs\Rules.md`
+4. `D:\My Websites\CodeJob\docs\taxonomy.md`
 
 ### Markdown Lint Gate (Mandatory)
 

@@ -35,10 +35,11 @@ flowchart TD
 
 ## Reviewer Attention
 
-- Backend full verification is currently limited by stale import in `backend/tests/test_phone_attribution.py`.
-- Frontend tests passed in this session (`npm test -- --run`), but lint/build were not rerun.
+- `dashboard` verification passed in this session: `24` test files and `78` tests.
+- The focused premium-number, analytics, and Telegram backend batch produced `30 passed, 1 failed`; the failing re-extraction test is tracked in `problem-fix-log.md` and `snowball.md`.
+- Gmail OAuth, Gmail sync, Nvoids, Telegram polling, RQ workers, and Sheets append were not executed against configured external services.
 
-- Audit date: 2026-05-22
-- Branch: external-recruiter-feed-ingestion
+- Audit date: 2026-08-05
+- Branch: semantic-embeddings
 - Evidence basis: both
-- Verification limits: backend full-suite pass cannot be claimed due collection blocker.
+- Verification limits: no full backend-suite result; one focused premium-number regression is unresolved.

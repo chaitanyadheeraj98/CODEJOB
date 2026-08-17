@@ -12,26 +12,62 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     deepseek_api_key: str = Field(default="", validation_alias="Deepseek_API_KEY")
     deepseek_base_url: str = "https://api.deepseek.com"
-    deepseek_model_fast: str = "deepseek-chat"
+    deepseek_model_fast: str = "deepseek-v4-flash"
+    deepseek_model_pro: str = Field(default="deepseek-v4-pro", validation_alias="DEEPSEEK_MODEL_PRO")
     deepseek_timeout_seconds: float = 20.0
     feature_deepseek_enabled: bool = False
+    role_manifest_child_creation_enabled: bool = Field(
+        default=False,
+        validation_alias="ROLE_MANIFEST_CHILD_CREATION_ENABLED",
+    )
+    groq_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("CodeJobGroq", "GROQ_API_KEY", "Groq_API_KEY"),
+    )
+    groq_base_url: str = "https://api.groq.com/openai/v1"
+    groq_gate_model: str = Field(
+        default="llama-3.1-8b-instant",
+        validation_alias=AliasChoices("CodeJobGroq_Model", "GROQ_GATE_MODEL"),
+    )
+    groq_gate_timeout_seconds: float = 20.0
+    groq_gate_strict_json: bool = True
+    groq_gate_body_char_limit: int = 6000
+    groq_gate_max_retries: int = 2
+    groq_gate_redact_contact_info: bool = True
+    role_manifest_groq_model: str = "llama-3.1-8b-instant"
+    role_manifest_extraction_passes_deterministic: int = 1
+    role_manifest_extraction_passes_variance: int = 2
+    role_manifest_retry_temperature: float = 0.4
+    role_manifest_max_tokens_groq: int = 1600
+    role_manifest_max_calls_per_email: int = 12
+    role_manifest_max_source_chars: int = 12000
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_chat_model: str = "gemma4:31b-cloud"
+    ollama_timeout_seconds: float = 60.0
+    ollama_max_tool_iterations: int = 6
+    feature_chat_enabled: bool = False
+    chat_history_max_messages: int = 20
+    chat_message_char_limit: int = 4000
     google_client_id: str = ""
     google_client_secret: str = ""
     google_redirect_uri: str = "http://localhost:8080/"
     google_token_path: str = "./data/google_token.json"
     gmail_label_filter: str = ""
     google_login_hint: str = ""
+    public_base_url: str = ""
+    tracking_secret_key: str = ""
     google_sheets_tracking_enabled: bool = False
     google_sheets_tracking_spreadsheet_id: str = "1F73Iax75j2rGGb53GGqTmAkEK0o19nmg"
     google_sheets_tracking_tab_name: str = "Sheet1"
     owner_id: str = "default-owner"
     resume_storage_dir: str = "./data/resumes"
+    attachment_storage_dir: str = "./data/attachments"
     qualification_threshold: float = 0.6
     feature_auto_polling: bool = False
     feature_auto_poll_interval_minutes: int = 10
     feature_auto_send: bool = False
     feature_retry_queue: bool = False
-    semantic_embedding_provider: str = "hash"
+    semantic_embedding_provider: str = "sbert"
     semantic_embedding_model: str = "text-embedding-3-small"
     semantic_embedding_dimension: int = 256
     google_embedding_provider: str = Field(
@@ -54,6 +90,16 @@ class Settings(BaseSettings):
     semantic_embedding_fallback_model: str = "openai/text-embedding-3-small"
     semantic_embedding_sbert_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     semantic_embedding_sbert_device: str = "cpu"
+    nvoids_detail_connect_timeout_seconds: float = 10.0
+    nvoids_detail_read_timeout_seconds: float = 45.0
+    nvoids_detail_write_timeout_seconds: float = 10.0
+    nvoids_detail_pool_timeout_seconds: float = 10.0
+    nvoids_detail_retry_attempts: int = 3
+    nvoids_detail_retry_backoff_seconds: str = "2,5,10"
+    hf_token: str = Field(
+        default="",
+        validation_alias=AliasChoices("HF_TOKEN", "HUGGINGFACE_HUB_TOKEN"),
+    )
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     semantic_embedding_timeout_seconds: float = 20.0
@@ -65,21 +111,36 @@ class Settings(BaseSettings):
     telegram_action_pin: str = ""
     telegram_alerts_enabled: bool = True
     telegram_auth_ttl_minutes: int = 30
-    allow_runtime_schema_patch: bool = False
-
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         populate_by_name=True,
     )
 
+    def _normalize_runtime_embedding_provider(self, provider: str | None) -> str | None:
+        normalized = (provider or "").strip().lower()
+        if normalized in {"sbert", "hash"}:
+            return normalized
+        if normalized in {"gemini", "openrouter", "openai"}:
+            return "sbert"
+        return None
+
     @property
     def effective_semantic_embedding_provider(self) -> str:
-        primary = (self.semantic_embedding_provider or "").strip().lower()
-        legacy = (self.google_embedding_provider or "").strip().lower()
-        if primary and not (primary == "hash" and legacy):
+        primary = self._normalize_runtime_embedding_provider(self.semantic_embedding_provider)
+        if primary:
             return primary
-        return legacy or "hash"
+        legacy = self._normalize_runtime_embedding_provider(self.google_embedding_provider)
+        if legacy:
+            return legacy
+        return "sbert"
+
+    @property
+    def effective_semantic_embedding_model(self) -> str:
+        if self.effective_semantic_embedding_provider == "hash":
+            dims = max(32, int(self.semantic_embedding_dimension or 256))
+            return f"hash:{dims}"
+        return (self.semantic_embedding_sbert_model or "sentence-transformers/all-MiniLM-L6-v2").strip() or "sentence-transformers/all-MiniLM-L6-v2"
 
 
 settings = Settings()

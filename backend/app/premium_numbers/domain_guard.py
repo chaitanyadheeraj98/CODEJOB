@@ -14,11 +14,6 @@ def employer_domains_for_owner(db: Session, owner_id: str) -> set[str]:
     return normalize_employer_domains(raw_domains)
 
 
-def is_premium_numbers_sender_allowed(sender: str, employer_domains: set[str]) -> bool:
-    domain = email_domain(sender or "")
-    return bool(domain and domain in employer_domains)
-
-
 def should_capture_premium_numbers(db: Session, email: RecruiterEmail) -> tuple[bool, str, str]:
     domains = employer_domains_for_owner(db, email.owner_id)
     sender_domain = email_domain(email.sender or "")

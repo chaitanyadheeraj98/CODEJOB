@@ -51,11 +51,6 @@ $result.Add("Source last modified (UTC): $($inputItem.LastWriteTimeUtc.ToString(
 $result.Add("Strategy: Use this compact report first. Escalate to GRAPH_REPORT.md only for ambiguous or cross-cutting tasks.")
 $result.Add("")
 
-$firstHeadingIndex = ($lines | Select-String -Pattern "^\s*#").LineNumber | Select-Object -First 1
-if (-not $firstHeadingIndex) {
-  $firstHeadingIndex = 1
-}
-
 $prefaceTake = [Math]::Min(40, $lines.Count)
 $result.Add("## Preface Snapshot")
 for ($i = 0; $i -lt $prefaceTake; $i++) {

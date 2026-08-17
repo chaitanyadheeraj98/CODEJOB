@@ -1,9 +1,11 @@
+<!-- markdownlint-configure-file {"MD013": false} -->
+
 # CODEJOB Data Models and Data Flow
 
-Audit date: 2026-05-17  
-Branch: `snowball-md`
+Audit date: 2026-08-14
+Branch: `semantic-embeddings`
 
-## 1) Core entities
+## 1 Core entities
 
 ### `RecruiterEmail`
 
@@ -15,7 +17,7 @@ Primary workflow record with:
 - draft metadata + quality payload exposure
 - labeling/send tracking fields
 
-### `UserSettings`
+### Settings record
 
 Owner-scoped settings row including:
 
@@ -36,7 +38,12 @@ Versioned resume file metadata + optional semantic embedding cache.
 - `RecipientRoutingFeedback`
 - `ProductivityEvent`
 
-## 2) Phone-intelligence entities
+### Chat history
+
+- `ChatSession`: owner-scoped conversation title plus created and updated timestamps.
+- `ChatMessage`: ordered user, assistant, and tool audit rows linked to a session. Tool rows retain the tool name and compact call metadata.
+
+## 2 Phone-intelligence entities
 
 - `PremiumNumberLead`
 - `NumberReviewQueue`
@@ -44,7 +51,7 @@ Versioned resume file metadata + optional semantic embedding cache.
 - `EmployerNumber`
 - `RecruiterOpportunity`
 
-## 3) State and enum contracts
+## 3 State and enum contracts
 
 Candidate states used in code:
 
@@ -67,7 +74,7 @@ Opportunity statuses:
 
 - `New`, `Called`, `Applied`, `Follow Up`, `Closed`, `Not Interested`
 
-## 4) Duplicate-prevention and uniqueness
+## 4 Duplicate-prevention and uniqueness
 
 Active uniqueness protections include:
 
@@ -77,7 +84,7 @@ Active uniqueness protections include:
 - `ux_recruiter_opportunities_owner_recruiter_msg`
 - `ux_number_review_queue_owner_phone_email`
 
-## 5) Data flow summary
+## 5 Data flow summary
 
 1. Gmail candidate enters orchestration.
 2. `RecruiterEmail` inserted/updated with scoring/routing/draft details.
@@ -88,12 +95,21 @@ Active uniqueness protections include:
 4. Manual approval path updates send state and emits analytics.
 5. Optional Sheets append runs as best-effort side effect.
 
-## 6) Schema/runtime notes
+Chat uses a separate read-only flow:
+
+1. A user message is validated and persisted under an owner-scoped `ChatSession`.
+2. LangGraph may call an owner-scoped MCP tool for candidates, runs, inbox, AI health, or settings.
+3. Tool and assistant audit rows are persisted, while assistant text streams to the dashboard over SSE.
+
+## 6 Schema/runtime notes
 
 - Schema response contracts are defined in `backend/app/schemas.py`.
 - Routing evidence/candidates are stored as JSON text and parsed in schema validators.
-- SQLite schema evolution is currently additive at startup via `ensure_sqlite_phase0_columns()`.
+- Alembic is the only production schema writer; startup verifies the database is at head and never patches it.
 - Query bucket persistence is in `UserSettings.saved_gmail_queries_json` (not a standalone table).
+- Alembic revision `20260814_0015` creates `chat_sessions` and `chat_messages`; upgrade and downgrade are covered by a focused migration test.
 
-Evidence basis: code inspection  
-Verification limits: model/flow mapping reviewed from source; full backend suite currently blocked by stale `test_phone_attribution.py` import.
+- Audit date: 2026-08-17
+- Branch: semantic-embeddings
+- Evidence basis: both
+- Verification limits: SQLite/PostgreSQL migration chains and chat persistence round trips were tested; the unfiltered backend suite remains blocked during collection by the stale `app.phone_attribution` import.
