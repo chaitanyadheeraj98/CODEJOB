@@ -31,3 +31,8 @@ dependencies = [
     "langchain-mcp-adapters==0.3.2",
     "psycopg2-binary>=2.9.12",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

@@ -71,3 +71,4 @@ jobs:
       - run: uv sync --frozen
       - run: uv run alembic upgrade head
       - run: uv run python scripts/verify_schema_equivalence.py --database-url "$DATABASE_URL"
+      - run: uv run pytest tests/test_migration_0018.py
