@@ -17,6 +17,8 @@ depends_on = None
 
 def upgrade() -> None:
     bind = op.get_bind()
+    if "user_settings" not in sa.inspect(bind).get_table_names():
+        return
     columns = {column["name"] for column in sa.inspect(bind).get_columns("user_settings")}
     if "preferred_employer_cc_emails" not in columns:
         op.add_column(
@@ -37,6 +39,8 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     bind = op.get_bind()
+    if "user_settings" not in sa.inspect(bind).get_table_names():
+        return
     columns = {column["name"] for column in sa.inspect(bind).get_columns("user_settings")}
     for name in ("default_employer_cc_emails", "preferred_employer_cc_emails"):
         if name in columns:

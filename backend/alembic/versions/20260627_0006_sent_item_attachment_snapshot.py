@@ -16,8 +16,12 @@ depends_on = None
 
 
 def upgrade() -> None:
+    if "recruiter_emails" not in sa.inspect(op.get_bind()).get_table_names():
+        return
     op.add_column("recruiter_emails", sa.Column("sent_attachment_file_names_json", sa.Text(), nullable=True))
 
 
 def downgrade() -> None:
+    if "recruiter_emails" not in sa.inspect(op.get_bind()).get_table_names():
+        return
     op.drop_column("recruiter_emails", "sent_attachment_file_names_json")

@@ -17,6 +17,8 @@ depends_on = None
 
 def upgrade() -> None:
     bind = op.get_bind()
+    if "recruiter_emails" not in sa.inspect(bind).get_table_names():
+        return
     columns = {column["name"] for column in sa.inspect(bind).get_columns("recruiter_emails")}
 
     if "company" not in columns:
@@ -42,6 +44,8 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     bind = op.get_bind()
+    if "recruiter_emails" not in sa.inspect(bind).get_table_names():
+        return
     columns = {column["name"] for column in sa.inspect(bind).get_columns("recruiter_emails")}
 
     if "interview_type" in columns:

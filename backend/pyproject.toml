@@ -29,4 +29,5 @@ dependencies = [
     "langchain-ollama==1.1.0",
     "mcp==1.29.0",
     "langchain-mcp-adapters==0.3.2",
+    "psycopg2-binary>=2.9.12",
 ]

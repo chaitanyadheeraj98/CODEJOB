@@ -39,7 +39,7 @@ from app.automation import (
     RunOrchestratorDependencies,
     RunOrchestratorRequest,
 )
-from app.db import Base, SessionLocal, engine, ensure_sqlite_phase0_columns, get_db
+from app.db import SessionLocal, get_db
 from app.gates import classify_email_intent
 from app.ai.groq_client import groq_request_mode_for_model
 from app.gmail_client import (

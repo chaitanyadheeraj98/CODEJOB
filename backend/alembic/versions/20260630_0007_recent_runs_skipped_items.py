@@ -31,8 +31,8 @@ def upgrade() -> None:
         sa.Column("skipped_count", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("failed_count", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("skipped_item_count", sa.Integer(), nullable=False, server_default="0"),
-        sa.Column("created_at", sa.DateTime(), nullable=True),
-        sa.Column("updated_at", sa.DateTime(), nullable=True),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(), nullable=False),
     )
     op.create_index("ix_recent_runs_owner_id", "recent_runs", ["owner_id"])
     op.create_index("ix_recent_runs_run_source", "recent_runs", ["run_source"])
@@ -57,7 +57,7 @@ def upgrade() -> None:
         sa.Column("location", sa.String(length=255), nullable=True),
         sa.Column("source_url", sa.String(length=1200), nullable=True),
         sa.Column("gmail_message_url", sa.String(length=1200), nullable=True),
-        sa.Column("created_at", sa.DateTime(), nullable=True),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
     )
     op.create_index("ix_recent_run_skipped_items_owner_id", "recent_run_skipped_items", ["owner_id"])
     op.create_index("ix_recent_run_skipped_items_run_key", "recent_run_skipped_items", ["run_key"])

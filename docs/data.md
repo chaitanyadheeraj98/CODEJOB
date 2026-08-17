@@ -105,11 +105,11 @@ Chat uses a separate read-only flow:
 
 - Schema response contracts are defined in `backend/app/schemas.py`.
 - Routing evidence/candidates are stored as JSON text and parsed in schema validators.
-- SQLite schema evolution is currently additive at startup via `ensure_sqlite_phase0_columns()`.
+- Alembic is the only production schema writer; startup verifies the database is at head and never patches it.
 - Query bucket persistence is in `UserSettings.saved_gmail_queries_json` (not a standalone table).
 - Alembic revision `20260814_0015` creates `chat_sessions` and `chat_messages`; upgrade and downgrade are covered by a focused migration test.
 
-- Audit date: 2026-08-14
+- Audit date: 2026-08-17
 - Branch: semantic-embeddings
 - Evidence basis: both
-- Verification limits: chat persistence and migration round trips were tested; the full backend suite remains blocked during collection by the stale `app.phone_attribution` import.
+- Verification limits: SQLite/PostgreSQL migration chains and chat persistence round trips were tested; the unfiltered backend suite remains blocked during collection by the stale `app.phone_attribution` import.

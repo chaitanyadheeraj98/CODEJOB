@@ -5,6 +5,7 @@ from pathlib import Path
 import sqlalchemy as sa
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -47,7 +48,7 @@ class MultiEmployerCcMigrationTests(unittest.TestCase):
                     values = connection.exec_driver_sql(
                         "SELECT preferred_employer_cc_emails, default_employer_cc_emails FROM user_settings"
                     ).one()
-                self.assertEqual(revision, "20260810_0014")
+                self.assertEqual(revision, ScriptDirectory.from_config(config).get_current_head())
                 self.assertIn("preferred_employer_cc_emails", columns)
                 self.assertIn("default_employer_cc_emails", columns)
                 self.assertEqual(values, ("ops@example.com", ""))

@@ -536,6 +536,9 @@ class PremiumNumberLead(Base):
 
 class RecruiterNumber(Base):
     __tablename__ = "recruiter_numbers"
+    __table_args__ = (
+        UniqueConstraint("owner_id", "normalized_phone_number", name="ux_recruiter_numbers_owner_phone"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     owner_id: Mapped[str] = mapped_column(String(100), index=True)
@@ -552,6 +555,9 @@ class RecruiterNumber(Base):
 
 class EmployerNumber(Base):
     __tablename__ = "employer_numbers"
+    __table_args__ = (
+        UniqueConstraint("owner_id", "normalized_phone_number", name="ux_employer_numbers_owner_phone"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     owner_id: Mapped[str] = mapped_column(String(100), index=True)
@@ -566,6 +572,14 @@ class EmployerNumber(Base):
 
 class RecruiterOpportunity(Base):
     __tablename__ = "recruiter_opportunities"
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_id",
+            "recruiter_number_id",
+            "gmail_message_id",
+            name="ux_recruiter_opportunities_owner_recruiter_msg",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     owner_id: Mapped[str] = mapped_column(String(100), index=True)
@@ -596,6 +610,14 @@ class RecruiterOpportunity(Base):
 
 class NumberReviewQueue(Base):
     __tablename__ = "number_review_queue"
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_id",
+            "normalized_phone_number",
+            "source_email_id",
+            name="ux_number_review_queue_owner_phone_email",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     owner_id: Mapped[str] = mapped_column(String(100), index=True)

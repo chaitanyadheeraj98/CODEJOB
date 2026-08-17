@@ -4,7 +4,6 @@ import logging
 import threading
 from collections.abc import Callable
 
-from app.db import Base, engine, ensure_sqlite_phase0_columns
 from app.gmail_client import is_gmail_configured
 from app.config import settings
 from app.runtime_state import runtime_state
@@ -39,8 +38,6 @@ class StartupService:
                 settings.google_embedding_provider,
                 settings.effective_semantic_embedding_provider,
             )
-        Base.metadata.create_all(bind=engine)
-        ensure_sqlite_phase0_columns()
         MigrationRuntimeService().ensure_schema_ready()
         self._ensure_default_settings()
         self._ensure_labeling_service()

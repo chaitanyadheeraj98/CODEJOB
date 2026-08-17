@@ -16,53 +16,93 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "user_settings",
-        sa.Column("feature_gmail_requirement_groups_enabled", sa.Boolean(), nullable=False, server_default=sa.text("0")),
-    )
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    tables = set(inspector.get_table_names())
 
-    op.create_table(
-        "gmail_requirement_groups",
-        sa.Column("id", sa.Integer(), primary_key=True),
-        sa.Column("owner_id", sa.String(length=100), nullable=False),
-        sa.Column("display_name", sa.String(length=255), nullable=False, server_default=""),
-        sa.Column("group_email", sa.String(length=255), nullable=False, server_default=""),
-        sa.Column("normalized_group_email", sa.String(length=255), nullable=False, server_default=""),
-        sa.Column("group_slug", sa.String(length=255), nullable=True),
-        sa.Column("enabled", sa.Boolean(), nullable=False, server_default=sa.text("1")),
-        sa.Column("created_at", sa.DateTime(), nullable=True),
-        sa.Column("updated_at", sa.DateTime(), nullable=True),
-        sa.UniqueConstraint("owner_id", "normalized_group_email", name="ux_gmail_requirement_groups_owner_normalized"),
-    )
-    op.create_index("ix_gmail_requirement_groups_owner_id", "gmail_requirement_groups", ["owner_id"])
-    op.create_index("ix_gmail_requirement_groups_group_email", "gmail_requirement_groups", ["group_email"])
-    op.create_index("ix_gmail_requirement_groups_normalized_group_email", "gmail_requirement_groups", ["normalized_group_email"])
+    if "user_settings" in tables:
+        settings_columns = {column["name"] for column in inspector.get_columns("user_settings")}
+        if "feature_gmail_requirement_groups_enabled" not in settings_columns:
+            op.add_column(
+                "user_settings",
+                sa.Column(
+                    "feature_gmail_requirement_groups_enabled",
+                    sa.Boolean(),
+                    nullable=False,
+                    server_default=sa.false(),
+                ),
+            )
 
+    if "gmail_requirement_groups" not in tables:
+        op.create_table(
+            "gmail_requirement_groups",
+            sa.Column("id", sa.Integer(), primary_key=True),
+            sa.Column("owner_id", sa.String(length=100), nullable=False),
+            sa.Column("display_name", sa.String(length=255), nullable=False, server_default=""),
+            sa.Column("group_email", sa.String(length=255), nullable=False, server_default=""),
+            sa.Column("normalized_group_email", sa.String(length=255), nullable=False, server_default=""),
+            sa.Column("group_slug", sa.String(length=255), nullable=True),
+            sa.Column("enabled", sa.Boolean(), nullable=False, server_default=sa.true()),
+            sa.Column("created_at", sa.DateTime(), nullable=False),
+            sa.Column("updated_at", sa.DateTime(), nullable=False),
+            sa.UniqueConstraint(
+                "owner_id",
+                "normalized_group_email",
+                name="ux_gmail_requirement_groups_owner_normalized",
+            ),
+        )
+        op.create_index("ix_gmail_requirement_groups_owner_id", "gmail_requirement_groups", ["owner_id"])
+        op.create_index("ix_gmail_requirement_groups_group_email", "gmail_requirement_groups", ["group_email"])
+        op.create_index(
+            "ix_gmail_requirement_groups_normalized_group_email",
+            "gmail_requirement_groups",
+            ["normalized_group_email"],
+        )
+
+    group_columns = (
+        sa.Column("source_group_name", sa.String(length=255), nullable=True),
+        sa.Column("source_group_email", sa.String(length=255), nullable=True),
+        sa.Column("source_group_match_method", sa.String(length=80), nullable=True),
+        sa.Column("source_group_trusted", sa.Boolean(), nullable=True),
+        sa.Column("qualification_result", sa.String(length=80), nullable=True),
+        sa.Column("blocking_rule", sa.String(length=120), nullable=True),
+        sa.Column("qualification_detail", sa.Text(), nullable=True),
+        sa.Column("qualification_context_json", sa.Text(), nullable=True),
+    )
     for table_name in ("recruiter_emails", "recent_run_skipped_items"):
-        op.add_column(table_name, sa.Column("source_group_name", sa.String(length=255), nullable=True))
-        op.add_column(table_name, sa.Column("source_group_email", sa.String(length=255), nullable=True))
-        op.add_column(table_name, sa.Column("source_group_match_method", sa.String(length=80), nullable=True))
-        op.add_column(table_name, sa.Column("source_group_trusted", sa.Boolean(), nullable=True))
-        op.add_column(table_name, sa.Column("qualification_result", sa.String(length=80), nullable=True))
-        op.add_column(table_name, sa.Column("blocking_rule", sa.String(length=120), nullable=True))
-        op.add_column(table_name, sa.Column("qualification_detail", sa.Text(), nullable=True))
-        op.add_column(table_name, sa.Column("qualification_context_json", sa.Text(), nullable=True))
+        if table_name not in tables:
+            continue
+        existing_columns = {column["name"] for column in sa.inspect(bind).get_columns(table_name)}
+        for column in group_columns:
+            if column.name not in existing_columns:
+                op.add_column(table_name, column.copy())
 
 
 def downgrade() -> None:
+    bind = op.get_bind()
+    tables = set(sa.inspect(bind).get_table_names())
+    group_column_names = (
+        "qualification_context_json",
+        "qualification_detail",
+        "blocking_rule",
+        "qualification_result",
+        "source_group_trusted",
+        "source_group_match_method",
+        "source_group_email",
+        "source_group_name",
+    )
     for table_name in ("recent_run_skipped_items", "recruiter_emails"):
-        op.drop_column(table_name, "qualification_context_json")
-        op.drop_column(table_name, "qualification_detail")
-        op.drop_column(table_name, "blocking_rule")
-        op.drop_column(table_name, "qualification_result")
-        op.drop_column(table_name, "source_group_trusted")
-        op.drop_column(table_name, "source_group_match_method")
-        op.drop_column(table_name, "source_group_email")
-        op.drop_column(table_name, "source_group_name")
+        if table_name not in tables:
+            continue
+        existing_columns = {column["name"] for column in sa.inspect(bind).get_columns(table_name)}
+        for column_name in group_column_names:
+            if column_name in existing_columns:
+                op.drop_column(table_name, column_name)
 
-    op.drop_index("ix_gmail_requirement_groups_normalized_group_email", table_name="gmail_requirement_groups")
-    op.drop_index("ix_gmail_requirement_groups_group_email", table_name="gmail_requirement_groups")
-    op.drop_index("ix_gmail_requirement_groups_owner_id", table_name="gmail_requirement_groups")
-    op.drop_table("gmail_requirement_groups")
+    if "gmail_requirement_groups" in tables:
+        op.drop_table("gmail_requirement_groups")
 
-    op.drop_column("user_settings", "feature_gmail_requirement_groups_enabled")
+    if "user_settings" in tables:
+        settings_columns = {column["name"] for column in sa.inspect(bind).get_columns("user_settings")}
+        if "feature_gmail_requirement_groups_enabled" in settings_columns:
+            op.drop_column("user_settings", "feature_gmail_requirement_groups_enabled")

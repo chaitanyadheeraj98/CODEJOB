@@ -40,8 +40,8 @@ def upgrade() -> None:
             sa.Column("embedding_status", sa.String(length=40), nullable=False, server_default="pending"),
             sa.Column("embedding_json", sa.Text(), nullable=True),
             sa.Column("status", sa.String(length=40), nullable=False, server_default="approved"),
-            sa.Column("created_at", sa.DateTime(), nullable=True),
-            sa.Column("updated_at", sa.DateTime(), nullable=True),
+            sa.Column("created_at", sa.DateTime(), nullable=False),
+            sa.Column("updated_at", sa.DateTime(), nullable=False),
         )
     else:
         columns = _columns(inspector, "custom_skill_taxonomy_entries")
@@ -82,8 +82,8 @@ def upgrade() -> None:
             sa.Column("confidence_aggregate", sa.Float(), nullable=False, server_default="0.0"),
             sa.Column("last_intent_type", sa.String(length=80), nullable=True),
             sa.Column("status", sa.String(length=40), nullable=False, server_default="pending"),
-            sa.Column("created_at", sa.DateTime(), nullable=True),
-            sa.Column("updated_at", sa.DateTime(), nullable=True),
+            sa.Column("created_at", sa.DateTime(), nullable=False),
+            sa.Column("updated_at", sa.DateTime(), nullable=False),
         )
 
     if "canonical_entity_taxonomy_entries" not in tables:
@@ -98,8 +98,8 @@ def upgrade() -> None:
             sa.Column("embedding_status", sa.String(length=40), nullable=False, server_default="pending"),
             sa.Column("embedding_json", sa.Text(), nullable=True),
             sa.Column("status", sa.String(length=40), nullable=False, server_default="approved"),
-            sa.Column("created_at", sa.DateTime(), nullable=True),
-            sa.Column("updated_at", sa.DateTime(), nullable=True),
+            sa.Column("created_at", sa.DateTime(), nullable=False),
+            sa.Column("updated_at", sa.DateTime(), nullable=False),
             sa.UniqueConstraint(
                 "owner_id",
                 "entity_type",

@@ -5,6 +5,7 @@ from pathlib import Path
 import sqlalchemy as sa
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 
 from app.config import settings
 
@@ -75,7 +76,7 @@ class StrictCandidateScreeningMigrationTests(unittest.TestCase):
                 inspector = sa.inspect(engine)
                 with engine.connect() as connection:
                     revision = connection.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one()
-                self.assertEqual(revision, "20260730_0011")
+                self.assertEqual(revision, ScriptDirectory.from_config(config).get_current_head())
                 self.assertIn(
                     "feature_strict_candidate_screening_enabled",
                     {column["name"] for column in inspector.get_columns("user_settings")},

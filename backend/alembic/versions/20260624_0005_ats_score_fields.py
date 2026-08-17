@@ -16,6 +16,8 @@ depends_on = None
 
 
 def upgrade() -> None:
+    if "recruiter_emails" not in sa.inspect(op.get_bind()).get_table_names():
+        return
     op.add_column("recruiter_emails", sa.Column("ats_score", sa.Float(), nullable=True))
     op.add_column("recruiter_emails", sa.Column("ats_score_source", sa.String(length=80), nullable=True))
     op.add_column("recruiter_emails", sa.Column("ats_summary", sa.Text(), nullable=True))
@@ -23,6 +25,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    if "recruiter_emails" not in sa.inspect(op.get_bind()).get_table_names():
+        return
     op.drop_column("recruiter_emails", "ats_breakdown_json")
     op.drop_column("recruiter_emails", "ats_summary")
     op.drop_column("recruiter_emails", "ats_score_source")

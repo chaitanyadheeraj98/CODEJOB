@@ -22,28 +22,37 @@ def _columns(inspector, table: str) -> set[str]:
 def upgrade() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
+    tables = set(inspector.get_table_names())
 
-    recruiter_columns = _columns(inspector, "recruiter_emails")
-    for name, column in (
-        ("tracking_token", sa.Column("tracking_token", sa.String(length=64), nullable=True)),
-        ("opened_at", sa.Column("opened_at", sa.DateTime(), nullable=True)),
-        ("open_count", sa.Column("open_count", sa.Integer(), nullable=False, server_default="0")),
-    ):
-        if name not in recruiter_columns:
-            op.add_column("recruiter_emails", column)
-    recruiter_indexes = {index["name"] for index in sa.inspect(bind).get_indexes("recruiter_emails")}
-    if "ix_recruiter_emails_tracking_token" not in recruiter_indexes:
-        op.create_index("ix_recruiter_emails_tracking_token", "recruiter_emails", ["tracking_token"], unique=True)
-
-    settings_columns = _columns(sa.inspect(bind), "user_settings")
-    for name in ("feature_email_tracking_enabled", "feature_reply_inbox_enabled"):
-        if name not in settings_columns:
-            op.add_column(
-                "user_settings",
-                sa.Column(name, sa.Boolean(), nullable=False, server_default=sa.false()),
+    if "recruiter_emails" in tables:
+        recruiter_columns = _columns(inspector, "recruiter_emails")
+        for name, column in (
+            ("tracking_token", sa.Column("tracking_token", sa.String(length=64), nullable=True)),
+            ("opened_at", sa.Column("opened_at", sa.DateTime(), nullable=True)),
+            ("open_count", sa.Column("open_count", sa.Integer(), nullable=False, server_default="0")),
+        ):
+            if name not in recruiter_columns:
+                op.add_column("recruiter_emails", column)
+        recruiter_indexes = {
+            index["name"] for index in sa.inspect(bind).get_indexes("recruiter_emails")
+        }
+        if "ix_recruiter_emails_tracking_token" not in recruiter_indexes:
+            op.create_index(
+                "ix_recruiter_emails_tracking_token",
+                "recruiter_emails",
+                ["tracking_token"],
+                unique=True,
             )
 
-    tables = set(sa.inspect(bind).get_table_names())
+    if "user_settings" in tables:
+        settings_columns = _columns(sa.inspect(bind), "user_settings")
+        for name in ("feature_email_tracking_enabled", "feature_reply_inbox_enabled"):
+            if name not in settings_columns:
+                op.add_column(
+                    "user_settings",
+                    sa.Column(name, sa.Boolean(), nullable=False, server_default=sa.false()),
+                )
+
     if "email_open_events" not in tables:
         op.create_table(
             "email_open_events",
@@ -98,11 +107,23 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_table("email_reply_messages")
-    op.drop_table("email_conversations")
-    op.drop_table("email_open_events")
-    op.drop_index("ix_recruiter_emails_tracking_token", table_name="recruiter_emails")
-    for name in ("feature_reply_inbox_enabled", "feature_email_tracking_enabled"):
-        op.drop_column("user_settings", name)
-    for name in ("open_count", "opened_at", "tracking_token"):
-        op.drop_column("recruiter_emails", name)
+    bind = op.get_bind()
+    tables = set(sa.inspect(bind).get_table_names())
+    for table_name in ("email_reply_messages", "email_conversations", "email_open_events"):
+        if table_name in tables:
+            op.drop_table(table_name)
+    if "recruiter_emails" in tables:
+        recruiter_indexes = {
+            index["name"] for index in sa.inspect(bind).get_indexes("recruiter_emails")
+        }
+        if "ix_recruiter_emails_tracking_token" in recruiter_indexes:
+            op.drop_index("ix_recruiter_emails_tracking_token", table_name="recruiter_emails")
+        recruiter_columns = _columns(sa.inspect(bind), "recruiter_emails")
+        for name in ("open_count", "opened_at", "tracking_token"):
+            if name in recruiter_columns:
+                op.drop_column("recruiter_emails", name)
+    if "user_settings" in tables:
+        settings_columns = _columns(sa.inspect(bind), "user_settings")
+        for name in ("feature_reply_inbox_enabled", "feature_email_tracking_enabled"):
+            if name in settings_columns:
+                op.drop_column("user_settings", name)
