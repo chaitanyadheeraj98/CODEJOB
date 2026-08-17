@@ -32,7 +32,7 @@ from app.gmail_client import GmailMessageCandidate, MailAttachment
 from app.models import AttachmentAsset, DraftEditFeedback, EmailConversation, EmailReplyMessage, GmailRequirementGroup, RecipientRoutingFeedback, RecentRun, RecentRunSkippedItem, RecruiterEmail, ResumeAsset, SyncRun, UserSettings
 from app.parsing import build_skills_json_payload
 from app.parsing.document_extraction import prepare_gmail_parse_body
-from app.phase0 import RoutingResult, parse_email_with_details
+from app.phase0 import RoutingResult, jd_entity_fields_from_parsed, parse_email_with_details
 from app.recent_runs import (
     RUN_SOURCE_AUTOMATION,
     RUN_SOURCE_GMAIL_SYNC,
@@ -127,6 +127,7 @@ class OrchestrationDeps:
     get_message_thread_id: Callable[[str], str] | None = None
     get_message_rfc_message_id: Callable[[str], str] | None = None
     list_thread_messages: Callable[[str], list[GmailMessageCandidate]] | None = None
+    list_unread_thread_ids: Callable[[], set[str]] | None = None
 
 
 class OrchestrationService:
@@ -216,6 +217,43 @@ class OrchestrationService:
             raise HTTPException(status_code=404, detail="Candidate not found")
         return email
 
+    def _sent_thread_ids(self, db: Session) -> set[str]:
+        sent_thread_ids = {
+            str(row[0])
+            for row in db.query(RecruiterEmail.external_thread_id)
+            .filter(
+                RecruiterEmail.owner_id == self.deps.owner_id,
+                RecruiterEmail.sent_status == "sent",
+                RecruiterEmail.external_thread_id.is_not(None),
+            )
+            .all()
+            if row[0]
+        }
+        sent_thread_ids.update(
+            str(row[0])
+            for row in db.query(EmailConversation.external_thread_id)
+            .filter(EmailConversation.owner_id == self.deps.owner_id)
+            .all()
+            if row[0]
+        )
+        return sent_thread_ids
+
+    def count_live_unread_replies(self, db: Session) -> int:
+        """Cheap, accurate-ish live count: unread inbox threads that are also sent threads.
+
+        Unlike _capture_inbound_replies, this only checks thread-id membership (no
+        per-message header fetch), so it misses the rfc-message-id-in-headers path
+        that catches a reply landing on a different thread id. That secondary path
+        exists for an edge case; the full sync still runs it. This is meant as a
+        cheap "worth checking" signal, not a replacement for the real scan.
+        """
+        if self.deps.list_unread_thread_ids is None:
+            return 0
+        sent_thread_ids = self._sent_thread_ids(db)
+        if not sent_thread_ids:
+            return 0
+        return len(sent_thread_ids & self.deps.list_unread_thread_ids())
+
     def _capture_inbound_replies(self, db: Session, user_settings: UserSettings) -> tuple[int, int]:
         """Scan for and ingest inbound replies to previously-sent recruiter emails.
 
@@ -244,24 +282,7 @@ class OrchestrationService:
         if not user_settings.feature_reply_inbox_enabled:
             return 0, 0
 
-        sent_thread_ids = {
-            str(row[0])
-            for row in db.query(RecruiterEmail.external_thread_id)
-            .filter(
-                RecruiterEmail.owner_id == self.deps.owner_id,
-                RecruiterEmail.sent_status == "sent",
-                RecruiterEmail.external_thread_id.is_not(None),
-            )
-            .all()
-            if row[0]
-        }
-        sent_thread_ids.update(
-            str(row[0])
-            for row in db.query(EmailConversation.external_thread_id)
-            .filter(EmailConversation.owner_id == self.deps.owner_id)
-            .all()
-            if row[0]
-        )
+        sent_thread_ids = self._sent_thread_ids(db)
         sent_rfc_message_ids = {
             str(row[0]).strip().lower()
             for row in db.query(EmailReplyMessage.external_rfc_message_id)
@@ -582,6 +603,7 @@ class OrchestrationService:
                             ),
                             separators=(",", ":"),
                         ),
+                        **jd_entity_fields_from_parsed(parsed),
                         decision="Qualified",
                         state="needs_review",
                         decision_reason="strict_candidate_screening",
@@ -722,6 +744,7 @@ class OrchestrationService:
                         build_skills_json_payload(parser_details, fallback_skills_text=str(parsed["skills_text"])),
                         separators=(",", ":"),
                     ),
+                    **jd_entity_fields_from_parsed(parsed),
                     score=int(ai_score * 100),
                     decision=decision,
                     state=state,
@@ -1618,6 +1641,8 @@ class OrchestrationService:
             email.location = str(parsed.get("location") or email.location or "")
             email.salary_text = str(parsed.get("salary_text") or email.salary_text or "")
             email.skills_text = str(parsed.get("skills_text") or email.skills_text or "")
+            for jd_field, jd_value in jd_entity_fields_from_parsed(parsed).items():
+                setattr(email, jd_field, jd_value if jd_value is not None else getattr(email, jd_field))
             email.parser_details_json = json.dumps(parser_details, separators=(",", ":"))
             email.skills_json = json.dumps(
                 build_skills_json_payload(parser_details, fallback_skills_text=email.skills_text),
@@ -1751,6 +1776,8 @@ class OrchestrationService:
         email.location = str(preparation.parsed.get("location", email.location or ""))
         email.salary_text = str(preparation.parsed.get("salary_text", email.salary_text or ""))
         email.skills_text = str(preparation.parsed.get("skills_text", email.skills_text or ""))
+        for jd_field, jd_value in jd_entity_fields_from_parsed(preparation.parsed).items():
+            setattr(email, jd_field, jd_value if jd_value is not None else getattr(email, jd_field))
         email.skills_json = json.dumps(
             build_skills_json_payload(parser_details, fallback_skills_text=email.skills_text),
             separators=(",", ":"),

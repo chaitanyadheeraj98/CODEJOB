@@ -168,6 +168,25 @@ class PremiumNumbersExtractionTests(unittest.TestCase):
         self.assertTrue(target)
         self.assertEqual(target[0].owner_name, "Rabbanis")
 
+    def test_extract_contact_email_skips_employer_domain_falls_back_to_sender(self) -> None:
+        fragment = "Reach kartheek@horizonsoftech.net for details."
+        result = extraction._extract_contact_email(
+            fragment, "Tarannum Sultana <tarannum@hanitstaffing.com>", {"horizonsoftech.net"}
+        )
+        self.assertEqual(result, "tarannum@hanitstaffing.com")
+
+    def test_extract_contact_email_prefers_non_employer_candidate(self) -> None:
+        fragment = "CC kartheek@horizonsoftech.net, primary contact tarannum@hanitstaffing.com"
+        result = extraction._extract_contact_email(fragment, "sender@example.com", {"horizonsoftech.net"})
+        self.assertEqual(result, "tarannum@hanitstaffing.com")
+
+    def test_extract_owner_name_skips_employer_domain_email(self) -> None:
+        fragment = "Forwarded message\nFrom: kartheek@horizonsoftech.net\nRegards"
+        result = extraction._extract_owner_name(
+            fragment, "Tarannum Sultana <tarannum@hanitstaffing.com>", {"horizonsoftech.net"}
+        )
+        self.assertEqual(result, "Tarannum Sultana")
+
     def test_dedupe_prefers_non_unknown_owner_on_confidence_tie(self) -> None:
         unknown = extraction.ExtractedPhoneLead(
             phone_number_display="+1 832-271-3861",

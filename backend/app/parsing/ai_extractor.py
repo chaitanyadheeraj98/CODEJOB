@@ -19,6 +19,11 @@ AI_EXTRACTOR_MAX_TOKENS = 6_000
 class AIExtractorResult:
     role_candidates: tuple[str, ...] = ()
     company: str = ""
+    end_client: str = ""
+    implementation_partner: str = ""
+    domain: str = ""
+    domain_confidence: str = ""
+    interview_type: str = ""
     primary_location: str = ""
     mentioned_locations: tuple[str, ...] = ()
     work_mode: str = ""
@@ -28,7 +33,6 @@ class AIExtractorResult:
     skills_text: str = ""
     must_have_skills: tuple[str, ...] = ()
     nice_to_have_skills: tuple[str, ...] = ()
-    excluded_skills: tuple[str, ...] = ()
     f2f_mentioned: bool = False
     asks_contact_fields: bool = False
     is_texas_role: bool = False
@@ -47,6 +51,11 @@ class _AIExtractionSchema(BaseModel):
     role: str = ""
     role_candidates: list[str] = Field(default_factory=list)
     company: str = ""
+    end_client: str = ""
+    implementation_partner: str = ""
+    domain: str = ""
+    domain_confidence: str = ""
+    interview_type: str = ""
     primary_location: str = ""
     mentioned_locations: list[str] = Field(default_factory=list)
     work_mode: str = ""
@@ -54,10 +63,8 @@ class _AIExtractionSchema(BaseModel):
     visa_hints: list[str] = Field(default_factory=list)
     experience_years_min: int | None = None
     skills_text: str = ""
-    skills: list[str] = Field(default_factory=list)
     must_have_skills: list[str] = Field(default_factory=list)
     nice_to_have_skills: list[str] = Field(default_factory=list)
-    excluded_skills: list[str] = Field(default_factory=list)
     skills_approved: list[str] = Field(default_factory=list)
     skills_unknown: list[str] = Field(default_factory=list)
     f2f_mentioned: bool = False
@@ -77,10 +84,8 @@ class _AIExtractionSchema(BaseModel):
         return _as_string_list(value)
 
     @field_validator(
-        "skills",
         "must_have_skills",
         "nice_to_have_skills",
-        "excluded_skills",
         "skills_approved",
         "skills_unknown",
         mode="before",
@@ -90,6 +95,12 @@ class _AIExtractionSchema(BaseModel):
         if isinstance(value, str):
             return _split_free_skill_text(value)
         return _as_string_list(value)
+
+    @field_validator("domain_confidence", mode="before")
+    @classmethod
+    def _coerce_domain_confidence(cls, value: object) -> str:
+        text = _clean_text(value).lower()
+        return text if text in {"confirmed", "assumed"} else ""
 
     @field_validator("skills_text", mode="before")
     @classmethod
@@ -208,7 +219,7 @@ def _dedupe_skill_values(values: list[str]) -> tuple[str, ...]:
 
 def _collect_free_skill_values(payload: dict[str, Any]) -> tuple[str, ...]:
     values: list[str] = []
-    for key in ("skills_text", "skills", "must_have_skills", "nice_to_have_skills", "skills_approved", "skills_unknown"):
+    for key in ("skills_text", "must_have_skills", "nice_to_have_skills", "skills_approved", "skills_unknown"):
         raw = payload.get(key)
         if isinstance(raw, str):
             values.extend(_split_free_skill_text(raw))
@@ -271,7 +282,20 @@ def _build_system_prompt() -> str:
         "For skills, extract every explicit technology, framework, programming language, platform, tool, "
         "database, testing tool, DevOps tool, rules engine, and methodology mentioned in the body. "
         "Do not include technologies the body says to avoid, exclude, or reject. "
-        "For Nvoids, derive skills only from the body text, not from source hints, title, email, footer, or metadata."
+        "For Nvoids, derive skills only from the body text, not from source hints, title, email, footer, or metadata. "
+        "'company' is the vendor/staffing company that sent this email — identify it only from the "
+        "From-line display name, email signature, footer, or sender's email domain. Never use the "
+        "ingestion source/platform name (e.g. 'Nvoids', 'nvoids.com') as company; if no vendor company "
+        "is identifiable from those signals, leave company empty. "
+        "'end_client' and 'implementation_partner' are the actual hiring business and any named "
+        "intermediary partner — only set these if explicitly named in the body; vendors frequently omit "
+        "them on purpose, so leaving them empty is the expected, correct answer most of the time. "
+        "'domain' is the industry/business domain of the role (e.g. banking, healthcare, insurance, "
+        "retail, telecom). Set domain_confidence to 'confirmed' only if the domain is explicitly stated "
+        "in the email; set it to 'assumed' if you inferred the domain from context (e.g. client name, "
+        "project description) without an explicit statement; leave both empty if no domain is inferable. "
+        "'interview_type' is the interview process described, if any (e.g. 'phone screen then onsite', "
+        "'F2F final round', 'video call', 'panel interview')."
     )
 
 
@@ -287,6 +311,11 @@ def _build_user_prompt(
         "{\n"
         '  "role_candidates": string[],\n'
         '  "company": string,\n'
+        '  "end_client": string,\n'
+        '  "implementation_partner": string,\n'
+        '  "domain": string,\n'
+        '  "domain_confidence": "confirmed"|"assumed"|"",\n'
+        '  "interview_type": string,\n'
         '  "primary_location": string,\n'
         '  "mentioned_locations": string[],\n'
         '  "work_mode": string,\n'
@@ -294,10 +323,8 @@ def _build_user_prompt(
         '  "visa_hints": string[],\n'
         '  "experience_years_min": number|null,\n'
         '  "skills_text": string,\n'
-        '  "skills": string[],\n'
         '  "must_have_skills": string[],\n'
         '  "nice_to_have_skills": string[],\n'
-        '  "excluded_skills": string[],\n'
         '  "f2f_mentioned": boolean,\n'
         '  "asks_contact_fields": boolean,\n'
         '  "is_texas_role": boolean,\n'
@@ -389,13 +416,18 @@ def extract_ai_job_details(
     nice_to_have_skills = _dedupe_strings(
         [skill for item in _as_string_list(normalized_payload.get("nice_to_have_skills")) for skill in _split_free_skill_text(item)]
     )
-    excluded_skills = _dedupe_strings(
-        [skill for item in _as_string_list(normalized_payload.get("excluded_skills")) for skill in _split_free_skill_text(item)]
-    )
+
+    domain = _clean_text(normalized_payload.get("domain"))
+    domain_confidence = _clean_text(normalized_payload.get("domain_confidence")) if domain else ""
 
     return AIExtractorResult(
         role_candidates=_dedupe_strings(role_candidates),
         company=_clean_text(normalized_payload.get("company")),
+        end_client=_clean_text(normalized_payload.get("end_client")),
+        implementation_partner=_clean_text(normalized_payload.get("implementation_partner")),
+        domain=domain,
+        domain_confidence=domain_confidence,
+        interview_type=_clean_text(normalized_payload.get("interview_type")),
         primary_location=primary_location,
         mentioned_locations=_dedupe_strings(mentioned_locations),
         work_mode=_clean_text(normalized_payload.get("work_mode")),
@@ -405,7 +437,6 @@ def extract_ai_job_details(
         skills_text=skills_text,
         must_have_skills=must_have_skills,
         nice_to_have_skills=nice_to_have_skills,
-        excluded_skills=excluded_skills,
         f2f_mentioned=_normalize_bool(normalized_payload.get("f2f_mentioned")),
         asks_contact_fields=_normalize_bool(normalized_payload.get("asks_contact_fields")),
         is_texas_role=_normalize_bool(normalized_payload.get("is_texas_role")),
@@ -421,6 +452,11 @@ def ai_extractor_result_to_payload(result: AIExtractorResult) -> dict[str, objec
     payload: dict[str, object] = {
         "role_candidates": list(result.role_candidates),
         "company": result.company,
+        "end_client": result.end_client,
+        "implementation_partner": result.implementation_partner,
+        "domain": result.domain,
+        "domain_confidence": result.domain_confidence,
+        "interview_type": result.interview_type,
         "primary_location": result.primary_location,
         "mentioned_locations": list(result.mentioned_locations),
         "work_mode": result.work_mode,
@@ -430,7 +466,6 @@ def ai_extractor_result_to_payload(result: AIExtractorResult) -> dict[str, objec
         "skills_text": result.skills_text,
         "must_have_skills": list(result.must_have_skills),
         "nice_to_have_skills": list(result.nice_to_have_skills),
-        "excluded_skills": list(result.excluded_skills),
         "f2f_mentioned": result.f2f_mentioned,
         "asks_contact_fields": result.asks_contact_fields,
         "is_texas_role": result.is_texas_role,

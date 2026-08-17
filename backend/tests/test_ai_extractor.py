@@ -264,7 +264,6 @@ class AIExtractorTests(unittest.TestCase):
             "visa_hints": ["H1B"],
             "experience_years_min": 8,
             "skills_text": "Java, Amazon ECS, Grafana, Temporal",
-            "excluded_skills": ["Python"],
             "f2f_mentioned": True,
             "asks_contact_fields": True,
             "is_texas_role": True,
@@ -289,7 +288,6 @@ class AIExtractorTests(unittest.TestCase):
         self.assertEqual(payload["skills_text"], "Java, Amazon ECS, Grafana, Temporal")
         self.assertEqual(payload["must_have_skills"], [])
         self.assertEqual(payload["nice_to_have_skills"], [])
-        self.assertEqual(payload["excluded_skills"], ["Python"])
         self.assertTrue(payload["f2f_mentioned"])
         self.assertTrue(payload["asks_contact_fields"])
         self.assertTrue(payload["is_texas_role"])
@@ -320,7 +318,6 @@ class AIExtractorTests(unittest.TestCase):
         "app.parsing.ai_extractor.deepseek_json_completion",
         return_value={
             "role": "Platform Engineer",
-            "skills": ["Python", "RAG"],
             "must_have_skills": "Kubernetes, Python",
             "skills_unknown": ["Temporal"],
         },
@@ -330,7 +327,7 @@ class AIExtractorTests(unittest.TestCase):
         payload = ai_extractor_result_to_payload(result)
 
         self.assertEqual(payload["role_candidates"], ["Platform Engineer"])
-        self.assertEqual(payload["skills_text"], "Python, RAG, Kubernetes, Temporal")
+        self.assertEqual(payload["skills_text"], "Kubernetes, Python, Temporal")
         self.assertEqual(payload["must_have_skills"], ["Kubernetes", "Python"])
         self.assertEqual(payload["nice_to_have_skills"], [])
         self.assertIn("Python", payload["skills_approved"])

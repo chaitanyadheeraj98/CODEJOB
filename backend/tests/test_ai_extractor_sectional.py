@@ -87,8 +87,7 @@ class AIExtractorSectionalTests(unittest.TestCase):
             ),
             (
                 SkillsSection(
-                    skills=["Python", "Kubernetes"],
-                    must_have_skills=["Python"],
+                    must_have_skills=["Python", "Kubernetes"],
                     evidence={"skills": ["Python and Kubernetes"]},
                 ),
                 SimpleNamespace(),
@@ -107,7 +106,7 @@ class AIExtractorSectionalTests(unittest.TestCase):
         validated = _AIExtractionSchema.model_validate(payload)
 
         self.assertEqual(validated.role_candidates, ["Senior Engineer"])
-        self.assertEqual(validated.skills, ["Python", "Kubernetes"])
+        self.assertEqual(validated.must_have_skills, ["Python", "Kubernetes"])
         self.assertEqual(set(validated.evidence), {"role", "experience", "skills", "confidence"})
 
 

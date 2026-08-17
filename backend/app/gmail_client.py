@@ -437,6 +437,30 @@ def list_unread_candidates_by_query(
     return results
 
 
+def list_unread_thread_ids(max_results: int = 500) -> set[str]:
+    """Cheap: one list() call, no per-message get(). Thread ids of unread inbox mail.
+
+    A message's threadId comes back from list() for free, no format="full" get()
+    needed, so callers can intersect against known sent-thread ids for an accurate
+    "unread replies to threads I sent" count without the per-message fetch cost
+    that makes the full sync (list_unread_candidates_by_query) slow.
+
+    ponytail: bounded to max_results (Gmail's own list() page-size ceiling is 500),
+    not exhaustive for accounts with more unread inbox mail than that. Good enough
+    for a live poll; the full sync's per-thread scan has no such bound.
+    """
+    service = _gmail_service()
+    response = _as_dict(
+        service.users().messages().list(userId="me", q="is:unread in:inbox", maxResults=max_results).execute()
+    )
+    messages = _as_list_of_dicts(response.get("messages"))
+    return {
+        str(message["threadId"])
+        for message in messages
+        if isinstance(message.get("threadId"), str) and message["threadId"]
+    }
+
+
 def list_thread_messages(thread_id: str) -> list[GmailMessageCandidate]:
     """Fetch every message in a known Gmail thread, regardless of read/unread state.
 

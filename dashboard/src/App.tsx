@@ -1596,6 +1596,11 @@ type JobQueueSummary = {
   failed: number
 }
 
+type LiveReplyStatus = {
+  count: number
+  checked_at: string | null
+}
+
 type VerdictLabel = 'Excellent' | 'Strong' | 'Good' | 'Review' | 'Risky'
 type VerdictTone = 'excellent' | 'strong' | 'good' | 'review' | 'risky'
 
@@ -2776,6 +2781,7 @@ function App() {
   const [productivityEvents, setProductivityEvents] = useState<ProductivityEvent[]>([])
   const [productivityTrend, setProductivityTrend] = useState<ProductivityTrendResponse | null>(null)
   const [jobSummary, setJobSummary] = useState<JobQueueSummary | null>(null)
+  const [liveReplyStatus, setLiveReplyStatus] = useState<LiveReplyStatus | null>(null)
   const datePickerRef = useRef<HTMLInputElement | null>(null)
   const lastTrackedViewRef = useRef<Record<string, number>>({})
   const hasBootstrappedCandidatesRef = useRef(false)
@@ -3423,6 +3429,12 @@ function App() {
     setJobSummary((await res.json()) as JobQueueSummary)
   }
 
+  const loadLiveReplyStatus = async () => {
+    const res = await fetch(`${apiBase}/gmail/live-replies`)
+    if (!res.ok) return
+    setLiveReplyStatus((await res.json()) as LiveReplyStatus)
+  }
+
   const loadRecentRuns = async (mailDate: string | null = settings.mail_date ?? null) => {
     const params = new URLSearchParams()
     params.set('limit', String(RECENT_RUNS_LIMIT))
@@ -3731,6 +3743,14 @@ function App() {
     }, 5000)
     return () => window.clearInterval(intervalId)
   }, [activePage])
+
+  useEffect(() => {
+    loadLiveReplyStatus().catch(() => {})
+    const intervalId = window.setInterval(() => {
+      loadLiveReplyStatus().catch(() => {})
+    }, 15000)
+    return () => window.clearInterval(intervalId)
+  }, [])
 
   useEffect(() => {
     trackViewEvent(activePage)
@@ -4770,14 +4790,24 @@ function App() {
             >
               {nvoidsRunning ? 'Nvoids Syncing...' : 'Sync Nvoids'}
             </button>
-            <button
-              type="button"
-              className="btnPrimary"
-              onClick={status?.authenticated ? runAutomation : connectGmail}
-              disabled={running || oauthInProgress}
-            >
-              {running ? 'Running...' : status?.authenticated ? 'Sync Now' : oauthInProgress ? 'OAuth In Progress...' : 'Connect Gmail'}
-            </button>
+            <span className="syncNowWrap">
+              <button
+                type="button"
+                className="btnPrimary"
+                onClick={status?.authenticated ? runAutomation : connectGmail}
+                disabled={running || oauthInProgress}
+              >
+                {running ? 'Running...' : status?.authenticated ? 'Sync Now' : oauthInProgress ? 'OAuth In Progress...' : 'Connect Gmail'}
+              </button>
+              {!running && liveReplyStatus && liveReplyStatus.count > 0 ? (
+                <span
+                  className="liveReplyBadge"
+                  title={`${liveReplyStatus.count} unread in Primary inbox (approx., not confirmed recruiter replies)${liveReplyStatus.checked_at ? ` — checked ${liveReplyStatus.checked_at}` : ''}`}
+                >
+                  {liveReplyStatus.count > 99 ? '99+' : liveReplyStatus.count}
+                </span>
+              ) : null}
+            </span>
             {oauthInProgress && oauthAuthorizationUrl ? (
               <a href={oauthAuthorizationUrl} target="_blank" rel="noreferrer" className="btnMuted">
                 Open OAuth URL

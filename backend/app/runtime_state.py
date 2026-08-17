@@ -44,6 +44,8 @@ class AppRuntimeState:
     auto_runner_thread: threading.Thread | None = None
     auto_runner_stop_event: threading.Event = field(default_factory=threading.Event)
     gmail_labeling_service: GmailLabelingService | None = None
+    live_reply_count: int = 0
+    live_reply_checked_at: datetime | None = None
 
 
 runtime_state = AppRuntimeState()

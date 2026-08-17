@@ -11,6 +11,8 @@ from sqlalchemy.orm import Session
 from app.models import UserSettings
 logger = logging.getLogger(__name__)
 
+LIVE_REPLY_CHECK_INTERVAL_SECONDS = 60
+
 
 class AutoRunnerService:
     def __init__(
@@ -20,6 +22,7 @@ class AutoRunnerService:
         get_settings: Callable[[Session], UserSettings],
         run_once: Callable[[object | None, Session], object],
         run_nvoids_once: Callable[[Session, int], object],
+        check_live_replies: Callable[[Session], None],
         action_lock: Lock,
         stop_event: Event,
     ) -> None:
@@ -27,6 +30,7 @@ class AutoRunnerService:
         self._get_settings = get_settings
         self._run_once = run_once
         self._run_nvoids_once = run_nvoids_once
+        self._check_live_replies = check_live_replies
         self._action_lock = action_lock
         self._stop_event = stop_event
 
@@ -45,6 +49,7 @@ class AutoRunnerService:
     def run_loop(self) -> None:
         next_run_at = datetime.now(UTC)
         next_nvoids_run_at = datetime.now(UTC)
+        next_live_check_at = datetime.now(UTC)
         while not self._stop_event.wait(5):
             db = self._session_factory()
             try:
@@ -52,6 +57,16 @@ class AutoRunnerService:
                 if not user_settings.enabled or not user_settings.feature_auto_polling:
                     next_run_at = datetime.now(UTC)
                 now_utc = datetime.now(UTC)
+
+                # Runs on its own cadence, outside action_lock, so a live count is
+                # visible even while a full sync is in progress under that lock.
+                if user_settings.enabled and now_utc >= next_live_check_at:
+                    try:
+                        self._check_live_replies(db)
+                    except Exception:
+                        logger.exception("Live reply check crashed")
+                    next_live_check_at = datetime.now(UTC) + timedelta(seconds=LIVE_REPLY_CHECK_INTERVAL_SECONDS)
+
                 if user_settings.enabled and user_settings.feature_auto_polling and now_utc >= next_run_at:
                     interval_minutes = self.poll_interval_minutes(user_settings)
                     with self._action_lock:

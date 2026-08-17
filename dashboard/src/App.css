@@ -1934,6 +1934,30 @@ button.emailSearchResult:focus-visible {
   font-size: 12px;
 }
 
+.syncNowWrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.liveReplyBadge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: #16a34a;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  box-shadow: 0 0 0 2px #fff;
+}
+
 .trackingBadge.opened {
   border-color: #86efac;
   background: #f0fdf4;

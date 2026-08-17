@@ -50,6 +50,7 @@ from app.gmail_client import (
     is_gmail_configured,
     list_thread_messages,
     list_unread_candidates_by_query,
+    list_unread_thread_ids,
     mark_message_processed,
     mark_reply_processed,
     append_tracking_sheet_row,
@@ -100,6 +101,7 @@ from app.phase0 import (
     greeting_from_to_contact,
     hard_filter_check,
     is_recruiter_like,
+    jd_entity_fields_from_parsed,
     normalize_employer_domains,
     parse_email,
     parse_email_with_details,
@@ -150,6 +152,10 @@ from app.job_intent_learning import (
 from app.services import analytics_service, email_lookup_service, policy_service
 from app.services.auto_runner_service import AutoRunnerService
 from app.services.candidate_runtime_service import CandidateRuntimeDeps, CandidateRuntimeService, resolve_resume_display_name
+from app.services.phone_intelligence_workflow_service import (
+    derive_company_from_email_domain,
+    derive_name_from_contact_email,
+)
 from app.services.gmail_group_source_service import (
     canonical_group_display_name,
     normalize_google_group_email,
@@ -215,6 +221,7 @@ from app.schemas import (
     JobIntentTaxonomyEntryResponse,
     JobEnqueueResponse,
     JobQueueSummaryResponse,
+    LiveReplyStatusResponse,
     JobStatusResponse,
     OAuthStartResponse,
     OAuthUrlResponse,
@@ -1044,6 +1051,14 @@ def _enqueue_automation(payload: AutomationRunRequest | None, db: Session) -> Jo
     )
 
 
+def _check_live_replies(db: Session) -> None:
+    _, authenticated, _ = gmail_auth_status()
+    if not authenticated:
+        return
+    runtime_state.live_reply_count = _get_orchestration_service().count_live_unread_replies(db)
+    runtime_state.live_reply_checked_at = datetime.now(UTC)
+
+
 def _get_auto_runner_service() -> AutoRunnerService:
     global auto_runner_service
     if auto_runner_service is None:
@@ -1052,6 +1067,7 @@ def _get_auto_runner_service() -> AutoRunnerService:
             get_settings=_get_settings,
             run_once=_enqueue_automation,
             run_nvoids_once=lambda db, max_items: _enqueue_nvoids_sync(db, max_items=max_items),
+            check_live_replies=_check_live_replies,
             action_lock=telegram_action_lock,
             stop_event=auto_runner_stop_event,
         )
@@ -1261,6 +1277,7 @@ def _get_orchestration_service() -> OrchestrationService:
                 get_message_thread_id=lambda message_id: get_message_thread_id(message_id),
                 get_message_rfc_message_id=lambda message_id: get_message_rfc_message_id(message_id),
                 list_thread_messages=lambda thread_id: list_thread_messages(thread_id),
+                list_unread_thread_ids=lambda: list_unread_thread_ids(),
             )
         )
     return orchestration_service
@@ -3427,6 +3444,14 @@ def jobs_summary(db: Session = Depends(get_db)) -> JobQueueSummaryResponse:
     return JobQueueSummaryResponse(queued=queued, processing=processing, succeeded=succeeded, failed=failed)
 
 
+@app.get("/gmail/live-replies", response_model=LiveReplyStatusResponse)
+def live_replies() -> LiveReplyStatusResponse:
+    return LiveReplyStatusResponse(
+        count=runtime_state.live_reply_count,
+        checked_at=runtime_state.live_reply_checked_at,
+    )
+
+
 @app.post("/jobs/gmail-sync", response_model=JobEnqueueResponse, status_code=202)
 def enqueue_gmail_sync(db: Session = Depends(get_db)) -> JobEnqueueResponse:
     return _enqueue_gmail_sync(db)
@@ -3630,6 +3655,7 @@ def ingest_email(payload: IngestEmailRequest, db: Session = Depends(get_db)) -> 
                 build_skills_json_payload(parser_details, fallback_skills_text=str(parsed["skills_text"])),
                 separators=(",", ":"),
             ),
+            **jd_entity_fields_from_parsed(parsed),
             decision="Qualified",
             state="needs_review",
             decision_reason="strict_candidate_screening",
@@ -3707,6 +3733,7 @@ def ingest_email(payload: IngestEmailRequest, db: Session = Depends(get_db)) -> 
             build_skills_json_payload(parser_details, fallback_skills_text=str(parsed["skills_text"])),
             separators=(",", ":"),
         ),
+        **jd_entity_fields_from_parsed(parsed),
         score=int(ai_score * 100),
         decision=decision,
         state=state,
@@ -4050,6 +4077,16 @@ def mark_number_as_recruiter(review_id: int, db: Session = Depends(get_db)) -> d
         .first()
     )
     candidate_email = extract_email_address(card.email_sender or "")
+    resolved_name = (
+        card.owner_name
+        if card.owner_name and card.owner_name.strip().lower() != "unknown"
+        else derive_name_from_contact_email(candidate_email)
+    )
+    resolved_company = (
+        card.company
+        if card.company and card.company.strip().lower() != "unknown"
+        else derive_company_from_email_domain(candidate_email)
+    )
     if not recruiter:
         recruiter = RecruiterNumber(
             owner_id=settings.owner_id,
@@ -4058,8 +4095,8 @@ def mark_number_as_recruiter(review_id: int, db: Session = Depends(get_db)) -> d
                 card.display_phone_number or card.normalized_phone_number,
                 canonical_phone,
             ),
-            recruiter_name=card.owner_name or "Unknown",
-            company=card.company or "Unknown",
+            recruiter_name=resolved_name or "Unknown",
+            company=resolved_company or "Unknown",
             designation=card.designation or "Unknown",
             recruiter_email=candidate_email,
             first_detected_email_id=card.source_email_id,
@@ -4068,10 +4105,10 @@ def mark_number_as_recruiter(review_id: int, db: Session = Depends(get_db)) -> d
         db.flush()
     else:
         # Preserve higher-quality existing identity; only enrich missing/unknown fields.
-        if (not recruiter.recruiter_name or recruiter.recruiter_name.strip().lower() == "unknown") and card.owner_name:
-            recruiter.recruiter_name = card.owner_name
-        if (not recruiter.company or recruiter.company.strip().lower() == "unknown") and card.company:
-            recruiter.company = card.company
+        if (not recruiter.recruiter_name or recruiter.recruiter_name.strip().lower() == "unknown") and resolved_name:
+            recruiter.recruiter_name = resolved_name
+        if (not recruiter.company or recruiter.company.strip().lower() == "unknown") and resolved_company:
+            recruiter.company = resolved_company
         if (not recruiter.designation or recruiter.designation.strip().lower() == "unknown") and card.designation:
             recruiter.designation = card.designation
         if not recruiter.recruiter_email and candidate_email:

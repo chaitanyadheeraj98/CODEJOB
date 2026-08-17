@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from app.config import settings as app_settings
 from app.models import RecruiterEmail, ResumeAsset, UserSettings
 from app.parsing import build_skills_json_payload
+from app.phase0 import jd_entity_fields_from_parsed
 from app.parsing.document_extraction import prepare_gmail_parse_body
 from app.recent_runs import SkippedItemRecord
 from app.routing import RoutingDecision
@@ -676,6 +677,7 @@ class RunOrchestrator:
             salary_text=str(parsed["salary_text"]),
             skills_text=str(parsed["skills_text"]),
             skills_json=skills_json,
+            **jd_entity_fields_from_parsed(parsed),
             source="gmail",
             external_message_id=str(item["external_message_id"]),
             external_thread_id=item.get("external_thread_id"),

@@ -215,23 +215,29 @@ def _domain_from_email(value: str) -> str:
     return text.split("@", 1)[1].strip()
 
 
-def _extract_contact_email(fragment: str, sender: str) -> str:
-    matches = EMAIL_RE.findall(fragment or "")
+def _is_employer_domain(email: str, employer_domains: set[str]) -> bool:
+    domain = _domain_from_email(email)
+    return bool(domain) and domain in employer_domains
+
+
+def _extract_contact_email(fragment: str, sender: str, employer_domains: set[str]) -> str:
+    matches = [m for m in EMAIL_RE.findall(fragment or "") if not _is_employer_domain(m, employer_domains)]
     if matches:
         return matches[-1].lower()
     return _sender_email(sender)
 
 
-def _extract_owner_name(fragment: str, sender: str) -> str:
+def _extract_owner_name(fragment: str, sender: str, employer_domains: set[str]) -> str:
     # Prefer explicit target-contact contexts (e.g. "share resume to rabbanis@...").
     contact_match = TARGET_CONTACT_EMAIL_RE.search(fragment or "")
     if contact_match:
         target_email = contact_match.group(1).strip()
-        local_match = EMAIL_LOCAL_NAME_RE.search(target_email)
-        if local_match:
-            local = re.sub(r"[^A-Za-z]", "", local_match.group(1) or "").strip()
-            if len(local) >= 2 and local.lower() not in GENERIC_LOCAL_NAME_TOKENS:
-                return local.title()
+        if not _is_employer_domain(target_email, employer_domains):
+            local_match = EMAIL_LOCAL_NAME_RE.search(target_email)
+            if local_match:
+                local = re.sub(r"[^A-Za-z]", "", local_match.group(1) or "").strip()
+                if len(local) >= 2 and local.lower() not in GENERIC_LOCAL_NAME_TOKENS:
+                    return local.title()
 
     lines = [line.strip(" -,\t\r") for line in (fragment or "").splitlines() if line.strip()]
     for line in lines:
@@ -252,6 +258,8 @@ def _extract_owner_name(fragment: str, sender: str) -> str:
             continue
         match = EMAIL_LOCAL_NAME_RE.search(line)
         if not match:
+            continue
+        if _is_employer_domain(match.group(0), employer_domains):
             continue
         local = re.sub(r"[^A-Za-z]", "", match.group(1) or "").strip()
         if len(local) < 2:
@@ -437,8 +445,8 @@ def _fallback_extract(sender: str, body: str, employer_domains: set[str]) -> lis
 
         designation_match = DESIGNATION_RE.search(fragment)
         designation = designation_match.group(0).title() if designation_match else "Unknown"
-        owner = _extract_owner_name(raw_fragment, sender)
-        contact_email = _extract_contact_email(raw_fragment, sender)
+        owner = _extract_owner_name(raw_fragment, sender, employer_domains)
+        contact_email = _extract_contact_email(raw_fragment, sender, employer_domains)
         company = _sender_company(sender)
         if "interview" in fragment_l:
             purpose = "Interview coordination"

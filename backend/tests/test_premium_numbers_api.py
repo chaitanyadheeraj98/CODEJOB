@@ -237,6 +237,64 @@ class PremiumNumbersApiTests(unittest.TestCase):
         self.assertEqual(payload["items"][0]["recruiter_name"], "Dharma Veer")
         self.assertEqual(payload["items"][0]["recruiter_email"], "dharma.veer@intellisoft.com")
 
+    def test_mark_number_as_recruiter_derives_name_and_company_from_email_when_unknown(self) -> None:
+        now = datetime.now(UTC)
+        with Session(self.engine) as db:
+            email = RecruiterEmail(
+                owner_id=main.settings.owner_id,
+                sender="bindu.k@saranshinc.com",
+                subject="Recruiter contact",
+                body="Call +1 609 757 4143",
+                role="Engineer",
+                location="remote",
+                salary_text="",
+                skills_text="",
+                score=80,
+                decision="Qualified",
+                state="needs_review",
+                draft_reply="Thanks",
+                source="gmail",
+                external_message_id="m-unknown-name-company",
+                external_thread_id="t-unknown-name-company",
+                gmail_received_at=now,
+                recipient_email="to@example.com",
+                cc_email="cc@example.com",
+            )
+            db.add(email)
+            db.commit()
+            db.refresh(email)
+            db.add(
+                NumberReviewQueue(
+                    owner_id=main.settings.owner_id,
+                    source_email_id=email.id,
+                    normalized_phone_number="+16097574143",
+                    display_phone_number="+1 609 757 4143",
+                    owner_name="Unknown",
+                    company="Unknown",
+                    designation="Recruiter",
+                    confidence="medium",
+                    purpose="Recruiter direct number",
+                    evidence_snippet="Extracted by AI from email context",
+                    email_subject=email.subject,
+                    email_sender="bindu.k@saranshinc.com",
+                    gmail_open_url=email.gmail_message_url or "",
+                    state="pending",
+                )
+            )
+            db.commit()
+            card = db.query(NumberReviewQueue).filter(NumberReviewQueue.owner_id == main.settings.owner_id).first()
+            assert card is not None
+            review_id = card.id
+
+        mark_res = self.client.post(f"/number-review/{review_id}/mark-recruiter")
+        self.assertEqual(mark_res.status_code, 200, mark_res.text)
+
+        with Session(self.engine) as db:
+            recruiter = db.query(RecruiterNumber).filter(RecruiterNumber.owner_id == main.settings.owner_id).first()
+            assert recruiter is not None
+            self.assertEqual(recruiter.recruiter_name, "Bindu K")
+            self.assertEqual(recruiter.company, "Saranshinc")
+
     def test_mark_number_as_employer_standardizes_display_phone(self) -> None:
         now = datetime.now(UTC)
         with Session(self.engine) as db:

@@ -462,6 +462,12 @@ class EmailResponse(BaseModel):
     body: str
     role: str
     location: str
+    company: str | None = None
+    end_client: str | None = None
+    implementation_partner: str | None = None
+    domain: str | None = None
+    domain_confidence: str | None = None
+    interview_type: str | None = None
     salary_text: str
     skills_text: str
     score: int
@@ -1117,6 +1123,11 @@ class JobQueueSummaryResponse(BaseModel):
     processing: int
     succeeded: int
     failed: int
+
+
+class LiveReplyStatusResponse(BaseModel):
+    count: int
+    checked_at: datetime | None
 
 
 class RecentRunListResponse(BaseModel):

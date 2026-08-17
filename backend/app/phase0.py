@@ -1082,6 +1082,20 @@ def _empty_contract_defaults() -> dict[str, str | int | bool]:
     }
 
 
+JD_ENTITY_FIELDS: tuple[str, ...] = (
+    "company",
+    "end_client",
+    "implementation_partner",
+    "domain",
+    "domain_confidence",
+    "interview_type",
+)
+
+
+def jd_entity_fields_from_parsed(parsed: Mapping[str, Any]) -> dict[str, str | None]:
+    return {key: (str(parsed.get(key) or "").strip() or None) for key in JD_ENTITY_FIELDS}
+
+
 def _ai_primary_parse_result(
     ai_payload: Mapping[str, Any] | None,
     *,
@@ -1106,6 +1120,9 @@ def _ai_primary_parse_result(
     salary_text = str(payload.get("salary_text") or "").strip()
     if salary_text:
         parsed["salary_text"] = salary_text
+
+    for key in JD_ENTITY_FIELDS:
+        parsed[key] = str(payload.get(key) or "").strip()
 
     skills_text = normalize_skills_text(str(payload.get("skills_text") or ""), preserve_unknown=True)
     if skills_text and skills_text != "none_detected":
