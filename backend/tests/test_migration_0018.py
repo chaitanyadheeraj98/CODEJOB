@@ -48,7 +48,7 @@ class DeclarativeBaselineMigrationTests(unittest.TestCase):
                         revision = connection.exec_driver_sql(
                             "SELECT version_num FROM alembic_version"
                         ).scalar_one()
-                    self.assertEqual(revision, "20260817_0019")
+                    self.assertEqual(revision, "20260818_0020")
                     self.assertEqual(compare(database_url), [])
                 finally:
                     engine.dispose()

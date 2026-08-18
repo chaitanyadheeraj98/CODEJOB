@@ -106,10 +106,12 @@ Chat uses a separate read-only flow:
 - Schema response contracts are defined in `backend/app/schemas.py`.
 - Routing evidence/candidates are stored as JSON text and parsed in schema validators.
 - Alembic is the only production schema writer; startup verifies the database is at head and never patches it.
+- The Compose production database is PostgreSQL 16 on the internal `postgres:5432` service; the preserved SQLite volume and final stopped-app snapshot are rollback-only after the 2026-08-18 cutover.
 - Query bucket persistence is in `UserSettings.saved_gmail_queries_json` (not a standalone table).
 - Alembic revision `20260814_0015` creates `chat_sessions` and `chat_messages`; upgrade and downgrade are covered by a focused migration test.
+- Alembic revision `20260818_0020` widens nine fields whose real SQLite values exceeded their declared `VARCHAR` capacities; SQLite keeps its equivalent unbounded representation without a table rebuild.
 
-- Audit date: 2026-08-17
+- Audit date: 2026-08-18
 - Branch: semantic-embeddings
 - Evidence basis: both
-- Verification limits: SQLite/PostgreSQL migration chains and chat persistence round trips were tested; the unfiltered backend suite remains blocked during collection by the stale `app.phone_attribution` import.
+- Verification limits: fresh SQLite/PostgreSQL migration chains, complete live-data content parity, production Docker startup, and representative API/worker reads were tested; the unfiltered backend suite remains blocked during collection by the stale `app.phone_attribution` import and retains its documented unrelated failure baseline.

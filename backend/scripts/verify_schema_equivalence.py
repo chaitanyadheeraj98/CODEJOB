@@ -135,6 +135,22 @@ ALLOWED_NULLABILITY_DRIFT = {
 }
 
 
+# SQLite never enforces VARCHAR lengths. Revision 0020 deliberately avoids
+# rebuilding the live 1 GB SQLite tables for representation-only type changes;
+# PostgreSQL receives the widened declarations that match Base.metadata.
+ALLOWED_SQLITE_TYPE_DRIFT = {
+    ("custom_skill_taxonomy_entries", "canonical_name"),
+    ("external_opportunities", "company"),
+    ("external_opportunities", "role"),
+    ("external_opportunities", "duration"),
+    ("external_opportunities", "rate"),
+    ("recent_run_skipped_items", "title_or_subject"),
+    ("recruiter_emails", "role"),
+    ("recruiter_opportunities", "job_title"),
+    ("recruiter_opportunities", "client"),
+}
+
+
 def _type_signature(column_type: sa.types.TypeEngine) -> tuple[str, int | None]:
     if isinstance(column_type, sa.TypeDecorator):
         return _type_signature(column_type.impl)
@@ -226,7 +242,10 @@ def compare(database_url: str) -> list[str]:
                 live_column = live_columns[name]
                 expected_signature = _type_signature(expected_type)
                 live_signature = _type_signature(live_column["type"])
-                if expected_signature != live_signature:
+                if expected_signature != live_signature and not (
+                    engine.dialect.name == "sqlite"
+                    and (table_name, name) in ALLOWED_SQLITE_TYPE_DRIFT
+                ):
                     problems.append(
                         f"{table_name}.{name}: TYPE MISMATCH "
                         f"expected={expected_signature} live={live_signature}"

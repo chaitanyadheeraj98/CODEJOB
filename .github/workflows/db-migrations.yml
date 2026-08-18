@@ -5,9 +5,13 @@ on:
     paths:
       - "backend/alembic/**"
       - "backend/app/db.py"
+      - "backend/app/external_feeds/models.py"
       - "backend/app/models.py"
       - "backend/scripts/verify_schema_equivalence.py"
+      - "backend/scripts/copy_sqlite_to_postgres.py"
+      - "backend/scripts/verify_data_parity.py"
       - "backend/tests/test_migration_0018.py"
+      - "backend/tests/test_copy_sqlite_to_postgres.py"
       - "backend/pyproject.toml"
       - "backend/uv.lock"
       - ".github/workflows/db-migrations.yml"
@@ -15,9 +19,13 @@ on:
     paths:
       - "backend/alembic/**"
       - "backend/app/db.py"
+      - "backend/app/external_feeds/models.py"
       - "backend/app/models.py"
       - "backend/scripts/verify_schema_equivalence.py"
+      - "backend/scripts/copy_sqlite_to_postgres.py"
+      - "backend/scripts/verify_data_parity.py"
       - "backend/tests/test_migration_0018.py"
+      - "backend/tests/test_copy_sqlite_to_postgres.py"
       - "backend/pyproject.toml"
       - "backend/uv.lock"
       - ".github/workflows/db-migrations.yml"
@@ -39,7 +47,7 @@ jobs:
       - run: uv sync --frozen
       - run: uv run alembic upgrade head
       - run: uv run python scripts/verify_schema_equivalence.py --database-url "$DATABASE_URL"
-      - run: uv run python -m pytest tests/test_migration_0018.py
+      - run: uv run python -m pytest tests/test_migration_0018.py tests/test_copy_sqlite_to_postgres.py
 
   postgres:
     runs-on: ubuntu-latest
@@ -71,4 +79,4 @@ jobs:
       - run: uv sync --frozen
       - run: uv run alembic upgrade head
       - run: uv run python scripts/verify_schema_equivalence.py --database-url "$DATABASE_URL"
-      - run: uv run python -m pytest tests/test_migration_0018.py
+      - run: uv run python -m pytest tests/test_migration_0018.py tests/test_copy_sqlite_to_postgres.py
