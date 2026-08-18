@@ -13,15 +13,22 @@ from app import main
 from app.db import Base
 from app.models import (
     EmailConversation,
-    EmployerNumber,
     NumberReviewQueue,
     PremiumNumberLead,
+    PremiumNumberContact,
     RecentRun,
     RecentRunSkippedItem,
     RecruiterEmail,
-    RecruiterNumber,
     RecruiterOpportunity,
 )
+
+
+def RecruiterNumber(**values):
+    return PremiumNumberContact(is_recruiter=True, **values)
+
+
+def EmployerNumber(**values):
+    return PremiumNumberContact(is_employer=True, **values)
 
 
 class EmailLookupApiTests(unittest.TestCase):

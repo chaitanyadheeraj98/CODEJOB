@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 from urllib.parse import quote
 
 from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text, UniqueConstraint
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, synonym
 
 from app.ai.draft_quality import assess_draft_quality
 from app.db import Base, UTCDateTime
@@ -514,9 +514,27 @@ class PremiumNumberLead(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     owner_id: Mapped[str] = mapped_column(String(100), index=True)
-    recruiter_email_id: Mapped[int] = mapped_column(Integer, index=True)
+    recruiter_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    external_opportunity_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey(
+            "external_opportunities.id",
+            name="fk_premium_number_leads_external_opportunity",
+        ),
+        nullable=True,
+        index=True,
+    )
+    contact_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("premium_number_contacts.id", name="fk_premium_number_leads_contact"),
+        nullable=True,
+        index=True,
+    )
     phone_number_normalized: Mapped[str] = mapped_column(String(40), index=True)
     phone_number_display: Mapped[str] = mapped_column(String(80))
+    role: Mapped[str] = mapped_column(String(20), default="recruiter")
+    extraction_source: Mapped[str] = mapped_column(String(50), default="ai")
+    contact_email: Mapped[str] = mapped_column(String(255), default="")
     owner_name: Mapped[str] = mapped_column(String(255), default="Unknown")
     company: Mapped[str] = mapped_column(String(255), default="Unknown")
     designation: Mapped[str] = mapped_column(String(255), default="Unknown")
@@ -530,6 +548,7 @@ class PremiumNumberLead(Base):
     source_email_sender: Mapped[str] = mapped_column(String(255), default="")
     source_email_subject: Mapped[str] = mapped_column(String(500), default="")
     source_email_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    source_url: Mapped[str | None] = mapped_column(String(1200), nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
 
@@ -570,6 +589,52 @@ class EmployerNumber(Base):
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
 
 
+class PremiumNumberContact(Base):
+    __tablename__ = "premium_number_contacts"
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_id",
+            "normalized_phone_number",
+            name="ux_premium_number_contacts_owner_phone",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    normalized_phone_number: Mapped[str] = mapped_column(String(40), index=True)
+    display_phone_number: Mapped[str] = mapped_column(String(80))
+    is_recruiter: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_employer: Mapped[bool] = mapped_column(Boolean, default=False)
+    recruiter_name: Mapped[str] = mapped_column(String(255), default="Unknown")
+    designation: Mapped[str] = mapped_column(String(255), default="Unknown")
+    recruiter_email: Mapped[str] = mapped_column(String(255), default="")
+    owner_name: Mapped[str] = mapped_column(String(255), default="Unknown")
+    company: Mapped[str] = mapped_column(String(255), default="Unknown")
+    first_detected_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    active_recruiter_lead_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey(
+            "premium_number_leads.id",
+            name="fk_premium_number_contacts_active_recruiter_lead",
+            use_alter=True,
+        ),
+        nullable=True,
+    )
+    active_employer_lead_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey(
+            "premium_number_leads.id",
+            name="fk_premium_number_contacts_active_employer_lead",
+            use_alter=True,
+        ),
+        nullable=True,
+    )
+    linkedin_url: Mapped[str] = mapped_column(String(500), default="")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
+
+
 class RecruiterOpportunity(Base):
     __tablename__ = "recruiter_opportunities"
     __table_args__ = (
@@ -594,10 +659,16 @@ class RecruiterOpportunity(Base):
     gmail_open_url: Mapped[str] = mapped_column(String(1000), default="")
     received_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     job_title: Mapped[str] = mapped_column(Text, default="")
-    client: Mapped[str] = mapped_column(Text, default="")
+    end_client: Mapped[str] = mapped_column(Text, default="")
+    # Transitional Python alias for callers migrating from the pre-unification name.
+    client = synonym("end_client")
     location: Mapped[str] = mapped_column(String(255), default="")
     work_mode: Mapped[str] = mapped_column(String(80), default="")
     visa_restrictions: Mapped[str] = mapped_column(String(255), default="")
+    resume_file_name: Mapped[str] = mapped_column(String(255), default="")
+    implementation_partner: Mapped[str] = mapped_column(String(255), default="")
+    prime_vendor: Mapped[str] = mapped_column(String(255), default="")
+    domain: Mapped[str] = mapped_column(String(255), default="")
     extracted_skills: Mapped[str] = mapped_column(Text, default="")
     evidence: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(40), default="New")
@@ -621,7 +692,22 @@ class NumberReviewQueue(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     owner_id: Mapped[str] = mapped_column(String(100), index=True)
-    source_email_id: Mapped[int] = mapped_column(Integer, index=True)
+    source_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    source_external_opportunity_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey(
+            "external_opportunities.id",
+            name="fk_number_review_queue_external_opportunity",
+        ),
+        nullable=True,
+        index=True,
+    )
+    source_lead_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("premium_number_leads.id", name="fk_number_review_queue_source_lead"),
+        nullable=True,
+        index=True,
+    )
     normalized_phone_number: Mapped[str] = mapped_column(String(40), index=True)
     display_phone_number: Mapped[str] = mapped_column(String(80))
     owner_name: Mapped[str] = mapped_column(String(255), default="Unknown")
@@ -632,6 +718,12 @@ class NumberReviewQueue(Base):
     evidence_snippet: Mapped[str] = mapped_column(Text, default="")
     email_subject: Mapped[str] = mapped_column(String(500), default="")
     email_sender: Mapped[str] = mapped_column(String(255), default="")
+    contact_email: Mapped[str] = mapped_column(String(255), default="")
+    contact_type: Mapped[str] = mapped_column(String(40), default="unknown")
+    recruiter_relevance_score: Mapped[int] = mapped_column(Integer, default=0)
+    relevance_reason: Mapped[str] = mapped_column(String(255), default="")
+    extraction_source: Mapped[str] = mapped_column(String(50), default="ai")
+    scored_with: Mapped[str] = mapped_column(String(20), default="legacy")
     gmail_open_url: Mapped[str] = mapped_column(String(1000), default="")
     state: Mapped[str] = mapped_column(String(40), default="pending")
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)

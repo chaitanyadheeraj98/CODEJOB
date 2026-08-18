@@ -436,6 +436,27 @@ class ExternalFeedsParserTests(unittest.TestCase):
         self.assertNotIn("<tr>", post.raw_body)
         self.assertIn("Backend Development Design, develop, and maintain scalable backend services.", post.raw_body)
 
+    def test_nvoids_company_regex_does_not_match_client_facing_experience(self) -> None:
+        html = """
+        <html><body><table>
+          <tr><td>Java Developer at Dallas, Texas, USA</td></tr>
+          <tr><td>Email: recruiter@example.com</td></tr>
+          <tr><td>Client-facing experience is required. Build Java APIs.</td></tr>
+          <tr><td>recruiter@example.com | View All</td></tr>
+          <tr><td>11:00 PM 07-May-26</td></tr>
+        </table></body></html>
+        """
+        post = parse_external_post(
+            source_type="nvoids",
+            source_url="https://nvoids.com/job_details.jsp?id=3445248",
+            title="Java Developer",
+            location="Dallas, Texas, USA",
+            posted_text="11:00 PM 07-May-26",
+            raw_body=html,
+            raw_html=html,
+        )
+        self.assertEqual(post.company, "")
+
 
 if __name__ == "__main__":
     unittest.main()

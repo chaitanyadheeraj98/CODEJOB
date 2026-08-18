@@ -1461,7 +1461,9 @@ type PaginatedListResponse<TItem> = {
 
 type NumberReviewCard = {
   id: number
-  source_email_id: number
+  source_email_id: number | null
+  source_external_opportunity_id: number | null
+  source_lead_id: number | null
   normalized_phone_number: string
   display_phone_number: string
   owner_name: string
@@ -1472,8 +1474,30 @@ type NumberReviewCard = {
   evidence_snippet: string
   email_subject: string
   email_sender: string
+  contact_email: string
+  contact_type: string
+  recruiter_relevance_score: number
+  relevance_reason: string
+  extraction_source: string
+  scored_with: string
   gmail_open_url: string
   state: string
+  linkedin_url?: string
+}
+
+type PremiumNumberVersion = {
+  id: number
+  role: string
+  owner_name: string
+  company: string
+  designation: string
+  contact_email: string
+  confidence: string
+  extraction_source: string
+  recruiter_email_id: number | null
+  external_opportunity_id: number | null
+  source_url: string | null
+  created_at: string
 }
 
 type RecruiterNumberCard = {
@@ -1484,6 +1508,13 @@ type RecruiterNumberCard = {
   company: string
   designation: string
   recruiter_email: string
+  first_detected_email_id: number | null
+  source_type: string | null
+  source_id: number | null
+  source_link_url: string | null
+  active_lead_id: number | null
+  version_count: number
+  linkedin_url: string
   total_opportunity_count: number
   last_email_received_at: string | null
 }
@@ -1495,6 +1526,11 @@ type EmployerNumberCard = {
   owner_name: string
   company: string
   source_email_id: number | null
+  source_type: string | null
+  source_id: number | null
+  source_link_url: string | null
+  active_lead_id: number | null
+  version_count: number
 }
 
 type OpportunityStatus = 'New' | 'Called' | 'Applied' | 'Follow Up' | 'Closed' | 'Not Interested'
@@ -1507,21 +1543,27 @@ type RecruiterOpportunityCard = {
   source_type: 'gmail' | 'nvoids'
   source_url: string | null
   external_opportunity_id: number | null
+  email_id: number | null
   email_subject: string
   email_sender: string
   gmail_open_url: string
   received_at: string | null
   job_title: string
-  client: string
+  end_client: string
   location: string
   work_mode: string
   visa_restrictions: string
+  resume_file_name: string
+  implementation_partner: string
+  prime_vendor: string
+  domain: string
   extracted_skills: string
   evidence: string
   recruiter_name: string
   recruiter_email: string
   recruiter_phone_display: string
   recruiter_phone_normalized: string
+  linkedin_url: string
   status: OpportunityStatus
   notes: string
   cold_call_script: string | null
@@ -2777,6 +2819,13 @@ function App() {
   const [deletingOpportunityId, setDeletingOpportunityId] = useState<number | null>(null)
   const [generatingColdCallId, setGeneratingColdCallId] = useState<number | null>(null)
   const [classifyingReviewId, setClassifyingReviewId] = useState<number | null>(null)
+  const [selectedReviewIds, setSelectedReviewIds] = useState<Set<number>>(new Set())
+  const [bulkActionInFlight, setBulkActionInFlight] = useState(false)
+  const [editedReviewFields, setEditedReviewFields] = useState<Record<number, Partial<NumberReviewCard>>>({})
+  const [editedOpportunityFields, setEditedOpportunityFields] = useState<Record<number, Partial<RecruiterOpportunityCard>>>({})
+  const [contactVersions, setContactVersions] = useState<Record<string, PremiumNumberVersion[]>>({})
+  const [versionActionKey, setVersionActionKey] = useState<string | null>(null)
+  const [linkedinEdits, setLinkedinEdits] = useState<Record<number, string>>({})
   const [timeRange, setTimeRange] = useState<TimeRangeKey>('current_day')
   const [productivityEvents, setProductivityEvents] = useState<ProductivityEvent[]>([])
   const [productivityTrend, setProductivityTrend] = useState<ProductivityTrendResponse | null>(null)
@@ -3305,15 +3354,74 @@ function App() {
     try {
       const res = await fetch(
         `${apiBase}/number-review/${reviewId}/${mode === 'recruiter' ? 'mark-recruiter' : 'mark-employer'}`,
-        { method: 'POST' },
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(editedReviewFields[reviewId] ?? {}),
+        },
       )
       if (!res.ok) throw new Error(`Failed to mark as ${mode}`)
+      setEditedReviewFields((prev) => {
+        const next = { ...prev }
+        delete next[reviewId]
+        return next
+      })
       await loadPremiumNumbers({ append: false, cursor: 0 })
     } catch (e) {
       setPremiumError((e as Error).message)
     } finally {
       setClassifyingReviewId(null)
     }
+  }
+
+  const runBulkReviewAction = async (action: 'mark-recruiter' | 'mark-employer' | 'delete' | 'rescore') => {
+    if (selectedReviewIds.size === 0) return
+    setBulkActionInFlight(true)
+    try {
+      const res = await fetch(`${apiBase}/number-review/bulk-${action}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ review_ids: [...selectedReviewIds] }),
+      })
+      if (!res.ok) throw new Error(`Failed to ${action.replace('-', ' ')} selected cards`)
+      setSelectedReviewIds(new Set())
+      await loadPremiumNumbers({ append: false, cursor: 0 })
+    } catch (e) {
+      setPremiumError((e as Error).message)
+    } finally {
+      setBulkActionInFlight(false)
+    }
+  }
+
+  const rescoreReviewCard = async (reviewId: number, sourceEmailId: number | null) => {
+    setClassifyingReviewId(reviewId)
+    try {
+      // Gmail-sourced cards use the dedicated reextract endpoint per spec; Nvoids-sourced
+      // cards (no source_email_id) have no reextract equivalent, so fall back to
+      // bulk-rescore, which already handles both source types on the backend.
+      const res = sourceEmailId
+        ? await fetch(`${apiBase}/premium-numbers/reextract/${sourceEmailId}`, { method: 'POST' })
+        : await fetch(`${apiBase}/number-review/bulk-rescore`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ review_ids: [reviewId] }),
+          })
+      if (!res.ok) throw new Error('Failed to rescore review card')
+      await loadPremiumNumbers({ append: false, cursor: 0 })
+    } catch (e) {
+      setPremiumError((e as Error).message)
+    } finally {
+      setClassifyingReviewId(null)
+    }
+  }
+
+  const toggleReviewSelection = (id: number) => {
+    setSelectedReviewIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
   }
 
   const deleteReviewCard = async (reviewId: number) => {
@@ -3329,7 +3437,24 @@ function App() {
     }
   }
 
-  const updateOpportunity = async (id: number, patch: Partial<Pick<RecruiterOpportunityCard, 'status' | 'notes'>>) => {
+  const updateOpportunity = async (
+    id: number,
+    patch: Partial<Pick<
+      RecruiterOpportunityCard,
+      | 'status'
+      | 'notes'
+      | 'job_title'
+      | 'location'
+      | 'work_mode'
+      | 'visa_restrictions'
+      | 'resume_file_name'
+      | 'implementation_partner'
+      | 'prime_vendor'
+      | 'end_client'
+      | 'domain'
+      | 'extracted_skills'
+    >>,
+  ) => {
     setUpdatingOpportunityId(id)
     try {
       const res = await fetch(`${apiBase}/recruiter-opportunities/${id}`, {
@@ -3340,10 +3465,68 @@ function App() {
       if (!res.ok) throw new Error('Failed to update opportunity')
       const updated = (await res.json()) as RecruiterOpportunityCard
       setOpportunityCards((prev) => prev.map((item) => (item.id === id ? updated : item)))
+      setEditedOpportunityFields((prev) => {
+        const next = { ...prev }
+        delete next[id]
+        return next
+      })
     } catch (e) {
       setPremiumError((e as Error).message)
     } finally {
       setUpdatingOpportunityId(null)
+    }
+  }
+
+  const loadContactVersions = async (role: 'recruiter' | 'employer', id: number) => {
+    const key = `${role}-${id}`
+    if (contactVersions[key]) return
+    setVersionActionKey(key)
+    try {
+      const res = await fetch(`${apiBase}/${role}-numbers/${id}/versions`)
+      if (!res.ok) throw new Error('Failed to load contact versions')
+      const versions = (await res.json()) as PremiumNumberVersion[]
+      setContactVersions((prev) => ({ ...prev, [key]: versions }))
+    } catch (e) {
+      setPremiumError((e as Error).message)
+    } finally {
+      setVersionActionKey(null)
+    }
+  }
+
+  const selectContactVersion = async (role: 'recruiter' | 'employer', id: number, leadId: number) => {
+    const key = `${role}-${id}`
+    setVersionActionKey(key)
+    try {
+      const res = await fetch(`${apiBase}/${role}-numbers/${id}/select-version/${leadId}`, { method: 'POST' })
+      if (!res.ok) throw new Error('Failed to select contact version')
+      await loadPremiumNumbers({ append: false, cursor: 0 })
+    } catch (e) {
+      setPremiumError((e as Error).message)
+    } finally {
+      setVersionActionKey(null)
+    }
+  }
+
+  const saveRecruiterLinkedin = async (id: number, currentValue: string) => {
+    setClassifyingReviewId(id)
+    try {
+      const res = await fetch(`${apiBase}/recruiter-numbers/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ linkedin_url: linkedinEdits[id] ?? currentValue }),
+      })
+      if (!res.ok) throw new Error('Failed to save LinkedIn profile')
+      const updated = (await res.json()) as RecruiterNumberCard
+      setRecruiterNumberCards((prev) => prev.map((item) => (item.id === id ? updated : item)))
+      setLinkedinEdits((prev) => {
+        const next = { ...prev }
+        delete next[id]
+        return next
+      })
+    } catch (e) {
+      setPremiumError((e as Error).message)
+    } finally {
+      setClassifyingReviewId(null)
     }
   }
 
@@ -6616,7 +6799,10 @@ function App() {
               <div className="actionBar">
                 <select
                   value={premiumScopeFilter}
-                  onChange={(e) => setPremiumScopeFilter(e.target.value as PremiumScope)}
+                  onChange={(e) => {
+                    setPremiumScopeFilter(e.target.value as PremiumScope)
+                    setSelectedReviewIds(new Set())
+                  }}
                 >
                   <option value="all_review">All</option>
                   <option value="recruiter_numbers">Recruiter Numbers</option>
@@ -6652,7 +6838,28 @@ function App() {
                   onChange={(e) => setPremiumSearch(e.target.value)}
                   placeholder="Search number, owner, company..."
                 />
+                {premiumScopeFilter === 'all_review' ? (
+                  <>
+                    <label>
+                      <input
+                        type="checkbox"
+                        aria-label="Select all visible review cards"
+                        checked={numberReviewCards.length > 0 && numberReviewCards.every((item) => selectedReviewIds.has(item.id))}
+                        onChange={(e) => setSelectedReviewIds(e.target.checked ? new Set(numberReviewCards.map((item) => item.id)) : new Set())}
+                        disabled={bulkActionInFlight}
+                      />
+                      Select all visible
+                    </label>
+                    <button type="button" onClick={() => runBulkReviewAction('mark-recruiter')} disabled={bulkActionInFlight || selectedReviewIds.size === 0}>Mark Selected as Recruiter</button>
+                    <button type="button" onClick={() => runBulkReviewAction('mark-employer')} disabled={bulkActionInFlight || selectedReviewIds.size === 0}>Mark Selected as Employer</button>
+                    <button type="button" onClick={() => runBulkReviewAction('rescore')} disabled={bulkActionInFlight || selectedReviewIds.size === 0}>Rescore Selected</button>
+                    <button type="button" onClick={() => runBulkReviewAction('delete')} disabled={bulkActionInFlight || selectedReviewIds.size === 0}>Delete Selected</button>
+                  </>
+                ) : null}
               </div>
+              {premiumScopeFilter === 'all_review' ? (
+                <p className="subtle">Rescoring re-checks every number in each source. Bulk actions ignore unsaved field edits.</p>
+              ) : null}
               {premiumLoading ? <p className="subtle">Loading premium numbers...</p> : null}
               {premiumError ? <p className="subtle">Premium numbers error: {premiumError}</p> : null}
               {premiumScopeFilter === 'all_review' && !premiumLoading && numberReviewCards.length === 0 ? (
@@ -6662,20 +6869,38 @@ function App() {
                 ? numberReviewCards.map((item) => (
                     <article
                       key={`review-${item.id}`}
-                      className={`emailItem ${isEmailSearchHighlight('premium_numbers', item.id) ? 'emailSearchHighlight' : ''}`}
+                      className={`emailItem ${isEmailSearchHighlight('premium_numbers', item.id) || selectedReviewIds.has(item.id) ? 'emailSearchHighlight' : ''}`}
                       data-email-search-section="premium_numbers"
                       data-email-search-related-id={item.id}
                     >
-                      <p><strong>Phone:</strong> {item.display_phone_number}</p>
-                      <p><strong>Owner:</strong> {item.owner_name}</p>
-                      <p><strong>Company:</strong> {item.company}</p>
-                      <p><strong>Designation:</strong> {item.designation}</p>
+                      <label>
+                        <input
+                          type="checkbox"
+                          aria-label={`Select review card ${item.id}`}
+                          checked={selectedReviewIds.has(item.id)}
+                          onChange={() => toggleReviewSelection(item.id)}
+                          disabled={bulkActionInFlight}
+                        />
+                        Select
+                      </label>
+                      <label>Phone<input value={editedReviewFields[item.id]?.display_phone_number ?? item.display_phone_number} onChange={(e) => setEditedReviewFields((prev) => ({ ...prev, [item.id]: { ...prev[item.id], display_phone_number: e.target.value } }))} /></label>
+                      <label>Owner<input value={editedReviewFields[item.id]?.owner_name ?? item.owner_name} onChange={(e) => setEditedReviewFields((prev) => ({ ...prev, [item.id]: { ...prev[item.id], owner_name: e.target.value } }))} /></label>
+                      <label>Company<input value={editedReviewFields[item.id]?.company ?? item.company} onChange={(e) => setEditedReviewFields((prev) => ({ ...prev, [item.id]: { ...prev[item.id], company: e.target.value } }))} /></label>
+                      <label>Designation<input value={editedReviewFields[item.id]?.designation ?? item.designation} onChange={(e) => setEditedReviewFields((prev) => ({ ...prev, [item.id]: { ...prev[item.id], designation: e.target.value } }))} /></label>
+                      <label>Extracted Contact Email<input type="email" value={editedReviewFields[item.id]?.contact_email ?? item.contact_email} onChange={(e) => setEditedReviewFields((prev) => ({ ...prev, [item.id]: { ...prev[item.id], contact_email: e.target.value } }))} /></label>
+                      <label>LinkedIn Profile<input value={editedReviewFields[item.id]?.linkedin_url ?? item.linkedin_url ?? ''} onChange={(e) => setEditedReviewFields((prev) => ({ ...prev, [item.id]: { ...prev[item.id], linkedin_url: e.target.value } }))} /></label>
                       <p><strong>Confidence:</strong> {item.confidence.toUpperCase()}</p>
                       <p><strong>Purpose:</strong> {item.purpose}</p>
-                      <p><strong>Email Sender:</strong> {item.email_sender}</p>
+                      <p><strong>Envelope Sender:</strong> {item.email_sender}</p>
                       <p><strong>Email Subject:</strong> {item.email_subject}</p>
+                      <p><strong>Contact Type:</strong> {item.contact_type}</p>
+                      <p><strong>Relevance Score:</strong> {item.recruiter_relevance_score}</p>
+                      <p><strong>Signal:</strong> {item.relevance_reason || '-'}</p>
+                      <p><strong>Extraction Source:</strong> {item.extraction_source}</p>
+                      <p><strong>Score basis:</strong> {item.scored_with === 'legacy' ? 'Legacy (rescore recommended)' : 'Current'}</p>
+                      <p><strong>{item.source_external_opportunity_id ? 'Post ID' : 'Source Email ID'}:</strong> {item.source_external_opportunity_id ?? item.source_email_id ?? '-'}</p>
                       {item.gmail_open_url ? (
-                        <p><strong>Open:</strong> <a href={item.gmail_open_url} target="_blank" rel="noreferrer">Open exact email in Gmail</a></p>
+                        <p><strong>Open:</strong> <a href={item.gmail_open_url} target="_blank" rel="noreferrer">{item.source_external_opportunity_id ? 'Open Original Post' : 'Open exact email in Gmail'}</a></p>
                       ) : null}
                       <p className="subtle"><strong>Evidence:</strong> {item.evidence_snippet}</p>
                       <div className="rowBtns">
@@ -6692,6 +6917,13 @@ function App() {
                           disabled={classifyingReviewId === item.id}
                         >
                           Mark as Employer
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => rescoreReviewCard(item.id, item.source_email_id)}
+                          disabled={classifyingReviewId === item.id}
+                        >
+                          Rescore
                         </button>
                         <button
                           type="button"
@@ -6722,8 +6954,25 @@ function App() {
                       <p><strong>Designation:</strong> {item.designation}</p>
                       <p><strong>Recruiter Email:</strong> {item.recruiter_email || '-'}</p>
                       <p><strong>Total Opportunities:</strong> {item.total_opportunity_count}</p>
+                      <p><strong>{item.source_type === 'nvoids' ? 'Post ID' : 'Source Email ID'}:</strong> {item.source_id ?? item.first_detected_email_id ?? '-'}</p>
+                      {item.source_link_url ? <p><strong>Source Link:</strong> <a href={item.source_link_url} target="_blank" rel="noreferrer">{item.source_type === 'nvoids' ? 'Open Original Post' : 'Open exact email in Gmail'}</a></p> : null}
+                      {item.linkedin_url ? <p><a href={item.linkedin_url} target="_blank" rel="noreferrer">LinkedIn Profile</a></p> : null}
+                      <label>
+                        Contact version ({item.version_count})
+                        <select
+                          value={item.active_lead_id ?? ''}
+                          onFocus={() => loadContactVersions('recruiter', item.id)}
+                          onChange={(e) => selectContactVersion('recruiter', item.id, Number(e.target.value))}
+                          disabled={versionActionKey === `recruiter-${item.id}`}
+                        >
+                          {!contactVersions[`recruiter-${item.id}`] ? <option value={item.active_lead_id ?? ''}>Load versions</option> : null}
+                          {(contactVersions[`recruiter-${item.id}`] ?? []).map((version) => <option key={version.id} value={version.id}>{version.owner_name} · {version.company} · {version.extraction_source}</option>)}
+                        </select>
+                      </label>
+                      <label>LinkedIn URL<input value={linkedinEdits[item.id] ?? item.linkedin_url} onChange={(e) => setLinkedinEdits((prev) => ({ ...prev, [item.id]: e.target.value }))} /></label>
                       <p><strong>Last Email:</strong> {item.last_email_received_at ? new Date(item.last_email_received_at).toLocaleString() : '-'}</p>
                       <div className="rowBtns">
+                        <button type="button" onClick={() => saveRecruiterLinkedin(item.id, item.linkedin_url)} disabled={classifyingReviewId === item.id}>Save LinkedIn</button>
                         <button
                           type="button"
                           onClick={() => swapNumberBucket(item.id, 'recruiter')}
@@ -6750,7 +6999,20 @@ function App() {
                       <p><strong>Phone:</strong> {item.display_phone_number}</p>
                       <p><strong>Owner:</strong> {item.owner_name}</p>
                       <p><strong>Company:</strong> {item.company}</p>
-                      <p><strong>Source Email ID:</strong> {item.source_email_id ?? '-'}</p>
+                      <p><strong>{item.source_type === 'nvoids' ? 'Post ID' : 'Source Email ID'}:</strong> {item.source_id ?? item.source_email_id ?? '-'}</p>
+                      {item.source_link_url ? <p><strong>Source Link:</strong> <a href={item.source_link_url} target="_blank" rel="noreferrer">{item.source_type === 'nvoids' ? 'Open Original Post' : 'Open exact email in Gmail'}</a></p> : null}
+                      <label>
+                        Contact version ({item.version_count})
+                        <select
+                          value={item.active_lead_id ?? ''}
+                          onFocus={() => loadContactVersions('employer', item.id)}
+                          onChange={(e) => selectContactVersion('employer', item.id, Number(e.target.value))}
+                          disabled={versionActionKey === `employer-${item.id}`}
+                        >
+                          {!contactVersions[`employer-${item.id}`] ? <option value={item.active_lead_id ?? ''}>Load versions</option> : null}
+                          {(contactVersions[`employer-${item.id}`] ?? []).map((version) => <option key={version.id} value={version.id}>{version.owner_name} · {version.company} · {version.extraction_source}</option>)}
+                        </select>
+                      </label>
                       <div className="rowBtns">
                         <button
                           type="button"
@@ -6780,13 +7042,19 @@ function App() {
                       <p><strong>Recruiter Name:</strong> {item.recruiter_name || '-'}</p>
                       <p><strong>Recruiter Email:</strong> {item.recruiter_email || '-'}</p>
                       <p><strong>Recruiter Phone:</strong> {item.recruiter_phone_display || '-'}</p>
+                      {item.linkedin_url ? <p><a href={item.linkedin_url} target="_blank" rel="noreferrer">LinkedIn Profile</a></p> : null}
                       <p><strong>Email Sender:</strong> {item.email_sender || '-'}</p>
-                      <p><strong>Job Title:</strong> {item.job_title || '-'}</p>
-                      <p><strong>Client:</strong> {item.client || '-'}</p>
-                      <p><strong>Location:</strong> {item.location || '-'}</p>
-                      <p><strong>Work Mode:</strong> {item.work_mode || '-'}</p>
-                      <p><strong>Visa:</strong> {item.visa_restrictions || '-'}</p>
-                      <p><strong>Skills:</strong> {item.extracted_skills || '-'}</p>
+                      <p><strong>Email ID:</strong> {item.email_id ?? '-'}</p>
+                      <label>Job Title<input value={editedOpportunityFields[item.id]?.job_title ?? item.job_title} onChange={(e) => setEditedOpportunityFields((prev) => ({ ...prev, [item.id]: { ...prev[item.id], job_title: e.target.value } }))} /></label>
+                      <label>Location<input value={editedOpportunityFields[item.id]?.location ?? item.location} onChange={(e) => setEditedOpportunityFields((prev) => ({ ...prev, [item.id]: { ...prev[item.id], location: e.target.value } }))} /></label>
+                      <label>Work Mode<input value={editedOpportunityFields[item.id]?.work_mode ?? item.work_mode} onChange={(e) => setEditedOpportunityFields((prev) => ({ ...prev, [item.id]: { ...prev[item.id], work_mode: e.target.value } }))} /></label>
+                      <label>Visa<input value={editedOpportunityFields[item.id]?.visa_restrictions ?? item.visa_restrictions} onChange={(e) => setEditedOpportunityFields((prev) => ({ ...prev, [item.id]: { ...prev[item.id], visa_restrictions: e.target.value } }))} /></label>
+                      <label>Resume Variant Submitted<input value={editedOpportunityFields[item.id]?.resume_file_name ?? item.resume_file_name} onChange={(e) => setEditedOpportunityFields((prev) => ({ ...prev, [item.id]: { ...prev[item.id], resume_file_name: e.target.value } }))} /></label>
+                      <label>Implementation Partner<input value={editedOpportunityFields[item.id]?.implementation_partner ?? item.implementation_partner} onChange={(e) => setEditedOpportunityFields((prev) => ({ ...prev, [item.id]: { ...prev[item.id], implementation_partner: e.target.value } }))} /></label>
+                      <label>Prime Vendor<input value={editedOpportunityFields[item.id]?.prime_vendor ?? item.prime_vendor} onChange={(e) => setEditedOpportunityFields((prev) => ({ ...prev, [item.id]: { ...prev[item.id], prime_vendor: e.target.value } }))} /></label>
+                      <label>End Client<input value={editedOpportunityFields[item.id]?.end_client ?? item.end_client} onChange={(e) => setEditedOpportunityFields((prev) => ({ ...prev, [item.id]: { ...prev[item.id], end_client: e.target.value } }))} /></label>
+                      <label>Domain<input value={editedOpportunityFields[item.id]?.domain ?? item.domain} onChange={(e) => setEditedOpportunityFields((prev) => ({ ...prev, [item.id]: { ...prev[item.id], domain: e.target.value } }))} /></label>
+                      <label>Skills<input value={editedOpportunityFields[item.id]?.extracted_skills ?? item.extracted_skills} onChange={(e) => setEditedOpportunityFields((prev) => ({ ...prev, [item.id]: { ...prev[item.id], extracted_skills: e.target.value } }))} /></label>
                       {item.source_url || item.gmail_open_url ? (
                         <p>
                           <strong>Open:</strong>{' '}
@@ -6825,6 +7093,13 @@ function App() {
                         />
                       </label>
                       <div className="rowBtns">
+                        <button
+                          type="button"
+                          onClick={() => updateOpportunity(item.id, editedOpportunityFields[item.id] ?? {})}
+                          disabled={updatingOpportunityId === item.id || !editedOpportunityFields[item.id]}
+                        >
+                          {updatingOpportunityId === item.id ? 'Saving...' : 'Save'}
+                        </button>
                         <button
                           type="button"
                           onClick={() => generateColdCallScript(item.id)}

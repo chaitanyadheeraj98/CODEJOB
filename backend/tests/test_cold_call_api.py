@@ -13,7 +13,7 @@ from sqlalchemy.pool import StaticPool
 from app import main
 from app.db import Base
 from app.external_feeds.models import ExternalOpportunity
-from app.models import RecruiterEmail, RecruiterNumber, RecruiterOpportunity
+from app.models import PremiumNumberContact, RecruiterEmail, RecruiterOpportunity
 
 
 class ColdCallApiTests(unittest.TestCase):
@@ -41,8 +41,9 @@ class ColdCallApiTests(unittest.TestCase):
         Base.metadata.drop_all(bind=self.engine)
         self.engine.dispose()
 
-    def _seed_recruiter(self, db: Session) -> RecruiterNumber:
-        recruiter = RecruiterNumber(
+    def _seed_recruiter(self, db: Session) -> PremiumNumberContact:
+        recruiter = PremiumNumberContact(
+            is_recruiter=True,
             owner_id=main.settings.owner_id,
             normalized_phone_number="+12145550000",
             display_phone_number="+1 214 555 0000",

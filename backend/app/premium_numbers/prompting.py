@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 
-def build_premium_numbers_prompts(email_content: str) -> tuple[str, str]:
+def build_premium_numbers_prompts(
+    email_content: str,
+    employer_domains: set[str] | None = None,
+) -> tuple[str, str]:
     system_prompt = (
         "You are an intelligent email information extraction system. "
         "Extract phone numbers and attribution details exactly as instructed. "
@@ -12,12 +15,14 @@ Your task is to analyze recruiter/job-related emails and extract ALL phone numbe
 
 For EACH phone number found, identify:
 
-1. Phone Number
-2. Owner Name
-3. Company Name
-4. Role/Designation (if available)
-5. Why the number is present
-6. Confidence Level (High / Medium / Low)
+1. Role: recruiter, employer, or unknown
+2. Phone Number
+3. Contact Name
+4. Contact Email
+5. Company Name
+6. Role/Designation (if available)
+7. Why the number is present
+8. Confidence Level (High / Medium / Low)
 
 Rules:
 - Carefully distinguish between main submission contacts, recruiter signatures, and office numbers.
@@ -28,13 +33,18 @@ Rules:
 - Extract multiple phone numbers if present.
 - Ignore invalid or incomplete numbers.
 - Support international phone number formats.
+- Known employer domains are employer contacts, not recruiter contacts.
+
+Known employer domains: {', '.join(sorted(employer_domains or set())) or 'none'}
 
 Expected JSON format:
 {{
-  "phone_numbers": [
+  "contacts": [
     {{
+      "role": "recruiter",
       "phone_number": "+1 512 271 9173",
-      "owner_name": "RAM",
+      "name": "RAM",
+      "email": "ram@example.com",
       "company": "TekWings",
       "designation": "Unknown",
       "purpose": "Resume submission contact",

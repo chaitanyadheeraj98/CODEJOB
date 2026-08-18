@@ -147,7 +147,7 @@ ALLOWED_SQLITE_TYPE_DRIFT = {
     ("recent_run_skipped_items", "title_or_subject"),
     ("recruiter_emails", "role"),
     ("recruiter_opportunities", "job_title"),
-    ("recruiter_opportunities", "client"),
+    ("recruiter_opportunities", "end_client"),
 }
 
 

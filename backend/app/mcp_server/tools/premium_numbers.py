@@ -7,11 +7,10 @@ from sqlalchemy import func, or_
 from app.config import settings
 from app.db import SessionLocal
 from app.models import (
-    EmployerNumber,
     NumberReviewQueue,
+    PremiumNumberContact,
     PremiumNumberLead,
     RecruiterEmail,
-    RecruiterNumber,
     RecruiterOpportunity,
 )
 from app.premium_numbers.intelligence import OPPORTUNITY_STATUS_VALUES
@@ -22,13 +21,13 @@ _VALID_CATEGORIES = ("recruiter", "employer", "review", "lead")
 
 # Mirrors the display-hiding rules already applied to these tables in main.py /
 # email_lookup_service.py, so the assistant never surfaces junk rows the UI itself hides.
-def _is_hidden_nvoids_placeholder_recruiter(row: RecruiterNumber) -> bool:
+def _is_hidden_nvoids_placeholder_recruiter(row: PremiumNumberContact) -> bool:
     normalized = str(row.normalized_phone_number or "").strip().lower()
     display = str(row.display_phone_number or "").strip().lower()
     return normalized.startswith("nvoids-") and display == "unknown" and row.first_detected_email_id is None
 
 
-def _is_hidden_invalid_employer_number(row: EmployerNumber) -> bool:
+def _is_hidden_invalid_employer_number(row: PremiumNumberContact) -> bool:
     display = str(row.display_phone_number or "").strip()
     if not display or display.lower() == "unknown":
         return False
@@ -37,15 +36,18 @@ def _is_hidden_invalid_employer_number(row: EmployerNumber) -> bool:
 
 
 def _recruiter_rows(db, email_id: int, recruiter_email_hint: str) -> list[dict[str, object]]:
-    query = db.query(RecruiterNumber).filter(RecruiterNumber.owner_id == settings.owner_id)
+    query = db.query(PremiumNumberContact).filter(
+        PremiumNumberContact.owner_id == settings.owner_id,
+        PremiumNumberContact.is_recruiter.is_(True),
+    )
     if email_id:
-        # RecruiterNumber is deduped globally by phone number, so the row that first captured
+        # A premium contact is deduped globally by phone number, so the row that first captured
         # a recruiter's number is often attached to an earlier email, not this specific thread.
         # Match on the recruiter's address too, not just first_detected_email_id, or a recruiter
         # who replied on a later thread would wrongly show up as having no stored number.
-        conditions = [RecruiterNumber.first_detected_email_id == email_id]
+        conditions = [PremiumNumberContact.first_detected_email_id == email_id]
         if recruiter_email_hint:
-            conditions.append(func.lower(RecruiterNumber.recruiter_email) == recruiter_email_hint)
+            conditions.append(func.lower(PremiumNumberContact.recruiter_email) == recruiter_email_hint)
         query = query.filter(or_(*conditions))
     return [
         {
@@ -61,15 +63,18 @@ def _recruiter_rows(db, email_id: int, recruiter_email_hint: str) -> list[dict[s
             "source_email_id": row.first_detected_email_id,
             "updated_at": row.updated_at.isoformat(),
         }
-        for row in query.order_by(RecruiterNumber.updated_at.desc())
+        for row in query.order_by(PremiumNumberContact.updated_at.desc())
         if not _is_hidden_nvoids_placeholder_recruiter(row)
     ]
 
 
 def _employer_rows(db, email_id: int, _recruiter_email_hint: str) -> list[dict[str, object]]:
-    query = db.query(EmployerNumber).filter(EmployerNumber.owner_id == settings.owner_id)
+    query = db.query(PremiumNumberContact).filter(
+        PremiumNumberContact.owner_id == settings.owner_id,
+        PremiumNumberContact.is_employer.is_(True),
+    )
     if email_id:
-        query = query.filter(EmployerNumber.source_email_id == email_id)
+        query = query.filter(PremiumNumberContact.source_email_id == email_id)
     return [
         {
             "category": "employer_number",
@@ -84,7 +89,7 @@ def _employer_rows(db, email_id: int, _recruiter_email_hint: str) -> list[dict[s
             "source_email_id": row.source_email_id,
             "updated_at": row.updated_at.isoformat(),
         }
-        for row in query.order_by(EmployerNumber.updated_at.desc())
+        for row in query.order_by(PremiumNumberContact.updated_at.desc())
         if not _is_hidden_invalid_employer_number(row)
     ]
 
@@ -216,8 +221,10 @@ def list_recruiter_opportunities(status: str = "", source_email_id: int = 0, lim
         recruiters = (
             {
                 row.id: row
-                for row in db.query(RecruiterNumber).filter(
-                    RecruiterNumber.owner_id == settings.owner_id, RecruiterNumber.id.in_(recruiter_ids)
+                for row in db.query(PremiumNumberContact).filter(
+                    PremiumNumberContact.owner_id == settings.owner_id,
+                    PremiumNumberContact.id.in_(recruiter_ids),
+                    PremiumNumberContact.is_recruiter.is_(True),
                 )
             }
             if recruiter_ids
@@ -231,7 +238,7 @@ def list_recruiter_opportunities(status: str = "", source_email_id: int = 0, lim
                     "id": row.id,
                     "status": row.status,
                     "job_title": row.job_title,
-                    "client": row.client,
+                    "end_client": row.end_client,
                     "location": row.location,
                     "work_mode": row.work_mode,
                     "visa_restrictions": row.visa_restrictions,

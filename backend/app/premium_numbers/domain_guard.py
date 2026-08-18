@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from app.models import RecruiterEmail, UserSettings
-from app.phase0 import email_domain, normalize_employer_domains
+from app.models import UserSettings
+from app.phase0 import normalize_employer_domains
 
 
 def employer_domains_for_owner(db: Session, owner_id: str) -> set[str]:
@@ -12,11 +12,3 @@ def employer_domains_for_owner(db: Session, owner_id: str) -> set[str]:
     if settings_row and settings_row.employer_domains:
         raw_domains = [part.strip() for part in settings_row.employer_domains.split(",") if part.strip()]
     return normalize_employer_domains(raw_domains)
-
-
-def should_capture_premium_numbers(db: Session, email: RecruiterEmail) -> tuple[bool, str, str]:
-    domains = employer_domains_for_owner(db, email.owner_id)
-    sender_domain = email_domain(email.sender or "")
-    if sender_domain and sender_domain in domains:
-        return True, sender_domain, ",".join(sorted(domains))
-    return False, sender_domain, ",".join(sorted(domains))

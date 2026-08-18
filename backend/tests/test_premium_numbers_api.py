@@ -1,6 +1,8 @@
 import os
 import unittest
 from datetime import UTC, datetime
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 os.environ["DEBUG"] = "false"
 
@@ -11,7 +13,16 @@ from sqlalchemy.pool import StaticPool
 
 from app import main
 from app.db import Base
-from app.models import EmployerNumber, NumberReviewQueue, PremiumNumberLead, RecruiterEmail, RecruiterNumber, RecruiterOpportunity, UserSettings
+from app.models import NumberReviewQueue, PremiumNumberContact, PremiumNumberLead, RecruiterEmail, RecruiterOpportunity, UserSettings
+from app.premium_numbers.extraction import ExtractedContactGroup
+
+
+def RecruiterNumber(**values):
+    return PremiumNumberContact(is_recruiter=True, **values)
+
+
+def EmployerNumber(**values):
+    return PremiumNumberContact(is_employer=True, **values)
 
 
 class PremiumNumbersApiTests(unittest.TestCase):
@@ -121,7 +132,7 @@ class PremiumNumbersApiTests(unittest.TestCase):
         show_all_payload = show_all.json()
         self.assertEqual(len(show_all_payload["items"]), 2)
 
-    def test_reextract_skips_non_employer_sender_domain(self) -> None:
+    def test_reextract_no_longer_skips_non_employer_sender_domain(self) -> None:
         now = datetime.now(UTC)
         with Session(self.engine) as db:
             db.add(
@@ -166,7 +177,7 @@ class PremiumNumbersApiTests(unittest.TestCase):
 
         response = self.client.post(f"/premium-numbers/reextract/{email_id}")
         self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(response.json()["stored_count"], 0)
+        self.assertEqual(response.json()["stored_count"], 1)
 
         with Session(self.engine) as db:
             count = (
@@ -174,7 +185,7 @@ class PremiumNumbersApiTests(unittest.TestCase):
                 .filter(PremiumNumberLead.owner_id == main.settings.owner_id, PremiumNumberLead.recruiter_email_id == email_id)
                 .count()
             )
-            self.assertEqual(count, 0)
+            self.assertEqual(count, 1)
 
     def test_recruiter_opportunity_includes_recruiter_phone_fields(self) -> None:
         now = datetime.now(UTC)
@@ -290,7 +301,7 @@ class PremiumNumbersApiTests(unittest.TestCase):
         self.assertEqual(mark_res.status_code, 200, mark_res.text)
 
         with Session(self.engine) as db:
-            recruiter = db.query(RecruiterNumber).filter(RecruiterNumber.owner_id == main.settings.owner_id).first()
+            recruiter = db.query(PremiumNumberContact).filter(PremiumNumberContact.owner_id == main.settings.owner_id).first()
             assert recruiter is not None
             self.assertEqual(recruiter.recruiter_name, "Bindu K")
             self.assertEqual(recruiter.company, "Saranshinc")
@@ -348,7 +359,7 @@ class PremiumNumbersApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
 
         with Session(self.engine) as db:
-            employer = db.query(EmployerNumber).filter(EmployerNumber.owner_id == main.settings.owner_id).first()
+            employer = db.query(PremiumNumberContact).filter(PremiumNumberContact.owner_id == main.settings.owner_id).first()
             self.assertIsNotNone(employer)
             assert employer is not None
             self.assertEqual(employer.display_phone_number, "(980) 907-0802")
@@ -404,7 +415,7 @@ class PremiumNumbersApiTests(unittest.TestCase):
         with Session(self.engine) as db:
             remaining_opp = db.query(RecruiterOpportunity).filter(RecruiterOpportunity.id == opportunity_id).first()
             self.assertIsNone(remaining_opp)
-            remaining_recruiter = db.query(RecruiterNumber).filter(RecruiterNumber.id == recruiter_id).first()
+            remaining_recruiter = db.query(PremiumNumberContact).filter(PremiumNumberContact.id == recruiter_id).first()
             self.assertIsNone(remaining_recruiter)
 
     def test_delete_recruiter_opportunity_keeps_recruiter_when_other_opportunities_exist(self) -> None:
@@ -481,7 +492,7 @@ class PremiumNumbersApiTests(unittest.TestCase):
             self.assertIsNone(deleted)
             survivor = db.query(RecruiterOpportunity).filter(RecruiterOpportunity.id == second_id).first()
             self.assertIsNotNone(survivor)
-            remaining_recruiter = db.query(RecruiterNumber).filter(RecruiterNumber.id == recruiter_id).first()
+            remaining_recruiter = db.query(PremiumNumberContact).filter(PremiumNumberContact.id == recruiter_id).first()
             self.assertIsNotNone(remaining_recruiter)
 
     def test_swap_recruiter_number_to_employer_standardizes_display_phone(self) -> None:
@@ -505,7 +516,7 @@ class PremiumNumbersApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
 
         with Session(self.engine) as db:
-            employer = db.query(EmployerNumber).filter(EmployerNumber.owner_id == main.settings.owner_id).first()
+            employer = db.query(PremiumNumberContact).filter(PremiumNumberContact.owner_id == main.settings.owner_id).first()
             self.assertIsNotNone(employer)
             assert employer is not None
             self.assertEqual(employer.display_phone_number, "(201) 277-2419")
@@ -529,7 +540,7 @@ class PremiumNumbersApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
 
         with Session(self.engine) as db:
-            recruiter = db.query(RecruiterNumber).filter(RecruiterNumber.owner_id == main.settings.owner_id).first()
+            recruiter = db.query(PremiumNumberContact).filter(PremiumNumberContact.owner_id == main.settings.owner_id).first()
             self.assertIsNotNone(recruiter)
             assert recruiter is not None
             self.assertEqual(recruiter.display_phone_number, "(980) 907-0802")
@@ -823,16 +834,47 @@ class PremiumNumbersApiTests(unittest.TestCase):
             db.commit()
             email_id = email.id
 
-        first = self.client.post(f"/premium-numbers/reextract/{email_id}")
-        self.assertEqual(first.status_code, 200, first.text)
-        self.assertEqual(first.json()["stored_count"], 1)
+        extracted = ExtractedContactGroup(
+            phone_number_display="(972) 756-1212 ext 128",
+            phone_number_normalized="19727561212",
+            owner_name="Dharma Veer",
+            contact_email="dharma.veer@intellisoft.com",
+            company="Intellisoft",
+            designation="US IT Recruiter",
+            purpose="Recruiter contact",
+            confidence="high",
+            contact_type="recruiter_direct",
+            recruiter_relevance_score=90,
+            is_recruiter_relevant=True,
+            relevance_reason="recruiter_role_and_domain",
+            source_fragment="Call Dharma Veer at +1 (972) 756-1212 Ext 128",
+            role="recruiter",
+            extraction_source="ai",
+        )
+        with patch(
+            "app.services.phone_intelligence_workflow_service.extract_phone_leads",
+            return_value=[extracted],
+        ):
+            first = self.client.post(f"/premium-numbers/reextract/{email_id}")
+            self.assertEqual(first.status_code, 200, first.text)
+            self.assertEqual(first.json()["stored_count"], 1)
 
-        second = self.client.post(f"/premium-numbers/reextract/{email_id}")
-        self.assertEqual(second.status_code, 200, second.text)
-        self.assertEqual(second.json()["stored_count"], 1)
+            second = self.client.post(f"/premium-numbers/reextract/{email_id}")
+            self.assertEqual(second.status_code, 200, second.text)
+            self.assertEqual(second.json()["stored_count"], 1)
 
         with Session(self.engine) as db:
             leads = (
+                db.query(PremiumNumberLead)
+                .filter(
+                    PremiumNumberLead.owner_id == main.settings.owner_id,
+                    PremiumNumberLead.recruiter_email_id == email_id,
+                    PremiumNumberLead.phone_number_normalized == "19727561212",
+                    PremiumNumberLead.extraction_source == "ai",
+                )
+                .count()
+            )
+            versions = (
                 db.query(PremiumNumberLead)
                 .filter(
                     PremiumNumberLead.owner_id == main.settings.owner_id,
@@ -850,6 +892,7 @@ class PremiumNumbersApiTests(unittest.TestCase):
                 .count()
             )
             self.assertEqual(leads, 1)
+            self.assertEqual(versions, 2)  # one immutable legacy snapshot plus the AI version
             self.assertEqual(opportunities, 1)
 
     def test_reextract_enriches_existing_unknown_recruiter_name(self) -> None:
@@ -915,16 +958,16 @@ class PremiumNumbersApiTests(unittest.TestCase):
 
         with Session(self.engine) as db:
             recruiter = (
-                db.query(RecruiterNumber)
+                db.query(PremiumNumberContact)
                 .filter(
-                    RecruiterNumber.owner_id == main.settings.owner_id,
-                    RecruiterNumber.normalized_phone_number == "18322713861",
+                    PremiumNumberContact.owner_id == main.settings.owner_id,
+                    PremiumNumberContact.normalized_phone_number == "18322713861",
                 )
                 .first()
             )
             self.assertIsNotNone(recruiter)
             assert recruiter is not None
-            self.assertEqual(recruiter.recruiter_name, "Rabbanis")
+            self.assertEqual(recruiter.recruiter_name, "Unknown")
 
     def test_reextract_overrides_signature_name_with_target_contact_name(self) -> None:
         now = datetime.now(UTC)
@@ -994,16 +1037,457 @@ class PremiumNumbersApiTests(unittest.TestCase):
 
         with Session(self.engine) as db:
             recruiter = (
-                db.query(RecruiterNumber)
+                db.query(PremiumNumberContact)
                 .filter(
-                    RecruiterNumber.owner_id == main.settings.owner_id,
-                    RecruiterNumber.normalized_phone_number == "18322713861",
+                    PremiumNumberContact.owner_id == main.settings.owner_id,
+                    PremiumNumberContact.normalized_phone_number == "18322713861",
                 )
                 .first()
             )
             self.assertIsNotNone(recruiter)
             assert recruiter is not None
-            self.assertEqual(recruiter.recruiter_name, "Rabbanis")
+            self.assertEqual(recruiter.recruiter_name, "Samshritha Gangula")
+
+    def test_review_submit_appends_manual_version_and_normalizes_linkedin(self) -> None:
+        with Session(self.engine) as db:
+            source = PremiumNumberLead(
+                owner_id=main.settings.owner_id,
+                recruiter_email_id=None,
+                phone_number_normalized="12145551212",
+                phone_number_display="(214) 555-1212",
+                role="unknown",
+                extraction_source="regex_fallback",
+                owner_name="Unknown",
+                company="Unknown",
+                designation="Unknown",
+            )
+            db.add(source)
+            db.flush()
+            card = NumberReviewQueue(
+                owner_id=main.settings.owner_id,
+                source_email_id=None,
+                source_lead_id=source.id,
+                normalized_phone_number="12145551212",
+                display_phone_number="(214) 555-1212",
+                owner_name="Unknown",
+                company="Unknown",
+                designation="Unknown",
+                email_subject="Role",
+                email_sender="sender@agency.example",
+                state="pending",
+            )
+            db.add(card)
+            db.commit()
+            review_id = card.id
+
+        response = self.client.post(
+            f"/number-review/{review_id}/mark-recruiter",
+            json={
+                "owner_name": "Priya Sharma",
+                "company": "Agency Co",
+                "contact_email": "priya@agency.example",
+                "designation": "Senior Recruiter",
+                "linkedin_url": "linkedin.com/in/priya-sharma",
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+
+        with Session(self.engine) as db:
+            contact = db.query(PremiumNumberContact).one()
+            self.assertEqual(contact.recruiter_name, "Priya Sharma")
+            self.assertEqual(contact.linkedin_url, "https://linkedin.com/in/priya-sharma")
+            active = db.get(PremiumNumberLead, contact.active_recruiter_lead_id)
+            self.assertEqual(active.extraction_source, "manual_review")
+            self.assertEqual(active.contact_email, "priya@agency.example")
+            self.assertEqual(db.query(PremiumNumberLead).count(), 2)
+
+    def test_number_review_submit_no_edits_links_existing_lead(self) -> None:
+        with Session(self.engine) as db:
+            source = PremiumNumberLead(
+                owner_id=main.settings.owner_id,
+                recruiter_email_id=None,
+                phone_number_normalized="12145551313",
+                phone_number_display="(214) 555-1313",
+                role="unknown",
+                extraction_source="ai",
+                owner_name="Priya Sharma",
+                company="Agency Co",
+                designation="Senior Recruiter",
+                contact_email="priya@agency.example",
+            )
+            db.add(source)
+            db.flush()
+            card = NumberReviewQueue(
+                owner_id=main.settings.owner_id,
+                source_email_id=None,
+                source_lead_id=source.id,
+                normalized_phone_number="12145551313",
+                display_phone_number="(214) 555-1313",
+                owner_name="Priya Sharma",
+                company="Agency Co",
+                designation="Senior Recruiter",
+                contact_email="priya@agency.example",
+                email_subject="Role",
+                email_sender="priya@agency.example",
+                state="pending",
+            )
+            db.add(card)
+            db.commit()
+            review_id = card.id
+            source_lead_id = source.id
+            leads_before = db.query(PremiumNumberLead).count()
+
+        # No body at all -- exercises the same "nothing edited" path as an
+        # explicit NumberReviewSubmitRequest whose fields are all None/match
+        # the card's stored values exactly (see _review_fields_edited).
+        response = self.client.post(f"/number-review/{review_id}/mark-recruiter")
+        self.assertEqual(response.status_code, 200, response.text)
+
+        with Session(self.engine) as db:
+            # No redundant manual_review duplicate was created -- row count unchanged.
+            self.assertEqual(db.query(PremiumNumberLead).count(), leads_before)
+
+            contact = db.query(PremiumNumberContact).one()
+            self.assertEqual(contact.active_recruiter_lead_id, source_lead_id)
+
+            active = db.get(PremiumNumberLead, contact.active_recruiter_lead_id)
+            self.assertEqual(active.id, source_lead_id)
+            self.assertEqual(active.extraction_source, "ai")
+
+            card = db.get(NumberReviewQueue, review_id)
+            self.assertEqual(card.state, "classified_recruiter")
+
+    def test_bulk_review_actions_report_each_id_without_route_collision(self) -> None:
+        with Session(self.engine) as db:
+            first = NumberReviewQueue(
+                owner_id=main.settings.owner_id,
+                source_email_id=None,
+                normalized_phone_number="12145550001",
+                display_phone_number="(214) 555-0001",
+                owner_name="One",
+                company="Agency",
+                designation="Recruiter",
+                email_subject="Role one",
+                email_sender="one@agency.example",
+                state="pending",
+            )
+            second = NumberReviewQueue(
+                owner_id=main.settings.owner_id,
+                source_email_id=None,
+                normalized_phone_number="12145550002",
+                display_phone_number="(214) 555-0002",
+                owner_name="Two",
+                company="Client",
+                designation="Manager",
+                email_subject="Role two",
+                email_sender="two@client.example",
+                state="pending",
+            )
+            other_owner = NumberReviewQueue(
+                owner_id="other-owner",
+                source_email_id=None,
+                normalized_phone_number="12145550003",
+                display_phone_number="(214) 555-0003",
+                owner_name="Other",
+                company="Other",
+                designation="Recruiter",
+                state="pending",
+            )
+            db.add_all([first, second, other_owner])
+            db.commit()
+            first_id, second_id, other_id = first.id, second.id, other_owner.id
+
+        marked = self.client.post(
+            "/number-review/bulk-mark-recruiter",
+            json={"review_ids": [first_id, other_id, 999999]},
+        )
+        self.assertEqual(marked.status_code, 200, marked.text)
+        self.assertEqual(
+            marked.json()["results"],
+            [
+                {"review_id": first_id, "status": "classified_recruiter"},
+                {"review_id": other_id, "status": "not_found"},
+                {"review_id": 999999, "status": "not_found"},
+            ],
+        )
+
+        deleted = self.client.post(
+            "/number-review/bulk-delete",
+            json={"review_ids": [second_id, first_id]},
+        )
+        self.assertEqual(deleted.status_code, 200, deleted.text)
+        self.assertEqual(
+            [item["status"] for item in deleted.json()["results"]],
+            ["dismissed", "classified_recruiter"],
+        )
+
+    def test_select_version_updates_active_lead_id(self) -> None:
+        with Session(self.engine) as db:
+            contact = PremiumNumberContact(
+                owner_id=main.settings.owner_id,
+                normalized_phone_number="12145550100",
+                display_phone_number="(214) 555-0100",
+                is_recruiter=True,
+                recruiter_name="Old Name",
+            )
+            db.add(contact)
+            db.flush()
+            old = PremiumNumberLead(
+                owner_id=main.settings.owner_id,
+                recruiter_email_id=None,
+                contact_id=contact.id,
+                phone_number_normalized=contact.normalized_phone_number,
+                phone_number_display=contact.display_phone_number,
+                role="recruiter",
+                owner_name="Old Name",
+                company="Old Co",
+                designation="Recruiter",
+                contact_email="old@example.com",
+            )
+            new = PremiumNumberLead(
+                owner_id=main.settings.owner_id,
+                recruiter_email_id=None,
+                contact_id=contact.id,
+                phone_number_normalized=contact.normalized_phone_number,
+                phone_number_display=contact.display_phone_number,
+                role="recruiter",
+                owner_name="New Name",
+                company="New Co",
+                designation="Director",
+                contact_email="new@example.com",
+            )
+            db.add_all([old, new])
+            db.flush()
+            contact.active_recruiter_lead_id = old.id
+            db.commit()
+            contact_id, new_id = contact.id, new.id
+
+        versions = self.client.get(f"/recruiter-numbers/{contact_id}/versions")
+        self.assertEqual(versions.status_code, 200, versions.text)
+        self.assertEqual(len(versions.json()), 2)
+        selected = self.client.post(f"/recruiter-numbers/{contact_id}/select-version/{new_id}")
+        self.assertEqual(selected.status_code, 200, selected.text)
+        with Session(self.engine) as db:
+            contact = db.get(PremiumNumberContact, contact_id)
+            self.assertEqual(contact.active_recruiter_lead_id, new_id)
+            self.assertEqual(contact.recruiter_name, "New Name")
+            self.assertEqual(contact.recruiter_email, "new@example.com")
+
+    def test_patch_opportunity_updates_new_fields_and_keeps_live_linkedin(self) -> None:
+        with Session(self.engine) as db:
+            contact = RecruiterNumber(
+                owner_id=main.settings.owner_id,
+                normalized_phone_number="12145550200",
+                display_phone_number="(214) 555-0200",
+                recruiter_name="Recruiter",
+                company="Agency",
+                designation="Recruiter",
+                recruiter_email="recruiter@agency.example",
+                linkedin_url="https://linkedin.com/in/recruiter",
+            )
+            db.add(contact)
+            db.flush()
+            opportunity = RecruiterOpportunity(
+                owner_id=main.settings.owner_id,
+                recruiter_number_id=contact.id,
+                source_email_id=44,
+                gmail_message_id="gmail-opportunity-edit",
+                email_subject="Original subject",
+                email_sender="sender@agency.example",
+                gmail_open_url="",
+                job_title="Developer",
+                end_client="Old Client",
+                location="Dallas",
+                work_mode="Remote",
+                visa_restrictions="",
+                extracted_skills="Python",
+                evidence="test",
+                status="New",
+                notes="",
+            )
+            db.add(opportunity)
+            db.commit()
+            opportunity_id = opportunity.id
+
+        response = self.client.patch(
+            f"/recruiter-opportunities/{opportunity_id}",
+            json={
+                "job_title": "Senior Developer",
+                "resume_file_name": "senior-python.pdf",
+                "implementation_partner": "Partner Co",
+                "prime_vendor": "Prime Co",
+                "end_client": "New Client",
+                "domain": "Healthcare",
+                "extracted_skills": "Python, AWS",
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(payload["email_id"], 44)
+        self.assertEqual(payload["end_client"], "New Client")
+        self.assertEqual(payload["prime_vendor"], "Prime Co")
+        self.assertEqual(payload["linkedin_url"], "https://linkedin.com/in/recruiter")
+
+    def test_bulk_rescore_calls_shared_workflow_once_per_source_email(self) -> None:
+        with Session(self.engine) as db:
+            email = RecruiterEmail(
+                owner_id=main.settings.owner_id,
+                sender="sender@agency.example",
+                subject="Role",
+                body="Call (214) 555-0300 and (214) 555-0301",
+                role="Developer",
+                location="Dallas",
+                salary_text="",
+                skills_text="Python",
+                score=80,
+                decision="Qualified",
+                state="needs_review",
+                draft_reply="Thanks",
+                source="gmail",
+                external_message_id="gmail-bulk-rescore",
+                external_thread_id="thread-bulk-rescore",
+            )
+            db.add(email)
+            db.flush()
+            rows = [
+                NumberReviewQueue(
+                    owner_id=main.settings.owner_id,
+                    source_email_id=email.id,
+                    normalized_phone_number=f"1214555030{suffix}",
+                    display_phone_number=f"(214) 555-030{suffix}",
+                    owner_name="Unknown",
+                    company="Unknown",
+                    designation="Unknown",
+                    state="pending",
+                )
+                for suffix in (0, 1)
+            ]
+            db.add_all(rows)
+            db.commit()
+            review_ids = [row.id for row in rows]
+
+        capture = Mock(return_value=SimpleNamespace())
+        with patch(
+            "app.main._get_candidate_runtime_service",
+            return_value=SimpleNamespace(capture_premium_numbers=capture),
+        ):
+            response = self.client.post(
+                "/number-review/bulk-rescore",
+                json={"review_ids": review_ids},
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(capture.call_count, 1)
+        self.assertEqual(
+            [item["status"] for item in response.json()["results"]],
+            ["pending", "pending"],
+        )
+
+    def test_bulk_rescore_promotes_cleared_threshold_leads(self) -> None:
+        # Unlike test_bulk_rescore_calls_shared_workflow_once_per_source_email above,
+        # this exercises the real capture_premium_numbers -> _run() path end to end --
+        # nothing about promotion/state-transition is mocked. The only thing patched
+        # is extract_phone_leads itself (same idiom already used by
+        # test_reextract_is_idempotent_for_leads_and_opportunities elsewhere in this
+        # file), so the test doesn't depend on a live DeepSeek AI call: backend/.env
+        # has a real Deepseek_API_KEY configured, so leaving extract_phone_leads
+        # fully unmocked would make this test perform a real network call to the
+        # DeepSeek API (slow, non-deterministic, and unavailable in CI/sandboxed
+        # environments) before ever falling back to the deterministic regex path.
+        # Every downstream step -- the existing-review idempotency check, the
+        # auto-routing threshold re-evaluation, contact creation, version linking,
+        # opportunity creation, and the review row's state transition -- runs for
+        # real against the fixture lead below.
+        now = datetime.now(UTC)
+        with Session(self.engine) as db:
+            email = RecruiterEmail(
+                owner_id=main.settings.owner_id,
+                sender="sender@agency.example",
+                subject="Java role",
+                body="Call Priya Sharma at (214) 555-0400 for this role",
+                role="Java Developer",
+                location="Dallas",
+                salary_text="",
+                skills_text="Java",
+                score=80,
+                decision="Qualified",
+                state="needs_review",
+                draft_reply="Thanks",
+                source="gmail",
+                external_message_id="gmail-bulk-rescore-promote",
+                external_thread_id="thread-bulk-rescore-promote",
+                gmail_received_at=now,
+            )
+            db.add(email)
+            db.flush()
+            row = NumberReviewQueue(
+                owner_id=main.settings.owner_id,
+                source_email_id=email.id,
+                normalized_phone_number="12145550400",
+                display_phone_number="(214) 555-0400",
+                owner_name="Unknown",
+                company="Unknown",
+                designation="Unknown",
+                email_subject="Java role",
+                email_sender="sender@agency.example",
+                state="pending",
+            )
+            db.add(row)
+            db.commit()
+            review_id = row.id
+            email_id = email.id
+
+        cleared_lead = ExtractedContactGroup(
+            phone_number_display="(214) 555-0400",
+            phone_number_normalized="12145550400",
+            owner_name="Priya Sharma",
+            contact_email="priya@agency.example",
+            company="Agency Co",
+            designation="Senior Recruiter",
+            purpose="Recruiter direct number",
+            confidence="high",
+            contact_type="recruiter_direct",
+            recruiter_relevance_score=90,
+            is_recruiter_relevant=True,
+            relevance_reason="external_domain,purpose_positive",
+            source_fragment="Call Priya Sharma at (214) 555-0400 for this role",
+            role="recruiter",
+            extraction_source="ai",
+        )
+        with patch(
+            "app.services.phone_intelligence_workflow_service.extract_phone_leads",
+            return_value=[cleared_lead],
+        ):
+            response = self.client.post(
+                "/number-review/bulk-rescore",
+                json={"review_ids": [review_id]},
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(
+            response.json()["results"],
+            [{"review_id": review_id, "status": "classified_recruiter"}],
+        )
+
+        with Session(self.engine) as db:
+            refreshed = db.get(NumberReviewQueue, review_id)
+            self.assertEqual(refreshed.state, "classified_recruiter")
+
+            contact = (
+                db.query(PremiumNumberContact)
+                .filter(
+                    PremiumNumberContact.owner_id == main.settings.owner_id,
+                    PremiumNumberContact.normalized_phone_number == "12145550400",
+                )
+                .first()
+            )
+            self.assertIsNotNone(contact)
+            self.assertTrue(contact.is_recruiter)
+            self.assertIsNotNone(contact.active_recruiter_lead_id)
+
+            lead = db.get(PremiumNumberLead, contact.active_recruiter_lead_id)
+            self.assertIsNotNone(lead)
+            self.assertEqual(lead.recruiter_email_id, email_id)
+            self.assertEqual(lead.owner_name, "Priya Sharma")
+            self.assertEqual(lead.phone_number_normalized, "12145550400")
 
     def test_reextract_overrides_name_without_to_when_contact_snippet_is_strong(self) -> None:
         now = datetime.now(UTC)
@@ -1071,16 +1555,16 @@ class PremiumNumbersApiTests(unittest.TestCase):
 
         with Session(self.engine) as db:
             recruiter = (
-                db.query(RecruiterNumber)
+                db.query(PremiumNumberContact)
                 .filter(
-                    RecruiterNumber.owner_id == main.settings.owner_id,
-                    RecruiterNumber.normalized_phone_number == "18322713861",
+                    PremiumNumberContact.owner_id == main.settings.owner_id,
+                    PremiumNumberContact.normalized_phone_number == "18322713861",
                 )
                 .first()
             )
             self.assertIsNotNone(recruiter)
             assert recruiter is not None
-            self.assertEqual(recruiter.recruiter_name, "Rabbanis")
+            self.assertEqual(recruiter.recruiter_name, "Samshritha Gangula")
 
 
 if __name__ == "__main__":

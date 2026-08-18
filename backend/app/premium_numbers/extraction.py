@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass
 from functools import lru_cache
@@ -74,10 +75,11 @@ SBERT_NEGATIVE_PROTOTYPES = (
     "System footer link metadata and list management notice.",
 )
 SBERT_MARGIN_THRESHOLD = 0.12
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class ExtractedPhoneLead:
+class ExtractedContactGroup:
     phone_number_display: str
     phone_number_normalized: str
     owner_name: str
@@ -91,6 +93,12 @@ class ExtractedPhoneLead:
     is_recruiter_relevant: bool
     relevance_reason: str
     source_fragment: str
+    role: str = "unknown"
+    extraction_source: str = "ai"
+
+
+# Backward-compatible import name for existing callers outside the shared workflow.
+ExtractedPhoneLead = ExtractedContactGroup
 
 
 def _normalize_phone(raw: str) -> str:
@@ -130,10 +138,10 @@ def _safe_json_parse(text: str) -> dict[str, object] | None:
             return None
 
 
-def _llm_extract(email_content: str) -> list[ExtractedPhoneLead]:
+def _llm_extract(email_content: str, employer_domains: set[str]) -> list[ExtractedContactGroup]:
     if not settings.deepseek_api_key:
         return []
-    system_prompt, user_prompt = build_premium_numbers_prompts(email_content)
+    system_prompt, user_prompt = build_premium_numbers_prompts(email_content, employer_domains)
     client = OpenAI(
         api_key=settings.deepseek_api_key,
         base_url=settings.deepseek_base_url,
@@ -152,11 +160,11 @@ def _llm_extract(email_content: str) -> list[ExtractedPhoneLead]:
     payload = _safe_json_parse(content or "")
     if not payload:
         return []
-    items = payload.get("phone_numbers")
+    items = payload.get("contacts")
     if not isinstance(items, list):
         return []
 
-    leads: list[ExtractedPhoneLead] = []
+    leads: list[ExtractedContactGroup] = []
     for item in items:
         if not isinstance(item, dict):
             continue
@@ -165,10 +173,13 @@ def _llm_extract(email_content: str) -> list[ExtractedPhoneLead]:
         if not normalized:
             continue
         leads.append(
-            ExtractedPhoneLead(
+            ExtractedContactGroup(
+                role=str(item.get("role", "unknown")).strip().lower()
+                if str(item.get("role", "unknown")).strip().lower() in {"recruiter", "employer", "unknown"}
+                else "unknown",
                 phone_number_display=display,
                 phone_number_normalized=normalized,
-                owner_name=str(item.get("owner_name", "Unknown")).strip() or "Unknown",
+                owner_name=str(item.get("name", item.get("owner_name", "Unknown"))).strip() or "Unknown",
                 contact_email=str(item.get("email", "")).strip().lower(),
                 company=str(item.get("company", "Unknown")).strip() or "Unknown",
                 designation=str(item.get("designation", "Unknown")).strip() or "Unknown",
@@ -179,6 +190,7 @@ def _llm_extract(email_content: str) -> list[ExtractedPhoneLead]:
                 is_recruiter_relevant=False,
                 relevance_reason="llm_only_unclassified",
                 source_fragment="Extracted by AI from email context",
+                extraction_source="ai",
             )
         )
     return leads
@@ -270,7 +282,7 @@ def _extract_owner_name(fragment: str, sender: str, employer_domains: set[str]) 
     return _sender_name(sender)
 
 
-def _lead_quality_score(lead: ExtractedPhoneLead) -> int:
+def _lead_quality_score(lead: ExtractedContactGroup) -> int:
     score = 0
     owner = (lead.owner_name or "").strip().lower()
     if owner and owner != "unknown":
@@ -286,6 +298,7 @@ def _lead_quality_score(lead: ExtractedPhoneLead) -> int:
 
 def _classify_recruiter_relevance(
     *,
+    candidate_email: str = "",
     sender: str,
     purpose: str,
     designation: str,
@@ -294,7 +307,7 @@ def _classify_recruiter_relevance(
 ) -> tuple[str, int, bool, str]:
     score = 50
     reasons: list[str] = []
-    domain = _domain_from_email(sender)
+    domain = _domain_from_email(candidate_email) or _domain_from_email(sender)
     purpose_l = (purpose or "").lower()
     designation_l = (designation or "").lower()
     fragment_l = (source_fragment or "").lower()
@@ -423,8 +436,14 @@ def _sbert_keep_candidate(fragment: str) -> tuple[bool, str]:
         return True, "sbert_error"
 
 
-def _fallback_extract(sender: str, body: str, employer_domains: set[str]) -> list[ExtractedPhoneLead]:
-    leads: list[ExtractedPhoneLead] = []
+def _fallback_extract(
+    sender: str,
+    body: str,
+    employer_domains: set[str],
+    *,
+    extraction_source: str = "regex_fallback",
+) -> list[ExtractedContactGroup]:
+    leads: list[ExtractedContactGroup] = []
     for match in PHONE_RE.finditer(body or ""):
         raw_phone = match.group(0)
         normalized, display_phone, _ext = format_phone(raw_phone)
@@ -445,9 +464,6 @@ def _fallback_extract(sender: str, body: str, employer_domains: set[str]) -> lis
 
         designation_match = DESIGNATION_RE.search(fragment)
         designation = designation_match.group(0).title() if designation_match else "Unknown"
-        owner = _extract_owner_name(raw_fragment, sender, employer_domains)
-        contact_email = _extract_contact_email(raw_fragment, sender, employer_domains)
-        company = _sender_company(sender)
         if "interview" in fragment_l:
             purpose = "Interview coordination"
         elif "vendor" in fragment_l:
@@ -458,6 +474,7 @@ def _fallback_extract(sender: str, body: str, employer_domains: set[str]) -> lis
             purpose = "Signature block phone number"
         confidence = "high" if ("regards" in fragment_l or "recruiter" in fragment_l) else "medium"
         contact_type, relevance_score, is_relevant, relevance_reason = _classify_recruiter_relevance(
+            candidate_email="",
             sender=sender,
             purpose=purpose,
             designation=designation,
@@ -467,12 +484,13 @@ def _fallback_extract(sender: str, body: str, employer_domains: set[str]) -> lis
         if sbert_reason:
             relevance_reason = f"{relevance_reason},{sbert_reason}" if relevance_reason else sbert_reason
         leads.append(
-            ExtractedPhoneLead(
+            ExtractedContactGroup(
+                role="unknown",
                 phone_number_display=display_phone,
                 phone_number_normalized=normalized,
-                owner_name=owner or "Unknown",
-                contact_email=contact_email,
-                company=company or "Unknown",
+                owner_name="Unknown",
+                contact_email="",
+                company="Unknown",
                 designation=designation,
                 purpose=purpose,
                 confidence=confidence,
@@ -481,26 +499,28 @@ def _fallback_extract(sender: str, body: str, employer_domains: set[str]) -> lis
                 is_recruiter_relevant=is_relevant,
                 relevance_reason=relevance_reason,
                 source_fragment=fragment[:240],
+                extraction_source=extraction_source,
             )
         )
     return leads
 
 
-def dedupe_phone_leads(leads: list[ExtractedPhoneLead]) -> list[ExtractedPhoneLead]:
-    deduped: dict[str, ExtractedPhoneLead] = {}
+def dedupe_phone_leads(leads: list[ExtractedContactGroup]) -> list[ExtractedContactGroup]:
+    deduped: dict[tuple[str, str], ExtractedContactGroup] = {}
     rank = {"high": 3, "medium": 2, "low": 1}
     for lead in leads:
-        existing = deduped.get(lead.phone_number_normalized)
+        key = (lead.phone_number_normalized, lead.role)
+        existing = deduped.get(key)
         if not existing:
-            deduped[lead.phone_number_normalized] = lead
+            deduped[key] = lead
             continue
         lead_rank = rank.get(lead.confidence, 1)
         existing_rank = rank.get(existing.confidence, 1)
         if lead_rank > existing_rank:
-            deduped[lead.phone_number_normalized] = lead
+            deduped[key] = lead
             continue
         if lead_rank == existing_rank and _lead_quality_score(lead) > _lead_quality_score(existing):
-            deduped[lead.phone_number_normalized] = lead
+            deduped[key] = lead
     return list(deduped.values())
 
 
@@ -509,25 +529,35 @@ def extract_phone_leads(
     subject: str,
     body: str,
     employer_domains: set[str] | None = None,
-) -> list[ExtractedPhoneLead]:
+) -> list[ExtractedContactGroup]:
     email_content = f"Sender: {sender}\nSubject: {subject}\n\n{body}"
     normalized_domains = {domain.strip().lower() for domain in (employer_domains or set()) if domain.strip()}
-    ai_leads: list[ExtractedPhoneLead] = []
+    ai_leads: list[ExtractedContactGroup] = []
+    ai_unavailable = not bool(settings.deepseek_api_key)
     try:
-        ai_leads = _llm_extract(email_content)
+        ai_leads = _llm_extract(email_content, normalized_domains)
     except Exception:
+        ai_unavailable = True
+        logger.exception("Premium-number AI extraction failed; using regex fallback")
         ai_leads = []
-    enriched_ai_leads: list[ExtractedPhoneLead] = []
+    enriched_ai_leads: list[ExtractedContactGroup] = []
     for lead in ai_leads:
         contact_type, relevance_score, is_relevant, relevance_reason = _classify_recruiter_relevance(
+            candidate_email=lead.contact_email,
             sender=sender,
             purpose=lead.purpose,
             designation=lead.designation,
             source_fragment=lead.source_fragment,
             employer_domains=normalized_domains,
         )
+        role = lead.role
+        if _is_employer_domain(lead.contact_email, normalized_domains):
+            role = "employer"
+        elif is_relevant:
+            role = "recruiter"
         enriched_ai_leads.append(
-            ExtractedPhoneLead(
+            ExtractedContactGroup(
+                role=role,
                 phone_number_display=lead.phone_number_display,
                 phone_number_normalized=lead.phone_number_normalized,
                 owner_name=lead.owner_name,
@@ -541,8 +571,16 @@ def extract_phone_leads(
                 is_recruiter_relevant=is_relevant,
                 relevance_reason=relevance_reason,
                 source_fragment=lead.source_fragment,
+                extraction_source="ai",
             )
         )
-    fallback_leads = _fallback_extract(sender, body, normalized_domains)
+    fallback_leads = _fallback_extract(
+        sender,
+        body,
+        normalized_domains,
+        extraction_source="regex_fallback_ai_unavailable" if ai_unavailable else "regex_fallback",
+    )
+    ai_phones = {lead.phone_number_normalized for lead in enriched_ai_leads}
+    fallback_leads = [lead for lead in fallback_leads if lead.phone_number_normalized not in ai_phones]
     combined = enriched_ai_leads + fallback_leads
     return dedupe_phone_leads(combined)

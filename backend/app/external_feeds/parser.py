@@ -496,12 +496,22 @@ def _extract_external_post_id(source_url: str) -> str:
     return tail or (source_url or "")
 
 
-def parse_external_post(*, source_type: str, source_url: str, title: str, location: str, posted_text: str, raw_body: str, raw_html: str) -> ParsedExternalPost:
+def parse_external_post(
+    *,
+    source_type: str,
+    source_url: str,
+    title: str,
+    location: str,
+    posted_text: str,
+    raw_body: str,
+    raw_html: str,
+    nvoids_detail: ParsedNvoidsDetail | None = None,
+) -> ParsedExternalPost:
     canonical_title = _normalize_line(title)
     company = ""
     skills_text = ""
     if source_type == "nvoids" and _has_meaningful_html_text(raw_html):
-        detail = parse_nvoids_detail(raw_html, canonical_title, location)
+        detail = nvoids_detail or parse_nvoids_detail(raw_html, canonical_title, location)
         canonical_title = detail.role or detail.listing_subject or canonical_title
         location = detail.location
         posted_text = detail.posted_text
@@ -510,7 +520,10 @@ def parse_external_post(*, source_type: str, source_url: str, title: str, locati
         recruiter_phone = detail.recruiter_phone
         recruiter_name = detail.recruiter_name
         parse_confidence = detail.parse_confidence
-        company_match = re.search(r"(?im)^\s*(?:client|company)\s*[:\-]\s*([^\n,;]+)", detail.jd_body or detail.body)
+        company_match = re.search(
+            r"(?im)^\s*(?:client|company)(?:\s*:\s*|\s+-\s+)([^\n,;]+)",
+            detail.jd_body or detail.body,
+        )
         company = company_match.group(1).strip() if company_match else ""
         skills_text = normalize_skills_text(extract_skills_text(detail.jd_body), preserve_unknown=True)
     else:
@@ -529,7 +542,10 @@ def parse_external_post(*, source_type: str, source_url: str, title: str, locati
     rate_match = re.search(r"(?:rate|max rate)\s*[:\-]?\s*([^\n;]+)", body, flags=re.IGNORECASE)
     rate = rate_match.group(1).strip() if rate_match else ""
     if not company:
-        company_match = re.search(r"(?:client|company)\s*[:\-]\s*([^\n,;]+)", body, flags=re.IGNORECASE)
+        company_match = re.search(
+            r"(?im)^\s*(?:client|company)(?:\s*:\s*|\s+-\s+)([^\n,;]+)",
+            body,
+        )
         company = company_match.group(1).strip() if company_match else ""
     external_post_id = _extract_external_post_id(source_url)
     return ParsedExternalPost(

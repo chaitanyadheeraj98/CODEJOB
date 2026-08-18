@@ -29,18 +29,25 @@ from app.models import (
     AttachmentAsset,
     EmailConversation,
     EmailReplyMessage,
-    EmployerNumber,
     GmailRequirementGroup,
     NumberReviewQueue,
     PremiumNumberLead,
+    PremiumNumberContact,
     RecentRun,
     RecentRunSkippedItem,
     RecruiterEmail,
-    RecruiterNumber,
     RecruiterOpportunity,
     ResumeAsset,
     UserSettings,
 )
+
+
+def RecruiterNumber(**values):
+    return PremiumNumberContact(is_recruiter=True, **values)
+
+
+def EmployerNumber(**values):
+    return PremiumNumberContact(is_employer=True, **values)
 
 
 class MCPServerToolTests(unittest.TestCase):

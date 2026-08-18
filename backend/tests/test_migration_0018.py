@@ -17,6 +17,7 @@ BASELINE_TABLES = {
     "employer_numbers",
     "number_review_queue",
     "premium_number_leads",
+    "premium_number_contacts",
     "productivity_events",
     "recipient_routing_feedback",
     "recruiter_emails",
@@ -48,7 +49,7 @@ class DeclarativeBaselineMigrationTests(unittest.TestCase):
                         revision = connection.exec_driver_sql(
                             "SELECT version_num FROM alembic_version"
                         ).scalar_one()
-                    self.assertEqual(revision, "20260818_0020")
+                    self.assertEqual(revision, "20260818_0021")
                     self.assertEqual(compare(database_url), [])
                 finally:
                     engine.dispose()

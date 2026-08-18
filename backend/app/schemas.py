@@ -852,9 +852,14 @@ class EmailSearchResponse(BaseModel):
 
 class PremiumNumberResponse(BaseModel):
     id: int
-    recruiter_email_id: int
+    recruiter_email_id: int | None
+    external_opportunity_id: int | None = None
+    contact_id: int | None = None
     phone_number_display: str
     phone_number_normalized: str
+    role: str = "recruiter"
+    extraction_source: str = "ai"
+    contact_email: str = ""
     owner_name: str
     company: str
     designation: str
@@ -868,6 +873,7 @@ class PremiumNumberResponse(BaseModel):
     source_email_sender: str
     source_email_subject: str
     source_email_message_id: str | None
+    source_url: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -882,7 +888,9 @@ class PremiumNumberListResponse(BaseModel):
 
 class UnknownNumberReviewCardResponse(BaseModel):
     id: int
-    source_email_id: int
+    source_email_id: int | None
+    source_external_opportunity_id: int | None = None
+    source_lead_id: int | None = None
     normalized_phone_number: str
     display_phone_number: str
     owner_name: str
@@ -893,6 +901,12 @@ class UnknownNumberReviewCardResponse(BaseModel):
     evidence_snippet: str
     email_subject: str
     email_sender: str
+    contact_email: str = ""
+    contact_type: str = "unknown"
+    recruiter_relevance_score: int = 0
+    relevance_reason: str = ""
+    extraction_source: str = "ai"
+    scored_with: str = "legacy"
     gmail_open_url: str
     state: str
     created_at: datetime
@@ -916,6 +930,12 @@ class RecruiterNumberResponse(BaseModel):
     designation: str
     recruiter_email: str
     first_detected_email_id: int | None
+    source_type: str | None = None
+    source_id: int | None = None
+    source_link_url: str | None = None
+    active_lead_id: int | None = None
+    version_count: int = 0
+    linkedin_url: str = ""
     total_opportunity_count: int = 0
     last_email_received_at: datetime | None = None
     created_at: datetime
@@ -929,6 +949,11 @@ class EmployerNumberResponse(BaseModel):
     owner_name: str
     company: str
     source_email_id: int | None
+    source_type: str | None = None
+    source_id: int | None = None
+    source_link_url: str | None = None
+    active_lead_id: int | None = None
+    version_count: int = 0
     created_at: datetime
     updated_at: datetime
 
@@ -955,21 +980,27 @@ class RecruiterOpportunityResponse(BaseModel):
     source_type: str = "gmail"
     source_url: str | None = None
     external_opportunity_id: int | None = None
+    email_id: int | None = None
     email_subject: str
     email_sender: str
     gmail_open_url: str
     received_at: datetime | None
     job_title: str
-    client: str
+    end_client: str
     location: str
     work_mode: str
     visa_restrictions: str
+    resume_file_name: str = ""
+    implementation_partner: str = ""
+    prime_vendor: str = ""
+    domain: str = ""
     extracted_skills: str
     evidence: str
     recruiter_name: str = ""
     recruiter_email: str = ""
     recruiter_phone_display: str = ""
     recruiter_phone_normalized: str = ""
+    linkedin_url: str = ""
     status: str
     notes: str
     cold_call_script: str | None = None
@@ -989,6 +1020,42 @@ class RecruiterOpportunityListResponse(BaseModel):
 class RecruiterOpportunityPatchRequest(BaseModel):
     status: str | None = None
     notes: str | None = None
+    job_title: str | None = None
+    location: str | None = None
+    work_mode: str | None = None
+    visa_restrictions: str | None = None
+    resume_file_name: str | None = None
+    implementation_partner: str | None = None
+    prime_vendor: str | None = None
+    end_client: str | None = None
+    domain: str | None = None
+    extracted_skills: str | None = None
+
+
+class BulkNumberReviewRequest(BaseModel):
+    review_ids: list[int]
+
+
+class BulkNumberReviewResultItem(BaseModel):
+    review_id: int
+    status: str
+
+
+class BulkNumberReviewResponse(BaseModel):
+    results: list[BulkNumberReviewResultItem]
+
+
+class NumberReviewSubmitRequest(BaseModel):
+    owner_name: str | None = None
+    company: str | None = None
+    display_phone_number: str | None = None
+    contact_email: str | None = None
+    designation: str | None = None
+    linkedin_url: str | None = None
+
+
+class RecruiterNumberPatchRequest(BaseModel):
+    linkedin_url: str | None = None
 
 
 class RecruiterOpportunityDeleteResponse(BaseModel):

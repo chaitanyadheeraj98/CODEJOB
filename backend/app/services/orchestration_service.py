@@ -21,6 +21,7 @@ from app.automation.queue_preparation import (
     prepare_candidate_for_queue,
 )
 from app.gates import EmailIntentDecision
+from app.gates.sender_denylist import SENDER_DENYLIST
 from app.ai.resume_context_attribution import RESUME_CONTEXT_MISSING, RESUME_CONTEXT_RULES_ONLY
 from app.automation import RunOrchestrator, RunOrchestratorDependencies, RunOrchestratorRequest
 from app.external_feeds.models import ExternalOpportunity
@@ -518,6 +519,35 @@ class OrchestrationService:
                     delivered_to=item.get("delivered_to"),
                     mailing_list=item.get("mailing_list"),
                 )
+                sender_domain = self.deps.email_domain(item["sender"])
+                if sender_domain in SENDER_DENYLIST:
+                    skipped_count += 1
+                    skipped_item_count += 1
+                    record_skipped_item(
+                        db,
+                        SkippedItemRecord(
+                            owner_id=self.deps.owner_id,
+                            run_source=RUN_SOURCE_GMAIL_SYNC,
+                            run_key=run_key,
+                            source_type="gmail",
+                            reason_code="denylisted_sender_domain",
+                            reason_detail=f"Skipped deterministic sender denylist match: {sender_domain}",
+                            external_message_id=item["external_message_id"],
+                            external_thread_id=item["external_thread_id"],
+                            title_or_subject=item["subject"],
+                            sender=item["sender"],
+                            gate_action="skip",
+                            gate_provider="sender_denylist",
+                            source_group_name=trusted_group_context.group_name,
+                            source_group_email=trusted_group_context.group_email,
+                            source_group_match_method=trusted_group_context.match_method,
+                            source_group_trusted=(
+                                trusted_group_context.trusted if trusted_group_context.matched else False
+                            ),
+                        ),
+                    )
+                    report_item()
+                    continue
                 approved_learning_signals = approved_learning_signals_for_owner(db, self.deps.owner_id)
                 intent_decision = self.deps.classify_email_intent(
                     sender=item["sender"],

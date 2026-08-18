@@ -68,16 +68,15 @@ from app.models import (
     CanonicalEntityTaxonomyEntry,
     CustomSkillTaxonomyEntry,
     DraftEditFeedback,
-    EmployerNumber,
     GmailRequirementGroup,
     JobIntentTaxonomyEntry,
     NumberReviewQueue,
+    PremiumNumberContact,
     PremiumNumberLead,
     ProductivityEvent,
     RecentRun,
     RecentRunSkippedItem,
     RecruiterEmail,
-    RecruiterNumber,
     RecruiterOpportunity,
     ResumeAsset,
     SyncRun,
@@ -153,6 +152,7 @@ from app.services import analytics_service, email_lookup_service, policy_service
 from app.services.auto_runner_service import AutoRunnerService
 from app.services.candidate_runtime_service import CandidateRuntimeDeps, CandidateRuntimeService, resolve_resume_display_name
 from app.services.phone_intelligence_workflow_service import (
+    apply_contact_version,
     derive_company_from_email_domain,
     derive_name_from_contact_email,
 )
@@ -194,6 +194,9 @@ from app.schemas import (
     AttachmentAssetUpdateRequest,
     AutomationRunRequest,
     AutomationRunResponse,
+    BulkNumberReviewRequest,
+    BulkNumberReviewResponse,
+    BulkNumberReviewResultItem,
     BulkApproveJobIntentSignalsResponse,
     BulkApproveSkillsResponse,
     BulkApproveEntitiesResponse,
@@ -234,10 +237,12 @@ from app.schemas import (
     ApproveEntityRequest,
     RecruiterNumberResponse,
     RecruiterNumberListResponse,
+    RecruiterNumberPatchRequest,
     RecruiterOpportunityDeleteResponse,
     RecruiterOpportunityListResponse,
     RecruiterOpportunityPatchRequest,
     RecruiterOpportunityResponse,
+    NumberReviewSubmitRequest,
     RejectRequest,
     ResolveRecipientsRequest,
     ResumeResponse,
@@ -716,12 +721,17 @@ def _load_recruiter_opportunity_for_sent_details(db: Session, email: RecruiterEm
     )
 
 
-def _load_recruiter_number_for_sent_details(db: Session, email: RecruiterEmail, recruiter_email: str | None) -> RecruiterNumber | None:
+def _load_recruiter_number_for_sent_details(
+    db: Session,
+    email: RecruiterEmail,
+    recruiter_email: str | None,
+) -> PremiumNumberContact | None:
     row = (
-        db.query(RecruiterNumber)
+        db.query(PremiumNumberContact)
         .filter(
-            RecruiterNumber.owner_id == settings.owner_id,
-            RecruiterNumber.first_detected_email_id == email.id,
+            PremiumNumberContact.owner_id == settings.owner_id,
+            PremiumNumberContact.is_recruiter.is_(True),
+            PremiumNumberContact.first_detected_email_id == email.id,
         )
         .first()
     )
@@ -730,12 +740,13 @@ def _load_recruiter_number_for_sent_details(db: Session, email: RecruiterEmail, 
     if not recruiter_email:
         return None
     return (
-        db.query(RecruiterNumber)
+        db.query(PremiumNumberContact)
         .filter(
-            RecruiterNumber.owner_id == settings.owner_id,
-            RecruiterNumber.recruiter_email == recruiter_email,
+            PremiumNumberContact.owner_id == settings.owner_id,
+            PremiumNumberContact.is_recruiter.is_(True),
+            PremiumNumberContact.recruiter_email == recruiter_email,
         )
-        .order_by(RecruiterNumber.updated_at.desc(), RecruiterNumber.id.desc())
+        .order_by(PremiumNumberContact.updated_at.desc(), PremiumNumberContact.id.desc())
         .first()
     )
 
@@ -810,7 +821,7 @@ def _build_sent_item_details(db: Session, email: RecruiterEmail) -> SentItemDeta
     recruiter_number = _load_recruiter_number_for_sent_details(db, email, recruiter_email)
     company = (
         _clean_optional_text(external.company if external else None)
-        or _clean_optional_text(recruiter_opportunity.client if recruiter_opportunity else None)
+        or _clean_optional_text(recruiter_opportunity.end_client if recruiter_opportunity else None)
         or _clean_optional_text(recruiter_number.company if recruiter_number else None)
         or _clean_optional_text(premium_lead.company if premium_lead else None)
     )
@@ -3596,7 +3607,10 @@ def gmail_labeling_preview(payload: GmailLabelingPreviewRequest) -> GmailLabelin
     return GmailLabelingPreviewResponse(label=decision.label, reason_path=decision.reason_path)
 
 
-def _recruiter_opportunity_response(row: RecruiterOpportunity, recruiter: RecruiterNumber | None) -> RecruiterOpportunityResponse:
+def _recruiter_opportunity_response(
+    row: RecruiterOpportunity,
+    recruiter: PremiumNumberContact | None,
+) -> RecruiterOpportunityResponse:
     return RecruiterOpportunityResponse(
         id=row.id,
         recruiter_number_id=row.recruiter_number_id,
@@ -3605,21 +3619,27 @@ def _recruiter_opportunity_response(row: RecruiterOpportunity, recruiter: Recrui
         source_type=row.source_type or "gmail",
         source_url=row.source_url,
         external_opportunity_id=row.external_opportunity_id,
+        email_id=row.source_email_id or row.external_opportunity_id,
         email_subject=row.email_subject,
         email_sender=row.email_sender,
         gmail_open_url=row.gmail_open_url,
         received_at=row.received_at,
         job_title=row.job_title,
-        client=row.client,
+        end_client=row.end_client,
         location=row.location,
         work_mode=row.work_mode,
         visa_restrictions=row.visa_restrictions,
+        resume_file_name=row.resume_file_name,
+        implementation_partner=row.implementation_partner,
+        prime_vendor=row.prime_vendor,
+        domain=row.domain,
         extracted_skills=row.extracted_skills,
         evidence=row.evidence,
         recruiter_name=(recruiter.recruiter_name if recruiter else ""),
         recruiter_email=(recruiter.recruiter_email if recruiter else ""),
         recruiter_phone_display=(recruiter.display_phone_number if recruiter else ""),
         recruiter_phone_normalized=(recruiter.normalized_phone_number if recruiter else ""),
+        linkedin_url=(recruiter.linkedin_url if recruiter else ""),
         status=row.status,
         notes=row.notes,
         cold_call_script=row.cold_call_script,
@@ -3883,7 +3903,7 @@ def _log_gmail_labeling_stats() -> None:
     gmail_labeling_runtime_service.log_stats()
 
 
-def _is_hidden_nvoids_placeholder_recruiter(row: RecruiterNumber | None) -> bool:
+def _is_hidden_nvoids_placeholder_recruiter(row: PremiumNumberContact | None) -> bool:
     if row is None:
         return False
     normalized = str(row.normalized_phone_number or "").strip().lower()
@@ -3891,7 +3911,7 @@ def _is_hidden_nvoids_placeholder_recruiter(row: RecruiterNumber | None) -> bool
     return normalized.startswith("nvoids-") and display == "unknown" and row.first_detected_email_id is None
 
 
-def _is_hidden_invalid_employer_number(row: EmployerNumber | None) -> bool:
+def _is_hidden_invalid_employer_number(row: PremiumNumberContact | None) -> bool:
     if row is None:
         return False
     display = str(row.display_phone_number or "").strip()
@@ -4038,6 +4058,7 @@ def list_number_review_queue(
                 NumberReviewQueue.owner_name.ilike(like),
                 NumberReviewQueue.company.ilike(like),
                 NumberReviewQueue.designation.ilike(like),
+                NumberReviewQueue.contact_email.ilike(like),
                 NumberReviewQueue.email_sender.ilike(like),
                 NumberReviewQueue.email_subject.ilike(like),
             )
@@ -4053,8 +4074,7 @@ def list_number_review_queue(
     )
 
 
-@app.post("/number-review/{review_id}/mark-recruiter", response_model=dict[str, int | str])
-def mark_number_as_recruiter(review_id: int, db: Session = Depends(get_db)) -> dict[str, int | str]:
+def _review_card(db: Session, review_id: int) -> NumberReviewQueue:
     card = (
         db.query(NumberReviewQueue)
         .filter(NumberReviewQueue.owner_id == settings.owner_id, NumberReviewQueue.id == review_id)
@@ -4062,157 +4082,447 @@ def mark_number_as_recruiter(review_id: int, db: Session = Depends(get_db)) -> d
     )
     if not card:
         raise HTTPException(status_code=404, detail="Review card not found")
-    if card.state != "pending":
-        return {"review_id": card.id, "status": card.state}
-    canonical_phone = canonicalize_phone(card.normalized_phone_number or card.display_phone_number)
+    return card
+
+
+def _normalize_linkedin_url(value: str | None) -> str:
+    normalized = (value or "").strip()
+    if normalized and not normalized.lower().startswith(("http://", "https://")):
+        return f"https://{normalized}"
+    return normalized
+
+
+def _effective_review_values(
+    card: NumberReviewQueue,
+    submit: NumberReviewSubmitRequest | None,
+) -> dict[str, str]:
+    return {
+        "owner_name": submit.owner_name if submit and submit.owner_name is not None else card.owner_name,
+        "company": submit.company if submit and submit.company is not None else card.company,
+        "display_phone_number": (
+            submit.display_phone_number
+            if submit and submit.display_phone_number is not None
+            else card.display_phone_number
+        ),
+        "contact_email": (
+            submit.contact_email
+            if submit and submit.contact_email is not None
+            else card.contact_email or extract_email_address(card.email_sender or "")
+        ),
+        "designation": (
+            submit.designation if submit and submit.designation is not None else card.designation
+        ),
+    }
+
+
+def _review_version(
+    db: Session,
+    card: NumberReviewQueue,
+    values: dict[str, str],
+    role: str,
+    *,
+    edited: bool,
+) -> PremiumNumberLead:
+    if not edited and card.source_lead_id:
+        existing = (
+            db.query(PremiumNumberLead)
+            .filter(
+                PremiumNumberLead.owner_id == settings.owner_id,
+                PremiumNumberLead.id == card.source_lead_id,
+            )
+            .first()
+        )
+        if existing:
+            return existing
+
+    version = PremiumNumberLead(
+        owner_id=settings.owner_id,
+        recruiter_email_id=card.source_email_id,
+        external_opportunity_id=card.source_external_opportunity_id,
+        phone_number_normalized=canonicalize_phone(values["display_phone_number"]),
+        phone_number_display=values["display_phone_number"],
+        role=role,
+        extraction_source="manual_review",
+        contact_email=(values["contact_email"] or "").strip().lower(),
+        owner_name=values["owner_name"] or "Unknown",
+        company=values["company"] or "Unknown",
+        designation=values["designation"] or "Unknown",
+        purpose=card.purpose,
+        confidence=card.confidence,
+        contact_type=card.contact_type,
+        recruiter_relevance_score=card.recruiter_relevance_score,
+        is_recruiter_relevant=role == "recruiter",
+        relevance_reason=card.relevance_reason,
+        source_fragment=card.evidence_snippet,
+        source_email_sender=card.email_sender,
+        source_email_subject=card.email_subject,
+        source_email_message_id=(
+            f"nvoids:{card.source_external_opportunity_id}"
+            if card.source_external_opportunity_id
+            else f"manual-{card.source_email_id}"
+        ),
+        source_url=card.gmail_open_url or None,
+    )
+    db.add(version)
+    db.flush()
+    return version
+
+
+def _review_fields_edited(
+    card: NumberReviewQueue,
+    submit: NumberReviewSubmitRequest | None,
+) -> bool:
+    if submit is None:
+        return False
+    return any(
+        value is not None and value != (getattr(card, field) or "")
+        for field, value in (
+            ("owner_name", submit.owner_name),
+            ("company", submit.company),
+            ("display_phone_number", submit.display_phone_number),
+            ("contact_email", submit.contact_email),
+            ("designation", submit.designation),
+        )
+    )
+
+
+def _contact_for_review(
+    db: Session,
+    card: NumberReviewQueue,
+    values: dict[str, str],
+) -> PremiumNumberContact:
+    canonical_phone = canonicalize_phone(values["display_phone_number"])
     if not canonical_phone:
         raise HTTPException(status_code=422, detail="Invalid phone number on review card")
-
-    recruiter = (
-        db.query(RecruiterNumber)
+    contact = (
+        db.query(PremiumNumberContact)
         .filter(
-            RecruiterNumber.owner_id == settings.owner_id,
-            RecruiterNumber.normalized_phone_number == canonical_phone,
+            PremiumNumberContact.owner_id == settings.owner_id,
+            PremiumNumberContact.normalized_phone_number == canonical_phone,
         )
         .first()
     )
-    candidate_email = extract_email_address(card.email_sender or "")
-    resolved_name = (
-        card.owner_name
-        if card.owner_name and card.owner_name.strip().lower() != "unknown"
-        else derive_name_from_contact_email(candidate_email)
+    if contact:
+        return contact
+    contact = PremiumNumberContact(
+        owner_id=settings.owner_id,
+        normalized_phone_number=canonical_phone,
+        display_phone_number=_standardized_display_phone(values["display_phone_number"], canonical_phone),
+        first_detected_email_id=card.source_email_id,
+        source_email_id=card.source_email_id,
     )
-    resolved_company = (
-        card.company
-        if card.company and card.company.strip().lower() != "unknown"
-        else derive_company_from_email_domain(candidate_email)
-    )
-    if not recruiter:
-        recruiter = RecruiterNumber(
-            owner_id=settings.owner_id,
-            normalized_phone_number=canonical_phone,
-            display_phone_number=_standardized_display_phone(
-                card.display_phone_number or card.normalized_phone_number,
-                canonical_phone,
-            ),
-            recruiter_name=resolved_name or "Unknown",
-            company=resolved_company or "Unknown",
-            designation=card.designation or "Unknown",
-            recruiter_email=candidate_email,
-            first_detected_email_id=card.source_email_id,
-        )
-        db.add(recruiter)
-        db.flush()
-    else:
-        # Preserve higher-quality existing identity; only enrich missing/unknown fields.
-        if (not recruiter.recruiter_name or recruiter.recruiter_name.strip().lower() == "unknown") and resolved_name:
-            recruiter.recruiter_name = resolved_name
-        if (not recruiter.company or recruiter.company.strip().lower() == "unknown") and resolved_company:
-            recruiter.company = resolved_company
-        if (not recruiter.designation or recruiter.designation.strip().lower() == "unknown") and card.designation:
-            recruiter.designation = card.designation
-        if not recruiter.recruiter_email and candidate_email:
-            recruiter.recruiter_email = candidate_email
+    db.add(contact)
+    db.flush()
+    return contact
 
-    email = (
-        db.query(RecruiterEmail)
-        .filter(RecruiterEmail.owner_id == settings.owner_id, RecruiterEmail.id == card.source_email_id)
-        .first()
+
+def _ensure_review_opportunity(
+    db: Session,
+    card: NumberReviewQueue,
+    contact: PremiumNumberContact,
+) -> None:
+    email = None
+    external = None
+    if card.source_email_id:
+        email = (
+            db.query(RecruiterEmail)
+            .filter(
+                RecruiterEmail.owner_id == settings.owner_id,
+                RecruiterEmail.id == card.source_email_id,
+            )
+            .first()
+        )
+    elif card.source_external_opportunity_id:
+        external = (
+            db.query(ExternalOpportunity)
+            .filter(
+                ExternalOpportunity.owner_id == settings.owner_id,
+                ExternalOpportunity.id == card.source_external_opportunity_id,
+            )
+            .first()
+        )
+    gmail_message_id = (
+        (email.external_message_id if email else None)
+        or (f"nvoids:{external.external_post_id}" if external else None)
+        or f"manual-{card.id}"
     )
-    gmail_message_id = (email.external_message_id if email else None) or f"manual-{card.source_email_id}"
-    existing_opportunity = (
-        db.query(RecruiterOpportunity)
+    exists = (
+        db.query(RecruiterOpportunity.id)
         .filter(
             RecruiterOpportunity.owner_id == settings.owner_id,
-            RecruiterOpportunity.recruiter_number_id == recruiter.id,
+            RecruiterOpportunity.recruiter_number_id == contact.id,
             RecruiterOpportunity.gmail_message_id == gmail_message_id,
         )
         .first()
     )
-    if not existing_opportunity:
-        db.add(
-            RecruiterOpportunity(
-                owner_id=settings.owner_id,
-                recruiter_number_id=recruiter.id,
-                source_email_id=card.source_email_id,
-                gmail_message_id=gmail_message_id,
-                email_subject=card.email_subject,
-                email_sender=card.email_sender,
-                gmail_open_url=card.gmail_open_url,
-                received_at=email.gmail_received_at if email else datetime.now(UTC),
-                job_title=email.role if email else card.email_subject,
-                client="",
-                location=email.location if email else "",
-                work_mode="",
-                visa_restrictions="",
-                extracted_skills=email.skills_text if email else "",
-                evidence=card.evidence_snippet,
-                status="New",
-                notes="",
-            )
+    if exists:
+        return
+    is_nvoids = external is not None
+    db.add(
+        RecruiterOpportunity(
+            owner_id=settings.owner_id,
+            recruiter_number_id=contact.id,
+            source_email_id=card.source_email_id,
+            gmail_message_id=gmail_message_id,
+            source_type="nvoids" if is_nvoids else "gmail",
+            source_url=(external.source_url if external else card.gmail_open_url) or None,
+            external_opportunity_id=card.source_external_opportunity_id,
+            email_subject=card.email_subject,
+            email_sender=card.email_sender,
+            gmail_open_url=card.gmail_open_url,
+            received_at=(
+                external.posted_at
+                if external
+                else (email.gmail_received_at if email else datetime.now(UTC))
+            ),
+            job_title=(external.role if external else (email.role if email else card.email_subject)),
+            end_client=(external.company if external else (email.end_client if email else "")),
+            location=(external.location if external else (email.location if email else "")),
+            work_mode=external.work_mode if external else "",
+            visa_restrictions=external.visa_hints if external else "",
+            resume_file_name=(email.resume_file_name if email else "") or "",
+            implementation_partner=(email.implementation_partner if email else "") or "",
+            prime_vendor="",
+            domain=(email.domain if email else "") or "",
+            extracted_skills=(external.skills_text if external else (email.skills_text if email else "")),
+            evidence=card.evidence_snippet,
+            status="New",
+            notes="",
         )
+    )
 
+
+def _mark_number_as_recruiter(
+    db: Session,
+    review_id: int,
+    submit: NumberReviewSubmitRequest | None = None,
+) -> dict[str, int | str]:
+    card = _review_card(db, review_id)
+    if card.state != "pending":
+        return {"review_id": card.id, "status": card.state}
+    values = _effective_review_values(card, submit)
+    candidate_email = extract_email_address(values["contact_email"])
+    if not values["owner_name"] or values["owner_name"].strip().lower() == "unknown":
+        values["owner_name"] = derive_name_from_contact_email(candidate_email) or "Unknown"
+    if not values["company"] or values["company"].strip().lower() == "unknown":
+        values["company"] = derive_company_from_email_domain(candidate_email) or "Unknown"
+    values["contact_email"] = candidate_email
+    contact = _contact_for_review(db, card, values)
+    version = _review_version(
+        db,
+        card,
+        values,
+        "recruiter",
+        edited=_review_fields_edited(card, submit),
+    )
+    version.contact_id = contact.id
+    apply_contact_version(contact, version, "recruiter")
+    contact.first_detected_email_id = contact.first_detected_email_id or card.source_email_id
+    if submit and submit.linkedin_url is not None:
+        contact.linkedin_url = _normalize_linkedin_url(submit.linkedin_url)
+    _ensure_review_opportunity(db, card, contact)
     card.state = "classified_recruiter"
     db.commit()
     return {"review_id": card.id, "status": card.state}
 
 
-@app.post("/number-review/{review_id}/mark-employer", response_model=dict[str, int | str])
-def mark_number_as_employer(review_id: int, db: Session = Depends(get_db)) -> dict[str, int | str]:
-    card = (
-        db.query(NumberReviewQueue)
-        .filter(NumberReviewQueue.owner_id == settings.owner_id, NumberReviewQueue.id == review_id)
-        .first()
-    )
-    if not card:
-        raise HTTPException(status_code=404, detail="Review card not found")
+def _mark_number_as_employer(
+    db: Session,
+    review_id: int,
+    submit: NumberReviewSubmitRequest | None = None,
+) -> dict[str, int | str]:
+    card = _review_card(db, review_id)
     if card.state != "pending":
         return {"review_id": card.id, "status": card.state}
-    canonical_phone = canonicalize_phone(card.normalized_phone_number or card.display_phone_number)
-    if not canonical_phone:
-        raise HTTPException(status_code=422, detail="Invalid phone number on review card")
-
-    existing = (
-        db.query(EmployerNumber)
-        .filter(
-            EmployerNumber.owner_id == settings.owner_id,
-            EmployerNumber.normalized_phone_number == canonical_phone,
-        )
-        .first()
+    values = _effective_review_values(card, submit)
+    contact = _contact_for_review(db, card, values)
+    version = _review_version(
+        db,
+        card,
+        values,
+        "employer",
+        edited=_review_fields_edited(card, submit),
     )
-    if not existing:
-        db.add(
-            EmployerNumber(
-                owner_id=settings.owner_id,
-                normalized_phone_number=canonical_phone,
-                display_phone_number=_standardized_display_phone(
-                    card.display_phone_number or card.normalized_phone_number,
-                    canonical_phone,
-                ),
-                owner_name=card.owner_name,
-                company=card.company,
-                source_email_id=card.source_email_id,
-            )
-        )
+    version.contact_id = contact.id
+    apply_contact_version(contact, version, "employer")
+    contact.source_email_id = contact.source_email_id or card.source_email_id
+    if submit and submit.linkedin_url is not None:
+        contact.linkedin_url = _normalize_linkedin_url(submit.linkedin_url)
     card.state = "classified_employer"
     db.commit()
     return {"review_id": card.id, "status": card.state}
 
 
-@app.delete("/number-review/{review_id}", response_model=dict[str, int | str])
-def delete_number_review_card(review_id: int, db: Session = Depends(get_db)) -> dict[str, int | str]:
-    card = (
-        db.query(NumberReviewQueue)
-        .filter(NumberReviewQueue.owner_id == settings.owner_id, NumberReviewQueue.id == review_id)
-        .first()
-    )
-    if not card:
-        raise HTTPException(status_code=404, detail="Review card not found")
+def _delete_number_review_card(db: Session, review_id: int) -> dict[str, int | str]:
+    card = _review_card(db, review_id)
     if card.state != "pending":
         return {"review_id": card.id, "status": card.state}
     card.state = "dismissed"
     db.commit()
     return {"review_id": card.id, "status": card.state}
+
+
+def _bulk_review_response(
+    db: Session,
+    review_ids: list[int],
+    action: Callable[[Session, int], dict[str, int | str]],
+) -> BulkNumberReviewResponse:
+    results: list[BulkNumberReviewResultItem] = []
+    for review_id in review_ids:
+        try:
+            outcome = action(db, review_id)
+            status = str(outcome["status"])
+        except HTTPException as exc:
+            if exc.status_code != 404:
+                raise
+            status = "not_found"
+        results.append(BulkNumberReviewResultItem(review_id=review_id, status=status))
+    return BulkNumberReviewResponse(results=results)
+
+
+@app.post("/number-review/bulk-mark-recruiter", response_model=BulkNumberReviewResponse)
+def bulk_mark_number_as_recruiter(
+    payload: BulkNumberReviewRequest,
+    db: Session = Depends(get_db),
+) -> BulkNumberReviewResponse:
+    return _bulk_review_response(db, payload.review_ids, _mark_number_as_recruiter)
+
+
+@app.post("/number-review/bulk-mark-employer", response_model=BulkNumberReviewResponse)
+def bulk_mark_number_as_employer(
+    payload: BulkNumberReviewRequest,
+    db: Session = Depends(get_db),
+) -> BulkNumberReviewResponse:
+    return _bulk_review_response(db, payload.review_ids, _mark_number_as_employer)
+
+
+@app.post("/number-review/bulk-delete", response_model=BulkNumberReviewResponse)
+def bulk_delete_number_review_cards(
+    payload: BulkNumberReviewRequest,
+    db: Session = Depends(get_db),
+) -> BulkNumberReviewResponse:
+    return _bulk_review_response(db, payload.review_ids, _delete_number_review_card)
+
+
+@app.post("/number-review/bulk-rescore", response_model=BulkNumberReviewResponse)
+def bulk_rescore_number_review_cards(
+    payload: BulkNumberReviewRequest,
+    db: Session = Depends(get_db),
+) -> BulkNumberReviewResponse:
+    rows = (
+        db.query(NumberReviewQueue)
+        .filter(
+            NumberReviewQueue.owner_id == settings.owner_id,
+            NumberReviewQueue.id.in_(payload.review_ids),
+        )
+        .all()
+        if payload.review_ids
+        else []
+    )
+    found = {row.id: row for row in rows}
+    gmail_ids = {row.source_email_id for row in rows if row.state == "pending" and row.source_email_id}
+    external_ids = {
+        row.source_external_opportunity_id
+        for row in rows
+        if row.state == "pending" and row.source_external_opportunity_id
+    }
+    for email in (
+        db.query(RecruiterEmail)
+        .filter(
+            RecruiterEmail.owner_id == settings.owner_id,
+            RecruiterEmail.id.in_(gmail_ids),
+        )
+        .all()
+        if gmail_ids
+        else []
+    ):
+        _get_candidate_runtime_service().capture_premium_numbers(db, email)
+    for item in (
+        db.query(ExternalOpportunity)
+        .filter(
+            ExternalOpportunity.owner_id == settings.owner_id,
+            ExternalOpportunity.id.in_(external_ids),
+        )
+        .all()
+        if external_ids
+        else []
+    ):
+        external_feed_service.phone_intelligence_workflow.capture_premium_numbers_for_nvoids(
+            db,
+            item,
+            item.raw_body or "",
+        )
+    db.expire_all()
+    refreshed = {
+        row.id: row.state
+        for row in db.query(NumberReviewQueue)
+        .filter(
+            NumberReviewQueue.owner_id == settings.owner_id,
+            NumberReviewQueue.id.in_(payload.review_ids),
+        )
+        .all()
+    } if payload.review_ids else {}
+    return BulkNumberReviewResponse(
+        results=[
+            BulkNumberReviewResultItem(
+                review_id=review_id,
+                status=(
+                    "not_found"
+                    if review_id not in found
+                    else refreshed.get(review_id, found[review_id].state)
+                ),
+            )
+            for review_id in payload.review_ids
+        ]
+    )
+
+
+@app.post("/number-review/{review_id}/mark-recruiter", response_model=dict[str, int | str])
+def mark_number_as_recruiter(
+    review_id: int,
+    payload: NumberReviewSubmitRequest | None = None,
+    db: Session = Depends(get_db),
+) -> dict[str, int | str]:
+    return _mark_number_as_recruiter(db, review_id, payload)
+
+
+@app.post("/number-review/{review_id}/mark-employer", response_model=dict[str, int | str])
+def mark_number_as_employer(
+    review_id: int,
+    payload: NumberReviewSubmitRequest | None = None,
+    db: Session = Depends(get_db),
+) -> dict[str, int | str]:
+    return _mark_number_as_employer(db, review_id, payload)
+
+
+@app.delete("/number-review/{review_id}", response_model=dict[str, int | str])
+def delete_number_review_card(
+    review_id: int,
+    db: Session = Depends(get_db),
+) -> dict[str, int | str]:
+    return _delete_number_review_card(db, review_id)
+
+
+def _contact_source_fields(
+    db: Session,
+    contact: PremiumNumberContact,
+    role: str,
+) -> tuple[str | None, int | None, str | None, int | None, int]:
+    active_id = (
+        contact.active_recruiter_lead_id if role == "recruiter" else contact.active_employer_lead_id
+    )
+    versions = db.query(PremiumNumberLead).filter(
+        PremiumNumberLead.owner_id == settings.owner_id,
+        PremiumNumberLead.contact_id == contact.id,
+    )
+    count = versions.count()
+    active = versions.filter(PremiumNumberLead.id == active_id).first() if active_id else None
+    if active and active.external_opportunity_id:
+        return "nvoids", active.external_opportunity_id, active.source_url, active_id, count
+    if active and active.recruiter_email_id:
+        return "gmail", active.recruiter_email_id, active.source_url, active_id, count
+    source_id = contact.first_detected_email_id if role == "recruiter" else contact.source_email_id
+    return ("gmail" if source_id else None), source_id, None, active_id, count
 
 
 @app.get("/recruiter-numbers", response_model=RecruiterNumberListResponse)
@@ -4222,21 +4532,24 @@ def list_recruiter_numbers(
     q: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> RecruiterNumberListResponse:
-    query = db.query(RecruiterNumber).filter(RecruiterNumber.owner_id == settings.owner_id)
+    query = db.query(PremiumNumberContact).filter(
+        PremiumNumberContact.owner_id == settings.owner_id,
+        PremiumNumberContact.is_recruiter.is_(True),
+    )
     if q:
         like = f"%{q.strip()}%"
         query = query.filter(
             or_(
-                RecruiterNumber.display_phone_number.ilike(like),
-                RecruiterNumber.recruiter_name.ilike(like),
-                RecruiterNumber.company.ilike(like),
-                RecruiterNumber.designation.ilike(like),
-                RecruiterNumber.recruiter_email.ilike(like),
+                PremiumNumberContact.display_phone_number.ilike(like),
+                PremiumNumberContact.recruiter_name.ilike(like),
+                PremiumNumberContact.company.ilike(like),
+                PremiumNumberContact.designation.ilike(like),
+                PremiumNumberContact.recruiter_email.ilike(like),
             )
         )
     rows = (
         query
-        .order_by(RecruiterNumber.updated_at.desc())
+        .order_by(PremiumNumberContact.updated_at.desc())
         .all()
     )
     results: list[RecruiterNumberResponse] = []
@@ -4260,6 +4573,9 @@ def list_recruiter_numbers(
             )
             .scalar()
         )
+        source_type, source_id, source_link, active_id, version_count = _contact_source_fields(
+            db, row, "recruiter"
+        )
         results.append(
             RecruiterNumberResponse(
                 id=row.id,
@@ -4270,6 +4586,12 @@ def list_recruiter_numbers(
                 designation=row.designation,
                 recruiter_email=row.recruiter_email,
                 first_detected_email_id=row.first_detected_email_id,
+                source_type=source_type,
+                source_id=source_id,
+                source_link_url=source_link,
+                active_lead_id=active_id,
+                version_count=version_count,
+                linkedin_url=row.linkedin_url,
                 total_opportunity_count=int(total),
                 last_email_received_at=last_received,
                 created_at=row.created_at,
@@ -4280,43 +4602,143 @@ def list_recruiter_numbers(
     return RecruiterNumberListResponse(items=visible, next_cursor=next_cursor, has_next=has_next)
 
 
-@app.post("/recruiter-numbers/{recruiter_number_id}/swap-to-employer", response_model=dict[str, int | str])
-def swap_recruiter_number_to_employer(recruiter_number_id: int, db: Session = Depends(get_db)) -> dict[str, int | str]:
-    recruiter = (
-        db.query(RecruiterNumber)
-        .filter(RecruiterNumber.owner_id == settings.owner_id, RecruiterNumber.id == recruiter_number_id)
-        .first()
-    )
-    if not recruiter:
-        raise HTTPException(status_code=404, detail="Recruiter number not found")
-    canonical_phone = canonicalize_phone(recruiter.normalized_phone_number or recruiter.display_phone_number)
-    if not canonical_phone:
-        raise HTTPException(status_code=422, detail="Invalid recruiter phone number")
-
-    employer = (
-        db.query(EmployerNumber)
+@app.patch("/recruiter-numbers/{recruiter_number_id}", response_model=RecruiterNumberResponse)
+def patch_recruiter_number(
+    recruiter_number_id: int,
+    payload: RecruiterNumberPatchRequest,
+    db: Session = Depends(get_db),
+) -> RecruiterNumberResponse:
+    contact = (
+        db.query(PremiumNumberContact)
         .filter(
-            EmployerNumber.owner_id == settings.owner_id,
-            EmployerNumber.normalized_phone_number == canonical_phone,
+            PremiumNumberContact.owner_id == settings.owner_id,
+            PremiumNumberContact.id == recruiter_number_id,
+            PremiumNumberContact.is_recruiter.is_(True),
         )
         .first()
     )
-    if not employer:
-        db.add(
-            EmployerNumber(
-                owner_id=settings.owner_id,
-                normalized_phone_number=canonical_phone,
-                display_phone_number=_standardized_display_phone(
-                    recruiter.display_phone_number or recruiter.normalized_phone_number,
-                    canonical_phone,
-                ),
-                owner_name=recruiter.recruiter_name or "Unknown",
-                company=recruiter.company or "Unknown",
-                source_email_id=recruiter.first_detected_email_id,
-            )
-        )
+    if not contact:
+        raise HTTPException(status_code=404, detail="Recruiter number not found")
+    if payload.linkedin_url is not None:
+        contact.linkedin_url = _normalize_linkedin_url(payload.linkedin_url)
+    db.commit()
+    db.refresh(contact)
+    source_type, source_id, source_link, active_id, version_count = _contact_source_fields(
+        db, contact, "recruiter"
+    )
+    total = db.query(func.count(RecruiterOpportunity.id)).filter(
+        RecruiterOpportunity.owner_id == settings.owner_id,
+        RecruiterOpportunity.recruiter_number_id == contact.id,
+    ).scalar() or 0
+    last_received = db.query(func.max(RecruiterOpportunity.received_at)).filter(
+        RecruiterOpportunity.owner_id == settings.owner_id,
+        RecruiterOpportunity.recruiter_number_id == contact.id,
+    ).scalar()
+    return RecruiterNumberResponse(
+        id=contact.id,
+        normalized_phone_number=contact.normalized_phone_number,
+        display_phone_number=contact.display_phone_number,
+        recruiter_name=contact.recruiter_name,
+        company=contact.company,
+        designation=contact.designation,
+        recruiter_email=contact.recruiter_email,
+        first_detected_email_id=contact.first_detected_email_id,
+        source_type=source_type,
+        source_id=source_id,
+        source_link_url=source_link,
+        active_lead_id=active_id,
+        version_count=version_count,
+        linkedin_url=contact.linkedin_url,
+        total_opportunity_count=int(total),
+        last_email_received_at=last_received,
+        created_at=contact.created_at,
+        updated_at=contact.updated_at,
+    )
 
-    db.delete(recruiter)
+
+@app.get("/recruiter-numbers/{contact_id}/versions", response_model=list[PremiumNumberResponse])
+def list_recruiter_number_versions(
+    contact_id: int,
+    db: Session = Depends(get_db),
+) -> list[PremiumNumberResponse]:
+    contact = db.query(PremiumNumberContact.id).filter(
+        PremiumNumberContact.owner_id == settings.owner_id,
+        PremiumNumberContact.id == contact_id,
+        PremiumNumberContact.is_recruiter.is_(True),
+    ).first()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Recruiter number not found")
+    rows = db.query(PremiumNumberLead).filter(
+        PremiumNumberLead.owner_id == settings.owner_id,
+        PremiumNumberLead.contact_id == contact_id,
+    ).order_by(PremiumNumberLead.created_at.desc(), PremiumNumberLead.id.desc()).all()
+    return [PremiumNumberResponse.model_validate(row) for row in rows]
+
+
+def _select_contact_version(
+    db: Session,
+    contact_id: int,
+    lead_id: int,
+    role: str,
+) -> PremiumNumberContact:
+    contact_query = db.query(PremiumNumberContact).filter(
+        PremiumNumberContact.owner_id == settings.owner_id,
+        PremiumNumberContact.id == contact_id,
+    )
+    contact_query = contact_query.filter(
+        PremiumNumberContact.is_recruiter.is_(True)
+        if role == "recruiter"
+        else PremiumNumberContact.is_employer.is_(True)
+    )
+    contact = contact_query.first()
+    lead = db.query(PremiumNumberLead).filter(
+        PremiumNumberLead.owner_id == settings.owner_id,
+        PremiumNumberLead.id == lead_id,
+        PremiumNumberLead.contact_id == contact_id,
+    ).first()
+    if not contact or not lead:
+        raise HTTPException(status_code=404, detail="Contact version not found")
+    apply_contact_version(contact, lead, role)
+    db.commit()
+    return contact
+
+
+@app.post("/recruiter-numbers/{contact_id}/select-version/{lead_id}", response_model=dict[str, int | str])
+def select_recruiter_number_version(
+    contact_id: int,
+    lead_id: int,
+    db: Session = Depends(get_db),
+) -> dict[str, int | str]:
+    _select_contact_version(db, contact_id, lead_id, "recruiter")
+    return {"id": contact_id, "active_lead_id": lead_id, "status": "selected"}
+
+
+@app.post("/recruiter-numbers/{recruiter_number_id}/swap-to-employer", response_model=dict[str, int | str])
+def swap_recruiter_number_to_employer(
+    recruiter_number_id: int,
+    db: Session = Depends(get_db),
+) -> dict[str, int | str]:
+    contact = (
+        db.query(PremiumNumberContact)
+        .filter(
+            PremiumNumberContact.owner_id == settings.owner_id,
+            PremiumNumberContact.id == recruiter_number_id,
+            PremiumNumberContact.is_recruiter.is_(True),
+        )
+        .first()
+    )
+    if not contact:
+        raise HTTPException(status_code=404, detail="Recruiter number not found")
+    contact.display_phone_number = _standardized_display_phone(
+        contact.display_phone_number,
+        contact.normalized_phone_number,
+        fallback=contact.display_phone_number,
+    )
+    contact.is_employer = True
+    contact.owner_name = contact.recruiter_name or "Unknown"
+    contact.source_email_id = contact.source_email_id or contact.first_detected_email_id
+    if contact.active_employer_lead_id is None:
+        contact.active_employer_lead_id = contact.active_recruiter_lead_id
     db.commit()
     return {"id": recruiter_number_id, "swapped_to": "employer"}
 
@@ -4328,67 +4750,106 @@ def list_employer_numbers(
     q: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> EmployerNumberListResponse:
-    query = db.query(EmployerNumber).filter(EmployerNumber.owner_id == settings.owner_id)
+    query = db.query(PremiumNumberContact).filter(
+        PremiumNumberContact.owner_id == settings.owner_id,
+        PremiumNumberContact.is_employer.is_(True),
+    )
     if q:
         like = f"%{q.strip()}%"
         query = query.filter(
             or_(
-                EmployerNumber.display_phone_number.ilike(like),
-                EmployerNumber.owner_name.ilike(like),
-                EmployerNumber.company.ilike(like),
+                PremiumNumberContact.display_phone_number.ilike(like),
+                PremiumNumberContact.owner_name.ilike(like),
+                PremiumNumberContact.company.ilike(like),
             )
         )
     rows = (
         query
-        .order_by(EmployerNumber.updated_at.desc())
+        .order_by(PremiumNumberContact.updated_at.desc())
         .all()
     )
-    items = [EmployerNumberResponse.model_validate(row) for row in rows if not _is_hidden_invalid_employer_number(row)]
+    items = []
+    for row in rows:
+        if _is_hidden_invalid_employer_number(row):
+            continue
+        source_type, source_id, source_link, active_id, version_count = _contact_source_fields(
+            db, row, "employer"
+        )
+        items.append(
+            EmployerNumberResponse(
+                id=row.id,
+                normalized_phone_number=row.normalized_phone_number,
+                display_phone_number=row.display_phone_number,
+                owner_name=row.owner_name,
+                company=row.company,
+                source_email_id=row.source_email_id,
+                source_type=source_type,
+                source_id=source_id,
+                source_link_url=source_link,
+                active_lead_id=active_id,
+                version_count=version_count,
+                created_at=row.created_at,
+                updated_at=row.updated_at,
+            )
+        )
     visible, next_cursor, has_next = _paginate_items(items, cursor=cursor, limit=limit)
     return EmployerNumberListResponse(items=visible, next_cursor=next_cursor, has_next=has_next)
 
 
 @app.post("/employer-numbers/{employer_number_id}/swap-to-recruiter", response_model=dict[str, int | str])
 def swap_employer_number_to_recruiter(employer_number_id: int, db: Session = Depends(get_db)) -> dict[str, int | str]:
-    employer = (
-        db.query(EmployerNumber)
-        .filter(EmployerNumber.owner_id == settings.owner_id, EmployerNumber.id == employer_number_id)
-        .first()
-    )
-    if not employer:
-        raise HTTPException(status_code=404, detail="Employer number not found")
-    canonical_phone = canonicalize_phone(employer.normalized_phone_number or employer.display_phone_number)
-    if not canonical_phone:
-        raise HTTPException(status_code=422, detail="Invalid employer phone number")
-
-    recruiter = (
-        db.query(RecruiterNumber)
+    contact = (
+        db.query(PremiumNumberContact)
         .filter(
-            RecruiterNumber.owner_id == settings.owner_id,
-            RecruiterNumber.normalized_phone_number == canonical_phone,
+            PremiumNumberContact.owner_id == settings.owner_id,
+            PremiumNumberContact.id == employer_number_id,
+            PremiumNumberContact.is_employer.is_(True),
         )
         .first()
     )
-    if not recruiter:
-        db.add(
-            RecruiterNumber(
-                owner_id=settings.owner_id,
-                normalized_phone_number=canonical_phone,
-                display_phone_number=_standardized_display_phone(
-                    employer.display_phone_number or employer.normalized_phone_number,
-                    canonical_phone,
-                ),
-                recruiter_name=employer.owner_name or "Unknown",
-                company=employer.company or "Unknown",
-                designation="Unknown",
-                recruiter_email="",
-                first_detected_email_id=employer.source_email_id,
-            )
-        )
-
-    db.delete(employer)
+    if not contact:
+        raise HTTPException(status_code=404, detail="Employer number not found")
+    contact.display_phone_number = _standardized_display_phone(
+        contact.display_phone_number,
+        contact.normalized_phone_number,
+        fallback=contact.display_phone_number,
+    )
+    contact.is_recruiter = True
+    contact.recruiter_name = contact.owner_name or "Unknown"
+    contact.first_detected_email_id = contact.first_detected_email_id or contact.source_email_id
+    if contact.active_recruiter_lead_id is None:
+        contact.active_recruiter_lead_id = contact.active_employer_lead_id
     db.commit()
     return {"id": employer_number_id, "swapped_to": "recruiter"}
+
+
+@app.get("/employer-numbers/{contact_id}/versions", response_model=list[PremiumNumberResponse])
+def list_employer_number_versions(
+    contact_id: int,
+    db: Session = Depends(get_db),
+) -> list[PremiumNumberResponse]:
+    contact = db.query(PremiumNumberContact.id).filter(
+        PremiumNumberContact.owner_id == settings.owner_id,
+        PremiumNumberContact.id == contact_id,
+        PremiumNumberContact.is_employer.is_(True),
+    ).first()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Employer number not found")
+    rows = db.query(PremiumNumberLead).filter(
+        PremiumNumberLead.owner_id == settings.owner_id,
+        PremiumNumberLead.contact_id == contact_id,
+    ).order_by(PremiumNumberLead.created_at.desc(), PremiumNumberLead.id.desc()).all()
+    return [PremiumNumberResponse.model_validate(row) for row in rows]
+
+
+@app.post("/employer-numbers/{contact_id}/select-version/{lead_id}", response_model=dict[str, int | str])
+def select_employer_number_version(
+    contact_id: int,
+    lead_id: int,
+    db: Session = Depends(get_db),
+) -> dict[str, int | str]:
+    _select_contact_version(db, contact_id, lead_id, "employer")
+    return {"id": contact_id, "active_lead_id": lead_id, "status": "selected"}
 
 
 @app.get("/recruiter-opportunities", response_model=RecruiterOpportunityListResponse)
@@ -4414,8 +4875,12 @@ def list_recruiter_opportunities(
     rows = query.order_by(RecruiterOpportunity.received_at.desc(), RecruiterOpportunity.created_at.desc()).all()
     recruiter_ids = sorted({row.recruiter_number_id for row in rows})
     recruiter_rows = (
-        db.query(RecruiterNumber)
-        .filter(RecruiterNumber.owner_id == settings.owner_id, RecruiterNumber.id.in_(recruiter_ids))
+        db.query(PremiumNumberContact)
+        .filter(
+            PremiumNumberContact.owner_id == settings.owner_id,
+            PremiumNumberContact.id.in_(recruiter_ids),
+            PremiumNumberContact.is_recruiter.is_(True),
+        )
         .all()
         if recruiter_ids
         else []
@@ -4435,7 +4900,7 @@ def list_recruiter_opportunities(
             if needle in (item.email_subject or "").lower()
             or needle in (item.email_sender or "").lower()
             or needle in (item.job_title or "").lower()
-            or needle in (item.client or "").lower()
+            or needle in (item.end_client or "").lower()
             or needle in (item.location or "").lower()
             or needle in (item.extracted_skills or "").lower()
             or needle in (item.recruiter_name or "").lower()
@@ -4587,11 +5052,29 @@ def patch_recruiter_opportunity(
         row.status = payload.status
     if payload.notes is not None:
         row.notes = payload.notes
+    for field in (
+        "job_title",
+        "location",
+        "work_mode",
+        "visa_restrictions",
+        "resume_file_name",
+        "implementation_partner",
+        "prime_vendor",
+        "end_client",
+        "domain",
+        "extracted_skills",
+    ):
+        value = getattr(payload, field)
+        if value is not None:
+            setattr(row, field, value)
     db.commit()
     db.refresh(row)
     recruiter = (
-        db.query(RecruiterNumber)
-        .filter(RecruiterNumber.owner_id == settings.owner_id, RecruiterNumber.id == row.recruiter_number_id)
+        db.query(PremiumNumberContact)
+        .filter(
+            PremiumNumberContact.owner_id == settings.owner_id,
+            PremiumNumberContact.id == row.recruiter_number_id,
+        )
         .first()
     )
     return _recruiter_opportunity_response(row, recruiter)
@@ -4627,15 +5110,18 @@ def delete_recruiter_opportunity(
     recruiter_number_deleted = False
     if remaining_count == 0:
         recruiter = (
-            db.query(RecruiterNumber)
+            db.query(PremiumNumberContact)
             .filter(
-                RecruiterNumber.owner_id == settings.owner_id,
-                RecruiterNumber.id == recruiter_number_id,
+                PremiumNumberContact.owner_id == settings.owner_id,
+                PremiumNumberContact.id == recruiter_number_id,
             )
             .first()
         )
         if recruiter:
-            db.delete(recruiter)
+            recruiter.is_recruiter = False
+            recruiter.active_recruiter_lead_id = None
+            if not recruiter.is_employer:
+                db.delete(recruiter)
             recruiter_number_deleted = True
 
     db.commit()
@@ -4698,8 +5184,11 @@ def generate_recruiter_opportunity_cold_call_script(
         max_skills=2,
     )
     recruiter = (
-        db.query(RecruiterNumber)
-        .filter(RecruiterNumber.owner_id == settings.owner_id, RecruiterNumber.id == row.recruiter_number_id)
+        db.query(PremiumNumberContact)
+        .filter(
+            PremiumNumberContact.owner_id == settings.owner_id,
+            PremiumNumberContact.id == row.recruiter_number_id,
+        )
         .first()
     )
 

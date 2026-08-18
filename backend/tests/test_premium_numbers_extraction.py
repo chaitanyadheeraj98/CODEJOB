@@ -1,5 +1,6 @@
 import unittest
 import os
+from types import SimpleNamespace
 from unittest.mock import patch
 
 os.environ["DEBUG"] = "false"
@@ -56,7 +57,7 @@ class PremiumNumbersExtractionTests(unittest.TestCase):
     def test_fallback_used_when_ai_returns_empty(self) -> None:
         original_llm = extraction._llm_extract
         try:
-            extraction._llm_extract = lambda _content: []
+            extraction._llm_extract = lambda _content, _domains: []
             leads = extraction.extract_phone_leads(
                 "Recruiter <r@example.com>",
                 "Role",
@@ -115,18 +116,23 @@ class PremiumNumbersExtractionTests(unittest.TestCase):
         self.assertEqual(display, "(609) 888-6198 ext 113")
         self.assertEqual(ext, "113")
 
-    def test_employer_domain_marks_internal_number(self) -> None:
-        leads = extraction.extract_phone_leads(
-            "Sheshwika <sheshwika@horizonsoftech.net>",
-            "Role",
-            "Please call me at +1 248 247 6165. Regards, Bench Sales Recruiter",
-            employer_domains={"horizonsoftech.net"},
-        )
+    def test_employer_domain_marks_internal_regex_fallback(self) -> None:
+        with (
+            patch.object(extraction, "_llm_extract", return_value=[]),
+            patch.object(extraction, "_sbert_keep_candidate", return_value=(True, "")),
+        ):
+            leads = extraction.extract_phone_leads(
+                "Sheshwika <sheshwika@horizonsoftech.net>",
+                "Role",
+                "Please call me at +1 248 247 6165. Regards, Bench Sales Recruiter",
+                employer_domains={"horizonsoftech.net"},
+            )
         self.assertTrue(leads)
         self.assertFalse(leads[0].is_recruiter_relevant)
         self.assertEqual(leads[0].contact_type, "employer_internal")
+        self.assertIn("employer_domain", leads[0].relevance_reason)
 
-    def test_extract_owner_name_from_contact_email_line(self) -> None:
+    def test_fallback_never_guesses_identity(self) -> None:
         leads = extraction.extract_phone_leads(
             "Samshritha <samshritha@horizonsoftech.net>",
             "Senior Talend Developer",
@@ -134,7 +140,11 @@ class PremiumNumbersExtractionTests(unittest.TestCase):
         )
         self.assertTrue(leads)
         self.assertEqual(leads[0].phone_number_normalized, "18322713861")
-        self.assertEqual(leads[0].owner_name, "Rabbanis")
+        self.assertEqual(leads[0].owner_name, "Unknown")
+        self.assertEqual(leads[0].contact_email, "")
+        self.assertEqual(leads[0].company, "Unknown")
+        self.assertEqual(leads[0].role, "unknown")
+        self.assertTrue(leads[0].extraction_source.startswith("regex_fallback"))
 
     def test_extract_owner_name_prefers_target_contact_over_signature_name(self) -> None:
         leads = extraction.extract_phone_leads(
@@ -150,7 +160,7 @@ class PremiumNumbersExtractionTests(unittest.TestCase):
         self.assertTrue(leads)
         target = [lead for lead in leads if lead.phone_number_normalized == "18322713861"]
         self.assertTrue(target)
-        self.assertEqual(target[0].owner_name, "Rabbanis")
+        self.assertEqual(target[0].owner_name, "Unknown")
 
     def test_extract_owner_name_when_to_and_email_are_split_by_newline(self) -> None:
         leads = extraction.extract_phone_leads(
@@ -166,7 +176,57 @@ class PremiumNumbersExtractionTests(unittest.TestCase):
         )
         target = [lead for lead in leads if lead.phone_number_normalized == "18322713861"]
         self.assertTrue(target)
-        self.assertEqual(target[0].owner_name, "Rabbanis")
+        self.assertEqual(target[0].owner_name, "Unknown")
+
+    def test_classify_uses_candidate_domain_not_sender(self) -> None:
+        contact_type, score, is_relevant, reason = extraction._classify_recruiter_relevance(
+            candidate_email="recruiter@agency.example",
+            sender="Employee <employee@horizonsoftech.net>",
+            purpose="Resume submission contact",
+            designation="Recruiter",
+            source_fragment="Please call this recruiter directly",
+            employer_domains={"horizonsoftech.net"},
+        )
+        self.assertEqual(contact_type, "recruiter_direct")
+        self.assertGreaterEqual(score, 70)
+        self.assertTrue(is_relevant)
+        self.assertIn("external_domain", reason)
+        self.assertNotIn("employer_domain", reason)
+
+    def test_ai_extract_returns_role_tagged_groups(self) -> None:
+        response = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content='{"contacts":[{"role":"employer","phone_number":"+1 214 555 1212",'
+                        '"name":"Ada","email":"ada@acme.example","company":"Acme",'
+                        '"designation":"Manager","confidence":"High"}]}'
+                    )
+                )
+            ]
+        )
+        client = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **_kwargs: response))
+        )
+        with patch.object(extraction.settings, "deepseek_api_key", "test-key"), patch(
+            "app.premium_numbers.extraction.OpenAI", return_value=client
+        ):
+            leads = extraction._llm_extract("body", {"acme.example"})
+        self.assertEqual(len(leads), 1)
+        self.assertEqual(leads[0].role, "employer")
+        self.assertEqual(leads[0].extraction_source, "ai")
+
+    def test_ai_parse_failure_falls_back_to_regex_only(self) -> None:
+        with patch("app.premium_numbers.extraction._llm_extract", side_effect=ValueError("bad json")):
+            leads = extraction.extract_phone_leads(
+                "Recruiter <r@example.com>",
+                "Role",
+                "Call me at +1 (214) 555-1212 for details.",
+            )
+        self.assertEqual(len(leads), 1)
+        self.assertEqual(leads[0].role, "unknown")
+        self.assertEqual(leads[0].owner_name, "Unknown")
+        self.assertEqual(leads[0].extraction_source, "regex_fallback_ai_unavailable")
 
     def test_extract_contact_email_skips_employer_domain_falls_back_to_sender(self) -> None:
         fragment = "Reach kartheek@horizonsoftech.net for details."
@@ -225,7 +285,7 @@ class PremiumNumbersExtractionTests(unittest.TestCase):
     def test_fallback_ignores_groups_msgid_footer_digits(self) -> None:
         original_llm = extraction._llm_extract
         try:
-            extraction._llm_extract = lambda _content: []
+            extraction._llm_extract = lambda _content, _domains: []
             body = (
                 "To unsubscribe from this group and stop receiving emails from it, send an email to "
                 "hstjava+unsubscribe@googlegroups.com. "
@@ -245,7 +305,7 @@ class PremiumNumbersExtractionTests(unittest.TestCase):
     def test_fallback_ignores_mailto_unsubscribe_numeric_noise(self) -> None:
         original_llm = extraction._llm_extract
         try:
-            extraction._llm_extract = lambda _content: []
+            extraction._llm_extract = lambda _content, _domains: []
             body = (
                 "Footer: <mailto:hstjava+unsubscribe@googlegroups.com> "
                 "Reference token 2482913610 in mailing metadata only."
@@ -263,7 +323,7 @@ class PremiumNumbersExtractionTests(unittest.TestCase):
     def test_fallback_keeps_real_phone_with_contact_intent(self) -> None:
         original_llm = extraction._llm_extract
         try:
-            extraction._llm_extract = lambda _content: []
+            extraction._llm_extract = lambda _content, _domains: []
             leads = extraction.extract_phone_leads(
                 "Uma G <uma@brightpathstaffing.com>",
                 "Java role",
@@ -278,7 +338,7 @@ class PremiumNumbersExtractionTests(unittest.TestCase):
         original_llm = extraction._llm_extract
         original_sbert = extraction._sbert_embedding
         try:
-            extraction._llm_extract = lambda _content: []
+            extraction._llm_extract = lambda _content, _domains: []
             extraction._sbert_prototype_centroids.cache_clear()
 
             def fake_sbert(text: str, _model: str):
@@ -306,7 +366,7 @@ class PremiumNumbersExtractionTests(unittest.TestCase):
         original_llm = extraction._llm_extract
         original_sbert = extraction._sbert_embedding
         try:
-            extraction._llm_extract = lambda _content: []
+            extraction._llm_extract = lambda _content, _domains: []
             extraction._sbert_prototype_centroids.cache_clear()
 
             def fake_sbert(text: str, _model: str):
@@ -333,7 +393,7 @@ class PremiumNumbersExtractionTests(unittest.TestCase):
         original_llm = extraction._llm_extract
         original_sbert = extraction._sbert_embedding
         try:
-            extraction._llm_extract = lambda _content: []
+            extraction._llm_extract = lambda _content, _domains: []
             extraction._sbert_prototype_centroids.cache_clear()
 
             def broken_sbert(_text: str, _model: str):
@@ -355,7 +415,7 @@ class PremiumNumbersExtractionTests(unittest.TestCase):
     def test_deterministic_noise_prefilter_runs_before_sbert(self) -> None:
         original_llm = extraction._llm_extract
         try:
-            extraction._llm_extract = lambda _content: []
+            extraction._llm_extract = lambda _content, _domains: []
             extraction._sbert_prototype_centroids.cache_clear()
             with patch("app.premium_numbers.extraction._sbert_embedding") as mocked:
                 body = (
