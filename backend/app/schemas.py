@@ -812,6 +812,7 @@ class ConversationSummaryResponse(BaseModel):
     last_message_preview: str
     last_message_at: datetime
     unread_reply_count: int
+    last_inbound_reply_at: datetime | None = None
 
 
 class ConversationMessageResponse(BaseModel):
@@ -938,6 +939,11 @@ class RecruiterNumberResponse(BaseModel):
     linkedin_url: str = ""
     total_opportunity_count: int = 0
     last_email_received_at: datetime | None = None
+    is_recruiter: bool = True
+    is_employer: bool = False
+    recruiter_relevance_score: int | None = None
+    status: str = "Active"
+    flagged: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -954,6 +960,11 @@ class EmployerNumberResponse(BaseModel):
     source_link_url: str | None = None
     active_lead_id: int | None = None
     version_count: int = 0
+    is_recruiter: bool = False
+    is_employer: bool = True
+    recruiter_relevance_score: int | None = None
+    status: str = "Active"
+    flagged: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -1000,6 +1011,7 @@ class RecruiterOpportunityResponse(BaseModel):
     recruiter_email: str = ""
     recruiter_phone_display: str = ""
     recruiter_phone_normalized: str = ""
+    recruiter_company: str = ""
     linkedin_url: str = ""
     status: str
     notes: str
@@ -1045,6 +1057,23 @@ class BulkNumberReviewResponse(BaseModel):
     results: list[BulkNumberReviewResultItem]
 
 
+class BulkContactActionRequest(BaseModel):
+    contact_ids: list[int]
+
+
+class BulkContactActionResultItem(BaseModel):
+    contact_id: int
+    status: str
+
+
+class BulkContactActionResponse(BaseModel):
+    results: list[BulkContactActionResultItem]
+
+
+class PendingNumberReviewCountResponse(BaseModel):
+    count: int
+
+
 class NumberReviewSubmitRequest(BaseModel):
     owner_name: str | None = None
     company: str | None = None
@@ -1055,7 +1084,16 @@ class NumberReviewSubmitRequest(BaseModel):
 
 
 class RecruiterNumberPatchRequest(BaseModel):
+    recruiter_name: str | None = None
+    company: str | None = None
+    designation: str | None = None
+    recruiter_email: str | None = None
     linkedin_url: str | None = None
+
+
+class EmployerNumberPatchRequest(BaseModel):
+    owner_name: str | None = None
+    company: str | None = None
 
 
 class RecruiterOpportunityDeleteResponse(BaseModel):

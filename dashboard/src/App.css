@@ -2010,6 +2010,28 @@ button.emailSearchResult:focus-visible {
 .inboxHeaderActions {
   display: flex;
   align-items: center;
+  gap: 10px;
+}
+
+.inboxTabGroup {
+  display: flex;
+  gap: 4px;
+}
+
+.inboxTabBtn {
+  border: 1px solid var(--inbox-border-strong);
+  border-radius: 999px;
+  background: transparent;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.inboxTabBtn.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
 }
 
 .inboxSection .inboxRefreshBtn {
@@ -2641,5 +2663,592 @@ button.emailSearchResult:focus-visible {
 
   .chatPanel {
     height: calc(100vh - 96px);
+  }
+}
+/* Premium Numbers inventory redesign */
+.premiumNumbersPage {
+  display: grid;
+  gap: 20px;
+  position: relative;
+}
+
+.premiumNumbersPage button:not(:disabled) {
+  transition: transform 90ms ease, opacity 90ms ease;
+}
+
+.premiumNumbersPage button:not(:disabled):active {
+  transform: scale(0.96);
+}
+
+.premiumNumbersPage button:disabled {
+  opacity: 0.65;
+  cursor: progress;
+}
+
+.actionToast {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 40;
+  padding: 10px 16px;
+  border-radius: 8px;
+  background: var(--ink);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 6px 18px rgb(15 23 42 / 20%);
+  animation: action-toast-in 160ms ease-out;
+}
+
+@keyframes action-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.premiumNumbersHeader {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 16px;
+}
+
+.premiumNumbersHeader h2,
+.premiumNumbersHeader p {
+  margin: 0;
+}
+
+.premiumNumbersHeader p {
+  margin-top: 5px;
+}
+
+.premiumTabs {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-soft);
+}
+
+.premiumTabs button {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 9px 14px;
+  border-radius: 6px;
+  font-weight: 600;
+}
+
+.premiumTabs button.active {
+  background: var(--surface);
+  color: var(--primary);
+  box-shadow: 0 1px 3px rgb(15 23 42 / 12%);
+}
+
+.inventoryPanel,
+.opportunitiesTab {
+  display: grid;
+  gap: 16px;
+}
+
+.inventoryToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+}
+
+.inventoryToolbar label {
+  display: grid;
+  gap: 5px;
+  min-width: 160px;
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.inventoryToolbar input,
+.inventoryToolbar select {
+  min-height: 40px;
+  font-size: 14px;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.inventorySearchField {
+  flex: 1 1 300px;
+}
+
+.selectionBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 9px;
+  min-height: 48px;
+  padding: 8px 12px;
+  border: 1px solid #c4d4f7;
+  border-radius: 7px;
+  background: #eef4ff;
+}
+
+.selectionBar > span {
+  color: var(--muted);
+}
+
+.selectionActions {
+  margin-left: auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.selectionActions button,
+.detailPanelActions button,
+.opportunityCard .rowBtns button {
+  min-height: 34px;
+  padding: 7px 12px;
+}
+
+.dangerButton {
+  border-color: #e5a3aa !important;
+  background: #fff7f8 !important;
+  color: var(--danger) !important;
+}
+
+.dangerText {
+  color: var(--danger) !important;
+}
+
+.inventoryNote,
+.inventoryApproximation {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.inventoryTableCard {
+  position: relative;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 1px 3px rgb(15 23 42 / 7%);
+}
+
+.inventoryTableScroll {
+  overflow-x: auto;
+}
+
+.inventoryTable {
+  width: 100%;
+  min-width: 850px;
+  border-collapse: collapse;
+  table-layout: auto;
+}
+
+.inventoryTable th,
+.inventoryTable td {
+  padding: 12px 10px;
+  border-bottom: 1px solid #e2e6ee;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.inventoryTable th {
+  background: #f7f8fb;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.inventoryTable tbody tr {
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.inventoryTable tbody tr:hover,
+.inventoryRow--selected {
+  background: #f1f5ff;
+}
+
+.inventoryTable tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.inventoryCheckboxCell {
+  width: 38px;
+  text-align: center !important;
+}
+
+.inventoryNumber,
+.inventoryScore {
+  color: #073eaf;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.inventoryTable td small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+}
+
+.categoryChips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+
+.categoryChip,
+.statusBadge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+  line-height: 1.35;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.categoryChip {
+  background: #f2f5fb;
+  color: #334155;
+}
+
+.statusBadge--active {
+  border-color: #b8dec3;
+  background: #eaf8ee;
+  color: #137333;
+}
+
+.statusBadge--pending {
+  border-color: #efd49b;
+  background: #fff7df;
+  color: #9a5b00;
+}
+
+.statusBadge--flagged {
+  border-color: #efb7bd;
+  background: #fff0f2;
+  color: var(--danger);
+}
+
+.inventoryMenuCell {
+  width: 40px;
+  position: relative;
+}
+
+.inventoryMenu summary {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 5px;
+  color: #123d8f;
+  cursor: pointer;
+  font-size: 20px;
+  list-style: none;
+}
+
+.inventoryMenu summary::-webkit-details-marker {
+  display: none;
+}
+
+.inventoryMenu[open] summary {
+  background: #e9effc;
+}
+
+.inventoryMenuPopover {
+  position: absolute;
+  z-index: 12;
+  right: 8px;
+  top: 42px;
+  display: grid;
+  min-width: 170px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+  box-shadow: 0 10px 28px rgb(15 23 42 / 16%);
+}
+
+.inventoryMenuPopover button {
+  border: 0;
+  background: transparent;
+  padding: 8px 9px;
+  text-align: left;
+}
+
+.inventoryMenuPopover button:hover {
+  background: var(--surface-soft);
+}
+
+.inventoryEmpty {
+  margin: 0;
+  padding: 28px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.inventoryPaginationFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 52px;
+  padding: 9px 12px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pagination button {
+  min-width: 32px;
+  min-height: 30px;
+  padding: 4px 8px;
+}
+
+.pagination button.active {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: #fff;
+}
+
+.errorBanner {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid #efb7bd;
+  border-radius: 7px;
+  background: #fff5f6;
+  color: var(--danger);
+}
+
+.detailPanelOverlay {
+  position: fixed;
+  z-index: 80;
+  inset: 0;
+  display: flex;
+  justify-content: flex-end;
+  background: rgb(15 23 42 / 42%);
+}
+
+.detailPanel {
+  width: min(620px, 94vw);
+  height: 100%;
+  overflow-y: auto;
+  background: var(--surface);
+  box-shadow: -10px 0 36px rgb(15 23 42 / 22%);
+  outline: none;
+}
+
+.detailPanelHeader {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.detailPanelHeader h3,
+.detailPanelHeader p {
+  margin: 0;
+}
+
+.detailPanelEyebrow {
+  margin-bottom: 3px !important;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.detailPanelHeader .categoryChips {
+  margin-top: 9px;
+}
+
+.detailPanelBody {
+  display: grid;
+  gap: 14px;
+  padding: 18px 20px 90px;
+}
+
+.detailSection {
+  display: grid;
+  gap: 12px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.detailSection h4 {
+  margin: 0;
+}
+
+.detailSectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.detailSectionHeader button {
+  min-height: 30px;
+  padding: 4px 12px;
+}
+
+.detailEditActions {
+  display: flex;
+  gap: 8px;
+}
+
+.detailFormGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.detailFormGrid label,
+.detailSection > label,
+.opportunityCard > label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.detailList {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.detailList div {
+  display: grid;
+  grid-template-columns: 135px minmax(0, 1fr);
+  gap: 12px;
+}
+
+.detailList dt {
+  color: var(--muted);
+}
+
+.detailList dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.detailPanelActions {
+  position: sticky;
+  z-index: 3;
+  bottom: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.opportunityGrid {
+  display: grid;
+  gap: 14px;
+}
+
+.opportunityCard {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+}
+
+.opportunityCard > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.opportunityCard h3 {
+  margin: 7px 0 0;
+}
+
+.opportunityCard > header select {
+  width: 160px;
+  flex-shrink: 0;
+}
+
+.opportunitySummary {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--muted);
+}
+
+.opportunitySummary p {
+  margin: 0;
+}
+
+.opportunityCard .detailFormGrid {
+  grid-template-columns: 1fr;
+}
+
+@media (max-width: 900px) {
+  .premiumNumbersHeader,
+  .inventoryPaginationFooter,
+  .opportunityCard > header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .premiumTabs,
+  .premiumTabs button {
+    width: 100%;
+  }
+
+  .premiumTabs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .selectionActions {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .detailFormGrid {
+    grid-template-columns: 1fr;
   }
 }

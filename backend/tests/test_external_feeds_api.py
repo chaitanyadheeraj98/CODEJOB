@@ -1074,7 +1074,7 @@ Job ID: ENG-2"""
         real_capture = workflow.capture_premium_numbers_for_nvoids
         captured_calls: list[tuple[bool, bool, str, str, bool]] = []
 
-        def _capture_and_delegate(db, item, jd_body):
+        def _capture_and_delegate(db, item, jd_body, ai_extraction=None):
             captured_calls.append(
                 (
                     isinstance(db, Session),
@@ -1084,7 +1084,7 @@ Job ID: ENG-2"""
                     bool(jd_body),
                 )
             )
-            return real_capture(db, item, jd_body)
+            return real_capture(db, item, jd_body, ai_extraction)
 
         with patch.object(
             workflow,
@@ -2676,6 +2676,70 @@ Job ID: ENG-2"""
                 self.assertIn('"ai_input_source":"nvoids_detail_table_row_3"', payload)
         finally:
             external_feed_service_module.parse_email_with_details = original_parse_email_with_details
+
+    def test_nvoids_bridge_passes_ai_extracted_job_metadata_to_shared_workflow(self) -> None:
+        # Round 4/5 follow-up: Nvoids Opportunity-card job metadata (job_title, location,
+        # work_mode, visa, domain, end_client, implementation_partner) must be AI-first, with
+        # the crude subject/body regex used only when AI extraction did not run or returned
+        # nothing. Fake a successful ai_primary DeepSeek parse and assert the exact values it
+        # returns are the ones threaded into capture_premium_numbers_for_nvoids - proving the
+        # sync loop -> _bridge_to_recruiter_opportunity -> capture_premium_numbers_for_nvoids
+        # wiring, not just that some AI call happened somewhere.
+        def _fake_parse_email_with_details(subject: str, body: str, **kwargs: object) -> tuple[dict[str, object], dict[str, object]]:
+            parsed = {
+                "role": "Senior Java Developer",
+                "location": "Fort Worth, TX",
+                "domain": "Airline",
+                "end_client": "Major Airline Co",
+                "implementation_partner": "Jasvik Solutions",
+                "skills_text": "Java, Spring Boot",
+            }
+            parser_details = {
+                "parser_mode": "ai_primary",
+                "ai_extractor_result": {
+                    "work_mode": "Onsite",
+                    "visa_hints": ["H1B", "GC"],
+                },
+            }
+            return parsed, parser_details
+
+        with self.SessionLocal() as db:
+            settings = db.query(UserSettings).filter(UserSettings.owner_id == main.settings.owner_id).first()
+            assert settings is not None
+            settings.feature_ai_extractor_enabled = True
+            db.commit()
+
+        workflow = main.external_feed_service.phone_intelligence_workflow
+        real_capture = workflow.capture_premium_numbers_for_nvoids
+        captured_ai_extractions: list[object] = []
+
+        def _capture_and_delegate(db, item, jd_body, ai_extraction=None):
+            captured_ai_extractions.append(ai_extraction)
+            return real_capture(db, item, jd_body, ai_extraction)
+
+        original_parse_email_with_details = external_feed_service_module.parse_email_with_details
+        try:
+            external_feed_service_module.parse_email_with_details = _fake_parse_email_with_details
+            with patch.object(
+                workflow,
+                "capture_premium_numbers_for_nvoids",
+                side_effect=_capture_and_delegate,
+            ):
+                sync = self.client.post("/external-feeds/nvoids/sync")
+            self.assertEqual(sync.status_code, 200, sync.text)
+        finally:
+            external_feed_service_module.parse_email_with_details = original_parse_email_with_details
+
+        self.assertGreaterEqual(len(captured_ai_extractions), 1)
+        for ai_extraction in captured_ai_extractions:
+            self.assertIsNotNone(ai_extraction)
+            self.assertEqual(ai_extraction.job_title, "Senior Java Developer")
+            self.assertEqual(ai_extraction.location, "Fort Worth, TX")
+            self.assertEqual(ai_extraction.work_mode, "Onsite")
+            self.assertEqual(ai_extraction.visa_restrictions, "H1B, GC")
+            self.assertEqual(ai_extraction.domain, "Airline")
+            self.assertEqual(ai_extraction.end_client, "Major Airline Co")
+            self.assertEqual(ai_extraction.implementation_partner, "Jasvik Solutions")
 
     def test_sync_continues_when_detail_fetch_times_out(self) -> None:
         class _TimeoutCollector(_FakeCollector):

@@ -579,12 +579,57 @@ class MCPServerToolTests(unittest.TestCase):
         result = list_contact_numbers(category="bogus")
         self.assertIn("error", result)
 
+    def test_list_contact_numbers_name_search_matches_name_or_company_case_insensitively(self) -> None:
+        by_name = list_contact_numbers(category="recruiter", name="pat rec")
+        self.assertEqual(by_name["count"], 1)
+        self.assertEqual(by_name["numbers"][0]["name"], "Pat Recruiter")
+
+        by_company = list_contact_numbers(category="recruiter", name="ACME STAFFING")
+        self.assertEqual(by_company["count"], 1)
+        self.assertEqual(by_company["numbers"][0]["name"], "Pat Recruiter")
+
+        no_match = list_contact_numbers(category="recruiter", name="Shraddha Patel")
+        self.assertEqual(no_match, {"count": 0, "numbers": []})
+
     def test_list_recruiter_opportunities_filters_by_status_and_rejects_unknown_status(self) -> None:
         closed = list_recruiter_opportunities(status="Closed")
         self.assertEqual(closed, {"count": 0, "opportunities": []})
 
         invalid = list_recruiter_opportunities(status="Bogus")
         self.assertIn("error", invalid)
+
+    def test_list_recruiter_opportunities_exposes_domain_and_matches_nvoids_email_id(self) -> None:
+        # Regression guard: the chat assistant couldn't answer "what domain did the recruiter
+        # mention" - domain/prime_vendor/implementation_partner/resume_file_name weren't
+        # returned, and the "Email ID" the UI shows on a Nvoids card is external_opportunity_id,
+        # which source_email_id never matched.
+        with self.SessionLocal() as db:
+            db.add(
+                RecruiterOpportunity(
+                    owner_id=settings.owner_id,
+                    recruiter_number_id=self.recruiter_number_id,
+                    source_type="nvoids",
+                    external_opportunity_id=3683,
+                    gmail_message_id="nvoids-3683",
+                    email_subject="JAVA / SPRING BOOT / KAFKA",
+                    job_title="Java Developer",
+                    domain="Airline",
+                    prime_vendor="Vendor Co",
+                    implementation_partner="Jasvik Solutions",
+                    resume_file_name="java_resume.pdf",
+                    status="New",
+                )
+            )
+            db.commit()
+
+        by_email_id = list_recruiter_opportunities(source_email_id=3683)
+        self.assertEqual(by_email_id["count"], 1)
+        card = by_email_id["opportunities"][0]
+        self.assertEqual(card["domain"], "Airline")
+        self.assertEqual(card["prime_vendor"], "Vendor Co")
+        self.assertEqual(card["implementation_partner"], "Jasvik Solutions")
+        self.assertEqual(card["resume_file_name"], "java_resume.pdf")
+        self.assertEqual(card["email_id"], 3683)
 
     def test_list_external_opportunities_excludes_other_owner_rows(self) -> None:
         result = list_external_opportunities()

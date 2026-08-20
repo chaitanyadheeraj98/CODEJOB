@@ -12,10 +12,12 @@ from app.external_feeds.models import ExternalFeedSource, ExternalOpportunity
 from app.models import NumberReviewQueue, PremiumNumberContact, PremiumNumberLead, RecruiterEmail, RecruiterOpportunity
 from app.premium_numbers.extraction import ExtractedContactGroup
 from app.services.phone_intelligence_workflow_service import (
+    JobMetadataAiExtraction,
     PhoneIntelligenceWorkflowService,
     PhoneWorkflowSourceContext,
     _context_from_external_opportunity,
     _context_from_recruiter_email,
+    job_metadata_ai_extraction_from_parsed,
 )
 
 
@@ -285,6 +287,135 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
             self.assertEqual(db.query(PremiumNumberLead).count(), 2)
             self.assertEqual(db.query(NumberReviewQueue).count(), 2)
 
+    def test_refresh_nvoids_opportunity_metadata_updates_existing_card(self) -> None:
+        # capture_premium_numbers_for_nvoids only writes job-metadata fields once, at first
+        # creation (_run's idempotency check skips _create_opportunity for an existing
+        # opportunity) - so an already-bridged card never gets fresh AI values without going
+        # through this refresh path. This is the fix for the live card that came back blank
+        # (Job Details.pdf / "JAVA / SPRING BOOT / KAFKA" posting): reprocessing/rescoring it
+        # doesn't touch job_title/location/work_mode/visa/domain/end_client/implementation_partner
+        # on the existing row - only this method does.
+        with Session(self.engine) as db:
+            item = self._external(db)
+            with patch(
+                "app.services.phone_intelligence_workflow_service.extract_phone_leads",
+                return_value=[_lead(role="recruiter", relevant=True, relevance_score=80)],
+            ):
+                service = PhoneIntelligenceWorkflowService()
+                service.capture_premium_numbers_for_nvoids(db, item, item.raw_body)
+
+            opportunity = db.query(RecruiterOpportunity).one()
+            self.assertEqual(opportunity.location, "Dallas")
+            self.assertEqual(opportunity.work_mode, "")
+            self.assertEqual(opportunity.domain, "")
+
+            ai_extraction = JobMetadataAiExtraction(
+                job_title="Senior Java Developer",
+                location="Fort Worth, TX",
+                work_mode="Onsite",
+                visa_restrictions="H1B, GC",
+                domain="Airline",
+                end_client="Major Airline Co",
+                implementation_partner="Jasvik Solutions",
+            )
+            service.refresh_nvoids_opportunity_metadata(db, opportunity, item, item.raw_body, ai_extraction)
+
+            db.refresh(opportunity)
+            self.assertEqual(opportunity.job_title, "Senior Java Developer")
+            self.assertEqual(opportunity.location, "Fort Worth, TX")
+            self.assertEqual(opportunity.work_mode, "Onsite")
+            self.assertEqual(opportunity.visa_restrictions, "H1B, GC")
+            self.assertEqual(opportunity.domain, "Airline")
+            self.assertEqual(opportunity.end_client, "Major Airline Co")
+            self.assertEqual(opportunity.implementation_partner, "Jasvik Solutions")
+
+    def test_refresh_nvoids_opportunity_metadata_never_blanks_existing_value(self) -> None:
+        with Session(self.engine) as db:
+            item = self._external(db)
+            with patch(
+                "app.services.phone_intelligence_workflow_service.extract_phone_leads",
+                return_value=[_lead(role="recruiter", relevant=True, relevance_score=80)],
+            ):
+                service = PhoneIntelligenceWorkflowService()
+                service.capture_premium_numbers_for_nvoids(
+                    db,
+                    item,
+                    item.raw_body,
+                    JobMetadataAiExtraction(work_mode="Remote", domain="Fintech"),
+                )
+
+            opportunity = db.query(RecruiterOpportunity).one()
+            self.assertEqual(opportunity.work_mode, "Remote")
+            self.assertEqual(opportunity.domain, "Fintech")
+
+            # A later refresh that finds nothing new (AI blank, regex blank) must not erase
+            # the values a previous, better extraction already produced.
+            service.refresh_nvoids_opportunity_metadata(
+                db, opportunity, item, "no metadata in this body", JobMetadataAiExtraction()
+            )
+
+            db.refresh(opportunity)
+            self.assertEqual(opportunity.work_mode, "Remote")
+            self.assertEqual(opportunity.domain, "Fintech")
+
+    def test_context_from_recruiter_email_prefers_stored_ai_role_over_raw_subject(self) -> None:
+        # Regression guard for a live card that showed the raw, un-parsed email subject as its
+        # Job Title ("FW: Request ID 102705-1 - Java Microservices with GCP") even though
+        # email.role already held the clean AI-extracted title from ingest
+        # ("Java Microservices with GCP") - _context_from_recruiter_email never read it, so
+        # _build_snapshot's regex fallback (which defaults to the raw subject) won every time.
+        with Session(self.engine) as db:
+            email = RecruiterEmail(
+                owner_id="default-owner",
+                sender="kartheek@horizonsoftech.net",
+                subject="FW: Request ID 102705-1 - Java Microservices with GCP",
+                body="Looking for a Java Microservices engineer with GCP experience.",
+                role="Java Microservices with GCP",
+                location="Alpharetta, GA",
+            )
+            db.add(email)
+            db.commit()
+            db.refresh(email)
+
+            context = _context_from_recruiter_email(email)
+            self.assertEqual(context.job_title, "Java Microservices with GCP")
+            self.assertNotEqual(context.job_title, email.subject)
+
+    def test_refresh_gmail_opportunity_metadata_updates_existing_card(self) -> None:
+        with Session(self.engine) as db:
+            email = self._email(db, "gmail-refresh")
+            with patch(
+                "app.services.phone_intelligence_workflow_service.extract_phone_leads",
+                return_value=[_lead(role="recruiter", relevant=True, relevance_score=80)],
+            ):
+                service = PhoneIntelligenceWorkflowService()
+                service.capture_premium_numbers(db, email)
+
+            opportunity = db.query(RecruiterOpportunity).one()
+            self.assertEqual(opportunity.job_title, "Python Developer")
+            self.assertEqual(opportunity.work_mode, "")
+            self.assertEqual(opportunity.visa_restrictions, "")
+
+            ai_extraction = JobMetadataAiExtraction(
+                job_title="Senior Python Engineer",
+                location="Remote, USA",
+                work_mode="Remote",
+                visa_restrictions="H1B",
+                domain="Fintech",
+                end_client="Fresh End Client",
+                implementation_partner="Fresh Partner",
+            )
+            service.refresh_gmail_opportunity_metadata(db, opportunity, email, ai_extraction)
+
+            db.refresh(opportunity)
+            self.assertEqual(opportunity.job_title, "Senior Python Engineer")
+            self.assertEqual(opportunity.location, "Remote, USA")
+            self.assertEqual(opportunity.work_mode, "Remote")
+            self.assertEqual(opportunity.visa_restrictions, "H1B")
+            self.assertEqual(opportunity.domain, "Fintech")
+            self.assertEqual(opportunity.end_client, "Fresh End Client")
+            self.assertEqual(opportunity.implementation_partner, "Fresh Partner")
+
     def test_build_snapshot_uses_recruiter_email_entity_fields(self) -> None:
         context = PhoneWorkflowSourceContext(
             owner_id="default-owner",
@@ -310,6 +441,178 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
         self.assertEqual(snapshot.extracted_skills, "Python, SQL, Kubernetes")
         self.assertEqual(snapshot.resume_file_name, "python-resume.pdf")
 
+    def test_build_snapshot_reports_comma_joined_visa_types(self) -> None:
+        context = PhoneWorkflowSourceContext(
+            owner_id="default-owner",
+            source="gmail",
+            subject="Python Developer",
+            body="Visa: H1B or GC accepted. No C2C.",
+            sender="jobs@agency.example",
+            open_url="https://mail.example/message",
+            dedupe_key="gmail-visa-types",
+            received_at=datetime.now(UTC),
+            recruiter_email_row_id=1,
+            external_opportunity_row_id=None,
+        )
+        snapshot = PhoneIntelligenceWorkflowService()._build_snapshot(7, context, _lead())
+        self.assertEqual(snapshot.visa_restrictions, "GC, H1B")
+
+    def test_build_snapshot_prefers_context_location_over_regex(self) -> None:
+        context = PhoneWorkflowSourceContext(
+            owner_id="default-owner",
+            source="gmail",
+            subject="Python Developer",
+            body="Location: Wrong Regex Location",
+            sender="jobs@agency.example",
+            open_url="https://mail.example/message",
+            dedupe_key="gmail-location-precedence",
+            received_at=datetime.now(UTC),
+            recruiter_email_row_id=1,
+            external_opportunity_row_id=None,
+            location="Fort Worth, TX",
+        )
+        snapshot = PhoneIntelligenceWorkflowService()._build_snapshot(7, context, _lead())
+        self.assertEqual(snapshot.location, "Fort Worth, TX")
+
+    def test_build_snapshot_falls_back_to_regex_location_when_context_blank(self) -> None:
+        context = PhoneWorkflowSourceContext(
+            owner_id="default-owner",
+            source="gmail",
+            subject="Python Developer",
+            body="Location: Dallas",
+            sender="jobs@agency.example",
+            open_url="https://mail.example/message",
+            dedupe_key="gmail-location-fallback",
+            received_at=datetime.now(UTC),
+            recruiter_email_row_id=1,
+            external_opportunity_row_id=None,
+        )
+        snapshot = PhoneIntelligenceWorkflowService()._build_snapshot(7, context, _lead())
+        self.assertEqual(snapshot.location, "Dallas")
+
+    def test_build_snapshot_prefers_context_job_metadata_over_regex(self) -> None:
+        """Round 4/5 follow-up (Nvoids AI-first restructure): when the context already
+        carries AI-derived job_title/work_mode/visa_restrictions, _build_snapshot must
+        use those instead of re-deriving from the crude subject/body regex.
+        """
+        context = PhoneWorkflowSourceContext(
+            owner_id="default-owner",
+            source="nvoids",
+            subject="Java Developer",
+            body="Locals, F2F interview. TEXAS,FORT WORTH. Experience with Airline domain.",
+            sender="kevin@jasvik.example",
+            open_url="https://nvoids.example/post",
+            dedupe_key="nvoids-ai-job-metadata",
+            received_at=datetime.now(UTC),
+            recruiter_email_row_id=None,
+            external_opportunity_row_id=42,
+            job_title="Senior Java Developer",
+            work_mode="Onsite",
+            visa_restrictions="H1B, GC",
+        )
+        snapshot = PhoneIntelligenceWorkflowService()._build_snapshot(7, context, _lead())
+        self.assertEqual(snapshot.job_title, "Senior Java Developer")
+        self.assertEqual(snapshot.work_mode, "Onsite")
+        self.assertEqual(snapshot.visa_restrictions, "H1B, GC")
+
+    def test_build_snapshot_falls_back_to_regex_job_metadata_when_context_blank(self) -> None:
+        context = PhoneWorkflowSourceContext(
+            owner_id="default-owner",
+            source="nvoids",
+            subject="Java Developer",
+            body="Role: Java Backend Engineer\nRemote work available.",
+            sender="kevin@jasvik.example",
+            open_url="https://nvoids.example/post",
+            dedupe_key="nvoids-ai-job-metadata-fallback",
+            received_at=datetime.now(UTC),
+            recruiter_email_row_id=None,
+            external_opportunity_row_id=43,
+        )
+        snapshot = PhoneIntelligenceWorkflowService()._build_snapshot(7, context, _lead())
+        self.assertEqual(snapshot.job_title, "Java Backend Engineer")
+        self.assertEqual(snapshot.work_mode, "Remote")
+
+    def test_job_metadata_ai_extraction_from_parsed_uses_ai_result_when_primary(self) -> None:
+        parsed = {
+            "role": "Senior Java Developer",
+            "location": "Fort Worth, TX",
+            "domain": "Airline",
+            "end_client": "Major Airline Co",
+            "implementation_partner": "Jasvik Solutions",
+        }
+        parser_details = {
+            "parser_mode": "ai_primary",
+            "ai_extractor_result": {
+                "work_mode": "Onsite",
+                "visa_hints": ["H1B", "GC"],
+            },
+        }
+        extraction = job_metadata_ai_extraction_from_parsed(parsed, parser_details)
+        self.assertEqual(extraction.job_title, "Senior Java Developer")
+        self.assertEqual(extraction.location, "Fort Worth, TX")
+        self.assertEqual(extraction.work_mode, "Onsite")
+        self.assertEqual(extraction.visa_restrictions, "H1B, GC")
+        self.assertEqual(extraction.domain, "Airline")
+        self.assertEqual(extraction.end_client, "Major Airline Co")
+        self.assertEqual(extraction.implementation_partner, "Jasvik Solutions")
+
+    def test_job_metadata_ai_extraction_from_parsed_leaves_work_mode_and_visa_blank_when_not_ai_primary(self) -> None:
+        # AI extractor failed or was disabled: parse_email_with_details already fell back
+        # to the base regex parser for `parsed`, but work_mode/visa_hints only ever come
+        # from the AI payload, so those two must stay blank -> _build_snapshot's own
+        # regex fallback (`_extract_job_metadata`) is what fills them, not this function.
+        parsed = {"role": "Java Developer", "location": "Dallas"}
+        parser_details = {"parser_mode": "ai_fallback", "ai_extractor_result": None}
+        extraction = job_metadata_ai_extraction_from_parsed(parsed, parser_details)
+        self.assertEqual(extraction.job_title, "Java Developer")
+        self.assertEqual(extraction.location, "Dallas")
+        self.assertEqual(extraction.work_mode, "")
+        self.assertEqual(extraction.visa_restrictions, "")
+
+    def test_context_from_external_opportunity_prefers_ai_extraction_over_regex_fields(self) -> None:
+        item = ExternalOpportunity(
+            id=90103,
+            owner_id="owner-adapter-nvoids",
+            feed_source_id=1,
+            source_type="nvoids",
+            external_post_id="post-adapter-ai",
+            recruiter_email="kevin@jasvik.example",
+            company="Jasvik Solutions",
+            role="Java Developer",
+            location="",
+            skills_text="Java, Spring Boot, Kafka",
+            raw_body="Locals, F2F interview.",
+            dedupe_hash="hash-adapter-ai",
+        )
+        ai_extraction = JobMetadataAiExtraction(
+            job_title="Senior Java Developer",
+            location="Fort Worth, TX",
+            work_mode="Onsite",
+            visa_restrictions="H1B, GC",
+            domain="Airline",
+            end_client="Major Airline Co",
+            implementation_partner="Jasvik Solutions",
+        )
+
+        context = _context_from_external_opportunity(item, "full jd body", ai_extraction)
+
+        self.assertEqual(context.job_title, "Senior Java Developer")
+        self.assertEqual(context.location, "Fort Worth, TX")
+        self.assertEqual(context.work_mode, "Onsite")
+        self.assertEqual(context.visa_restrictions, "H1B, GC")
+        self.assertEqual(context.domain, "Airline")
+        self.assertEqual(context.end_client, "Major Airline Co")
+        self.assertEqual(context.implementation_partner, "Jasvik Solutions")
+
+        # AI blank on a field -> falls back to the regex-derived item field (location/end_client),
+        # or stays blank when there's no regex equivalent (work_mode/visa/domain/implementation_partner).
+        blank_ai_context = _context_from_external_opportunity(item, "full jd body", JobMetadataAiExtraction())
+        self.assertEqual(blank_ai_context.job_title, "")
+        self.assertEqual(blank_ai_context.location, "")
+        self.assertEqual(blank_ai_context.end_client, item.company)
+        self.assertEqual(blank_ai_context.work_mode, "")
+        self.assertEqual(blank_ai_context.domain, "")
+
     def test_context_from_recruiter_email_matches_existing_fields(self) -> None:
         """temp121.md `### 25.10`: the gmail adapter must map every source
         field from a `RecruiterEmail` onto `PhoneWorkflowSourceContext`,
@@ -330,6 +633,7 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
             domain="Healthcare",
             skills_text="Python, SQL",
             resume_file_name="python-resume.pdf",
+            location="Fort Worth, TX",
         )
 
         context = _context_from_recruiter_email(email, source="gmail")
@@ -349,6 +653,7 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
         self.assertEqual(context.domain, email.domain)
         self.assertEqual(context.skills_text, email.skills_text)
         self.assertEqual(context.resume_file_name, email.resume_file_name)
+        self.assertEqual(context.location, email.location)
 
         # dedupe_key falls back to "manual-{id}" when there's no external_message_id.
         manual_email = RecruiterEmail(
@@ -377,6 +682,7 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
             domain=None,
             skills_text=None,
             resume_file_name=None,
+            location=None,
         )
         empty_context = _context_from_recruiter_email(empty_fields_email)
         self.assertEqual(empty_context.end_client, "")
@@ -384,6 +690,7 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
         self.assertEqual(empty_context.domain, "")
         self.assertEqual(empty_context.skills_text, "")
         self.assertEqual(empty_context.resume_file_name, "")
+        self.assertEqual(empty_context.location, "")
 
     def test_context_from_external_opportunity_matches_existing_fields(self) -> None:
         """temp121.md `### 25.10`: the nvoids adapter must map every source
@@ -425,6 +732,7 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
         self.assertEqual(context.external_opportunity_row_id, item.id)
         self.assertEqual(context.end_client, item.company)
         self.assertEqual(context.skills_text, item.skills_text)
+        self.assertEqual(context.location, item.location)
         # No equivalent source for these fields on the nvoids side (§23.1) —
         # the adapter leaves them at the dataclass defaults.
         self.assertEqual(context.implementation_partner, "")
@@ -453,6 +761,7 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
         self.assertEqual(empty_context.sender, "")
         self.assertEqual(empty_context.end_client, "")
         self.assertEqual(empty_context.skills_text, "")
+        self.assertEqual(empty_context.location, "")
         self.assertEqual(empty_context.body, "")
 
     def test_gmail_public_methods_unchanged(self) -> None:

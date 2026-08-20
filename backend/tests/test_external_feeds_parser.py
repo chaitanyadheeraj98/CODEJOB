@@ -58,7 +58,7 @@ class ExternalFeedsParserTests(unittest.TestCase):
         self.assertEqual(post.recruiter_email, "recruiter@example.com")
         self.assertIn("214", post.recruiter_phone)
         self.assertEqual(post.work_mode, "Remote")
-        self.assertEqual(post.visa_hints, "Mentioned")
+        self.assertEqual(post.visa_hints, "H1B")
         self.assertEqual(post.external_post_id, "nvoids:1")
 
     def test_parse_external_post_uses_stable_id_when_uid_changes(self) -> None:

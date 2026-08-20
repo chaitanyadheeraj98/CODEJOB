@@ -6,27 +6,19 @@ import { getDraftSourceLabel } from './features/ai/ui'
 import QueryBucket from './features/query_bucket/QueryBucket'
 import EmailSearch from './features/email_search/EmailSearch'
 import ChatWidget from './features/chat/ChatWidget'
+import { getChatStatus } from './features/chat/api'
+import type { ChatStatus } from './features/chat/types'
+import PremiumNumbersPage from './features/premium_numbers/PremiumNumbersPage'
 import { type CandidateState, useCandidateBuckets } from './candidateBuckets'
 import { addCcEmail, removeCcEmail } from './ccEmails'
 import { addEmployerDomain, removeEmployerDomain } from './employerDomains'
 import { formatRelativeInboxTime, getInitials } from './inboxFormat'
-import { buildPremiumScopeUrl, defaultPremiumPageMeta, type PremiumScope } from './premiumNumbers'
 import type { EmailSearchHit } from './emailSearch'
 
 const GMAIL_OAUTH_POLL_INTERVAL_MS = 2000
 const GMAIL_OAUTH_POLL_TIMEOUT_MS = 180000
 const VIEW_EVENT_THROTTLE_MS = 60000
-const PREMIUM_PAGE_LIMIT = 25
 const SETTINGS_REVIEW_BATCH_SIZE = 50
-
-function emailSearchPremiumScope(hit: EmailSearchHit): PremiumScope | null {
-  if (hit.section !== 'premium_numbers') return null
-  if (hit.detail.number_review_id != null) return 'all_review'
-  if (hit.detail.recruiter_number_id != null) return 'recruiter_numbers'
-  if (hit.detail.employer_number_id != null) return 'employer_numbers'
-  if (hit.detail.recruiter_opportunity_id != null) return 'recruiter_opportunities'
-  return null
-}
 
 function emailSearchRelatedId(hit: EmailSearchHit): string | null {
   if (hit.section === 'inbox') {
@@ -1338,6 +1330,7 @@ type ConversationSummary = {
   last_message_preview: string
   last_message_at: string
   unread_reply_count: number
+  last_inbound_reply_at: string | null
 }
 
 type ConversationMessage = {
@@ -1449,131 +1442,6 @@ export function ResumePickerPanel({ candidate }: ResumePickerPanelProps) {
       ) : null}
     </div>
   )
-}
-
-type PremiumNumberConfidence = 'high' | 'medium' | 'low'
-
-type PaginatedListResponse<TItem> = {
-  items: TItem[]
-  next_cursor: number | null
-  has_next: boolean
-}
-
-type NumberReviewCard = {
-  id: number
-  source_email_id: number | null
-  source_external_opportunity_id: number | null
-  source_lead_id: number | null
-  normalized_phone_number: string
-  display_phone_number: string
-  owner_name: string
-  company: string
-  designation: string
-  confidence: PremiumNumberConfidence
-  purpose: string
-  evidence_snippet: string
-  email_subject: string
-  email_sender: string
-  contact_email: string
-  contact_type: string
-  recruiter_relevance_score: number
-  relevance_reason: string
-  extraction_source: string
-  scored_with: string
-  gmail_open_url: string
-  state: string
-  linkedin_url?: string
-}
-
-type PremiumNumberVersion = {
-  id: number
-  role: string
-  owner_name: string
-  company: string
-  designation: string
-  contact_email: string
-  confidence: string
-  extraction_source: string
-  recruiter_email_id: number | null
-  external_opportunity_id: number | null
-  source_url: string | null
-  created_at: string
-}
-
-type RecruiterNumberCard = {
-  id: number
-  normalized_phone_number: string
-  display_phone_number: string
-  recruiter_name: string
-  company: string
-  designation: string
-  recruiter_email: string
-  first_detected_email_id: number | null
-  source_type: string | null
-  source_id: number | null
-  source_link_url: string | null
-  active_lead_id: number | null
-  version_count: number
-  linkedin_url: string
-  total_opportunity_count: number
-  last_email_received_at: string | null
-}
-
-type EmployerNumberCard = {
-  id: number
-  normalized_phone_number: string
-  display_phone_number: string
-  owner_name: string
-  company: string
-  source_email_id: number | null
-  source_type: string | null
-  source_id: number | null
-  source_link_url: string | null
-  active_lead_id: number | null
-  version_count: number
-}
-
-type OpportunityStatus = 'New' | 'Called' | 'Applied' | 'Follow Up' | 'Closed' | 'Not Interested'
-
-type RecruiterOpportunityCard = {
-  id: number
-  recruiter_number_id: number
-  source_email_id: number | null
-  gmail_message_id: string
-  source_type: 'gmail' | 'nvoids'
-  source_url: string | null
-  external_opportunity_id: number | null
-  email_id: number | null
-  email_subject: string
-  email_sender: string
-  gmail_open_url: string
-  received_at: string | null
-  job_title: string
-  end_client: string
-  location: string
-  work_mode: string
-  visa_restrictions: string
-  resume_file_name: string
-  implementation_partner: string
-  prime_vendor: string
-  domain: string
-  extracted_skills: string
-  evidence: string
-  recruiter_name: string
-  recruiter_email: string
-  recruiter_phone_display: string
-  recruiter_phone_normalized: string
-  linkedin_url: string
-  status: OpportunityStatus
-  notes: string
-  cold_call_script: string | null
-  cold_call_script_updated_at: string | null
-}
-
-type RecruiterOpportunityDeleteResponse = {
-  id: number
-  deleted: boolean
-  recruiter_number_deleted: boolean
 }
 
 type CandidateDeleteResponse = {
@@ -2682,6 +2550,7 @@ function App() {
   const profileNames: PolicyProfileName[] = ['Flexible Drafting', 'Balanced', 'Strict']
   const [status, setStatus] = useState<GmailStatus | null>(null)
   const [aiStatus, setAiStatus] = useState<AiStatus | null>(null)
+  const [chatStatus, setChatStatus] = useState<ChatStatus | null>(null)
   const [telegramStatus, setTelegramStatus] = useState<TelegramStatus | null>(null)
   const [settings, setSettingsState] = useState<SettingsPayload>({
     enabled: true,
@@ -2784,6 +2653,7 @@ function App() {
   const [activePage, setActivePage] = useState<'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'inbox' | 'premium_numbers' | 'settings'>('run_queue')
   const [emailSearchTarget, setEmailSearchTarget] = useState<EmailSearchHit | null>(null)
   const [inboxConversations, setInboxConversations] = useState<ConversationSummary[]>([])
+  const [inboxTab, setInboxTab] = useState<'all' | 'replies'>('all')
   const [selectedConversationId, setSelectedConversationId] = useState<number | null>(null)
   const [selectedConversation, setSelectedConversation] = useState<ConversationDetail | null>(null)
   const [inboxLoading, setInboxLoading] = useState(false)
@@ -2804,28 +2674,8 @@ function App() {
   const [nvoidsLocationDraft, setNvoidsLocationDraft] = useState('')
   const [employerDomainDraft, setEmployerDomainDraft] = useState('')
   const [employerDomainError, setEmployerDomainError] = useState('')
-  const [numberReviewCards, setNumberReviewCards] = useState<NumberReviewCard[]>([])
-  const [recruiterNumberCards, setRecruiterNumberCards] = useState<RecruiterNumberCard[]>([])
-  const [employerNumberCards, setEmployerNumberCards] = useState<EmployerNumberCard[]>([])
-  const [opportunityCards, setOpportunityCards] = useState<RecruiterOpportunityCard[]>([])
-  const [premiumPageMeta, setPremiumPageMeta] = useState(defaultPremiumPageMeta())
-  const [premiumLoading, setPremiumLoading] = useState(false)
-  const [premiumError, setPremiumError] = useState('')
-  const [premiumScopeFilter, setPremiumScopeFilter] = useState<PremiumScope>('all_review')
-  const [opportunityStatusFilter, setOpportunityStatusFilter] = useState<'all' | OpportunityStatus>('all')
-  const [opportunitySourceFilter, setOpportunitySourceFilter] = useState<'all' | 'gmail' | 'nvoids'>('all')
-  const [premiumSearch, setPremiumSearch] = useState('')
-  const [updatingOpportunityId, setUpdatingOpportunityId] = useState<number | null>(null)
-  const [deletingOpportunityId, setDeletingOpportunityId] = useState<number | null>(null)
-  const [generatingColdCallId, setGeneratingColdCallId] = useState<number | null>(null)
-  const [classifyingReviewId, setClassifyingReviewId] = useState<number | null>(null)
-  const [selectedReviewIds, setSelectedReviewIds] = useState<Set<number>>(new Set())
-  const [bulkActionInFlight, setBulkActionInFlight] = useState(false)
-  const [editedReviewFields, setEditedReviewFields] = useState<Record<number, Partial<NumberReviewCard>>>({})
-  const [editedOpportunityFields, setEditedOpportunityFields] = useState<Record<number, Partial<RecruiterOpportunityCard>>>({})
-  const [contactVersions, setContactVersions] = useState<Record<string, PremiumNumberVersion[]>>({})
-  const [versionActionKey, setVersionActionKey] = useState<string | null>(null)
-  const [linkedinEdits, setLinkedinEdits] = useState<Record<number, string>>({})
+  const [premiumPendingCount, setPremiumPendingCount] = useState(0)
+  const [premiumRefreshToken, setPremiumRefreshToken] = useState(0)
   const [timeRange, setTimeRange] = useState<TimeRangeKey>('current_day')
   const [productivityEvents, setProductivityEvents] = useState<ProductivityEvent[]>([])
   const [productivityTrend, setProductivityTrend] = useState<ProductivityTrendResponse | null>(null)
@@ -2836,8 +2686,6 @@ function App() {
   const hasBootstrappedCandidatesRef = useRef(false)
   const oauthPollingStartedAtRef = useRef<number | null>(null)
   const refreshTimerRef = useRef<number | null>(null)
-  const premiumRequestTrackerRef = useRef(0)
-  const premiumLoadingRef = useRef(false)
 
   const {
     queue,
@@ -3053,6 +2901,10 @@ function App() {
     const res = await fetch(`${apiBase}/ai/status`)
     if (!res.ok) throw new Error('Failed to load AI status')
     setAiStatus((await res.json()) as AiStatus)
+  }
+
+  const loadChatStatus = async () => {
+    setChatStatus(await getChatStatus(apiBase))
   }
 
   const loadTelegramStatus = async () => {
@@ -3274,309 +3126,17 @@ function App() {
 
   const activeResume = resumeAssets.find((item) => item.is_current) ?? null
 
-  const loadPremiumNumbers = async (opts?: { append?: boolean; cursor?: number | null; mailDate?: string | null }) => {
-    const append = Boolean(opts?.append)
-    const cursor = opts?.cursor ?? 0
-    const mailDate = opts?.mailDate ?? settings.mail_date
-    const scope = premiumScopeFilter
-    const requestId = premiumRequestTrackerRef.current + 1
-    premiumRequestTrackerRef.current = requestId
-    premiumLoadingRef.current = true
-    setPremiumLoading(true)
-    setPremiumError('')
+  const loadPremiumNumbers = async (_opts?: { append?: boolean; cursor?: number | null; mailDate?: string | null }) => {
+    void _opts
+    setPremiumRefreshToken((value) => value + 1)
     try {
-      const url = buildPremiumScopeUrl({
-        apiBase,
-        scope,
-        cursor,
-        limit: PREMIUM_PAGE_LIMIT,
-        q: premiumSearch,
-        mailDate,
-        opportunityStatus: opportunityStatusFilter,
-        opportunitySource: opportunitySourceFilter,
-      })
-      const res = await fetch(url)
-      if (!res.ok) {
-        const errorLabel =
-          scope === 'all_review'
-            ? 'number review queue'
-            : scope === 'recruiter_numbers'
-              ? 'recruiter numbers'
-              : scope === 'employer_numbers'
-                ? 'employer numbers'
-                : 'recruiter opportunities'
-        throw new Error(`Failed to load ${errorLabel}`)
+      const response = await fetch(`${apiBase}/number-review/pending-count`)
+      if (response.ok) {
+        const payload = await response.json() as { count: number }
+        setPremiumPendingCount(payload.count)
       }
-      if (requestId !== premiumRequestTrackerRef.current) return
-      if (scope === 'all_review') {
-        const payload = (await res.json()) as PaginatedListResponse<NumberReviewCard>
-        setNumberReviewCards((prev) => (append ? [...prev, ...payload.items] : payload.items))
-        setPremiumPageMeta((prev) => ({
-          ...prev,
-          [scope]: { nextCursor: payload.next_cursor, hasNext: payload.has_next },
-        }))
-      } else if (scope === 'recruiter_numbers') {
-        const payload = (await res.json()) as PaginatedListResponse<RecruiterNumberCard>
-        setRecruiterNumberCards((prev) => (append ? [...prev, ...payload.items] : payload.items))
-        setPremiumPageMeta((prev) => ({
-          ...prev,
-          [scope]: { nextCursor: payload.next_cursor, hasNext: payload.has_next },
-        }))
-      } else if (scope === 'employer_numbers') {
-        const payload = (await res.json()) as PaginatedListResponse<EmployerNumberCard>
-        setEmployerNumberCards((prev) => (append ? [...prev, ...payload.items] : payload.items))
-        setPremiumPageMeta((prev) => ({
-          ...prev,
-          [scope]: { nextCursor: payload.next_cursor, hasNext: payload.has_next },
-        }))
-      } else {
-        const payload = (await res.json()) as PaginatedListResponse<RecruiterOpportunityCard>
-        setOpportunityCards((prev) => (append ? [...prev, ...payload.items] : payload.items))
-        setPremiumPageMeta((prev) => ({
-          ...prev,
-          [scope]: { nextCursor: payload.next_cursor, hasNext: payload.has_next },
-        }))
-      }
-    } catch (e) {
-      if (requestId === premiumRequestTrackerRef.current) {
-        setPremiumError((e as Error).message)
-      }
-    } finally {
-      if (requestId === premiumRequestTrackerRef.current) {
-        premiumLoadingRef.current = false
-        setPremiumLoading(false)
-      }
-    }
-  }
-
-  const markReviewCard = async (reviewId: number, mode: 'recruiter' | 'employer') => {
-    setClassifyingReviewId(reviewId)
-    try {
-      const res = await fetch(
-        `${apiBase}/number-review/${reviewId}/${mode === 'recruiter' ? 'mark-recruiter' : 'mark-employer'}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(editedReviewFields[reviewId] ?? {}),
-        },
-      )
-      if (!res.ok) throw new Error(`Failed to mark as ${mode}`)
-      setEditedReviewFields((prev) => {
-        const next = { ...prev }
-        delete next[reviewId]
-        return next
-      })
-      await loadPremiumNumbers({ append: false, cursor: 0 })
-    } catch (e) {
-      setPremiumError((e as Error).message)
-    } finally {
-      setClassifyingReviewId(null)
-    }
-  }
-
-  const runBulkReviewAction = async (action: 'mark-recruiter' | 'mark-employer' | 'delete' | 'rescore') => {
-    if (selectedReviewIds.size === 0) return
-    setBulkActionInFlight(true)
-    try {
-      const res = await fetch(`${apiBase}/number-review/bulk-${action}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ review_ids: [...selectedReviewIds] }),
-      })
-      if (!res.ok) throw new Error(`Failed to ${action.replace('-', ' ')} selected cards`)
-      setSelectedReviewIds(new Set())
-      await loadPremiumNumbers({ append: false, cursor: 0 })
-    } catch (e) {
-      setPremiumError((e as Error).message)
-    } finally {
-      setBulkActionInFlight(false)
-    }
-  }
-
-  const rescoreReviewCard = async (reviewId: number, sourceEmailId: number | null) => {
-    setClassifyingReviewId(reviewId)
-    try {
-      // Gmail-sourced cards use the dedicated reextract endpoint per spec; Nvoids-sourced
-      // cards (no source_email_id) have no reextract equivalent, so fall back to
-      // bulk-rescore, which already handles both source types on the backend.
-      const res = sourceEmailId
-        ? await fetch(`${apiBase}/premium-numbers/reextract/${sourceEmailId}`, { method: 'POST' })
-        : await fetch(`${apiBase}/number-review/bulk-rescore`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ review_ids: [reviewId] }),
-          })
-      if (!res.ok) throw new Error('Failed to rescore review card')
-      await loadPremiumNumbers({ append: false, cursor: 0 })
-    } catch (e) {
-      setPremiumError((e as Error).message)
-    } finally {
-      setClassifyingReviewId(null)
-    }
-  }
-
-  const toggleReviewSelection = (id: number) => {
-    setSelectedReviewIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }
-
-  const deleteReviewCard = async (reviewId: number) => {
-    setClassifyingReviewId(reviewId)
-    try {
-      const res = await fetch(`${apiBase}/number-review/${reviewId}`, { method: 'DELETE' })
-      if (!res.ok) throw new Error('Failed to delete review card')
-      await loadPremiumNumbers({ append: false, cursor: 0 })
-    } catch (e) {
-      setPremiumError((e as Error).message)
-    } finally {
-      setClassifyingReviewId(null)
-    }
-  }
-
-  const updateOpportunity = async (
-    id: number,
-    patch: Partial<Pick<
-      RecruiterOpportunityCard,
-      | 'status'
-      | 'notes'
-      | 'job_title'
-      | 'location'
-      | 'work_mode'
-      | 'visa_restrictions'
-      | 'resume_file_name'
-      | 'implementation_partner'
-      | 'prime_vendor'
-      | 'end_client'
-      | 'domain'
-      | 'extracted_skills'
-    >>,
-  ) => {
-    setUpdatingOpportunityId(id)
-    try {
-      const res = await fetch(`${apiBase}/recruiter-opportunities/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(patch),
-      })
-      if (!res.ok) throw new Error('Failed to update opportunity')
-      const updated = (await res.json()) as RecruiterOpportunityCard
-      setOpportunityCards((prev) => prev.map((item) => (item.id === id ? updated : item)))
-      setEditedOpportunityFields((prev) => {
-        const next = { ...prev }
-        delete next[id]
-        return next
-      })
-    } catch (e) {
-      setPremiumError((e as Error).message)
-    } finally {
-      setUpdatingOpportunityId(null)
-    }
-  }
-
-  const loadContactVersions = async (role: 'recruiter' | 'employer', id: number) => {
-    const key = `${role}-${id}`
-    if (contactVersions[key]) return
-    setVersionActionKey(key)
-    try {
-      const res = await fetch(`${apiBase}/${role}-numbers/${id}/versions`)
-      if (!res.ok) throw new Error('Failed to load contact versions')
-      const versions = (await res.json()) as PremiumNumberVersion[]
-      setContactVersions((prev) => ({ ...prev, [key]: versions }))
-    } catch (e) {
-      setPremiumError((e as Error).message)
-    } finally {
-      setVersionActionKey(null)
-    }
-  }
-
-  const selectContactVersion = async (role: 'recruiter' | 'employer', id: number, leadId: number) => {
-    const key = `${role}-${id}`
-    setVersionActionKey(key)
-    try {
-      const res = await fetch(`${apiBase}/${role}-numbers/${id}/select-version/${leadId}`, { method: 'POST' })
-      if (!res.ok) throw new Error('Failed to select contact version')
-      await loadPremiumNumbers({ append: false, cursor: 0 })
-    } catch (e) {
-      setPremiumError((e as Error).message)
-    } finally {
-      setVersionActionKey(null)
-    }
-  }
-
-  const saveRecruiterLinkedin = async (id: number, currentValue: string) => {
-    setClassifyingReviewId(id)
-    try {
-      const res = await fetch(`${apiBase}/recruiter-numbers/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ linkedin_url: linkedinEdits[id] ?? currentValue }),
-      })
-      if (!res.ok) throw new Error('Failed to save LinkedIn profile')
-      const updated = (await res.json()) as RecruiterNumberCard
-      setRecruiterNumberCards((prev) => prev.map((item) => (item.id === id ? updated : item)))
-      setLinkedinEdits((prev) => {
-        const next = { ...prev }
-        delete next[id]
-        return next
-      })
-    } catch (e) {
-      setPremiumError((e as Error).message)
-    } finally {
-      setClassifyingReviewId(null)
-    }
-  }
-
-  const generateColdCallScript = async (id: number) => {
-    setGeneratingColdCallId(id)
-    try {
-      const res = await fetch(`${apiBase}/recruiter-opportunities/${id}/generate-cold-call-script`, {
-        method: 'POST',
-      })
-      if (!res.ok) throw new Error('Failed to generate cold call script')
-      const updated = (await res.json()) as RecruiterOpportunityCard
-      setOpportunityCards((prev) => prev.map((item) => (item.id === id ? updated : item)))
-    } catch (e) {
-      setPremiumError((e as Error).message)
-    } finally {
-      setGeneratingColdCallId(null)
-    }
-  }
-
-  const deleteOpportunity = async (id: number) => {
-    setDeletingOpportunityId(id)
-    try {
-      const res = await fetch(`${apiBase}/recruiter-opportunities/${id}`, {
-        method: 'DELETE',
-      })
-      if (!res.ok) throw new Error('Failed to delete opportunity')
-      await res.json() as RecruiterOpportunityDeleteResponse
-      setOpportunityCards((prev) => prev.filter((item) => item.id !== id))
-      schedulePostMutationRefresh()
-    } catch (e) {
-      setPremiumError((e as Error).message)
-    } finally {
-      setDeletingOpportunityId(null)
-    }
-  }
-
-  const swapNumberBucket = async (id: number, from: 'recruiter' | 'employer') => {
-    setClassifyingReviewId(id)
-    try {
-      const endpoint =
-        from === 'recruiter'
-          ? `${apiBase}/recruiter-numbers/${id}/swap-to-employer`
-          : `${apiBase}/employer-numbers/${id}/swap-to-recruiter`
-      const res = await fetch(endpoint, { method: 'POST' })
-      if (!res.ok) throw new Error('Failed to swap number bucket')
-      await loadPremiumNumbers({ append: false, cursor: 0 })
-    } catch (e) {
-      setPremiumError((e as Error).message)
-    } finally {
-      setClassifyingReviewId(null)
+    } catch {
+      // Keep the last known sidebar badge if a background refresh is temporarily unavailable.
     }
   }
 
@@ -3641,8 +3201,30 @@ function App() {
     setInboxLoading(true)
     setInboxError('')
     try {
-      const res = await fetch(`${apiBase}/inbox/conversations`)
+      const suffix = inboxTab === 'replies' ? '?only_replies=true' : ''
+      const res = await fetch(`${apiBase}/inbox/conversations${suffix}`)
       if (!res.ok) throw new Error('Failed to load inbox conversations')
+      const payload = (await res.json()) as ConversationSummary[]
+      setInboxConversations(payload)
+      return payload
+    } catch (e) {
+      setInboxError((e as Error).message)
+      return []
+    } finally {
+      setInboxLoading(false)
+    }
+  }
+
+  const refreshInboxReplies = async (): Promise<ConversationSummary[]> => {
+    setInboxLoading(true)
+    setInboxError('')
+    try {
+      const suffix = inboxTab === 'replies' ? '?only_replies=true' : ''
+      const res = await fetch(`${apiBase}/inbox/conversations/refresh${suffix}`, { method: 'POST' })
+      if (!res.ok) {
+        const details = await res.json().catch(() => null)
+        throw new Error(details?.detail ?? 'Failed to refresh conversations')
+      }
       const payload = (await res.json()) as ConversationSummary[]
       setInboxConversations(payload)
       return payload
@@ -3814,9 +3396,10 @@ function App() {
   useEffect(() => {
     const bootstrap = async () => {
       try {
-        const [, , , normalizedSettings] = await Promise.all([
+        const [, , , , normalizedSettings] = await Promise.all([
           loadStatus(),
           loadAiStatus(),
+          loadChatStatus().catch(() => {}),
           loadTelegramStatus(),
           loadSettingsBootstrap(),
         ])
@@ -3870,38 +3453,6 @@ function App() {
     }
   }, [emailSearchTarget, queue, failedQueue, sentQueue, bucketMeta, settings.mail_date])
 
-  useEffect(() => {
-    if (!hasBootstrappedCandidatesRef.current || !settingsBootstrapReady) return
-    if (activePage !== 'premium_numbers') return
-    loadPremiumNumbers({ append: false, cursor: 0 }).catch((e) => setPremiumError((e as Error).message))
-  }, [activePage, premiumScopeFilter, premiumSearch, settings.mail_date, opportunityStatusFilter, opportunitySourceFilter, settingsBootstrapReady])
-
-  useEffect(() => {
-    if (activePage !== 'premium_numbers' || !emailSearchTarget || emailSearchTarget.section !== 'premium_numbers') return
-    if (premiumLoadingRef.current) return
-    const scope = emailSearchPremiumScope(emailSearchTarget)
-    if (!scope || scope !== premiumScopeFilter) return
-    const relatedId = emailSearchRelatedId(emailSearchTarget)
-    if (relatedId == null) return
-    const cards =
-      scope === 'all_review' ? numberReviewCards
-      : scope === 'recruiter_numbers' ? recruiterNumberCards
-      : scope === 'employer_numbers' ? employerNumberCards
-      : opportunityCards
-    if (cards.some((item) => String(item.id) === relatedId)) return
-    const meta = premiumPageMeta[scope]
-    if (!meta.hasNext || meta.nextCursor == null) return
-    loadPremiumNumbers({ append: true, cursor: meta.nextCursor }).catch((e) => setPremiumError((e as Error).message))
-  }, [
-    activePage,
-    emailSearchTarget,
-    premiumScopeFilter,
-    premiumPageMeta,
-    numberReviewCards,
-    recruiterNumberCards,
-    employerNumberCards,
-    opportunityCards,
-  ])
 
   useEffect(() => {
     if (activePage !== 'inbox') return
@@ -3912,7 +3463,7 @@ function App() {
       if (selectedId) openInboxConversation(selectedId).catch((e) => setInboxError((e as Error).message))
       else setSelectedConversation(null)
     }).catch((e) => setInboxError((e as Error).message))
-  }, [activePage])
+  }, [activePage, inboxTab])
 
   useEffect(() => {
     loadProductivityAnalytics(timeRange).catch((e) => setError((e as Error).message))
@@ -3959,10 +3510,6 @@ function App() {
     failedQueue,
     sentQueue,
     logs,
-    numberReviewCards,
-    recruiterNumberCards,
-    employerNumberCards,
-    opportunityCards,
     inboxConversations,
   ])
 
@@ -4925,10 +4472,6 @@ function App() {
     if (hit.section === 'inbox' && typeof hit.detail.conversation_id === 'number') {
       setSelectedConversationId(hit.detail.conversation_id)
     }
-    if (hit.section === 'premium_numbers') {
-      const scope = emailSearchPremiumScope(hit)
-      if (scope) setPremiumScopeFilter(scope)
-    }
     setActivePage(hit.section)
   }
 
@@ -4943,7 +4486,7 @@ function App() {
         runCount={logs.length}
         sentCount={bucketMeta.approved_sent.total ?? sentQueue.length}
         inboxCount={inboxUnreadCount}
-        premiumCount={numberReviewCards.length}
+        premiumCount={premiumPendingCount}
         activePage={activePage}
         onNavigate={setActivePage}
       />
@@ -5253,6 +4796,11 @@ function App() {
                   {aiStatus?.embedding_last_error ? configRow('Embedding Error', aiStatus.embedding_last_error) : null}
                   {aiStatus?.embedding_last_success_at ? configRow('Embedding Last Success', aiStatus.embedding_last_success_at) : null}
                   {embeddingLastDuration ? configRow('Embedding Duration', embeddingLastDuration) : null}
+                  {configRow('Chatbot (Ollama)', chatStatus?.enabled ? (chatStatus.ollama_running ? 'Running' : 'Not Running') : 'Disabled')}
+                  {chatStatus?.model ? configRow('Ollama Model', chatStatus.model) : null}
+                  {chatStatus?.mcp_status ? configRow('Ollama MCP Status', chatStatus.mcp_status) : null}
+                  {chatStatus?.ollama_last_error ? configRow('Ollama Error', chatStatus.ollama_last_error) : null}
+                  {chatStatus?.ollama_last_success_at ? configRow('Ollama Last Success', chatStatus.ollama_last_success_at) : null}
                   {aiStatus?.last_draft_source ? configRow('Draft Source', getDraftSourceLabel(aiStatus.last_draft_source)) : null}
                   {aiLastDuration ? configRow('Last Duration', aiLastDuration) : null}
                 </div>
@@ -5418,6 +4966,11 @@ function App() {
                   {aiStatus?.embedding_last_error ? <div className="row"><span className="label">Embedding Error</span><span>{aiStatus.embedding_last_error}</span></div> : null}
                   {aiStatus?.embedding_last_success_at ? <div className="row"><span className="label">Embedding Last Success</span><span>{aiStatus.embedding_last_success_at}</span></div> : null}
                   {embeddingLastDuration ? <div className="row"><span className="label">Embedding Duration</span><span>{embeddingLastDuration}</span></div> : null}
+                  <div className="row"><span className="label">Chatbot (Ollama)</span><span>{chatStatus?.enabled ? (chatStatus.ollama_running ? 'Running' : 'Not Running') : 'Disabled'}</span></div>
+                  {chatStatus?.model ? <div className="row"><span className="label">Ollama Model</span><span className="tag">{chatStatus.model}</span></div> : null}
+                  {chatStatus?.mcp_status ? <div className="row"><span className="label">Ollama MCP Status</span><span>{chatStatus.mcp_status}</span></div> : null}
+                  {chatStatus?.ollama_last_error ? <div className="row"><span className="label">Ollama Error</span><span>{chatStatus.ollama_last_error}</span></div> : null}
+                  {chatStatus?.ollama_last_success_at ? <div className="row"><span className="label">Ollama Last Success</span><span>{chatStatus.ollama_last_success_at}</span></div> : null}
                   {aiStatus?.last_draft_source ? <div className="row"><span className="label">Draft Source</span><span>{getDraftSourceLabel(aiStatus.last_draft_source)}</span></div> : null}
                   {aiLastDuration ? <div className="row"><span className="label">Last Duration</span><span>{aiLastDuration}</span></div> : null}
                 </div>
@@ -6794,368 +6347,13 @@ function App() {
           ) : null}
 
           {activePage === 'premium_numbers' ? (
-            <section className="card pageSection">
-              <h2>Premium Numbers</h2>
-              <div className="actionBar">
-                <select
-                  value={premiumScopeFilter}
-                  onChange={(e) => {
-                    setPremiumScopeFilter(e.target.value as PremiumScope)
-                    setSelectedReviewIds(new Set())
-                  }}
-                >
-                  <option value="all_review">All</option>
-                  <option value="recruiter_numbers">Recruiter Numbers</option>
-                  <option value="employer_numbers">Employer Numbers</option>
-                  <option value="recruiter_opportunities">Recruiter Opportunities</option>
-                </select>
-                {premiumScopeFilter === 'recruiter_opportunities' ? (
-                  <>
-                    <select
-                      value={opportunityStatusFilter}
-                      onChange={(e) => setOpportunityStatusFilter(e.target.value as 'all' | OpportunityStatus)}
-                    >
-                      <option value="all">All statuses</option>
-                      <option value="New">New</option>
-                      <option value="Called">Called</option>
-                      <option value="Applied">Applied</option>
-                      <option value="Follow Up">Follow Up</option>
-                      <option value="Closed">Closed</option>
-                      <option value="Not Interested">Not Interested</option>
-                    </select>
-                    <select
-                      value={opportunitySourceFilter}
-                      onChange={(e) => setOpportunitySourceFilter(e.target.value as 'all' | 'gmail' | 'nvoids')}
-                    >
-                      <option value="all">All sources</option>
-                      <option value="gmail">Gmail</option>
-                      <option value="nvoids">Nvoids</option>
-                    </select>
-                  </>
-                ) : null}
-                <input
-                  value={premiumSearch}
-                  onChange={(e) => setPremiumSearch(e.target.value)}
-                  placeholder="Search number, owner, company..."
-                />
-                {premiumScopeFilter === 'all_review' ? (
-                  <>
-                    <label>
-                      <input
-                        type="checkbox"
-                        aria-label="Select all visible review cards"
-                        checked={numberReviewCards.length > 0 && numberReviewCards.every((item) => selectedReviewIds.has(item.id))}
-                        onChange={(e) => setSelectedReviewIds(e.target.checked ? new Set(numberReviewCards.map((item) => item.id)) : new Set())}
-                        disabled={bulkActionInFlight}
-                      />
-                      Select all visible
-                    </label>
-                    <button type="button" onClick={() => runBulkReviewAction('mark-recruiter')} disabled={bulkActionInFlight || selectedReviewIds.size === 0}>Mark Selected as Recruiter</button>
-                    <button type="button" onClick={() => runBulkReviewAction('mark-employer')} disabled={bulkActionInFlight || selectedReviewIds.size === 0}>Mark Selected as Employer</button>
-                    <button type="button" onClick={() => runBulkReviewAction('rescore')} disabled={bulkActionInFlight || selectedReviewIds.size === 0}>Rescore Selected</button>
-                    <button type="button" onClick={() => runBulkReviewAction('delete')} disabled={bulkActionInFlight || selectedReviewIds.size === 0}>Delete Selected</button>
-                  </>
-                ) : null}
-              </div>
-              {premiumScopeFilter === 'all_review' ? (
-                <p className="subtle">Rescoring re-checks every number in each source. Bulk actions ignore unsaved field edits.</p>
-              ) : null}
-              {premiumLoading ? <p className="subtle">Loading premium numbers...</p> : null}
-              {premiumError ? <p className="subtle">Premium numbers error: {premiumError}</p> : null}
-              {premiumScopeFilter === 'all_review' && !premiumLoading && numberReviewCards.length === 0 ? (
-                <p className="subtle">No unknown numbers pending review.</p>
-              ) : null}
-              {premiumScopeFilter === 'all_review'
-                ? numberReviewCards.map((item) => (
-                    <article
-                      key={`review-${item.id}`}
-                      className={`emailItem ${isEmailSearchHighlight('premium_numbers', item.id) || selectedReviewIds.has(item.id) ? 'emailSearchHighlight' : ''}`}
-                      data-email-search-section="premium_numbers"
-                      data-email-search-related-id={item.id}
-                    >
-                      <label>
-                        <input
-                          type="checkbox"
-                          aria-label={`Select review card ${item.id}`}
-                          checked={selectedReviewIds.has(item.id)}
-                          onChange={() => toggleReviewSelection(item.id)}
-                          disabled={bulkActionInFlight}
-                        />
-                        Select
-                      </label>
-                      <label>Phone<input value={editedReviewFields[item.id]?.display_phone_number ?? item.display_phone_number} onChange={(e) => setEditedReviewFields((prev) => ({ ...prev, [item.id]: { ...prev[item.id], display_phone_number: e.target.value } }))} /></label>
-                      <label>Owner<input value={editedReviewFields[item.id]?.owner_name ?? item.owner_name} onChange={(e) => setEditedReviewFields((prev) => ({ ...prev, [item.id]: { ...prev[item.id], owner_name: e.target.value } }))} /></label>
-                      <label>Company<input value={editedReviewFields[item.id]?.company ?? item.company} onChange={(e) => setEditedReviewFields((prev) => ({ ...prev, [item.id]: { ...prev[item.id], company: e.target.value } }))} /></label>
-                      <label>Designation<input value={editedReviewFields[item.id]?.designation ?? item.designation} onChange={(e) => setEditedReviewFields((prev) => ({ ...prev, [item.id]: { ...prev[item.id], designation: e.target.value } }))} /></label>
-                      <label>Extracted Contact Email<input type="email" value={editedReviewFields[item.id]?.contact_email ?? item.contact_email} onChange={(e) => setEditedReviewFields((prev) => ({ ...prev, [item.id]: { ...prev[item.id], contact_email: e.target.value } }))} /></label>
-                      <label>LinkedIn Profile<input value={editedReviewFields[item.id]?.linkedin_url ?? item.linkedin_url ?? ''} onChange={(e) => setEditedReviewFields((prev) => ({ ...prev, [item.id]: { ...prev[item.id], linkedin_url: e.target.value } }))} /></label>
-                      <p><strong>Confidence:</strong> {item.confidence.toUpperCase()}</p>
-                      <p><strong>Purpose:</strong> {item.purpose}</p>
-                      <p><strong>Envelope Sender:</strong> {item.email_sender}</p>
-                      <p><strong>Email Subject:</strong> {item.email_subject}</p>
-                      <p><strong>Contact Type:</strong> {item.contact_type}</p>
-                      <p><strong>Relevance Score:</strong> {item.recruiter_relevance_score}</p>
-                      <p><strong>Signal:</strong> {item.relevance_reason || '-'}</p>
-                      <p><strong>Extraction Source:</strong> {item.extraction_source}</p>
-                      <p><strong>Score basis:</strong> {item.scored_with === 'legacy' ? 'Legacy (rescore recommended)' : 'Current'}</p>
-                      <p><strong>{item.source_external_opportunity_id ? 'Post ID' : 'Source Email ID'}:</strong> {item.source_external_opportunity_id ?? item.source_email_id ?? '-'}</p>
-                      {item.gmail_open_url ? (
-                        <p><strong>Open:</strong> <a href={item.gmail_open_url} target="_blank" rel="noreferrer">{item.source_external_opportunity_id ? 'Open Original Post' : 'Open exact email in Gmail'}</a></p>
-                      ) : null}
-                      <p className="subtle"><strong>Evidence:</strong> {item.evidence_snippet}</p>
-                      <div className="rowBtns">
-                        <button
-                          type="button"
-                          onClick={() => markReviewCard(item.id, 'recruiter')}
-                          disabled={classifyingReviewId === item.id}
-                        >
-                          Mark as Recruiter
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => markReviewCard(item.id, 'employer')}
-                          disabled={classifyingReviewId === item.id}
-                        >
-                          Mark as Employer
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => rescoreReviewCard(item.id, item.source_email_id)}
-                          disabled={classifyingReviewId === item.id}
-                        >
-                          Rescore
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => deleteReviewCard(item.id)}
-                          disabled={classifyingReviewId === item.id}
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </article>
-                  ))
-                : null}
-
-              {premiumScopeFilter === 'recruiter_numbers' && !premiumLoading && recruiterNumberCards.length === 0 ? (
-                <p className="subtle">No recruiter numbers found.</p>
-              ) : null}
-              {premiumScopeFilter === 'recruiter_numbers'
-                ? recruiterNumberCards.map((item) => (
-                    <article
-                      key={`recruiter-number-${item.id}`}
-                      className={`emailItem ${isEmailSearchHighlight('premium_numbers', item.id) ? 'emailSearchHighlight' : ''}`}
-                      data-email-search-section="premium_numbers"
-                      data-email-search-related-id={item.id}
-                    >
-                      <p><strong>Recruiter:</strong> {item.recruiter_name}</p>
-                      <p><strong>Phone:</strong> {item.display_phone_number}</p>
-                      <p><strong>Company:</strong> {item.company}</p>
-                      <p><strong>Designation:</strong> {item.designation}</p>
-                      <p><strong>Recruiter Email:</strong> {item.recruiter_email || '-'}</p>
-                      <p><strong>Total Opportunities:</strong> {item.total_opportunity_count}</p>
-                      <p><strong>{item.source_type === 'nvoids' ? 'Post ID' : 'Source Email ID'}:</strong> {item.source_id ?? item.first_detected_email_id ?? '-'}</p>
-                      {item.source_link_url ? <p><strong>Source Link:</strong> <a href={item.source_link_url} target="_blank" rel="noreferrer">{item.source_type === 'nvoids' ? 'Open Original Post' : 'Open exact email in Gmail'}</a></p> : null}
-                      {item.linkedin_url ? <p><a href={item.linkedin_url} target="_blank" rel="noreferrer">LinkedIn Profile</a></p> : null}
-                      <label>
-                        Contact version ({item.version_count})
-                        <select
-                          value={item.active_lead_id ?? ''}
-                          onFocus={() => loadContactVersions('recruiter', item.id)}
-                          onChange={(e) => selectContactVersion('recruiter', item.id, Number(e.target.value))}
-                          disabled={versionActionKey === `recruiter-${item.id}`}
-                        >
-                          {!contactVersions[`recruiter-${item.id}`] ? <option value={item.active_lead_id ?? ''}>Load versions</option> : null}
-                          {(contactVersions[`recruiter-${item.id}`] ?? []).map((version) => <option key={version.id} value={version.id}>{version.owner_name} · {version.company} · {version.extraction_source}</option>)}
-                        </select>
-                      </label>
-                      <label>LinkedIn URL<input value={linkedinEdits[item.id] ?? item.linkedin_url} onChange={(e) => setLinkedinEdits((prev) => ({ ...prev, [item.id]: e.target.value }))} /></label>
-                      <p><strong>Last Email:</strong> {item.last_email_received_at ? new Date(item.last_email_received_at).toLocaleString() : '-'}</p>
-                      <div className="rowBtns">
-                        <button type="button" onClick={() => saveRecruiterLinkedin(item.id, item.linkedin_url)} disabled={classifyingReviewId === item.id}>Save LinkedIn</button>
-                        <button
-                          type="button"
-                          onClick={() => swapNumberBucket(item.id, 'recruiter')}
-                          disabled={classifyingReviewId === item.id}
-                        >
-                          Swap to Employer
-                        </button>
-                      </div>
-                    </article>
-                  ))
-                : null}
-
-              {premiumScopeFilter === 'employer_numbers' && !premiumLoading && employerNumberCards.length === 0 ? (
-                <p className="subtle">No employer numbers found.</p>
-              ) : null}
-              {premiumScopeFilter === 'employer_numbers'
-                ? employerNumberCards.map((item) => (
-                    <article
-                      key={`employer-number-${item.id}`}
-                      className={`emailItem ${isEmailSearchHighlight('premium_numbers', item.id) ? 'emailSearchHighlight' : ''}`}
-                      data-email-search-section="premium_numbers"
-                      data-email-search-related-id={item.id}
-                    >
-                      <p><strong>Phone:</strong> {item.display_phone_number}</p>
-                      <p><strong>Owner:</strong> {item.owner_name}</p>
-                      <p><strong>Company:</strong> {item.company}</p>
-                      <p><strong>{item.source_type === 'nvoids' ? 'Post ID' : 'Source Email ID'}:</strong> {item.source_id ?? item.source_email_id ?? '-'}</p>
-                      {item.source_link_url ? <p><strong>Source Link:</strong> <a href={item.source_link_url} target="_blank" rel="noreferrer">{item.source_type === 'nvoids' ? 'Open Original Post' : 'Open exact email in Gmail'}</a></p> : null}
-                      <label>
-                        Contact version ({item.version_count})
-                        <select
-                          value={item.active_lead_id ?? ''}
-                          onFocus={() => loadContactVersions('employer', item.id)}
-                          onChange={(e) => selectContactVersion('employer', item.id, Number(e.target.value))}
-                          disabled={versionActionKey === `employer-${item.id}`}
-                        >
-                          {!contactVersions[`employer-${item.id}`] ? <option value={item.active_lead_id ?? ''}>Load versions</option> : null}
-                          {(contactVersions[`employer-${item.id}`] ?? []).map((version) => <option key={version.id} value={version.id}>{version.owner_name} · {version.company} · {version.extraction_source}</option>)}
-                        </select>
-                      </label>
-                      <div className="rowBtns">
-                        <button
-                          type="button"
-                          onClick={() => swapNumberBucket(item.id, 'employer')}
-                          disabled={classifyingReviewId === item.id}
-                        >
-                          Swap to Recruiter
-                        </button>
-                      </div>
-                    </article>
-                  ))
-                : null}
-
-              {premiumScopeFilter === 'recruiter_opportunities' && !premiumLoading && opportunityCards.length === 0 ? (
-                <p className="subtle">No recruiter opportunities found.</p>
-              ) : null}
-              {premiumScopeFilter === 'recruiter_opportunities'
-                ? opportunityCards.map((item) => (
-                    <article
-                      key={`opportunity-${item.id}`}
-                      className={`emailItem ${isEmailSearchHighlight('premium_numbers', item.id) ? 'emailSearchHighlight' : ''}`}
-                      data-email-search-section="premium_numbers"
-                      data-email-search-related-id={item.id}
-                    >
-                      <p><strong>Subject:</strong> {item.email_subject}</p>
-                      <p><strong>Source:</strong> {(item.source_type || 'gmail').toUpperCase()}</p>
-                      <p><strong>Recruiter Name:</strong> {item.recruiter_name || '-'}</p>
-                      <p><strong>Recruiter Email:</strong> {item.recruiter_email || '-'}</p>
-                      <p><strong>Recruiter Phone:</strong> {item.recruiter_phone_display || '-'}</p>
-                      {item.linkedin_url ? <p><a href={item.linkedin_url} target="_blank" rel="noreferrer">LinkedIn Profile</a></p> : null}
-                      <p><strong>Email Sender:</strong> {item.email_sender || '-'}</p>
-                      <p><strong>Email ID:</strong> {item.email_id ?? '-'}</p>
-                      <label>Job Title<input value={editedOpportunityFields[item.id]?.job_title ?? item.job_title} onChange={(e) => setEditedOpportunityFields((prev) => ({ ...prev, [item.id]: { ...prev[item.id], job_title: e.target.value } }))} /></label>
-                      <label>Location<input value={editedOpportunityFields[item.id]?.location ?? item.location} onChange={(e) => setEditedOpportunityFields((prev) => ({ ...prev, [item.id]: { ...prev[item.id], location: e.target.value } }))} /></label>
-                      <label>Work Mode<input value={editedOpportunityFields[item.id]?.work_mode ?? item.work_mode} onChange={(e) => setEditedOpportunityFields((prev) => ({ ...prev, [item.id]: { ...prev[item.id], work_mode: e.target.value } }))} /></label>
-                      <label>Visa<input value={editedOpportunityFields[item.id]?.visa_restrictions ?? item.visa_restrictions} onChange={(e) => setEditedOpportunityFields((prev) => ({ ...prev, [item.id]: { ...prev[item.id], visa_restrictions: e.target.value } }))} /></label>
-                      <label>Resume Variant Submitted<input value={editedOpportunityFields[item.id]?.resume_file_name ?? item.resume_file_name} onChange={(e) => setEditedOpportunityFields((prev) => ({ ...prev, [item.id]: { ...prev[item.id], resume_file_name: e.target.value } }))} /></label>
-                      <label>Implementation Partner<input value={editedOpportunityFields[item.id]?.implementation_partner ?? item.implementation_partner} onChange={(e) => setEditedOpportunityFields((prev) => ({ ...prev, [item.id]: { ...prev[item.id], implementation_partner: e.target.value } }))} /></label>
-                      <label>Prime Vendor<input value={editedOpportunityFields[item.id]?.prime_vendor ?? item.prime_vendor} onChange={(e) => setEditedOpportunityFields((prev) => ({ ...prev, [item.id]: { ...prev[item.id], prime_vendor: e.target.value } }))} /></label>
-                      <label>End Client<input value={editedOpportunityFields[item.id]?.end_client ?? item.end_client} onChange={(e) => setEditedOpportunityFields((prev) => ({ ...prev, [item.id]: { ...prev[item.id], end_client: e.target.value } }))} /></label>
-                      <label>Domain<input value={editedOpportunityFields[item.id]?.domain ?? item.domain} onChange={(e) => setEditedOpportunityFields((prev) => ({ ...prev, [item.id]: { ...prev[item.id], domain: e.target.value } }))} /></label>
-                      <label>Skills<input value={editedOpportunityFields[item.id]?.extracted_skills ?? item.extracted_skills} onChange={(e) => setEditedOpportunityFields((prev) => ({ ...prev, [item.id]: { ...prev[item.id], extracted_skills: e.target.value } }))} /></label>
-                      {item.source_url || item.gmail_open_url ? (
-                        <p>
-                          <strong>Open:</strong>{' '}
-                          <a href={item.source_url || item.gmail_open_url} target="_blank" rel="noreferrer">
-                            {item.source_type === 'nvoids' ? 'Open Original Post' : 'Open exact email in Gmail'}
-                          </a>
-                        </p>
-                      ) : null}
-                      <label>
-                        Status
-                        <select
-                          value={item.status}
-                          onChange={(e) => updateOpportunity(item.id, { status: e.target.value as OpportunityStatus })}
-                          disabled={updatingOpportunityId === item.id}
-                        >
-                          <option value="New">New</option>
-                          <option value="Called">Called</option>
-                          <option value="Applied">Applied</option>
-                          <option value="Follow Up">Follow Up</option>
-                          <option value="Closed">Closed</option>
-                          <option value="Not Interested">Not Interested</option>
-                        </select>
-                      </label>
-                      <label>
-                        Notes
-                        <textarea
-                          value={item.notes || ''}
-                          rows={3}
-                          onChange={(e) =>
-                            setOpportunityCards((prev) =>
-                              prev.map((entry) => (entry.id === item.id ? { ...entry, notes: e.target.value } : entry)),
-                            )
-                          }
-                          onBlur={(e) => updateOpportunity(item.id, { notes: e.target.value })}
-                          disabled={updatingOpportunityId === item.id}
-                        />
-                      </label>
-                      <div className="rowBtns">
-                        <button
-                          type="button"
-                          onClick={() => updateOpportunity(item.id, editedOpportunityFields[item.id] ?? {})}
-                          disabled={updatingOpportunityId === item.id || !editedOpportunityFields[item.id]}
-                        >
-                          {updatingOpportunityId === item.id ? 'Saving...' : 'Save'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => generateColdCallScript(item.id)}
-                          disabled={generatingColdCallId === item.id || deletingOpportunityId === item.id}
-                        >
-                          {generatingColdCallId === item.id ? 'Generating...' : 'Generate Cold Call Script'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => deleteOpportunity(item.id)}
-                          disabled={deletingOpportunityId === item.id}
-                        >
-                          {deletingOpportunityId === item.id ? 'Deleting...' : 'Delete'}
-                        </button>
-                        {item.cold_call_script ? (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              navigator.clipboard.writeText(item.cold_call_script || '').catch(() => {
-                                setPremiumError('Failed to copy cold call script')
-                              })
-                            }}
-                          >
-                            Copy Script
-                          </button>
-                        ) : null}
-                      </div>
-                      {item.cold_call_script ? (
-                        <label>
-                          Cold Call Script
-                          <textarea
-                            value={item.cold_call_script}
-                            rows={4}
-                            readOnly
-                          />
-                        </label>
-                      ) : null}
-                    </article>
-                  ))
-                : null}
-              {premiumPageMeta[premiumScopeFilter].hasNext ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    const nextCursor = premiumPageMeta[premiumScopeFilter].nextCursor
-                    if (nextCursor == null) return
-                    loadPremiumNumbers({ append: true, cursor: nextCursor }).catch((e) =>
-                      setPremiumError((e as Error).message),
-                    )
-                  }}
-                  disabled={premiumLoading || premiumPageMeta[premiumScopeFilter].nextCursor == null}
-                >
-                  {premiumLoading ? 'Loading...' : 'Load More'}
-                </button>
-              ) : null}
-            </section>
+            <PremiumNumbersPage
+              apiBase={apiBase}
+              mailDate={settings.mail_date ?? null}
+              emailSearchTarget={emailSearchTarget}
+              refreshToken={premiumRefreshToken}
+              onPendingCountChange={setPremiumPendingCount}
+            />
           ) : null}
 
           {activePage === 'inbox' ? (
@@ -7166,10 +6364,30 @@ function App() {
                   <p className="subtle">Replies are authoritative. Open counts are only a best-effort image signal.</p>
                 </div>
                 <div className="inboxHeaderActions">
+                  <div className="inboxTabGroup" role="tablist" aria-label="Inbox view">
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={inboxTab === 'all'}
+                      className={`inboxTabBtn ${inboxTab === 'all' ? 'active' : ''}`}
+                      onClick={() => setInboxTab('all')}
+                    >
+                      All
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={inboxTab === 'replies'}
+                      className={`inboxTabBtn ${inboxTab === 'replies' ? 'active' : ''}`}
+                      onClick={() => setInboxTab('replies')}
+                    >
+                      Received Replies
+                    </button>
+                  </div>
                   <button
                     type="button"
                     className={`iconBtn inboxRefreshBtn ${inboxLoading ? 'loading' : ''}`}
-                    onClick={() => void loadInboxConversations()}
+                    onClick={() => void refreshInboxReplies()}
                     disabled={inboxLoading}
                     aria-label="Refresh conversations"
                     aria-busy={inboxLoading}
@@ -7192,7 +6410,8 @@ function App() {
                   ) : null}
                   {inboxConversations.map((conversation) => {
                     const isUnread = conversation.unread_reply_count > 0
-                    const absoluteTime = new Date(conversation.last_message_at).toLocaleString()
+                    const displayTime = conversation.last_inbound_reply_at ?? conversation.last_message_at
+                    const absoluteTime = new Date(displayTime).toLocaleString()
                     return (
                       <button
                         key={conversation.id}
@@ -7211,8 +6430,8 @@ function App() {
                           </span>
                           <span className="conversationListMeta">
                             {isUnread ? <span className="unreadDot" aria-hidden="true" /> : null}
-                            <time dateTime={conversation.last_message_at} title={absoluteTime}>
-                              {formatRelativeInboxTime(conversation.last_message_at)}
+                            <time dateTime={displayTime} title={absoluteTime}>
+                              {formatRelativeInboxTime(displayTime)}
                             </time>
                           </span>
                         </span>

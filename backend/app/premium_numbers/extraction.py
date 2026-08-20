@@ -1,20 +1,17 @@
 from __future__ import annotations
 
-import json
 import logging
 import re
 from dataclasses import dataclass
 from functools import lru_cache
 
-from openai import OpenAI
-
+from app.ai.deepseek_client import deepseek_json_completion
 from app.config import settings
 from app.premium_numbers.phone_normalization import format_phone
 from app.premium_numbers.prompting import build_premium_numbers_prompts
 from app.semantic.embeddings_service import _sbert_embedding
 
 PHONE_RE = re.compile(r"(?:\+?\d[\d\-\s().]{7,}\d)")
-JSON_BLOCK_RE = re.compile(r"\{[\s\S]*\}")
 EMAIL_RE = re.compile(r"\b[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}\b", re.IGNORECASE)
 URL_NOISE_TOKEN_RE = re.compile(r"%(?:[0-9A-Fa-f]{2})")
 DESIGNATION_RE = re.compile(
@@ -120,46 +117,17 @@ def _normalize_confidence(raw: str) -> str:
     return "low"
 
 
-def _safe_json_parse(text: str) -> dict[str, object] | None:
-    content = (text or "").strip()
-    if not content:
-        return None
-    try:
-        parsed = json.loads(content)
-        return parsed if isinstance(parsed, dict) else None
-    except json.JSONDecodeError:
-        match = JSON_BLOCK_RE.search(content)
-        if not match:
-            return None
-        try:
-            parsed = json.loads(match.group(0))
-            return parsed if isinstance(parsed, dict) else None
-        except json.JSONDecodeError:
-            return None
-
-
 def _llm_extract(email_content: str, employer_domains: set[str]) -> list[ExtractedContactGroup]:
-    if not settings.deepseek_api_key:
-        return []
     system_prompt, user_prompt = build_premium_numbers_prompts(email_content, employer_domains)
-    client = OpenAI(
-        api_key=settings.deepseek_api_key,
-        base_url=settings.deepseek_base_url,
-        timeout=settings.deepseek_timeout_seconds,
+    # thinking="disabled": deepseek-v4-flash is a reasoning model that otherwise spends the
+    # max_tokens budget on invisible chain-of-thought and returns empty content (finish_reason
+    # "length") before writing the actual JSON answer - see docs/temp files/temp127.md.
+    payload = deepseek_json_completion(
+        system_prompt,
+        user_prompt,
+        max_tokens=900,
+        thinking="disabled",
     )
-    response = client.chat.completions.create(
-        model=settings.deepseek_model_fast or "deepseek-chat",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        temperature=0.0,
-        max_tokens=700,
-    )
-    content = response.choices[0].message.content if response.choices else ""
-    payload = _safe_json_parse(content or "")
-    if not payload:
-        return []
     items = payload.get("contacts")
     if not isinstance(items, list):
         return []
@@ -534,53 +502,59 @@ def extract_phone_leads(
     normalized_domains = {domain.strip().lower() for domain in (employer_domains or set()) if domain.strip()}
     ai_leads: list[ExtractedContactGroup] = []
     ai_unavailable = not bool(settings.deepseek_api_key)
-    try:
-        ai_leads = _llm_extract(email_content, normalized_domains)
-    except Exception:
-        ai_unavailable = True
-        logger.exception("Premium-number AI extraction failed; using regex fallback")
-        ai_leads = []
-    enriched_ai_leads: list[ExtractedContactGroup] = []
-    for lead in ai_leads:
-        contact_type, relevance_score, is_relevant, relevance_reason = _classify_recruiter_relevance(
-            candidate_email=lead.contact_email,
-            sender=sender,
-            purpose=lead.purpose,
-            designation=lead.designation,
-            source_fragment=lead.source_fragment,
-            employer_domains=normalized_domains,
-        )
-        role = lead.role
-        if _is_employer_domain(lead.contact_email, normalized_domains):
-            role = "employer"
-        elif is_relevant:
-            role = "recruiter"
-        enriched_ai_leads.append(
-            ExtractedContactGroup(
-                role=role,
-                phone_number_display=lead.phone_number_display,
-                phone_number_normalized=lead.phone_number_normalized,
-                owner_name=lead.owner_name,
-                contact_email=lead.contact_email,
-                company=lead.company,
-                designation=lead.designation,
+    if not ai_unavailable:
+        try:
+            ai_leads = _llm_extract(email_content, normalized_domains)
+        except Exception:
+            ai_unavailable = True
+            logger.exception("Premium-number AI extraction failed; using regex fallback")
+            ai_leads = []
+
+    if ai_leads:
+        # AI ran and found at least one contact - trust it exclusively. Regex is a fallback
+        # for when AI is disabled/unavailable/fails/finds nothing, not a second opinion to
+        # merge in alongside a successful AI result.
+        enriched_ai_leads: list[ExtractedContactGroup] = []
+        for lead in ai_leads:
+            contact_type, relevance_score, is_relevant, relevance_reason = _classify_recruiter_relevance(
+                candidate_email=lead.contact_email,
+                sender=sender,
                 purpose=lead.purpose,
-                confidence=lead.confidence,
-                contact_type=contact_type,
-                recruiter_relevance_score=relevance_score,
-                is_recruiter_relevant=is_relevant,
-                relevance_reason=relevance_reason,
+                designation=lead.designation,
                 source_fragment=lead.source_fragment,
-                extraction_source="ai",
+                employer_domains=normalized_domains,
             )
-        )
+            role = lead.role
+            if _is_employer_domain(lead.contact_email, normalized_domains):
+                role = "employer"
+            elif is_relevant:
+                role = "recruiter"
+            enriched_ai_leads.append(
+                ExtractedContactGroup(
+                    role=role,
+                    phone_number_display=lead.phone_number_display,
+                    phone_number_normalized=lead.phone_number_normalized,
+                    owner_name=lead.owner_name,
+                    contact_email=lead.contact_email,
+                    company=lead.company,
+                    designation=lead.designation,
+                    purpose=lead.purpose,
+                    confidence=lead.confidence,
+                    contact_type=contact_type,
+                    recruiter_relevance_score=relevance_score,
+                    is_recruiter_relevant=is_relevant,
+                    relevance_reason=relevance_reason,
+                    source_fragment=lead.source_fragment,
+                    extraction_source="ai",
+                )
+            )
+        return dedupe_phone_leads(enriched_ai_leads)
+
+    # AI disabled, unavailable, failed, or found nothing - regex is the sole source.
     fallback_leads = _fallback_extract(
         sender,
         body,
         normalized_domains,
         extraction_source="regex_fallback_ai_unavailable" if ai_unavailable else "regex_fallback",
     )
-    ai_phones = {lead.phone_number_normalized for lead in enriched_ai_leads}
-    fallback_leads = [lead for lead in fallback_leads if lead.phone_number_normalized not in ai_phones]
-    combined = enriched_ai_leads + fallback_leads
-    return dedupe_phone_leads(combined)
+    return dedupe_phone_leads(fallback_leads)

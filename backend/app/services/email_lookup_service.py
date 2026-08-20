@@ -17,7 +17,10 @@ from app.models import (
     RecruiterEmail,
     RecruiterOpportunity,
 )
-from app.premium_numbers.phone_normalization import canonicalize_phone
+from app.premium_numbers.domain_guard import (
+    is_hidden_invalid_employer_number,
+    is_hidden_nvoids_placeholder_recruiter,
+)
 
 
 MAX_EMAIL_SEARCH_HITS = 200
@@ -69,20 +72,6 @@ class EmailSearchHit:
 def _query_limit() -> int:
     # Keep one extra result so the HTTP layer can report that the response was truncated.
     return MAX_EMAIL_SEARCH_HITS + 1
-
-
-def _is_hidden_nvoids_placeholder_recruiter(row: PremiumNumberContact) -> bool:
-    normalized = str(row.normalized_phone_number or "").strip().lower()
-    display = str(row.display_phone_number or "").strip().lower()
-    return normalized.startswith("nvoids-") and display == "unknown" and row.first_detected_email_id is None
-
-
-def _is_hidden_invalid_employer_number(row: PremiumNumberContact) -> bool:
-    display = str(row.display_phone_number or "").strip()
-    if not display or display.lower() == "unknown":
-        return False
-    normalized = str(row.normalized_phone_number or "").strip()
-    return not canonicalize_phone(normalized) and not canonicalize_phone(display)
 
 
 def search_email(
@@ -238,6 +227,7 @@ def search_email(
         .filter(
             PremiumNumberContact.owner_id == owner_id,
             PremiumNumberContact.is_recruiter.is_(True),
+            PremiumNumberContact.deleted_at.is_(None),
             or_(*recruiter_number_conditions),
         )
         .order_by(PremiumNumberContact.updated_at.desc(), PremiumNumberContact.id.desc())
@@ -245,7 +235,7 @@ def search_email(
         .all()
     )
     for recruiter_number in recruiter_number_rows:
-        if _is_hidden_nvoids_placeholder_recruiter(recruiter_number):
+        if is_hidden_nvoids_placeholder_recruiter(recruiter_number):
             continue
         hits.append(
             EmailSearchHit(
@@ -275,6 +265,7 @@ def search_email(
         .filter(
             PremiumNumberContact.owner_id == owner_id,
             PremiumNumberContact.is_employer.is_(True),
+            PremiumNumberContact.deleted_at.is_(None),
             or_(*employer_number_conditions),
         )
         .order_by(PremiumNumberContact.updated_at.desc(), PremiumNumberContact.id.desc())
@@ -282,7 +273,7 @@ def search_email(
         .all()
     )
     for employer_number in employer_number_rows:
-        if _is_hidden_invalid_employer_number(employer_number):
+        if is_hidden_invalid_employer_number(employer_number):
             continue
         hits.append(
             EmailSearchHit(

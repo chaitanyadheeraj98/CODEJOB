@@ -60,7 +60,15 @@ class EmailTrackingInboxTests(unittest.TestCase):
         db.flush()
         return row
 
-    def _add_sent_email(self, db: Session, *, token: str = "tracking-token") -> RecruiterEmail:
+    def _add_sent_email(
+        self,
+        db: Session,
+        *,
+        token: str = "tracking-token",
+        external_message_id: str = "source-message",
+        external_thread_id: str = "thread-123",
+        gmail_sent_id: str = "sent-message",
+    ) -> RecruiterEmail:
         row = RecruiterEmail(
             owner_id=main.settings.owner_id,
             sender="Recruiter <recruiter@example.com>",
@@ -74,12 +82,12 @@ class EmailTrackingInboxTests(unittest.TestCase):
             approval_status="approved",
             sent_status="sent",
             source="gmail",
-            external_message_id="source-message",
-            external_thread_id="thread-123",
+            external_message_id=external_message_id,
+            external_thread_id=external_thread_id,
             recipient_email="recruiter@example.com",
             cc_email="manager@example.com",
             sent_at=datetime.now(UTC),
-            gmail_sent_id="sent-message",
+            gmail_sent_id=gmail_sent_id,
             tracking_token=token,
         )
         db.add(row)
@@ -261,6 +269,135 @@ class EmailTrackingInboxTests(unittest.TestCase):
             self.assertEqual(conversation.unread_reply_count, 2)
             self.assertEqual(conversation.external_thread_id, "fresh-thread-456")
             self.assertEqual(messages[1].body, "Wednesday also works.")
+
+    def test_capture_inbound_reply_ignores_self_sent_thread_messages(self) -> None:
+        with Session(self.engine) as db:
+            self._add_settings(db, reply_inbox=True)
+            sent_email = self._add_sent_email(db, token="tracking-token-3", gmail_sent_id="legacy-mismatched-id")
+            ensure_sent_conversation(
+                db,
+                owner_id=main.settings.owner_id,
+                root_email=sent_email,
+                thread_id="thread-123",
+                sent_rfc_message_id="<sent@example.com>",
+            )
+            db.commit()
+
+        # Deliberately a different id than gmail_sent_id above, simulating a record whose
+        # real Gmail id was never captured at send time - the id-based dedup alone can't
+        # catch this; the sender check must.
+        self_sent_item = {
+            "external_message_id": "actual-gmail-sent-id",
+            "external_thread_id": "thread-123",
+            "external_rfc_message_id": "<sent@example.com>",
+            "in_reply_to_header": "",
+            "references_header": "",
+            "sender": "Me <me@example.com>",
+            "recipient_email": "recruiter@example.com",
+            "subject": "Java role",
+            "body": "Hello recruiter",
+            "snippet": "Hello recruiter",
+            "gmail_received_at": datetime.now(UTC),
+            "label_ids": ["SENT"],
+            "to_header": "recruiter@example.com",
+            "cc_header": "",
+            "list_id": "",
+            "list_post": "",
+            "list_unsubscribe": "",
+            "delivered_to": "",
+            "mailing_list": "",
+        }
+        originals = (main.is_gmail_configured, main.list_unread_candidates_by_query, main.list_thread_messages)
+        try:
+            main.is_gmail_configured = lambda: True
+            main.list_unread_candidates_by_query = lambda query, **_kwargs: []
+            main.list_thread_messages = lambda thread_id: [self_sent_item] if thread_id == "thread-123" else []
+            main.orchestration_service = None
+            response = self.client.post("/inbox/conversations/refresh")
+        finally:
+            main.is_gmail_configured, main.list_unread_candidates_by_query, main.list_thread_messages = originals
+            main.orchestration_service = None
+
+        self.assertEqual(response.status_code, 200, response.text)
+        with Session(self.engine) as db:
+            messages = db.query(EmailReplyMessage).order_by(EmailReplyMessage.id.asc()).all()
+            self.assertEqual(len(messages), 1)
+            self.assertEqual(messages[0].direction, "outbound")
+            conversation = (
+                db.query(EmailConversation).filter(EmailConversation.external_thread_id == "thread-123").first()
+            )
+            assert conversation is not None
+            self.assertEqual(conversation.status, "sent")
+            self.assertEqual(conversation.unread_reply_count, 0)
+
+    def test_only_replies_filter_sorts_unread_first_then_by_true_reply_time(self) -> None:
+        with Session(self.engine) as db:
+            self._add_settings(db)
+            no_reply_email = self._add_sent_email(
+                db, token="tok-no-reply", external_message_id="msg-no-reply", external_thread_id="thread-no-reply"
+            )
+            ensure_sent_conversation(
+                db, owner_id=main.settings.owner_id, root_email=no_reply_email, thread_id="thread-no-reply"
+            )
+
+            old_reply_email = self._add_sent_email(
+                db, token="tok-old", external_message_id="msg-old", external_thread_id="thread-old"
+            )
+            old_conversation = ensure_sent_conversation(
+                db, owner_id=main.settings.owner_id, root_email=old_reply_email, thread_id="thread-old"
+            )
+            db.flush()
+            db.add(
+                EmailReplyMessage(
+                    owner_id=main.settings.owner_id,
+                    conversation_id=old_conversation.id,
+                    direction="inbound",
+                    external_message_id="reply-old",
+                    sender="recruiter@example.com",
+                    body="old reply",
+                    snippet="old reply",
+                    received_at=datetime(2026, 1, 1, tzinfo=UTC),
+                )
+            )
+            old_conversation.status = "replied"
+            old_conversation.unread_reply_count = 0
+            # Replying back bumps last_message_at without a new inbound message — this must
+            # not affect the "Received Replies" ordering, which is what this test guards.
+            old_conversation.last_message_at = datetime(2026, 6, 1, tzinfo=UTC)
+
+            unread_email = self._add_sent_email(
+                db, token="tok-unread", external_message_id="msg-unread", external_thread_id="thread-unread"
+            )
+            unread_conversation = ensure_sent_conversation(
+                db, owner_id=main.settings.owner_id, root_email=unread_email, thread_id="thread-unread"
+            )
+            db.flush()
+            db.add(
+                EmailReplyMessage(
+                    owner_id=main.settings.owner_id,
+                    conversation_id=unread_conversation.id,
+                    direction="inbound",
+                    external_message_id="reply-unread",
+                    sender="recruiter@example.com",
+                    body="unread reply",
+                    snippet="unread reply",
+                    received_at=datetime(2026, 3, 1, tzinfo=UTC),
+                )
+            )
+            unread_conversation.status = "replied"
+            unread_conversation.unread_reply_count = 1
+            db.commit()
+
+        listing = self.client.get("/inbox/conversations?only_replies=true")
+        self.assertEqual(listing.status_code, 200, listing.text)
+        rows = listing.json()
+        thread_order = [row["subject"] for row in rows]
+        self.assertEqual(len(rows), 2, thread_order)  # thread-no-reply excluded
+        self.assertEqual(rows[0]["unread_reply_count"], 1)  # unread reply sorts first
+        self.assertTrue(rows[0]["last_inbound_reply_at"].startswith("2026-03-01"))
+        self.assertEqual(rows[1]["unread_reply_count"], 0)
+        # last_inbound_reply_at reflects the reply itself, not the later outbound bump.
+        self.assertTrue(rows[1]["last_inbound_reply_at"].startswith("2026-01-01"))
 
 
 if __name__ == "__main__":

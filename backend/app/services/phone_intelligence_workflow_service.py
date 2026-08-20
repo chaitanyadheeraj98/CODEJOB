@@ -14,6 +14,7 @@ from app.models import (
     RecruiterEmail,
     RecruiterOpportunity,
 )
+from app.parsing.jd_requirements import extract_work_authorizations
 from app.phase0 import email_domain
 from app.premium_numbers.domain_guard import employer_domains_for_owner
 from app.premium_numbers.extraction import ExtractedContactGroup, extract_phone_leads
@@ -54,6 +55,49 @@ class PhoneIntelligenceWorkflowResult:
 
 
 @dataclass(frozen=True)
+class JobMetadataAiExtraction:
+    """AI-first job metadata for a posting or email, produced by parse_email_with_details().
+
+    Fields left blank mean the AI extractor did not run, failed, or returned no value for that
+    field; callers should fall back to regex extraction (or a prior stored value) in that case.
+    """
+
+    job_title: str = ""
+    location: str = ""
+    work_mode: str = ""
+    visa_restrictions: str = ""
+    domain: str = ""
+    end_client: str = ""
+    implementation_partner: str = ""
+
+
+def job_metadata_ai_extraction_from_parsed(parsed: dict, parser_details: dict) -> JobMetadataAiExtraction:
+    job_title = str(parsed.get("role") or "").strip()
+    location = str(parsed.get("location") or "").strip()
+    domain = str(parsed.get("domain") or "").strip()
+    end_client = str(parsed.get("end_client") or "").strip()
+    implementation_partner = str(parsed.get("implementation_partner") or "").strip()
+
+    work_mode = ""
+    visa_restrictions = ""
+    if parser_details.get("parser_mode") == "ai_primary":
+        ai_result = parser_details.get("ai_extractor_result") or {}
+        work_mode = str(ai_result.get("work_mode") or "").strip()
+        visa_hints = ai_result.get("visa_hints") or []
+        visa_restrictions = ", ".join(hint for hint in visa_hints if hint)
+
+    return JobMetadataAiExtraction(
+        job_title=job_title,
+        location=location,
+        work_mode=work_mode,
+        visa_restrictions=visa_restrictions,
+        domain=domain,
+        end_client=end_client,
+        implementation_partner=implementation_partner,
+    )
+
+
+@dataclass(frozen=True)
 class PhoneWorkflowSourceContext:
     owner_id: str
     source: str
@@ -70,6 +114,10 @@ class PhoneWorkflowSourceContext:
     domain: str = ""
     skills_text: str = ""
     resume_file_name: str = ""
+    location: str = ""
+    job_title: str = ""
+    work_mode: str = ""
+    visa_restrictions: str = ""
 
     def __post_init__(self) -> None:
         if (self.recruiter_email_row_id is None) == (self.external_opportunity_row_id is None):
@@ -80,7 +128,9 @@ def _context_from_recruiter_email(
     email: RecruiterEmail,
     *,
     source: str = "gmail",
+    ai_extraction: JobMetadataAiExtraction | None = None,
 ) -> PhoneWorkflowSourceContext:
+    ai = ai_extraction or JobMetadataAiExtraction()
     return PhoneWorkflowSourceContext(
         owner_id=email.owner_id,
         source=source,
@@ -92,18 +142,27 @@ def _context_from_recruiter_email(
         received_at=email.gmail_received_at,
         recruiter_email_row_id=email.id,
         external_opportunity_row_id=None,
-        end_client=email.end_client or "",
-        implementation_partner=email.implementation_partner or "",
-        domain=email.domain or "",
+        end_client=ai.end_client or email.end_client or "",
+        implementation_partner=ai.implementation_partner or email.implementation_partner or "",
+        domain=ai.domain or email.domain or "",
         skills_text=email.skills_text or "",
         resume_file_name=email.resume_file_name or "",
+        location=ai.location or email.location or "",
+        # email.role is itself AI-first (parse_email_with_details already ran during ingest) -
+        # read it by default so a fresh capture doesn't fall back to _extract_job_metadata's
+        # crude regex (which used to leave job_title as the raw, unparsed email subject).
+        job_title=ai.job_title or email.role or "",
+        work_mode=ai.work_mode,
+        visa_restrictions=ai.visa_restrictions,
     )
 
 
 def _context_from_external_opportunity(
     item: ExternalOpportunity,
     jd_body: str,
+    ai_extraction: JobMetadataAiExtraction | None = None,
 ) -> PhoneWorkflowSourceContext:
+    ai = ai_extraction or JobMetadataAiExtraction()
     return PhoneWorkflowSourceContext(
         owner_id=item.owner_id,
         source="nvoids",
@@ -115,8 +174,14 @@ def _context_from_external_opportunity(
         received_at=item.posted_at,
         recruiter_email_row_id=None,
         external_opportunity_row_id=item.id,
-        end_client=item.company or "",
+        end_client=ai.end_client or item.company or "",
+        implementation_partner=ai.implementation_partner,
+        domain=ai.domain,
         skills_text=item.skills_text or "",
+        location=ai.location or item.location or "",
+        job_title=ai.job_title,
+        work_mode=ai.work_mode,
+        visa_restrictions=ai.visa_restrictions,
     )
 
 
@@ -171,6 +236,13 @@ def apply_contact_version(
         contact.owner_name = lead.owner_name or "Unknown"
         if lead.company and lead.company.strip().lower() != "unknown":
             contact.company = lead.company
+    if lead.external_opportunity_id:
+        contact.source_type = "nvoids"
+        contact.source_id = lead.external_opportunity_id
+    elif lead.recruiter_email_id:
+        contact.source_type = "gmail"
+        contact.source_id = lead.recruiter_email_id
+    contact.source_link_url = lead.source_url
 
 
 class PhoneIntelligenceWorkflowService:
@@ -226,13 +298,74 @@ class PhoneIntelligenceWorkflowService:
         db: Session,
         item: ExternalOpportunity,
         jd_body: str,
+        ai_extraction: JobMetadataAiExtraction | None = None,
     ) -> PhoneIntelligenceWorkflowResult:
         return self._run(
             db,
-            _context_from_external_opportunity(item, jd_body),
+            _context_from_external_opportunity(item, jd_body, ai_extraction),
             include_premium_lead_upsert=True,
             include_intelligence=True,
         )
+
+    def refresh_nvoids_opportunity_metadata(
+        self,
+        db: Session,
+        opportunity: RecruiterOpportunity,
+        item: ExternalOpportunity,
+        jd_body: str,
+        ai_extraction: JobMetadataAiExtraction | None = None,
+    ) -> RecruiterOpportunity:
+        """Re-derive job metadata for an *already-created* Nvoids opportunity - see
+        `_refresh_opportunity_metadata` for the shared contract with the Gmail equivalent.
+        """
+        return self._refresh_opportunity_metadata(
+            db, opportunity, _context_from_external_opportunity(item, jd_body, ai_extraction)
+        )
+
+    def refresh_gmail_opportunity_metadata(
+        self,
+        db: Session,
+        opportunity: RecruiterOpportunity,
+        email: RecruiterEmail,
+        ai_extraction: JobMetadataAiExtraction | None = None,
+    ) -> RecruiterOpportunity:
+        """Re-derive job metadata for an *already-created* Gmail opportunity - see
+        `_refresh_opportunity_metadata` for the shared contract with the Nvoids equivalent.
+        """
+        return self._refresh_opportunity_metadata(
+            db, opportunity, _context_from_recruiter_email(email, ai_extraction=ai_extraction)
+        )
+
+    def _refresh_opportunity_metadata(
+        self,
+        db: Session,
+        opportunity: RecruiterOpportunity,
+        context: PhoneWorkflowSourceContext,
+    ) -> RecruiterOpportunity:
+        """Re-derive job_title/location/work_mode/visa/domain/end_client/implementation_partner
+        for an *already-created* opportunity (AI-first, regex fallback - same contract as a fresh
+        capture) and apply them onto the existing row. `capture_premium_numbers*` only writes
+        these fields once, at first creation (see `_run`'s idempotency check), so an already-
+        bridged card never gets new AI-derived values without going through this path. A freshly
+        computed blank never overwrites an existing non-blank value, so a manual edit or an
+        earlier good extraction is never clobbered by a weaker later one.
+        """
+        job_title, location, work_mode, visa_restrictions = self._extract_job_metadata(
+            context.subject,
+            context.body,
+        )
+        opportunity.job_title = context.job_title or job_title or opportunity.job_title
+        opportunity.location = context.location or location or opportunity.location
+        opportunity.work_mode = context.work_mode or work_mode or opportunity.work_mode
+        opportunity.visa_restrictions = context.visa_restrictions or visa_restrictions or opportunity.visa_restrictions
+        opportunity.domain = context.domain or opportunity.domain
+        opportunity.end_client = context.end_client or opportunity.end_client
+        opportunity.implementation_partner = context.implementation_partner or opportunity.implementation_partner
+        if self.manage_transaction:
+            db.commit()
+        else:
+            db.flush()
+        return opportunity
 
     def _run(
         self,
@@ -501,6 +634,10 @@ class PhoneIntelligenceWorkflowService:
         contact: PremiumNumberContact | None,
     ) -> tuple[PremiumNumberContact, bool]:
         if contact:
+            contact.deleted_at = None
+            contact.source_type = context.source
+            contact.source_id = context.external_opportunity_row_id or context.recruiter_email_row_id
+            contact.source_link_url = context.open_url or None
             return contact, False
         contact = PremiumNumberContact(
             owner_id=context.owner_id,
@@ -508,6 +645,9 @@ class PhoneIntelligenceWorkflowService:
             display_phone_number=lead.phone_number_display,
             first_detected_email_id=context.recruiter_email_row_id,
             source_email_id=context.recruiter_email_row_id,
+            source_type=context.source,
+            source_id=context.external_opportunity_row_id or context.recruiter_email_row_id,
+            source_link_url=context.open_url or None,
         )
         db.add(contact)
         db.flush()
@@ -614,11 +754,7 @@ class PhoneIntelligenceWorkflowService:
             if "remote" in content_l
             else ("Hybrid" if "hybrid" in content_l else ("Onsite" if "onsite" in content_l else ""))
         )
-        visa_restrictions = (
-            "Mentioned"
-            if any(token in content_l for token in ("visa", "c2c", "w2", "1099"))
-            else ""
-        )
+        visa_restrictions = ", ".join(extract_work_authorizations(content))
         role_match = re.search(
             r"(?:role|position|title)\s*[:\-]\s*([^\n,;]+)",
             content,
@@ -657,11 +793,11 @@ class PhoneIntelligenceWorkflowService:
             email_sender=context.sender,
             gmail_open_url=context.open_url,
             received_at=context.received_at or datetime.now(UTC),
-            job_title=job_title,
+            job_title=context.job_title or job_title,
             end_client=context.end_client,
-            location=location,
-            work_mode=work_mode,
-            visa_restrictions=visa_restrictions,
+            location=context.location or location,
+            work_mode=context.work_mode or work_mode,
+            visa_restrictions=context.visa_restrictions or visa_restrictions,
             resume_file_name=context.resume_file_name,
             implementation_partner=context.implementation_partner,
             prime_vendor="",

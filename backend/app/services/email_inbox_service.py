@@ -110,10 +110,18 @@ def capture_inbound_reply(
     *,
     owner_id: str,
     item: GmailMessageCandidate,
+    owner_email: str,
 ) -> tuple[bool, bool]:
     thread_id = (item.get("external_thread_id") or "").strip()
     if not thread_id:
         return False, False
+    # Thread scans (list_thread_messages) return every message in the thread,
+    # including ones we sent ourselves. Without this check they'd get stored as
+    # a second "inbound" row under our own name instead of being recognized as
+    # already covered by the outbound row written at send time.
+    _, sender_email = parseaddr(item.get("sender") or "")
+    if sender_email.strip().lower() == owner_email.strip().lower():
+        return True, False
     conversation = (
         db.query(EmailConversation)
         .filter(
@@ -164,6 +172,14 @@ def capture_inbound_reply(
     if root_email is None:
         return False, False
 
+    message_id = item["external_message_id"]
+    # The JD-scan query re-returns this same message every run as long as it stays
+    # unread in Gmail (we never mark source messages read). Once a sent conversation
+    # exists for its thread, that's indistinguishable from a genuine reply unless we
+    # recognize it as the original message the candidate/reply was seeded from.
+    if root_email.external_message_id and message_id == root_email.external_message_id:
+        return True, False
+
     if conversation is None:
         conversation = ensure_sent_conversation(
             db,
@@ -171,7 +187,6 @@ def capture_inbound_reply(
             root_email=root_email,
             thread_id=thread_id,
         )
-    message_id = item["external_message_id"]
     existing = (
         db.query(EmailReplyMessage.id)
         .filter(
@@ -288,15 +303,48 @@ def _summary(db: Session, conversation: EmailConversation, root_email: Recruiter
     )
 
 
-def list_conversations(db: Session, owner_id: str) -> list[ConversationSummaryResponse]:
+def list_conversations(db: Session, owner_id: str, only_replies: bool = False) -> list[ConversationSummaryResponse]:
+    if not only_replies:
+        rows = (
+            db.query(EmailConversation, RecruiterEmail)
+            .join(RecruiterEmail, RecruiterEmail.id == EmailConversation.root_recruiter_email_id)
+            .filter(EmailConversation.owner_id == owner_id, RecruiterEmail.owner_id == owner_id)
+            .order_by(EmailConversation.last_message_at.desc(), EmailConversation.id.desc())
+            .all()
+        )
+        return [_summary(db, conversation, root_email) for conversation, root_email in rows]
+
+    # last_message_at also moves on outbound replies (see send_conversation_reply), so it
+    # can't be trusted as "when they replied" — compute that straight from inbound messages.
+    last_inbound = (
+        db.query(
+            EmailReplyMessage.conversation_id.label("conversation_id"),
+            func.max(EmailReplyMessage.received_at).label("last_inbound_at"),
+        )
+        .filter(EmailReplyMessage.owner_id == owner_id, EmailReplyMessage.direction == "inbound")
+        .group_by(EmailReplyMessage.conversation_id)
+        .subquery()
+    )
     rows = (
-        db.query(EmailConversation, RecruiterEmail)
+        db.query(EmailConversation, RecruiterEmail, last_inbound.c.last_inbound_at)
         .join(RecruiterEmail, RecruiterEmail.id == EmailConversation.root_recruiter_email_id)
-        .filter(EmailConversation.owner_id == owner_id, RecruiterEmail.owner_id == owner_id)
-        .order_by(EmailConversation.last_message_at.desc(), EmailConversation.id.desc())
+        .join(last_inbound, last_inbound.c.conversation_id == EmailConversation.id)
+        .filter(
+            EmailConversation.owner_id == owner_id,
+            RecruiterEmail.owner_id == owner_id,
+            EmailConversation.status == "replied",
+        )
+        .order_by(
+            (EmailConversation.unread_reply_count > 0).desc(),
+            last_inbound.c.last_inbound_at.desc(),
+            EmailConversation.id.desc(),
+        )
         .all()
     )
-    return [_summary(db, conversation, root_email) for conversation, root_email in rows]
+    return [
+        _summary(db, conversation, root_email).model_copy(update={"last_inbound_reply_at": last_inbound_at})
+        for conversation, root_email, last_inbound_at in rows
+    ]
 
 
 def conversation_detail(db: Session, owner_id: str, conversation_id: int) -> ConversationDetailResponse:

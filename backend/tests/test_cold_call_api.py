@@ -13,7 +13,7 @@ from sqlalchemy.pool import StaticPool
 from app import main
 from app.db import Base
 from app.external_feeds.models import ExternalOpportunity
-from app.models import PremiumNumberContact, RecruiterEmail, RecruiterOpportunity
+from app.models import PremiumNumberContact, RecruiterEmail, RecruiterOpportunity, UserSettings
 
 
 class ColdCallApiTests(unittest.TestCase):
@@ -213,6 +213,101 @@ class ColdCallApiTests(unittest.TestCase):
     def test_generate_cold_call_script_returns_404_for_missing_id(self) -> None:
         response = self.client.post("/recruiter-opportunities/999999/generate-cold-call-script")
         self.assertEqual(response.status_code, 404, response.text)
+
+    def test_refresh_ai_metadata_updates_nvoids_opportunity(self) -> None:
+        # Regression guard for the live card that stayed blank: capture_premium_numbers_for_nvoids
+        # only writes job-metadata fields once, at creation - reprocessing/rescoring an already
+        # -bridged opportunity never touches them. This endpoint is the only path that does.
+        opportunity_id = self._seed_nvoids_backed_opportunity()
+        fake_parsed = {
+            "role": "Senior Java Developer",
+            "location": "Fort Worth, TX",
+            "domain": "Airline",
+            "end_client": "Major Airline Co",
+            "implementation_partner": "Jasvik Solutions",
+        }
+        fake_parser_details = {
+            "parser_mode": "ai_primary",
+            "ai_extractor_result": {"work_mode": "Onsite", "visa_hints": ["H1B", "GC"]},
+        }
+        with patch(
+            "app.external_feeds.service.parse_email_with_details",
+            return_value=(fake_parsed, fake_parser_details),
+        ):
+            response = self.client.post(f"/recruiter-opportunities/{opportunity_id}/refresh-ai-metadata")
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(payload["job_title"], "Senior Java Developer")
+        self.assertEqual(payload["location"], "Fort Worth, TX")
+        self.assertEqual(payload["work_mode"], "Onsite")
+        self.assertEqual(payload["visa_restrictions"], "H1B, GC")
+        self.assertEqual(payload["domain"], "Airline")
+        self.assertEqual(payload["end_client"], "Major Airline Co")
+        self.assertEqual(payload["implementation_partner"], "Jasvik Solutions")
+
+    def test_refresh_ai_metadata_persists_across_requests(self) -> None:
+        # Regression guard: refresh_nvoids_opportunity_metadata runs with manage_transaction=False
+        # (only db.flush()), so the endpoint itself must db.commit() or the refreshed values
+        # never survive past the request that produced them.
+        opportunity_id = self._seed_nvoids_backed_opportunity()
+        fake_parsed = {"role": "Senior Java Developer", "domain": "Airline"}
+        fake_parser_details = {"parser_mode": "ai_primary", "ai_extractor_result": {}}
+        with patch(
+            "app.external_feeds.service.parse_email_with_details",
+            return_value=(fake_parsed, fake_parser_details),
+        ):
+            self.client.post(f"/recruiter-opportunities/{opportunity_id}/refresh-ai-metadata")
+
+        listing = self.client.get("/recruiter-opportunities", params={"source_type": "nvoids"})
+        self.assertEqual(listing.status_code, 200, listing.text)
+        persisted = next(item for item in listing.json()["items"] if item["id"] == opportunity_id)
+        self.assertEqual(persisted["job_title"], "Senior Java Developer")
+        self.assertEqual(persisted["domain"], "Airline")
+
+    def test_refresh_ai_metadata_returns_404_for_missing_id(self) -> None:
+        response = self.client.post("/recruiter-opportunities/999999/refresh-ai-metadata")
+        self.assertEqual(response.status_code, 404, response.text)
+
+    def test_refresh_ai_metadata_updates_gmail_opportunity(self) -> None:
+        # Gmail cards used to be assumed "already fresh from ingest" and refused this endpoint,
+        # but a card's AI extraction can be stale (old prompt, missed field) just like Nvoids -
+        # e.g. job_title falling back to the raw, un-parsed email subject. Regression guard for
+        # that: this must actually re-run AI and update the existing row, not just accept Gmail.
+        with Session(self.engine) as db:
+            db.add(UserSettings(owner_id=main.settings.owner_id, feature_ai_extractor_enabled=True))
+            db.commit()
+        opportunity_id = self._seed_gmail_backed_opportunity()
+        fake_parsed = {
+            "role": "Senior Java Developer",
+            "location": "Fort Worth, TX",
+            "domain": "Airline",
+            "end_client": "Major Airline Co",
+            "implementation_partner": "Jasvik Solutions",
+        }
+        fake_parser_details = {
+            "parser_mode": "ai_primary",
+            "ai_extractor_result": {"work_mode": "Onsite", "visa_hints": ["H1B", "GC"]},
+        }
+        with patch("app.main.parse_email_with_details", return_value=(fake_parsed, fake_parser_details)):
+            response = self.client.post(f"/recruiter-opportunities/{opportunity_id}/refresh-ai-metadata")
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(payload["job_title"], "Senior Java Developer")
+        self.assertEqual(payload["location"], "Fort Worth, TX")
+        self.assertEqual(payload["work_mode"], "Onsite")
+        self.assertEqual(payload["visa_restrictions"], "H1B, GC")
+        self.assertEqual(payload["domain"], "Airline")
+        self.assertEqual(payload["end_client"], "Major Airline Co")
+        self.assertEqual(payload["implementation_partner"], "Jasvik Solutions")
+
+    def test_refresh_ai_metadata_rejects_unsupported_source_type(self) -> None:
+        opportunity_id = self._seed_gmail_backed_opportunity()
+        with Session(self.engine) as db:
+            row = db.get(RecruiterOpportunity, opportunity_id)
+            row.source_type = "manual"
+            db.commit()
+        response = self.client.post(f"/recruiter-opportunities/{opportunity_id}/refresh-ai-metadata")
+        self.assertEqual(response.status_code, 422, response.text)
 
 
 if __name__ == "__main__":

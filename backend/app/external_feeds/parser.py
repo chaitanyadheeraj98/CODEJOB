@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from urllib.parse import parse_qs, urljoin, urlparse
 
 from app.parsing.document_extraction import clean_html_text
+from app.parsing.jd_requirements import extract_work_authorizations
 from app.skill_taxonomy import extract_skills_text, normalize_skills_text
 
 try:
@@ -536,7 +537,7 @@ def parse_external_post(
         skills_text = normalize_skills_text(extract_skills_text(body), preserve_unknown=True)
     lc = body.lower()
     work_mode = "Remote" if "remote" in lc else ("Hybrid" if "hybrid" in lc else ("Onsite" if "onsite" in lc else ""))
-    visa_hints = "Mentioned" if any(token in lc for token in ("visa", "c2c", "w2", "1099", "opt", "h1b")) else ""
+    visa_hints = ", ".join(extract_work_authorizations(body))
     duration_match = re.search(r"(?:duration|contract)\s*[:\-]\s*([^\n,;]+)", body, flags=re.IGNORECASE)
     duration = duration_match.group(1).strip() if duration_match else ""
     rate_match = re.search(r"(?:rate|max rate)\s*[:\-]?\s*([^\n;]+)", body, flags=re.IGNORECASE)

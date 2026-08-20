@@ -33,7 +33,7 @@ from app.gmail_client import GmailMessageCandidate, MailAttachment
 from app.models import AttachmentAsset, DraftEditFeedback, EmailConversation, EmailReplyMessage, GmailRequirementGroup, RecipientRoutingFeedback, RecentRun, RecentRunSkippedItem, RecruiterEmail, ResumeAsset, SyncRun, UserSettings
 from app.parsing import build_skills_json_payload
 from app.parsing.document_extraction import prepare_gmail_parse_body
-from app.phase0 import RoutingResult, jd_entity_fields_from_parsed, parse_email_with_details
+from app.phase0 import DEFAULT_SIGNATURE_EMAIL, RoutingResult, jd_entity_fields_from_parsed, parse_email_with_details
 from app.recent_runs import (
     RUN_SOURCE_AUTOMATION,
     RUN_SOURCE_GMAIL_SYNC,
@@ -335,20 +335,15 @@ class OrchestrationService:
                     candidates.append(item)
                     seen_message_ids.add(item["external_message_id"])
 
+        owner_email = (user_settings.signature_email or "").strip() or DEFAULT_SIGNATURE_EMAIL
         matched_count = 0
         created_count = 0
         for item in candidates:
-            existing_candidate_email = (
-                db.query(RecruiterEmail.id)
-                .filter(
-                    RecruiterEmail.owner_id == self.deps.owner_id,
-                    RecruiterEmail.external_message_id == item["external_message_id"],
-                )
-                .first()
-            )
-            if existing_candidate_email:
-                continue
-            matched_reply, created_reply = capture_inbound_reply(db, owner_id=self.deps.owner_id, item=item)
+            # No "already a RecruiterEmail candidate" skip here: a message that also matched
+            # the JD-candidate scan (e.g. a reply whose subject happens to match the saved
+            # search) must still be captured as a reply. capture_inbound_reply is already
+            # idempotent on external_message_id, so this can't double-insert.
+            matched_reply, created_reply = capture_inbound_reply(db, owner_id=self.deps.owner_id, item=item, owner_email=owner_email)
             if not matched_reply:
                 continue
             matched_count += 1
@@ -485,6 +480,7 @@ class OrchestrationService:
                         db,
                         owner_id=self.deps.owner_id,
                         item=item,
+                        owner_email=(user_settings.signature_email or "").strip() or DEFAULT_SIGNATURE_EMAIL,
                     )
                     if matched_reply:
                         if created_reply:
@@ -985,6 +981,23 @@ class OrchestrationService:
             self.deps.telegram_notify(self.deps.build_telegram_digest("Run Digest", response))
             self.deps.log_gmail_labeling_stats()
             return response
+
+        if user_settings.feature_reply_inbox_enabled:
+            # Candidates here come from the JD-scan query, which can also match a reply on
+            # a thread we already have a conversation for (e.g. its subject still says "Java
+            # Full Stack Developer"). Log it as a reply too rather than assuming thread
+            # membership means it isn't also a genuine new requirement from that recruiter -
+            # classification below still runs on every item regardless.
+            owner_email = (user_settings.signature_email or "").strip() or DEFAULT_SIGNATURE_EMAIL
+            for item in items:
+                try:
+                    capture_inbound_reply(db, owner_id=self.deps.owner_id, item=item, owner_email=owner_email)
+                except Exception:
+                    logger.exception(
+                        "reply_capture_failed_for_candidate_item external_message_id=%s",
+                        item.get("external_message_id"),
+                    )
+            db.commit()
 
         capture_started = False
         if self.deps.embedding_latency_log_enabled():
@@ -1523,8 +1536,18 @@ class OrchestrationService:
 
         return email
 
-    def list_inbox_conversations(self, db: Session) -> list[ConversationSummaryResponse]:
-        return list_conversations(db, self.deps.owner_id)
+    def list_inbox_conversations(self, db: Session, only_replies: bool = False) -> list[ConversationSummaryResponse]:
+        return list_conversations(db, self.deps.owner_id, only_replies=only_replies)
+
+    def refresh_inbox_replies(self, db: Session, only_replies: bool = False) -> list[ConversationSummaryResponse]:
+        """Cheap reply-only refresh for the inbox refresh icon: no candidate import/scoring/queueing."""
+        if not self.deps.is_gmail_configured():
+            raise HTTPException(status_code=400, detail="Gmail OAuth is not configured")
+        user_settings = self.deps.get_settings(db)
+        if not user_settings.enabled:
+            raise HTTPException(status_code=400, detail="Pipeline is disabled in settings")
+        self._capture_inbound_replies(db, user_settings)
+        return list_conversations(db, self.deps.owner_id, only_replies=only_replies)
 
     def get_inbox_conversation(self, conversation_id: int, db: Session) -> ConversationDetailResponse:
         return conversation_detail(db, self.deps.owner_id, conversation_id)

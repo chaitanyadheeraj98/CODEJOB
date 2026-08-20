@@ -631,6 +631,10 @@ class PremiumNumberContact(Base):
         nullable=True,
     )
     linkedin_url: Mapped[str] = mapped_column(String(500), default="")
+    source_type: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
+    source_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_link_url: Mapped[str | None] = mapped_column(String(1200), nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
 

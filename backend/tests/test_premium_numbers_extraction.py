@@ -1,6 +1,5 @@
 import unittest
 import os
-from types import SimpleNamespace
 from unittest.mock import patch
 
 os.environ["DEBUG"] = "false"
@@ -11,11 +10,12 @@ from app.premium_numbers.phone_normalization import format_phone
 
 class PremiumNumbersExtractionTests(unittest.TestCase):
     def test_fallback_extracts_and_normalizes_phone(self) -> None:
-        leads = extraction.extract_phone_leads(
-            "Uma G <uma@brightpathstaffing.com>",
-            "Java role",
-            "Please call me at +1 (214) 555-1212. Best regards, Uma G, Senior Recruiter",
-        )
+        with patch.object(extraction, "_llm_extract", return_value=[]):
+            leads = extraction.extract_phone_leads(
+                "Uma G <uma@brightpathstaffing.com>",
+                "Java role",
+                "Please call me at +1 (214) 555-1212. Best regards, Uma G, Senior Recruiter",
+            )
         self.assertTrue(leads)
         self.assertEqual(leads[0].phone_number_normalized, "12145551212")
 
@@ -132,12 +132,44 @@ class PremiumNumbersExtractionTests(unittest.TestCase):
         self.assertEqual(leads[0].contact_type, "employer_internal")
         self.assertIn("employer_domain", leads[0].relevance_reason)
 
-    def test_fallback_never_guesses_identity(self) -> None:
-        leads = extraction.extract_phone_leads(
-            "Samshritha <samshritha@horizonsoftech.net>",
-            "Senior Talend Developer",
-            "please share the suitable resume to Rabbanis@kgatetech.com - +1 832-271-3861",
+    def test_ai_success_excludes_regex_only_numbers(self) -> None:
+        # AI-first must mean AI-exclusive when it succeeds, not "AI plus regex gap-fill" -
+        # a phone number regex could also find in the same body must not be added once AI
+        # has already returned at least one real result.
+        ai_lead = extraction.ExtractedContactGroup(
+            role="recruiter",
+            phone_number_display="(555) 111-2222",
+            phone_number_normalized="15551112222",
+            owner_name="Jordan",
+            contact_email="jordan@vendor.example",
+            company="Vendor Co",
+            designation="Recruiter",
+            purpose="Direct contact",
+            confidence="high",
+            contact_type="unknown",
+            recruiter_relevance_score=0,
+            is_recruiter_relevant=False,
+            relevance_reason="",
+            source_fragment="Call me at 555-111-2222",
+            extraction_source="ai",
         )
+        with patch.object(extraction, "_llm_extract", return_value=[ai_lead]):
+            leads = extraction.extract_phone_leads(
+                "Jordan <jordan@vendor.example>",
+                "Role",
+                "Call me at 555-111-2222. Backup line 555-333-4444, ask for Alex.",
+            )
+        self.assertEqual(len(leads), 1)
+        self.assertEqual(leads[0].phone_number_normalized, "15551112222")
+        self.assertEqual(leads[0].extraction_source, "ai")
+
+    def test_fallback_never_guesses_identity(self) -> None:
+        with patch.object(extraction, "_llm_extract", return_value=[]):
+            leads = extraction.extract_phone_leads(
+                "Samshritha <samshritha@horizonsoftech.net>",
+                "Senior Talend Developer",
+                "please share the suitable resume to Rabbanis@kgatetech.com - +1 832-271-3861",
+            )
         self.assertTrue(leads)
         self.assertEqual(leads[0].phone_number_normalized, "18322713861")
         self.assertEqual(leads[0].owner_name, "Unknown")
@@ -147,33 +179,35 @@ class PremiumNumbersExtractionTests(unittest.TestCase):
         self.assertTrue(leads[0].extraction_source.startswith("regex_fallback"))
 
     def test_extract_owner_name_prefers_target_contact_over_signature_name(self) -> None:
-        leads = extraction.extract_phone_leads(
-            "Samshritha Gangula <samshritha@horizonsoftech.net>",
-            "Senior Talend Developer",
-            (
-                "please share the suitable resume to Rabbanis@kgatetech.com - +1 832-271-3861\n"
-                "Thanks & Regards\n"
-                "Samshritha Gangula\n"
-                "Bench Sales Recruiter"
-            ),
-        )
+        with patch.object(extraction, "_llm_extract", return_value=[]):
+            leads = extraction.extract_phone_leads(
+                "Samshritha Gangula <samshritha@horizonsoftech.net>",
+                "Senior Talend Developer",
+                (
+                    "please share the suitable resume to Rabbanis@kgatetech.com - +1 832-271-3861\n"
+                    "Thanks & Regards\n"
+                    "Samshritha Gangula\n"
+                    "Bench Sales Recruiter"
+                ),
+            )
         self.assertTrue(leads)
         target = [lead for lead in leads if lead.phone_number_normalized == "18322713861"]
         self.assertTrue(target)
         self.assertEqual(target[0].owner_name, "Unknown")
 
     def test_extract_owner_name_when_to_and_email_are_split_by_newline(self) -> None:
-        leads = extraction.extract_phone_leads(
-            "Samshritha Gangula <samshritha@horizonsoftech.net>",
-            "Senior Talend Developer",
-            (
-                "please share the suitable resume to \n"
-                "<mailto:Rabbanis@kgatetech.com> Rabbanis@kgatetech.com - +1 832-271-3861\n"
-                "Thanks & Regards\n"
-                "Samshritha Gangula\n"
-                "Bench Sales Recruiter"
-            ),
-        )
+        with patch.object(extraction, "_llm_extract", return_value=[]):
+            leads = extraction.extract_phone_leads(
+                "Samshritha Gangula <samshritha@horizonsoftech.net>",
+                "Senior Talend Developer",
+                (
+                    "please share the suitable resume to \n"
+                    "<mailto:Rabbanis@kgatetech.com> Rabbanis@kgatetech.com - +1 832-271-3861\n"
+                    "Thanks & Regards\n"
+                    "Samshritha Gangula\n"
+                    "Bench Sales Recruiter"
+                ),
+            )
         target = [lead for lead in leads if lead.phone_number_normalized == "18322713861"]
         self.assertTrue(target)
         self.assertEqual(target[0].owner_name, "Unknown")
@@ -194,27 +228,29 @@ class PremiumNumbersExtractionTests(unittest.TestCase):
         self.assertNotIn("employer_domain", reason)
 
     def test_ai_extract_returns_role_tagged_groups(self) -> None:
-        response = SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    message=SimpleNamespace(
-                        content='{"contacts":[{"role":"employer","phone_number":"+1 214 555 1212",'
-                        '"name":"Ada","email":"ada@acme.example","company":"Acme",'
-                        '"designation":"Manager","confidence":"High"}]}'
-                    )
-                )
+        payload = {
+            "contacts": [
+                {
+                    "role": "employer",
+                    "phone_number": "+1 214 555 1212",
+                    "name": "Ada",
+                    "email": "ada@acme.example",
+                    "company": "Acme",
+                    "designation": "Manager",
+                    "confidence": "High",
+                }
             ]
-        )
-        client = SimpleNamespace(
-            chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **_kwargs: response))
-        )
-        with patch.object(extraction.settings, "deepseek_api_key", "test-key"), patch(
-            "app.premium_numbers.extraction.OpenAI", return_value=client
-        ):
+        }
+        with patch(
+            "app.premium_numbers.extraction.deepseek_json_completion", return_value=payload
+        ) as mock_completion:
             leads = extraction._llm_extract("body", {"acme.example"})
         self.assertEqual(len(leads), 1)
         self.assertEqual(leads[0].role, "employer")
         self.assertEqual(leads[0].extraction_source, "ai")
+        # thinking must stay disabled - deepseek-v4-flash otherwise burns its max_tokens
+        # budget on reasoning and returns empty content instead of the JSON answer.
+        self.assertEqual(mock_completion.call_args.kwargs["thinking"], "disabled")
 
     def test_ai_parse_failure_falls_back_to_regex_only(self) -> None:
         with patch("app.premium_numbers.extraction._llm_extract", side_effect=ValueError("bad json")):

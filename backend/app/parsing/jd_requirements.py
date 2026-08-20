@@ -223,6 +223,23 @@ def _build_groups_for_sentence(
     return groups
 
 
+def extract_work_authorizations(text: str) -> tuple[str, ...]:
+    allowed_authorizations: list[str] = []
+    for match in _AUTHORIZATION_RE.finditer(text or ""):
+        value = " ".join(part for part in match.groups() if part).casefold()
+        if "usc" in value or "citizen" in value:
+            allowed_authorizations.append("USC")
+        if "gc" in value or "green card" in value:
+            allowed_authorizations.append("GC")
+        if "h1b" in value:
+            allowed_authorizations.append("H1B")
+        if "ead" in value:
+            allowed_authorizations.append("EAD")
+        if "tn" in value:
+            allowed_authorizations.append("TN")
+    return _dedupe_strings(allowed_authorizations)
+
+
 def parse_structured_jd_requirements(
     sections: Sequence[JDSectionLike],
     *,
@@ -257,19 +274,7 @@ def parse_structured_jd_requirements(
 
     years = [int(value) for value in _EXPERIENCE_RE.findall(full_text or "")]
     us_years = [int(value) for value in _US_EXPERIENCE_RE.findall(full_text or "")]
-    allowed_authorizations: list[str] = []
-    for match in _AUTHORIZATION_RE.finditer(full_text or ""):
-        value = " ".join(part for part in match.groups() if part).casefold()
-        if "usc" in value or "citizen" in value:
-            allowed_authorizations.append("USC")
-        if "gc" in value or "green card" in value:
-            allowed_authorizations.append("GC")
-        if "h1b" in value:
-            allowed_authorizations.append("H1B")
-        if "ead" in value:
-            allowed_authorizations.append("EAD")
-        if "tn" in value:
-            allowed_authorizations.append("TN")
+    allowed_authorizations = extract_work_authorizations(full_text or "")
     hinted_location = str((source_hints or {}).get("canonical_location") or "").strip()
     locations = _dedupe_strings([hinted_location, *_CITY_STATE_RE.findall(full_text or "")])
     work_mode_match = _WORK_MODE_RE.search(full_text or "")
