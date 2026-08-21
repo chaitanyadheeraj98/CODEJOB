@@ -92,7 +92,7 @@ class OrchestrationDeps:
     policy_threshold: Callable[[UserSettings, Any], float]
     policy_batch_limit: Callable[[Any, int], int]
     policy_dry_run: Callable[[Any], bool]
-    policy_f2f_block: Callable[[dict[str, str | int | bool], Any], tuple[bool, str]]
+    policy_f2f_block: Callable[[dict[str, str | int | bool], Any, UserSettings], tuple[bool, str]]
     evaluate_routing_policy: Callable[..., Any]
     apply_routing_decision: Callable[[RecruiterEmail, Any], None]
     capture_premium_numbers: Callable[[Session, RecruiterEmail], None]
@@ -724,7 +724,7 @@ class OrchestrationService:
                 else:
                     if policy_service.draft_rule_mode(effective_policy, "score_threshold") == "warn" and ai_score < threshold:
                         warnings.append(f"score_below_threshold:{ai_score:.2f}<{threshold:.2f}")
-                    blocked, block_reason = self.deps.policy_f2f_block(parsed, effective_policy)
+                    blocked, block_reason = self.deps.policy_f2f_block(parsed, effective_policy, user_settings)
                     if blocked:
                         state = "auto_rejected"
                         decision = "Reject"
@@ -894,6 +894,7 @@ class OrchestrationService:
         db: Session,
         *,
         run_key_override: str | None = None,
+        items_override: list[GmailMessageCandidate] | None = None,
     ) -> AutomationRunResponse:
         run_key = run_key_override or automation_run_key(str(uuid.uuid4()))
         recent_run = db.query(RecentRun).filter(RecentRun.run_key == run_key).first()
@@ -954,11 +955,20 @@ class OrchestrationService:
         threshold = self.deps.policy_threshold(user_settings, effective_policy)
         batch_limit = self.deps.policy_batch_limit(effective_policy, default_value=20)
         dry_run = self.deps.policy_dry_run(effective_policy)
-        items = self.deps.list_unread_candidates_by_query(effective_query, max_results_per_page=batch_limit)[:batch_limit]
+        items = (
+            items_override
+            if items_override is not None
+            else self.deps.list_unread_candidates_by_query(effective_query, max_results_per_page=batch_limit)[:batch_limit]
+        )
         if not items:
+            idle_detail = (
+                "None of the selected messages could be retrieved from Gmail (they may have been deleted)."
+                if items_override is not None
+                else f"No unread matching emails found for query: {effective_query}"
+            )
             response = self.deps.build_run_response(
                 "idle",
-                f"No unread matching emails found for query: {effective_query}",
+                idle_detail,
                 run_key=run_key,
                 effective_query=effective_query,
                 matched_count=0,
@@ -1098,15 +1108,16 @@ class OrchestrationService:
                     result.queued_email_ids, db
                 )
 
+            matched_label = "selected emails" if items_override is not None else "unread matching emails"
             if result.queued_count > 0:
                 status = "ready"
-                detail = f"Processed {result.matched_count} unread matching emails: queued={result.queued_count}, skipped={result.skipped_count}, failed={result.failed_count}."
+                detail = f"Processed {result.matched_count} {matched_label}: queued={result.queued_count}, skipped={result.skipped_count}, failed={result.failed_count}."
             elif result.failed_count > 0:
                 status = "failed"
-                detail = f"Processed {result.matched_count} unread matching emails: queued=0, skipped={result.skipped_count}, failed={result.failed_count}."
+                detail = f"Processed {result.matched_count} {matched_label}: queued=0, skipped={result.skipped_count}, failed={result.failed_count}."
             else:
                 status = "skipped"
-                detail = f"Processed {result.matched_count} unread matching emails: queued=0, skipped={result.skipped_count}, failed=0."
+                detail = f"Processed {result.matched_count} {matched_label}: queued=0, skipped={result.skipped_count}, failed=0."
             if dry_run:
                 detail = f"[Dry run] {detail} No database or Gmail label changes were made. (batch_limit={batch_limit}, threshold={threshold:.2f})"
             else:
@@ -1162,7 +1173,7 @@ class OrchestrationService:
             self.deps.record_productivity_event(
                 db,
                 event_type="recent_run_recorded",
-                event_source="run_once",
+                event_source="run_once_retry" if items_override is not None else "run_once",
                 entity_id=response.email_id,
                 metadata={
                     "status": response.status,

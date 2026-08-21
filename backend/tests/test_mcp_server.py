@@ -22,7 +22,7 @@ from app.mcp_server.tools.external_feed import list_external_opportunities
 from app.mcp_server.tools.help import get_app_help
 from app.mcp_server.tools.inbox import get_conversation, get_recruiter_replies, list_conversations
 from app.mcp_server.tools.premium_numbers import list_contact_numbers, list_recruiter_opportunities
-from app.mcp_server.tools.resumes import list_resumes
+from app.mcp_server.tools.resumes import get_resume, list_resumes
 from app.mcp_server.tools.runs import get_recent_runs, get_run_items
 from app.mcp_server.tools.status import get_ai_status, get_settings_summary
 from app.models import (
@@ -81,6 +81,9 @@ class MCPServerToolTests(unittest.TestCase):
                 role="Python Engineer",
                 skills_text="Python, FastAPI",
                 state="needs_review",
+                ats_score=49.23,
+                ats_score_source="rules",
+                resume_picker_reason="Mandatory FAIL 0.39; closest available resume selected",
             )
             other = RecruiterEmail(
                 owner_id="other-owner",
@@ -97,6 +100,9 @@ class MCPServerToolTests(unittest.TestCase):
                 sha256="a" * 64,
                 version=2,
                 skills_text="Python, FastAPI",
+                content_markdown="Built FastAPI services.",
+                content_summary="Backend engineer with Python and FastAPI experience.",
+                content_evidence_json='{"skills":[{"name":"FastAPI","evidence":"Built FastAPI services."}]}',
                 is_current=True,
             )
             other_resume = ResumeAsset(
@@ -318,6 +324,8 @@ class MCPServerToolTests(unittest.TestCase):
 
         candidate = get_candidate(self.owned_id)
         self.assertIn("<untrusted_candidate_data>", candidate["untrusted_source_data"])
+        self.assertEqual(candidate["ats_score"], 49.23)
+        self.assertEqual(candidate["resume_picker_reason"], "Mandatory FAIL 0.39; closest available resume selected")
         self.assertEqual(get_candidate(999999), {"error": "Candidate not found"})
 
         runs = get_recent_runs(10)
@@ -343,6 +351,9 @@ class MCPServerToolTests(unittest.TestCase):
         resumes = list_resumes(10)
         self.assertEqual(len(resumes["resumes"]), 1)
         self.assertEqual(resumes["resumes"][0]["file_name"], "chait_resume_v2.pdf")
+        self.assertIn("FastAPI", resumes["resumes"][0]["content_summary"])
+        resume_detail = get_resume(resumes["resumes"][0]["id"])
+        self.assertIn("<untrusted_resume_data>", resume_detail["untrusted_resume_data"])
 
         replies = get_recruiter_replies()
         self.assertEqual(replies["count"], 1)
@@ -378,6 +389,17 @@ class MCPServerToolTests(unittest.TestCase):
         for variant in ("need_review", "needs review", "Needs-Review", "nead review"):
             candidates = search_candidates("Python", variant, 10)
             self.assertEqual(candidates["count"], 1, f"variant={variant!r} failed: {candidates}")
+
+    def test_search_candidates_query_matches_by_numeric_id(self) -> None:
+        candidates = search_candidates(str(self.owned_id), "needs_review", 10)
+        self.assertEqual(candidates["count"], 1, candidates)
+        self.assertEqual(candidates["candidates"][0]["id"], self.owned_id)
+
+        candidates = search_candidates(f"approve Email ID: {self.owned_id}", "needs_review", 10)
+        self.assertEqual(candidates["count"], 1, candidates)
+
+        candidates = search_candidates(str(self.owned_id + 999999), "needs_review", 10)
+        self.assertEqual(candidates["count"], 0, candidates)
 
     def test_search_candidates_status_unrecognized_returns_error(self) -> None:
         result = search_candidates("Python", "banana", 10)

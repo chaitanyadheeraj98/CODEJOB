@@ -437,6 +437,28 @@ def list_unread_candidates_by_query(
     return results
 
 
+def get_candidates_by_message_ids(message_ids: list[str]) -> list[GmailMessageCandidate]:
+    """Fetch specific messages by id, independent of the is:unread query/label state.
+
+    Used to retry skipped items directly by their stored Gmail message id, so retry
+    works regardless of whether the message is currently marked read or unread.
+    """
+    service = _gmail_service()
+    results: list[GmailMessageCandidate] = []
+    for message_id in message_ids:
+        try:
+            details = _as_dict(
+                service.users().messages().get(userId="me", id=message_id, format="full").execute()
+            )
+        except HttpError:
+            logger.exception("gmail_message_fetch_failed message_id=%s", message_id)
+            continue
+        candidate = _message_details_to_candidate(details)
+        if candidate is not None:
+            results.append(candidate)
+    return results
+
+
 def list_unread_thread_ids(max_results: int = 500) -> set[str]:
     """Cheap: one list() call, no per-message get(). Thread ids of unread inbox mail.
 

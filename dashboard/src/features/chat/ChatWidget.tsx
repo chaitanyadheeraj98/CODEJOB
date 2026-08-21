@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 
-import { getChatStatus } from './api'
+import { getChatStatus, runProposalAction } from './api'
+import { proposalForMessage, proposalResultDetail } from './proposals'
 import type { ChatStatus } from './types'
 import { useChatSession } from './useChatSession'
 
@@ -90,6 +91,8 @@ export default function ChatWidget({ apiBase }: ChatWidgetProps) {
   const [draft, setDraft] = useState('')
   const [status, setStatus] = useState<ChatStatus | null>(null)
   const [statusError, setStatusError] = useState('')
+  const [proposalResults, setProposalResults] = useState<Record<number, { approved: boolean; detail: string } | 'cancelled'>>({})
+  const [proposalBusyId, setProposalBusyId] = useState<number | null>(null)
   const messagesEndRef = useRef<HTMLDivElement | null>(null)
   const ready = Boolean(status?.enabled && status.ollama_running)
   const chat = useChatSession(apiBase, ready)
@@ -128,6 +131,32 @@ export default function ChatWidget({ apiBase }: ChatWidgetProps) {
     if (!text || chat.busy) return
     setDraft('')
     await chat.sendMessage(text)
+  }
+
+  const currentSession = chat.sessions.find((session) => session.id === chat.sessionId)
+
+  const renameCurrent = async () => {
+    const next = window.prompt('Rename chat', currentSession?.title ?? '')
+    if (next == null || !next.trim() || next.trim() === currentSession?.title) return
+    await chat.renameCurrentSession(next.trim())
+  }
+
+  const approveProposal = async (messageId: number, proposal: NonNullable<ReturnType<typeof proposalForMessage>>) => {
+    setProposalBusyId(messageId)
+    try {
+      const result = await runProposalAction(apiBase, proposal.handler, proposal.fields)
+      setProposalResults((current) => ({
+        ...current,
+        [messageId]: { approved: true, detail: proposalResultDetail(result) },
+      }))
+    } catch (reason) {
+      setProposalResults((current) => ({
+        ...current,
+        [messageId]: { approved: false, detail: reason instanceof Error ? reason.message : 'Action failed' },
+      }))
+    } finally {
+      setProposalBusyId(null)
+    }
   }
 
   return (
@@ -185,6 +214,14 @@ export default function ChatWidget({ apiBase }: ChatWidgetProps) {
                 </label>
                 <button
                   type="button"
+                  onClick={() => void renameCurrent()}
+                  disabled={chat.busy || chat.sessionId == null}
+                  aria-label="Rename current chat"
+                >
+                  Rename
+                </button>
+                <button
+                  type="button"
                   onClick={() => void chat.removeCurrentSession()}
                   disabled={chat.busy || chat.sessionId == null}
                   aria-label="Delete current chat"
@@ -199,13 +236,52 @@ export default function ChatWidget({ apiBase }: ChatWidgetProps) {
                     <p>Try "How many candidates need review?" or "Summarize my latest run."</p>
                   </div>
                 ) : null}
-                {chat.messages.map((message) => (
-                  <div key={message.id} className={`chatBubble ${message.role}`}>
-                    {message.content
-                      ? renderMarkdownLite(message.content)
-                      : chat.busy && message.role === 'assistant' ? 'Thinking...' : ''}
-                  </div>
-                ))}
+                {chat.messages.map((message) => {
+                  const proposal = proposalForMessage(message)
+                  if (proposal) {
+                    const result = proposalResults[message.id]
+                    return (
+                      <div key={message.id} className="chatProposal">
+                        <strong>Confirm action</strong>
+                        <dl>
+                          {proposal.handler.summary(proposal.fields).map(([label, value]) => (
+                            <div key={label}><dt>{label}</dt><dd>{value || '-'}</dd></div>
+                          ))}
+                        </dl>
+                        {result === 'cancelled' ? <p>Cancelled. No changes were made.</p> : null}
+                        {result && result !== 'cancelled' ? (
+                          <p className={result.approved ? '' : 'chatError'}>{result.detail}</p>
+                        ) : null}
+                        {!result ? (
+                          <div className="chatProposalActions">
+                            <button
+                              type="button"
+                              onClick={() => void approveProposal(message.id, proposal)}
+                              disabled={proposalBusyId != null}
+                            >
+                              {proposalBusyId === message.id ? 'Working...' : proposal.handler.confirmLabel(proposal.fields)}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setProposalResults((current) => ({ ...current, [message.id]: 'cancelled' }))}
+                              disabled={proposalBusyId != null}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : null}
+                      </div>
+                    )
+                  }
+                  if (message.role === 'tool') return null
+                  return (
+                    <div key={message.id} className={`chatBubble ${message.role}`}>
+                      {message.content
+                        ? renderMarkdownLite(message.content)
+                        : chat.busy && message.role === 'assistant' ? 'Thinking...' : ''}
+                    </div>
+                  )
+                })}
                 <div ref={messagesEndRef} />
               </div>
               {chat.error ? <p className="chatError" role="alert">{chat.error}</p> : null}

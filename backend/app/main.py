@@ -47,6 +47,7 @@ from app.gmail_client import (
     get_message_thread_id,
     get_message_rfc_message_id,
     gmail_auth_status,
+    get_candidates_by_message_ids,
     is_gmail_configured,
     list_thread_messages,
     list_unread_candidates_by_query,
@@ -126,7 +127,7 @@ from app.jobs.queues import (
     get_redis_connection,
     redis_is_ready,
 )
-from app.jobs.tasks import run_automation_job, run_gmail_sync_job, run_nvoids_sync_job
+from app.jobs.tasks import run_automation_job, run_gmail_sync_job, run_nvoids_sync_job, run_retry_selected_messages_job
 from app.skill_taxonomy import (
     TAXONOMY_PLACEHOLDER_KEYS,
     clear_skill_taxonomy_cache,
@@ -145,7 +146,11 @@ from app.premium_numbers.domain_guard import (
 from app.premium_numbers.phone_normalization import best_display_phone, canonicalize_phone
 from app.query_bucket import sanitize_saved_queries
 from app.runtime_state import runtime_state
-from app.routers.chat import get_chat_service as _get_chat_service, router as chat_router
+from app.routers.chat import (
+    get_chat_service as _get_chat_service,
+    require_chat_actions_enabled,
+    router as chat_router,
+)
 from app.job_intent_learning import (
     NEGATIVE_NEWSLETTER,
     POSITIVE_RECRUITER_JD,
@@ -176,6 +181,7 @@ from app.services.candidate_screening_service import (
 from app.services.email_inbox_service import TRANSPARENT_PIXEL_PNG, record_open, reply_count_for_email
 from app.services.orchestration_service import OrchestrationDeps, OrchestrationService
 from app.services.requirement_expansion_service import RequirementExpansionService
+from app.services.resume_enrichment_service import enrich_resume
 from app.services.role_manifest_pipeline import extract_and_score_children
 from app.services.role_manifest_service import RoleManifestService
 from app.services.sendability_service import apply_resume_sendability, resolve_sendability_status
@@ -209,11 +215,13 @@ from app.schemas import (
     BulkApproveJobIntentSignalsResponse,
     BulkApproveSkillsResponse,
     BulkApproveEntitiesResponse,
+    BulkApproveRequest,
     BulkRejectRequest,
     CandidateListResponse,
     ConversationDetailResponse,
     ConversationReplyRequest,
     ConversationSummaryResponse,
+    ChatSendReplyRequest,
     CustomSkillTaxonomyEntryResponse,
     CanonicalEntityTaxonomyEntryResponse,
     DismissJobIntentSignalRequest,
@@ -242,6 +250,7 @@ from app.schemas import (
     EmployerNumberListResponse,
     PremiumNumberListResponse,
     PremiumNumberResponse,
+    ManualPremiumContactRequest,
     PendingNumberReviewCountResponse,
     PendingSkillResponse,
     PendingEntityResponse,
@@ -272,6 +281,7 @@ from app.schemas import (
     RecentRunItemResponse,
     RecentRunListResponse,
     RecentRunResponse,
+    RecentRunSkippedItemRetryRequest,
     RegenerateCandidateRequest,
     RoleDetectionRetryResponse,
     TelegramStatusResponse,
@@ -1077,6 +1087,19 @@ def _enqueue_automation(payload: AutomationRunRequest | None, db: Session) -> Jo
     )
 
 
+def _enqueue_retry_selected_skipped_items(db: Session, external_message_ids: list[str]) -> JobEnqueueResponse:
+    run_key = automation_run_key(uuid.uuid4().hex)
+    return _enqueue_background_job(
+        db,
+        queue_name=AUTOMATION_RUN_QUEUE,
+        run_source=RUN_SOURCE_AUTOMATION,
+        run_key=run_key,
+        task=run_retry_selected_messages_job,
+        task_kwargs={"run_key": run_key, "external_message_ids": external_message_ids},
+        total_items=len(external_message_ids),
+    )
+
+
 def _check_live_replies(db: Session) -> None:
     _, authenticated, _ = gmail_auth_status()
     if not authenticated:
@@ -1333,11 +1356,15 @@ def _preferred_employer_cc_emails(user_settings: UserSettings) -> list[str]:
     return [legacy] if legacy else []
 
 
-def _policy_f2f_block(parsed: dict[str, str | int | bool], policy: PolicyConfig) -> tuple[bool, str]:
+def _policy_f2f_block(parsed: dict[str, str | int | bool], policy: PolicyConfig, user_settings: UserSettings) -> tuple[bool, str]:
     normalized = policy_service.normalize_policy(policy)
     qualification = normalized["qualification"]
     strictness = policy_service.as_str(qualification.get("location_strictness", "balanced"), "balanced")
-    f2f_blocked, f2f_reason = should_block_f2f(parsed)
+    accepted_rule = qualification["draft_rules"]["accepted_location"]
+    accepted_locations = [loc.strip().lower() for loc in accepted_rule.get("locations", []) if loc.strip()] or [
+        loc.strip().lower() for loc in user_settings.accepted_locations.split(",") if loc.strip()
+    ]
+    f2f_blocked, f2f_reason = should_block_f2f(parsed, accepted_locations)
     if strictness == "lenient":
         f2f_blocked = False
         f2f_reason = ""
@@ -1422,8 +1449,10 @@ def _refresh_resume_embedding(resume: ResumeAsset) -> None:
     try:
         resume_text = _semantic_text_for_resume(resume)
         if resume_text.strip():
-            resume_vector, _provider = _generate_embedding_with_health(resume_text)
-            resume.semantic_embedding = embedding_to_json(resume_vector)
+            _vector, payload, _provider, _chunks = _get_scoring_runtime_service()._safe_embed_with_chunking(
+                None, resume_text
+            )
+            resume.semantic_embedding = payload
         else:
             resume.semantic_embedding = None
     except Exception as exc:
@@ -2040,6 +2069,9 @@ def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
         nvoids_batch_limit=_nvoids_batch_limit(s),
         nvoids_detail_title_mode=(s.nvoids_detail_title_mode or "job_details").strip().lower() or "job_details",
         nvoids_locations=_csv_to_list(s.nvoids_locations),
+        nvoids_job_role=s.nvoids_job_role or "",
+        nvoids_search_location=s.nvoids_search_location or "",
+        nvoids_custom_query=s.nvoids_custom_query or "",
         feature_auto_send=s.feature_auto_send,
         feature_retry_queue=s.feature_retry_queue,
         feature_ai_enabled=s.feature_ai_enabled,
@@ -2289,6 +2321,9 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
     s.nvoids_batch_limit = max(1, min(int(payload.nvoids_batch_limit), 50))
     s.nvoids_detail_title_mode = payload.nvoids_detail_title_mode
     s.nvoids_locations = _to_csv(payload.nvoids_locations)
+    s.nvoids_job_role = payload.nvoids_job_role
+    s.nvoids_search_location = payload.nvoids_search_location
+    s.nvoids_custom_query = payload.nvoids_custom_query
     s.feature_auto_send = payload.feature_auto_send
     s.feature_retry_queue = payload.feature_retry_queue
     s.feature_ai_enabled = payload.feature_ai_enabled
@@ -2457,6 +2492,10 @@ def upload_resume(
         is_enabled=True,
         is_current=True,
     )
+    try:
+        enrich_resume(resume)
+    except Exception as exc:
+        logger.warning("Resume enrichment skipped: %s", exc)
     _refresh_resume_embedding(resume)
     db.add(resume)
     db.commit()
@@ -2467,6 +2506,29 @@ def upload_resume(
 @app.get("/settings/resumes", response_model=list[ResumeResponse])
 def list_resumes(db: Session = Depends(get_db)) -> list[ResumeAsset]:
     return _list_resumes(db)
+
+
+@app.post("/settings/resumes/backfill-enrichment")
+def backfill_resume_enrichment(db: Session = Depends(get_db)) -> dict[str, object]:
+    rows = (
+        db.query(ResumeAsset)
+        .filter(ResumeAsset.owner_id == settings.owner_id, ResumeAsset.content_markdown.is_(None))
+        .order_by(ResumeAsset.id)
+        .all()
+    )
+    enriched_ids: list[int] = []
+    failed: list[dict[str, object]] = []
+    for resume in rows:
+        try:
+            enrich_resume(resume)
+            _refresh_resume_embedding(resume)
+            db.commit()
+            enriched_ids.append(resume.id)
+        except Exception as exc:
+            db.rollback()
+            logger.warning("Resume enrichment backfill failed for %s: %s", resume.id, exc)
+            failed.append({"id": resume.id, "error": str(exc)[:500]})
+    return {"enriched_count": len(enriched_ids), "enriched_ids": enriched_ids, "failed": failed}
 
 
 @app.patch("/settings/resumes/{resume_id}", response_model=ResumeResponse)
@@ -3339,8 +3401,11 @@ def _run_automation(
     db: Session,
     *,
     run_key_override: str | None = None,
+    items_override: list[GmailMessageCandidate] | None = None,
 ) -> AutomationRunResponse:
-    response = _get_orchestration_service().run_once(payload, db, run_key_override=run_key_override)
+    response = _get_orchestration_service().run_once(
+        payload, db, run_key_override=run_key_override, items_override=items_override
+    )
     user_settings = _get_settings(db)
     if user_settings.feature_role_manifest_enabled and response.queued_email_ids:
         source_rows = (
@@ -3992,6 +4057,65 @@ def list_premium_numbers(
         next_cursor=next_cursor,
         has_next=has_next,
     )
+
+
+@app.post(
+    "/premium-numbers/contacts",
+    dependencies=[Depends(require_chat_actions_enabled)],
+)
+def create_premium_contact(
+    payload: ManualPremiumContactRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    canonical_phone = canonicalize_phone(payload.phone)
+    if not canonical_phone:
+        raise HTTPException(status_code=422, detail="A valid US phone number is required")
+    email = payload.email.strip().lower()
+    if email and ("@" not in email or parseaddr(email)[1].lower() != email):
+        raise HTTPException(status_code=422, detail="A valid email address is required")
+
+    contact = (
+        db.query(PremiumNumberContact)
+        .filter(
+            PremiumNumberContact.owner_id == settings.owner_id,
+            PremiumNumberContact.normalized_phone_number == canonical_phone,
+        )
+        .first()
+    )
+    created = contact is None
+    if contact is None:
+        contact = PremiumNumberContact(
+            owner_id=settings.owner_id,
+            normalized_phone_number=canonical_phone,
+            display_phone_number=best_display_phone(payload.phone, fallback=payload.phone),
+        )
+        db.add(contact)
+
+    contact.display_phone_number = best_display_phone(payload.phone, fallback=payload.phone)
+    contact.is_recruiter = payload.role == "recruiter"
+    contact.is_employer = payload.role == "employer"
+    contact.recruiter_name = payload.name.strip() if payload.role == "recruiter" else contact.recruiter_name
+    contact.owner_name = payload.name.strip() if payload.role == "employer" else contact.owner_name
+    contact.designation = payload.title.strip() or "Unknown"
+    contact.company = payload.company.strip() or "Unknown"
+    contact.recruiter_email = email
+    contact.source_type = "manual"
+    contact.deleted_at = None
+    db.commit()
+    db.refresh(contact)
+    _record_productivity_event(
+        db,
+        event_type="premium_contact_created",
+        event_source="chat_assistant",
+        entity_id=contact.id,
+        metadata={"role": payload.role, "created": created},
+    )
+    return {
+        "id": contact.id,
+        "created": created,
+        "phone_display": contact.display_phone_number,
+        "role": payload.role,
+    }
 
 
 @app.get("/premium-numbers/{lead_id}", response_model=PremiumNumberResponse)
@@ -5361,6 +5485,27 @@ def list_recent_run_items(
     return RecentRunItemListResponse(items=visible, next_cursor=next_cursor, has_next=has_next)
 
 
+@app.post("/recent-runs/skipped/retry", response_model=JobEnqueueResponse, status_code=202)
+def retry_recent_run_skipped_items(
+    payload: RecentRunSkippedItemRetryRequest,
+    db: Session = Depends(get_db),
+) -> JobEnqueueResponse:
+    if not payload.skipped_item_ids:
+        raise HTTPException(status_code=422, detail="skipped_item_ids must not be empty")
+    rows = (
+        db.query(RecentRunSkippedItem)
+        .filter(
+            RecentRunSkippedItem.owner_id == settings.owner_id,
+            RecentRunSkippedItem.id.in_(payload.skipped_item_ids),
+        )
+        .all()
+    )
+    message_ids = list(dict.fromkeys(row.external_message_id for row in rows if row.external_message_id))
+    if not message_ids:
+        raise HTTPException(status_code=400, detail="Selected items have no Gmail message id to retry")
+    return _enqueue_retry_selected_skipped_items(db, message_ids)
+
+
 @app.patch("/recruiter-opportunities/{opportunity_id}", response_model=RecruiterOpportunityResponse)
 def patch_recruiter_opportunity(
     opportunity_id: int,
@@ -5683,6 +5828,37 @@ def approve_and_send(
     return _get_orchestration_service().approve_send(email_id, payload, db)
 
 
+@app.post(
+    "/candidates/{email_id}/send-chat-reply",
+    dependencies=[Depends(require_chat_actions_enabled)],
+)
+def send_chat_reply(
+    email_id: int,
+    payload: ChatSendReplyRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    email = _get_candidate_for_review(db, email_id)
+    if not (email.recipient_email or "").strip():
+        raise HTTPException(status_code=400, detail="Recipient email is missing")
+    if not (email.external_thread_id or "").strip():
+        raise HTTPException(status_code=400, detail="Gmail thread is missing")
+    message_id = send_reply_with_attachment(
+        thread_id=email.external_thread_id,
+        to=email.recipient_email,
+        cc=email.cc_email,
+        subject=(payload.subject or email.subject or "").strip(),
+        body=payload.body.strip(),
+    )
+    _record_productivity_event(
+        db,
+        event_type="chat_reply_sent",
+        event_source="chat_assistant",
+        entity_id=email.id,
+        metadata={"gmail_message_id": message_id},
+    )
+    return {"sent": True, "message_id": message_id, "email_id": email.id}
+
+
 @app.post("/candidates/{email_id}/reject", response_model=EmailResponse)
 def reject_candidate(
     email_id: int,
@@ -5779,6 +5955,29 @@ def reject_bulk(payload: BulkRejectRequest, db: Session = Depends(get_db)) -> di
             rejected += 1
     db.commit()
     return {"rejected_count": rejected}
+
+
+@app.post(
+    "/candidates/approve-bulk",
+    dependencies=[Depends(require_chat_actions_enabled)],
+)
+def approve_bulk_candidates(payload: BulkApproveRequest, db: Session = Depends(get_db)) -> dict[str, object]:
+    approved_ids: list[int] = []
+    failed: list[dict[str, object]] = []
+    for candidate_id in dict.fromkeys(payload.ids):
+        try:
+            _get_orchestration_service().approve_send(candidate_id, ApproveSendRequest(), db)
+            _record_productivity_event(
+                db,
+                event_type="approved_sent",
+                event_source="chat_assistant",
+                entity_id=candidate_id,
+                metadata={"via": "chat"},
+            )
+            approved_ids.append(candidate_id)
+        except HTTPException as exc:
+            failed.append({"id": candidate_id, "error": str(exc.detail)})
+    return {"approved_count": len(approved_ids), "approved_ids": approved_ids, "failed": failed}
 
 
 @app.post("/candidates/{email_id}/resolve-recipients", response_model=EmailResponse)

@@ -236,6 +236,8 @@ def apply_contact_version(
         contact.owner_name = lead.owner_name or "Unknown"
         if lead.company and lead.company.strip().lower() != "unknown":
             contact.company = lead.company
+    if lead.linkedin_url:
+        contact.linkedin_url = lead.linkedin_url
     if lead.external_opportunity_id:
         contact.source_type = "nvoids"
         contact.source_id = lead.external_opportunity_id
@@ -533,6 +535,7 @@ class PhoneIntelligenceWorkflowService:
         row.contact_email = lead.contact_email
         row.owner_name = lead.owner_name
         row.company = lead.company
+        row.linkedin_url = lead.linkedin_url
         row.designation = lead.designation
         row.purpose = lead.purpose
         row.confidence = lead.confidence
@@ -669,6 +672,8 @@ class PhoneIntelligenceWorkflowService:
             contact.owner_name = lead.owner_name or "Unknown"
         if lead.company and lead.company.strip().lower() != "unknown":
             contact.company = lead.company
+        if lead.linkedin_url:
+            contact.linkedin_url = lead.linkedin_url
 
     def _snapshot_legacy_contact_if_needed(
         self,
@@ -711,6 +716,7 @@ class PhoneIntelligenceWorkflowService:
             contact_email=contact.recruiter_email if role == "recruiter" else "",
             owner_name=(contact.recruiter_name if role == "recruiter" else contact.owner_name),
             company=contact.company,
+            linkedin_url=contact.linkedin_url,
             designation=contact.designation if role == "recruiter" else "Unknown",
             purpose="Legacy contact snapshot",
             confidence="low",

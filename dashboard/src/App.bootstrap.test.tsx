@@ -158,7 +158,7 @@ describe('Settings bootstrap flow', () => {
     vi.restoreAllMocks()
   })
 
-  it('enqueues automation, renders native progress, and polls to completion', async () => {
+  it('enqueues automation, renders color-coded progress, and polls to completion', async () => {
     vi.useFakeTimers()
     let jobPolls = 0
     const baseFetch = makeAppFetch()
@@ -204,16 +204,18 @@ describe('Settings bootstrap flow', () => {
       runButton?.click()
       await flushPromises(10)
     })
-    const progress = container.querySelector('progress') as HTMLProgressElement | null
-    expect(progress?.value).toBe(25)
+    const progressBar = container.querySelector('[role="progressbar"]') as HTMLElement | null
+    expect(progressBar?.getAttribute('aria-valuenow')).toBe('25')
     expect(container.textContent ?? '').toContain('Processing candidates.')
+    expect(container.textContent ?? '').toContain('Running')
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1500)
       await flushPromises(10)
     })
-    expect((container.querySelector('progress') as HTMLProgressElement | null)?.value).toBe(100)
+    expect((container.querySelector('[role="progressbar"]') as HTMLElement | null)?.getAttribute('aria-valuenow')).toBe('100')
     expect(container.textContent ?? '').toContain('Automation complete.')
+    expect(container.textContent ?? '').toContain('Completed')
     expect(runButton?.hasAttribute('disabled')).toBe(false)
   })
 
@@ -458,7 +460,7 @@ describe('Settings bootstrap flow', () => {
 
     const sections = Array.from(container.querySelectorAll('section'))
     const profile = sections.find((section) => section.querySelector('h2')?.textContent === 'Profile Settings')
-    const automation = sections.find((section) => section.querySelector('h2')?.textContent === 'Automation Filters')
+    const automation = sections.find((section) => section.querySelector('h2')?.textContent === 'AI Automation Access')
     expect(profile?.textContent).toContain('Candidate Eligibility Profile')
     expect(profile?.textContent).toContain('Enforce Strict Candidate Screening')
     expect(profile?.textContent).toContain('Candidate Work Authorizations')

@@ -421,11 +421,19 @@ button.emailSearchResult:focus-visible {
   border-radius: 10px;
   background: var(--surface);
   padding: 12px 14px;
+  border-left: 4px solid var(--line-strong);
 }
+
+.jobProgressCard--queued { border-left-color: #94a3b8; }
+.jobProgressCard--running { border-left-color: var(--primary); }
+.jobProgressCard--ok { border-left-color: #137333; }
+.jobProgressCard--failed { border-left-color: var(--danger); }
+.jobProgressCard--canceled { border-left-color: #9a5b00; }
 
 .jobProgressCard div {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   gap: 12px;
   margin-bottom: 8px;
 }
@@ -436,13 +444,119 @@ button.emailSearchResult:focus-visible {
   font-size: 13px;
 }
 
-.jobProgressCard progress {
-  width: 100%;
-  height: 12px;
-}
-
 .jobProgressCard p {
   margin: 7px 0 0;
+}
+
+.jobStatusPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: fit-content;
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-size: 11px;
+  line-height: 1.4;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.jobStatusPill--queued { background: #f1f5f9; color: #475569; border-color: #cbd5e1; }
+.jobStatusPill--running { background: #e6edff; color: var(--primary-strong); border-color: #b9c9f7; }
+.jobStatusPill--ok { background: #eaf8ee; color: #137333; border-color: #b8dec3; }
+.jobStatusPill--failed { background: #fff0f2; color: var(--danger); border-color: #efb7bd; }
+.jobStatusPill--canceled { background: #fff7df; color: #9a5b00; border-color: #efd49b; }
+
+.jobStatusPill--running .jobStatusDot {
+  animation: jobPulse 1.2s ease-in-out infinite;
+}
+
+.jobStatusDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: 0 0 auto;
+}
+
+@keyframes jobPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.jobProgressBar {
+  display: flex;
+  width: 100%;
+  height: 10px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: #eef1f7;
+}
+
+.jobProgressBar__segment {
+  height: 100%;
+  transition: flex-basis 0.3s ease;
+}
+
+.jobProgressBar__segment--done { background: #1e9e4c; }
+.jobProgressBar__segment--skipped { background: var(--danger); }
+.jobProgressBar__segment--remaining { background: transparent; }
+
+.jobProgressLegend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 6px;
+  font-size: 11px;
+  color: #64748b;
+}
+
+.jobProgressLegend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+}
+
+.jobProgressLegend i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.jobLiveSkipped {
+  margin-top: 10px;
+  max-height: 160px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.jobLiveSkippedRow {
+  border-left: 3px solid var(--danger);
+  background: #fff5f6;
+  border-radius: 4px;
+  padding: 5px 8px;
+}
+
+.jobLiveSkippedRow p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.jobLiveSkippedRow p:first-child {
+  color: #1f2937;
+  font-weight: 600;
+}
+
+.jobLiveSkippedRow p:last-child {
+  color: #7a1420;
 }
 
 .queryBucketInline {
@@ -1370,6 +1484,27 @@ button.emailSearchResult:focus-visible {
   padding: 14px;
   margin-top: 12px;
   background: var(--surface-soft);
+}
+
+.skippedItemRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.skippedItemCheckbox {
+  flex: 0 0 auto;
+  padding-top: 4px;
+}
+
+.skippedItemCheckbox input {
+  width: 18px;
+  height: 18px;
+}
+
+.skippedItemContent {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .sentItemCard {
@@ -2527,6 +2662,10 @@ button.emailSearchResult:focus-visible {
   font-size: 12px;
 }
 
+.chatHistoryBar button[aria-label="Rename current chat"] {
+  color: var(--primary);
+}
+
 .chatMessages {
   display: flex;
   min-height: 0;
@@ -2581,6 +2720,47 @@ button.emailSearchResult:focus-visible {
   border: 1px solid var(--line);
   background: var(--surface);
   color: var(--ink);
+}
+
+.chatProposal {
+  align-self: stretch;
+  border: 1px solid var(--primary);
+  border-radius: 12px;
+  padding: 12px;
+  background: var(--surface);
+}
+
+.chatProposal dl,
+.chatProposal p {
+  margin: 8px 0 0;
+}
+
+.chatProposal dl div {
+  display: grid;
+  grid-template-columns: 72px 1fr;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.chatProposal dt {
+  font-weight: 700;
+}
+
+.chatProposal dd {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.chatProposalActions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.chatProposalActions button:first-child {
+  background: var(--primary);
+  color: #fff;
 }
 
 .chatBubble p {

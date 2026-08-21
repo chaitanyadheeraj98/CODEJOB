@@ -737,10 +737,10 @@ The candidate should collaborate closely with platform partners.
                     "Lead Java Developer | O'Fallon, MO (hybrid)",
                     f"Location: O'Fallon, MO\n{phrase}\nJava Spring Boot Kafka",
                 )
-                blocked, reason = should_block_f2f(parsed)
+                blocked, reason = should_block_f2f(parsed, ["texas", "remote"])
                 self.assertTrue(bool(parsed["f2f_mentioned"]))
                 self.assertTrue(blocked)
-                self.assertIn("non-Texas", reason)
+                self.assertIn("outside accepted locations", reason)
 
     def test_explicit_texas_interview_phrase_is_not_blocked(self) -> None:
         parsed = parse_email(
@@ -748,7 +748,7 @@ The candidate should collaborate closely with platform partners.
             "Location: Plano, TX\nOnsite interview required\nJava Spring Boot Kafka",
         )
 
-        blocked, reason = should_block_f2f(parsed)
+        blocked, reason = should_block_f2f(parsed, ["texas", "remote"])
 
         self.assertTrue(bool(parsed["f2f_mentioned"]))
         self.assertFalse(blocked)
@@ -773,7 +773,7 @@ The candidate should collaborate closely with platform partners.
                     "Lead Java Developer | Columbus, OH",
                     f"Location: Columbus, OH\n{phrase}\nJava Spring Boot Kafka",
                 )
-                blocked, reason = should_block_f2f(parsed)
+                blocked, reason = should_block_f2f(parsed, ["texas", "remote"])
                 self.assertTrue(bool(parsed["f2f_mentioned"]))
                 self.assertTrue(blocked)
                 self.assertIn("Columbus, OH", reason)

@@ -109,12 +109,22 @@ class ExternalFeedService:
             normalized.append(token)
         return normalized
 
-    def build_nvoids_query(self, raw_locations: list[str] | tuple[str, ...] | None) -> str:
-        locations = self._normalize_location_tokens(raw_locations)
-        if not locations:
+    def build_nvoids_query(
+        self,
+        *,
+        job_role: str | None = None,
+        search_location: str | None = None,
+        custom_query: str | None = None,
+    ) -> str:
+        custom = (custom_query or "").strip()
+        if custom:
+            return custom
+        role = (job_role or "").strip()
+        location = (search_location or "").strip()
+        if not role and not location:
             return self.default_query
-        location_clause = " or ".join(locations)
-        return f"({location_clause}) and java and spring* not(*js)"
+        role_clause = role or "java and spring* not(*js)"
+        return f"({location}) and {role_clause}" if location else role_clause
 
     def row_matches_locations(self, row_location: str, raw_locations: list[str] | tuple[str, ...] | None) -> bool:
         locations = self._normalize_location_tokens(raw_locations)
@@ -197,7 +207,11 @@ class ExternalFeedService:
         )
         location_filters = self._normalize_location_tokens((user_settings.nvoids_locations or "").split(","))
         detail_title_mode = self.normalize_nvoids_detail_title_mode(getattr(user_settings, "nvoids_detail_title_mode", None))
-        query = self.build_nvoids_query(location_filters)
+        query = self.build_nvoids_query(
+            job_role=user_settings.nvoids_job_role,
+            search_location=user_settings.nvoids_search_location,
+            custom_query=user_settings.nvoids_custom_query,
+        )
         run = ExternalScrapeRun(owner_id=owner_id, source_type="nvoids", started_at=datetime.now(UTC), notes="")
         db.add(run)
         db.commit()
@@ -866,11 +880,17 @@ class ExternalFeedService:
         )
 
     @staticmethod
-    def _policy_f2f_block(parsed: dict[str, str | int | bool], policy: policy_service.PolicyConfig) -> tuple[bool, str]:
+    def _policy_f2f_block(
+        parsed: dict[str, str | int | bool], policy: policy_service.PolicyConfig, user_settings: UserSettings
+    ) -> tuple[bool, str]:
         normalized = policy_service.normalize_policy(policy)
         qualification = normalized["qualification"]
         strictness = policy_service.as_str(qualification.get("location_strictness", "balanced"), "balanced")
-        f2f_blocked, f2f_reason = should_block_f2f(parsed)
+        accepted_rule = qualification["draft_rules"]["accepted_location"]
+        accepted_locations = [loc.strip().lower() for loc in accepted_rule.get("locations", []) if loc.strip()] or [
+            loc.strip().lower() for loc in user_settings.accepted_locations.split(",") if loc.strip()
+        ]
+        f2f_blocked, f2f_reason = should_block_f2f(parsed, accepted_locations)
         if strictness == "lenient":
             f2f_blocked = False
             f2f_reason = ""

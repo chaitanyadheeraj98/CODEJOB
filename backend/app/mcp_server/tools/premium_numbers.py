@@ -14,12 +14,62 @@ from app.models import (
     RecruiterOpportunity,
 )
 from app.premium_numbers.intelligence import OPPORTUNITY_STATUS_VALUES
+from app.premium_numbers.phone_normalization import best_display_phone, canonicalize_phone
 from app.premium_numbers.domain_guard import (
     is_hidden_invalid_employer_number,
     is_hidden_nvoids_placeholder_recruiter,
 )
 
 _VALID_CATEGORIES = ("recruiter", "employer", "review", "lead")
+
+
+def propose_create_premium_contact(
+    name: str = "",
+    title: str = "",
+    company: str = "",
+    email: str = "",
+    phone: str = "",
+    role: str = "recruiter",
+) -> dict[str, object]:
+    """Validate and shape a Premium Numbers contact proposal without writing it."""
+    normalized_role = role.strip().lower()
+    normalized_phone = canonicalize_phone(phone)
+    missing: list[str] = []
+    if not name.strip():
+        missing.append("name")
+    if not normalized_phone:
+        missing.append("phone")
+    if normalized_role not in {"recruiter", "employer"}:
+        missing.append("role")
+    if missing:
+        return {"status": "missing_fields", "missing": missing}
+
+    db = SessionLocal()
+    try:
+        duplicate = (
+            db.query(PremiumNumberContact)
+            .filter(
+                PremiumNumberContact.owner_id == settings.owner_id,
+                PremiumNumberContact.normalized_phone_number == normalized_phone,
+            )
+            .first()
+        )
+        return {
+            "action": "create_premium_contact",
+            "fields": {
+                "name": name.strip(),
+                "title": title.strip(),
+                "company": company.strip(),
+                "email": email.strip().lower(),
+                "phone": phone.strip(),
+                "phone_normalized": normalized_phone,
+                "phone_display": best_display_phone(phone, fallback=phone),
+                "role": normalized_role,
+            },
+            "duplicate_of_id": duplicate.id if duplicate else None,
+        }
+    finally:
+        db.close()
 
 
 def _recruiter_rows(db, email_id: int, recruiter_email_hint: str, name_search: str) -> list[dict[str, object]]:

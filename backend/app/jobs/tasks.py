@@ -110,6 +110,38 @@ def run_nvoids_sync_job(*, run_key: str, max_items: int) -> dict[str, Any]:
         db.close()
 
 
+def run_retry_selected_messages_job(*, run_key: str, external_message_ids: list[str]) -> dict[str, Any]:
+    from app import main
+
+    db = SessionLocal()
+    try:
+        update_job_progress(
+            db,
+            run_key=run_key,
+            total_items=len(external_message_ids),
+            status="running",
+            detail=f"Retry worker started for {len(external_message_ids)} selected email(s).",
+        )
+        items = main.get_candidates_by_message_ids(external_message_ids)
+        response = main._run_automation(None, db, run_key_override=run_key, items_override=items)
+        row = update_job_progress(
+            db,
+            run_key=run_key,
+            processed_items=len(external_message_ids),
+            total_items=len(external_message_ids),
+            status=response.status,
+            detail=response.detail,
+            complete=True,
+        )
+        return {"run_key": run_key, "status": row.status}
+    except Exception as exc:
+        db.rollback()
+        _mark_failed(run_key, exc)
+        raise
+    finally:
+        db.close()
+
+
 def run_automation_job(*, run_key: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
     from app import main
 

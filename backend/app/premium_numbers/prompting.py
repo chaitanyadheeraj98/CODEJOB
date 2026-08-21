@@ -21,8 +21,9 @@ For EACH phone number found, identify:
 4. Contact Email
 5. Company Name
 6. Role/Designation (if available)
-7. Why the number is present
-8. Confidence Level (High / Medium / Low)
+7. LinkedIn Profile URL (if mentioned)
+8. Why the number is present
+9. Confidence Level (High / Medium / Low)
 
 Rules:
 - Carefully distinguish between main submission contacts, recruiter signatures, and office numbers.
@@ -47,6 +48,7 @@ Expected JSON format:
       "email": "ram@example.com",
       "company": "TekWings",
       "designation": "Unknown",
+      "linkedin_url": "",
       "purpose": "Resume submission contact",
       "confidence": "High"
     }}

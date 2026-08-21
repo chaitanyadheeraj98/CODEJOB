@@ -50,6 +50,13 @@ function findInput(container: HTMLDivElement, labelText: string): HTMLInputEleme
   ) as HTMLInputElement | undefined
 }
 
+function findChipInput(container: HTMLDivElement, labelText: string): HTMLInputElement | undefined {
+  const label = Array.from(container.querySelectorAll('label')).find((element) =>
+    (element.textContent ?? '').trim().startsWith(labelText),
+  )
+  return label?.querySelector('input.skillInput') as HTMLInputElement | undefined
+}
+
 describe('draft rule policy helpers', () => {
   it('normalizes missing and legacy draft rules into the current shape', () => {
     const normalized = normalizeDynamicPolicy(
@@ -259,7 +266,7 @@ describe('Draft Qualification Rules settings UI', () => {
 
     const acceptedLocationSelect = findSelect(container, 'Accepted location rule')
     const recipientMappingSelect = findSelect(container, 'Recipient mapping rule')
-    const acceptedLocationsInput = findInput(container, 'Accepted locations')
+    const acceptedLocationsInput = findChipInput(container, 'Accepted locations')
     expect(acceptedLocationSelect).toBeDefined()
     expect(recipientMappingSelect).toBeDefined()
     expect(acceptedLocationsInput).toBeDefined()
@@ -267,7 +274,12 @@ describe('Draft Qualification Rules settings UI', () => {
     await act(async () => {
       if (acceptedLocationSelect) setSelectValue(acceptedLocationSelect, 'warn')
       if (recipientMappingSelect) setSelectValue(recipientMappingSelect, 'ignore')
-      if (acceptedLocationsInput) setInputValue(acceptedLocationsInput, 'texas, remote, ohio')
+      if (acceptedLocationsInput) {
+        for (const location of ['texas', 'remote', 'ohio']) {
+          setInputValue(acceptedLocationsInput, location)
+          acceptedLocationsInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+        }
+      }
       await Promise.resolve()
     })
 
@@ -304,7 +316,7 @@ describe('Draft Qualification Rules settings UI', () => {
         },
       },
     })
-    const qualificationThreshold = findInput(container, 'Qualification Threshold')
+    const qualificationThreshold = findInput(container, 'Score threshold value')
     expect(qualificationThreshold).toBeDefined()
 
     await act(async () => {
@@ -330,7 +342,7 @@ describe('Draft Qualification Rules settings UI', () => {
 
     const summaryGrid = container.querySelector('.configSummaryGrid')
     expect(summaryGrid).not.toBeNull()
-    expect(summaryGrid?.textContent).toContain('Qualification Threshold:0.60')
+    expect(summaryGrid?.textContent).toContain('Score Threshold Value:0.6')
     expect(summaryGrid?.textContent).not.toContain('0.91')
     // Literal values, not just booleans/counts: accepted_locations and must_have_skills
     // are non-empty in the fixture, employer_domains is empty.

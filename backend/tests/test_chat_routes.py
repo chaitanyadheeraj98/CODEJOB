@@ -55,6 +55,23 @@ class ChatRouteTests(unittest.TestCase):
         self.assertFalse(status.json()["enabled"])
         self.assertEqual(self.client.post("/chat/sessions").status_code, 404)
 
+    def test_rename_session_persists_title_and_rejects_blank(self) -> None:
+        main.settings.feature_chat_enabled = True
+        session_id = self.client.post("/chat/sessions").json()["id"]
+
+        renamed = self.client.patch(f"/chat/sessions/{session_id}", json={"title": "  Gmail Integration Testing  "})
+        self.assertEqual(renamed.status_code, 200, renamed.text)
+        self.assertEqual(renamed.json()["title"], "Gmail Integration Testing")
+
+        fetched = self.client.get(f"/chat/sessions/{session_id}")
+        self.assertEqual(fetched.json()["title"], "Gmail Integration Testing")
+
+        blank = self.client.patch(f"/chat/sessions/{session_id}", json={"title": "   "})
+        self.assertEqual(blank.status_code, 422)
+
+        missing = self.client.patch("/chat/sessions/999999", json={"title": "Anything"})
+        self.assertEqual(missing.status_code, 404)
+
     def test_session_message_route_streams_sse(self) -> None:
         main.settings.feature_chat_enabled = True
         with patch("app.routers.chat._ollama_running", new=AsyncMock(return_value=True)):

@@ -44,6 +44,7 @@ export default function DetailPanel({
   const [savingEmployer, setSavingEmployer] = useState(false)
   const [pendingAction, setPendingAction] = useState<InventoryAction | null>(null)
   const [deletingVersion, setDeletingVersion] = useState(false)
+  const [syncingVersion, setSyncingVersion] = useState(false)
 
   useEffect(() => {
     const panel = panelRef.current
@@ -82,6 +83,11 @@ export default function DetailPanel({
     }
   }
 
+  const closeEditors = () => {
+    setEditingRecruiter(false)
+    setEditingEmployer(false)
+  }
+
   const act = (action: InventoryAction, edits?: ReviewEdits) => {
     setPendingAction(action)
     onAction(row, action, edits)
@@ -92,6 +98,19 @@ export default function DetailPanel({
   const review = row.review
   const recruiter = row.recruiter
   const employer = row.employer
+
+  const activeVersion = versions.find((version) => version.id === primaryContact?.active_lead_id) ?? null
+  const profileOutOfSync = Boolean(
+    activeVersion &&
+      (primaryRole === 'recruiter'
+        ? recruiter &&
+          (activeVersion.owner_name !== recruiter.recruiter_name ||
+            activeVersion.company !== recruiter.company ||
+            (activeVersion.contact_email || '') !== (recruiter.recruiter_email || '') ||
+            (activeVersion.linkedin_url || '') !== (recruiter.linkedin_url || ''))
+        : employer &&
+          (activeVersion.owner_name !== employer.owner_name || activeVersion.company !== employer.company)),
+  )
 
   return (
     <div className="detailPanelOverlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
@@ -274,6 +293,29 @@ export default function DetailPanel({
           {primaryContact ? (
             <section className="detailSection">
               <h4>Versions and source</h4>
+              {profileOutOfSync && activeVersion ? (
+                <p className="errorBanner">
+                  The profile above doesn't match this active version ({activeVersion.owner_name} · {activeVersion.company}).
+                  {' '}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSyncingVersion(true)
+                      selectContactVersion(apiBase, primaryRole, row.id, activeVersion.id)
+                        .then(() => {
+                          onToast('Profile synced from active version')
+                          closeEditors()
+                          return onReload()
+                        })
+                        .catch((reason) => onError((reason as Error).message))
+                        .finally(() => setSyncingVersion(false))
+                    }}
+                    disabled={syncingVersion || busy}
+                  >
+                    {syncingVersion ? 'Syncing...' : 'Sync profile from this version'}
+                  </button>
+                </p>
+              ) : null}
               <label>
                 Active {primaryRole} version ({primaryContact.version_count})
                 <select
@@ -283,6 +325,7 @@ export default function DetailPanel({
                     selectContactVersion(apiBase, primaryRole, row.id, Number(event.target.value))
                       .then(() => {
                         onToast('Version switched')
+                        closeEditors()
                         return onReload()
                       })
                       .catch((reason) => onError((reason as Error).message))
@@ -315,6 +358,7 @@ export default function DetailPanel({
                     deleteContactVersion(apiBase, primaryRole, row.id, primaryContact.active_lead_id)
                       .then(() => {
                         onToast('Version deleted')
+                        closeEditors()
                         return onReload()
                       })
                       .catch((reason) => onError((reason as Error).message))

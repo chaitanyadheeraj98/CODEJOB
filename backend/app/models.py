@@ -189,6 +189,9 @@ class UserSettings(Base):
     nvoids_batch_limit: Mapped[int] = mapped_column(Integer, default=10)
     nvoids_detail_title_mode: Mapped[str] = mapped_column(String(40), default="job_details")
     nvoids_locations: Mapped[str] = mapped_column(Text, default="")
+    nvoids_job_role: Mapped[str] = mapped_column(Text, default="")
+    nvoids_search_location: Mapped[str] = mapped_column(Text, default="")
+    nvoids_custom_query: Mapped[str] = mapped_column(Text, default="")
     feature_auto_send: Mapped[bool] = mapped_column(default=False)
     feature_retry_queue: Mapped[bool] = mapped_column(default=False)
     feature_ai_enabled: Mapped[bool] = mapped_column(default=False)
@@ -232,6 +235,9 @@ class ResumeAsset(Base):
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     is_current: Mapped[bool] = mapped_column(default=True)
     semantic_embedding: Mapped[str | None] = mapped_column(Text, nullable=True)
+    content_markdown: Mapped[str | None] = mapped_column(Text, nullable=True)
+    content_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    content_evidence_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
 
@@ -549,6 +555,7 @@ class PremiumNumberLead(Base):
     source_email_subject: Mapped[str] = mapped_column(String(500), default="")
     source_email_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     source_url: Mapped[str | None] = mapped_column(String(1200), nullable=True)
+    linkedin_url: Mapped[str] = mapped_column(String(500), default="")
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
 

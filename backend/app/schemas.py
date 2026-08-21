@@ -1,7 +1,7 @@
 from datetime import datetime
 import json
 import re
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from pydantic import AliasChoices, BaseModel, Field, field_validator
 
@@ -26,6 +26,24 @@ class RejectRequest(BaseModel):
 class BulkRejectRequest(BaseModel):
     ids: list[int]
     reason: str | None = None
+
+
+class BulkApproveRequest(BaseModel):
+    ids: list[int] = Field(max_length=25)
+
+
+class ManualPremiumContactRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    title: str = Field(default="", max_length=255)
+    company: str = Field(default="", max_length=255)
+    email: str = Field(default="", max_length=255)
+    phone: str = Field(min_length=1, max_length=80)
+    role: Literal["recruiter", "employer"] = "recruiter"
+
+
+class ChatSendReplyRequest(BaseModel):
+    body: str = Field(min_length=1, max_length=20000)
+    subject: str | None = Field(default=None, max_length=998)
 
 
 class ResolveRecipientsRequest(BaseModel):
@@ -81,6 +99,9 @@ class SettingsRequest(BaseModel):
     nvoids_batch_limit: int = 10
     nvoids_detail_title_mode: str = "job_details"
     nvoids_locations: list[str] = Field(default_factory=list)
+    nvoids_job_role: str = ""
+    nvoids_search_location: str = ""
+    nvoids_custom_query: str = ""
     feature_auto_send: bool = False
     feature_retry_queue: bool = False
     feature_ai_enabled: bool = False
@@ -198,6 +219,7 @@ class ResumeResponse(BaseModel):
     skills_text: str
     is_enabled: bool
     is_current: bool
+    content_summary: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -758,6 +780,10 @@ class ChatMessageRequest(BaseModel):
     text: str
 
 
+class ChatSessionRenameRequest(BaseModel):
+    title: str
+
+
 class ChatDeleteResponse(BaseModel):
     id: int
     deleted: bool
@@ -875,6 +901,7 @@ class PremiumNumberResponse(BaseModel):
     source_email_subject: str
     source_email_message_id: str | None
     source_url: str | None = None
+    linkedin_url: str = ""
     created_at: datetime
     updated_at: datetime
 
@@ -1068,6 +1095,10 @@ class BulkContactActionResultItem(BaseModel):
 
 class BulkContactActionResponse(BaseModel):
     results: list[BulkContactActionResultItem]
+
+
+class RecentRunSkippedItemRetryRequest(BaseModel):
+    skipped_item_ids: list[int]
 
 
 class PendingNumberReviewCountResponse(BaseModel):

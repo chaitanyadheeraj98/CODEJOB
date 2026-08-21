@@ -219,6 +219,29 @@ class ScoringRuntimeService:
     def semantic_text_for_resume(self, resume: ResumeAsset | None, *, allow_file_fallback: bool = True) -> str:
         if not resume:
             return ""
+        evidence = self._resume_evidence_payload(resume)
+        if evidence:
+            parts: list[str] = []
+            skill_parts = []
+            for item in evidence.get("skills", []):
+                if not isinstance(item, dict) or not str(item.get("name") or "").strip():
+                    continue
+                name = str(item["name"]).strip()
+                detail = str(item.get("evidence") or "").strip()
+                skill_parts.append(f"{name} ({detail})" if detail else name)
+            if skill_parts:
+                parts.append(f"Skills: {', '.join(skill_parts)}")
+            if isinstance(evidence.get("years_detected"), int):
+                parts.append(f"Experience: {evidence['years_detected']} years")
+            for key, label in (("titles", "Titles"), ("projects", "Projects"), ("certifications", "Certifications")):
+                values = [str(value).strip() for value in evidence.get(key, []) if str(value).strip()]
+                if values:
+                    parts.append(f"{label}: {', '.join(values)}")
+            domain = str(evidence.get("domain") or "").strip()
+            if domain:
+                parts.append(f"Domain: {domain}")
+            if parts:
+                return ". ".join(parts)
         skills_text = str(getattr(resume, "skills_text", "") or "").strip()
         if skills_text and skills_text.lower() != "none_detected":
             compact_skills = build_semantic_skill_summary(skills_text, limit=12) or skills_text
@@ -226,6 +249,82 @@ class ScoringRuntimeService:
         if not allow_file_fallback:
             return ""
         return extract_resume_context(resume.file_path, resume.file_name)
+
+    def _resume_evidence_payload(self, resume: ResumeAsset | None) -> dict[str, Any]:
+        raw = str(getattr(resume, "content_evidence_json", "") or "").strip()
+        if not raw:
+            return {}
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    def _normalized_contains(self, haystack: str, needle: str) -> bool:
+        normalized_haystack = normalize_taxonomy_text(haystack)
+        normalized_needle = normalize_taxonomy_text(needle)
+        if not normalized_haystack or not normalized_needle:
+            return False
+        return bool(re.search(rf"(?<![a-z0-9]){re.escape(normalized_needle)}(?![a-z0-9])", normalized_haystack))
+
+    def _required_skill_evidence(
+        self,
+        required_skills: list[str],
+        *,
+        resume_skills_text: str,
+        evidence: dict[str, Any],
+    ) -> tuple[float, list[dict[str, object]], list[str]]:
+        details: list[dict[str, object]] = []
+        missing: list[str] = []
+        evidence_skills = [item for item in evidence.get("skills", []) if isinstance(item, dict)]
+        for skill in required_skills:
+            credit = 0.0
+            sentence = ""
+            for item in evidence_skills:
+                name = str(item.get("name") or "")
+                if not (self._normalized_contains(name, skill) or self._normalized_contains(skill, name)):
+                    continue
+                sentence = str(item.get("evidence") or "").strip()
+                credit = 1.0 if sentence else 0.5
+                break
+            if credit == 0.0 and self._normalized_contains(resume_skills_text, skill):
+                credit = 0.5
+            details.append({"skill": skill, "credit": credit, "evidence": sentence or None})
+            if credit == 0.0:
+                missing.append(skill)
+        score = sum(float(item["credit"]) for item in details) / len(details) if details else 0.0
+        return clamp01(score), details, missing
+
+    def _responsibility_evidence_score(self, jd_text: str, evidence_texts: list[str]) -> float:
+        stop_words = {
+            "about", "after", "also", "and", "are", "but", "for", "from", "have", "into",
+            "need", "our", "that", "the", "their", "this", "with", "will", "years", "your",
+        }
+
+        def words(value: str) -> set[str]:
+            return {
+                token for token in re.findall(r"[a-z0-9+#.]{3,}", value.lower())
+                if token not in stop_words
+            }
+
+        jd_words = words(jd_text)
+        scores = []
+        for text in evidence_texts:
+            item_words = words(text)
+            if item_words:
+                scores.append(len(jd_words & item_words) / len(item_words))
+        return clamp01(max(scores, default=0.0))
+
+    def _required_certification_phrases(self, jd_text: str) -> list[str]:
+        return list(
+            dict.fromkeys(
+                cleaned
+                for part in re.split(r"[\n;.]", jd_text or "")
+                if "certif" in part.lower()
+                if (cleaned := re.sub(r"\s+", " ", part).strip())
+                if len(cleaned) <= 200
+            )
+        )
 
     def _picker_sort_key(self, selection: ResumeMatchSelection) -> tuple[int, float, float, float, float]:
         return (
@@ -1379,7 +1478,7 @@ class ScoringRuntimeService:
         email_embedding_json: str | None = None,
         resume_embedding_json: str | None = None,
     ) -> tuple[float | None, str | None, str | None, str | None]:
-        _ = subject, body
+        _ = subject
         if not resume:
             return None, None, None, None
 
@@ -1395,6 +1494,8 @@ class ScoringRuntimeService:
             requirements_payload=((parser_details or {}).get("structured_requirements") if parser_details else None),
             resume=resume,
         )
+        requirements_payload = ((parser_details or {}).get("structured_requirements") if parser_details else None)
+        requirements = requirements_from_payload(requirements_payload)
         primary_overlap = raw_overlap
         if structured_coverage is not None:
             primary_overlap = clamp01(
@@ -1402,8 +1503,75 @@ class ScoringRuntimeService:
                 + (structured_coverage.preferred_group_coverage * 0.20)
                 + (structured_coverage.informational_coverage * 0.05)
             )
-        role_foundation_score = clamp01((intent.foundation_score * 0.55) + (intent.role_alignment_score * 0.45))
         weak_penalty = min(0.12, 0.04 * len(intent.weak_signal_hits)) if intent.jd_role_family == "ai" else 0.0
+
+        required_skills = list(
+            dict.fromkeys(
+                skill.canonical_name
+                for group in requirements.required_groups
+                for skill in group.skills
+                if skill.canonical_name
+            )
+        )
+        if not required_skills:
+            required_skills = self._split_skill_candidates(jd_skills_text)
+        evidence = self._resume_evidence_payload(resume)
+        required_skills_score, required_skill_evidence, evidence_missing_skills = self._required_skill_evidence(
+            required_skills,
+            resume_skills_text=resume_skills_text,
+            evidence=evidence,
+        )
+
+        years_detected = evidence.get("years_detected") if isinstance(evidence.get("years_detected"), int) else None
+        years_required = requirements.experience_years_min
+        years_score = (
+            clamp01(float(years_detected) / years_required)
+            if years_required and years_detected is not None
+            else 0.0
+        )
+
+        titles = [str(value).strip() for value in evidence.get("titles", []) if str(value).strip()]
+        title_intent = compute_intent_weighted_match(
+            jd_role=str(parsed.get("role", "")),
+            jd_skills_text=jd_skills_text,
+            resume_skills_text=", ".join([resume_skills_text, *titles]),
+        )
+        role_match_score = title_intent.role_alignment_score if titles else intent.role_alignment_score * 0.5
+
+        project_evidence = [str(value).strip() for value in evidence.get("projects", []) if str(value).strip()]
+        project_evidence.extend(
+            str(item.get("evidence") or "").strip()
+            for item in evidence.get("skills", [])
+            if isinstance(item, dict) and str(item.get("evidence") or "").strip()
+        )
+        responsibility_score = self._responsibility_evidence_score(body, project_evidence)
+
+        target_domains = list(requirements.preferred_domains)
+        parsed_domain = str(parsed.get("domain", "") or "").strip()
+        if parsed_domain and parsed_domain.lower() not in {"unknown", "none"}:
+            target_domains.append(parsed_domain)
+        target_domains = list(dict.fromkeys(target_domains))
+        resume_domain = str(evidence.get("domain") or "").strip()
+        domain_score = 1.0 if any(
+            self._normalized_contains(resume_domain, target) or self._normalized_contains(target, resume_domain)
+            for target in target_domains
+        ) else 0.0
+
+        certification_targets = self._required_certification_phrases(body)
+        resume_certifications = [
+            str(value).strip() for value in evidence.get("certifications", []) if str(value).strip()
+        ]
+        matched_certifications = [
+            target for target in certification_targets
+            if any(
+                self._normalized_contains(target, certification)
+                or self._normalized_contains(certification, target)
+                for certification in resume_certifications
+            )
+        ]
+        certification_score = (
+            len(matched_certifications) / len(certification_targets) if certification_targets else 0.0
+        )
 
         semantic_similarity_score = 0.0
         semantic_used = False
@@ -1414,13 +1582,23 @@ class ScoringRuntimeService:
                 semantic_similarity_score = semantic_similarity(email_embedding, resume_embedding)
                 semantic_used = True
 
-        weighted_sum = (
-            (primary_overlap * 0.45)
-            + (intent.score * 0.30)
-            + (role_foundation_score * 0.15)
-            + ((semantic_similarity_score if semantic_used else 0.0) * 0.10)
-        )
-        total_weight = 1.0 if semantic_used else 0.90
+        categories: dict[str, tuple[float, float]] = {}
+        if required_skills:
+            categories["required_skills"] = (0.30, required_skills_score)
+        if years_required is not None:
+            categories["experience_years"] = (0.25, years_score)
+        if str(parsed.get("role", "") or "").strip():
+            categories["job_title_role"] = (0.15, role_match_score)
+        if body.strip():
+            categories["responsibilities_projects"] = (0.15, responsibility_score)
+        if target_domains:
+            categories["industry_domain"] = (0.05, domain_score)
+        if certification_targets:
+            categories["education_certifications"] = (0.05, certification_score)
+        if semantic_used:
+            categories["semantic_similarity"] = (0.05, semantic_similarity_score)
+        total_weight = sum(weight for weight, _score in categories.values()) or 1.0
+        weighted_sum = sum(weight * score for weight, score in categories.values())
         final_score_01 = clamp01((weighted_sum / total_weight) - weak_penalty)
         final_score = round(final_score_01 * 100.0, 2)
 
@@ -1431,6 +1609,30 @@ class ScoringRuntimeService:
             "role_alignment": round(intent.role_alignment_score, 4),
             "foundation_coverage": round(intent.foundation_score, 4),
             "semantic_similarity": round(semantic_similarity_score, 4) if semantic_used else None,
+            "required_skills_match": round(required_skills_score, 4) if required_skills else None,
+            "required_skill_evidence": required_skill_evidence,
+            "evidence_missing_required_skills": evidence_missing_skills,
+            "experience_years": {
+                "detected": years_detected,
+                "required": years_required,
+                "score": round(years_score, 4) if years_required is not None else None,
+            },
+            "job_title_role_match": round(role_match_score, 4),
+            "matched_titles": titles if titles and role_match_score > 0 else [],
+            "missing_titles": [] if titles and role_match_score > 0 else [str(parsed.get("role", "") or "")],
+            "responsibilities_project_evidence": round(responsibility_score, 4),
+            "industry_domain": {
+                "resume": resume_domain or None,
+                "required": target_domains,
+                "matched": bool(domain_score) if target_domains else None,
+            },
+            "education_certifications": {
+                "resume": resume_certifications,
+                "required": certification_targets,
+                "matched": matched_certifications,
+                "missing": [value for value in certification_targets if value not in matched_certifications],
+            },
+            "active_category_weights": {name: weight for name, (weight, _score) in categories.items()},
             "matched_raw_skills": matched_raw,
             "missing_raw_skills": missing_raw,
             "matched_clusters": list(intent.matched_clusters),
@@ -1451,9 +1653,9 @@ class ScoringRuntimeService:
         }
         summary_parts = [
             f"ATS hybrid score {int(round(final_score))}/100",
-            f"raw_overlap={primary_overlap:.2f}",
-            f"intent_match={intent.score:.2f}",
-            f"role_alignment={intent.role_alignment_score:.2f}",
+            f"required_skills_match={required_skills_score:.2f}",
+            f"role_alignment={role_match_score:.2f}",
+            f"responsibility_evidence={responsibility_score:.2f}",
         ]
         if structured_coverage is not None:
             summary_parts.append(f"required_group_coverage={structured_coverage.required_group_coverage:.2f}")

@@ -65,7 +65,7 @@ class RunOrchestratorDependencies:
         [str, str, dict[str, str | int | bool], UserSettings, RecruiterEmail | None, ResumeAsset | None],
         tuple[float, str, str, str | None, str | None, Any],
     ]
-    policy_f2f_block: Callable[[dict[str, str | int | bool], Mapping[str, Any]], tuple[bool, str]]
+    policy_f2f_block: Callable[[dict[str, str | int | bool], Mapping[str, Any], UserSettings], tuple[bool, str]]
     evaluate_routing_policy: Callable[[Session, str, str, str, str, bool], RoutingDecision]
     greeting_from_to_contact: Callable[[str | None, str], str]
     build_user_fallback_draft: Callable[

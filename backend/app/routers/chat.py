@@ -16,6 +16,7 @@ from app.schemas import (
     ChatMessageRequest,
     ChatMessageResponse,
     ChatSessionDetailResponse,
+    ChatSessionRenameRequest,
     ChatSessionResponse,
     ChatStatusResponse,
 )
@@ -36,6 +37,12 @@ def get_chat_service() -> ChatService:
 def require_chat_enabled() -> None:
     if not settings.feature_chat_enabled:
         raise HTTPException(status_code=404, detail="Chat is disabled")
+
+
+def require_chat_actions_enabled() -> None:
+    require_chat_enabled()
+    if not settings.feature_chat_actions_enabled:
+        raise HTTPException(status_code=404, detail="Chat actions are disabled")
 
 
 async def _ollama_running() -> bool:
@@ -110,6 +117,20 @@ def get_chat_session(
         **ChatSessionResponse.model_validate(session).model_dump(),
         messages=[ChatMessageResponse.model_validate(row) for row in messages],
     )
+
+
+@router.patch(
+    "/sessions/{session_id}",
+    response_model=ChatSessionResponse,
+    dependencies=[Depends(require_chat_enabled)],
+)
+def rename_chat_session(
+    session_id: int,
+    payload: ChatSessionRenameRequest,
+    db: Session = Depends(get_db),
+    service: ChatService = Depends(get_chat_service),
+) -> ChatSessionResponse:
+    return ChatSessionResponse.model_validate(service.rename_session(db, session_id, payload.title))
 
 
 @router.delete(

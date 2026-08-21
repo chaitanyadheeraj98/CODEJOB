@@ -46,8 +46,11 @@ class Settings(BaseSettings):
     ollama_timeout_seconds: float = 60.0
     ollama_max_tool_iterations: int = 6
     feature_chat_enabled: bool = False
+    feature_chat_actions_enabled: bool = False
     chat_history_max_messages: int = 20
     chat_message_char_limit: int = 4000
+    searxng_url: str = Field(default="", validation_alias=AliasChoices("SEARXNG_URL"))
+    chat_web_search_max_results: int = 5
     google_client_id: str = ""
     google_client_secret: str = ""
     google_redirect_uri: str = "http://localhost:8080/"

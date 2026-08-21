@@ -22,6 +22,8 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+      searxng:
+        condition: service_started
 
   worker:
     build:
@@ -79,6 +81,15 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  searxng:
+    image: searxng/searxng:latest
+    container_name: codejob-searxng
+    environment:
+      SEARXNG_BASE_URL: http://searxng:8080/
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    restart: unless-stopped
 
 volumes:
   backend_data:

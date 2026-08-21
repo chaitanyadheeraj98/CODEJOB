@@ -44,6 +44,7 @@ export type PremiumNumberVersion = {
   recruiter_email_id: number | null
   external_opportunity_id: number | null
   source_url: string | null
+  linkedin_url: string
   created_at: string
 }
 

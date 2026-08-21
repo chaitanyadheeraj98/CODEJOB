@@ -1,4 +1,5 @@
 import type { ChatSession, ChatSessionDetail, ChatStatus } from './types'
+import type { ProposalFields, ProposalHandler } from './proposals'
 
 async function responseError(response: Response, fallback: string): Promise<Error> {
   const payload = (await response.json().catch(() => null)) as { detail?: string } | null
@@ -32,6 +33,16 @@ export async function getChatSession(apiBase: string, sessionId: number): Promis
 export async function deleteChatSession(apiBase: string, sessionId: number): Promise<void> {
   const response = await fetch(`${apiBase}/chat/sessions/${sessionId}`, { method: 'DELETE' })
   if (!response.ok) throw await responseError(response, 'Failed to delete chat')
+}
+
+export async function renameChatSession(apiBase: string, sessionId: number, title: string): Promise<ChatSession> {
+  const response = await fetch(`${apiBase}/chat/sessions/${sessionId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title }),
+  })
+  if (!response.ok) throw await responseError(response, 'Failed to rename chat')
+  return (await response.json()) as ChatSession
 }
 
 export type ChatStreamEvent = {
@@ -95,4 +106,19 @@ export async function sendChatMessage(
   if (!response.ok) throw await responseError(response, 'Failed to send message')
   if (!response.body) throw new Error('Chat response did not include a stream')
   await consumeSseStream(response.body, onEvent)
+}
+
+export async function runProposalAction(
+  apiBase: string,
+  handler: ProposalHandler,
+  fields: ProposalFields,
+): Promise<Record<string, unknown>> {
+  const endpoint = typeof handler.endpoint === 'function' ? handler.endpoint(fields) : handler.endpoint
+  const response = await fetch(`${apiBase}${endpoint}`, {
+    method: handler.method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(handler.buildBody(fields)),
+  })
+  if (!response.ok) throw await responseError(response, 'Action failed')
+  return (await response.json()) as Record<string, unknown>
 }

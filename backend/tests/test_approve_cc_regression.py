@@ -292,7 +292,7 @@ class ApproveCcRegressionTests(unittest.TestCase):
                 resume_embedding_json=None,
                 semantic_diag=SimpleNamespace(input_source="latest_block", input_chars=100, chunks=1, fallback_reason=None),
             )
-            main.should_block_f2f = lambda _p: (False, None)
+            main.should_block_f2f = lambda *_args, **_kwargs: (False, None)
             main._analyze_email_routing = lambda _db, _sender, _subject, _body, _snippet="": main.RoutingResult(
                 to_email="ankit.negi@codinix.com",
                 cc_email="vaishnavi@horizonsoftech.net",

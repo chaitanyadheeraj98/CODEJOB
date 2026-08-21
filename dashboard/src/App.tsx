@@ -188,6 +188,9 @@ type SettingsPayload = {
   nvoids_batch_limit: number
   nvoids_detail_title_mode: NvoidsDetailTitleMode
   nvoids_locations: string[]
+  nvoids_job_role: string
+  nvoids_search_location: string
+  nvoids_custom_query: string
   feature_auto_send: boolean
   feature_retry_queue: boolean
   feature_ai_enabled: boolean
@@ -440,6 +443,9 @@ type RecentRunCard = AutomationRunResponse & {
   skipped_items_loaded?: boolean
   skipped_items_loading?: boolean
   skipped_items_error?: string | null
+  selected_skipped_ids?: number[]
+  retrying_skipped?: boolean
+  retry_error?: string | null
 }
 
 type BackgroundJob = {
@@ -451,6 +457,8 @@ type BackgroundJob = {
   total_items: number | null
   progress_pct: number | null
   queue_name: string | null
+  skipped_item_count?: number | null
+  failed_count?: number | null
 }
 
 type JobEnqueueResponse = {
@@ -575,6 +583,7 @@ type ResumeDatabaseSectionProps = {
   resumeSkillsInput: string
   resumeSkillEdits: Record<number, string>
   resumeAssets: ResumeAsset[]
+  resumeUploading: boolean
   setResumeFile: (file: File | null) => void
   setResumeSkillsInput: (value: string) => void
   setResumeSkillEdits: React.Dispatch<React.SetStateAction<Record<number, string>>>
@@ -590,6 +599,7 @@ export function ResumeDatabaseSection({
   resumeSkillsInput,
   resumeSkillEdits,
   resumeAssets,
+  resumeUploading,
   setResumeFile,
   setResumeSkillsInput,
   setResumeSkillEdits,
@@ -629,6 +639,7 @@ export function ResumeDatabaseSection({
             type="file"
             accept=".pdf,.doc,.docx"
             aria-label="Upload resume file"
+            disabled={resumeUploading}
             onChange={(e) => setResumeFile(e.target.files?.[0] ?? null)}
           />
           <label className="resumeDatabaseField">
@@ -642,9 +653,12 @@ export function ResumeDatabaseSection({
             />
           </label>
           <p className="subtle resumeDatabaseHelp">Use clean comma-separated skills for faster and more accurate resume matching.</p>
-          <button type="button" onClick={uploadResume} disabled={!resumeFile}>
-            Upload Resume To Database
+          <button type="button" onClick={uploadResume} disabled={!resumeFile || resumeUploading}>
+            {resumeUploading ? 'Processing Resume...' : 'Upload Resume To Database'}
           </button>
+          {resumeUploading ? (
+            <p className="subtle" aria-live="polite">Processing resume - extracting content and preparing ATS profile...</p>
+          ) : null}
         </div>
         {resumeAssets.length === 0 ? (
           <p className="subtle">No resumes stored yet.</p>
@@ -1372,6 +1386,21 @@ function getSourceLabel(source: string | null | undefined): string {
 function renderTextOrDash(value: string | null | undefined): string {
   const text = (value ?? '').trim()
   return text || '-'
+}
+
+function jobStatusMeta(status: string): { label: string; className: string; checkmark: boolean } {
+  switch (status) {
+    case 'running':
+      return { label: 'Running', className: 'running', checkmark: false }
+    case 'ok':
+      return { label: 'Completed', className: 'ok', checkmark: true }
+    case 'failed':
+      return { label: 'Failed', className: 'failed', checkmark: false }
+    case 'canceled':
+      return { label: 'Canceled', className: 'canceled', checkmark: false }
+    default:
+      return { label: 'Queued', className: 'queued', checkmark: false }
+  }
 }
 
 function jdSummarySkills(item: Candidate): string[] {
@@ -2576,6 +2605,9 @@ function App() {
     nvoids_batch_limit: 10,
     nvoids_detail_title_mode: 'job_details',
     nvoids_locations: [],
+    nvoids_job_role: '',
+    nvoids_search_location: '',
+    nvoids_custom_query: '',
     feature_auto_send: false,
     feature_retry_queue: false,
     feature_ai_enabled: false,
@@ -2610,6 +2642,7 @@ function App() {
   const [resumeFile, setResumeFile] = useState<File | null>(null)
   const [resumeSkillsInput, setResumeSkillsInput] = useState('')
   const [resumeSkillEdits, setResumeSkillEdits] = useState<Record<number, string>>({})
+  const [resumeUploading, setResumeUploading] = useState(false)
   const [attachmentUploadFiles, setAttachmentUploadFiles] = useState<File[]>([])
   const [gmailRequirementGroups, setGmailRequirementGroups] = useState<TrustedGmailGroup[]>([])
   const [gmailGroupsBusy, setGmailGroupsBusy] = useState(false)
@@ -2632,6 +2665,8 @@ function App() {
   const [nvoidsRunning, setNvoidsRunning] = useState(false)
   const [automationJob, setAutomationJob] = useState<BackgroundJob | null>(null)
   const [nvoidsJob, setNvoidsJob] = useState<BackgroundJob | null>(null)
+  const [automationLiveSkipped, setAutomationLiveSkipped] = useState<RecentRunItem[]>([])
+  const [nvoidsLiveSkipped, setNvoidsLiveSkipped] = useState<RecentRunItem[]>([])
   const [oauthInProgress, setOauthInProgress] = useState(false)
   const [oauthAuthorizationUrl, setOauthAuthorizationUrl] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -2672,6 +2707,7 @@ function App() {
   const [roleManifestChildCreationEnabled, setRoleManifestChildCreationEnabled] = useState(false)
   const [skillDraft, setSkillDraft] = useState('')
   const [nvoidsLocationDraft, setNvoidsLocationDraft] = useState('')
+  const [acceptedLocationDraft, setAcceptedLocationDraft] = useState('')
   const [employerDomainDraft, setEmployerDomainDraft] = useState('')
   const [employerDomainError, setEmployerDomainError] = useState('')
   const [premiumPendingCount, setPremiumPendingCount] = useState(0)
@@ -2843,6 +2879,21 @@ function App() {
       },
     })
   }
+  const addAcceptedLocation = (raw: string) => {
+    const location = raw.trim()
+    if (!location) return
+    const current = draftRules.accepted_location.locations ?? settings.accepted_locations
+    if (current.some((s) => s.toLowerCase() === location.toLowerCase())) {
+      setAcceptedLocationDraft('')
+      return
+    }
+    updateRuleValue('accepted_location', [...current, location].join(','))
+    setAcceptedLocationDraft('')
+  }
+  const removeAcceptedLocation = (locationToRemove: string) => {
+    const current = draftRules.accepted_location.locations ?? settings.accepted_locations
+    updateRuleValue('accepted_location', current.filter((s) => s.toLowerCase() !== locationToRemove.toLowerCase()).join(','))
+  }
   const detectProfileFromPolicy = (policy: DynamicPolicy): PolicyProfileName | null => {
     for (const profileName of profileNames) {
       if (JSON.stringify(policyProfiles[profileName]) === JSON.stringify(policy)) return profileName
@@ -2953,6 +3004,9 @@ function App() {
       nvoids_batch_limit: Math.max(1, Math.min(payload.nvoids_batch_limit || 10, 50)),
       nvoids_detail_title_mode: normalizeNvoidsDetailTitleMode(payload.nvoids_detail_title_mode),
       nvoids_locations: payload.nvoids_locations ?? [],
+      nvoids_job_role: payload.nvoids_job_role ?? '',
+      nvoids_search_location: payload.nvoids_search_location ?? '',
+      nvoids_custom_query: payload.nvoids_custom_query ?? '',
       employer_domains: payload.employer_domains ?? [],
       draft_text_size: normalizeDraftTextSize(payload.draft_text_size),
       preferred_employer_cc_emails:
@@ -3331,6 +3385,100 @@ function App() {
     }
   }
 
+  const toggleSkippedItemSelected = (runKey: string | null | undefined, itemId: number) => {
+    if (!runKey) return
+    setLogs((prev) =>
+      prev.map((item) => {
+        if (item.run_key !== runKey) return item
+        const selected = item.selected_skipped_ids ?? []
+        const next = selected.includes(itemId)
+          ? selected.filter((id) => id !== itemId)
+          : [...selected, itemId]
+        return { ...item, selected_skipped_ids: next }
+      }),
+    )
+  }
+
+  const selectAllSkippedItems = (runKey: string | null | undefined, checked: boolean) => {
+    if (!runKey) return
+    setLogs((prev) =>
+      prev.map((item) => {
+        if (item.run_key !== runKey) return item
+        const retryableIds = (item.skipped_items ?? [])
+          .filter((skipped) => Boolean(skipped.external_message_id))
+          .map((skipped) => skipped.id)
+        return { ...item, selected_skipped_ids: checked ? retryableIds : [] }
+      }),
+    )
+  }
+
+  const retrySelectedSkippedItems = async (runKey: string | null | undefined) => {
+    if (!runKey) return
+    const current = logs.find((item) => item.run_key === runKey)
+    const selected = current?.selected_skipped_ids ?? []
+    if (selected.length === 0) return
+    const confirmed = window.confirm(
+      `Retry ${selected.length} selected email(s)? Each will be re-fetched from Gmail by message id and run through Sync + Queue again.`,
+    )
+    if (!confirmed) return
+    setRunning(true)
+    setError('')
+    setLogs((prev) =>
+      prev.map((item) => (item.run_key === runKey ? { ...item, retrying_skipped: true, retry_error: null } : item)),
+    )
+    try {
+      const res = await fetch(`${apiBase}/recent-runs/skipped/retry`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skipped_item_ids: selected }),
+      })
+      if (!res.ok) {
+        const details = await res.json().catch(() => null)
+        const attachRunKey = details?.detail?.run_key as string | undefined
+        if (details?.detail?.code === 'another_job_in_progress' && attachRunKey) {
+          // Already-running job (e.g. a manual Sync + Queue): attach to it so the existing
+          // poller shows real progress instead of a raw "another_job_in_progress" error.
+          setAutomationJob({
+            run_key: attachRunKey, job_id: details.detail.job_id ?? null, status: 'running',
+            detail: 'Attaching to the automation run already in progress.',
+            processed_items: 0, total_items: null, progress_pct: null, queue_name: 'automation_run',
+          })
+          setAutomationLiveSkipped([])
+          setLogs((prev) =>
+            prev.map((item) =>
+              item.run_key === runKey ? { ...item, retrying_skipped: false, selected_skipped_ids: [] } : item,
+            ),
+          )
+          return
+        }
+        throw new Error(typeof details?.detail === 'string' ? details.detail : 'Failed to retry selected items')
+      }
+      const data = (await res.json()) as JobEnqueueResponse
+      setAutomationJob({
+        ...data,
+        detail: `Queued ${selected.length} selected email(s) for retry.`,
+        processed_items: 0,
+        total_items: selected.length,
+        progress_pct: 0,
+        queue_name: 'automation_run',
+      })
+      setAutomationLiveSkipped([])
+      setLogs((prev) =>
+        prev.map((item) =>
+          item.run_key === runKey ? { ...item, retrying_skipped: false, selected_skipped_ids: [] } : item,
+        ),
+      )
+      await loadRecentRuns(settings.mail_date ?? null)
+    } catch (e) {
+      setRunning(false)
+      setLogs((prev) =>
+        prev.map((item) =>
+          item.run_key === runKey ? { ...item, retrying_skipped: false, retry_error: (e as Error).message } : item,
+        ),
+      )
+    }
+  }
+
   const trackViewEvent = async (page: typeof activePage) => {
     const eventMap: Record<typeof activePage, string> = {
       run_queue: 'view_run_queue',
@@ -3549,9 +3697,15 @@ function App() {
     let timerId: number | null = null
     const poll = async () => {
       const results = await Promise.all(pendingJobs.map(async ({ kind, job }) => {
-        const response = await fetch(`${apiBase}/jobs/${encodeURIComponent(job.run_key)}`)
-        if (!response.ok) throw new Error(`Failed to load ${kind} job progress`)
-        return { kind, job: (await response.json()) as BackgroundJob }
+        const [statusRes, itemsRes] = await Promise.all([
+          fetch(`${apiBase}/jobs/${encodeURIComponent(job.run_key)}`),
+          fetch(`${apiBase}/recent-runs/${encodeURIComponent(job.run_key)}/items?outcome=skipped&limit=25`),
+        ])
+        if (!statusRes.ok) throw new Error(`Failed to load ${kind} job progress`)
+        const items = itemsRes.ok
+          ? (((await itemsRes.json()) as RecentRunItemListResponse).items ?? [])
+          : []
+        return { kind, job: (await statusRes.json()) as BackgroundJob, items }
       }))
       if (canceled) return
 
@@ -3560,9 +3714,11 @@ function App() {
         const isTerminal = result.job.status !== 'queued' && result.job.status !== 'running'
         if (result.kind === 'automation') {
           setAutomationJob(result.job)
+          setAutomationLiveSkipped(result.items)
           if (isTerminal) setRunning(false)
         } else {
           setNvoidsJob(result.job)
+          setNvoidsLiveSkipped(result.items)
           if (isTerminal) setNvoidsRunning(false)
         }
         terminal = terminal || isTerminal
@@ -3679,6 +3835,7 @@ function App() {
     const fd = new FormData()
     fd.append('file', resumeFile)
     fd.append('skills_text', resumeSkillsInput)
+    setResumeUploading(true)
     try {
       const res = await fetch(`${apiBase}/settings/resume`, { method: 'POST', body: fd })
       if (!res.ok) throw new Error('Failed to upload resume')
@@ -3687,6 +3844,8 @@ function App() {
       await loadSettingsBootstrap()
     } catch (e) {
       setError((e as Error).message)
+    } finally {
+      setResumeUploading(false)
     }
   }
 
@@ -3955,6 +4114,7 @@ function App() {
             detail: 'Attaching to the automation run already in progress.',
             processed_items: 0, total_items: null, progress_pct: null, queue_name: 'automation_run',
           })
+          setAutomationLiveSkipped([])
           return
         }
         throw new Error(typeof details?.detail === 'string' ? details.detail : 'Automation run failed')
@@ -3968,6 +4128,7 @@ function App() {
         progress_pct: 0,
         queue_name: 'automation_run',
       })
+      setAutomationLiveSkipped([])
       await loadRecentRuns(settings.mail_date ?? null)
     } catch (e) {
       setError((e as Error).message)
@@ -3997,6 +4158,7 @@ function App() {
             detail: 'Attaching to the Nvoids sync already in progress.',
             processed_items: 0, total_items: null, progress_pct: null, queue_name: 'nvoids_sync',
           })
+          setNvoidsLiveSkipped([])
           return
         }
         throw new Error(typeof details?.detail === 'string' ? details.detail : 'Nvoids sync failed')
@@ -4010,6 +4172,7 @@ function App() {
         progress_pct: 0,
         queue_name: 'nvoids_sync',
       })
+      setNvoidsLiveSkipped([])
       await loadRecentRuns(settings.mail_date ?? null)
     } catch (e) {
       setError((e as Error).message)
@@ -4645,18 +4808,57 @@ function App() {
           </section>
           {automationJob || nvoidsJob ? (
             <section className="jobProgressGrid" aria-label="Background job progress">
-              {[automationJob, nvoidsJob].filter((job): job is BackgroundJob => job !== null).map((job) => (
-                <article className="jobProgressCard" key={job.run_key}>
-                  <div>
-                    <strong>{job.queue_name === 'nvoids_sync' ? 'Nvoids sync' : 'Gmail automation'}</strong>
-                    <span>{job.status} · {job.processed_items}/{job.total_items ?? '?'}</span>
-                  </div>
-                  <progress max={100} value={job.progress_pct ?? 0}>
-                    {job.progress_pct ?? 0}%
-                  </progress>
-                  <p>{job.detail}</p>
-                </article>
-              ))}
+              {[
+                automationJob ? { job: automationJob, liveSkipped: automationLiveSkipped } : null,
+                nvoidsJob ? { job: nvoidsJob, liveSkipped: nvoidsLiveSkipped } : null,
+              ]
+                .filter((entry): entry is { job: BackgroundJob; liveSkipped: RecentRunItem[] } => entry !== null)
+                .map(({ job, liveSkipped }) => {
+                  const meta = jobStatusMeta(job.status)
+                  const isTerminal = job.status !== 'queued' && job.status !== 'running'
+                  const total = Math.max(job.total_items ?? job.processed_items, job.processed_items, 1)
+                  const skippedCount = isTerminal
+                    ? (job.skipped_item_count ?? liveSkipped.length)
+                    : liveSkipped.length
+                  const doneCount = Math.max(0, job.processed_items - skippedCount)
+                  const donePct = Math.min(100, (doneCount / total) * 100)
+                  const skippedPct = Math.min(100 - donePct, (skippedCount / total) * 100)
+                  return (
+                    <article className={`jobProgressCard jobProgressCard--${meta.className}`} key={job.run_key}>
+                      <div>
+                        <strong>{job.queue_name === 'nvoids_sync' ? 'Nvoids sync' : 'Gmail automation'}</strong>
+                        <span className={`jobStatusPill jobStatusPill--${meta.className}`}>
+                          <i className="jobStatusDot" aria-hidden="true" />
+                          {meta.checkmark ? '✓ ' : ''}{meta.label}
+                        </span>
+                      </div>
+                      <div>
+                        <span>{job.processed_items}/{job.total_items ?? '?'} processed</span>
+                        <span>{job.progress_pct ?? Math.round(donePct + skippedPct)}%</span>
+                      </div>
+                      <div className="jobProgressBar" role="progressbar" aria-valuenow={job.progress_pct ?? 0} aria-valuemin={0} aria-valuemax={100}>
+                        <div className="jobProgressBar__segment jobProgressBar__segment--done" style={{ flexBasis: `${donePct}%` }} />
+                        <div className="jobProgressBar__segment jobProgressBar__segment--skipped" style={{ flexBasis: `${skippedPct}%` }} />
+                        <div className="jobProgressBar__segment jobProgressBar__segment--remaining" style={{ flexBasis: `${Math.max(0, 100 - donePct - skippedPct)}%` }} />
+                      </div>
+                      <div className="jobProgressLegend">
+                        <span><i style={{ background: '#1e9e4c' }} />Processed {doneCount}</span>
+                        <span><i style={{ background: 'var(--danger)' }} />Skipped {skippedCount}</span>
+                      </div>
+                      <p>{job.detail}</p>
+                      {liveSkipped.length > 0 ? (
+                        <div className="jobLiveSkipped" aria-label="Recently skipped items">
+                          {liveSkipped.slice(0, 8).map((item) => (
+                            <div className="jobLiveSkippedRow" key={item.id}>
+                              <p>{renderTextOrDash(item.title_or_subject)}</p>
+                              <p>{renderTextOrDash(item.reason_detail || item.reason_code)}</p>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                    </article>
+                  )
+                })}
             </section>
           ) : null}
 
@@ -4807,15 +5009,13 @@ function App() {
               </section>
 
               <section className="liveMonitorCard configSummaryCard">
-                <h3>Automation Filters</h3>
+                <h3>AI Automation Access</h3>
                 <div className="configSummaryList">
                   {configRow('Enable AI Features', formatBool(activeConfigurationSettings.feature_ai_enabled))}
                   {configRow('Enable AI Extractor', formatBool(activeConfigurationSettings.feature_ai_extractor_enabled))}
                   {configRow('Enable Role Manifest Detection', formatBool(activeConfigurationSettings.feature_role_manifest_enabled))}
                   {configRow('Enable Semantic Matching', formatBool(activeConfigurationSettings.feature_semantic_enabled))}
                   {configRow('Enable Groq Smart Job Parser', formatBool(activeConfigurationSettings.feature_groq_job_parser_enabled))}
-                  {configRow('Qualification Threshold', activeConfigurationSettings.qualification_threshold.toFixed(2))}
-                  {configRow('Must-have Skills', summarizeConfigList(activeConfigurationSettings.must_have_skills))}
                 </div>
               </section>
 
@@ -4848,7 +5048,7 @@ function App() {
                   {configRow('Must-have Skills', summarizeConfigList(activeConfigurationDraftRules.must_have_skills.skills ?? activeConfigurationSettings.must_have_skills))}
                   {configRow('Score Threshold Rule', formatRuleMode(activeConfigurationDraftRules.score_threshold.mode))}
                   {configRow('Score Threshold Value', activeConfigurationDraftRules.score_threshold.value ?? activeConfigurationSettings.qualification_threshold)}
-                  {configRow('F2F Non-Texas Rule', formatRuleMode(activeConfigurationDraftRules.f2f_non_texas.mode))}
+                  {configRow('F2F Location Rule', formatRuleMode(activeConfigurationDraftRules.f2f_non_texas.mode))}
                   {configRow('Unknown Location Rule', formatRuleMode(activeConfigurationDraftRules.unknown_location.mode))}
                   {configRow('Recipient Mapping Rule', formatRuleMode(activeConfigurationDraftRules.recipient_mapping.mode))}
                 </div>
@@ -4895,6 +5095,9 @@ function App() {
                   {configRow('Auto Sync Nvoids', formatBool(activeConfigurationSettings.feature_nvoids_auto_sync))}
                   {configRow('Nvoids Detail Page Type', nvoidsDetailTitleModeLabel)}
                   {configRow('Preferred Nvoids Locations', summarizeConfigList(activeConfigurationSettings.nvoids_locations))}
+                  {configRow('Nvoids Job Role', truncateConfigValue(activeConfigurationSettings.nvoids_job_role))}
+                  {configRow('Nvoids Search Location', truncateConfigValue(activeConfigurationSettings.nvoids_search_location))}
+                  {configRow('Nvoids Custom Query', truncateConfigValue(activeConfigurationSettings.nvoids_custom_query, 80))}
                 </div>
               </section>
             </div>
@@ -4977,7 +5180,7 @@ function App() {
               </section>
 
               <section className="card">
-                <h2>Automation Filters</h2>
+                <h2>AI Automation Access</h2>
                 <div className="stack">
                   <label className="toggleRow">
                     <span>Enable AI Features</span>
@@ -5038,51 +5241,6 @@ function App() {
                       />
                       <span className="toggleTrack" />
                     </span>
-                  </label>
-                  <label>
-                    Qualification Threshold
-                    <input
-                      type="number"
-                      min={0}
-                      max={1}
-                      step={0.01}
-                      value={settings.qualification_threshold}
-                      onChange={(e) => updateRuleValue('score_threshold', e.target.value)}
-                    />
-                  </label>
-                  <label>
-                    Must-have Skills (comma-separated)
-                    <div className="skillBox">
-                      {settings.must_have_skills.map((skill) => (
-                        <span key={skill} className="skillChip">
-                          {skill}
-                          <button
-                            type="button"
-                            className="chipRemove"
-                            onClick={() => removeMustHaveSkill(skill)}
-                            aria-label={`Remove ${skill}`}
-                            title={`Remove ${skill}`}
-                          >
-                            x
-                          </button>
-                        </span>
-                      ))}
-                      <input
-                        value={skillDraft}
-                        className="skillInput"
-                        onChange={(e) => setSkillDraft(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' || e.key === ',') {
-                            e.preventDefault()
-                            addMustHaveSkill(skillDraft)
-                          } else if (e.key === 'Backspace' && !skillDraft && settings.must_have_skills.length > 0) {
-                            removeMustHaveSkill(settings.must_have_skills[settings.must_have_skills.length - 1])
-                          }
-                        }}
-                        onBlur={() => addMustHaveSkill(skillDraft)}
-                        placeholder="Add skill..."
-                      />
-                    </div>
                   </label>
                 </div>
               </section>
@@ -5254,11 +5412,38 @@ function App() {
                   </label>
                   <label>
                     Accepted locations
-                    <input
-                      value={(draftRules.accepted_location.locations ?? settings.accepted_locations).join(', ')}
-                      onChange={(e) => updateRuleValue('accepted_location', e.target.value)}
-                      placeholder="texas, remote"
-                    />
+                    <div className="skillBox">
+                      {(draftRules.accepted_location.locations ?? settings.accepted_locations).map((location) => (
+                        <span key={location} className="skillChip">
+                          {location}
+                          <button
+                            type="button"
+                            className="chipRemove"
+                            onClick={() => removeAcceptedLocation(location)}
+                            aria-label={`Remove ${location}`}
+                            title={`Remove ${location}`}
+                          >
+                            x
+                          </button>
+                        </span>
+                      ))}
+                      <input
+                        value={acceptedLocationDraft}
+                        className="skillInput"
+                        onChange={(e) => setAcceptedLocationDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ',') {
+                            e.preventDefault()
+                            addAcceptedLocation(acceptedLocationDraft)
+                          } else if (e.key === 'Backspace' && !acceptedLocationDraft) {
+                            const current = draftRules.accepted_location.locations ?? settings.accepted_locations
+                            if (current.length > 0) removeAcceptedLocation(current[current.length - 1])
+                          }
+                        }}
+                        onBlur={() => addAcceptedLocation(acceptedLocationDraft)}
+                        placeholder="Add location..."
+                      />
+                    </div>
                   </label>
                   <p className="subtle">Uses your accepted location list and can ignore, warn, or block when parsed locations do not match.</p>
 
@@ -5297,11 +5482,38 @@ function App() {
                   </label>
                   <label>
                     Must-have skills
-                    <input
-                      value={(draftRules.must_have_skills.skills ?? settings.must_have_skills).join(', ')}
-                      onChange={(e) => updateRuleValue('must_have_skills', e.target.value)}
-                      placeholder="java, spring"
-                    />
+                    <div className="skillBox">
+                      {(draftRules.must_have_skills.skills ?? settings.must_have_skills).map((skill) => (
+                        <span key={skill} className="skillChip">
+                          {skill}
+                          <button
+                            type="button"
+                            className="chipRemove"
+                            onClick={() => removeMustHaveSkill(skill)}
+                            aria-label={`Remove ${skill}`}
+                            title={`Remove ${skill}`}
+                          >
+                            x
+                          </button>
+                        </span>
+                      ))}
+                      <input
+                        value={skillDraft}
+                        className="skillInput"
+                        onChange={(e) => setSkillDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ',') {
+                            e.preventDefault()
+                            addMustHaveSkill(skillDraft)
+                          } else if (e.key === 'Backspace' && !skillDraft) {
+                            const current = draftRules.must_have_skills.skills ?? settings.must_have_skills
+                            if (current.length > 0) removeMustHaveSkill(current[current.length - 1])
+                          }
+                        }}
+                        onBlur={() => addMustHaveSkill(skillDraft)}
+                        placeholder="Add skill..."
+                      />
+                    </div>
                   </label>
                   <p className="subtle">Controls whether missing required skills are ignored, shown as warnings, or block drafting.</p>
 
@@ -5330,7 +5542,7 @@ function App() {
                   <p className="subtle">Low scores can be ignored, surfaced as warnings, or block drafting.</p>
 
                   <label>
-                    F2F non-Texas rule
+                    F2F location rule
                     <select
                       value={draftRules.f2f_non_texas.mode}
                       onChange={(e) => updateRuleMode('f2f_non_texas', e.target.value as RuleMode)}
@@ -5340,7 +5552,7 @@ function App() {
                       <option value="block">Block Draft</option>
                     </select>
                   </label>
-                  <p className="subtle">Controls how face-to-face roles outside Texas are handled.</p>
+                  <p className="subtle">Controls how face-to-face roles outside your accepted locations are handled.</p>
 
                   <label>
                     Unknown location rule
@@ -5775,6 +5987,34 @@ function App() {
                       />
                     </div>
                   </label>
+                  <p className="subtle">
+                    Preferred Nvoids Locations filters results after they're fetched, before they're forwarded as
+                    candidates. Use Search Location below to narrow the actual Nvoids search itself.
+                  </p>
+                  <label>
+                    Nvoids Job Role
+                    <input
+                      value={settings.nvoids_job_role}
+                      onChange={(e) => setSettings({ ...settings, nvoids_job_role: e.target.value })}
+                      placeholder="e.g. AI Engineer, Machine Learning Engineer"
+                    />
+                  </label>
+                  <label>
+                    Nvoids Search Location
+                    <input
+                      value={settings.nvoids_search_location}
+                      onChange={(e) => setSettings({ ...settings, nvoids_search_location: e.target.value })}
+                      placeholder="e.g. New Jersey"
+                    />
+                  </label>
+                  <label>
+                    Nvoids Custom Query
+                    <input
+                      value={settings.nvoids_custom_query}
+                      onChange={(e) => setSettings({ ...settings, nvoids_custom_query: e.target.value })}
+                      placeholder="Overrides Job Role and Search Location when set, e.g. python and (aws or gcp)"
+                    />
+                  </label>
                   <label>
                     Nvoids Batch Limit (per run)
                     <input
@@ -5878,6 +6118,7 @@ function App() {
                 resumeSkillsInput={resumeSkillsInput}
                 resumeSkillEdits={resumeSkillEdits}
                 resumeAssets={resumeAssets}
+                resumeUploading={resumeUploading}
                 setResumeFile={setResumeFile}
                 setResumeSkillsInput={setResumeSkillsInput}
                 setResumeSkillEdits={setResumeSkillEdits}
@@ -6261,12 +6502,40 @@ function App() {
                   </button>
                   {item.skipped_items_loading ? <p className="subtle">Loading skipped items...</p> : null}
                   {item.skipped_items_error ? <p className="errorMessage">{item.skipped_items_error}</p> : null}
+                  {item.retry_error ? <p className="errorMessage">{item.retry_error}</p> : null}
                   {item.skipped_items_loaded ? (
                     item.skipped_items && item.skipped_items.length > 0 ? (
                       <div className="stack">
+                        {(() => {
+                          const retryableIds = item.skipped_items
+                            .filter((skipped) => Boolean(skipped.external_message_id))
+                            .map((skipped) => skipped.id)
+                          const selected = item.selected_skipped_ids ?? []
+                          if (retryableIds.length === 0) return null
+                          return (
+                            <div className="automationMetrics">
+                              <label>
+                                <input
+                                  type="checkbox"
+                                  checked={selected.length > 0 && retryableIds.every((id) => selected.includes(id))}
+                                  onChange={(e) => selectAllSkippedItems(item.run_key, e.target.checked)}
+                                />{' '}
+                                Select All
+                              </label>
+                              <button
+                                type="button"
+                                disabled={selected.length === 0 || item.retrying_skipped}
+                                onClick={() => void retrySelectedSkippedItems(item.run_key)}
+                              >
+                                {item.retrying_skipped ? 'Retrying...' : `Retry Selected (${selected.length})`}
+                              </button>
+                            </div>
+                          )
+                        })()}
                         {item.skipped_items.map((skipped) => {
                           const intentEvidence = skipped.intent_evidence ?? []
                           const intentNegativeEvidence = skipped.intent_negative_evidence ?? []
+                          const isSelected = (item.selected_skipped_ids ?? []).includes(skipped.id)
                           return (
                           <article
                             key={`${item.run_key}-${skipped.id}`}
@@ -6274,63 +6543,78 @@ function App() {
                             data-email-search-section="recent_runs"
                             data-email-search-related-id={skipped.id}
                           >
-                            <p><strong>Source:</strong> {getSourceLabel(skipped.source_type)}</p>
-                            <p><strong>Title:</strong> {renderTextOrDash(skipped.title_or_subject)}</p>
-                            <p><strong>Why:</strong> {renderTextOrDash(skipped.reason_detail || skipped.reason_code)}</p>
-                            {skipped.source_group_name || skipped.source_group_email ? (
-                              <p>
-                                <strong>Source Group:</strong>{' '}
-                                {[skipped.source_group_name, skipped.source_group_email].filter(Boolean).join(' | ')}
-                              </p>
-                            ) : null}
-                            {skipped.source_group_match_method ? (
-                              <p><strong>Matched Through:</strong> {skipped.source_group_match_method}</p>
-                            ) : null}
-                            {skipped.intent_type || skipped.gate_action || skipped.gate_provider ? (
-                              <p>
-                                <strong>Gate:</strong>{' '}
-                                {[skipped.intent_type, skipped.gate_action, skipped.gate_provider].filter(Boolean).join(' | ')}
-                              </p>
-                            ) : null}
-                            {skipped.intent_confidence != null ? (
-                              <p><strong>Confidence:</strong> {skipped.intent_confidence.toFixed(2)}</p>
-                            ) : null}
-                            {skipped.intent_reason && skipped.intent_reason !== skipped.reason_detail ? (
-                              <p><strong>Intent Reason:</strong> {skipped.intent_reason}</p>
-                            ) : null}
-                            {skipped.qualification_result ? (
-                              <p><strong>Qualification Result:</strong> {skipped.qualification_result}</p>
-                            ) : null}
-                            {skipped.blocking_rule ? (
-                              <p><strong>Blocking Rule:</strong> {skipped.blocking_rule}</p>
-                            ) : null}
-                            {skipped.qualification_detail && skipped.qualification_detail !== skipped.reason_detail ? (
-                              <p><strong>Qualification Detail:</strong> {skipped.qualification_detail}</p>
-                            ) : null}
-                            {intentEvidence.length > 0 ? (
-                              <div className="automationMetrics">
-                                <strong>Evidence:</strong>
-                                {intentEvidence.map((entry) => (
-                                  <span key={`${skipped.id}-${entry}`} className="tag">{entry}</span>
-                                ))}
+                            <div className="skippedItemRow">
+                              <div className="skippedItemCheckbox">
+                                {skipped.external_message_id ? (
+                                  <input
+                                    type="checkbox"
+                                    checked={isSelected}
+                                    aria-label="Select for retry"
+                                    title="Select for retry"
+                                    onChange={() => toggleSkippedItemSelected(item.run_key, skipped.id)}
+                                  />
+                                ) : null}
                               </div>
-                            ) : null}
-                            {intentNegativeEvidence.length > 0 ? (
-                              <div className="automationMetrics">
-                                <strong>Negative Evidence:</strong>
-                                {intentNegativeEvidence.map((entry) => (
-                                  <span key={`${skipped.id}-neg-${entry}`} className="tag">{entry}</span>
-                                ))}
+                              <div className="skippedItemContent">
+                                <p><strong>Source:</strong> {getSourceLabel(skipped.source_type)}</p>
+                                <p><strong>Title:</strong> {renderTextOrDash(skipped.title_or_subject)}</p>
+                                <p><strong>Why:</strong> {renderTextOrDash(skipped.reason_detail || skipped.reason_code)}</p>
+                                {skipped.source_group_name || skipped.source_group_email ? (
+                                  <p>
+                                    <strong>Source Group:</strong>{' '}
+                                    {[skipped.source_group_name, skipped.source_group_email].filter(Boolean).join(' | ')}
+                                  </p>
+                                ) : null}
+                                {skipped.source_group_match_method ? (
+                                  <p><strong>Matched Through:</strong> {skipped.source_group_match_method}</p>
+                                ) : null}
+                                {skipped.intent_type || skipped.gate_action || skipped.gate_provider ? (
+                                  <p>
+                                    <strong>Gate:</strong>{' '}
+                                    {[skipped.intent_type, skipped.gate_action, skipped.gate_provider].filter(Boolean).join(' | ')}
+                                  </p>
+                                ) : null}
+                                {skipped.intent_confidence != null ? (
+                                  <p><strong>Confidence:</strong> {skipped.intent_confidence.toFixed(2)}</p>
+                                ) : null}
+                                {skipped.intent_reason && skipped.intent_reason !== skipped.reason_detail ? (
+                                  <p><strong>Intent Reason:</strong> {skipped.intent_reason}</p>
+                                ) : null}
+                                {skipped.qualification_result ? (
+                                  <p><strong>Qualification Result:</strong> {skipped.qualification_result}</p>
+                                ) : null}
+                                {skipped.blocking_rule ? (
+                                  <p><strong>Blocking Rule:</strong> {skipped.blocking_rule}</p>
+                                ) : null}
+                                {skipped.qualification_detail && skipped.qualification_detail !== skipped.reason_detail ? (
+                                  <p><strong>Qualification Detail:</strong> {skipped.qualification_detail}</p>
+                                ) : null}
+                                {intentEvidence.length > 0 ? (
+                                  <div className="automationMetrics">
+                                    <strong>Evidence:</strong>
+                                    {intentEvidence.map((entry) => (
+                                      <span key={`${skipped.id}-${entry}`} className="tag">{entry}</span>
+                                    ))}
+                                  </div>
+                                ) : null}
+                                {intentNegativeEvidence.length > 0 ? (
+                                  <div className="automationMetrics">
+                                    <strong>Negative Evidence:</strong>
+                                    {intentNegativeEvidence.map((entry) => (
+                                      <span key={`${skipped.id}-neg-${entry}`} className="tag">{entry}</span>
+                                    ))}
+                                  </div>
+                                ) : null}
+                                {skipped.source_url || skipped.gmail_message_url ? (
+                                  <p>
+                                    <strong>Open:</strong>{' '}
+                                    <a href={skipped.source_url ?? skipped.gmail_message_url ?? undefined} target="_blank" rel="noreferrer">
+                                      {skipped.source_type === 'nvoids' ? 'Open Original Post' : 'Open exact email in Gmail'}
+                                    </a>
+                                  </p>
+                                ) : null}
                               </div>
-                            ) : null}
-                            {skipped.source_url || skipped.gmail_message_url ? (
-                              <p>
-                                <strong>Open:</strong>{' '}
-                                <a href={skipped.source_url ?? skipped.gmail_message_url ?? undefined} target="_blank" rel="noreferrer">
-                                  {skipped.source_type === 'nvoids' ? 'Open Original Post' : 'Open exact email in Gmail'}
-                                </a>
-                              </p>
-                            ) : null}
+                            </div>
                           </article>
                           )
                         })}

@@ -66,6 +66,16 @@ class ChatService:
             .all()
         )
 
+    def rename_session(self, db: Session, session_id: int, title: str) -> ChatSession:
+        cleaned = title.strip()
+        if not cleaned:
+            raise HTTPException(status_code=422, detail="Title is required")
+        row = self._session_or_404(db, session_id)
+        row.title = cleaned[:120]
+        db.commit()
+        db.refresh(row)
+        return row
+
     def delete_session(self, db: Session, session_id: int) -> None:
         row = self._session_or_404(db, session_id)
         db.query(ChatMessage).filter(ChatMessage.session_id == session_id).delete(synchronize_session=False)

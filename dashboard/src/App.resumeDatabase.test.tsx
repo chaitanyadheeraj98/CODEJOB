@@ -58,6 +58,7 @@ describe('ResumeDatabaseSection', () => {
               updated_at: '2026-06-14T00:00:00Z',
             },
           ]}
+          resumeUploading={false}
           setResumeFile={vi.fn()}
           setResumeSkillsInput={vi.fn()}
           setResumeSkillEdits={vi.fn()}
@@ -94,5 +95,39 @@ describe('ResumeDatabaseSection', () => {
     })
 
     expect(container.querySelector('.resumeDatabaseBody')).toBeNull()
+  })
+
+  it('shows a processing state while resume enrichment runs', () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+    })
+
+    act(() => {
+      root.render(
+        <ResumeDatabaseSection
+          activeResume={null}
+          resumeFile={new File(['resume'], 'resume.pdf')}
+          resumeSkillsInput="Java"
+          resumeSkillEdits={{}}
+          resumeAssets={[]}
+          resumeUploading
+          setResumeFile={vi.fn()}
+          setResumeSkillsInput={vi.fn()}
+          setResumeSkillEdits={vi.fn()}
+          uploadResume={vi.fn()}
+          saveResumeSkills={vi.fn()}
+          toggleResumeAsset={vi.fn()}
+          deleteResumeAsset={vi.fn()}
+        />,
+      )
+    })
+
+    expect(container.textContent).toContain('Processing Resume...')
+    expect(container.textContent).toContain('extracting content and preparing ATS profile')
+    expect(container.querySelector<HTMLButtonElement>('.resumeDatabaseUpload button')?.disabled).toBe(true)
   })
 })

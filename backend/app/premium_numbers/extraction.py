@@ -92,6 +92,7 @@ class ExtractedContactGroup:
     source_fragment: str
     role: str = "unknown"
     extraction_source: str = "ai"
+    linkedin_url: str = ""
 
 
 # Backward-compatible import name for existing callers outside the shared workflow.
@@ -159,6 +160,7 @@ def _llm_extract(email_content: str, employer_domains: set[str]) -> list[Extract
                 relevance_reason="llm_only_unclassified",
                 source_fragment="Extracted by AI from email context",
                 extraction_source="ai",
+                linkedin_url=str(item.get("linkedin_url", "")).strip(),
             )
         )
     return leads

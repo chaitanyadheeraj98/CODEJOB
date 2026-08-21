@@ -3311,13 +3311,38 @@ Job ID: ENG-2"""
 
 
 class ExternalFeedServiceQueryTests(unittest.TestCase):
-    def test_build_nvoids_query_uses_default_when_locations_empty(self) -> None:
+    def test_build_nvoids_query_uses_default_when_nothing_configured(self) -> None:
         service = ExternalFeedService()
-        self.assertEqual(service.build_nvoids_query([]), "(tx or texas) and java and spring* not(*js)")
+        self.assertEqual(service.build_nvoids_query(), "(tx or texas) and java and spring* not(*js)")
 
-    def test_build_nvoids_query_includes_location_tokens(self) -> None:
+    def test_build_nvoids_query_combines_job_role_and_search_location(self) -> None:
         service = ExternalFeedService()
-        self.assertEqual(service.build_nvoids_query(["texas", "remote"]), "(texas or remote) and java and spring* not(*js)")
+        self.assertEqual(
+            service.build_nvoids_query(job_role="ai engineer", search_location="new jersey"),
+            "(new jersey) and ai engineer",
+        )
+
+    def test_build_nvoids_query_job_role_only_omits_location_clause(self) -> None:
+        service = ExternalFeedService()
+        self.assertEqual(service.build_nvoids_query(job_role="data scientist"), "data scientist")
+
+    def test_build_nvoids_query_search_location_only_falls_back_to_default_role(self) -> None:
+        service = ExternalFeedService()
+        self.assertEqual(
+            service.build_nvoids_query(search_location="remote"),
+            "(remote) and java and spring* not(*js)",
+        )
+
+    def test_build_nvoids_query_custom_query_overrides_job_role_and_location(self) -> None:
+        service = ExternalFeedService()
+        self.assertEqual(
+            service.build_nvoids_query(
+                job_role="ai engineer",
+                search_location="texas",
+                custom_query="  python and (aws or gcp)  ",
+            ),
+            "python and (aws or gcp)",
+        )
 
     def test_row_matches_locations_treats_remote_as_explicit_token(self) -> None:
         service = ExternalFeedService()
