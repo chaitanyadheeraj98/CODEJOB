@@ -114,7 +114,11 @@ class SettingsRequest(BaseModel):
     feature_email_tracking_enabled: bool = False
     feature_reply_inbox_enabled: bool = False
     feature_applications_enabled: bool = False
+    feature_application_automation_enabled: bool = False
+    feature_reminder_sweep_interval_minutes: int = 240
     candidate_work_authorizations: list[str] | None = Field(default_factory=list)
+    preferred_employment_types: list[Literal["C2C", "W2", "1099", "FT"]] = Field(default_factory=list)
+    preferred_minimum_rate: float | None = Field(default=None, ge=0)
     candidate_total_experience_years: float | None = Field(default=None, ge=0)
     candidate_us_experience_years: float | None = Field(default=None, ge=0)
     candidate_current_location: str | None = ""
@@ -155,6 +159,11 @@ class SettingsRequest(BaseModel):
     @classmethod
     def validate_nvoids_poll_interval(cls, value: int) -> int:
         return max(1, min(int(value), 1440))
+
+    @field_validator("feature_reminder_sweep_interval_minutes")
+    @classmethod
+    def validate_reminder_sweep_interval(cls, value: int) -> int:
+        return max(30, min(int(value), 1440))
 
     @field_validator("nvoids_batch_limit")
     @classmethod
@@ -965,6 +974,9 @@ class RecruiterNumberResponse(BaseModel):
     active_lead_id: int | None = None
     version_count: int = 0
     linkedin_url: str = ""
+    recruiter_verification_level: str = "unverified"
+    do_not_work_again: bool = False
+    do_not_work_again_reason: str = ""
     total_opportunity_count: int = 0
     last_email_received_at: datetime | None = None
     is_recruiter: bool = True
@@ -1043,6 +1055,15 @@ class RecruiterOpportunityResponse(BaseModel):
     linkedin_url: str = ""
     status: str
     notes: str
+    employment_type: str = ""
+    rate_amount: float | None = None
+    rate_currency: str = "USD"
+    rate_unit: str = ""
+    contract_duration: str = ""
+    relocation_required: bool | None = None
+    extension_likely: str = "unknown"
+    end_client_confirmed: bool = False
+    job_confidence: str = "unknown"
     cold_call_script: str | None = None
     cold_call_script_updated_at: datetime | None = None
     created_at: datetime
@@ -1070,6 +1091,15 @@ class RecruiterOpportunityPatchRequest(BaseModel):
     end_client: str | None = None
     domain: str | None = None
     extracted_skills: str | None = None
+    employment_type: str | None = None
+    rate_amount: float | None = None
+    rate_currency: str | None = None
+    rate_unit: str | None = None
+    contract_duration: str | None = None
+    relocation_required: bool | None = None
+    extension_likely: str | None = None
+    end_client_confirmed: bool | None = None
+    job_confidence: str | None = None
 
 
 class ApplicationCreateRequest(BaseModel):
@@ -1082,6 +1112,7 @@ class ApplicationPatchRequest(BaseModel):
     next_action_type: str | None = Field(default=None, max_length=80)
     next_action_at: datetime | None = None
     closed_reason: str | None = Field(default=None, max_length=120)
+    closed_reason_code: str | None = None
 
 
 class ApplicationEventCreateRequest(BaseModel):
@@ -1103,6 +1134,67 @@ class ApplicationEventResponse(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class ApplicationRTRRequest(BaseModel):
+    role_scope: str = ""
+    end_client_scope: str = ""
+    expires_at: datetime | None = None
+
+
+class ApplicationRTRUpdateRequest(BaseModel):
+    status: Literal["confirmed", "expired", "revoked"]
+    proof_attachment_id: int | None = Field(default=None, gt=0)
+    proof_recruiter_email_id: int | None = Field(default=None, gt=0)
+
+
+class ApplicationRTRResponse(BaseModel):
+    id: int
+    status: str
+    role_scope: str
+    end_client_scope: str
+    requested_at: datetime
+    confirmed_at: datetime | None
+    expires_at: datetime | None
+    proof_attachment_id: int | None
+    proof_recruiter_email_id: int | None
+    note: str
+
+    model_config = {"from_attributes": True}
+
+
+class ApplicationInterviewCreateRequest(BaseModel):
+    round_type: Literal["recruiter_screen", "interview_1", "interview_2", "final_interview", "other"]
+    scheduled_at: datetime | None = None
+    format: str = ""
+    interviewer_names: str = ""
+    sync_application_status: bool = True
+
+
+class ApplicationInterviewPatchRequest(BaseModel):
+    scheduled_at: datetime | None = None
+    format: str | None = None
+    interviewer_names: str | None = None
+    feedback: str | None = None
+    result: Literal["scheduled", "completed", "passed", "failed", "cancelled", "rescheduled"] | None = None
+    follow_up_task_note: str | None = None
+
+
+class ApplicationInterviewResponse(BaseModel):
+    id: int
+    round_type: str
+    scheduled_at: datetime | None
+    format: str
+    interviewer_names: str
+    feedback: str
+    result: str
+    follow_up_task_note: str
+
+    model_config = {"from_attributes": True}
+
+
+class ApplicationSubmitToClientRequest(BaseModel):
+    override_duplicate_warning: bool = False
 
 
 class ApplicationResponse(BaseModel):
@@ -1128,6 +1220,7 @@ class ApplicationResponse(BaseModel):
     last_contact_at: datetime | None
     closed_at: datetime | None
     closed_reason: str | None
+    closed_reason_code: str | None
     created_at: datetime
     updated_at: datetime
     current_recruiter_name: str = ""
@@ -1136,6 +1229,8 @@ class ApplicationResponse(BaseModel):
     current_job_title: str = ""
     current_end_client: str = ""
     events: list[ApplicationEventResponse] = Field(default_factory=list)
+    rtr_history: list[ApplicationRTRResponse] = Field(default_factory=list)
+    interviews: list[ApplicationInterviewResponse] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
 
@@ -1151,6 +1246,56 @@ class ApplicationDashboardSummaryResponse(BaseModel):
     waiting_on_recruiter: int
     interviews: int
     closed_recent: int
+    pending_suggestions: int = 0
+
+
+class OpportunityMatchResponse(BaseModel):
+    opportunity: RecruiterOpportunityResponse
+    score: float
+    reasons: list[str]
+
+
+class OpportunityMatchListResponse(BaseModel):
+    items: list[OpportunityMatchResponse]
+
+
+class RecruiterReputationResponse(BaseModel):
+    recruiter_contact_id: int
+    history_label: Literal["limited_history", "established"]
+    outreach_count: int
+    replies_count: int
+    median_first_reply_business_days: float | None
+    submissions_count: int
+    interviews_after_submission_count: int
+    offers_count: int
+    last_active_at: datetime | None
+
+    model_config = {"from_attributes": True}
+
+
+class ApplicationSuggestionResponse(BaseModel):
+    id: int
+    application_id: int
+    suggestion_type: Literal["link_reply", "status_change", "next_action", "stale_prompt"]
+    status: Literal["pending", "accepted", "dismissed"]
+    confidence: Literal["high", "medium"]
+    recruiter_email_id: int | None
+    suggested_status: str | None
+    suggested_next_action_type: str | None
+    suggested_next_action_at: datetime | None
+    reason: str
+    created_at: datetime
+    resolved_at: datetime | None
+
+    model_config = {"from_attributes": True}
+
+
+class ApplicationSuggestionListResponse(BaseModel):
+    items: list[ApplicationSuggestionResponse]
+
+
+class ApplicationSuggestionResolveRequest(BaseModel):
+    override_next_action_at: datetime | None = None
 
 
 class BulkNumberReviewRequest(BaseModel):
@@ -1202,6 +1347,9 @@ class RecruiterNumberPatchRequest(BaseModel):
     designation: str | None = None
     recruiter_email: str | None = None
     linkedin_url: str | None = None
+    recruiter_verification_level: Literal["unverified", "verified", "trusted"] | None = None
+    do_not_work_again: bool | None = None
+    do_not_work_again_reason: str | None = None
 
 
 class EmployerNumberPatchRequest(BaseModel):

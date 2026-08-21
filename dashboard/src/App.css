@@ -3488,6 +3488,94 @@ button.emailSearchResult:focus-visible {
   width: fit-content;
 }
 
+.applicationWorkflowPanel {
+  padding: 0 0 14px;
+}
+
+.applicationInterviewList,
+.applicationInterviewRow,
+.duplicateConflict,
+.opportunityJobDetails > .detailFormGrid {
+  display: grid;
+  gap: 10px;
+}
+
+.applicationInterviewRow,
+.duplicateConflict {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.applicationInterviewRow > p,
+.duplicateConflict > p,
+.duplicateConflict > ul {
+  margin: 0;
+}
+
+.opportunityJobDetails > summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.opportunityJobDetails > .detailFormGrid {
+  margin-top: 12px;
+}
+
+.detailFormGrid .checkboxLabel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.checkboxLabel input[type='checkbox'] {
+  width: auto;
+}
+
+.applicationSuggestions,
+.opportunityMatchEvidence,
+.recruiterReputation {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px;
+}
+
+.applicationSuggestions {
+  margin-bottom: 16px;
+}
+
+.applicationSuggestionList {
+  display: grid;
+  gap: 10px;
+}
+
+.applicationSuggestionRow {
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 12px;
+}
+
+.opportunityMatchEvidence ul {
+  margin: 8px 0 0;
+  padding-left: 20px;
+}
+
+.limitedHistoryLabel {
+  font-weight: 700;
+}
+
+.settingsCheckboxGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
 @media (max-width: 900px) {
   .premiumNumbersHeader,
   .inventoryPaginationFooter,

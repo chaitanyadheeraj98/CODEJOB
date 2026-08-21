@@ -203,7 +203,11 @@ type SettingsPayload = {
   feature_email_tracking_enabled: boolean
   feature_reply_inbox_enabled: boolean
   feature_applications_enabled: boolean
+  feature_application_automation_enabled: boolean
+  feature_reminder_sweep_interval_minutes: number
   candidate_work_authorizations: string[]
+  preferred_employment_types: Array<'C2C' | 'W2' | '1099' | 'FT'>
+  preferred_minimum_rate: number | null
   candidate_total_experience_years: number | null
   candidate_us_experience_years: number | null
   candidate_current_location: string
@@ -2621,7 +2625,11 @@ function App() {
     feature_email_tracking_enabled: false,
     feature_reply_inbox_enabled: false,
     feature_applications_enabled: false,
+    feature_application_automation_enabled: false,
+    feature_reminder_sweep_interval_minutes: 240,
     candidate_work_authorizations: [],
+    preferred_employment_types: [],
+    preferred_minimum_rate: null,
     candidate_total_experience_years: null,
     candidate_us_experience_years: null,
     candidate_current_location: '',
@@ -2993,7 +3001,11 @@ function App() {
       feature_role_manifest_enabled: Boolean(payload.feature_role_manifest_enabled),
       feature_strict_candidate_screening_enabled: Boolean(payload.feature_strict_candidate_screening_enabled),
       feature_applications_enabled: Boolean(payload.feature_applications_enabled),
+      feature_application_automation_enabled: Boolean(payload.feature_application_automation_enabled),
+      feature_reminder_sweep_interval_minutes: Math.max(30, Math.min(payload.feature_reminder_sweep_interval_minutes || 240, 1440)),
       candidate_work_authorizations: payload.candidate_work_authorizations ?? [],
+      preferred_employment_types: payload.preferred_employment_types ?? [],
+      preferred_minimum_rate: payload.preferred_minimum_rate ?? null,
       candidate_total_experience_years: payload.candidate_total_experience_years ?? null,
       candidate_us_experience_years: payload.candidate_us_experience_years ?? null,
       candidate_current_location: payload.candidate_current_location ?? '',
@@ -5805,7 +5817,61 @@ function App() {
                       <span className="toggleTrack" />
                     </span>
                   </label>
+                  <fieldset>
+                    <legend>Preferred employment types</legend>
+                    <div className="settingsCheckboxGrid">
+                      {(['C2C', 'W2', '1099', 'FT'] as const).map((employmentType) => (
+                        <label key={employmentType} className="checkboxLabel">
+                          <input
+                            type="checkbox"
+                            checked={settings.preferred_employment_types.includes(employmentType)}
+                            onChange={(event) => setSettings({
+                              ...settings,
+                              preferred_employment_types: event.target.checked
+                                ? [...settings.preferred_employment_types, employmentType]
+                                : settings.preferred_employment_types.filter((value) => value !== employmentType),
+                            })}
+                          />
+                          {employmentType}
+                        </label>
+                      ))}
+                    </div>
+                  </fieldset>
+                  <label>
+                    Preferred minimum rate
+                    <input
+                      type="number"
+                      min={0}
+                      step="any"
+                      value={settings.preferred_minimum_rate ?? ''}
+                      onChange={(event) => setSettings({ ...settings, preferred_minimum_rate: event.target.value === '' ? null : Number(event.target.value) })}
+                    />
+                  </label>
                   <p className="subtle">Shows the manual application pipeline inside Premium Numbers.</p>
+                  <label className="toggleRow pillRow">
+                    <span>Application Automation</span>
+                    <span className="toggleSwitch">
+                      <input
+                        type="checkbox"
+                        checked={settings.feature_application_automation_enabled}
+                        onChange={(event) => setSettings({ ...settings, feature_application_automation_enabled: event.target.checked })}
+                        disabled={!settings.feature_applications_enabled}
+                      />
+                      <span className="toggleTrack" />
+                    </span>
+                  </label>
+                  <p className="subtle">Requires Application Tracker. Generates reviewable reply and reminder suggestions; it never advances a stage by itself.</p>
+                  <label>
+                    Reminder sweep interval (minutes)
+                    <input
+                      type="number"
+                      min={30}
+                      max={1440}
+                      value={settings.feature_reminder_sweep_interval_minutes}
+                      onChange={(event) => setSettings({ ...settings, feature_reminder_sweep_interval_minutes: Number(event.target.value) })}
+                      disabled={!settings.feature_applications_enabled || !settings.feature_application_automation_enabled}
+                    />
+                  </label>
                   <label>
                     Batch Limit
                     <input

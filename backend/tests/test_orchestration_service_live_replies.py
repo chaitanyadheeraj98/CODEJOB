@@ -1,6 +1,7 @@
 import unittest
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
@@ -141,7 +142,9 @@ class OrchestrationServiceLiveRepliesTests(unittest.TestCase):
                 list_thread_messages=lambda thread_id: [reply_item] if thread_id == "t1" else [],
             )
             user_settings = db.query(UserSettings).filter(UserSettings.owner_id == "default-owner").first()
-            matched_count, created_count = OrchestrationService(deps)._capture_inbound_replies(db, user_settings)
+            with patch("app.services.application_intelligence_service.correlate_reply_to_application") as correlate:
+                matched_count, created_count = OrchestrationService(deps)._capture_inbound_replies(db, user_settings)
+            correlate.assert_not_called()
             db.commit()
 
             self.assertEqual((matched_count, created_count), (1, 1))
@@ -150,6 +153,60 @@ class OrchestrationServiceLiveRepliesTests(unittest.TestCase):
             self.assertEqual(reply_row.direction, "inbound")
             conversation = db.query(EmailConversation).filter(EmailConversation.external_thread_id == "t1").first()
             self.assertEqual(conversation.status, "replied")
+
+    def test_capture_inbound_replies_correlates_only_when_application_automation_is_enabled(self) -> None:
+        with Session(self.engine) as db:
+            root = RecruiterEmail(
+                owner_id="default-owner",
+                sender="me",
+                subject="Application",
+                body="body",
+                sent_status="sent",
+                external_thread_id="t2",
+            )
+            db.add(root)
+            db.flush()
+            db.add(
+                EmailConversation(
+                    owner_id="default-owner",
+                    root_recruiter_email_id=root.id,
+                    external_thread_id="t2",
+                    last_message_at=datetime.now(UTC),
+                )
+            )
+            db.add(
+                UserSettings(
+                    owner_id="default-owner",
+                    feature_reply_inbox_enabled=True,
+                    feature_application_automation_enabled=True,
+                    signature_email="me@example.com",
+                )
+            )
+            db.commit()
+            reply_item = {
+                "external_message_id": "reply-2",
+                "external_thread_id": "t2",
+                "external_rfc_message_id": None,
+                "in_reply_to_header": "",
+                "references_header": "",
+                "sender": "Recruiter <r@example.com>",
+                "body": "Let's schedule a call",
+                "snippet": "Let's schedule a call",
+                "gmail_received_at": datetime.now(UTC),
+            }
+            deps = SimpleNamespace(
+                owner_id="default-owner",
+                list_unread_candidates_by_query=lambda *_a, **_k: [reply_item],
+                list_thread_messages=None,
+                mark_reply_processed=None,
+                mark_message_processed=lambda _message_id: None,
+            )
+            user_settings = db.query(UserSettings).filter(UserSettings.owner_id == "default-owner").one()
+            with patch("app.services.application_intelligence_service.correlate_reply_to_application") as correlate:
+                matched_count, created_count = OrchestrationService(deps)._capture_inbound_replies(db, user_settings)
+
+            self.assertEqual((matched_count, created_count), (1, 1))
+            correlate.assert_called_once()
 
     def test_capture_inbound_replies_skips_original_root_message_reappearing_unread(self) -> None:
         """The app never marks Gmail messages read, so the original recruiter email that

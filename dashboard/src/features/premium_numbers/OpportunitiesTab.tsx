@@ -6,10 +6,11 @@ import {
   generateColdCallScript,
   listOpportunities,
   listResumeOptions,
+  matchOpportunitiesForResume,
   refreshOpportunityAiMetadata,
   updateOpportunity,
 } from './api'
-import type { OpportunityStatus, RecruiterOpportunityCard, ResumeAssetOption } from './types'
+import type { OpportunityMatch, OpportunityStatus, RecruiterOpportunityCard, ResumeAssetOption } from './types'
 
 const PAGE_SIZE = 10
 const STATUSES: OpportunityStatus[] = ['New', 'Called', 'Applied', 'Follow Up', 'Closed', 'Not Interested']
@@ -47,6 +48,8 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
   const [trackingId, setTrackingId] = useState<number | null>(null)
   const [resumeOptions, setResumeOptions] = useState<ResumeAssetOption[]>([])
   const [selectedResumeId, setSelectedResumeId] = useState<number | null>(null)
+  const [sortByMatch, setSortByMatch] = useState(false)
+  const [matchesByOpportunity, setMatchesByOpportunity] = useState<Record<number, OpportunityMatch>>({})
   const requestIdRef = useRef(0)
 
   const load = () => {
@@ -54,7 +57,16 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
     requestIdRef.current = requestId
     setLoading(true)
     setError('')
-    return listOpportunities({ apiBase, q: search, status, sourceType: source, mailDate })
+    const request = sortByMatch && selectedResumeId != null
+      ? matchOpportunitiesForResume(apiBase, selectedResumeId).then((matches) => {
+          setMatchesByOpportunity(Object.fromEntries(matches.map((match) => [match.opportunity.id, match])) as Record<number, OpportunityMatch>)
+          return matches.map((match) => match.opportunity)
+        })
+      : listOpportunities({ apiBase, q: search, status, sourceType: source, mailDate }).then((items) => {
+          setMatchesByOpportunity({})
+          return items
+        })
+    return request
       .then((items) => {
         if (requestId !== requestIdRef.current) return
         setRows(items)
@@ -72,7 +84,18 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
     const timer = window.setTimeout(() => { load().catch(() => undefined) }, 150)
     return () => window.clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [apiBase, mailDate, refreshToken, search, source, status])
+  }, [apiBase, mailDate, refreshToken, search, selectedResumeId, sortByMatch, source, status])
+
+  useEffect(() => {
+    if (!applicationsEnabled) return
+    listResumeOptions(apiBase)
+      .then((items) => {
+        const enabled = items.filter((resume) => resume.is_enabled)
+        setResumeOptions(enabled)
+        setSelectedResumeId((current) => current ?? (enabled.find((resume) => resume.is_current) ?? enabled[0])?.id ?? null)
+      })
+      .catch((reason) => setError((reason as Error).message))
+  }, [apiBase, applicationsEnabled])
 
   useEffect(() => {
     if (highlightedId == null) return
@@ -187,10 +210,24 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
       <div className="inventoryToolbar opportunitiesToolbar">
         <label className="inventorySearchField">
           <span>Search opportunities</span>
-          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search role, recruiter, client..." />
+          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search role, recruiter, client..." disabled={sortByMatch} />
         </label>
-        <label><span>Status</span><select value={status} onChange={(event) => setStatus(event.target.value as 'all' | OpportunityStatus)}><option value="all">All statuses</option>{STATUSES.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
-        <label><span>Source</span><select value={source} onChange={(event) => setSource(event.target.value as 'all' | 'gmail' | 'nvoids')}><option value="all">All sources</option><option value="gmail">Gmail</option><option value="nvoids">Nvoids</option></select></label>
+        <label><span>Status</span><select value={status} onChange={(event) => setStatus(event.target.value as 'all' | OpportunityStatus)} disabled={sortByMatch}><option value="all">All statuses</option>{STATUSES.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+        <label><span>Source</span><select value={source} onChange={(event) => setSource(event.target.value as 'all' | 'gmail' | 'nvoids')} disabled={sortByMatch}><option value="all">All sources</option><option value="gmail">Gmail</option><option value="nvoids">Nvoids</option></select></label>
+        {applicationsEnabled ? (
+          <>
+            <label>
+              <span>Best matches for resume</span>
+              <select value={selectedResumeId ?? ''} onChange={(event) => setSelectedResumeId(Number(event.target.value))}>
+                {resumeOptions.map((resume) => <option key={resume.id} value={resume.id}>{resume.file_name} (v{resume.version})</option>)}
+              </select>
+            </label>
+            <label className="checkboxLabel matchSortToggle">
+              <input type="checkbox" checked={sortByMatch} onChange={(event) => setSortByMatch(event.target.checked)} disabled={selectedResumeId == null} />
+              Sort by resume fit
+            </label>
+          </>
+        ) : null}
       </div>
       {loading ? <p className="subtle">Loading recruiter opportunities...</p> : null}
       {error ? <p className="errorBanner">Recruiter opportunities error: {error}</p> : null}
@@ -208,6 +245,12 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
               <div><span className="categoryChip">{item.source_type.toUpperCase()}</span><h3>{item.job_title || 'Recruiter opportunity'}</h3></div>
               <select value={item.status} aria-label={`Status for ${item.job_title}`} onChange={(event) => patchRow(item.id, { status: event.target.value as OpportunityStatus })} disabled={busyId === item.id}>{STATUSES.map((value) => <option key={value} value={value}>{value}</option>)}</select>
             </header>
+            {matchesByOpportunity[item.id] ? (
+              <div className="opportunityMatchEvidence">
+                <strong>{matchesByOpportunity[item.id].score}% match</strong>
+                <ul>{matchesByOpportunity[item.id].reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>
+              </div>
+            ) : null}
             <label>Location<input value={String(edits[item.id]?.location ?? item.location ?? '')} onChange={(event) => setEdits((current) => ({ ...current, [item.id]: { ...current[item.id], location: event.target.value } }))} /></label>
             <div className="opportunitySummary">
               <p><strong>Recruiter:</strong> {item.recruiter_name || '--'}</p>
@@ -223,6 +266,47 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
                 <label key={field}>{label}<input value={String(edits[item.id]?.[field] ?? item[field] ?? '')} onChange={(event) => setEdits((current) => ({ ...current, [item.id]: { ...current[item.id], [field]: event.target.value } }))} /></label>
               ))}
             </div>
+            <details className="opportunityJobDetails">
+              <summary>Job details</summary>
+              <div className="detailFormGrid">
+                <label>Employment type<input value={String(edits[item.id]?.employment_type ?? item.employment_type ?? '')} onChange={(event) => setEdits((current) => ({ ...current, [item.id]: { ...current[item.id], employment_type: event.target.value } }))} /></label>
+                <label>Rate amount<input type="number" min={0} step="any" value={edits[item.id]?.rate_amount === undefined ? (item.rate_amount ?? '') : (edits[item.id]?.rate_amount ?? '')} onChange={(event) => setEdits((current) => ({ ...current, [item.id]: { ...current[item.id], rate_amount: event.target.value ? Number(event.target.value) : null } }))} /></label>
+                <label>Currency<input value={String(edits[item.id]?.rate_currency ?? item.rate_currency ?? 'USD')} onChange={(event) => setEdits((current) => ({ ...current, [item.id]: { ...current[item.id], rate_currency: event.target.value } }))} /></label>
+                <label>Rate unit<input value={String(edits[item.id]?.rate_unit ?? item.rate_unit ?? '')} onChange={(event) => setEdits((current) => ({ ...current, [item.id]: { ...current[item.id], rate_unit: event.target.value } }))} placeholder="hour, day, year" /></label>
+                <label>Contract duration<input value={String(edits[item.id]?.contract_duration ?? item.contract_duration ?? '')} onChange={(event) => setEdits((current) => ({ ...current, [item.id]: { ...current[item.id], contract_duration: event.target.value } }))} /></label>
+                <label>
+                  Relocation required
+                  <select
+                    value={String(edits[item.id]?.relocation_required === undefined ? (item.relocation_required ?? '') : (edits[item.id]?.relocation_required ?? ''))}
+                    onChange={(event) => setEdits((current) => ({ ...current, [item.id]: { ...current[item.id], relocation_required: event.target.value === '' ? null : event.target.value === 'true' } }))}
+                  >
+                    <option value="">Unknown</option>
+                    <option value="false">No</option>
+                    <option value="true">Yes</option>
+                  </select>
+                </label>
+                <label>
+                  Extension likely
+                  <select value={String(edits[item.id]?.extension_likely ?? item.extension_likely ?? 'unknown')} onChange={(event) => setEdits((current) => ({ ...current, [item.id]: { ...current[item.id], extension_likely: event.target.value } }))}>
+                    <option value="unknown">Unknown</option><option value="yes">Yes</option><option value="no">No</option>
+                  </select>
+                </label>
+                <label>
+                  Job confidence
+                  <select value={String(edits[item.id]?.job_confidence ?? item.job_confidence ?? 'unknown')} onChange={(event) => setEdits((current) => ({ ...current, [item.id]: { ...current[item.id], job_confidence: event.target.value } }))}>
+                    <option value="unknown">Unknown</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option>
+                  </select>
+                </label>
+                <label className="checkboxLabel">
+                  <input
+                    type="checkbox"
+                    checked={edits[item.id]?.end_client_confirmed ?? item.end_client_confirmed}
+                    onChange={(event) => setEdits((current) => ({ ...current, [item.id]: { ...current[item.id], end_client_confirmed: event.target.checked } }))}
+                  />
+                  End client confirmed
+                </label>
+              </div>
+            </details>
             {item.source_url || item.gmail_open_url ? <a href={item.source_url || item.gmail_open_url} target="_blank" rel="noreferrer">{item.source_type === 'nvoids' ? 'Open original post' : 'Open exact email in Gmail'}</a> : null}
             {item.linkedin_url ? <a href={item.linkedin_url} target="_blank" rel="noreferrer">LinkedIn profile</a> : null}
             <label>Notes<textarea rows={3} value={item.notes || ''} onChange={(event) => setRows((current) => current.map((row) => row.id === item.id ? { ...row, notes: event.target.value } : row))} onBlur={(event) => patchRow(item.id, { notes: event.target.value })} /></label>

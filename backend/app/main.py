@@ -67,8 +67,12 @@ from app.external_feeds.models import ExternalOpportunity, ExternalScrapeRun
 from app.models import (
     APPLICATION_CLOSED_STATUS_VALUES,
     APPLICATION_STATUS_VALUES,
+    APPLICATION_SUGGESTION_STATUS_VALUES,
     Application,
     ApplicationEvent,
+    ApplicationInterview,
+    ApplicationRTR,
+    ApplicationSuggestion,
     AttachmentAsset,
     CanonicalEntityTaxonomyEntry,
     CustomSkillTaxonomyEntry,
@@ -162,7 +166,7 @@ from app.job_intent_learning import (
     normalize_job_intent_phrase,
     prioritized_learning_signals,
 )
-from app.services import analytics_service, application_service, email_lookup_service, policy_service
+from app.services import analytics_service, application_intelligence_service, application_service, email_lookup_service, policy_service
 from app.services.auto_runner_service import AutoRunnerService
 from app.services.candidate_runtime_service import CandidateRuntimeDeps, CandidateRuntimeService, resolve_resume_display_name
 from app.services.phone_intelligence_workflow_service import (
@@ -207,9 +211,19 @@ from app.schemas import (
     ApplicationDashboardSummaryResponse,
     ApplicationEventCreateRequest,
     ApplicationEventResponse,
+    ApplicationInterviewCreateRequest,
+    ApplicationInterviewPatchRequest,
+    ApplicationInterviewResponse,
     ApplicationListResponse,
     ApplicationPatchRequest,
     ApplicationResponse,
+    ApplicationRTRRequest,
+    ApplicationRTRResponse,
+    ApplicationRTRUpdateRequest,
+    ApplicationSubmitToClientRequest,
+    ApplicationSuggestionListResponse,
+    ApplicationSuggestionResolveRequest,
+    ApplicationSuggestionResponse,
     ApproveJobIntentSignalRequest,
     ApproveSendRequest,
     ApproveSkillRequest,
@@ -267,12 +281,15 @@ from app.schemas import (
     PendingEntityResponse,
     ApproveEntityRequest,
     RecruiterNumberResponse,
+    RecruiterReputationResponse,
     RecruiterNumberListResponse,
     RecruiterNumberPatchRequest,
     RecruiterOpportunityDeleteResponse,
     RecruiterOpportunityListResponse,
     RecruiterOpportunityPatchRequest,
     RecruiterOpportunityResponse,
+    OpportunityMatchListResponse,
+    OpportunityMatchResponse,
     NumberReviewSubmitRequest,
     RejectRequest,
     ResolveRecipientsRequest,
@@ -1119,6 +1136,15 @@ def _check_live_replies(db: Session) -> None:
     runtime_state.live_reply_checked_at = datetime.now(UTC)
 
 
+def _run_reminder_sweep(db: Session) -> None:
+    user_settings = _get_settings(db)
+    application_intelligence_service.generate_reminder_sweep_suggestions(
+        db,
+        owner_id=user_settings.owner_id,
+    )
+    db.commit()
+
+
 def _get_auto_runner_service() -> AutoRunnerService:
     global auto_runner_service
     if auto_runner_service is None:
@@ -1128,6 +1154,7 @@ def _get_auto_runner_service() -> AutoRunnerService:
             run_once=_enqueue_automation,
             run_nvoids_once=lambda db, max_items: _enqueue_nvoids_sync(db, max_items=max_items),
             check_live_replies=_check_live_replies,
+            run_reminder_sweep=_run_reminder_sweep,
             action_lock=telegram_action_lock,
             stop_event=auto_runner_stop_event,
         )
@@ -2095,7 +2122,14 @@ def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
         feature_email_tracking_enabled=s.feature_email_tracking_enabled,
         feature_reply_inbox_enabled=s.feature_reply_inbox_enabled,
         feature_applications_enabled=s.feature_applications_enabled,
+        feature_application_automation_enabled=s.feature_application_automation_enabled,
+        feature_reminder_sweep_interval_minutes=max(
+            30,
+            min(int(s.feature_reminder_sweep_interval_minutes or 240), 1440),
+        ),
         candidate_work_authorizations=_json_string_list(s.candidate_work_authorizations_json),
+        preferred_employment_types=_json_string_list(s.preferred_employment_types_json),
+        preferred_minimum_rate=s.preferred_minimum_rate,
         candidate_total_experience_years=s.candidate_total_experience_years,
         candidate_us_experience_years=s.candidate_us_experience_years,
         candidate_current_location=s.candidate_current_location or "",
@@ -2346,6 +2380,11 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
     s.feature_email_tracking_enabled = payload.feature_email_tracking_enabled
     s.feature_reply_inbox_enabled = payload.feature_reply_inbox_enabled
     s.feature_applications_enabled = payload.feature_applications_enabled
+    s.feature_application_automation_enabled = payload.feature_application_automation_enabled
+    s.feature_reminder_sweep_interval_minutes = max(
+        30,
+        min(int(payload.feature_reminder_sweep_interval_minutes), 1440),
+    )
     provided_fields = payload.model_fields_set
     if "feature_role_manifest_enabled" in provided_fields:
         s.feature_role_manifest_enabled = payload.feature_role_manifest_enabled
@@ -2353,6 +2392,10 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
         s.feature_strict_candidate_screening_enabled = payload.feature_strict_candidate_screening_enabled
     if "candidate_work_authorizations" in provided_fields:
         s.candidate_work_authorizations_json = json.dumps(payload.candidate_work_authorizations or [], separators=(",", ":"))
+    if "preferred_employment_types" in provided_fields:
+        s.preferred_employment_types_json = json.dumps(payload.preferred_employment_types, separators=(",", ":"))
+    if "preferred_minimum_rate" in provided_fields:
+        s.preferred_minimum_rate = payload.preferred_minimum_rate
     if "candidate_total_experience_years" in provided_fields:
         s.candidate_total_experience_years = payload.candidate_total_experience_years
     if "candidate_us_experience_years" in provided_fields:
@@ -3752,6 +3795,15 @@ def _recruiter_opportunity_response(
         linkedin_url=(recruiter.linkedin_url if recruiter else ""),
         status=row.status,
         notes=row.notes,
+        employment_type=row.employment_type,
+        rate_amount=row.rate_amount,
+        rate_currency=row.rate_currency,
+        rate_unit=row.rate_unit,
+        contract_duration=row.contract_duration,
+        relocation_required=row.relocation_required,
+        extension_likely=row.extension_likely,
+        end_client_confirmed=row.end_client_confirmed,
+        job_confidence=row.job_confidence,
         cold_call_script=row.cold_call_script,
         cold_call_script_updated_at=row.cold_call_script_updated_at,
         created_at=row.created_at,
@@ -3771,6 +3823,56 @@ def _get_application(db: Session, application_id: int) -> Application:
     )
     if not row:
         raise HTTPException(status_code=404, detail="Application not found")
+    return row
+
+
+def _get_application_rtr(db: Session, application: Application, rtr_id: int) -> ApplicationRTR:
+    row = (
+        db.query(ApplicationRTR)
+        .filter(
+            ApplicationRTR.owner_id == settings.owner_id,
+            ApplicationRTR.application_id == application.id,
+            ApplicationRTR.id == rtr_id,
+        )
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="RTR not found")
+    return row
+
+
+def _get_application_interview(
+    db: Session,
+    application: Application,
+    interview_id: int,
+) -> ApplicationInterview:
+    row = (
+        db.query(ApplicationInterview)
+        .filter(
+            ApplicationInterview.owner_id == settings.owner_id,
+            ApplicationInterview.application_id == application.id,
+            ApplicationInterview.id == interview_id,
+            ApplicationInterview.deleted_at.is_(None),
+        )
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Interview not found")
+    return row
+
+
+def _get_application_suggestion(db: Session, suggestion_id: int) -> ApplicationSuggestion:
+    row = (
+        db.query(ApplicationSuggestion)
+        .filter(
+            ApplicationSuggestion.owner_id == settings.owner_id,
+            ApplicationSuggestion.id == suggestion_id,
+            ApplicationSuggestion.status == "pending",
+        )
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Suggestion not found or already resolved")
     return row
 
 
@@ -3808,6 +3910,33 @@ def _application_response(
         if include_events
         else []
     )
+    rtr_history = (
+        db.query(ApplicationRTR)
+        .filter(
+            ApplicationRTR.owner_id == settings.owner_id,
+            ApplicationRTR.application_id == row.id,
+        )
+        .order_by(ApplicationRTR.requested_at.desc(), ApplicationRTR.id.desc())
+        .all()
+        if include_events
+        else []
+    )
+    interviews = (
+        db.query(ApplicationInterview)
+        .filter(
+            ApplicationInterview.owner_id == settings.owner_id,
+            ApplicationInterview.application_id == row.id,
+            ApplicationInterview.deleted_at.is_(None),
+        )
+        .order_by(
+            ApplicationInterview.scheduled_at.is_(None),
+            ApplicationInterview.scheduled_at.asc(),
+            ApplicationInterview.id.asc(),
+        )
+        .all()
+        if include_events
+        else []
+    )
     return ApplicationResponse.model_validate(row).model_copy(
         update={
             "current_recruiter_name": recruiter.recruiter_name if recruiter else "",
@@ -3816,6 +3945,8 @@ def _application_response(
             "current_job_title": opportunity.job_title if opportunity else "",
             "current_end_client": opportunity.end_client if opportunity else "",
             "events": [ApplicationEventResponse.model_validate(event) for event in events],
+            "rtr_history": [ApplicationRTRResponse.model_validate(rtr) for rtr in rtr_history],
+            "interviews": [ApplicationInterviewResponse.model_validate(interview) for interview in interviews],
         }
     )
 
@@ -4824,6 +4955,9 @@ def _recruiter_number_response(
         active_lead_id=active_id,
         version_count=version_count,
         linkedin_url=contact.linkedin_url,
+        recruiter_verification_level=contact.recruiter_verification_level,
+        do_not_work_again=contact.do_not_work_again,
+        do_not_work_again_reason=contact.do_not_work_again_reason,
         total_opportunity_count=int(total),
         last_email_received_at=last_received,
         is_recruiter=contact.is_recruiter,
@@ -4937,6 +5071,12 @@ def patch_recruiter_number(
         contact.recruiter_email = payload.recruiter_email.strip()
     if payload.linkedin_url is not None:
         contact.linkedin_url = _normalize_linkedin_url(payload.linkedin_url)
+    if payload.recruiter_verification_level is not None:
+        contact.recruiter_verification_level = payload.recruiter_verification_level
+    if payload.do_not_work_again is not None:
+        contact.do_not_work_again = payload.do_not_work_again
+    if payload.do_not_work_again_reason is not None:
+        contact.do_not_work_again_reason = payload.do_not_work_again_reason
     contact.updated_at = datetime.now(UTC)
     db.commit()
     db.refresh(contact)
@@ -5626,10 +5766,22 @@ def patch_recruiter_opportunity(
         "end_client",
         "domain",
         "extracted_skills",
+        "employment_type",
+        "rate_amount",
+        "rate_currency",
+        "rate_unit",
+        "contract_duration",
+        "relocation_required",
+        "extension_likely",
+        "end_client_confirmed",
+        "job_confidence",
     ):
         value = getattr(payload, field)
         if value is not None:
             setattr(row, field, value)
+    for nullable_field in ("rate_amount", "relocation_required"):
+        if nullable_field in payload.model_fields_set:
+            setattr(row, nullable_field, getattr(payload, nullable_field))
     db.commit()
     db.refresh(row)
     recruiter = (
@@ -5937,8 +6089,175 @@ def list_applications(
 
 @app.get("/applications/dashboard-summary", response_model=ApplicationDashboardSummaryResponse)
 def applications_dashboard_summary(db: Session = Depends(get_db)) -> ApplicationDashboardSummaryResponse:
+    pending_suggestions = int(
+        db.query(func.count(ApplicationSuggestion.id))
+        .filter(
+            ApplicationSuggestion.owner_id == settings.owner_id,
+            ApplicationSuggestion.status == "pending",
+        )
+        .scalar()
+        or 0
+    )
     return ApplicationDashboardSummaryResponse(
-        **application_service.dashboard_summary(db, settings.owner_id)
+        **application_service.dashboard_summary(db, settings.owner_id),
+        pending_suggestions=pending_suggestions,
+    )
+
+
+@app.get("/applications/match", response_model=OpportunityMatchListResponse)
+def match_opportunities_for_resume(
+    resume_asset_id: int = Query(gt=0),
+    limit: int = Query(default=25, ge=1, le=100),
+    exclude_already_applied: bool = True,
+    db: Session = Depends(get_db),
+) -> OpportunityMatchListResponse:
+    try:
+        matches = application_intelligence_service.rank_opportunities_for_resume(
+            db,
+            owner_id=settings.owner_id,
+            resume_asset_id=resume_asset_id,
+            limit=limit,
+            exclude_already_applied=exclude_already_applied,
+        )
+    except application_service.ApplicationReferenceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    opportunity_ids = [match.opportunity_id for match in matches]
+    opportunities = {
+        row.id: row
+        for row in (
+            db.query(RecruiterOpportunity)
+            .filter(
+                RecruiterOpportunity.owner_id == settings.owner_id,
+                RecruiterOpportunity.id.in_(opportunity_ids),
+            )
+            .all()
+            if opportunity_ids
+            else []
+        )
+    }
+    recruiter_ids = {row.recruiter_number_id for row in opportunities.values()}
+    recruiters = {
+        row.id: row
+        for row in (
+            db.query(PremiumNumberContact)
+            .filter(
+                PremiumNumberContact.owner_id == settings.owner_id,
+                PremiumNumberContact.id.in_(recruiter_ids),
+                PremiumNumberContact.deleted_at.is_(None),
+            )
+            .all()
+            if recruiter_ids
+            else []
+        )
+    }
+    return OpportunityMatchListResponse(
+        items=[
+            OpportunityMatchResponse(
+                opportunity=_recruiter_opportunity_response(
+                    opportunities[match.opportunity_id],
+                    recruiters.get(opportunities[match.opportunity_id].recruiter_number_id),
+                ),
+                score=match.score,
+                reasons=match.reasons,
+            )
+            for match in matches
+            if match.opportunity_id in opportunities
+        ]
+    )
+
+
+@app.get("/recruiter-numbers/{recruiter_number_id}/reputation", response_model=RecruiterReputationResponse)
+def get_recruiter_reputation(
+    recruiter_number_id: int,
+    db: Session = Depends(get_db),
+) -> RecruiterReputationResponse:
+    recruiter = (
+        db.query(PremiumNumberContact.id)
+        .filter(
+            PremiumNumberContact.owner_id == settings.owner_id,
+            PremiumNumberContact.id == recruiter_number_id,
+            PremiumNumberContact.is_recruiter.is_(True),
+            PremiumNumberContact.deleted_at.is_(None),
+        )
+        .first()
+    )
+    if recruiter is None:
+        raise HTTPException(status_code=404, detail="Recruiter number not found")
+    return RecruiterReputationResponse.model_validate(
+        application_intelligence_service.compute_recruiter_reputation(
+            db,
+            owner_id=settings.owner_id,
+            recruiter_contact_id=recruiter_number_id,
+        )
+    )
+
+
+@app.get("/applications/suggestions", response_model=ApplicationSuggestionListResponse)
+def list_application_suggestions(
+    status: str = "pending",
+    db: Session = Depends(get_db),
+) -> ApplicationSuggestionListResponse:
+    if status not in APPLICATION_SUGGESTION_STATUS_VALUES:
+        raise HTTPException(status_code=422, detail="Invalid application suggestion status")
+    rows = (
+        db.query(ApplicationSuggestion)
+        .filter(
+            ApplicationSuggestion.owner_id == settings.owner_id,
+            ApplicationSuggestion.status == status,
+        )
+        .order_by(ApplicationSuggestion.created_at.desc(), ApplicationSuggestion.id.desc())
+        .all()
+    )
+    return ApplicationSuggestionListResponse(
+        items=[ApplicationSuggestionResponse.model_validate(row) for row in rows]
+    )
+
+
+@app.post("/applications/suggestions/{suggestion_id}/accept", response_model=ApplicationResponse)
+def accept_application_suggestion(
+    suggestion_id: int,
+    payload: ApplicationSuggestionResolveRequest,
+    db: Session = Depends(get_db),
+) -> ApplicationResponse:
+    suggestion = _get_application_suggestion(db, suggestion_id)
+    application = _get_application(db, suggestion.application_id)
+    try:
+        application_service.accept_suggestion(
+            db,
+            suggestion,
+            application=application,
+            override_next_action_at=payload.override_next_action_at,
+        )
+    except application_service.ApplicationReferenceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except application_service.ApplicationValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    db.commit()
+    db.refresh(application)
+    return _application_response(db, application, include_events=True)
+
+
+@app.post("/applications/suggestions/{suggestion_id}/dismiss", response_model=ApplicationSuggestionResponse)
+def dismiss_application_suggestion(
+    suggestion_id: int,
+    db: Session = Depends(get_db),
+) -> ApplicationSuggestionResponse:
+    suggestion = _get_application_suggestion(db, suggestion_id)
+    application_service.dismiss_suggestion(db, suggestion)
+    db.commit()
+    db.refresh(suggestion)
+    return ApplicationSuggestionResponse.model_validate(suggestion)
+
+
+@app.post("/applications/reminders/run", response_model=ApplicationSuggestionListResponse)
+def run_reminder_sweep_now(db: Session = Depends(get_db)) -> ApplicationSuggestionListResponse:
+    created = application_intelligence_service.generate_reminder_sweep_suggestions(
+        db,
+        owner_id=settings.owner_id,
+    )
+    db.commit()
+    return ApplicationSuggestionListResponse(
+        items=[ApplicationSuggestionResponse.model_validate(row) for row in created]
     )
 
 
@@ -5956,10 +6275,28 @@ def patch_application(
     row = _get_application(db, application_id)
     provided = payload.model_fields_set
     if "status" in provided and payload.status is not None:
+        if payload.status == "submitted_to_client":
+            raise HTTPException(status_code=422, detail="Use the submit-to-client endpoint for this status")
         try:
-            application_service.update_status(db, row, new_status=payload.status)
+            application_service.update_status(
+                db,
+                row,
+                new_status=payload.status,
+                closed_reason_code=(
+                    payload.closed_reason_code if "closed_reason_code" in provided else None
+                ),
+            )
         except application_service.ApplicationValidationError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+    elif "closed_reason_code" in provided:
+        if row.status not in APPLICATION_CLOSED_STATUS_VALUES:
+            raise HTTPException(status_code=422, detail="Closed reason code requires a closed application status")
+        if (
+            payload.closed_reason_code is not None
+            and payload.closed_reason_code not in application_service.CLOSED_REASON_CODE_VALUES
+        ):
+            raise HTTPException(status_code=422, detail="Invalid closed reason code")
+        row.closed_reason_code = payload.closed_reason_code
     if "next_action_type" in provided or "next_action_at" in provided:
         application_service.set_next_action(
             db,
@@ -6006,6 +6343,149 @@ def create_application_event(
     db.commit()
     db.refresh(event)
     return ApplicationEventResponse.model_validate(event)
+
+
+@app.post("/applications/{application_id}/rtr", response_model=ApplicationResponse, status_code=201)
+def request_application_rtr(
+    application_id: int,
+    payload: ApplicationRTRRequest,
+    db: Session = Depends(get_db),
+) -> ApplicationResponse:
+    row = _get_application(db, application_id)
+    application_service.request_rtr(
+        db,
+        row,
+        role_scope=payload.role_scope,
+        end_client_scope=payload.end_client_scope,
+        expires_at=payload.expires_at,
+    )
+    db.commit()
+    db.refresh(row)
+    return _application_response(db, row, include_events=True)
+
+
+@app.patch("/applications/{application_id}/rtr/{rtr_id}", response_model=ApplicationResponse)
+def update_application_rtr(
+    application_id: int,
+    rtr_id: int,
+    payload: ApplicationRTRUpdateRequest,
+    db: Session = Depends(get_db),
+) -> ApplicationResponse:
+    row = _get_application(db, application_id)
+    rtr = _get_application_rtr(db, row, rtr_id)
+    try:
+        if payload.status == "confirmed":
+            application_service.confirm_rtr(
+                db,
+                row,
+                rtr,
+                proof_attachment_id=payload.proof_attachment_id,
+                proof_recruiter_email_id=payload.proof_recruiter_email_id,
+            )
+        else:
+            application_service.expire_or_revoke_rtr(db, rtr, new_status=payload.status)
+    except application_service.ApplicationReferenceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except application_service.ApplicationValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    db.commit()
+    db.refresh(row)
+    return _application_response(db, row, include_events=True)
+
+
+@app.post("/applications/{application_id}/submit-to-client", response_model=ApplicationResponse)
+def submit_application_to_client(
+    application_id: int,
+    payload: ApplicationSubmitToClientRequest,
+    db: Session = Depends(get_db),
+) -> ApplicationResponse:
+    row = _get_application(db, application_id)
+    try:
+        application_service.submit_to_client(
+            db,
+            row,
+            override_duplicate_warning=payload.override_duplicate_warning,
+        )
+    except application_service.ApplicationDuplicateWarning as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": str(exc),
+                "duplicates": [
+                    {
+                        "id": candidate.id,
+                        "job_title_snapshot": candidate.job_title_snapshot,
+                        "end_client_snapshot": candidate.end_client_snapshot,
+                        "status": candidate.status,
+                        "created_at": candidate.created_at.isoformat(),
+                    }
+                    for candidate in exc.candidates
+                ],
+            },
+        ) from exc
+    db.commit()
+    db.refresh(row)
+    return _application_response(db, row, include_events=True)
+
+
+@app.post("/applications/{application_id}/interviews", response_model=ApplicationResponse, status_code=201)
+def create_application_interview(
+    application_id: int,
+    payload: ApplicationInterviewCreateRequest,
+    db: Session = Depends(get_db),
+) -> ApplicationResponse:
+    row = _get_application(db, application_id)
+    try:
+        application_service.add_interview(
+            db,
+            row,
+            round_type=payload.round_type,
+            scheduled_at=payload.scheduled_at,
+            format=payload.format,
+            interviewer_names=payload.interviewer_names,
+            sync_application_status=payload.sync_application_status,
+        )
+    except application_service.ApplicationValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    db.commit()
+    db.refresh(row)
+    return _application_response(db, row, include_events=True)
+
+
+@app.patch("/applications/{application_id}/interviews/{interview_id}", response_model=ApplicationResponse)
+def patch_application_interview(
+    application_id: int,
+    interview_id: int,
+    payload: ApplicationInterviewPatchRequest,
+    db: Session = Depends(get_db),
+) -> ApplicationResponse:
+    row = _get_application(db, application_id)
+    interview = _get_application_interview(db, row, interview_id)
+    try:
+        application_service.update_interview(
+            db,
+            interview,
+            **payload.model_dump(exclude_unset=True),
+        )
+    except application_service.ApplicationValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    db.commit()
+    db.refresh(row)
+    return _application_response(db, row, include_events=True)
+
+
+@app.delete("/applications/{application_id}/interviews/{interview_id}", response_model=ApplicationResponse)
+def delete_application_interview(
+    application_id: int,
+    interview_id: int,
+    db: Session = Depends(get_db),
+) -> ApplicationResponse:
+    row = _get_application(db, application_id)
+    interview = _get_application_interview(db, row, interview_id)
+    application_service.delete_interview(db, interview)
+    db.commit()
+    db.refresh(row)
+    return _application_response(db, row, include_events=True)
 
 
 @app.get("/candidates/{email_id}", response_model=EmailResponse)

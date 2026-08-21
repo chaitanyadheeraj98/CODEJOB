@@ -38,9 +38,12 @@ const application: ApplicationCard = {
   last_contact_at: null,
   closed_at: null,
   closed_reason: null,
+  closed_reason_code: null,
   created_at: '2026-08-20T12:00:00Z',
   updated_at: '2026-08-20T12:00:00Z',
   events: [],
+  rtr_history: [],
+  interviews: [],
 }
 
 describe('ApplicationsTab', () => {
@@ -72,8 +75,10 @@ describe('ApplicationsTab', () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url.endsWith('/applications/dashboard-summary')) {
-        return jsonResponse({ due_today: 1, waiting_on_recruiter: 0, interviews: 0, closed_recent: 0 })
+        return jsonResponse({ due_today: 1, waiting_on_recruiter: 0, interviews: 0, closed_recent: 0, pending_suggestions: 0 })
       }
+      if (url.endsWith('/settings/attachments')) return jsonResponse([])
+      if (url.includes('/applications/suggestions?')) return jsonResponse({ items: [] })
       if (url.includes('/applications?')) {
         return jsonResponse({ items: [application], next_cursor: null, has_next: false })
       }
@@ -137,5 +142,202 @@ describe('ApplicationsTab', () => {
     })
     expect(container.textContent).toContain('Recruiter requested an updated summary.')
     expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith('/applications/41/events') && init?.method === 'POST')).toBe(true)
+  })
+
+  it('requests and confirms RTR, adds an interview, and explicitly overrides a duplicate warning', async () => {
+    const rtr = {
+      id: 71,
+      status: 'requested' as const,
+      role_scope: 'Senior Java Developer',
+      end_client_scope: 'Bank X',
+      requested_at: '2026-08-21T12:00:00Z',
+      confirmed_at: null,
+      expires_at: null,
+      proof_attachment_id: null,
+      proof_recruiter_email_id: null,
+      note: '',
+    }
+    const interview = {
+      id: 81,
+      round_type: 'interview_1' as const,
+      scheduled_at: null,
+      format: '',
+      interviewer_names: '',
+      feedback: '',
+      result: 'scheduled' as const,
+      follow_up_task_note: '',
+    }
+    let detail: ApplicationCard = application
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/settings/attachments')) return jsonResponse([{ id: 5, file_name: 'rtr-proof.pdf', is_enabled: true }])
+      if (url.endsWith('/applications/dashboard-summary')) return jsonResponse({ due_today: 0, waiting_on_recruiter: 0, interviews: 0, closed_recent: 0, pending_suggestions: 0 })
+      if (url.includes('/applications/suggestions?')) return jsonResponse({ items: [] })
+      if (url.includes('/applications?')) return jsonResponse({ items: [detail], next_cursor: null, has_next: false })
+      if (url.endsWith('/applications/41/rtr') && init?.method === 'POST') {
+        detail = { ...detail, status: 'rtr_requested', rtr_history: [rtr] }
+        return jsonResponse(detail, 201)
+      }
+      if (url.endsWith('/applications/41/rtr/71') && init?.method === 'PATCH') {
+        detail = {
+          ...detail,
+          status: 'rtr_confirmed',
+          rtr_history: [{ ...rtr, status: 'confirmed', confirmed_at: '2026-08-21T13:00:00Z', proof_attachment_id: 5 }],
+        }
+        return jsonResponse(detail)
+      }
+      if (url.endsWith('/applications/41/interviews') && init?.method === 'POST') {
+        detail = { ...detail, status: 'interview_1', interviews: [interview] }
+        return jsonResponse(detail, 201)
+      }
+      if (url.endsWith('/applications/41/submit-to-client') && init?.method === 'POST') {
+        const payload = JSON.parse(String(init.body)) as { override_duplicate_warning: boolean }
+        if (!payload.override_duplicate_warning) {
+          return jsonResponse({
+            detail: {
+              message: 'Possible duplicate submission to the same end client',
+              duplicates: [{ id: 42, job_title_snapshot: 'Java Developer', end_client_snapshot: 'Bank X', status: 'matched', created_at: '2026-08-20T12:00:00Z' }],
+            },
+          }, 409)
+        }
+        detail = { ...detail, status: 'submitted_to_client', submitted_to_client_at: '2026-08-21T14:00:00Z' }
+        return jsonResponse(detail)
+      }
+      if (url.endsWith('/applications/41')) return jsonResponse(detail)
+      return jsonResponse({ detail: 'not found' }, 404)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+      vi.unstubAllGlobals()
+    })
+
+    await act(async () => {
+      root.render(<ApplicationsTab apiBase="http://localhost:8000" refreshToken={0} onToast={vi.fn()} />)
+    })
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 300)) })
+    const button = (text: string) => Array.from(container.querySelectorAll('button')).find((item) => item.textContent === text)
+
+    await act(async () => {
+      button('View timeline')?.click()
+      await new Promise((resolve) => window.setTimeout(resolve, 30))
+    })
+    await act(async () => {
+      button('Request RTR')?.click()
+      await new Promise((resolve) => window.setTimeout(resolve, 30))
+    })
+    expect(container.textContent).toContain('Confirm RTR')
+
+    const attachmentSelect = Array.from(container.querySelectorAll('label')).find((item) => item.textContent?.includes('Attachment proof'))?.querySelector('select')
+    const selectSetter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')!.set!
+    await act(async () => {
+      selectSetter.call(attachmentSelect, '5')
+      attachmentSelect?.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await act(async () => {
+      button('Confirm RTR')?.click()
+      await new Promise((resolve) => window.setTimeout(resolve, 30))
+    })
+    expect(detail.rtr_history[0].status).toBe('confirmed')
+
+    await act(async () => {
+      button('Add interview')?.click()
+      await new Promise((resolve) => window.setTimeout(resolve, 30))
+    })
+    expect(container.textContent).toContain('Interview 1')
+
+    await act(async () => {
+      button('Submit to client')?.click()
+      await new Promise((resolve) => window.setTimeout(resolve, 30))
+    })
+    expect(container.textContent).toContain('Possible duplicate submission')
+    expect(container.textContent).toContain('#42')
+    await act(async () => {
+      button('Submit anyway')?.click()
+      await new Promise((resolve) => window.setTimeout(resolve, 30))
+    })
+    expect(detail.status).toBe('submitted_to_client')
+    const submitCalls = fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/applications/41/submit-to-client'))
+    expect(submitCalls.map(([, init]) => JSON.parse(String(init?.body)).override_duplicate_warning)).toEqual([false, true])
+  })
+
+  it('accepts and dismisses pending suggestions without automatic mutation', async () => {
+    const suggestions = [
+      {
+        id: 91,
+        application_id: 41,
+        suggestion_type: 'status_change',
+        status: 'pending',
+        confidence: 'high',
+        recruiter_email_id: 77,
+        suggested_status: 'client_reviewing',
+        suggested_next_action_type: null,
+        suggested_next_action_at: null,
+        reason: "Matched phrase: 'submitted your resume'",
+        created_at: '2026-08-21T12:00:00Z',
+        resolved_at: null,
+      },
+      {
+        id: 92,
+        application_id: 41,
+        suggestion_type: 'stale_prompt',
+        status: 'pending',
+        confidence: 'high',
+        recruiter_email_id: null,
+        suggested_status: null,
+        suggested_next_action_type: null,
+        suggested_next_action_at: null,
+        reason: 'No activity in 3 weeks - close or continue?',
+        created_at: '2026-08-21T11:00:00Z',
+        resolved_at: null,
+      },
+    ]
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/settings/attachments')) return jsonResponse([])
+      if (url.endsWith('/applications/dashboard-summary')) return jsonResponse({ due_today: 0, waiting_on_recruiter: 0, interviews: 0, closed_recent: 0, pending_suggestions: 2 })
+      if (url.includes('/applications/suggestions?')) return jsonResponse({ items: suggestions })
+      if (url.includes('/applications?')) return jsonResponse({ items: [application], next_cursor: null, has_next: false })
+      if (url.endsWith('/applications/suggestions/91/accept') && init?.method === 'POST') {
+        return jsonResponse({ ...application, status: 'client_reviewing' })
+      }
+      if (url.endsWith('/applications/suggestions/92/dismiss') && init?.method === 'POST') {
+        return jsonResponse({ ...suggestions[1], status: 'dismissed' })
+      }
+      return jsonResponse({ detail: 'not found' }, 404)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+      vi.unstubAllGlobals()
+    })
+
+    await act(async () => {
+      root.render(<ApplicationsTab apiBase="http://localhost:8000" refreshToken={0} onToast={vi.fn()} />)
+    })
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 300)) })
+    expect(container.textContent).toContain("Matched phrase: 'submitted your resume'")
+    expect(container.textContent).toContain('Source email #77')
+    const buttons = (text: string) => Array.from(container.querySelectorAll('button')).filter((button) => button.textContent === text)
+    await act(async () => {
+      buttons('Accept')[0]?.click()
+      await new Promise((resolve) => window.setTimeout(resolve, 20))
+    })
+    expect(container.textContent).not.toContain("Matched phrase: 'submitted your resume'")
+    await act(async () => {
+      buttons('Dismiss')[0]?.click()
+      await new Promise((resolve) => window.setTimeout(resolve, 20))
+    })
+    expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith('/applications/suggestions/91/accept') && init?.method === 'POST')).toBe(true)
+    expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith('/applications/suggestions/92/dismiss') && init?.method === 'POST')).toBe(true)
   })
 })

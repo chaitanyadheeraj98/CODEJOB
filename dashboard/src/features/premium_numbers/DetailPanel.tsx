@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type RefObject } from 'react'
 
-import { deleteContactVersion, listContactVersions, selectContactVersion, updateEmployerNumber, updateRecruiterNumber } from './api'
+import { deleteContactVersion, getRecruiterReputation, listContactVersions, selectContactVersion, updateEmployerNumber, updateRecruiterNumber } from './api'
 import { CategoryChip, StatusBadge } from './StatusBadge'
-import type { EmployerNumberCard, InventoryAction, InventoryRow, PremiumNumberVersion, RecruiterNumberCard, ReviewEdits } from './types'
+import type { EmployerNumberCard, InventoryAction, InventoryRow, PremiumNumberVersion, RecruiterNumberCard, RecruiterReputation, ReviewEdits } from './types'
 
-type RecruiterEdits = Partial<Pick<RecruiterNumberCard, 'recruiter_name' | 'company' | 'designation' | 'recruiter_email' | 'linkedin_url'>>
+type RecruiterEdits = Partial<Pick<RecruiterNumberCard, 'recruiter_name' | 'company' | 'designation' | 'recruiter_email' | 'linkedin_url' | 'recruiter_verification_level' | 'do_not_work_again' | 'do_not_work_again_reason'>>
 type EmployerEdits = Partial<Pick<EmployerNumberCard, 'owner_name' | 'company'>>
 
 type DetailPanelProps = {
@@ -45,6 +45,7 @@ export default function DetailPanel({
   const [pendingAction, setPendingAction] = useState<InventoryAction | null>(null)
   const [deletingVersion, setDeletingVersion] = useState(false)
   const [syncingVersion, setSyncingVersion] = useState(false)
+  const [reputation, setReputation] = useState<RecruiterReputation | null>(null)
 
   useEffect(() => {
     const panel = panelRef.current
@@ -60,6 +61,13 @@ export default function DetailPanel({
       .catch((reason) => onError((reason as Error).message))
       .finally(() => setVersionsLoading(false))
   }, [apiBase, onError, primaryContact, primaryRole, row.id, row.key, row.recruiter?.linkedin_url])
+
+  useEffect(() => {
+    if (!row.recruiter) return
+    getRecruiterReputation(apiBase, row.id)
+      .then(setReputation)
+      .catch((reason) => onError((reason as Error).message))
+  }, [apiBase, onError, row.id, row.recruiter])
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key === 'Escape') {
@@ -182,6 +190,9 @@ export default function DetailPanel({
                         designation: recruiter.designation,
                         recruiter_email: recruiter.recruiter_email,
                         linkedin_url: recruiter.linkedin_url,
+                        recruiter_verification_level: recruiter.recruiter_verification_level,
+                        do_not_work_again: recruiter.do_not_work_again,
+                        do_not_work_again_reason: recruiter.do_not_work_again_reason,
                       })
                       setEditingRecruiter(true)
                     }}
@@ -198,6 +209,19 @@ export default function DetailPanel({
                   <label>Designation<input value={recruiterEdits.designation ?? ''} onChange={(event) => setRecruiterEdits((value) => ({ ...value, designation: event.target.value }))} /></label>
                   <label>Email<input type="email" value={recruiterEdits.recruiter_email ?? ''} onChange={(event) => setRecruiterEdits((value) => ({ ...value, recruiter_email: event.target.value }))} /></label>
                   <label>LinkedIn URL<input value={recruiterEdits.linkedin_url ?? ''} onChange={(event) => setRecruiterEdits((value) => ({ ...value, linkedin_url: event.target.value }))} /></label>
+                  <label>
+                    Verification
+                    <select value={recruiterEdits.recruiter_verification_level ?? 'unverified'} onChange={(event) => setRecruiterEdits((value) => ({ ...value, recruiter_verification_level: event.target.value as RecruiterNumberCard['recruiter_verification_level'] }))}>
+                      <option value="unverified">Unverified</option><option value="verified">Verified</option><option value="trusted">Trusted</option>
+                    </select>
+                  </label>
+                  <label className="checkboxLabel">
+                    <input type="checkbox" checked={recruiterEdits.do_not_work_again ?? false} onChange={(event) => setRecruiterEdits((value) => ({ ...value, do_not_work_again: event.target.checked }))} />
+                    Do not work with again
+                  </label>
+                  {recruiterEdits.do_not_work_again ? (
+                    <label>Reason<input value={recruiterEdits.do_not_work_again_reason ?? ''} onChange={(event) => setRecruiterEdits((value) => ({ ...value, do_not_work_again_reason: event.target.value }))} /></label>
+                  ) : null}
                 </div>
               ) : (
                 <dl className="detailList">
@@ -206,6 +230,8 @@ export default function DetailPanel({
                   <div><dt>Designation</dt><dd>{recruiter.designation}</dd></div>
                   <div><dt>Email</dt><dd>{recruiter.recruiter_email || '--'}</dd></div>
                   <div><dt>LinkedIn</dt><dd>{recruiter.linkedin_url || '--'}</dd></div>
+                  <div><dt>Verification</dt><dd>{recruiter.recruiter_verification_level}</dd></div>
+                  <div><dt>Do not work again</dt><dd>{recruiter.do_not_work_again ? recruiter.do_not_work_again_reason || 'Yes' : 'No'}</dd></div>
                   <div><dt>Opportunities</dt><dd>{recruiter.total_opportunity_count}</dd></div>
                   <div><dt>Last email</dt><dd>{recruiter.last_email_received_at ? new Date(recruiter.last_email_received_at).toLocaleString() : '--'}</dd></div>
                 </dl>
@@ -233,6 +259,26 @@ export default function DetailPanel({
                   <button type="button" onClick={() => setEditingRecruiter(false)} disabled={savingRecruiter}>Cancel</button>
                 </div>
               ) : null}
+            </section>
+          ) : null}
+
+          {recruiter ? (
+            <section className="detailSection recruiterReputation">
+              <h4>Reputation</h4>
+              {!reputation ? <p className="subtle">Loading recruiter history...</p> : (
+                <>
+                  {reputation.history_label === 'limited_history' ? <p className="limitedHistoryLabel">Limited history</p> : null}
+                  <dl className="detailList">
+                    <div><dt>Outreach attempts</dt><dd>{reputation.outreach_count}</dd></div>
+                    <div><dt>Replies</dt><dd>{reputation.replies_count}</dd></div>
+                    <div><dt>Median first reply</dt><dd>{reputation.median_first_reply_business_days == null ? '--' : `${reputation.median_first_reply_business_days} business days`}</dd></div>
+                    <div><dt>Client submissions</dt><dd>{reputation.submissions_count}</dd></div>
+                    <div><dt>Interviews after submission</dt><dd>{reputation.interviews_after_submission_count}</dd></div>
+                    <div><dt>Offers</dt><dd>{reputation.offers_count}</dd></div>
+                    <div><dt>Last active</dt><dd>{reputation.last_active_at ? new Date(reputation.last_active_at).toLocaleString() : '--'}</dd></div>
+                  </dl>
+                </>
+              )}
             </section>
           ) : null}
 

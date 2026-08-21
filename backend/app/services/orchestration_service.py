@@ -27,7 +27,7 @@ from app.automation import RunOrchestrator, RunOrchestratorDependencies, RunOrch
 from app.external_feeds.models import ExternalOpportunity
 from app.external_feeds.parser import parse_nvoids_detail
 from app.job_intent_learning import approved_learning_signals_for_owner, record_pending_job_intent_learning
-from app.services import policy_service
+from app.services import application_intelligence_service, policy_service
 from app.services.policy_service import EffectiveRunInputs
 from app.gmail_client import GmailMessageCandidate, MailAttachment
 from app.models import AttachmentAsset, DraftEditFeedback, EmailConversation, EmailReplyMessage, GmailRequirementGroup, RecipientRoutingFeedback, RecentRun, RecentRunSkippedItem, RecruiterEmail, ResumeAsset, SyncRun, UserSettings
@@ -350,6 +350,26 @@ class OrchestrationService:
             if created_reply:
                 created_count += 1
             db.commit()
+            if created_reply and user_settings.feature_application_automation_enabled:
+                reply = (
+                    db.query(EmailReplyMessage)
+                    .filter(
+                        EmailReplyMessage.owner_id == self.deps.owner_id,
+                        EmailReplyMessage.external_message_id == item["external_message_id"],
+                    )
+                    .first()
+                )
+                if reply is not None:
+                    try:
+                        application_intelligence_service.correlate_reply_to_application(
+                            db,
+                            owner_id=self.deps.owner_id,
+                            reply_message_id=reply.id,
+                        )
+                        db.commit()
+                    except Exception:
+                        db.rollback()
+                        logger.exception("application_reply_correlation_failed reply_message_id=%s", reply.id)
             try:
                 if self.deps.mark_reply_processed is not None:
                     self.deps.mark_reply_processed(item["external_message_id"], item.get("label_ids"))

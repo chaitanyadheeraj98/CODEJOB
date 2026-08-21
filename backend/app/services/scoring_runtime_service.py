@@ -24,6 +24,7 @@ from app.skill_taxonomy import (
     load_skill_taxonomy,
     normalize_skill_token,
     normalize_taxonomy_text,
+    role_family_fit_score,
     score_taxonomy_skills,
 )
 
@@ -1263,29 +1264,6 @@ class ScoringRuntimeService:
             missing_preferred_skills=missing_preferred,
         )
 
-    def _role_family_fit_score(
-        self,
-        *,
-        jd_role_family: str,
-        resume_role_family: str,
-        role_alignment_score: float,
-        foundation_score: float,
-        jd_priority_score: float,
-    ) -> tuple[float, str]:
-        adjusted = role_alignment_score
-        if jd_role_family == resume_role_family:
-            return clamp01(adjusted), "direct_family_alignment"
-        if jd_role_family == "general":
-            return clamp01(max(adjusted, 0.7)), "general_family_fallback"
-        if jd_role_family != "ai" and resume_role_family == "ai":
-            if foundation_score >= 0.60 and jd_priority_score >= 0.50:
-                return clamp01(max(adjusted, 0.72)), "ai_enabled_fullstack_override"
-            if foundation_score < 0.55 and jd_priority_score < 0.50:
-                return clamp01(min(adjusted, 0.25)), "generic_ai_guardrail"
-        if foundation_score >= 0.65 and jd_priority_score >= 0.45:
-            return clamp01(max(adjusted, 0.68)), "foundation_priority_override"
-        return clamp01(adjusted), "role_alignment_only"
-
     def _build_picker_selection(
         self,
         *,
@@ -1318,7 +1296,7 @@ class ScoringRuntimeService:
         priority_data = self._compute_jd_priority_scores(parsed=parsed, parser_details=parser_details, resume=resume)
         jd_priority_score = float(priority_data["jd_priority_score"])
         partial_credit_score = float(priority_data["partial_credit_score"])
-        role_family_fit_score, role_family_reason = self._role_family_fit_score(
+        role_family_fit, role_family_reason = role_family_fit_score(
             jd_role_family=intent.jd_role_family,
             resume_role_family=intent.resume_role_family,
             role_alignment_score=intent.role_alignment_score,
@@ -1329,7 +1307,7 @@ class ScoringRuntimeService:
             (ai_score * 0.45)
             + (ats_score_01 * 0.20)
             + (jd_priority_score * 0.20)
-            + (role_family_fit_score * 0.10)
+            + (role_family_fit * 0.10)
             + (partial_credit_score * 0.05)
         )
         matched_priority = list(priority_data["matched_priority_skills"])
@@ -1348,7 +1326,7 @@ class ScoringRuntimeService:
             "ats_score": round(ats_score or 0.0, 2) if ats_score is not None else None,
             "ats_score_01": round(ats_score_01, 4),
             "jd_priority_score": round(jd_priority_score, 4),
-            "role_family_fit_score": round(role_family_fit_score, 4),
+            "role_family_fit_score": round(role_family_fit, 4),
             "partial_credit_score": round(partial_credit_score, 4),
             "jd_role_family": intent.jd_role_family,
             "resume_role_family": intent.resume_role_family,
@@ -1385,7 +1363,7 @@ class ScoringRuntimeService:
                 f"ai={ai_score:.2f}",
                 f"ats={(ats_score or 0.0):.2f}",
                 f"priority={jd_priority_score:.2f}",
-                f"role_fit={role_family_fit_score:.2f}",
+                f"role_fit={role_family_fit:.2f}",
                 f"matched={', '.join(matched_priority[:4]) or 'none'}",
                 f"missing_required={', '.join(mandatory_gate.missing_required_skills[:4]) or 'none'}",
             ]

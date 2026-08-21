@@ -65,6 +65,9 @@ const recruiter: RecruiterNumberCard = {
   recruiter_email: 'talent@example.com',
   first_detected_email_id: null,
   linkedin_url: '',
+  recruiter_verification_level: 'unverified',
+  do_not_work_again: false,
+  do_not_work_again_reason: '',
   total_opportunity_count: 1,
   last_email_received_at: null,
 }

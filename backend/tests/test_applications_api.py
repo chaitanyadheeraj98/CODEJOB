@@ -1,6 +1,6 @@
 import os
 import unittest
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 os.environ["DEBUG"] = "false"
 
@@ -11,7 +11,15 @@ from sqlalchemy.pool import StaticPool
 
 from app import main
 from app.db import Base
-from app.models import Application, PremiumNumberContact, RecruiterOpportunity, ResumeAsset
+from app.models import (
+    Application,
+    ApplicationSuggestion,
+    AttachmentAsset,
+    PremiumNumberContact,
+    RecruiterOpportunity,
+    ResumeAsset,
+    UserSettings,
+)
 from app.services import application_service
 
 
@@ -208,6 +216,283 @@ class ApplicationsApiTests(unittest.TestCase):
         self.assertEqual(preserved.json()["resume_file_name_snapshot"], "3001-resume.pdf")
         self.assertEqual(preserved.json()["job_title_snapshot"], "Java Developer 3001")
         self.assertEqual(preserved.json()["current_job_title"], "")
+
+    def test_rtr_and_interview_crud_with_proof_and_validation(self) -> None:
+        with Session(self.engine) as db:
+            resume, opportunity = self._sources(
+                db,
+                owner_id=main.settings.owner_id,
+                suffix="4001",
+            )
+            attachment = AttachmentAsset(
+                owner_id=main.settings.owner_id,
+                file_path="rtr-proof.pdf",
+                file_name="rtr-proof.pdf",
+                sha256="e" * 64,
+                file_size=12,
+            )
+            db.add(attachment)
+            db.commit()
+            attachment_id = attachment.id
+            resume_id = resume.id
+            opportunity_id = opportunity.id
+
+        created = self.client.post(
+            "/applications",
+            json={"resume_asset_id": resume_id, "recruiter_opportunity_id": opportunity_id},
+        )
+        application_id = created.json()["id"]
+        requested = self.client.post(
+            f"/applications/{application_id}/rtr",
+            json={
+                "role_scope": "Senior Java Developer",
+                "end_client_scope": "Client 4001",
+            },
+        )
+        self.assertEqual(requested.status_code, 201, requested.text)
+        self.assertEqual(requested.json()["status"], "rtr_requested")
+        rtr_id = requested.json()["rtr_history"][0]["id"]
+
+        no_proof = self.client.patch(
+            f"/applications/{application_id}/rtr/{rtr_id}",
+            json={"status": "confirmed"},
+        )
+        self.assertEqual(no_proof.status_code, 422, no_proof.text)
+        invalid_rtr = self.client.patch(
+            f"/applications/{application_id}/rtr/{rtr_id}",
+            json={"status": "not-valid"},
+        )
+        self.assertEqual(invalid_rtr.status_code, 422, invalid_rtr.text)
+        confirmed = self.client.patch(
+            f"/applications/{application_id}/rtr/{rtr_id}",
+            json={"status": "confirmed", "proof_attachment_id": attachment_id},
+        )
+        self.assertEqual(confirmed.status_code, 200, confirmed.text)
+        self.assertEqual(confirmed.json()["status"], "rtr_confirmed")
+        self.assertEqual(confirmed.json()["rtr_history"][0]["proof_attachment_id"], attachment_id)
+
+        invalid_round = self.client.post(
+            f"/applications/{application_id}/interviews",
+            json={"round_type": "interview_9"},
+        )
+        self.assertEqual(invalid_round.status_code, 422, invalid_round.text)
+        added = self.client.post(
+            f"/applications/{application_id}/interviews",
+            json={
+                "round_type": "interview_2",
+                "format": "video",
+                "interviewer_names": "Alex",
+            },
+        )
+        self.assertEqual(added.status_code, 201, added.text)
+        self.assertEqual(added.json()["status"], "interview_2")
+        interview_id = added.json()["interviews"][0]["id"]
+        invalid_result = self.client.patch(
+            f"/applications/{application_id}/interviews/{interview_id}",
+            json={"result": "unknown"},
+        )
+        self.assertEqual(invalid_result.status_code, 422, invalid_result.text)
+        updated = self.client.patch(
+            f"/applications/{application_id}/interviews/{interview_id}",
+            json={"result": "passed", "feedback": "Strong technical round"},
+        )
+        self.assertEqual(updated.status_code, 200, updated.text)
+        self.assertEqual(updated.json()["interviews"][0]["result"], "passed")
+        self.assertEqual(updated.json()["interviews"][0]["feedback"], "Strong technical round")
+        deleted = self.client.delete(f"/applications/{application_id}/interviews/{interview_id}")
+        self.assertEqual(deleted.status_code, 200, deleted.text)
+        self.assertEqual(deleted.json()["interviews"], [])
+
+        invalid_reason = self.client.patch(
+            f"/applications/{application_id}",
+            json={"status": "rejected", "closed_reason_code": "not-valid"},
+        )
+        self.assertEqual(invalid_reason.status_code, 422, invalid_reason.text)
+        closed = self.client.patch(
+            f"/applications/{application_id}",
+            json={"status": "rejected", "closed_reason_code": "skills_gap"},
+        )
+        self.assertEqual(closed.status_code, 200, closed.text)
+        self.assertEqual(closed.json()["closed_reason_code"], "skills_gap")
+
+    def test_submit_duplicate_warning_override_and_risk_field_patches(self) -> None:
+        with Session(self.engine) as db:
+            first_resume, first_opportunity = self._sources(
+                db,
+                owner_id=main.settings.owner_id,
+                suffix="5001",
+            )
+            second_resume, second_opportunity = self._sources(
+                db,
+                owner_id=main.settings.owner_id,
+                suffix="5002",
+            )
+            for opportunity in (first_opportunity, second_opportunity):
+                opportunity.job_title = "Senior Java Developer"
+                opportunity.end_client = "Bank X"
+            recruiter_id = first_opportunity.recruiter_number_id
+            db.commit()
+            first_resume_id = first_resume.id
+            first_opportunity_id = first_opportunity.id
+            second_resume_id = second_resume.id
+            second_opportunity_id = second_opportunity.id
+
+        first = self.client.post(
+            "/applications",
+            json={
+                "resume_asset_id": first_resume_id,
+                "recruiter_opportunity_id": first_opportunity_id,
+            },
+        ).json()
+        second = self.client.post(
+            "/applications",
+            json={
+                "resume_asset_id": second_resume_id,
+                "recruiter_opportunity_id": second_opportunity_id,
+            },
+        ).json()
+
+        bypass = self.client.patch(
+            f"/applications/{second['id']}",
+            json={"status": "submitted_to_client"},
+        )
+        self.assertEqual(bypass.status_code, 422, bypass.text)
+        warned = self.client.post(
+            f"/applications/{second['id']}/submit-to-client",
+            json={"override_duplicate_warning": False},
+        )
+        self.assertEqual(warned.status_code, 409, warned.text)
+        self.assertEqual([row["id"] for row in warned.json()["detail"]["duplicates"]], [first["id"]])
+        overridden = self.client.post(
+            f"/applications/{second['id']}/submit-to-client",
+            json={"override_duplicate_warning": True},
+        )
+        self.assertEqual(overridden.status_code, 200, overridden.text)
+        self.assertEqual(overridden.json()["status"], "submitted_to_client")
+        self.assertIn(
+            "duplicate_override",
+            [event["event_type"] for event in overridden.json()["events"]],
+        )
+
+        opportunity_patch = {
+            "employment_type": "contract",
+            "rate_amount": 85.5,
+            "rate_currency": "USD",
+            "rate_unit": "hour",
+            "contract_duration": "12 months",
+            "relocation_required": False,
+            "extension_likely": "yes",
+            "end_client_confirmed": True,
+            "job_confidence": "high",
+        }
+        opportunity_response = self.client.patch(
+            f"/recruiter-opportunities/{first_opportunity_id}",
+            json=opportunity_patch,
+        )
+        self.assertEqual(opportunity_response.status_code, 200, opportunity_response.text)
+        for key, value in opportunity_patch.items():
+            self.assertEqual(opportunity_response.json()[key], value)
+
+        recruiter_response = self.client.patch(
+            f"/recruiter-numbers/{recruiter_id}",
+            json={
+                "recruiter_verification_level": "trusted",
+                "do_not_work_again": True,
+                "do_not_work_again_reason": "Repeated duplicate submissions",
+            },
+        )
+        self.assertEqual(recruiter_response.status_code, 200, recruiter_response.text)
+        self.assertEqual(recruiter_response.json()["recruiter_verification_level"], "trusted")
+        self.assertTrue(recruiter_response.json()["do_not_work_again"])
+
+    def test_phase_three_match_reputation_suggestions_and_reminder_routes(self) -> None:
+        with Session(self.engine) as db:
+            resume, opportunity = self._sources(
+                db,
+                owner_id=main.settings.owner_id,
+                suffix="6001",
+            )
+            other_resume, _ = self._sources(db, owner_id="other-owner", suffix="6002")
+            resume.skills_text = "Java, Spring Boot, SQL"
+            opportunity.extracted_skills = "Java, Spring Boot, SQL"
+            opportunity.work_mode = "Remote"
+            opportunity.job_confidence = "high"
+            opportunity.end_client_confirmed = True
+            settings_row = UserSettings(
+                owner_id=main.settings.owner_id,
+                remote_preference="remote",
+                feature_applications_enabled=True,
+                feature_application_automation_enabled=True,
+            )
+            db.add(settings_row)
+            db.commit()
+            resume_id = resume.id
+            opportunity_id = opportunity.id
+            recruiter_id = opportunity.recruiter_number_id
+            other_resume_id = other_resume.id
+
+        matched = self.client.get(
+            "/applications/match",
+            params={"resume_asset_id": resume_id, "exclude_already_applied": False},
+        )
+        self.assertEqual(matched.status_code, 200, matched.text)
+        self.assertEqual(matched.json()["items"][0]["opportunity"]["id"], opportunity_id)
+        self.assertTrue(matched.json()["items"][0]["reasons"])
+        self.assertEqual(
+            self.client.get("/applications/match", params={"resume_asset_id": other_resume_id}).status_code,
+            404,
+        )
+
+        created = self.client.post(
+            "/applications",
+            json={"resume_asset_id": resume_id, "recruiter_opportunity_id": opportunity_id},
+        )
+        self.assertEqual(created.status_code, 201, created.text)
+        application_id = created.json()["id"]
+        with Session(self.engine) as db:
+            suggestion = ApplicationSuggestion(
+                owner_id=main.settings.owner_id,
+                application_id=application_id,
+                suggestion_type="status_change",
+                suggested_status="recruiter_responded",
+                reason="Matched recruiter reply",
+            )
+            other_suggestion = ApplicationSuggestion(
+                owner_id="other-owner",
+                application_id=application_id,
+                suggestion_type="status_change",
+                suggested_status="rejected",
+                reason="Other owner",
+            )
+            db.add_all([suggestion, other_suggestion])
+            db.commit()
+            suggestion_id = suggestion.id
+            other_suggestion_id = other_suggestion.id
+
+        suggestions = self.client.get("/applications/suggestions")
+        self.assertEqual(suggestions.status_code, 200, suggestions.text)
+        self.assertEqual([row["id"] for row in suggestions.json()["items"]], [suggestion_id])
+        self.assertEqual(self.client.get("/applications/dashboard-summary").json()["pending_suggestions"], 1)
+        accepted = self.client.post(f"/applications/suggestions/{suggestion_id}/accept", json={})
+        self.assertEqual(accepted.status_code, 200, accepted.text)
+        self.assertEqual(accepted.json()["status"], "recruiter_responded")
+        self.assertEqual(self.client.post(f"/applications/suggestions/{suggestion_id}/accept", json={}).status_code, 404)
+        self.assertEqual(self.client.post(f"/applications/suggestions/{other_suggestion_id}/dismiss").status_code, 404)
+
+        with Session(self.engine) as db:
+            application = db.get(Application, application_id)
+            application.status = "contacted"
+            application.status_changed_at = datetime.now(UTC).replace(microsecond=0) - timedelta(days=7)
+            application.next_action_at = None
+            db.commit()
+        reminders = self.client.post("/applications/reminders/run")
+        self.assertEqual(reminders.status_code, 200, reminders.text)
+        self.assertEqual(reminders.json()["items"][0]["suggestion_type"], "next_action")
+
+        reputation = self.client.get(f"/recruiter-numbers/{recruiter_id}/reputation")
+        self.assertEqual(reputation.status_code, 200, reputation.text)
+        self.assertEqual(reputation.json()["recruiter_contact_id"], recruiter_id)
+        self.assertEqual(reputation.json()["history_label"], "limited_history")
 
 
 if __name__ == "__main__":

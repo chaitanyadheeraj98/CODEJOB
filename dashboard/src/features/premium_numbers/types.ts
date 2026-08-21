@@ -73,6 +73,9 @@ export type RecruiterNumberCard = ContactCardBase & {
   recruiter_email: string
   first_detected_email_id: number | null
   linkedin_url: string
+  recruiter_verification_level: 'unverified' | 'verified' | 'trusted'
+  do_not_work_again: boolean
+  do_not_work_again_reason: string
   total_opportunity_count: number
   last_email_received_at: string | null
 }
@@ -116,6 +119,15 @@ export type RecruiterOpportunityCard = {
   linkedin_url: string
   status: OpportunityStatus
   notes: string
+  employment_type: string
+  rate_amount: number | null
+  rate_currency: string
+  rate_unit: string
+  contract_duration: string
+  relocation_required: boolean | null
+  extension_likely: string
+  end_client_confirmed: boolean
+  job_confidence: string
   cold_call_script: string | null
   cold_call_script_updated_at: string | null
   created_at: string
@@ -151,6 +163,30 @@ export type ApplicationEventCard = {
   occurred_at: string
 }
 
+export type ApplicationRTR = {
+  id: number
+  status: 'requested' | 'confirmed' | 'expired' | 'revoked'
+  role_scope: string
+  end_client_scope: string
+  requested_at: string
+  confirmed_at: string | null
+  expires_at: string | null
+  proof_attachment_id: number | null
+  proof_recruiter_email_id: number | null
+  note: string
+}
+
+export type ApplicationInterview = {
+  id: number
+  round_type: 'recruiter_screen' | 'interview_1' | 'interview_2' | 'final_interview' | 'other'
+  scheduled_at: string | null
+  format: string
+  interviewer_names: string
+  feedback: string
+  result: 'scheduled' | 'completed' | 'passed' | 'failed' | 'cancelled' | 'rescheduled'
+  follow_up_task_note: string
+}
+
 export type ApplicationCard = {
   id: number
   resume_asset_id: number
@@ -177,9 +213,12 @@ export type ApplicationCard = {
   last_contact_at: string | null
   closed_at: string | null
   closed_reason: string | null
+  closed_reason_code: string | null
   created_at: string
   updated_at: string
   events: ApplicationEventCard[]
+  rtr_history: ApplicationRTR[]
+  interviews: ApplicationInterview[]
 }
 
 export type ApplicationDashboardSummary = {
@@ -187,6 +226,40 @@ export type ApplicationDashboardSummary = {
   waiting_on_recruiter: number
   interviews: number
   closed_recent: number
+  pending_suggestions: number
+}
+
+export type OpportunityMatch = {
+  opportunity: RecruiterOpportunityCard
+  score: number
+  reasons: string[]
+}
+
+export type RecruiterReputation = {
+  recruiter_contact_id: number
+  history_label: 'limited_history' | 'established'
+  outreach_count: number
+  replies_count: number
+  median_first_reply_business_days: number | null
+  submissions_count: number
+  interviews_after_submission_count: number
+  offers_count: number
+  last_active_at: string | null
+}
+
+export type ApplicationSuggestion = {
+  id: number
+  application_id: number
+  suggestion_type: 'link_reply' | 'status_change' | 'next_action' | 'stale_prompt'
+  status: 'pending' | 'accepted' | 'dismissed'
+  confidence: 'high' | 'medium'
+  recruiter_email_id: number | null
+  suggested_status: string | null
+  suggested_next_action_type: string | null
+  suggested_next_action_at: string | null
+  reason: string
+  created_at: string
+  resolved_at: string | null
 }
 
 export type ResumeAssetOption = {
@@ -195,6 +268,20 @@ export type ResumeAssetOption = {
   version: number
   is_enabled: boolean
   is_current: boolean
+}
+
+export type AttachmentAssetOption = {
+  id: number
+  file_name: string
+  is_enabled: boolean
+}
+
+export type ApplicationDuplicateSummary = {
+  id: number
+  job_title_snapshot: string
+  end_client_snapshot: string
+  status: ApplicationStatus
+  created_at: string
 }
 
 export type InventoryStatusFilter = 'all' | 'Pending' | 'Active' | 'Flagged'

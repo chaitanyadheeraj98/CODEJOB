@@ -1,14 +1,20 @@
 import type {
+  ApplicationDuplicateSummary,
   ApplicationCard,
   ApplicationDashboardSummary,
   ApplicationEventCard,
+  ApplicationInterview,
   ApplicationStatus,
+  ApplicationSuggestion,
+  AttachmentAssetOption,
   EmployerNumberCard,
   NumberReviewCard,
   OpportunityStatus,
+  OpportunityMatch,
   PaginatedListResponse,
   PremiumNumberVersion,
   RecruiterNumberCard,
+  RecruiterReputation,
   RecruiterOpportunityCard,
   ResumeAssetOption,
   ReviewEdits,
@@ -17,10 +23,33 @@ import type {
 const MAX_INVENTORY_ROWS_PER_SOURCE = 300
 const PAGE_LIMIT = 100
 
+export class ApplicationDuplicateConflictError extends Error {
+  duplicates: ApplicationDuplicateSummary[]
+
+  constructor(message: string, duplicates: ApplicationDuplicateSummary[]) {
+    super(message)
+    this.name = 'ApplicationDuplicateConflictError'
+    this.duplicates = duplicates
+  }
+}
+
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init)
   if (!response.ok) {
     const detail = await response.text().catch(() => '')
+    if (response.status === 409 && detail) {
+      try {
+        const payload = JSON.parse(detail) as { detail?: { message?: string; duplicates?: ApplicationDuplicateSummary[] } }
+        if (Array.isArray(payload.detail?.duplicates)) {
+          throw new ApplicationDuplicateConflictError(
+            payload.detail?.message || 'Possible duplicate submission',
+            payload.detail.duplicates,
+          )
+        }
+      } catch (reason) {
+        if (reason instanceof ApplicationDuplicateConflictError) throw reason
+      }
+    }
     throw new Error(detail || `Request failed (${response.status})`)
   }
   return await response.json() as T
@@ -190,7 +219,7 @@ export async function deleteContactVersion(
 export function updateRecruiterNumber(
   apiBase: string,
   contactId: number,
-  patch: Partial<Pick<RecruiterNumberCard, 'recruiter_name' | 'company' | 'designation' | 'recruiter_email' | 'linkedin_url'>>,
+  patch: Partial<Pick<RecruiterNumberCard, 'recruiter_name' | 'company' | 'designation' | 'recruiter_email' | 'linkedin_url' | 'recruiter_verification_level' | 'do_not_work_again' | 'do_not_work_again_reason'>>,
 ): Promise<RecruiterNumberCard> {
   return requestJson(`${apiBase}/recruiter-numbers/${contactId}`, jsonInit('PATCH', patch))
 }
@@ -215,6 +244,10 @@ export function listResumeOptions(apiBase: string): Promise<ResumeAssetOption[]>
   return requestJson<ResumeAssetOption[]>(`${apiBase}/settings/resumes`)
 }
 
+export function listAttachmentOptions(apiBase: string): Promise<AttachmentAssetOption[]> {
+  return requestJson<AttachmentAssetOption[]>(`${apiBase}/settings/attachments`)
+}
+
 export function createApplication(
   apiBase: string,
   payload: { resume_asset_id: number; recruiter_opportunity_id: number },
@@ -229,7 +262,7 @@ export function getApplication(apiBase: string, applicationId: number): Promise<
 export function updateApplication(
   apiBase: string,
   applicationId: number,
-  patch: Partial<Pick<ApplicationCard, 'status' | 'next_action_type' | 'next_action_at' | 'closed_reason'>>,
+  patch: Partial<Pick<ApplicationCard, 'status' | 'next_action_type' | 'next_action_at' | 'closed_reason' | 'closed_reason_code'>>,
 ): Promise<ApplicationCard> {
   return requestJson(`${apiBase}/applications/${applicationId}`, jsonInit('PATCH', patch))
 }
@@ -248,6 +281,104 @@ export function createApplicationEvent(
 
 export function getApplicationsDashboardSummary(apiBase: string): Promise<ApplicationDashboardSummary> {
   return requestJson(`${apiBase}/applications/dashboard-summary`)
+}
+
+export async function matchOpportunitiesForResume(
+  apiBase: string,
+  resumeAssetId: number,
+  options: { limit?: number; excludeAlreadyApplied?: boolean } = {},
+): Promise<OpportunityMatch[]> {
+  const params = new URLSearchParams({ resume_asset_id: String(resumeAssetId) })
+  if (options.limit != null) params.set('limit', String(options.limit))
+  if (options.excludeAlreadyApplied != null) params.set('exclude_already_applied', String(options.excludeAlreadyApplied))
+  return (await requestJson<{ items: OpportunityMatch[] }>(`${apiBase}/applications/match?${params}`)).items
+}
+
+export function getRecruiterReputation(apiBase: string, recruiterNumberId: number): Promise<RecruiterReputation> {
+  return requestJson(`${apiBase}/recruiter-numbers/${recruiterNumberId}/reputation`)
+}
+
+export async function listApplicationSuggestions(
+  apiBase: string,
+  status: ApplicationSuggestion['status'] = 'pending',
+): Promise<ApplicationSuggestion[]> {
+  const params = new URLSearchParams({ status })
+  return (await requestJson<{ items: ApplicationSuggestion[] }>(`${apiBase}/applications/suggestions?${params}`)).items
+}
+
+export function acceptApplicationSuggestion(
+  apiBase: string,
+  suggestionId: number,
+  overrideNextActionAt?: string,
+): Promise<ApplicationCard> {
+  return requestJson(
+    `${apiBase}/applications/suggestions/${suggestionId}/accept`,
+    jsonInit('POST', overrideNextActionAt ? { override_next_action_at: overrideNextActionAt } : {}),
+  )
+}
+
+export function dismissApplicationSuggestion(apiBase: string, suggestionId: number): Promise<ApplicationSuggestion> {
+  return requestJson(`${apiBase}/applications/suggestions/${suggestionId}/dismiss`, { method: 'POST' })
+}
+
+export async function runReminderSweepNow(apiBase: string): Promise<ApplicationSuggestion[]> {
+  return (await requestJson<{ items: ApplicationSuggestion[] }>(`${apiBase}/applications/reminders/run`, { method: 'POST' })).items
+}
+
+export function requestApplicationRtr(
+  apiBase: string,
+  applicationId: number,
+  payload: { role_scope: string; end_client_scope: string; expires_at: string | null },
+): Promise<ApplicationCard> {
+  return requestJson(`${apiBase}/applications/${applicationId}/rtr`, jsonInit('POST', payload))
+}
+
+export function updateApplicationRtr(
+  apiBase: string,
+  applicationId: number,
+  rtrId: number,
+  payload: { status: 'confirmed' | 'expired' | 'revoked'; proof_attachment_id?: number; proof_recruiter_email_id?: number },
+): Promise<ApplicationCard> {
+  return requestJson(`${apiBase}/applications/${applicationId}/rtr/${rtrId}`, jsonInit('PATCH', payload))
+}
+
+export function addApplicationInterview(
+  apiBase: string,
+  applicationId: number,
+  payload: Pick<ApplicationInterview, 'round_type' | 'format' | 'interviewer_names'> & {
+    scheduled_at: string | null
+    sync_application_status: boolean
+  },
+): Promise<ApplicationCard> {
+  return requestJson(`${apiBase}/applications/${applicationId}/interviews`, jsonInit('POST', payload))
+}
+
+export function updateApplicationInterview(
+  apiBase: string,
+  applicationId: number,
+  interviewId: number,
+  patch: Partial<Pick<ApplicationInterview, 'scheduled_at' | 'format' | 'interviewer_names' | 'feedback' | 'result' | 'follow_up_task_note'>>,
+): Promise<ApplicationCard> {
+  return requestJson(`${apiBase}/applications/${applicationId}/interviews/${interviewId}`, jsonInit('PATCH', patch))
+}
+
+export function deleteApplicationInterview(
+  apiBase: string,
+  applicationId: number,
+  interviewId: number,
+): Promise<ApplicationCard> {
+  return requestJson(`${apiBase}/applications/${applicationId}/interviews/${interviewId}`, { method: 'DELETE' })
+}
+
+export function submitApplicationToClient(
+  apiBase: string,
+  applicationId: number,
+  overrideDuplicateWarning = false,
+): Promise<ApplicationCard> {
+  return requestJson(
+    `${apiBase}/applications/${applicationId}/submit-to-client`,
+    jsonInit('POST', { override_duplicate_warning: overrideDuplicateWarning }),
+  )
 }
 
 export function generateColdCallScript(apiBase: string, opportunityId: number): Promise<RecruiterOpportunityCard> {
