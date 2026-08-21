@@ -2934,7 +2934,8 @@ button.emailSearchResult:focus-visible {
 }
 
 .inventoryPanel,
-.opportunitiesTab {
+.opportunitiesTab,
+.applicationsTab {
   display: grid;
   gap: 16px;
 }
@@ -3405,6 +3406,88 @@ button.emailSearchResult:focus-visible {
   grid-template-columns: 1fr;
 }
 
+.applicationSummary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.applicationSummary > div {
+  display: grid;
+  gap: 3px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.applicationSummary strong {
+  color: var(--primary);
+  font-size: 24px;
+}
+
+.applicationSummary span,
+.snapshotNotice,
+.applicationTimeline time,
+.applicationTimeline small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.resumeLockPicker,
+.applicationTimeline {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.resumeLockPicker > label,
+.applicationEventForm label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.resumeLockPicker p {
+  margin: 0;
+}
+
+.applicationTimeline ol {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.applicationTimeline li {
+  display: grid;
+  gap: 3px;
+  padding-left: 12px;
+  border-left: 3px solid #c4d4f7;
+}
+
+.applicationTimeline li p {
+  margin: 2px 0 0;
+  white-space: pre-wrap;
+}
+
+.applicationEventForm {
+  display: grid;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.applicationEventForm button {
+  width: fit-content;
+}
+
 @media (max-width: 900px) {
   .premiumNumbersHeader,
   .inventoryPaginationFooter,
@@ -3420,7 +3503,11 @@ button.emailSearchResult:focus-visible {
 
   .premiumTabs {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  }
+
+  .applicationSummary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .selectionActions {

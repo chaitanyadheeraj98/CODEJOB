@@ -113,6 +113,7 @@ class SettingsRequest(BaseModel):
     feature_strict_candidate_screening_enabled: bool = False
     feature_email_tracking_enabled: bool = False
     feature_reply_inbox_enabled: bool = False
+    feature_applications_enabled: bool = False
     candidate_work_authorizations: list[str] | None = Field(default_factory=list)
     candidate_total_experience_years: float | None = Field(default=None, ge=0)
     candidate_us_experience_years: float | None = Field(default=None, ge=0)
@@ -1069,6 +1070,87 @@ class RecruiterOpportunityPatchRequest(BaseModel):
     end_client: str | None = None
     domain: str | None = None
     extracted_skills: str | None = None
+
+
+class ApplicationCreateRequest(BaseModel):
+    resume_asset_id: int = Field(gt=0)
+    recruiter_opportunity_id: int = Field(gt=0)
+
+
+class ApplicationPatchRequest(BaseModel):
+    status: str | None = None
+    next_action_type: str | None = Field(default=None, max_length=80)
+    next_action_at: datetime | None = None
+    closed_reason: str | None = Field(default=None, max_length=120)
+
+
+class ApplicationEventCreateRequest(BaseModel):
+    event_type: Literal["note", "email_linked", "call_note"]
+    note: str = ""
+    linked_recruiter_email_id: int | None = Field(default=None, gt=0)
+
+
+class ApplicationEventResponse(BaseModel):
+    id: int
+    owner_id: str
+    application_id: int
+    event_type: str
+    event_source: str
+    note: str
+    linked_recruiter_email_id: int | None
+    metadata_json: str
+    occurred_at: datetime
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ApplicationResponse(BaseModel):
+    id: int
+    owner_id: str
+    resume_asset_id: int
+    resume_version_snapshot: int
+    resume_file_name_snapshot: str
+    resume_sha256_snapshot: str
+    recruiter_opportunity_id: int
+    recruiter_contact_id: int
+    recruiter_name_snapshot: str
+    recruiter_company_snapshot: str
+    job_title_snapshot: str
+    end_client_snapshot: str
+    status: str
+    status_changed_at: datetime
+    resume_shared_at: datetime | None
+    submitted_to_client_at: datetime | None
+    next_action_type: str | None
+    next_action_at: datetime | None
+    follow_up_count: int
+    last_contact_at: datetime | None
+    closed_at: datetime | None
+    closed_reason: str | None
+    created_at: datetime
+    updated_at: datetime
+    current_recruiter_name: str = ""
+    current_recruiter_company: str = ""
+    current_recruiter_phone_display: str = ""
+    current_job_title: str = ""
+    current_end_client: str = ""
+    events: list[ApplicationEventResponse] = Field(default_factory=list)
+
+    model_config = {"from_attributes": True}
+
+
+class ApplicationListResponse(BaseModel):
+    items: list[ApplicationResponse]
+    next_cursor: int | None
+    has_next: bool
+
+
+class ApplicationDashboardSummaryResponse(BaseModel):
+    due_today: int
+    waiting_on_recruiter: int
+    interviews: int
+    closed_recent: int
 
 
 class BulkNumberReviewRequest(BaseModel):

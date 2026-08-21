@@ -1,4 +1,8 @@
 import type {
+  ApplicationCard,
+  ApplicationDashboardSummary,
+  ApplicationEventCard,
+  ApplicationStatus,
   EmployerNumberCard,
   NumberReviewCard,
   OpportunityStatus,
@@ -6,6 +10,7 @@ import type {
   PremiumNumberVersion,
   RecruiterNumberCard,
   RecruiterOpportunityCard,
+  ResumeAssetOption,
   ReviewEdits,
 } from './types'
 
@@ -100,6 +105,25 @@ export function buildOpportunityListUrl(args: {
   return `${args.apiBase}/recruiter-opportunities?${params}`
 }
 
+export function listApplications(args: {
+  apiBase: string
+  q: string
+  status: 'all' | ApplicationStatus
+}): Promise<ApplicationCard[]> {
+  return listAll((cursor) => buildApplicationListUrl({ ...args, cursor }))
+}
+
+export function buildApplicationListUrl(args: {
+  apiBase: string
+  cursor: number
+  q: string
+  status: 'all' | ApplicationStatus
+}): string {
+  const params = listParams(args.cursor, args.q)
+  if (args.status !== 'all') params.set('status', args.status)
+  return `${args.apiBase}/applications?${params}`
+}
+
 function jsonInit(method: string, body?: unknown): RequestInit {
   return {
     method,
@@ -185,6 +209,45 @@ export function updateOpportunity(
   patch: Partial<RecruiterOpportunityCard>,
 ): Promise<RecruiterOpportunityCard> {
   return requestJson(`${apiBase}/recruiter-opportunities/${opportunityId}`, jsonInit('PATCH', patch))
+}
+
+export function listResumeOptions(apiBase: string): Promise<ResumeAssetOption[]> {
+  return requestJson<ResumeAssetOption[]>(`${apiBase}/settings/resumes`)
+}
+
+export function createApplication(
+  apiBase: string,
+  payload: { resume_asset_id: number; recruiter_opportunity_id: number },
+): Promise<ApplicationCard> {
+  return requestJson(`${apiBase}/applications`, jsonInit('POST', payload))
+}
+
+export function getApplication(apiBase: string, applicationId: number): Promise<ApplicationCard> {
+  return requestJson(`${apiBase}/applications/${applicationId}`)
+}
+
+export function updateApplication(
+  apiBase: string,
+  applicationId: number,
+  patch: Partial<Pick<ApplicationCard, 'status' | 'next_action_type' | 'next_action_at' | 'closed_reason'>>,
+): Promise<ApplicationCard> {
+  return requestJson(`${apiBase}/applications/${applicationId}`, jsonInit('PATCH', patch))
+}
+
+export async function deleteApplication(apiBase: string, applicationId: number): Promise<void> {
+  await requestJson(`${apiBase}/applications/${applicationId}`, { method: 'DELETE' })
+}
+
+export function createApplicationEvent(
+  apiBase: string,
+  applicationId: number,
+  payload: { event_type: 'note' | 'email_linked' | 'call_note'; note: string; linked_recruiter_email_id?: number },
+): Promise<ApplicationEventCard> {
+  return requestJson(`${apiBase}/applications/${applicationId}/events`, jsonInit('POST', payload))
+}
+
+export function getApplicationsDashboardSummary(apiBase: string): Promise<ApplicationDashboardSummary> {
+  return requestJson(`${apiBase}/applications/dashboard-summary`)
 }
 
 export function generateColdCallScript(apiBase: string, opportunityId: number): Promise<RecruiterOpportunityCard> {

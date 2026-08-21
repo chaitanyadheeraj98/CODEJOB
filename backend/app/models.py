@@ -203,6 +203,7 @@ class UserSettings(Base):
     feature_strict_candidate_screening_enabled: Mapped[bool] = mapped_column(default=False)
     feature_email_tracking_enabled: Mapped[bool] = mapped_column(default=False)
     feature_reply_inbox_enabled: Mapped[bool] = mapped_column(default=False)
+    feature_applications_enabled: Mapped[bool] = mapped_column(default=False)
     candidate_work_authorizations_json: Mapped[str] = mapped_column(Text, default="[]")
     candidate_total_experience_years: Mapped[float | None] = mapped_column(Float, nullable=True)
     candidate_us_experience_years: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -688,6 +689,90 @@ class RecruiterOpportunity(Base):
     cold_call_script_updated_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
+
+
+APPLICATION_STATUS_VALUES = (
+    "matched",
+    "contacted",
+    "recruiter_responded",
+    "resume_shared",
+    "rtr_requested",
+    "rtr_confirmed",
+    "submitted_to_client",
+    "client_reviewing",
+    "interview_1",
+    "interview_2",
+    "final_interview",
+    "offer",
+    "hired",
+    "rejected",
+    "withdrawn",
+    "no_response",
+    "position_closed",
+    "duplicate",
+)
+
+APPLICATION_CLOSED_STATUS_VALUES = (
+    "hired",
+    "rejected",
+    "withdrawn",
+    "no_response",
+    "position_closed",
+    "duplicate",
+)
+
+
+class Application(Base):
+    __tablename__ = "applications"
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_id",
+            "resume_asset_id",
+            "recruiter_opportunity_id",
+            name="ux_applications_owner_resume_opportunity",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), default="default-owner", index=True)
+    resume_asset_id: Mapped[int] = mapped_column(Integer, index=True)
+    resume_version_snapshot: Mapped[int] = mapped_column(Integer)
+    resume_file_name_snapshot: Mapped[str] = mapped_column(String(255))
+    resume_sha256_snapshot: Mapped[str] = mapped_column(String(64))
+    recruiter_opportunity_id: Mapped[int] = mapped_column(Integer, index=True)
+    recruiter_contact_id: Mapped[int] = mapped_column(Integer, index=True)
+    recruiter_name_snapshot: Mapped[str] = mapped_column(String(255), default="")
+    recruiter_company_snapshot: Mapped[str] = mapped_column(String(255), default="")
+    job_title_snapshot: Mapped[str] = mapped_column(Text, default="")
+    end_client_snapshot: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(40), index=True, default="matched")
+    status_changed_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    resume_shared_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    submitted_to_client_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    next_action_type: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    next_action_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
+    follow_up_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_contact_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    closed_reason: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
+
+
+class ApplicationEvent(Base):
+    __tablename__ = "application_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), default="default-owner", index=True)
+    application_id: Mapped[int] = mapped_column(Integer, index=True)
+    event_type: Mapped[str] = mapped_column(String(80), index=True)
+    event_source: Mapped[str] = mapped_column(String(40), default="user")
+    note: Mapped[str] = mapped_column(Text, default="")
+    linked_recruiter_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    occurred_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
 
 
 class NumberReviewQueue(Base):

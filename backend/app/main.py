@@ -65,6 +65,10 @@ from app.gmail_labeling import GmailLabelingService, LabelRuleInput
 from app.external_feeds.service import ExternalFeedService
 from app.external_feeds.models import ExternalOpportunity, ExternalScrapeRun
 from app.models import (
+    APPLICATION_CLOSED_STATUS_VALUES,
+    APPLICATION_STATUS_VALUES,
+    Application,
+    ApplicationEvent,
     AttachmentAsset,
     CanonicalEntityTaxonomyEntry,
     CustomSkillTaxonomyEntry,
@@ -158,7 +162,7 @@ from app.job_intent_learning import (
     normalize_job_intent_phrase,
     prioritized_learning_signals,
 )
-from app.services import analytics_service, email_lookup_service, policy_service
+from app.services import analytics_service, application_service, email_lookup_service, policy_service
 from app.services.auto_runner_service import AutoRunnerService
 from app.services.candidate_runtime_service import CandidateRuntimeDeps, CandidateRuntimeService, resolve_resume_display_name
 from app.services.phone_intelligence_workflow_service import (
@@ -199,6 +203,13 @@ from app.services.taxonomy_learning_service import (
 from app.services.telegram_runtime_service import TelegramRuntime, TelegramRuntimeDeps
 from app.schemas import (
     AIStatusResponse,
+    ApplicationCreateRequest,
+    ApplicationDashboardSummaryResponse,
+    ApplicationEventCreateRequest,
+    ApplicationEventResponse,
+    ApplicationListResponse,
+    ApplicationPatchRequest,
+    ApplicationResponse,
     ApproveJobIntentSignalRequest,
     ApproveSendRequest,
     ApproveSkillRequest,
@@ -2083,6 +2094,7 @@ def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
         feature_strict_candidate_screening_enabled=s.feature_strict_candidate_screening_enabled,
         feature_email_tracking_enabled=s.feature_email_tracking_enabled,
         feature_reply_inbox_enabled=s.feature_reply_inbox_enabled,
+        feature_applications_enabled=s.feature_applications_enabled,
         candidate_work_authorizations=_json_string_list(s.candidate_work_authorizations_json),
         candidate_total_experience_years=s.candidate_total_experience_years,
         candidate_us_experience_years=s.candidate_us_experience_years,
@@ -2333,6 +2345,7 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
     s.feature_gmail_requirement_groups_enabled = payload.feature_gmail_requirement_groups_enabled
     s.feature_email_tracking_enabled = payload.feature_email_tracking_enabled
     s.feature_reply_inbox_enabled = payload.feature_reply_inbox_enabled
+    s.feature_applications_enabled = payload.feature_applications_enabled
     provided_fields = payload.model_fields_set
     if "feature_role_manifest_enabled" in provided_fields:
         s.feature_role_manifest_enabled = payload.feature_role_manifest_enabled
@@ -2570,6 +2583,22 @@ def delete_resume(resume_id: int, db: Session = Depends(get_db)) -> dict[str, ob
     )
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found")
+
+    active_application = (
+        db.query(Application.id)
+        .filter(
+            Application.owner_id == settings.owner_id,
+            Application.resume_asset_id == resume_id,
+            Application.deleted_at.is_(None),
+            Application.status.not_in(APPLICATION_CLOSED_STATUS_VALUES),
+        )
+        .first()
+    )
+    if active_application:
+        raise HTTPException(
+            status_code=409,
+            detail="Resume is used by an active application; close or delete those applications first",
+        )
 
     file_path = Path(resume.file_path)
     deleted_was_current = bool(resume.is_current)
@@ -3727,6 +3756,67 @@ def _recruiter_opportunity_response(
         cold_call_script_updated_at=row.cold_call_script_updated_at,
         created_at=row.created_at,
         updated_at=row.updated_at,
+    )
+
+
+def _get_application(db: Session, application_id: int) -> Application:
+    row = (
+        db.query(Application)
+        .filter(
+            Application.owner_id == settings.owner_id,
+            Application.id == application_id,
+            Application.deleted_at.is_(None),
+        )
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Application not found")
+    return row
+
+
+def _application_response(
+    db: Session,
+    row: Application,
+    *,
+    include_events: bool = False,
+) -> ApplicationResponse:
+    opportunity = (
+        db.query(RecruiterOpportunity)
+        .filter(
+            RecruiterOpportunity.owner_id == settings.owner_id,
+            RecruiterOpportunity.id == row.recruiter_opportunity_id,
+        )
+        .first()
+    )
+    recruiter = (
+        db.query(PremiumNumberContact)
+        .filter(
+            PremiumNumberContact.owner_id == settings.owner_id,
+            PremiumNumberContact.id == row.recruiter_contact_id,
+            PremiumNumberContact.deleted_at.is_(None),
+        )
+        .first()
+    )
+    events = (
+        db.query(ApplicationEvent)
+        .filter(
+            ApplicationEvent.owner_id == settings.owner_id,
+            ApplicationEvent.application_id == row.id,
+        )
+        .order_by(ApplicationEvent.occurred_at.asc(), ApplicationEvent.id.asc())
+        .all()
+        if include_events
+        else []
+    )
+    return ApplicationResponse.model_validate(row).model_copy(
+        update={
+            "current_recruiter_name": recruiter.recruiter_name if recruiter else "",
+            "current_recruiter_company": recruiter.company if recruiter else "",
+            "current_recruiter_phone_display": recruiter.display_phone_number if recruiter else "",
+            "current_job_title": opportunity.job_title if opportunity else "",
+            "current_end_client": opportunity.end_client if opportunity else "",
+            "events": [ApplicationEventResponse.model_validate(event) for event in events],
+        }
     )
 
 
@@ -5568,6 +5658,22 @@ def delete_recruiter_opportunity(
     if not row:
         raise HTTPException(status_code=404, detail="Opportunity not found")
 
+    active_application = (
+        db.query(Application.id)
+        .filter(
+            Application.owner_id == settings.owner_id,
+            Application.recruiter_opportunity_id == opportunity_id,
+            Application.deleted_at.is_(None),
+            Application.status.not_in(APPLICATION_CLOSED_STATUS_VALUES),
+        )
+        .first()
+    )
+    if active_application:
+        raise HTTPException(
+            status_code=409,
+            detail="Opportunity is used by an active application; close or delete those applications first",
+        )
+
     recruiter_number_id = row.recruiter_number_id
     db.delete(row)
     db.flush()
@@ -5766,6 +5872,140 @@ def refresh_recruiter_opportunity_ai_metadata(
         .first()
     )
     return _recruiter_opportunity_response(row, recruiter)
+
+
+@app.post("/applications", response_model=ApplicationResponse, status_code=201)
+def create_application_route(
+    payload: ApplicationCreateRequest,
+    db: Session = Depends(get_db),
+) -> ApplicationResponse:
+    try:
+        row = application_service.create_application(
+            db,
+            owner_id=settings.owner_id,
+            resume_asset_id=payload.resume_asset_id,
+            recruiter_opportunity_id=payload.recruiter_opportunity_id,
+        )
+    except application_service.ApplicationReferenceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except application_service.ApplicationConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    db.commit()
+    db.refresh(row)
+    return _application_response(db, row)
+
+
+@app.get("/applications", response_model=ApplicationListResponse)
+def list_applications(
+    cursor: int = Query(0, ge=0),
+    limit: int = Query(25, ge=1, le=100),
+    status: str | None = Query(default=None),
+    resume_asset_id: int | None = Query(default=None, gt=0),
+    recruiter_contact_id: int | None = Query(default=None, gt=0),
+    q: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> ApplicationListResponse:
+    query = db.query(Application).filter(
+        Application.owner_id == settings.owner_id,
+        Application.deleted_at.is_(None),
+    )
+    if status:
+        if status not in APPLICATION_STATUS_VALUES:
+            raise HTTPException(status_code=422, detail="Invalid application status")
+        query = query.filter(Application.status == status)
+    if resume_asset_id is not None:
+        query = query.filter(Application.resume_asset_id == resume_asset_id)
+    if recruiter_contact_id is not None:
+        query = query.filter(Application.recruiter_contact_id == recruiter_contact_id)
+    if q and q.strip():
+        needle = f"%{q.strip()}%"
+        query = query.filter(
+            or_(
+                Application.resume_file_name_snapshot.ilike(needle),
+                Application.recruiter_name_snapshot.ilike(needle),
+                Application.recruiter_company_snapshot.ilike(needle),
+                Application.job_title_snapshot.ilike(needle),
+                Application.end_client_snapshot.ilike(needle),
+            )
+        )
+    rows = query.order_by(Application.created_at.desc(), Application.id.desc()).all()
+    visible, next_cursor, has_next = _paginate_items(rows, cursor=cursor, limit=limit)
+    # ponytail: one current-source lookup pair per visible row; batch only if this tab outgrows 100 rows/page.
+    items = [_application_response(db, row) for row in visible]
+    return ApplicationListResponse(items=items, next_cursor=next_cursor, has_next=has_next)
+
+
+@app.get("/applications/dashboard-summary", response_model=ApplicationDashboardSummaryResponse)
+def applications_dashboard_summary(db: Session = Depends(get_db)) -> ApplicationDashboardSummaryResponse:
+    return ApplicationDashboardSummaryResponse(
+        **application_service.dashboard_summary(db, settings.owner_id)
+    )
+
+
+@app.get("/applications/{application_id}", response_model=ApplicationResponse)
+def get_application(application_id: int, db: Session = Depends(get_db)) -> ApplicationResponse:
+    return _application_response(db, _get_application(db, application_id), include_events=True)
+
+
+@app.patch("/applications/{application_id}", response_model=ApplicationResponse)
+def patch_application(
+    application_id: int,
+    payload: ApplicationPatchRequest,
+    db: Session = Depends(get_db),
+) -> ApplicationResponse:
+    row = _get_application(db, application_id)
+    provided = payload.model_fields_set
+    if "status" in provided and payload.status is not None:
+        try:
+            application_service.update_status(db, row, new_status=payload.status)
+        except application_service.ApplicationValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if "next_action_type" in provided or "next_action_at" in provided:
+        application_service.set_next_action(
+            db,
+            row,
+            next_action_type=(
+                payload.next_action_type if "next_action_type" in provided else row.next_action_type
+            ),
+            next_action_at=payload.next_action_at if "next_action_at" in provided else row.next_action_at,
+        )
+    if "closed_reason" in provided:
+        row.closed_reason = payload.closed_reason
+    db.commit()
+    db.refresh(row)
+    return _application_response(db, row, include_events=True)
+
+
+@app.delete("/applications/{application_id}")
+def soft_delete_application(application_id: int, db: Session = Depends(get_db)) -> dict[str, object]:
+    row = _get_application(db, application_id)
+    row.deleted_at = datetime.now(UTC)
+    db.commit()
+    return {"id": application_id, "deleted": True}
+
+
+@app.post("/applications/{application_id}/events", response_model=ApplicationEventResponse, status_code=201)
+def create_application_event(
+    application_id: int,
+    payload: ApplicationEventCreateRequest,
+    db: Session = Depends(get_db),
+) -> ApplicationEventResponse:
+    row = _get_application(db, application_id)
+    try:
+        event = application_service.append_event(
+            db,
+            row,
+            event_type=payload.event_type,
+            note=payload.note,
+            linked_recruiter_email_id=payload.linked_recruiter_email_id,
+        )
+    except application_service.ApplicationReferenceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except application_service.ApplicationValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    db.commit()
+    db.refresh(event)
+    return ApplicationEventResponse.model_validate(event)
 
 
 @app.get("/candidates/{email_id}", response_model=EmailResponse)

@@ -89,6 +89,8 @@ describe('PremiumNumbersPage', () => {
       if (url.includes('/number-review?')) return jsonResponse({ items: [review], next_cursor: null, has_next: false })
       if (url.includes('/recruiter-numbers?')) return jsonResponse({ items: url.includes('flagged=true') ? [] : [recruiter], next_cursor: null, has_next: false })
       if (url.includes('/employer-numbers?')) return jsonResponse({ items: url.includes('flagged=true') ? [] : [employer], next_cursor: null, has_next: false })
+      if (url.endsWith('/applications/dashboard-summary')) return jsonResponse({ due_today: 0, waiting_on_recruiter: 0, interviews: 0, closed_recent: 0 })
+      if (url.includes('/applications?')) return jsonResponse({ items: [], next_cursor: null, has_next: false })
       if (init?.method === 'POST') return jsonResponse({ results: [] })
       if (url.includes('/versions')) return jsonResponse([])
       return jsonResponse({ detail: 'not found' }, 404)
@@ -111,6 +113,7 @@ describe('PremiumNumbersPage', () => {
           mailDate={null}
           emailSearchTarget={null}
           refreshToken={0}
+          applicationsEnabled
           onPendingCountChange={vi.fn()}
         />,
       )
@@ -142,5 +145,14 @@ describe('PremiumNumbersPage', () => {
     expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith('/number-review/bulk-rescore') && init?.method === 'POST')).toBe(true)
     expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith('/recruiter-numbers/bulk-rescore') && init?.method === 'POST')).toBe(true)
     expect(container.textContent).toContain('Rescored')
+
+    const applicationsTab = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find((button) => button.textContent === 'Applications')
+    expect(applicationsTab).toBeDefined()
+    await act(async () => {
+      applicationsTab?.click()
+      await new Promise((resolve) => window.setTimeout(resolve, 300))
+    })
+    expect(container.textContent).toContain('Due today')
+    expect(container.textContent).toContain('No tracked applications match these filters.')
   })
 })

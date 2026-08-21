@@ -122,6 +122,81 @@ export type RecruiterOpportunityCard = {
   updated_at: string
 }
 
+export type ApplicationStatus =
+  | 'matched'
+  | 'contacted'
+  | 'recruiter_responded'
+  | 'resume_shared'
+  | 'rtr_requested'
+  | 'rtr_confirmed'
+  | 'submitted_to_client'
+  | 'client_reviewing'
+  | 'interview_1'
+  | 'interview_2'
+  | 'final_interview'
+  | 'offer'
+  | 'hired'
+  | 'rejected'
+  | 'withdrawn'
+  | 'no_response'
+  | 'position_closed'
+  | 'duplicate'
+
+export type ApplicationEventCard = {
+  id: number
+  event_type: string
+  event_source: string
+  note: string
+  linked_recruiter_email_id: number | null
+  occurred_at: string
+}
+
+export type ApplicationCard = {
+  id: number
+  resume_asset_id: number
+  resume_version_snapshot: number
+  resume_file_name_snapshot: string
+  recruiter_opportunity_id: number
+  recruiter_contact_id: number
+  recruiter_name_snapshot: string
+  recruiter_company_snapshot: string
+  job_title_snapshot: string
+  end_client_snapshot: string
+  current_recruiter_name: string
+  current_recruiter_company: string
+  current_recruiter_phone_display: string
+  current_job_title: string
+  current_end_client: string
+  status: ApplicationStatus
+  status_changed_at: string
+  resume_shared_at: string | null
+  submitted_to_client_at: string | null
+  next_action_type: string | null
+  next_action_at: string | null
+  follow_up_count: number
+  last_contact_at: string | null
+  closed_at: string | null
+  closed_reason: string | null
+  created_at: string
+  updated_at: string
+  events: ApplicationEventCard[]
+}
+
+export type ApplicationDashboardSummary = {
+  due_today: number
+  waiting_on_recruiter: number
+  interviews: number
+  closed_recent: number
+}
+
+export type ResumeAssetOption = {
+  id: number
+  file_name: string
+  version: number
+  is_enabled: boolean
+  is_current: boolean
+}
+
 export type InventoryStatusFilter = 'all' | 'Pending' | 'Active' | 'Flagged'
 export type InventoryCategoryFilter = 'all' | 'Recruiter' | 'Employer'
 export type InventorySourceFilter = 'all' | 'gmail' | 'nvoids'

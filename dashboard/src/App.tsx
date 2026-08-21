@@ -202,6 +202,7 @@ type SettingsPayload = {
   feature_strict_candidate_screening_enabled: boolean
   feature_email_tracking_enabled: boolean
   feature_reply_inbox_enabled: boolean
+  feature_applications_enabled: boolean
   candidate_work_authorizations: string[]
   candidate_total_experience_years: number | null
   candidate_us_experience_years: number | null
@@ -2619,6 +2620,7 @@ function App() {
     feature_strict_candidate_screening_enabled: false,
     feature_email_tracking_enabled: false,
     feature_reply_inbox_enabled: false,
+    feature_applications_enabled: false,
     candidate_work_authorizations: [],
     candidate_total_experience_years: null,
     candidate_us_experience_years: null,
@@ -2990,6 +2992,7 @@ function App() {
       feature_gmail_requirement_groups_enabled: Boolean(payload.feature_gmail_requirement_groups_enabled),
       feature_role_manifest_enabled: Boolean(payload.feature_role_manifest_enabled),
       feature_strict_candidate_screening_enabled: Boolean(payload.feature_strict_candidate_screening_enabled),
+      feature_applications_enabled: Boolean(payload.feature_applications_enabled),
       candidate_work_authorizations: payload.candidate_work_authorizations ?? [],
       candidate_total_experience_years: payload.candidate_total_experience_years ?? null,
       candidate_us_experience_years: payload.candidate_us_experience_years ?? null,
@@ -5791,6 +5794,18 @@ function App() {
                     </span>
                   </label>
                   <p className="subtle">Checks unread Gmail on the existing polling interval and captures replies from previously sent threads before JD parsing.</p>
+                  <label className="toggleRow pillRow">
+                    <span>Application Tracker</span>
+                    <span className="toggleSwitch">
+                      <input
+                        type="checkbox"
+                        checked={settings.feature_applications_enabled}
+                        onChange={(e) => setSettings({ ...settings, feature_applications_enabled: e.target.checked })}
+                      />
+                      <span className="toggleTrack" />
+                    </span>
+                  </label>
+                  <p className="subtle">Shows the manual application pipeline inside Premium Numbers.</p>
                   <label>
                     Batch Limit
                     <input
@@ -6636,6 +6651,7 @@ function App() {
               mailDate={settings.mail_date ?? null}
               emailSearchTarget={emailSearchTarget}
               refreshToken={premiumRefreshToken}
+              applicationsEnabled={settings.feature_applications_enabled}
               onPendingCountChange={setPremiumPendingCount}
             />
           ) : null}

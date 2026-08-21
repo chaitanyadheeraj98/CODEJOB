@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { EmailSearchHit } from '../../emailSearch'
 import { pendingReviewCount } from './api'
+import ApplicationsTab from './ApplicationsTab'
 import DetailPanel from './DetailPanel'
 import InventoryTable from './InventoryTable'
 import OpportunitiesTab from './OpportunitiesTab'
@@ -21,6 +22,7 @@ type PremiumNumbersPageProps = {
   mailDate: string | null
   emailSearchTarget: EmailSearchHit | null
   refreshToken: number
+  applicationsEnabled: boolean
   onPendingCountChange: (count: number) => void
 }
 
@@ -42,11 +44,13 @@ export default function PremiumNumbersPage({
   mailDate,
   emailSearchTarget,
   refreshToken,
+  applicationsEnabled,
   onPendingCountChange,
 }: PremiumNumbersPageProps) {
   const targetOpportunityId = opportunityTargetId(emailSearchTarget)
   const targetInventoryKey = inventoryTargetKey(emailSearchTarget)
-  const [tab, setTab] = useState<'inventory' | 'opportunities'>(targetOpportunityId == null ? 'inventory' : 'opportunities')
+  const [tab, setTab] = useState<'inventory' | 'opportunities' | 'applications'>(targetOpportunityId == null ? 'inventory' : 'opportunities')
+  const activeTab = !applicationsEnabled && tab === 'applications' ? 'inventory' : tab
   const [detailRow, setDetailRow] = useState<InventoryRow | null>(null)
   const returnFocusRef = useRef<HTMLElement | null>(null)
   const toast = useToast()
@@ -126,12 +130,13 @@ export default function PremiumNumbersPage({
           <p className="subtle">Manage inventory, assignments, and rescoring operations.</p>
         </div>
         <div className="premiumTabs" role="tablist" aria-label="Premium number views">
-          <button type="button" role="tab" aria-selected={tab === 'inventory'} className={tab === 'inventory' ? 'active' : ''} onClick={() => setTab('inventory')}>Number Inventory</button>
-          <button type="button" role="tab" aria-selected={tab === 'opportunities'} className={tab === 'opportunities' ? 'active' : ''} onClick={() => setTab('opportunities')}>Recruiter Opportunities</button>
+          <button type="button" role="tab" aria-selected={activeTab === 'inventory'} className={activeTab === 'inventory' ? 'active' : ''} onClick={() => setTab('inventory')}>Number Inventory</button>
+          <button type="button" role="tab" aria-selected={activeTab === 'opportunities'} className={activeTab === 'opportunities' ? 'active' : ''} onClick={() => setTab('opportunities')}>Recruiter Opportunities</button>
+          {applicationsEnabled ? <button type="button" role="tab" aria-selected={activeTab === 'applications'} className={activeTab === 'applications' ? 'active' : ''} onClick={() => setTab('applications')}>Applications</button> : null}
         </div>
       </header>
 
-      {tab === 'inventory' ? (
+      {activeTab === 'inventory' ? (
         <div role="tabpanel" className="inventoryPanel">
           <div className="inventoryToolbar">
             <label className="inventorySearchField">
@@ -176,9 +181,13 @@ export default function PremiumNumbersPage({
           />
           <p className="inventoryApproximation">Counts reflect up to 300 loaded rows per source; source endpoints remain independently paginated.</p>
         </div>
+      ) : activeTab === 'opportunities' ? (
+        <div role="tabpanel">
+          <OpportunitiesTab apiBase={apiBase} mailDate={mailDate} refreshToken={refreshToken} highlightedId={targetOpportunityId} applicationsEnabled={applicationsEnabled} onToast={toast.show} />
+        </div>
       ) : (
         <div role="tabpanel">
-          <OpportunitiesTab apiBase={apiBase} mailDate={mailDate} refreshToken={refreshToken} highlightedId={targetOpportunityId} onToast={toast.show} />
+          <ApplicationsTab apiBase={apiBase} refreshToken={refreshToken} onToast={toast.show} />
         </div>
       )}
 

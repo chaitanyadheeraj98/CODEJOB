@@ -1,7 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-import { deleteOpportunity, generateColdCallScript, listOpportunities, refreshOpportunityAiMetadata, updateOpportunity } from './api'
-import type { OpportunityStatus, RecruiterOpportunityCard } from './types'
+import {
+  createApplication,
+  deleteOpportunity,
+  generateColdCallScript,
+  listOpportunities,
+  listResumeOptions,
+  refreshOpportunityAiMetadata,
+  updateOpportunity,
+} from './api'
+import type { OpportunityStatus, RecruiterOpportunityCard, ResumeAssetOption } from './types'
 
 const PAGE_SIZE = 10
 const STATUSES: OpportunityStatus[] = ['New', 'Called', 'Applied', 'Follow Up', 'Closed', 'Not Interested']
@@ -22,10 +30,11 @@ type OpportunitiesTabProps = {
   mailDate: string | null
   refreshToken: number
   highlightedId: number | null
+  applicationsEnabled: boolean
   onToast: (message: string) => void
 }
 
-export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, highlightedId, onToast }: OpportunitiesTabProps) {
+export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, highlightedId, applicationsEnabled, onToast }: OpportunitiesTabProps) {
   const [rows, setRows] = useState<RecruiterOpportunityCard[]>([])
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState<'all' | OpportunityStatus>('all')
@@ -35,6 +44,9 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
   const [busyId, setBusyId] = useState<number | null>(null)
   const [error, setError] = useState('')
   const [edits, setEdits] = useState<Record<number, Partial<RecruiterOpportunityCard>>>({})
+  const [trackingId, setTrackingId] = useState<number | null>(null)
+  const [resumeOptions, setResumeOptions] = useState<ResumeAssetOption[]>([])
+  const [selectedResumeId, setSelectedResumeId] = useState<number | null>(null)
   const requestIdRef = useRef(0)
 
   const load = () => {
@@ -136,6 +148,40 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
     }
   }
 
+  const openResumePicker = async (opportunityId: number) => {
+    setTrackingId(opportunityId)
+    setBusyId(opportunityId)
+    setError('')
+    try {
+      const enabled = (await listResumeOptions(apiBase)).filter((resume) => resume.is_enabled)
+      setResumeOptions(enabled)
+      setSelectedResumeId((enabled.find((resume) => resume.is_current) ?? enabled[0])?.id ?? null)
+    } catch (reason) {
+      setError((reason as Error).message)
+      setTrackingId(null)
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const trackApplication = async (item: RecruiterOpportunityCard) => {
+    if (selectedResumeId == null) return
+    setBusyId(item.id)
+    setError('')
+    try {
+      await createApplication(apiBase, {
+        resume_asset_id: selectedResumeId,
+        recruiter_opportunity_id: item.id,
+      })
+      setTrackingId(null)
+      onToast('Application tracking started')
+    } catch (reason) {
+      setError((reason as Error).message)
+    } finally {
+      setBusyId(null)
+    }
+  }
+
   return (
     <div className="opportunitiesTab">
       <div className="inventoryToolbar opportunitiesToolbar">
@@ -190,9 +236,37 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
               </button>
               <button type="button" onClick={() => generate(item.id)} disabled={busyId === item.id}>{busyId === item.id ? 'Working...' : 'Generate Cold Call Script'}</button>
               <button type="button" onClick={() => refreshAiMetadata(item.id)} disabled={busyId === item.id}>{busyId === item.id ? 'Working...' : 'Refresh AI Metadata'}</button>
+              {applicationsEnabled ? <button type="button" onClick={() => openResumePicker(item.id)} disabled={busyId === item.id}>Track Application</button> : null}
               <button type="button" className="dangerButton" onClick={() => remove(item.id)} disabled={busyId === item.id}>{busyId === item.id ? 'Working...' : 'Delete'}</button>
               {item.cold_call_script ? <button type="button" onClick={() => navigator.clipboard.writeText(item.cold_call_script || '').then(() => onToast('Copied')).catch(() => setError('Failed to copy cold call script'))}>Copy Script</button> : null}
             </div>
+            {trackingId === item.id ? (
+              <div className="resumeLockPicker">
+                <label>
+                  Resume version
+                  <select
+                    aria-label={`Resume for ${item.job_title}`}
+                    value={selectedResumeId ?? ''}
+                    onChange={(event) => setSelectedResumeId(Number(event.target.value))}
+                  >
+                    {resumeOptions.map((resume) => (
+                      <option key={resume.id} value={resume.id}>{resume.file_name} (v{resume.version})</option>
+                    ))}
+                  </select>
+                </label>
+                {selectedResumeId == null ? (
+                  <p className="subtle">Enable a resume in Settings before tracking this opportunity.</p>
+                ) : (
+                  <p className="subtle">
+                    Confirming locks this resume version and the current recruiter/job details into the application history.
+                  </p>
+                )}
+                <div className="rowBtns">
+                  <button type="button" onClick={() => trackApplication(item)} disabled={busyId === item.id || selectedResumeId == null}>Confirm &amp; Track</button>
+                  <button type="button" onClick={() => setTrackingId(null)} disabled={busyId === item.id}>Cancel</button>
+                </div>
+              </div>
+            ) : null}
             {item.cold_call_script ? <label>Cold Call Script<textarea rows={4} value={item.cold_call_script} readOnly /></label> : null}
           </article>
         ))}
