@@ -340,4 +340,114 @@ describe('ApplicationsTab', () => {
     expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith('/applications/suggestions/91/accept') && init?.method === 'POST')).toBe(true)
     expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith('/applications/suggestions/92/dismiss') && init?.method === 'POST')).toBe(true)
   })
+
+  it('generates editable drafts, labels fallback sources, and sends only after review', async () => {
+    const sources = ['deepseek', 'rules_only', 'ai_disabled'] as const
+    let draftIndex = 0
+    let resolveSend!: (response: Response) => void
+    const pendingSend = new Promise<Response>((resolve) => { resolveSend = resolve })
+    const sentApplication: ApplicationCard = {
+      ...application,
+      follow_up_count: 1,
+      last_contact_at: '2026-08-21T15:00:00Z',
+      events: [{
+        id: 101,
+        event_type: 'outreach_sent',
+        event_source: 'user',
+        note: 'Edited follow-up body',
+        linked_recruiter_email_id: 77,
+        occurred_at: '2026-08-21T15:00:00Z',
+      }],
+    }
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/settings/attachments')) return jsonResponse([{ id: 5, file_name: 'rtr-proof.pdf', is_enabled: true }])
+      if (url.endsWith('/applications/dashboard-summary')) return jsonResponse({ due_today: 0, waiting_on_recruiter: 0, interviews: 0, closed_recent: 0, pending_suggestions: 0 })
+      if (url.includes('/applications/suggestions?')) return jsonResponse({ items: [] })
+      if (url.includes('/applications?')) return jsonResponse({ items: [application], next_cursor: null, has_next: false })
+      if (url.endsWith('/applications/41/draft-message') && init?.method === 'POST') {
+        const source = sources[Math.min(draftIndex, sources.length - 1)]
+        draftIndex += 1
+        return jsonResponse({
+          to: 'recruiter@example.com',
+          cc: 'employer@example.com',
+          thread_id: 'thread-41',
+          subject: 'Following up - Senior Java Developer',
+          body: 'Generated follow-up body',
+          source,
+          ai_model: source === 'ai_disabled' ? null : 'deepseek-fast',
+          ai_error: source === 'rules_only' ? 'provider down' : null,
+          resume_context_status: 'injected',
+          resume_file_name: 'java-backend.pdf',
+          message_kind: 'followup',
+        })
+      }
+      if (url.endsWith('/applications/41/send-message') && init?.method === 'POST') return pendingSend
+      if (url.endsWith('/applications/41')) return jsonResponse(application)
+      return jsonResponse({ detail: 'not found' }, 404)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const onToast = vi.fn()
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+      vi.unstubAllGlobals()
+    })
+
+    await act(async () => {
+      root.render(<ApplicationsTab apiBase="http://localhost:8000" refreshToken={0} onToast={onToast} />)
+    })
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 300)) })
+    const button = (text: string) => Array.from(container.querySelectorAll('button')).find((item) => item.textContent === text)
+    await act(async () => {
+      button('View timeline')?.click()
+      await new Promise((resolve) => window.setTimeout(resolve, 30))
+    })
+
+    expect((button('Send') as HTMLButtonElement).disabled).toBe(true)
+    for (const expected of ['AI-drafted', 'Template (AI unavailable)', 'Template']) {
+      await act(async () => {
+        button('Generate draft')?.click()
+        await new Promise((resolve) => window.setTimeout(resolve, 20))
+      })
+      expect(container.textContent).toContain(expected)
+    }
+
+    const field = (text: string) => Array.from(container.querySelectorAll('label'))
+      .find((label) => label.textContent?.trim().startsWith(text))
+    const toInput = field('To')?.querySelector('input') as HTMLInputElement
+    const bodyInput = field('Body')?.querySelector('textarea') as HTMLTextAreaElement
+    expect(toInput.value).toBe('recruiter@example.com')
+    expect(bodyInput.value).toBe('Generated follow-up body')
+    const textareaSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')!.set!
+    await act(async () => {
+      textareaSetter.call(bodyInput, 'Edited follow-up body')
+      bodyInput.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect((button('Send') as HTMLButtonElement).disabled).toBe(false)
+
+    await act(async () => {
+      button('Send')?.click()
+      await Promise.resolve()
+    })
+    expect((button('Send') as HTMLButtonElement).disabled).toBe(true)
+    await act(async () => {
+      resolveSend(jsonResponse({ sent: true, gmail_message_id: 'gmail-41', application: sentApplication }))
+      await new Promise((resolve) => window.setTimeout(resolve, 20))
+    })
+
+    const sendCall = fetchMock.mock.calls.find(([url, init]) => String(url).endsWith('/applications/41/send-message') && init?.method === 'POST')
+    expect(JSON.parse(String(sendCall?.[1]?.body))).toMatchObject({
+      to: 'recruiter@example.com',
+      body: 'Edited follow-up body',
+      thread_id: 'thread-41',
+      include_resume: true,
+    })
+    expect(onToast).toHaveBeenCalledWith('Message sent')
+    expect((field('To')?.querySelector('input') as HTMLInputElement).value).toBe('')
+    expect(container.textContent).toContain('Outreach Sent')
+  })
 })

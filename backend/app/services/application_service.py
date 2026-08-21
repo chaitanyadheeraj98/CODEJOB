@@ -36,6 +36,7 @@ APPLICATION_EVENT_TYPE_VALUES = (
     "next_action_set",
     "duplicate_override",
     "recruiter_replied",
+    "outreach_sent",
 )
 APPLICATION_EVENT_SOURCE_VALUES = ("user", "system")
 WAITING_ON_RECRUITER_STATUS_VALUES = (

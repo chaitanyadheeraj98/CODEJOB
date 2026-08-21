@@ -11,12 +11,14 @@ import {
   deleteApplication,
   deleteApplicationInterview,
   dismissApplicationSuggestion,
+  draftApplicationMessage,
   getApplicationsDashboardSummary,
   getRecruiterReputation,
   listApplicationSuggestions,
   matchOpportunitiesForResume,
   requestApplicationRtr,
   runReminderSweepNow,
+  sendApplicationMessage,
   submitApplicationToClient,
   updateApplication,
   updateApplicationInterview,
@@ -159,5 +161,41 @@ describe('premium number API URLs', () => {
       'http://localhost:8000/applications/reminders/run',
     ])
     expect(fetchMock.mock.calls.map(([, init]) => init?.method ?? 'GET')).toEqual(['GET', 'GET', 'GET', 'POST', 'POST', 'POST'])
+  })
+
+  it('uses the Phase 4 draft and explicit-send request shapes', async () => {
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async (input) => {
+      const body = String(input).endsWith('/draft-message')
+        ? {
+            to: 'recruiter@example.com', cc: null, thread_id: null, subject: 'Follow-up', body: 'Any update?',
+            source: 'ai_disabled', ai_model: null, ai_error: null, resume_context_status: 'injected',
+            resume_file_name: 'resume.pdf', message_kind: 'followup',
+          }
+        : { sent: true, gmail_message_id: 'gmail-1', application: {} }
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await draftApplicationMessage('http://localhost:8000', 41, 'followup')
+    await sendApplicationMessage('http://localhost:8000', 41, {
+      to: 'recruiter@example.com',
+      cc: null,
+      subject: 'Follow-up',
+      body: 'Any update?',
+      thread_id: null,
+      message_kind: 'followup',
+      include_resume: true,
+      attachment_asset_ids: [5],
+    })
+
+    expect(fetchMock.mock.calls.map(([calledUrl]) => String(calledUrl))).toEqual([
+      'http://localhost:8000/applications/41/draft-message',
+      'http://localhost:8000/applications/41/send-message',
+    ])
+    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(['POST', 'POST'])
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ message_kind: 'followup' })
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toMatchObject({
+      message_kind: 'followup', include_resume: true, attachment_asset_ids: [5],
+    })
   })
 })

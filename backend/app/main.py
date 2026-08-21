@@ -166,7 +166,14 @@ from app.job_intent_learning import (
     normalize_job_intent_phrase,
     prioritized_learning_signals,
 )
-from app.services import analytics_service, application_intelligence_service, application_service, email_lookup_service, policy_service
+from app.services import (
+    analytics_service,
+    application_intelligence_service,
+    application_outreach_service,
+    application_service,
+    email_lookup_service,
+    policy_service,
+)
 from app.services.auto_runner_service import AutoRunnerService
 from app.services.candidate_runtime_service import CandidateRuntimeDeps, CandidateRuntimeService, resolve_resume_display_name
 from app.services.phone_intelligence_workflow_service import (
@@ -209,6 +216,8 @@ from app.schemas import (
     AIStatusResponse,
     ApplicationCreateRequest,
     ApplicationDashboardSummaryResponse,
+    ApplicationDraftMessageRequest,
+    ApplicationDraftMessageResponse,
     ApplicationEventCreateRequest,
     ApplicationEventResponse,
     ApplicationInterviewCreateRequest,
@@ -220,6 +229,8 @@ from app.schemas import (
     ApplicationRTRRequest,
     ApplicationRTRResponse,
     ApplicationRTRUpdateRequest,
+    ApplicationSendMessageRequest,
+    ApplicationSendMessageResponse,
     ApplicationSubmitToClientRequest,
     ApplicationSuggestionListResponse,
     ApplicationSuggestionResolveRequest,
@@ -2123,6 +2134,7 @@ def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
         feature_reply_inbox_enabled=s.feature_reply_inbox_enabled,
         feature_applications_enabled=s.feature_applications_enabled,
         feature_application_automation_enabled=s.feature_application_automation_enabled,
+        feature_application_outreach_drafts_enabled=s.feature_application_outreach_drafts_enabled,
         feature_reminder_sweep_interval_minutes=max(
             30,
             min(int(s.feature_reminder_sweep_interval_minutes or 240), 1440),
@@ -2381,6 +2393,7 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
     s.feature_reply_inbox_enabled = payload.feature_reply_inbox_enabled
     s.feature_applications_enabled = payload.feature_applications_enabled
     s.feature_application_automation_enabled = payload.feature_application_automation_enabled
+    s.feature_application_outreach_drafts_enabled = payload.feature_application_outreach_drafts_enabled
     s.feature_reminder_sweep_interval_minutes = max(
         30,
         min(int(payload.feature_reminder_sweep_interval_minutes), 1440),
@@ -6258,6 +6271,65 @@ def run_reminder_sweep_now(db: Session = Depends(get_db)) -> ApplicationSuggesti
     db.commit()
     return ApplicationSuggestionListResponse(
         items=[ApplicationSuggestionResponse.model_validate(row) for row in created]
+    )
+
+
+@app.post("/applications/{application_id}/draft-message", response_model=ApplicationDraftMessageResponse)
+def draft_application_message(
+    application_id: int,
+    payload: ApplicationDraftMessageRequest,
+    db: Session = Depends(get_db),
+) -> ApplicationDraftMessageResponse:
+    application = _get_application(db, application_id)
+    user_settings = _get_settings(db)
+    try:
+        draft = application_outreach_service.build_application_draft(
+            db,
+            application,
+            message_kind=payload.message_kind,
+            user_settings=user_settings,
+            model_name=settings.deepseek_model_fast,
+        )
+    except application_service.ApplicationReferenceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except application_service.ApplicationValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return ApplicationDraftMessageResponse(**draft.__dict__)
+
+
+@app.post("/applications/{application_id}/send-message", response_model=ApplicationSendMessageResponse)
+def send_application_message(
+    application_id: int,
+    payload: ApplicationSendMessageRequest,
+    db: Session = Depends(get_db),
+) -> ApplicationSendMessageResponse:
+    application = _get_application(db, application_id)
+    try:
+        application, gmail_message_id = application_outreach_service.send_application_message(
+            db,
+            application,
+            to=payload.to,
+            cc=payload.cc,
+            subject=payload.subject,
+            body=payload.body,
+            thread_id=payload.thread_id,
+            message_kind=payload.message_kind,
+            include_resume=payload.include_resume,
+            attachment_asset_ids=payload.attachment_asset_ids,
+        )
+    except application_service.ApplicationReferenceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except application_service.ApplicationValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=502, detail=f"Failed to send message: {exc}") from exc
+    db.commit()
+    db.refresh(application)
+    return ApplicationSendMessageResponse(
+        sent=True,
+        gmail_message_id=gmail_message_id,
+        application=_application_response(db, application, include_events=True),
     )
 
 

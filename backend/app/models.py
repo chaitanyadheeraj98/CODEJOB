@@ -205,6 +205,7 @@ class UserSettings(Base):
     feature_reply_inbox_enabled: Mapped[bool] = mapped_column(default=False)
     feature_applications_enabled: Mapped[bool] = mapped_column(default=False)
     feature_application_automation_enabled: Mapped[bool] = mapped_column(default=False)
+    feature_application_outreach_drafts_enabled: Mapped[bool] = mapped_column(default=False)
     feature_reminder_sweep_interval_minutes: Mapped[int] = mapped_column(Integer, default=240)
     candidate_work_authorizations_json: Mapped[str] = mapped_column(Text, default="[]")
     preferred_employment_types_json: Mapped[str] = mapped_column(Text, default="[]")

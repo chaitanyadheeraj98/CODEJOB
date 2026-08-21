@@ -262,6 +262,33 @@ export type ApplicationSuggestion = {
   resolved_at: string | null
 }
 
+export type ApplicationMessageKind = 'followup' | 'submission_to_recruiter'
+
+export type ApplicationDraftMessage = {
+  to: string
+  cc: string | null
+  thread_id: string | null
+  subject: string
+  body: string
+  source: string
+  ai_model: string | null
+  ai_error: string | null
+  resume_context_status: string
+  resume_file_name: string
+  message_kind: ApplicationMessageKind
+}
+
+export type ApplicationSendMessagePayload = {
+  to: string
+  cc?: string | null
+  subject: string
+  body: string
+  thread_id?: string | null
+  message_kind: ApplicationMessageKind
+  include_resume: boolean
+  attachment_asset_ids: number[]
+}
+
 export type ResumeAssetOption = {
   id: number
   file_name: string

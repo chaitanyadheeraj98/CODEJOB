@@ -204,6 +204,7 @@ type SettingsPayload = {
   feature_reply_inbox_enabled: boolean
   feature_applications_enabled: boolean
   feature_application_automation_enabled: boolean
+  feature_application_outreach_drafts_enabled: boolean
   feature_reminder_sweep_interval_minutes: number
   candidate_work_authorizations: string[]
   preferred_employment_types: Array<'C2C' | 'W2' | '1099' | 'FT'>
@@ -2626,6 +2627,7 @@ function App() {
     feature_reply_inbox_enabled: false,
     feature_applications_enabled: false,
     feature_application_automation_enabled: false,
+    feature_application_outreach_drafts_enabled: false,
     feature_reminder_sweep_interval_minutes: 240,
     candidate_work_authorizations: [],
     preferred_employment_types: [],
@@ -3002,6 +3004,7 @@ function App() {
       feature_strict_candidate_screening_enabled: Boolean(payload.feature_strict_candidate_screening_enabled),
       feature_applications_enabled: Boolean(payload.feature_applications_enabled),
       feature_application_automation_enabled: Boolean(payload.feature_application_automation_enabled),
+      feature_application_outreach_drafts_enabled: Boolean(payload.feature_application_outreach_drafts_enabled),
       feature_reminder_sweep_interval_minutes: Math.max(30, Math.min(payload.feature_reminder_sweep_interval_minutes || 240, 1440)),
       candidate_work_authorizations: payload.candidate_work_authorizations ?? [],
       preferred_employment_types: payload.preferred_employment_types ?? [],
@@ -5861,6 +5864,19 @@ function App() {
                     </span>
                   </label>
                   <p className="subtle">Requires Application Tracker. Generates reviewable reply and reminder suggestions; it never advances a stage by itself.</p>
+                  <label className="toggleRow pillRow">
+                    <span>AI-assisted outreach drafts</span>
+                    <span className="toggleSwitch">
+                      <input
+                        type="checkbox"
+                        checked={settings.feature_application_outreach_drafts_enabled}
+                        onChange={(event) => setSettings({ ...settings, feature_application_outreach_drafts_enabled: event.target.checked })}
+                        disabled={!settings.feature_applications_enabled}
+                      />
+                      <span className="toggleTrack" />
+                    </span>
+                  </label>
+                  <p className="subtle">Uses AI only to propose editable application emails. Sending always requires a separate click.</p>
                   <label>
                     Reminder sweep interval (minutes)
                     <input

@@ -4,6 +4,9 @@ import type {
   ApplicationDashboardSummary,
   ApplicationEventCard,
   ApplicationInterview,
+  ApplicationDraftMessage,
+  ApplicationMessageKind,
+  ApplicationSendMessagePayload,
   ApplicationStatus,
   ApplicationSuggestion,
   AttachmentAssetOption,
@@ -323,6 +326,28 @@ export function dismissApplicationSuggestion(apiBase: string, suggestionId: numb
 
 export async function runReminderSweepNow(apiBase: string): Promise<ApplicationSuggestion[]> {
   return (await requestJson<{ items: ApplicationSuggestion[] }>(`${apiBase}/applications/reminders/run`, { method: 'POST' })).items
+}
+
+export function draftApplicationMessage(
+  apiBase: string,
+  applicationId: number,
+  messageKind: ApplicationMessageKind,
+): Promise<ApplicationDraftMessage> {
+  return requestJson(
+    `${apiBase}/applications/${applicationId}/draft-message`,
+    jsonInit('POST', { message_kind: messageKind }),
+  )
+}
+
+export function sendApplicationMessage(
+  apiBase: string,
+  applicationId: number,
+  payload: ApplicationSendMessagePayload,
+): Promise<{ sent: boolean; gmail_message_id: string; application: ApplicationCard }> {
+  return requestJson(
+    `${apiBase}/applications/${applicationId}/send-message`,
+    jsonInit('POST', payload),
+  )
 }
 
 export function requestApplicationRtr(

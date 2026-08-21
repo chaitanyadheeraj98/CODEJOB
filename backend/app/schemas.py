@@ -115,6 +115,7 @@ class SettingsRequest(BaseModel):
     feature_reply_inbox_enabled: bool = False
     feature_applications_enabled: bool = False
     feature_application_automation_enabled: bool = False
+    feature_application_outreach_drafts_enabled: bool = False
     feature_reminder_sweep_interval_minutes: int = 240
     candidate_work_authorizations: list[str] | None = Field(default_factory=list)
     preferred_employment_types: list[Literal["C2C", "W2", "1099", "FT"]] = Field(default_factory=list)
@@ -1197,6 +1198,50 @@ class ApplicationSubmitToClientRequest(BaseModel):
     override_duplicate_warning: bool = False
 
 
+class ApplicationDraftMessageRequest(BaseModel):
+    message_kind: Literal["followup", "submission_to_recruiter"] = "followup"
+
+
+class ApplicationDraftMessageResponse(BaseModel):
+    to: str
+    cc: str | None
+    thread_id: str | None
+    subject: str
+    body: str
+    source: str
+    ai_model: str | None
+    ai_error: str | None
+    resume_context_status: str
+    resume_file_name: str
+    message_kind: str
+
+
+class ApplicationSendMessageRequest(BaseModel):
+    to: str
+    cc: str | None = None
+    subject: str
+    body: str
+    thread_id: str | None = None
+    message_kind: Literal["followup", "submission_to_recruiter"] = "followup"
+    include_resume: bool = True
+    attachment_asset_ids: list[int] = Field(default_factory=list)
+
+    @field_validator("to")
+    @classmethod
+    def validate_to(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Recipient email is required")
+        return cleaned
+
+    @field_validator("body")
+    @classmethod
+    def validate_body(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Message body is required")
+        return value
+
+
 class ApplicationResponse(BaseModel):
     id: int
     owner_id: str
@@ -1233,6 +1278,12 @@ class ApplicationResponse(BaseModel):
     interviews: list[ApplicationInterviewResponse] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
+
+
+class ApplicationSendMessageResponse(BaseModel):
+    sent: bool
+    gmail_message_id: str
+    application: ApplicationResponse
 
 
 class ApplicationListResponse(BaseModel):

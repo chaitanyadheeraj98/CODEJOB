@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from app.ai.draft_text_utils import extract_subject_line, sanitize_plain_text
 from app.ai.resume_context_attribution import (
     RESUME_CONTEXT_EXTRACT_FAILED,
     DraftResumeContextStatus,
@@ -30,22 +31,6 @@ DEFAULT_SIGNATURE_BLOCK = "\n".join(
         f"[EMAIL] {DEFAULT_SIGNATURE_EMAIL}",
     ]
 )
-
-
-def _sanitize_plain_text_reply(text: str) -> str:
-    cleaned_lines: list[str] = []
-    for raw in text.splitlines():
-        cleaned_lines.append(raw.strip())
-    cleaned = "\n".join(cleaned_lines).strip()
-    return cleaned
-
-
-def _extract_subject_line(text: str) -> str | None:
-    for raw in text.splitlines():
-        stripped = raw.strip()
-        if stripped.lower().startswith("subject:"):
-            return stripped
-    return None
 
 
 def _extract_signature_block(fallback_draft: str) -> str:
@@ -97,7 +82,7 @@ def _compose_reply_with_fixed_wrapper(
     expected_greeting: str,
     fallback_draft: str,
 ) -> str:
-    subject_line = _extract_subject_line(ai_text) or _extract_subject_line(fallback_draft)
+    subject_line = extract_subject_line(ai_text) or extract_subject_line(fallback_draft)
     body_text = _extract_body_only(ai_text, expected_greeting)
     signature_block = _extract_signature_block(fallback_draft)
 
@@ -151,7 +136,7 @@ def generate_reply_with_ai_or_fallback(
     )
     try:
         generated = deepseek_chat_completion(system_prompt, user_prompt)
-        sanitized = _sanitize_plain_text_reply(generated)
+        sanitized = sanitize_plain_text(generated)
         sanitized = _compose_reply_with_fixed_wrapper(
             sanitized,
             expected_greeting=greeting_line,

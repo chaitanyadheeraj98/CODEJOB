@@ -8,6 +8,7 @@ import {
   deleteApplication,
   deleteApplicationInterview,
   dismissApplicationSuggestion,
+  draftApplicationMessage,
   getApplication,
   getApplicationsDashboardSummary,
   listAttachmentOptions,
@@ -15,6 +16,7 @@ import {
   listApplicationSuggestions,
   requestApplicationRtr,
   runReminderSweepNow,
+  sendApplicationMessage,
   submitApplicationToClient,
   updateApplication,
   updateApplicationInterview,
@@ -25,6 +27,7 @@ import type {
   ApplicationDashboardSummary,
   ApplicationDuplicateSummary,
   ApplicationInterview,
+  ApplicationMessageKind,
   ApplicationStatus,
   ApplicationSuggestion,
   AttachmentAssetOption,
@@ -81,6 +84,18 @@ type InterviewDraft = {
   sync_application_status: boolean
 }
 
+type ApplicationDraftEdit = {
+  message_kind: ApplicationMessageKind
+  to: string
+  cc: string
+  thread_id: string | null
+  subject: string
+  body: string
+  source: string
+  include_resume: boolean
+  attachment_asset_ids: number[]
+}
+
 type ApplicationsTabProps = {
   apiBase: string
   refreshToken: number
@@ -102,6 +117,27 @@ function localDateTimeValue(value: string | null): string {
   return local.toISOString().slice(0, 16)
 }
 
+function emptyApplicationDraft(): ApplicationDraftEdit {
+  return {
+    message_kind: 'followup',
+    to: '',
+    cc: '',
+    thread_id: null,
+    subject: '',
+    body: '',
+    source: '',
+    include_resume: true,
+    attachment_asset_ids: [],
+  }
+}
+
+function draftSourceLabel(source: string): string {
+  if (source === 'deepseek') return 'AI-drafted'
+  if (source === 'rules_only') return 'Template (AI unavailable)'
+  if (source === 'ai_disabled') return 'Template'
+  return ''
+}
+
 export default function ApplicationsTab({ apiBase, refreshToken, onToast }: ApplicationsTabProps) {
   const [rows, setRows] = useState<ApplicationCard[]>([])
   const [summary, setSummary] = useState<ApplicationDashboardSummary>({ due_today: 0, waiting_on_recruiter: 0, interviews: 0, closed_recent: 0, pending_suggestions: 0 })
@@ -120,6 +156,7 @@ export default function ApplicationsTab({ apiBase, refreshToken, onToast }: Appl
   const [rtrProofDrafts, setRtrProofDrafts] = useState<Record<number, RtrProofDraft>>({})
   const [interviewDrafts, setInterviewDrafts] = useState<Record<number, InterviewDraft>>({})
   const [interviewEdits, setInterviewEdits] = useState<Record<number, Partial<ApplicationInterview>>>({})
+  const [draftEdits, setDraftEdits] = useState<Record<number, ApplicationDraftEdit>>({})
   const [duplicateConflicts, setDuplicateConflicts] = useState<Record<number, ApplicationDuplicateSummary[]>>({})
   const [error, setError] = useState('')
   const requestIdRef = useRef(0)
@@ -455,6 +492,71 @@ export default function ApplicationsTab({ apiBase, refreshToken, onToast }: Appl
     }
   }
 
+  const updateDraft = (applicationId: number, patch: Partial<ApplicationDraftEdit>) => {
+    setDraftEdits((current) => ({
+      ...current,
+      [applicationId]: { ...emptyApplicationDraft(), ...current[applicationId], ...patch },
+    }))
+  }
+
+  const generateDraft = async (applicationId: number) => {
+    const existing = draftEdits[applicationId] ?? emptyApplicationDraft()
+    setBusyId(applicationId)
+    setError('')
+    try {
+      const generated = await draftApplicationMessage(apiBase, applicationId, existing.message_kind)
+      setDraftEdits((current) => ({
+        ...current,
+        [applicationId]: {
+          ...existing,
+          message_kind: generated.message_kind,
+          to: generated.to,
+          cc: generated.cc ?? '',
+          thread_id: generated.thread_id,
+          subject: generated.subject,
+          body: generated.body,
+          source: generated.source,
+        },
+      }))
+      onToast('Draft ready for review')
+    } catch (reason) {
+      setError((reason as Error).message)
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const sendDraft = async (applicationId: number) => {
+    const draft = draftEdits[applicationId]
+    if (!draft?.to.trim() || !draft.body.trim()) return
+    setBusyId(applicationId)
+    setError('')
+    try {
+      const result = await sendApplicationMessage(apiBase, applicationId, {
+        to: draft.to.trim(),
+        cc: draft.cc.trim() || null,
+        subject: draft.subject.trim(),
+        body: draft.body,
+        thread_id: draft.thread_id,
+        message_kind: draft.message_kind,
+        include_resume: draft.include_resume,
+        attachment_asset_ids: draft.attachment_asset_ids,
+      })
+      replaceRow(result.application)
+      setDetails((current) => ({ ...current, [applicationId]: result.application }))
+      setDraftEdits((current) => {
+        const next = { ...current }
+        delete next[applicationId]
+        return next
+      })
+      onToast('Message sent')
+    } catch (reason) {
+      setError((reason as Error).message)
+    } finally {
+      setBusyId(null)
+    }
+  }
+
   const checkReminders = async () => {
     setLoading(true)
     setError('')
@@ -540,6 +642,7 @@ export default function ApplicationsTab({ apiBase, refreshToken, onToast }: Appl
             interviewer_names: '',
             sync_application_status: true,
           }
+          const messageDraft = draftEdits[item.id] ?? emptyApplicationDraft()
           const currentRtr = detail?.rtr_history[0]
           const hasUnexpiredRtr = Boolean(
             currentRtr
@@ -777,6 +880,81 @@ export default function ApplicationsTab({ apiBase, refreshToken, onToast }: Appl
                           </label>
                           <button type="button" onClick={() => addInterview(item.id)} disabled={busyId === item.id}>Add interview</button>
                         </div>
+                      </section>
+
+                      <section className="detailSection applicationWorkflowPanel applicationDraftPanel">
+                        <h4>Draft &amp; send</h4>
+                        <p className="subtle">Generate a starting point, review every field, then send explicitly.</p>
+                        <div className="detailFormGrid">
+                          <label>
+                            Message type
+                            <select
+                              aria-label={`Message type for ${currentTitle}`}
+                              value={messageDraft.message_kind}
+                              onChange={(event) => updateDraft(item.id, { message_kind: event.target.value as ApplicationMessageKind })}
+                            >
+                              <option value="followup">Follow-up</option>
+                              <option value="submission_to_recruiter">Submission to recruiter</option>
+                            </select>
+                          </label>
+                          <div className="rowBtns applicationDraftActions">
+                            <button type="button" onClick={() => generateDraft(item.id)} disabled={busyId === item.id}>Generate draft</button>
+                            {messageDraft.source ? <span className="subtle applicationDraftSource">{draftSourceLabel(messageDraft.source)}</span> : null}
+                          </div>
+                          <label>
+                            To
+                            <input value={messageDraft.to} onChange={(event) => updateDraft(item.id, { to: event.target.value })} />
+                          </label>
+                          <label>
+                            Cc
+                            <input value={messageDraft.cc} onChange={(event) => updateDraft(item.id, { cc: event.target.value })} />
+                          </label>
+                          <label>
+                            Subject
+                            <input value={messageDraft.subject} onChange={(event) => updateDraft(item.id, { subject: event.target.value })} />
+                          </label>
+                          <label>
+                            Body
+                            <textarea rows={8} value={messageDraft.body} onChange={(event) => updateDraft(item.id, { body: event.target.value })} />
+                          </label>
+                        </div>
+                        <label className="checkboxLabel">
+                          <input
+                            type="checkbox"
+                            checked={messageDraft.include_resume}
+                            onChange={(event) => updateDraft(item.id, { include_resume: event.target.checked })}
+                          />
+                          Attach application resume ({item.resume_file_name_snapshot})
+                        </label>
+                        {attachments.length > 0 ? (
+                          <fieldset className="applicationAttachmentList">
+                            <legend>Additional attachments</legend>
+                            {attachments.map((attachment) => (
+                              <label key={attachment.id} className="checkboxLabel">
+                                <input
+                                  type="checkbox"
+                                  checked={messageDraft.attachment_asset_ids.includes(attachment.id)}
+                                  onChange={(event) => updateDraft(item.id, {
+                                    attachment_asset_ids: event.target.checked
+                                      ? [...messageDraft.attachment_asset_ids, attachment.id]
+                                      : messageDraft.attachment_asset_ids.filter((id) => id !== attachment.id),
+                                  })}
+                                />
+                                {attachment.file_name}
+                              </label>
+                            ))}
+                          </fieldset>
+                        ) : null}
+                        <div className="rowBtns">
+                          <button
+                            type="button"
+                            onClick={() => sendDraft(item.id)}
+                            disabled={busyId === item.id || !messageDraft.to.trim() || !messageDraft.body.trim()}
+                          >
+                            Send
+                          </button>
+                        </div>
+                        <p className="subtle">Consider updating status above if this changes where things stand.</p>
                       </section>
 
                       <h4>Activity timeline</h4>

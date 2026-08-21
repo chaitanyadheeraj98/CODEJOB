@@ -1,6 +1,8 @@
 import os
 import unittest
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from unittest.mock import patch
 
 os.environ["DEBUG"] = "false"
 
@@ -493,6 +495,132 @@ class ApplicationsApiTests(unittest.TestCase):
         self.assertEqual(reputation.status_code, 200, reputation.text)
         self.assertEqual(reputation.json()["recruiter_contact_id"], recruiter_id)
         self.assertEqual(reputation.json()["history_label"], "limited_history")
+
+    def test_phase_four_draft_and_send_routes_require_explicit_send(self) -> None:
+        with Session(self.engine) as db:
+            resume, opportunity = self._sources(
+                db,
+                owner_id=main.settings.owner_id,
+                suffix="7001",
+            )
+            application = application_service.create_application(
+                db,
+                owner_id=main.settings.owner_id,
+                resume_asset_id=resume.id,
+                recruiter_opportunity_id=opportunity.id,
+            )
+            db.add(UserSettings(owner_id=main.settings.owner_id))
+            db.commit()
+            application_id = application.id
+
+        saved_settings = self.client.put(
+            "/settings",
+            json={
+                "feature_applications_enabled": True,
+                "feature_application_outreach_drafts_enabled": True,
+            },
+        )
+        self.assertEqual(saved_settings.status_code, 200, saved_settings.text)
+        self.assertTrue(saved_settings.json()["feature_application_outreach_drafts_enabled"])
+        self.assertTrue(self.client.get("/settings").json()["feature_application_outreach_drafts_enabled"])
+
+        draft_result = SimpleNamespace(
+            to="recruiter@example.com",
+            cc="employer@example.com",
+            thread_id="thread-7001",
+            subject="Following up - Java Developer 7001",
+            body="Hi Recruiter,\n\nAny update?",
+            source="ai_disabled",
+            ai_model=None,
+            ai_error=None,
+            resume_context_status="injected",
+            resume_file_name="7001-resume.pdf",
+            message_kind="followup",
+        )
+        with patch(
+            "app.main.application_outreach_service.build_application_draft",
+            return_value=draft_result,
+        ) as build:
+            drafted = self.client.post(
+                f"/applications/{application_id}/draft-message",
+                json={"message_kind": "followup"},
+            )
+        self.assertEqual(drafted.status_code, 200, drafted.text)
+        self.assertEqual(drafted.json()["source"], "ai_disabled")
+        self.assertEqual(drafted.json()["to"], "recruiter@example.com")
+        build.assert_called_once()
+        self.assertEqual(
+            self.client.post(
+                f"/applications/{application_id}/draft-message",
+                json={"message_kind": "invalid"},
+            ).status_code,
+            422,
+        )
+
+        def send_stub(_db, application, **_kwargs):
+            return application, "gmail-message-7001"
+
+        payload = {
+            "to": "recruiter@example.com",
+            "cc": "employer@example.com",
+            "subject": "Following up",
+            "body": "Any update?",
+            "thread_id": "thread-7001",
+            "message_kind": "followup",
+            "include_resume": True,
+            "attachment_asset_ids": [],
+        }
+        with patch(
+            "app.main.application_outreach_service.send_application_message",
+            side_effect=send_stub,
+        ) as send:
+            sent = self.client.post(
+                f"/applications/{application_id}/send-message",
+                json=payload,
+            )
+        self.assertEqual(sent.status_code, 200, sent.text)
+        self.assertTrue(sent.json()["sent"])
+        self.assertEqual(sent.json()["gmail_message_id"], "gmail-message-7001")
+        self.assertEqual(sent.json()["application"]["status"], "matched")
+        self.assertEqual(send.call_args.kwargs["thread_id"], "thread-7001")
+        self.assertEqual(
+            self.client.post(
+                f"/applications/{application_id}/send-message",
+                json={**payload, "to": "   "},
+            ).status_code,
+            422,
+        )
+
+    def test_phase_four_send_route_surfaces_gmail_failure(self) -> None:
+        with Session(self.engine) as db:
+            resume, opportunity = self._sources(
+                db,
+                owner_id=main.settings.owner_id,
+                suffix="7002",
+            )
+            application = application_service.create_application(
+                db,
+                owner_id=main.settings.owner_id,
+                resume_asset_id=resume.id,
+                recruiter_opportunity_id=opportunity.id,
+            )
+            db.commit()
+            application_id = application.id
+
+        with patch(
+            "app.main.application_outreach_service.send_application_message",
+            side_effect=RuntimeError("Gmail unavailable"),
+        ):
+            response = self.client.post(
+                f"/applications/{application_id}/send-message",
+                json={
+                    "to": "recruiter@example.com",
+                    "subject": "Following up",
+                    "body": "Any update?",
+                },
+            )
+        self.assertEqual(response.status_code, 502, response.text)
+        self.assertIn("Gmail unavailable", response.json()["detail"])
 
 
 if __name__ == "__main__":

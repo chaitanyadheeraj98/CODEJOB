@@ -3492,6 +3492,36 @@ button.emailSearchResult:focus-visible {
   padding: 0 0 14px;
 }
 
+.applicationDraftPanel textarea {
+  min-height: 150px;
+  resize: vertical;
+}
+
+.applicationDraftActions,
+.applicationDraftPanel > .checkboxLabel,
+.applicationAttachmentList .checkboxLabel {
+  align-items: center;
+}
+
+.applicationDraftSource {
+  align-self: center;
+}
+
+.applicationAttachmentList {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.applicationDraftPanel > .checkboxLabel,
+.applicationAttachmentList .checkboxLabel {
+  display: flex;
+  gap: 8px;
+}
+
 .applicationInterviewList,
 .applicationInterviewRow,
 .duplicateConflict,

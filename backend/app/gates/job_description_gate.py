@@ -85,7 +85,7 @@ GROQ_SCHEMA: dict[str, object] = {
             },
         },
     },
-    "required": ["intent_type", "action", "confidence", "reason", "evidence", "negative_evidence"],
+    "required": ["intent_type", "action", "confidence", "reason", "evidence", "negative_evidence", "learning_signals"],
     "additionalProperties": False,
 }
 
