@@ -17,6 +17,7 @@ from app.mcp_server.tools.premium_numbers import (
 from app.mcp_server.tools.resumes import get_resume, list_resumes
 from app.mcp_server.tools.runs import get_recent_runs, get_run_items
 from app.mcp_server.tools.status import get_ai_status, get_settings_summary
+from app.mcp_server.tools.support import propose_create_github_issue
 
 __all__ = [
     "count_received_emails",
@@ -36,6 +37,7 @@ __all__ = [
     "list_recruiter_opportunities",
     "list_resumes",
     "propose_bulk_approve_candidates",
+    "propose_create_github_issue",
     "propose_create_premium_contact",
     "propose_send_email",
     "search_candidates",

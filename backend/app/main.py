@@ -194,6 +194,7 @@ from app.services.candidate_screening_service import (
     apply_screening_decision,
 )
 from app.services.email_inbox_service import TRANSPARENT_PIXEL_PNG, record_open, reply_count_for_email
+from app.services.github_issue_service import GithubIssueServiceError, create_github_issue
 from app.services.orchestration_service import OrchestrationDeps, OrchestrationService
 from app.services.requirement_expansion_service import RequirementExpansionService
 from app.services.resume_enrichment_service import enrich_resume
@@ -258,6 +259,7 @@ from app.schemas import (
     ConversationReplyRequest,
     ConversationSummaryResponse,
     ChatSendReplyRequest,
+    GithubIssueCreateRequest,
     CustomSkillTaxonomyEntryResponse,
     CanonicalEntityTaxonomyEntryResponse,
     DismissJobIntentSignalRequest,
@@ -6649,6 +6651,20 @@ def send_chat_reply(
         metadata={"gmail_message_id": message_id},
     )
     return {"sent": True, "message_id": message_id, "email_id": email.id}
+
+
+@app.post(
+    "/support/github-issues",
+    dependencies=[Depends(require_chat_actions_enabled)],
+)
+def create_support_github_issue(payload: GithubIssueCreateRequest) -> dict[str, object]:
+    body = f"**User report:** {payload.user_report}\n\n**AI summary:** {payload.ai_summary}"
+    if payload.context.strip():
+        body += f"\n\n**Helpful context:** {payload.context.strip()}"
+    try:
+        return create_github_issue(payload.title, body)
+    except GithubIssueServiceError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @app.post("/candidates/{email_id}/reject", response_model=EmailResponse)

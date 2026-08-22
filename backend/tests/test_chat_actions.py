@@ -15,9 +15,11 @@ from app.db import Base
 from app.mcp_server.tools.candidates import propose_bulk_approve_candidates
 from app.mcp_server.tools.email_actions import propose_send_email
 from app.mcp_server.tools.premium_numbers import propose_create_premium_contact
+from app.mcp_server.tools.support import propose_create_github_issue
 from app.mcp_server.tools.web_search import search_web
 from app.ai.chat.system_prompt import build_system_prompt
 from app.models import PremiumNumberContact, ProductivityEvent, RecruiterEmail
+from app.services.github_issue_service import GithubIssueServiceError
 
 
 class ChatActionTests(unittest.TestCase):
@@ -149,21 +151,70 @@ class ChatActionTests(unittest.TestCase):
     def test_action_routes_are_flag_gated_and_not_mcp_tools(self) -> None:
         main.settings.feature_chat_actions_enabled = False
         self.assertEqual(self.client.post("/candidates/approve-bulk", json={"ids": []}).status_code, 404)
+        self.assertEqual(
+            self.client.post(
+                "/support/github-issues",
+                json={"title": "t", "user_report": "r", "ai_summary": "s"},
+            ).status_code,
+            404,
+        )
 
         proposal_tools = {
             propose_bulk_approve_candidates,
             propose_create_premium_contact,
+            propose_create_github_issue,
             propose_send_email,
         }
         confirm_paths = {
             "/candidates/approve-bulk",
             "/premium-numbers/contacts",
             "/candidates/{email_id}/send-chat-reply",
+            "/support/github-issues",
         }
         route_handlers = {
             route.endpoint for route in main.app.routes if getattr(route, "path", "") in confirm_paths
         }
         self.assertTrue(proposal_tools.isdisjoint(route_handlers))
+
+    def test_github_issue_confirm_creates_only_after_click(self) -> None:
+        missing = propose_create_github_issue("", "summary")
+        self.assertEqual(missing["missing"], ["user_report"])
+
+        proposal = propose_create_github_issue(
+            "the ats scores in chat are wrong",
+            "Bulk search returns score instead of ats_score",
+            context="Email 7323 expected 76.56, got 61",
+        )
+        self.assertEqual(proposal["action"], "create_github_issue")
+
+        with patch.object(
+            main,
+            "create_github_issue",
+            return_value={"issue_number": 42, "issue_url": "https://github.com/x/y/issues/42"},
+        ) as mock_create:
+            response = self.client.post(
+                "/support/github-issues",
+                json={
+                    "title": proposal["title"],
+                    "user_report": proposal["user_report"],
+                    "ai_summary": proposal["ai_summary"],
+                    "context": proposal["context"],
+                },
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["issue_number"], 42)
+        body = mock_create.call_args.args[1]
+        self.assertIn("the ats scores in chat are wrong", body)
+        self.assertIn("Bulk search returns score instead of ats_score", body)
+        self.assertIn("Email 7323", body)
+
+    def test_github_issue_confirm_surfaces_service_errors_as_502(self) -> None:
+        with patch.object(main, "create_github_issue", side_effect=GithubIssueServiceError("not configured")):
+            response = self.client.post(
+                "/support/github-issues",
+                json={"title": "t", "user_report": "r", "ai_summary": "s"},
+            )
+        self.assertEqual(response.status_code, 502)
 
     def test_web_search_caps_results_and_marks_content_untrusted(self) -> None:
         class FakeResponse:

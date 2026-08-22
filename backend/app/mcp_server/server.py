@@ -19,6 +19,7 @@ from app.mcp_server.tools import (
     list_recruiter_opportunities,
     list_resumes,
     propose_bulk_approve_candidates,
+    propose_create_github_issue,
     propose_create_premium_contact,
     propose_send_email,
     search_candidates,
@@ -68,5 +69,7 @@ if settings.feature_chat_actions_enabled:
         from app.mcp_server.tools.web_search import search_web
 
         mcp.tool()(search_web)
+    if settings.github_token and settings.github_repo:
+        mcp.tool()(propose_create_github_issue)
 
 mcp_app = mcp.streamable_http_app()

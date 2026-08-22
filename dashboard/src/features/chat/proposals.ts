@@ -59,6 +59,23 @@ export const PROPOSAL_HANDLERS: Record<string, ProposalHandler> = {
       ['Body', text(fields.body)],
     ],
   },
+  propose_create_github_issue: {
+    endpoint: '/support/github-issues',
+    method: 'POST',
+    buildBody: (fields) => ({
+      title: fields.title,
+      user_report: fields.user_report,
+      ai_summary: fields.ai_summary,
+      context: fields.context,
+    }),
+    confirmLabel: () => 'Create GitHub Issue',
+    summary: (fields) => [
+      ['Title', text(fields.title)],
+      ['Your report', text(fields.user_report)],
+      ['AI summary', text(fields.ai_summary)],
+      ...(text(fields.context) ? [['Context', text(fields.context)] as [string, string]] : []),
+    ],
+  },
 }
 
 export function proposalForMessage(message: ChatMessage): { handler: ProposalHandler; fields: ProposalFields } | null {
@@ -80,6 +97,7 @@ export function proposalResultDetail(payload: Record<string, unknown>): string {
     return `${payload.approved_count} approved${failed ? `; ${failed} failed` : ''}.`
   }
   if (payload.sent) return 'Email sent.'
+  if (typeof payload.issue_number === 'number') return `Issue #${payload.issue_number} created.`
   if (typeof payload.id === 'number') return `Saved as contact ${payload.id}.`
   return 'Action completed.'
 }

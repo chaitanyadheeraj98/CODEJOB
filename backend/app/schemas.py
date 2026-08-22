@@ -46,6 +46,13 @@ class ChatSendReplyRequest(BaseModel):
     subject: str | None = Field(default=None, max_length=998)
 
 
+class GithubIssueCreateRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=250)
+    user_report: str = Field(min_length=1, max_length=4000)
+    ai_summary: str = Field(min_length=1, max_length=4000)
+    context: str = Field(default="", max_length=4000)
+
+
 class ResolveRecipientsRequest(BaseModel):
     to_email: str
     cc_email: str
