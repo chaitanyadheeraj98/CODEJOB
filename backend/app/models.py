@@ -348,6 +348,7 @@ class EmailReplyMessage(Base):
     snippet: Mapped[str] = mapped_column(Text, default="")
     received_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, index=True)
     read_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    notified_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
 
 class ChatSession(Base):

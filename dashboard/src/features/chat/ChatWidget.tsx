@@ -125,6 +125,10 @@ export default function ChatWidget({ apiBase }: ChatWidgetProps) {
     messagesEndRef.current?.scrollIntoView({ block: 'nearest' })
   }, [chat.messages])
 
+  useEffect(() => {
+    if (open) chat.markSeen()
+  }, [open, chat.markSeen])
+
   const submit = async (event: FormEvent) => {
     event.preventDefault()
     const text = draft.trim()
@@ -318,6 +322,9 @@ export default function ChatWidget({ apiBase }: ChatWidgetProps) {
         aria-label={open ? 'Close CodeJob assistant' : 'Open CodeJob assistant'}
       >
         {open ? 'x' : 'Chat'}
+        {!open && chat.unseenCount > 0 ? (
+          <span className="chatBadge" aria-label={`${chat.unseenCount} new`}>{chat.unseenCount}</span>
+        ) : null}
       </button>
     </aside>
   )

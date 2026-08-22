@@ -2598,6 +2598,7 @@ button.emailSearchResult:focus-visible {
 }
 
 .chatLauncher {
+  position: relative;
   width: 58px;
   height: 58px;
   border: 0;
@@ -2610,6 +2611,24 @@ button.emailSearchResult:focus-visible {
 
 .chatLauncher:hover {
   background: var(--primary-strong);
+}
+
+.chatBadge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: #dc2626;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  box-shadow: 0 0 0 2px var(--surface, #fff);
 }
 
 .chatPanel {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import {
   createChatSession,
@@ -25,6 +25,31 @@ export function useChatSession(apiBase: string, enabled: boolean) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [unseenCount, setUnseenCount] = useState(0)
+  const messagesRef = useRef<ChatMessage[]>([])
+  useEffect(() => {
+    messagesRef.current = messages
+  }, [messages])
+
+  const markSeen = useCallback(() => setUnseenCount(0), [])
+
+  // Picks up notifications a background sync posts into this session (e.g. a
+  // recruiter reply worth flagging) without the user having to send a message.
+  useEffect(() => {
+    if (!enabled || sessionId == null) return
+    const interval = window.setInterval(() => {
+      if (busy) return
+      getChatSession(apiBase, sessionId).then((detail) => {
+        const next = visibleMessages(detail.messages)
+        const previous = messagesRef.current
+        if (next.length > previous.length) {
+          setUnseenCount((count) => count + (next.length - previous.length))
+          setMessages(next)
+        }
+      }, () => {})
+    }, 20000)
+    return () => window.clearInterval(interval)
+  }, [apiBase, enabled, sessionId, busy])
 
   useEffect(() => {
     if (!enabled) return
@@ -137,6 +162,8 @@ export function useChatSession(apiBase: string, enabled: boolean) {
     messages,
     busy,
     error,
+    unseenCount,
+    markSeen,
     startSession,
     selectSession,
     renameCurrentSession,

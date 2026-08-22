@@ -55,6 +55,12 @@ def run_gmail_sync_job(*, run_key: str, sync_batch_id: str) -> dict[str, Any]:
             ),
             complete=True,
         )
+        try:
+            from app.services.proactive_notification_service import generate_reply_notifications
+
+            generate_reply_notifications(db)
+        except Exception:
+            logger.exception("proactive_notification_generation_failed run_key=%r", run_key)
         return {"run_key": run_key, "status": row.status}
     except Exception as exc:
         db.rollback()
