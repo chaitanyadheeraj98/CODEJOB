@@ -3,6 +3,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import type { EmailSearchHit } from '../../emailSearch'
 import PremiumNumbersPage from './PremiumNumbersPage'
 import type { EmployerNumberCard, NumberReviewCard, RecruiterNumberCard } from './types'
 
@@ -157,5 +158,53 @@ describe('PremiumNumbersPage', () => {
     })
     expect(container.textContent).toContain('Due today')
     expect(container.textContent).toContain('No tracked applications match these filters.')
+  })
+
+  it('highlights a promoted premium_number_lead hit via its detail.contact_id', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/number-review/pending-count')) return jsonResponse({ count: 0 })
+      if (url.includes('/number-review?')) return jsonResponse({ items: [], next_cursor: null, has_next: false })
+      if (url.includes('/recruiter-numbers?')) return jsonResponse({ items: [recruiter], next_cursor: null, has_next: false })
+      if (url.includes('/employer-numbers?')) return jsonResponse({ items: [], next_cursor: null, has_next: false })
+      return jsonResponse({ detail: 'not found' }, 404)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+      vi.unstubAllGlobals()
+    })
+
+    const leadHit: EmailSearchHit = {
+      section: 'premium_numbers',
+      recruiter_email_id: 500,
+      sender: 'Global Talent Ltd',
+      subject: 'Role',
+      state: 'approved_sent',
+      detail: { premium_number_lead_id: 9, contact_id: recruiter.id },
+      occurred_at: '2026-08-18T13:00:00Z',
+    }
+
+    await act(async () => {
+      root.render(
+        <PremiumNumbersPage
+          apiBase="http://localhost:8000"
+          mailDate={null}
+          emailSearchTarget={leadHit}
+          refreshToken={0}
+          applicationsEnabled={false}
+          onPendingCountChange={vi.fn()}
+        />,
+      )
+    })
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 300)) })
+
+    const highlighted = container.querySelector('tr.emailSearchHighlight')
+    expect(highlighted?.textContent).toContain('Global Talent Ltd')
   })
 })

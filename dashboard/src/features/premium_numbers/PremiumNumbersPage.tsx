@@ -29,7 +29,9 @@ type PremiumNumbersPageProps = {
 function inventoryTargetKey(target: EmailSearchHit | null): string | null {
   if (!target || target.section !== 'premium_numbers') return null
   if (target.detail.number_review_id != null) return `review:${target.detail.number_review_id}`
-  const contactId = target.detail.recruiter_number_id ?? target.detail.employer_number_id
+  // A premium_number_lead_id hit only has somewhere to navigate to once the lead is
+  // promoted to a contact (detail.contact_id) - an un-promoted lead has no inventory row.
+  const contactId = target.detail.recruiter_number_id ?? target.detail.employer_number_id ?? target.detail.contact_id
   return contactId == null ? null : `contact:${contactId}`
 }
 

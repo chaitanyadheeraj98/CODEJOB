@@ -166,6 +166,7 @@ def search_email(
                 state=root_email.state,
                 detail={
                     "premium_number_lead_id": lead.id,
+                    "contact_id": lead.contact_id,
                     "phone_number_display": lead.phone_number_display,
                     "company": lead.company,
                     "confidence": lead.confidence,

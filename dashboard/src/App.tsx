@@ -33,7 +33,8 @@ function emailSearchRelatedId(hit: EmailSearchHit): string | null {
       hit.detail.number_review_id ??
       hit.detail.recruiter_number_id ??
       hit.detail.employer_number_id ??
-      hit.detail.recruiter_opportunity_id
+      hit.detail.recruiter_opportunity_id ??
+      hit.detail.contact_id
     return related == null ? null : String(related)
   }
   return hit.recruiter_email_id == null ? null : String(hit.recruiter_email_id)
@@ -3662,23 +3663,41 @@ function App() {
     if (!emailSearchTarget) return
     const relatedId = emailSearchRelatedId(emailSearchTarget)
     if (relatedId == null) return
-    const timerId = window.setTimeout(() => {
-      const target = Array.from(document.querySelectorAll<HTMLElement>('[data-email-search-section]')).find((element) => (
-        element.dataset.emailSearchSection === emailSearchTarget.section &&
-        element.dataset.emailSearchRelatedId === relatedId
-      ))
-      target?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
-    }, 0)
+    const findTarget = () => Array.from(document.querySelectorAll<HTMLElement>('[data-email-search-section]')).find((element) => (
+      element.dataset.emailSearchSection === emailSearchTarget.section &&
+      element.dataset.emailSearchRelatedId === relatedId
+    ))
+    // Bucket data for a freshly-navigated section can still be loading, so retry briefly
+    // instead of depending on queue/failedQueue/etc - those change on every unrelated
+    // background refresh and would re-trigger this scroll long after the user moved on.
+    let attempts = 0
+    let timerId: number
+    const tryScroll = () => {
+      const target = findTarget()
+      if (target) {
+        target.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
+        return
+      }
+      attempts += 1
+      if (attempts < 10) timerId = window.setTimeout(tryScroll, 200)
+    }
+    timerId = window.setTimeout(tryScroll, 0)
     return () => window.clearTimeout(timerId)
-  }, [
-    activePage,
-    emailSearchTarget,
-    queue,
-    failedQueue,
-    sentQueue,
-    logs,
-    inboxConversations,
-  ])
+  }, [emailSearchTarget])
+
+  useEffect(() => {
+    if (!emailSearchTarget) return
+    const relatedId = emailSearchRelatedId(emailSearchTarget)
+    if (relatedId == null) return
+    const detach = (event: MouseEvent) => {
+      const card = (event.target as HTMLElement).closest<HTMLElement>('[data-email-search-section]')
+      const isCurrentCard = card?.dataset.emailSearchSection === emailSearchTarget.section
+        && card?.dataset.emailSearchRelatedId === relatedId
+      if (!isCurrentCard) setEmailSearchTarget(null)
+    }
+    document.addEventListener('mousedown', detach)
+    return () => document.removeEventListener('mousedown', detach)
+  }, [emailSearchTarget])
 
   useEffect(() => {
     if (!running) return
@@ -4653,6 +4672,14 @@ function App() {
     setEmailSearchTarget(hit)
     if (hit.section === 'inbox' && typeof hit.detail.conversation_id === 'number') {
       setSelectedConversationId(hit.detail.conversation_id)
+    }
+    if (hit.section === 'recent_runs' && hit.detail.recent_run_skipped_item_id != null) {
+      // The skipped-item row only exists in the DOM once its parent run's
+      // "Skipped Items" section is expanded - without this the scroll-to-target
+      // effect never finds it.
+      const runKey = typeof hit.detail.run_key === 'string' ? hit.detail.run_key : null
+      const run = logs.find((item) => item.run_key === runKey)
+      if (run && !run.skipped_items_loaded) void toggleRecentRunItems(runKey)
     }
     setActivePage(hit.section)
   }
