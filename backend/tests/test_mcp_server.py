@@ -316,6 +316,7 @@ class MCPServerToolTests(unittest.TestCase):
         candidates = search_candidates("Python", "Needs Review", 10)
         self.assertEqual(candidates["count"], 1)
         self.assertEqual(candidates["candidates"][0]["id"], self.owned_id)
+        self.assertEqual(candidates["candidates"][0]["ats_score"], 49.23)
         self.assertIn(
             "<untrusted_candidate_data>",
             candidates["candidates"][0]["untrusted_candidate_data"],
@@ -609,6 +610,10 @@ class MCPServerToolTests(unittest.TestCase):
         by_company = list_contact_numbers(category="recruiter", name="ACME STAFFING")
         self.assertEqual(by_company["count"], 1)
         self.assertEqual(by_company["numbers"][0]["name"], "Pat Recruiter")
+
+        by_email = list_contact_numbers(category="recruiter", name="recruiter@example.com")
+        self.assertEqual(by_email["count"], 1)
+        self.assertEqual(by_email["numbers"][0]["name"], "Pat Recruiter")
 
         no_match = list_contact_numbers(category="recruiter", name="Shraddha Patel")
         self.assertEqual(no_match, {"count": 0, "numbers": []})

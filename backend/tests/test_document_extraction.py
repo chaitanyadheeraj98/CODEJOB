@@ -144,7 +144,7 @@ class DocumentExtractionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "resume.pdf"
             path.write_bytes(b"placeholder")
-            with patch("app.parsing.document_extraction.partition", return_value=elements):
+            with patch("unstructured.partition.auto.partition", return_value=elements):
                 result = extract_document_text(str(path), path.name, max_chars=140)
 
         self.assertTrue(result.truncated)

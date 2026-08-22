@@ -850,6 +850,7 @@ class ConversationSummaryResponse(BaseModel):
     last_message_at: datetime
     unread_reply_count: int
     last_inbound_reply_at: datetime | None = None
+    gmail_thread_link: str | None = None
 
 
 class ConversationMessageResponse(BaseModel):

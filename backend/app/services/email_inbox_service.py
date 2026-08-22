@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.gmail_client import GmailMessageCandidate
 from app.models import EmailConversation, EmailOpenEvent, EmailReplyMessage, RecruiterEmail
 from app.parsing.document_extraction import extract_gmail_reply_body
+from app.recent_runs import build_gmail_message_url
 from app.schemas import ConversationDetailResponse, ConversationMessageResponse, ConversationSummaryResponse
 
 
@@ -300,6 +301,11 @@ def _summary(db: Session, conversation: EmailConversation, root_email: Recruiter
         last_message_preview=((latest.snippet or latest.body)[:240] if latest else (root_email.draft_reply or "")[:240]),
         last_message_at=conversation.last_message_at,
         unread_reply_count=conversation.unread_reply_count,
+        gmail_thread_link=build_gmail_message_url(
+            external_message_id=root_email.external_message_id,
+            external_thread_id=conversation.external_thread_id,
+            external_rfc_message_id=root_email.external_rfc_message_id,
+        ),
     )
 
 

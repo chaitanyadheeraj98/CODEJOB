@@ -5,13 +5,13 @@ import re
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 from xml.etree import ElementTree
 
 from bs4 import BeautifulSoup
-from unstructured.chunking.title import chunk_by_title
-from unstructured.documents.elements import Element
-from unstructured.partition.auto import partition
-from unstructured.partition.html import partition_html
+
+if TYPE_CHECKING:
+    from unstructured.documents.elements import Element
 
 
 logger = logging.getLogger(__name__)
@@ -119,6 +119,8 @@ def _render_with_limit(elements: list[Element], max_chars: int | None) -> tuple[
     if max_chars <= 0:
         return "", "", bool(markdown)
 
+    from unstructured.chunking.title import chunk_by_title
+
     chunks = chunk_by_title(
         content,
         combine_text_under_n_chars=0,
@@ -198,6 +200,8 @@ def extract_document_text(
         return _fallback_document(path, file_name, max_chars)
 
     try:
+        from unstructured.partition.auto import partition
+
         elements = list(partition(filename=str(path), strategy="fast"))
         markdown, plain, truncated = _render_with_limit(elements, max_chars)
         if markdown:
@@ -231,6 +235,8 @@ def clean_html_text(html: str, *, max_chars: int | None = None) -> str:
     if not html.strip():
         return ""
     try:
+        from unstructured.partition.html import partition_html
+
         elements = list(partition_html(text=_normalize_line_breaks_for_partitioning(html)))
         markdown, _plain, _truncated = _render_with_limit(elements, max_chars)
         if markdown:

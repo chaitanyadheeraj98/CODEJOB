@@ -58,6 +58,7 @@ def _summary(row: RecruiterEmail) -> dict[str, object]:
         "id": row.id,
         "state": row.state,
         "score": row.score,
+        "ats_score": row.ats_score,
         "decision": row.decision,
         "created_at": row.created_at.isoformat(),
         "untrusted_candidate_data": (
@@ -78,7 +79,12 @@ def _sent_attachment_names(row: RecruiterEmail) -> list[str]:
 
 
 def search_candidates(query: str = "", status: str = "", limit: int = 10) -> dict[str, object]:
-    """Search the owner's candidates by text and optional queue status (fuzzy-matched)."""
+    """Search the owner's candidates by text and optional queue status (fuzzy-matched).
+
+    Each result has both "score" (AI match score x100, not ATS) and "ats_score"
+    (the real ATS score) - use ats_score when the user asks about ATS scores,
+    ranking, or "best" candidates by ATS.
+    """
     db = SessionLocal()
     try:
         resolved_status, status_error = _resolve_status(status)
@@ -145,7 +151,6 @@ def get_candidate(email_id: int) -> dict[str, object]:
                 "resume_file_name": row.resume_file_name,
                 "sent_attachment_file_names": _sent_attachment_names(row),
                 "sent_at": row.sent_at.isoformat() if row.sent_at else None,
-                "ats_score": row.ats_score,
                 "ats_score_source": row.ats_score_source,
                 "ai_score": row.ai_score,
                 "ai_score_source": row.ai_score_source,

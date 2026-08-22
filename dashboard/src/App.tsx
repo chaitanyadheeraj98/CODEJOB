@@ -1351,6 +1351,7 @@ type ConversationSummary = {
   last_message_at: string
   unread_reply_count: number
   last_inbound_reply_at: string | null
+  gmail_thread_link: string | null
 }
 
 type ConversationMessage = {
@@ -6795,30 +6796,46 @@ function App() {
                     const displayTime = conversation.last_inbound_reply_at ?? conversation.last_message_at
                     const absoluteTime = new Date(displayTime).toLocaleString()
                     return (
-                      <button
-                        key={conversation.id}
-                        type="button"
-                        className={`conversationListItem ${isUnread ? 'unread' : ''} ${selectedConversationId === conversation.id ? 'active' : ''} ${isEmailSearchHighlight('inbox', conversation.id) ? 'emailSearchHighlight' : ''}`}
-                        data-email-search-section="inbox"
-                        data-email-search-related-id={conversation.id}
-                        onClick={() => void openInboxConversation(conversation.id)}
-                        aria-label={`${isUnread ? 'Unread: ' : ''}${conversation.recruiter}, ${conversation.subject}, ${absoluteTime}`}
-                        title={absoluteTime}
-                      >
-                        <span className="conversationListTopline">
-                          <span className="conversationListIdentity">
-                            <span className="conversationListSender">{conversation.recruiter}</span>
-                            <span className="conversationListSubject">{conversation.subject}</span>
+                      <div key={conversation.id} className="conversationListItemWrap">
+                        <button
+                          type="button"
+                          className={`conversationListItem ${isUnread ? 'unread' : ''} ${selectedConversationId === conversation.id ? 'active' : ''} ${isEmailSearchHighlight('inbox', conversation.id) ? 'emailSearchHighlight' : ''}`}
+                          data-email-search-section="inbox"
+                          data-email-search-related-id={conversation.id}
+                          onClick={() => void openInboxConversation(conversation.id)}
+                          aria-label={`${isUnread ? 'Unread: ' : ''}${conversation.recruiter}, ${conversation.subject}, ${absoluteTime}`}
+                          title={absoluteTime}
+                        >
+                          <span className="conversationListTopline">
+                            <span className="conversationListIdentity">
+                              <span className="conversationListSender">{conversation.recruiter}</span>
+                              <span className="conversationListSubject">{conversation.subject}</span>
+                            </span>
+                            <span className="conversationListMeta">
+                              {isUnread ? <span className="unreadDot" aria-hidden="true" /> : null}
+                              <time dateTime={displayTime} title={absoluteTime}>
+                                {formatRelativeInboxTime(displayTime)}
+                              </time>
+                            </span>
                           </span>
-                          <span className="conversationListMeta">
-                            {isUnread ? <span className="unreadDot" aria-hidden="true" /> : null}
-                            <time dateTime={displayTime} title={absoluteTime}>
-                              {formatRelativeInboxTime(displayTime)}
-                            </time>
-                          </span>
-                        </span>
-                        <small className="conversationPreview">{conversation.last_message_preview || 'No message preview'}</small>
-                      </button>
+                          <small className="conversationPreview">{conversation.last_message_preview || 'No message preview'}</small>
+                        </button>
+                        {conversation.gmail_thread_link ? (
+                          <a
+                            className="conversationGmailLink"
+                            href={conversation.gmail_thread_link}
+                            target="_blank"
+                            rel="noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            title="Open original thread in Gmail"
+                            aria-label="Open original thread in Gmail"
+                          >
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                              <path d="M14 4h6v6M20 4 11 13M9 5H5a1 1 0 0 0-1 1v13a1 1 0 0 0 1 1h13a1 1 0 0 0 1-1v-4" />
+                            </svg>
+                          </a>
+                        ) : null}
+                      </div>
                     )
                   })}
                 </div>

@@ -90,7 +90,11 @@ def _recruiter_rows(db, email_id: int, recruiter_email_hint: str, name_search: s
     if name_search:
         like = f"%{name_search}%"
         query = query.filter(
-            or_(PremiumNumberContact.recruiter_name.ilike(like), PremiumNumberContact.company.ilike(like))
+            or_(
+                PremiumNumberContact.recruiter_name.ilike(like),
+                PremiumNumberContact.company.ilike(like),
+                PremiumNumberContact.recruiter_email.ilike(like),
+            )
         )
     return [
         {
@@ -213,8 +217,10 @@ def list_contact_numbers(category: str = "", email_id: int = 0, name: str = "", 
     Omit category to search all four. Pass email_id (a candidate/email id from
     search_candidates or get_recruiter_replies) to find the number(s) tied to one specific
     email instead of browsing everything. Pass name to search by a recruiter's or employer's
-    name or company (case-insensitive, partial match) - use this when asked to find someone by
-    name, since search_candidates does not cover this data. If a number was extracted but was
+    name or company (case-insensitive, partial match); for recruiters this also matches
+    their stored email address, so a raw address like "agoyal@webmsi.com" works here too - use
+    this when asked to find someone by name or email, since search_candidates does not cover
+    this data. If a number was extracted but was
     junk/invalid, it is intentionally left out here, same as in the app's UI; say the number is
     unavailable rather than guessing one.
     """

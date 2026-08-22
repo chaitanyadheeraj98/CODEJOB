@@ -5,6 +5,7 @@ import html
 import json
 import logging
 import mimetypes
+import os
 import re
 import threading
 from dataclasses import dataclass
@@ -118,6 +119,13 @@ def _load_credentials() -> Credentials:
         _ensure_token_parent()
         token_path.write_text(creds.to_json(), encoding="utf-8")
         return creds
+
+    if "PYTEST_CURRENT_TEST" in os.environ:
+        raise RuntimeError(
+            "Gmail OAuth would require an interactive browser flow here, which hangs "
+            "under pytest (no cached/refreshable token). The calling function needs "
+            "to be mocked in this test instead of reaching _load_credentials()."
+        )
 
     global _oauth_last_authorization_url
     flow = InstalledAppFlow.from_client_config(_credentials_payload(), SCOPES)

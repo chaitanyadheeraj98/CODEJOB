@@ -11,3 +11,7 @@ wheels/
 
 # Environment files
 .env*
+
+# pytest caches
+.pytest_cache/
+.testmondata*

@@ -225,6 +225,7 @@ class EmailTrackingInboxTests(unittest.TestCase):
             main.list_unread_candidates_by_query,
             main.classify_email_intent,
             main.mark_reply_processed,
+            main.list_thread_messages,
         )
         marked: list[str] = []
         try:
@@ -236,6 +237,9 @@ class EmailTrackingInboxTests(unittest.TestCase):
                 AssertionError("reply reached JD intent classification")
             )
             main.mark_reply_processed = lambda message_id, _labels=None: marked.append(message_id)
+            # Reply is matched via the unread-search + in_reply_to_header path above, not the
+            # per-thread rescan - this stubs that second scan path out so it doesn't reach Gmail.
+            main.list_thread_messages = lambda thread_id: []
             main.orchestration_service = None
             response = self.client.post("/gmail/sync")
         finally:
@@ -244,6 +248,7 @@ class EmailTrackingInboxTests(unittest.TestCase):
                 main.list_unread_candidates_by_query,
                 main.classify_email_intent,
                 main.mark_reply_processed,
+                main.list_thread_messages,
             ) = originals
             main.orchestration_service = None
 
@@ -307,15 +312,26 @@ class EmailTrackingInboxTests(unittest.TestCase):
             "delivered_to": "",
             "mailing_list": "",
         }
-        originals = (main.is_gmail_configured, main.list_unread_candidates_by_query, main.list_thread_messages)
+        originals = (
+            main.is_gmail_configured,
+            main.list_unread_candidates_by_query,
+            main.list_thread_messages,
+            main.mark_reply_processed,
+        )
         try:
             main.is_gmail_configured = lambda: True
             main.list_unread_candidates_by_query = lambda query, **_kwargs: []
             main.list_thread_messages = lambda thread_id: [self_sent_item] if thread_id == "thread-123" else []
+            main.mark_reply_processed = lambda message_id, _labels=None: None
             main.orchestration_service = None
             response = self.client.post("/inbox/conversations/refresh")
         finally:
-            main.is_gmail_configured, main.list_unread_candidates_by_query, main.list_thread_messages = originals
+            (
+                main.is_gmail_configured,
+                main.list_unread_candidates_by_query,
+                main.list_thread_messages,
+                main.mark_reply_processed,
+            ) = originals
             main.orchestration_service = None
 
         self.assertEqual(response.status_code, 200, response.text)

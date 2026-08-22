@@ -2257,6 +2257,10 @@ button.emailSearchResult:focus-visible {
   background: transparent;
 }
 
+.conversationListItemWrap {
+  position: relative;
+}
+
 .inboxSection .conversationListItem {
   display: flex;
   flex-direction: column;
@@ -2267,10 +2271,38 @@ button.emailSearchResult:focus-visible {
   border: 1px solid var(--inbox-border);
   border-left: 4px solid transparent;
   border-radius: 12px;
-  padding: 13px 12px 13px 10px;
+  padding: 13px 32px 13px 10px;
   background: var(--inbox-surface);
   color: inherit;
   text-align: left;
+}
+
+.conversationGmailLink {
+  display: inline-grid;
+  position: absolute;
+  top: 10px;
+  right: 8px;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border-radius: 999px;
+  color: var(--inbox-muted);
+}
+
+.conversationGmailLink:hover,
+.conversationGmailLink:focus-visible {
+  background: #eef4ff;
+  color: var(--inbox-avatar-ink);
+}
+
+.conversationGmailLink svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .inboxSection .conversationListItem:not(.active):hover {
