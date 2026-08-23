@@ -9,7 +9,15 @@ from sqlalchemy.pool import StaticPool
 
 from app.db import Base
 from app.external_feeds.models import ExternalFeedSource, ExternalOpportunity
-from app.models import NumberReviewQueue, PremiumNumberContact, PremiumNumberLead, RecruiterEmail, RecruiterOpportunity
+from app.models import (
+    NumberReviewQueue,
+    OpportunityLifecycleEvent,
+    OpportunityLineage,
+    PremiumNumberContact,
+    PremiumNumberLead,
+    RecruiterEmail,
+    RecruiterOpportunity,
+)
 from app.premium_numbers.extraction import ExtractedContactGroup
 from app.services.phone_intelligence_workflow_service import (
     JobMetadataAiExtraction,
@@ -164,6 +172,16 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
             self.assertEqual(active.extraction_source, "legacy_snapshot")
             self.assertEqual(contact.recruiter_name, "Legacy Name")
             self.assertEqual(db.query(RecruiterOpportunity).count(), 1)
+            opportunity = db.query(RecruiterOpportunity).one()
+            lineage = db.query(OpportunityLineage).one()
+            self.assertEqual(lineage.recruiter_opportunity_id, opportunity.id)
+            self.assertEqual(lineage.origin_type, "gmail")
+            self.assertEqual(
+                db.query(OpportunityLifecycleEvent)
+                .filter_by(lineage_id=lineage.id, event_type="ingested")
+                .count(),
+                1,
+            )
 
     def test_legacy_snapshot_created_on_first_new_version(self) -> None:
         """temp122.md `## 7. Workstream D` cutover behavior: the first new-model
@@ -267,6 +285,11 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
             self.assertIsNone(review.source_email_id)
             self.assertEqual(review.source_external_opportunity_id, item.id)
             self.assertEqual(review.contact_email, "row2@agency.example")
+            self.assertIsNotNone(review.lineage_id)
+            lineage = db.get(OpportunityLineage, review.lineage_id)
+            self.assertIsNotNone(lineage)
+            self.assertEqual(lineage.origin_type, "nvoids")
+            self.assertIsNone(lineage.recruiter_opportunity_id)
             version = db.get(PremiumNumberLead, review.source_lead_id)
             self.assertEqual(version.contact_email, "row2@agency.example")
             self.assertEqual(db.query(PremiumNumberContact).count(), 0)
@@ -286,6 +309,7 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
 
             self.assertEqual(db.query(PremiumNumberLead).count(), 2)
             self.assertEqual(db.query(NumberReviewQueue).count(), 2)
+            self.assertEqual(db.query(OpportunityLineage).count(), 2)
 
     def test_refresh_nvoids_opportunity_metadata_updates_existing_card(self) -> None:
         # capture_premium_numbers_for_nvoids only writes job-metadata fields once, at first

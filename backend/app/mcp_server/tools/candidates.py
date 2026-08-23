@@ -56,6 +56,7 @@ def _parse_date(value: str) -> date | None:
 def _summary(row: RecruiterEmail) -> dict[str, object]:
     return {
         "id": row.id,
+        "record_id": row.record_id,
         "state": row.state,
         "score": row.score,
         "ats_score": row.ats_score,

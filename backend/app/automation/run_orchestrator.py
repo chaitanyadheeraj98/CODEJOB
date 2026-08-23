@@ -18,7 +18,7 @@ from app.phase0 import jd_entity_fields_from_parsed
 from app.parsing.document_extraction import prepare_gmail_parse_body
 from app.recent_runs import SkippedItemRecord
 from app.routing import RoutingDecision
-from app.services import policy_service
+from app.services import opportunity_lineage_service, policy_service
 from app.services.gmail_group_source_service import ConfiguredRequirementGroup, resolve_trusted_group_context
 from app.services.candidate_screening_service import CandidateScreeningService, apply_screening_decision
 from app.services.requirement_expansion_service import RequirementExpansionService
@@ -667,7 +667,7 @@ class RunOrchestrator:
     ) -> RecruiterEmail:
         if existing:
             return existing
-        return RecruiterEmail(
+        email = RecruiterEmail(
             owner_id=request.owner_id,
             sender=str(item["sender"]),
             subject=str(item["subject"]),
@@ -686,6 +686,12 @@ class RunOrchestrator:
             recipient_email=item.get("recipient_email"),
             parser_details_json=parser_details_json,
         )
+        if email.record_id is None:
+            candidate_record = opportunity_lineage_service.create_candidate_record(
+                request.db, owner_id=request.owner_id, origin_type="gmail"
+            )
+            email.record_id = candidate_record.id
+        return email
 
     def _commit_email_phase(
         self,

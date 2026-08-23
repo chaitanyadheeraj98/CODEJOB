@@ -1253,6 +1253,7 @@ export function JobIntentLearningSection({
 
 type Candidate = {
   id: number
+  record_id?: string | null
   subject: string
   sender: string
   body: string
@@ -6310,7 +6311,7 @@ function App() {
                 data-email-search-section="needs_review"
                 data-email-search-related-id={item.id}
               >
-                <p><strong>Email ID:</strong> {item.id}</p>
+                <p><strong>Record ID:</strong> {item.record_id ?? '-'}</p>
                 {item.is_multi_role_child ? (
                   <p><strong>Requirement:</strong> {item.requirement_index ?? '-'} of {item.requirement_count ?? '-'}</p>
                 ) : null}
@@ -6490,7 +6491,7 @@ function App() {
                 data-email-search-section="failed_mapping"
                 data-email-search-related-id={item.id}
               >
-                <p><strong>Email ID:</strong> {item.id}</p>
+                <p><strong>Record ID:</strong> {item.record_id ?? '-'}</p>
                 <p><strong>From:</strong> {item.sender}</p>
                 <p><strong>Subject:</strong> {item.subject}</p>
                 {openUrl ? (
@@ -6971,7 +6972,7 @@ function App() {
               >
                 <div className="sentItemHeader">
                   <div className="sentItemHeaderText">
-                    <p><strong>Email ID:</strong> {item.id}</p>
+                    <p><strong>Record ID:</strong> {item.record_id ?? '-'}</p>
                     <p><strong>From:</strong> {item.sender}</p>
                     <p><strong>Subject:</strong> {item.subject}</p>
                     <p><strong>Sent at:</strong> {item.sent_at ? new Date(item.sent_at).toLocaleString() : '-'}</p>

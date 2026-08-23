@@ -626,6 +626,7 @@ class EmailResponse(BaseModel):
     sent_at: datetime | None
     gmail_sent_id: str | None
     last_error: str | None
+    record_id: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -1041,6 +1042,7 @@ class RecruiterOpportunityResponse(BaseModel):
     source_url: str | None = None
     external_opportunity_id: int | None = None
     email_id: int | None = None
+    record_id: str | None = None
     email_subject: str
     email_sender: str
     gmail_open_url: str

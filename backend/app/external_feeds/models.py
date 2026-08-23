@@ -54,6 +54,12 @@ class ExternalOpportunity(Base):
     ingested_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
     bridge_status: Mapped[str] = mapped_column(String(40), default="pending")
     bridge_target_opportunity_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    record_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("candidate_records.id", name="fk_external_opportunities_record"),
+        nullable=True,
+        index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
 

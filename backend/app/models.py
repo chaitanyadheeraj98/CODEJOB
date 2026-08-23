@@ -125,6 +125,12 @@ class RecruiterEmail(Base):
     open_count: Mapped[int] = mapped_column(Integer, default=0)
     sent_attachment_file_names_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    record_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("candidate_records.id", name="fk_recruiter_emails_record"),
+        nullable=True,
+        index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
 
@@ -705,6 +711,12 @@ class RecruiterOpportunity(Base):
     job_confidence: Mapped[str] = mapped_column(String(20), default="unknown")
     cold_call_script: Mapped[str | None] = mapped_column(Text, nullable=True)
     cold_call_script_updated_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    record_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("candidate_records.id", name="fk_recruiter_opportunities_record"),
+        nullable=True,
+        index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
 
@@ -881,6 +893,21 @@ class NumberReviewQueue(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    lineage_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey(
+            "opportunity_lineages.id",
+            name="fk_number_review_queue_lineage",
+        ),
+        nullable=True,
+        index=True,
+    )
+    record_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("candidate_records.id", name="fk_number_review_queue_record"),
+        nullable=True,
+        index=True,
+    )
     source_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     source_external_opportunity_id: Mapped[int | None] = mapped_column(
         Integer,
@@ -930,6 +957,104 @@ class ProductivityEvent(Base):
     weight: Mapped[float] = mapped_column(Float, default=0.0)
     metadata_json: Mapped[str] = mapped_column(Text, default="{}")
     occurred_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+
+
+class OpportunityLineage(Base):
+    __tablename__ = "opportunity_lineages"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    origin_type: Mapped[str] = mapped_column(String(20), index=True)
+    recruiter_opportunity_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey(
+            "recruiter_opportunities.id",
+            name="fk_opportunity_lineage_recruiter_opportunity",
+        ),
+        unique=True,
+        index=True,
+        nullable=True,
+    )
+    current_status: Mapped[str] = mapped_column(String(20), default="active")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    # This is the current closure timestamp and is reset on reopen. The full
+    # close/reopen history remains append-only in OpportunityLifecycleEvent.
+    closed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+
+class OpportunitySourceReference(Base):
+    __tablename__ = "opportunity_source_references"
+    __table_args__ = (
+        UniqueConstraint(
+            "lineage_id",
+            "source_type",
+            "external_id",
+            name="ux_opportunity_source_reference",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    lineage_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey(
+            "opportunity_lineages.id",
+            name="fk_source_reference_lineage",
+        ),
+        index=True,
+    )
+    source_type: Mapped[str] = mapped_column(String(20), index=True)
+    external_id: Mapped[str] = mapped_column(String(255))
+    source_url: Mapped[str] = mapped_column(String(1200), default="")
+    first_seen_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    last_seen_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
+
+
+class OpportunityLifecycleEvent(Base):
+    __tablename__ = "opportunity_lifecycle_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    lineage_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey(
+            "opportunity_lineages.id",
+            name="fk_lifecycle_event_lineage",
+        ),
+        index=True,
+    )
+    event_type: Mapped[str] = mapped_column(String(40), index=True)
+    occurred_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, index=True)
+    actor: Mapped[str] = mapped_column(String(20), default="system")
+    process_name: Mapped[str] = mapped_column(String(60), default="")
+    related_record_type: Mapped[str] = mapped_column(String(40), default="")
+    related_record_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    note: Mapped[str] = mapped_column(Text, default="")
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+
+
+class CandidateRecord(Base):
+    """Permanent, user-facing identity for a candidate, minted at the same two anchor
+    points as OpportunityLineage (RecruiterEmail for Gmail, ExternalOpportunity for
+    Nvoids) but independent of whether the candidate ever becomes an opportunity.
+    Status is always resolved through the owning RecruiterEmail/ExternalOpportunity row
+    or, once linked, through OpportunityLineage - this table is identity + link only.
+    """
+
+    __tablename__ = "candidate_records"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    origin_type: Mapped[str] = mapped_column(String(20), index=True)
+    internal_lineage_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("opportunity_lineages.id", name="fk_candidate_record_lineage"),
+        unique=True,
+        index=True,
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
 
 

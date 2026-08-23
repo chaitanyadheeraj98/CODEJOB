@@ -10,6 +10,7 @@ from app.mcp_server.tools.external_feed import list_external_opportunities
 from app.mcp_server.tools.help import get_app_help
 from app.mcp_server.tools.inbox import get_conversation, get_recruiter_replies, list_conversations
 from app.mcp_server.tools.premium_numbers import (
+    get_record_details,
     list_contact_numbers,
     list_recruiter_opportunities,
     propose_create_premium_contact,
@@ -27,6 +28,7 @@ __all__ = [
     "get_conversation",
     "get_draft_status",
     "get_recent_runs",
+    "get_record_details",
     "get_resume",
     "get_recruiter_replies",
     "get_run_items",

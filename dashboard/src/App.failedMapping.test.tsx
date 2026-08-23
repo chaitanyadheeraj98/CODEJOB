@@ -36,6 +36,7 @@ describe('Failed Mapping delete flow', () => {
     let failedItems = [
       {
         id: 101,
+        record_id: 'record-failed-101',
         owner_id: 'default-owner',
         sender: 'Recruiter <recruiter@example.com>',
         subject: 'Needs routing help',
@@ -269,6 +270,8 @@ describe('Failed Mapping delete flow', () => {
     })
 
     expect(container.textContent ?? '').toContain('Failed Recipient Mapping (Teach the model)')
+    expect(container.textContent ?? '').toContain('Record ID:')
+    expect(container.textContent ?? '').toContain('record-failed-101')
     expect(container.textContent ?? '').toContain('Delete')
     const nvoidsLink = Array.from(container.querySelectorAll('a')).find(
       (link) => link.textContent === 'Open Original Post',

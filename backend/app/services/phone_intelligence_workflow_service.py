@@ -18,6 +18,7 @@ from app.parsing.jd_requirements import extract_work_authorizations
 from app.phase0 import email_domain
 from app.premium_numbers.domain_guard import employer_domains_for_owner
 from app.premium_numbers.extraction import ExtractedContactGroup, extract_phone_leads
+from app.services import opportunity_lineage_service
 
 
 EMAIL_LOCAL_PART_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9._-]*$")
@@ -421,11 +422,50 @@ class PhoneIntelligenceWorkflowService:
                         if point.existing_opportunity:
                             opportunity_existing += 1
                         else:
-                            self._create_opportunity(
+                            opportunity = self._create_opportunity(
                                 db,
                                 context.owner_id,
                                 self._build_snapshot(contact.id, context, lead),
                             )
+                            source_type = "nvoids" if context.source == "nvoids" else "gmail"
+                            source_row_id = (
+                                context.external_opportunity_row_id
+                                if source_type == "nvoids"
+                                else context.recruiter_email_row_id
+                            )
+                            record_id = opportunity_lineage_service.resolve_record_id(
+                                db,
+                                owner_id=context.owner_id,
+                                source_type=source_type,
+                                external_id=str(source_row_id) if source_row_id is not None else "",
+                            )
+                            opportunity.record_id = record_id
+                            if point.existing_review and point.existing_review.lineage_id:
+                                opportunity_lineage_service.attach_recruiter_opportunity(
+                                    db,
+                                    lineage_id=point.existing_review.lineage_id,
+                                    recruiter_opportunity_id=opportunity.id,
+                                    process_name="phone_intelligence_workflow",
+                                )
+                                opportunity_lineage_service.link_record_to_lineage(
+                                    db, record_id=record_id, lineage_id=point.existing_review.lineage_id
+                                )
+                            else:
+                                lineage = opportunity_lineage_service.create_lineage(
+                                    db,
+                                    owner_id=context.owner_id,
+                                    origin_type=source_type,
+                                    source_type=source_type,
+                                    external_id=str(source_row_id) if source_row_id is not None else "",
+                                    source_url=context.open_url,
+                                    process_name="phone_intelligence_workflow",
+                                    recruiter_opportunity_id=opportunity.id,
+                                )
+                                if point.existing_review:
+                                    point.existing_review.lineage_id = lineage.id
+                                opportunity_lineage_service.link_record_to_lineage(
+                                    db, record_id=record_id, lineage_id=lineage.id
+                                )
                             opportunity_created += 1
                     else:
                         employer_matches += 1
@@ -437,9 +477,35 @@ class PhoneIntelligenceWorkflowService:
                 if point.existing_review:
                     continue
 
+                source_type = "nvoids" if context.source == "nvoids" else "gmail"
+                source_row_id = (
+                    context.external_opportunity_row_id
+                    if source_type == "nvoids"
+                    else context.recruiter_email_row_id
+                )
+                record_id = opportunity_lineage_service.resolve_record_id(
+                    db,
+                    owner_id=context.owner_id,
+                    source_type=source_type,
+                    external_id=str(source_row_id) if source_row_id is not None else "",
+                )
+                lineage = opportunity_lineage_service.create_lineage(
+                    db,
+                    owner_id=context.owner_id,
+                    origin_type=source_type,
+                    source_type=source_type,
+                    external_id=str(source_row_id) if source_row_id is not None else "",
+                    source_url=context.open_url,
+                    process_name="phone_intelligence_workflow",
+                )
+                opportunity_lineage_service.link_record_to_lineage(
+                    db, record_id=record_id, lineage_id=lineage.id
+                )
                 db.add(
                     NumberReviewQueue(
                         owner_id=context.owner_id,
+                        lineage_id=lineage.id,
+                        record_id=record_id,
                         source_email_id=context.recruiter_email_row_id,
                         source_external_opportunity_id=context.external_opportunity_row_id,
                         source_lead_id=version.id if version else None,

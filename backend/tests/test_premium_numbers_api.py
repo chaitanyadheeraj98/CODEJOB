@@ -13,8 +13,18 @@ from sqlalchemy.pool import StaticPool
 
 from app import main
 from app.db import Base
-from app.models import NumberReviewQueue, PremiumNumberContact, PremiumNumberLead, RecruiterEmail, RecruiterOpportunity, UserSettings
+from app.models import (
+    NumberReviewQueue,
+    OpportunityLifecycleEvent,
+    OpportunityLineage,
+    PremiumNumberContact,
+    PremiumNumberLead,
+    RecruiterEmail,
+    RecruiterOpportunity,
+    UserSettings,
+)
 from app.premium_numbers.extraction import ExtractedContactGroup
+from app.services import opportunity_lineage_service
 
 
 def RecruiterNumber(**values):
@@ -213,9 +223,19 @@ class PremiumNumbersApiTests(unittest.TestCase):
             db.add(email)
             db.commit()
             db.refresh(email)
+            lineage = opportunity_lineage_service.create_lineage(
+                db,
+                owner_id=main.settings.owner_id,
+                origin_type="gmail",
+                source_type="gmail",
+                external_id=str(email.id),
+                source_url=email.gmail_message_url or "",
+                process_name="phone_intelligence_workflow",
+            )
             db.add(
                 NumberReviewQueue(
                     owner_id=main.settings.owner_id,
+                    lineage_id=lineage.id,
                     source_email_id=email.id,
                     normalized_phone_number="+12143938746",
                     display_phone_number="+1 214 393 8746",
@@ -247,6 +267,18 @@ class PremiumNumbersApiTests(unittest.TestCase):
         self.assertEqual(payload["items"][0]["recruiter_phone_display"], "(214) 393-8746")
         self.assertEqual(payload["items"][0]["recruiter_name"], "Dharma Veer")
         self.assertEqual(payload["items"][0]["recruiter_email"], "dharma.veer@intellisoft.com")
+        with Session(self.engine) as db:
+            card = db.get(NumberReviewQueue, review_id)
+            opportunity = db.query(RecruiterOpportunity).one()
+            lineage = db.query(OpportunityLineage).one()
+            self.assertEqual(card.lineage_id, lineage.id)
+            self.assertEqual(lineage.recruiter_opportunity_id, opportunity.id)
+            self.assertEqual(
+                db.query(OpportunityLifecycleEvent)
+                .filter_by(lineage_id=lineage.id, event_type="promoted")
+                .count(),
+                1,
+            )
 
     def test_mark_number_as_recruiter_derives_name_and_company_from_email_when_unknown(self) -> None:
         now = datetime.now(UTC)
@@ -400,10 +432,22 @@ class PremiumNumbersApiTests(unittest.TestCase):
                 notes="",
             )
             db.add(opportunity)
+            db.flush()
+            lineage = opportunity_lineage_service.create_lineage(
+                db,
+                owner_id=main.settings.owner_id,
+                origin_type="gmail",
+                source_type="gmail",
+                external_id="",
+                source_url="",
+                process_name="test_fixture",
+                recruiter_opportunity_id=opportunity.id,
+            )
             db.commit()
             db.refresh(opportunity)
             opportunity_id = opportunity.id
             recruiter_id = recruiter.id
+            lineage_id = lineage.id
 
         response = self.client.delete(f"/recruiter-opportunities/{opportunity_id}")
         self.assertEqual(response.status_code, 200, response.text)
@@ -417,6 +461,16 @@ class PremiumNumbersApiTests(unittest.TestCase):
             self.assertIsNone(remaining_opp)
             remaining_recruiter = db.query(PremiumNumberContact).filter(PremiumNumberContact.id == recruiter_id).first()
             self.assertIsNone(remaining_recruiter)
+            lineage = db.get(OpportunityLineage, lineage_id)
+            self.assertIsNone(lineage.recruiter_opportunity_id)
+            self.assertEqual(lineage.current_status, "closed")
+            self.assertIsNotNone(lineage.closed_at)
+            self.assertEqual(
+                db.query(OpportunityLifecycleEvent)
+                .filter_by(lineage_id=lineage_id, event_type="deleted")
+                .count(),
+                1,
+            )
 
     def test_delete_recruiter_opportunity_keeps_recruiter_when_other_opportunities_exist(self) -> None:
         with Session(self.engine) as db:
@@ -1504,8 +1558,20 @@ class PremiumNumbersApiTests(unittest.TestCase):
                 notes="",
             )
             db.add(opportunity)
+            db.flush()
+            lineage = opportunity_lineage_service.create_lineage(
+                db,
+                owner_id=main.settings.owner_id,
+                origin_type="gmail",
+                source_type="gmail",
+                external_id="",
+                source_url="",
+                process_name="test_fixture",
+                recruiter_opportunity_id=opportunity.id,
+            )
             db.commit()
             opportunity_id = opportunity.id
+            lineage_id = lineage.id
 
         response = self.client.patch(
             f"/recruiter-opportunities/{opportunity_id}",
@@ -1517,6 +1583,7 @@ class PremiumNumbersApiTests(unittest.TestCase):
                 "end_client": "New Client",
                 "domain": "Healthcare",
                 "extracted_skills": "Python, AWS",
+                "status": "Closed",
             },
         )
         self.assertEqual(response.status_code, 200, response.text)
@@ -1525,6 +1592,17 @@ class PremiumNumbersApiTests(unittest.TestCase):
         self.assertEqual(payload["end_client"], "New Client")
         self.assertEqual(payload["prime_vendor"], "Prime Co")
         self.assertEqual(payload["linkedin_url"], "https://linkedin.com/in/recruiter")
+        with Session(self.engine) as db:
+            lineage = db.get(OpportunityLineage, lineage_id)
+            self.assertEqual(lineage.current_status, "closed")
+            self.assertIsNotNone(lineage.closed_at)
+            event = (
+                db.query(OpportunityLifecycleEvent)
+                .filter_by(lineage_id=lineage_id, event_type="status_changed")
+                .one()
+            )
+            self.assertEqual(event.process_name, "main_api")
+            self.assertIn('"to":"Closed"', event.metadata_json)
 
     def test_bulk_rescore_calls_shared_workflow_once_per_source_email(self) -> None:
         with Session(self.engine) as db:

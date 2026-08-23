@@ -27,7 +27,7 @@ from app.automation import RunOrchestrator, RunOrchestratorDependencies, RunOrch
 from app.external_feeds.models import ExternalOpportunity
 from app.external_feeds.parser import parse_nvoids_detail
 from app.job_intent_learning import approved_learning_signals_for_owner, record_pending_job_intent_learning
-from app.services import application_intelligence_service, policy_service
+from app.services import application_intelligence_service, opportunity_lineage_service, policy_service
 from app.services.policy_service import EffectiveRunInputs
 from app.gmail_client import GmailMessageCandidate, MailAttachment
 from app.models import AttachmentAsset, DraftEditFeedback, EmailConversation, EmailReplyMessage, GmailRequirementGroup, RecipientRoutingFeedback, RecentRun, RecentRunSkippedItem, RecruiterEmail, ResumeAsset, SyncRun, UserSettings
@@ -668,6 +668,11 @@ class OrchestrationService:
                     apply_screening_decision(email, screening)
                     self.deps.apply_gmail_label_for_email(email=email, candidate_item=item)
                     db.add(email)
+                    if email.record_id is None:
+                        candidate_record = opportunity_lineage_service.create_candidate_record(
+                            db, owner_id=email.owner_id, origin_type="gmail"
+                        )
+                        email.record_id = candidate_record.id
                     imported_count += 1
                     report_item()
                     if manifest_result is not None:
@@ -859,6 +864,11 @@ class OrchestrationService:
                 if selected_resume and resume_embedding_json and selected_resume.semantic_embedding != resume_embedding_json:
                     selected_resume.semantic_embedding = resume_embedding_json
                 db.add(email)
+                if email.record_id is None:
+                    candidate_record = opportunity_lineage_service.create_candidate_record(
+                        db, owner_id=email.owner_id, origin_type="gmail"
+                    )
+                    email.record_id = candidate_record.id
                 imported_count += 1
                 report_item()
                 if manifest_result is not None:

@@ -96,6 +96,7 @@ export type RecruiterOpportunityCard = {
   source_url: string | null
   external_opportunity_id: number | null
   email_id: number | null
+  record_id: string | null
   email_subject: string
   email_sender: string
   gmail_open_url: string

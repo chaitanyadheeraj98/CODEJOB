@@ -43,7 +43,7 @@ from app.recent_runs import (
 )
 from app.routing import CcSelectionRequest, RoutingDecision, RoutingPolicyService
 from app.semantic.embeddings_service import generate_embedding
-from app.services import policy_service
+from app.services import opportunity_lineage_service, policy_service
 from app.services.candidate_runtime_service import CandidateRuntimeDeps, CandidateRuntimeService
 from app.services.candidate_screening_service import CandidateScreeningService, apply_screening_decision
 from app.services.scoring_runtime_service import ScoringRuntimeDeps, ScoringRuntimeService
@@ -473,6 +473,10 @@ class ExternalFeedService:
                     )
                     db.add(record)
                     db.flush()
+                    candidate_record = opportunity_lineage_service.create_candidate_record(
+                        db, owner_id=owner_id, origin_type="nvoids"
+                    )
+                    record.record_id = candidate_record.id
                     nvoids_ai_parsed, nvoids_ai_parser_details = self.compute_nvoids_ai_parse(
                         db,
                         owner_id=owner_id,
@@ -731,6 +735,20 @@ class ExternalFeedService:
                 continue
 
             for opportunity, _ext in nvoids_opportunities:
+                lineage = (
+                    opportunity_lineage_service.detach_recruiter_opportunity_for_deletion(
+                        db,
+                        owner_id=owner_id,
+                        recruiter_opportunity_id=opportunity.id,
+                        process_name="external_feed_service",
+                    )
+                )
+                if lineage is None:
+                    logger.warning(
+                        "Missing opportunity lineage for recruiter opportunity %s during "
+                        "Nvoids placeholder cleanup",
+                        opportunity.id,
+                    )
                 db.delete(opportunity)
                 deleted_placeholder_opportunities += 1
             db.flush()
@@ -1046,6 +1064,17 @@ class ExternalFeedService:
                 parser_details_json=json.dumps(parser_details, separators=(",", ":")),
             )
             apply_screening_decision(email, screening)
+            email.record_id = item.record_id
+            if email.record_id is None:
+                logger.warning(
+                    "nvoids_enqueue_missing_record_id external_post_id=%r item_id=%s",
+                    item.external_post_id,
+                    item.id,
+                )
+                candidate_record = opportunity_lineage_service.create_candidate_record(
+                    db, owner_id=owner_id, origin_type="nvoids"
+                )
+                email.record_id = candidate_record.id
             db.add(email)
             db.flush()
             return EnqueueResult(enqueued=True, candidate_email_id=email.id)
@@ -1228,6 +1257,17 @@ class ExternalFeedService:
             email.resume_file_name,
             email.draft_source,
         )
+        email.record_id = item.record_id
+        if email.record_id is None:
+            logger.warning(
+                "nvoids_enqueue_missing_record_id external_post_id=%r item_id=%s",
+                item.external_post_id,
+                item.id,
+            )
+            candidate_record = opportunity_lineage_service.create_candidate_record(
+                db, owner_id=owner_id, origin_type="nvoids"
+            )
+            email.record_id = candidate_record.id
         db.add(email)
         db.flush()
         return EnqueueResult(enqueued=True, candidate_email_id=email.id)

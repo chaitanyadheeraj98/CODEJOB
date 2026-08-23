@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from sqlalchemy.orm import Session
 
 from app.models import RecruiterEmail
+from app.services import opportunity_lineage_service
 from app.services.role_manifest_service import RoleManifestResult
 
 
@@ -134,6 +135,13 @@ class RequirementExpansionService:
                     requirement_key=requirement.requirement_key,
                 )
                 db.add(child)
+                db.flush()
+                child_record = opportunity_lineage_service.create_candidate_record(
+                    db,
+                    owner_id=parent.owner_id,
+                    origin_type="nvoids" if parent.source == "nvoids" else "gmail",
+                )
+                child.record_id = child_record.id
             elif child.state in TERMINAL_STATES:
                 child_ids.append(child.id)
                 continue

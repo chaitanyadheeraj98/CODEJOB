@@ -1,5 +1,6 @@
 import unittest
 from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
@@ -12,12 +13,15 @@ from app.models import (
     ApplicationInterview,
     ApplicationSuggestion,
     AttachmentAsset,
+    OpportunityLifecycleEvent,
+    OpportunitySourceReference,
     PremiumNumberContact,
+    ProductivityEvent,
     RecruiterOpportunity,
     RecruiterEmail,
     ResumeAsset,
 )
-from app.services import application_service
+from app.services import application_service, opportunity_lineage_service
 
 
 class ApplicationServiceTests(unittest.TestCase):
@@ -60,6 +64,17 @@ class ApplicationServiceTests(unittest.TestCase):
             end_client="Bank X",
         )
         db.add(opportunity)
+        db.flush()
+        opportunity_lineage_service.create_lineage(
+            db,
+            owner_id=owner_id,
+            origin_type="gmail",
+            source_type="gmail",
+            external_id="",
+            source_url="",
+            process_name="test_fixture",
+            recruiter_opportunity_id=opportunity.id,
+        )
         db.commit()
         return resume, opportunity
 
@@ -121,6 +136,19 @@ class ApplicationServiceTests(unittest.TestCase):
             )
             self.assertEqual(len(status_events), 4)
             self.assertIn('"from":"hired","to":"contacted"', status_events[-1].metadata_json)
+            lineage_status_events = (
+                db.query(OpportunityLifecycleEvent)
+                .filter(
+                    OpportunityLifecycleEvent.event_type == "status_changed",
+                    OpportunityLifecycleEvent.related_record_id == application.id,
+                )
+                .all()
+            )
+            self.assertEqual(len(lineage_status_events), 4)
+            self.assertEqual(
+                lineage_status_events[-1].process_name,
+                "application_service",
+            )
 
     def test_dashboard_summary_counts_owner_scoped_active_rows(self) -> None:
         now = datetime.now(UTC)
@@ -320,6 +348,20 @@ class ApplicationServiceTests(unittest.TestCase):
             )
             self.assertEqual(rtr.status, "confirmed")
             self.assertEqual(application.status, "rtr_confirmed")
+            application_service.expire_or_revoke_rtr(
+                db,
+                application,
+                rtr,
+                new_status="revoked",
+            )
+            self.assertEqual(rtr.status, "revoked")
+            db.flush()
+            lineage_event = (
+                db.query(OpportunityLifecycleEvent)
+                .filter_by(event_type="rtr_status_changed")
+                .one()
+            )
+            self.assertIn('"to":"revoked"', lineage_event.metadata_json)
 
             interview = application_service.add_interview(
                 db,
@@ -348,6 +390,55 @@ class ApplicationServiceTests(unittest.TestCase):
                 closed_reason_code="rate_mismatch",
             )
             self.assertEqual(application.closed_reason_code, "rate_mismatch")
+
+    def test_attach_source_reference_integrity_race_preserves_outer_transaction(self) -> None:
+        with Session(self.engine) as db:
+            email = RecruiterEmail(
+                owner_id="owner",
+                sender="source@example.com",
+                subject="Role",
+                body="Body",
+                external_message_id="source-race",
+            )
+            db.add(email)
+            db.flush()
+            lineage = opportunity_lineage_service.create_lineage(
+                db,
+                owner_id="owner",
+                origin_type="gmail",
+                source_type="gmail",
+                external_id=str(email.id),
+                source_url="https://mail.example/source",
+                process_name="test",
+            )
+            db.flush()
+            existing = db.query(OpportunitySourceReference).one()
+            outer_event = ProductivityEvent(
+                owner_id="owner",
+                event_type="outer_transaction_survives",
+            )
+            db.add(outer_event)
+
+            with patch.object(
+                opportunity_lineage_service,
+                "_source_reference",
+                side_effect=[None, existing],
+            ):
+                returned = opportunity_lineage_service.attach_source_reference(
+                    db,
+                    lineage_id=lineage.id,
+                    source_type="gmail",
+                    external_id=str(email.id),
+                    source_url="https://mail.example/new-source",
+                )
+            db.commit()
+
+            self.assertEqual(returned.id, existing.id)
+            self.assertEqual(
+                db.query(OpportunitySourceReference).count(),
+                1,
+            )
+            self.assertIsNotNone(db.get(ProductivityEvent, outer_event.id))
 
     def test_accept_and_dismiss_application_suggestions(self) -> None:
         with Session(self.engine) as db:

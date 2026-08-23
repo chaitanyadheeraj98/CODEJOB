@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from datetime import UTC, datetime, timedelta
 
@@ -25,6 +26,10 @@ from app.models import (
     ResumeAsset,
     utc_now,
 )
+from app.services import opportunity_lineage_service
+
+
+logger = logging.getLogger(__name__)
 
 
 APPLICATION_EVENT_TYPE_VALUES = (
@@ -37,6 +42,7 @@ APPLICATION_EVENT_TYPE_VALUES = (
     "duplicate_override",
     "recruiter_replied",
     "outreach_sent",
+    "rtr_status_changed",
 )
 APPLICATION_EVENT_SOURCE_VALUES = ("user", "system")
 WAITING_ON_RECRUITER_STATUS_VALUES = (
@@ -235,6 +241,32 @@ def append_event(
         created_at=now,
     )
     db.add(event)
+    lineage = opportunity_lineage_service.get_lineage_for_opportunity(
+        db,
+        owner_id=application.owner_id,
+        recruiter_opportunity_id=application.recruiter_opportunity_id,
+    )
+    if lineage is None:
+        logger.warning(
+            "Missing opportunity lineage for application %s and recruiter opportunity %s",
+            application.id,
+            application.recruiter_opportunity_id,
+        )
+    else:
+        lineage_metadata = dict(metadata or {})
+        if linked_recruiter_email_id is not None:
+            lineage_metadata.setdefault("linked_recruiter_email_id", linked_recruiter_email_id)
+        opportunity_lineage_service.record_event(
+            db,
+            lineage_id=lineage.id,
+            event_type=event_type,
+            actor=event_source,
+            process_name="application_service",
+            related_record_type="Application",
+            related_record_id=application.id,
+            note=note,
+            metadata=lineage_metadata,
+        )
     if event_type in {"email_linked", "call_note"}:
         application.last_contact_at = now
     return event
@@ -371,11 +403,23 @@ def confirm_rtr(
     return rtr
 
 
-def expire_or_revoke_rtr(db: Session, rtr: ApplicationRTR, *, new_status: str) -> ApplicationRTR:
+def expire_or_revoke_rtr(
+    db: Session,
+    application: Application,
+    rtr: ApplicationRTR,
+    *,
+    new_status: str,
+) -> ApplicationRTR:
     if new_status not in {"expired", "revoked"}:
         raise ApplicationValidationError("RTR status must be expired or revoked")
     rtr.status = new_status
     rtr.updated_at = utc_now()
+    append_event(
+        db,
+        application,
+        event_type="rtr_status_changed",
+        metadata={"rtr_id": rtr.id, "to": new_status},
+    )
     return rtr
 
 

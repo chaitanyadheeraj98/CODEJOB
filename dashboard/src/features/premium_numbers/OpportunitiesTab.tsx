@@ -259,7 +259,7 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
               <p><strong>Email Sender:</strong> {item.email_sender || '--'}</p>
               <p><strong>Phone:</strong> {item.recruiter_phone_display || '--'}</p>
               <p><strong>Subject:</strong> {item.email_subject || '--'}</p>
-              <p><strong>Email ID:</strong> {item.email_id ?? '--'}</p>
+              <p><strong>Record ID:</strong> {item.record_id ?? '--'}</p>
             </div>
             <div className="detailFormGrid">
               {EDITABLE_FIELDS.map(([field, label]) => (

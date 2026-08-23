@@ -90,6 +90,7 @@ from app.models import (
     ResumeAsset,
     SyncRun,
     UserSettings,
+    utc_now,
 )
 from app.models import RecipientRoutingFeedback
 from app.parsing import build_skills_json_payload
@@ -172,6 +173,7 @@ from app.services import (
     application_outreach_service,
     application_service,
     email_lookup_service,
+    opportunity_lineage_service,
     policy_service,
 )
 from app.services.auto_runner_service import AutoRunnerService
@@ -3777,6 +3779,7 @@ def gmail_labeling_preview(payload: GmailLabelingPreviewRequest) -> GmailLabelin
 def _recruiter_opportunity_response(
     row: RecruiterOpportunity,
     recruiter: PremiumNumberContact | None,
+    record_id: str | None = None,
 ) -> RecruiterOpportunityResponse:
     return RecruiterOpportunityResponse(
         id=row.id,
@@ -3787,6 +3790,7 @@ def _recruiter_opportunity_response(
         source_url=row.source_url,
         external_opportunity_id=row.external_opportunity_id,
         email_id=row.source_email_id or row.external_opportunity_id,
+        record_id=record_id,
         email_subject=row.email_subject,
         email_sender=row.email_sender,
         gmail_open_url=row.gmail_open_url,
@@ -4004,6 +4008,10 @@ def ingest_email(payload: IngestEmailRequest, db: Session = Depends(get_db)) -> 
         )
         apply_screening_decision(email, screening)
         db.add(email)
+        candidate_record = opportunity_lineage_service.create_candidate_record(
+            db, owner_id=email.owner_id, origin_type="gmail"
+        )
+        email.record_id = candidate_record.id
         db.commit()
         db.refresh(email)
         if user_settings.feature_role_manifest_enabled:
@@ -4114,6 +4122,10 @@ def ingest_email(payload: IngestEmailRequest, db: Session = Depends(get_db)) -> 
     if email.state == "needs_review":
         apply_resume_sendability(email)
     db.add(email)
+    candidate_record = opportunity_lineage_service.create_candidate_record(
+        db, owner_id=email.owner_id, origin_type="gmail"
+    )
+    email.record_id = candidate_record.id
     if selected_resume and resume_embedding_json and selected_resume.semantic_embedding != resume_embedding_json:
         selected_resume.semantic_embedding = resume_embedding_json
     db.commit()
@@ -4631,38 +4643,62 @@ def _ensure_review_opportunity(
     if exists:
         return
     is_nvoids = external is not None
-    db.add(
-        RecruiterOpportunity(
-            owner_id=settings.owner_id,
-            recruiter_number_id=contact.id,
-            source_email_id=card.source_email_id,
-            gmail_message_id=gmail_message_id,
-            source_type="nvoids" if is_nvoids else "gmail",
-            source_url=(external.source_url if external else card.gmail_open_url) or None,
-            external_opportunity_id=card.source_external_opportunity_id,
-            email_subject=card.email_subject,
-            email_sender=card.email_sender,
-            gmail_open_url=card.gmail_open_url,
-            received_at=(
-                external.posted_at
-                if external
-                else (email.gmail_received_at if email else datetime.now(UTC))
-            ),
-            job_title=(external.role if external else (email.role if email else card.email_subject)),
-            end_client=(external.company if external else (email.end_client if email else "")),
-            location=(external.location if external else (email.location if email else "")),
-            work_mode=external.work_mode if external else "",
-            visa_restrictions=external.visa_hints if external else "",
-            resume_file_name=(email.resume_file_name if email else "") or "",
-            implementation_partner=(email.implementation_partner if email else "") or "",
-            prime_vendor="",
-            domain=(email.domain if email else "") or "",
-            extracted_skills=(external.skills_text if external else (email.skills_text if email else "")),
-            evidence=card.evidence_snippet,
-            status="New",
-            notes="",
-        )
+    row = RecruiterOpportunity(
+        owner_id=settings.owner_id,
+        recruiter_number_id=contact.id,
+        source_email_id=card.source_email_id,
+        gmail_message_id=gmail_message_id,
+        source_type="nvoids" if is_nvoids else "gmail",
+        source_url=(external.source_url if external else card.gmail_open_url) or None,
+        external_opportunity_id=card.source_external_opportunity_id,
+        email_subject=card.email_subject,
+        email_sender=card.email_sender,
+        gmail_open_url=card.gmail_open_url,
+        received_at=(
+            external.posted_at
+            if external
+            else (email.gmail_received_at if email else datetime.now(UTC))
+        ),
+        job_title=(external.role if external else (email.role if email else card.email_subject)),
+        end_client=(external.company if external else (email.end_client if email else "")),
+        location=(external.location if external else (email.location if email else "")),
+        work_mode=external.work_mode if external else "",
+        visa_restrictions=external.visa_hints if external else "",
+        resume_file_name=(email.resume_file_name if email else "") or "",
+        implementation_partner=(email.implementation_partner if email else "") or "",
+        prime_vendor="",
+        domain=(email.domain if email else "") or "",
+        extracted_skills=(external.skills_text if external else (email.skills_text if email else "")),
+        evidence=card.evidence_snippet,
+        status="New",
+        notes="",
     )
+    db.add(row)
+    db.flush()
+    row.record_id = card.record_id
+    if card.lineage_id:
+        opportunity_lineage_service.attach_recruiter_opportunity(
+            db,
+            lineage_id=card.lineage_id,
+            recruiter_opportunity_id=row.id,
+        )
+    else:
+        source_type = "nvoids" if is_nvoids else "gmail"
+        source_row_id = card.source_external_opportunity_id if is_nvoids else card.source_email_id
+        lineage = opportunity_lineage_service.create_lineage(
+            db,
+            owner_id=settings.owner_id,
+            origin_type=source_type,
+            source_type=source_type,
+            external_id=str(source_row_id) if source_row_id is not None else "",
+            source_url=(external.source_url if external else card.gmail_open_url) or "",
+            process_name="main_api",
+            recruiter_opportunity_id=row.id,
+        )
+        card.lineage_id = lineage.id
+        opportunity_lineage_service.link_record_to_lineage(
+            db, record_id=card.record_id, lineage_id=lineage.id
+        )
 
 
 def _mark_number_as_recruiter(
@@ -5584,7 +5620,7 @@ def list_recruiter_opportunities(
     )
     recruiter_map = {row.id: row for row in recruiter_rows}
     items = [
-        _recruiter_opportunity_response(row, recruiter)
+        _recruiter_opportunity_response(row, recruiter, row.record_id)
         for row in rows
         for recruiter in [recruiter_map.get(row.recruiter_number_id)]
         if not is_hidden_nvoids_placeholder_recruiter(recruiter)
@@ -5767,7 +5803,35 @@ def patch_recruiter_opportunity(
     if payload.status is not None:
         if payload.status not in OPPORTUNITY_STATUS_VALUES:
             raise HTTPException(status_code=422, detail="Invalid opportunity status")
+        old_status = row.status
         row.status = payload.status
+        if payload.status != old_status:
+            lineage = opportunity_lineage_service.get_lineage_for_opportunity(
+                db,
+                owner_id=settings.owner_id,
+                recruiter_opportunity_id=row.id,
+            )
+            if lineage is None:
+                logger.warning(
+                    "Missing opportunity lineage for recruiter opportunity %s during status change",
+                    row.id,
+                )
+            else:
+                opportunity_lineage_service.record_event(
+                    db,
+                    lineage_id=lineage.id,
+                    event_type="status_changed",
+                    process_name="main_api",
+                    related_record_type="RecruiterOpportunity",
+                    related_record_id=row.id,
+                    metadata={"from": old_status, "to": payload.status},
+                )
+                if payload.status in {"Closed", "Not Interested"}:
+                    lineage.current_status = "closed"
+                    lineage.closed_at = utc_now()
+                else:
+                    lineage.current_status = "active"
+                    lineage.closed_at = None
     if payload.notes is not None:
         row.notes = payload.notes
     for field in (
@@ -5809,7 +5873,7 @@ def patch_recruiter_opportunity(
         )
         .first()
     )
-    return _recruiter_opportunity_response(row, recruiter)
+    return _recruiter_opportunity_response(row, recruiter, row.record_id)
 
 
 @app.delete("/recruiter-opportunities/{opportunity_id}", response_model=RecruiterOpportunityDeleteResponse)
@@ -5842,6 +5906,17 @@ def delete_recruiter_opportunity(
         )
 
     recruiter_number_id = row.recruiter_number_id
+    lineage = opportunity_lineage_service.detach_recruiter_opportunity_for_deletion(
+        db,
+        owner_id=settings.owner_id,
+        recruiter_opportunity_id=row.id,
+        process_name="main_api",
+    )
+    if lineage is None:
+        logger.warning(
+            "Missing opportunity lineage for recruiter opportunity %s during deletion",
+            row.id,
+        )
     db.delete(row)
     db.flush()
 
@@ -5961,7 +6036,7 @@ def generate_recruiter_opportunity_cold_call_script(
     row.cold_call_script_updated_at = datetime.now(UTC)
     db.commit()
     db.refresh(row)
-    return _recruiter_opportunity_response(row, recruiter)
+    return _recruiter_opportunity_response(row, recruiter, row.record_id)
 
 
 @app.post("/recruiter-opportunities/{opportunity_id}/refresh-ai-metadata", response_model=RecruiterOpportunityResponse)
@@ -6038,7 +6113,7 @@ def refresh_recruiter_opportunity_ai_metadata(
         )
         .first()
     )
-    return _recruiter_opportunity_response(row, recruiter)
+    return _recruiter_opportunity_response(row, recruiter, row.record_id)
 
 
 @app.post("/applications", response_model=ApplicationResponse, status_code=201)
@@ -6171,6 +6246,7 @@ def match_opportunities_for_resume(
                 opportunity=_recruiter_opportunity_response(
                     opportunities[match.opportunity_id],
                     recruiters.get(opportunities[match.opportunity_id].recruiter_number_id),
+                    opportunities[match.opportunity_id].record_id,
                 ),
                 score=match.score,
                 reasons=match.reasons,
@@ -6457,7 +6533,12 @@ def update_application_rtr(
                 proof_recruiter_email_id=payload.proof_recruiter_email_id,
             )
         else:
-            application_service.expire_or_revoke_rtr(db, rtr, new_status=payload.status)
+            application_service.expire_or_revoke_rtr(
+                db,
+                row,
+                rtr,
+                new_status=payload.status,
+            )
     except application_service.ApplicationReferenceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except application_service.ApplicationValidationError as exc:

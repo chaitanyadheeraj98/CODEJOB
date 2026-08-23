@@ -9,6 +9,7 @@ from app.mcp_server.tools import (
     get_conversation,
     get_draft_status,
     get_recent_runs,
+    get_record_details,
     get_resume,
     get_recruiter_replies,
     get_run_items,
@@ -49,6 +50,7 @@ BASE_TOOLS = (
     get_app_help,
     list_contact_numbers,
     list_recruiter_opportunities,
+    get_record_details,
     list_external_opportunities,
     get_resume,
 )

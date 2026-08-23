@@ -21,6 +21,7 @@ const opportunity: RecruiterOpportunityCard = {
   source_url: null,
   external_opportunity_id: null,
   email_id: 21,
+  record_id: '11111111-1111-1111-1111-111111111111',
   email_subject: 'Senior Java Developer',
   email_sender: 'priya@example.com',
   gmail_open_url: 'https://mail.google.test/21',

@@ -23,7 +23,22 @@ from app.external_feeds.parser import parse_nvoids_detail
 from app.external_feeds import service as external_feed_service_module
 from app.external_feeds.service import ExternalFeedService
 from app.external_feeds.models import ExternalFeedSource, ExternalOpportunity
-from app.models import AttachmentAsset, CustomSkillTaxonomyEntry, NumberReviewQueue, PremiumNumberContact, PremiumNumberLead, RecentRun, RecentRunSkippedItem, RecruiterEmail, RecruiterOpportunity, ResumeAsset, UserSettings
+from app.models import (
+    AttachmentAsset,
+    CustomSkillTaxonomyEntry,
+    NumberReviewQueue,
+    OpportunityLifecycleEvent,
+    OpportunityLineage,
+    PremiumNumberContact,
+    PremiumNumberLead,
+    RecentRun,
+    RecentRunSkippedItem,
+    RecruiterEmail,
+    RecruiterOpportunity,
+    ResumeAsset,
+    UserSettings,
+)
+from app.services import opportunity_lineage_service
 from app.services.role_manifest_service import RoleManifestService
 from role_manifest_fixtures import (
     REAL_NVOIDS_SIX_ROLE_MANIFEST,
@@ -208,6 +223,17 @@ class ExternalFeedsApiTests(unittest.TestCase):
                 status="New",
             )
             db.add(opportunity)
+            db.flush()
+            opportunity_lineage_service.create_lineage(
+                db,
+                owner_id=main.settings.owner_id,
+                origin_type="nvoids",
+                source_type="nvoids",
+                external_id=str(ext.id),
+                source_url=ext.source_url,
+                process_name="test_fixture",
+                recruiter_opportunity_id=opportunity.id,
+            )
             db.commit()
             return recruiter.id, opportunity.id, ext.id
 
@@ -3043,6 +3069,14 @@ Job ID: ENG-2"""
             company="Valid Co",
             external_phone="+1 214 555 0125",
         )
+        with self.SessionLocal() as db:
+            lineage = opportunity_lineage_service.get_lineage_for_opportunity(
+                db,
+                owner_id=main.settings.owner_id,
+                recruiter_opportunity_id=opportunity_id,
+            )
+            assert lineage is not None
+            lineage_id = lineage.id
 
         res = self.client.post("/external-feeds/nvoids/backfill-phones?limit=100")
         self.assertEqual(res.status_code, 200, res.text)
@@ -3057,6 +3091,15 @@ Job ID: ENG-2"""
             self.assertEqual(ext.recruiter_phone, "")
             self.assertIsNone(db.query(PremiumNumberContact).filter(PremiumNumberContact.id == recruiter_id).first())
             self.assertIsNone(db.query(RecruiterOpportunity).filter(RecruiterOpportunity.id == opportunity_id).first())
+            lineage = db.get(OpportunityLineage, lineage_id)
+            self.assertIsNone(lineage.recruiter_opportunity_id)
+            self.assertEqual(lineage.current_status, "closed")
+            self.assertEqual(
+                db.query(OpportunityLifecycleEvent)
+                .filter_by(lineage_id=lineage_id, event_type="deleted")
+                .count(),
+                1,
+            )
 
     def test_backfill_recovers_row_3_phone_and_routes_fallback_to_review(self) -> None:
         recruiter_id, opportunity_id, ext_id = self._seed_nvoids_placeholder_recruiter(

@@ -109,6 +109,7 @@ describe('Sent Items audit view', () => {
     stubAppFetch(
       {
         id: 99,
+        record_id: 'record-sent-99',
         owner_id: 'default-owner',
         sender: 'Recruiter <recruiter@example.com>',
         subject: 'Java Developer',
@@ -226,6 +227,9 @@ describe('Sent Items audit view', () => {
       sentItemsButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
       await Promise.resolve()
     })
+
+    expect(container.textContent ?? '').toContain('Record ID:')
+    expect(container.textContent ?? '').toContain('record-sent-99')
 
     const viewDetailsButton = Array.from(container.querySelectorAll('button')).find((button) =>
       button.textContent === 'View Details',
