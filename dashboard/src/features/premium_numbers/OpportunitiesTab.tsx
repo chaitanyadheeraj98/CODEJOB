@@ -48,6 +48,7 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
   const [trackingId, setTrackingId] = useState<number | null>(null)
   const [resumeOptions, setResumeOptions] = useState<ResumeAssetOption[]>([])
   const [selectedResumeId, setSelectedResumeId] = useState<number | null>(null)
+  const [trackingDedupeKey, setTrackingDedupeKey] = useState('')
   const [sortByMatch, setSortByMatch] = useState(false)
   const [matchesByOpportunity, setMatchesByOpportunity] = useState<Record<number, OpportunityMatch>>({})
   const requestIdRef = useRef(0)
@@ -173,6 +174,7 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
 
   const openResumePicker = async (opportunityId: number) => {
     setTrackingId(opportunityId)
+    setTrackingDedupeKey(crypto.randomUUID())
     setBusyId(opportunityId)
     setError('')
     try {
@@ -195,6 +197,7 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
       await createApplication(apiBase, {
         resume_asset_id: selectedResumeId,
         recruiter_opportunity_id: item.id,
+        dedupe_key: trackingDedupeKey,
       })
       setTrackingId(null)
       onToast('Application tracking started')

@@ -36,7 +36,7 @@ export class ApplicationDuplicateConflictError extends Error {
   }
 }
 
-async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
+export async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init)
   if (!response.ok) {
     const detail = await response.text().catch(() => '')
@@ -141,6 +141,8 @@ export function listApplications(args: {
   apiBase: string
   q: string
   status: 'all' | ApplicationStatus
+  resumeAssetId?: number | null
+  resumeSubmissionStatus?: ApplicationCard['resume_submission_status'] | 'all'
 }): Promise<ApplicationCard[]> {
   return listAll((cursor) => buildApplicationListUrl({ ...args, cursor }))
 }
@@ -150,9 +152,13 @@ export function buildApplicationListUrl(args: {
   cursor: number
   q: string
   status: 'all' | ApplicationStatus
+  resumeAssetId?: number | null
+  resumeSubmissionStatus?: ApplicationCard['resume_submission_status'] | 'all'
 }): string {
   const params = listParams(args.cursor, args.q)
   if (args.status !== 'all') params.set('status', args.status)
+  if (args.resumeAssetId != null) params.set('resume_asset_id', String(args.resumeAssetId))
+  if (args.resumeSubmissionStatus && args.resumeSubmissionStatus !== 'all') params.set('resume_submission_status', args.resumeSubmissionStatus)
   return `${args.apiBase}/applications?${params}`
 }
 
@@ -253,7 +259,7 @@ export function listAttachmentOptions(apiBase: string): Promise<AttachmentAssetO
 
 export function createApplication(
   apiBase: string,
-  payload: { resume_asset_id: number; recruiter_opportunity_id: number },
+  payload: { resume_asset_id: number; recruiter_opportunity_id: number; dedupe_key: string },
 ): Promise<ApplicationCard> {
   return requestJson(`${apiBase}/applications`, jsonInit('POST', payload))
 }

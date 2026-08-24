@@ -17,6 +17,7 @@ from app.models import (
     ApplicationInterview,
     ApplicationRTR,
     ApplicationSuggestion,
+    ApplicationSkillGapSnapshot,
     AttachmentAsset,
     INTERVIEW_RESULT_VALUES,
     INTERVIEW_ROUND_TYPE_VALUES,
@@ -43,6 +44,8 @@ APPLICATION_EVENT_TYPE_VALUES = (
     "recruiter_replied",
     "outreach_sent",
     "rtr_status_changed",
+    'resume_submission_status_changed',
+    'manual_submission_logged',
 )
 APPLICATION_EVENT_SOURCE_VALUES = ("user", "system")
 WAITING_ON_RECRUITER_STATUS_VALUES = (
@@ -89,7 +92,8 @@ def create_application(
     owner_id: str,
     resume_asset_id: int,
     recruiter_opportunity_id: int,
-) -> Application:
+    dedupe_key: str,
+) -> tuple[Application, bool]:
     resume = (
         db.query(ResumeAsset)
         .filter(ResumeAsset.owner_id == owner_id, ResumeAsset.id == resume_asset_id)
@@ -121,17 +125,9 @@ def create_application(
     if not recruiter:
         raise ApplicationReferenceNotFoundError("Recruiter contact not found")
 
-    existing = (
-        db.query(Application.id)
-        .filter(
-            Application.owner_id == owner_id,
-            Application.resume_asset_id == resume_asset_id,
-            Application.recruiter_opportunity_id == recruiter_opportunity_id,
-        )
-        .first()
-    )
-    if existing:
-        raise ApplicationConflictError("This resume is already tracked for this opportunity")
+    dedupe_key = dedupe_key.strip()
+    if not dedupe_key or len(dedupe_key) > 64:
+        raise ApplicationValidationError('dedupe_key is required and must be at most 64 characters')
 
     now = utc_now()
     application = Application(
@@ -146,19 +142,140 @@ def create_application(
         recruiter_company_snapshot=recruiter.company or "",
         job_title_snapshot=opportunity.job_title or "",
         end_client_snapshot=opportunity.end_client or "",
+        dedupe_key=dedupe_key,
         status="matched",
         status_changed_at=now,
         created_at=now,
         updated_at=now,
     )
-    db.add(application)
     try:
-        db.flush()
-    except IntegrityError as exc:
-        db.rollback()
-        raise ApplicationConflictError("This resume is already tracked for this opportunity") from exc
+        with db.begin_nested():
+            db.add(application)
+            db.flush()
+    except IntegrityError:
+        existing = (
+            db.query(Application)
+            .filter(Application.owner_id == owner_id, Application.dedupe_key == dedupe_key)
+            .first()
+        )
+        if existing is None:
+            raise
+        return existing, False
     append_event(db, application, event_type="created", event_source="system")
-    return application
+    return application, True
+
+
+def _json_list(raw: str | None) -> list[object]:
+    try:
+        value = json.loads(raw or '[]')
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+    return value if isinstance(value, list) else []
+
+
+def _json_dict(raw: str | None) -> dict[str, object]:
+    try:
+        value = json.loads(raw or '{}')
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _record_milestone(application: Application, name: str, occurred_at: datetime) -> None:
+    milestones = _json_dict(application.milestones_reached_json)
+    milestones.setdefault(name, occurred_at.isoformat())
+    application.milestones_reached_json = json.dumps(milestones, separators=(',', ':'))
+
+
+def _set_resume_submission_status(
+    db: Session,
+    application: Application,
+    *,
+    new_status: str,
+    trigger: str,
+) -> bool:
+    old_status = application.resume_submission_status
+    if old_status == new_status:
+        return False
+    application.resume_submission_status = new_status
+    append_event(
+        db,
+        application,
+        event_type='resume_submission_status_changed',
+        event_source='system',
+        metadata={'from': old_status, 'to': new_status, 'trigger': trigger},
+    )
+    return True
+
+
+def _mark_submitted(db: Session, application: Application, *, trigger: str) -> None:
+    if application.resume_submission_status != 'not_submitted':
+        return
+    resume = (
+        db.query(ResumeAsset)
+        .filter(
+            ResumeAsset.owner_id == application.owner_id,
+            ResumeAsset.id == application.resume_asset_id,
+        )
+        .first()
+    )
+    if resume is None:
+        raise ApplicationReferenceNotFoundError('Resume for this application no longer exists')
+    from app.services import resume_tracking_service
+
+    application.resume_submitted_at = application.resume_submitted_at or utc_now()
+    application.resume_skills_snapshot_json = json.dumps(
+        resume_tracking_service.snapshot_resume_skills(resume),
+        separators=(',', ':'),
+    )
+    application.resume_primary_role_snapshot = (resume.primary_role or '').strip()
+    _set_resume_submission_status(
+        db,
+        application,
+        new_status='submitted',
+        trigger=trigger,
+    )
+    resume_tracking_service.compute_skill_gap(db, application)
+
+
+def mark_resume_submitted_if_needed(db: Session, application: Application) -> None:
+    _mark_submitted(db, application, trigger='outreach_send')
+
+
+def _append_ai_missing_skill_tags(
+    db: Session,
+    application: Application,
+) -> None:
+    snapshot = (
+        db.query(ApplicationSkillGapSnapshot)
+        .filter(
+            ApplicationSkillGapSnapshot.owner_id == application.owner_id,
+            ApplicationSkillGapSnapshot.application_id == application.id,
+        )
+        .first()
+    )
+    if snapshot is None:
+        return
+    tags = [tag for tag in _json_list(application.rejection_detail_tags_json) if isinstance(tag, dict)]
+    existing = {
+        (str(tag.get('category') or ''), str(tag.get('value') or '').strip().casefold())
+        for tag in tags
+    }
+    for value in _json_list(snapshot.missing_required_json):
+        skill = str(value or '').strip()
+        key = ('missing_skill', skill.casefold())
+        if not skill or key in existing:
+            continue
+        tags.append(
+            {
+                'category': 'missing_skill',
+                'value': skill,
+                'source': 'ai',
+                'confirmed_at': None,
+            }
+        )
+        existing.add(key)
+    application.rejection_detail_tags_json = json.dumps(tags, separators=(',', ':'))
 
 
 def update_status(
@@ -197,6 +314,46 @@ def update_status(
         note=note or "",
         metadata={"from": old_status, "to": new_status},
     )
+    should_derive = new_status in APPLICATION_CLOSED_STATUS_VALUES
+    if (
+        not should_derive
+        and old_status not in APPLICATION_CLOSED_STATUS_VALUES
+        and new_status not in APPLICATION_CLOSED_STATUS_VALUES
+    ):
+        should_derive = APPLICATION_STATUS_VALUES.index(new_status) > APPLICATION_STATUS_VALUES.index(old_status)
+    if not should_derive:
+        return application
+
+    desired_status: str | None = None
+    milestone: str | None = None
+    if new_status not in APPLICATION_CLOSED_STATUS_VALUES:
+        if APPLICATION_STATUS_VALUES.index(new_status) >= APPLICATION_STATUS_VALUES.index('resume_shared'):
+            _mark_submitted(db, application, trigger='status_derivation')
+        if new_status in INTERVIEW_STATUS_VALUES:
+            desired_status = 'interview_scheduled'
+            milestone = 'interview_scheduled'
+        elif new_status == 'offer':
+            desired_status = 'offered'
+            milestone = 'offered'
+    elif new_status == 'hired':
+        desired_status = 'hired'
+        milestone = 'hired'
+    elif new_status == 'rejected':
+        desired_status = 'rejected'
+    elif new_status == 'withdrawn':
+        desired_status = 'withdrawn'
+
+    if desired_status is not None:
+        _set_resume_submission_status(
+            db,
+            application,
+            new_status=desired_status,
+            trigger='status_derivation',
+        )
+    if milestone is not None:
+        _record_milestone(application, milestone, now)
+    if new_status == 'rejected':
+        _append_ai_missing_skill_tags(db, application)
     return application
 
 
@@ -241,17 +398,22 @@ def append_event(
         created_at=now,
     )
     db.add(event)
-    lineage = opportunity_lineage_service.get_lineage_for_opportunity(
-        db,
-        owner_id=application.owner_id,
-        recruiter_opportunity_id=application.recruiter_opportunity_id,
+    lineage = (
+        opportunity_lineage_service.get_lineage_for_opportunity(
+            db,
+            owner_id=application.owner_id,
+            recruiter_opportunity_id=application.recruiter_opportunity_id,
+        )
+        if application.recruiter_opportunity_id is not None
+        else None
     )
     if lineage is None:
-        logger.warning(
-            "Missing opportunity lineage for application %s and recruiter opportunity %s",
-            application.id,
-            application.recruiter_opportunity_id,
-        )
+        if application.recruiter_opportunity_id is not None:
+            logger.warning(
+                "Missing opportunity lineage for application %s and recruiter opportunity %s",
+                application.id,
+                application.recruiter_opportunity_id,
+            )
     else:
         lineage_metadata = dict(metadata or {})
         if linked_recruiter_email_id is not None:
@@ -555,6 +717,22 @@ def accept_suggestion(
             event_type="note",
             event_source="system",
             note=suggestion.reason,
+        )
+    elif suggestion.suggestion_type in {
+        'new_variant_needed',
+        'email_positioning',
+        'skill_gap_pattern',
+    }:
+        append_event(
+            db,
+            application,
+            event_type='note',
+            event_source='system',
+            note=suggestion.reason,
+            metadata={
+                'suggestion_type': suggestion.suggestion_type,
+                'payload': _json_dict(suggestion.payload_json),
+            },
         )
     else:
         raise ApplicationValidationError("Invalid application suggestion type")

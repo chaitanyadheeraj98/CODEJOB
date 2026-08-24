@@ -81,12 +81,14 @@ class ApplicationServiceTests(unittest.TestCase):
     def test_create_snapshots_sources_and_rejects_duplicate(self) -> None:
         with Session(self.engine) as db:
             resume, opportunity = self._sources(db)
-            application = application_service.create_application(
+            application, created = application_service.create_application(
                 db,
                 owner_id="owner",
                 resume_asset_id=resume.id,
                 recruiter_opportunity_id=opportunity.id,
+                dedupe_key="create-snapshot",
             )
+            self.assertTrue(created)
             db.commit()
 
             self.assertEqual(application.resume_version_snapshot, 3)
@@ -99,22 +101,25 @@ class ApplicationServiceTests(unittest.TestCase):
             self.assertEqual(event.event_type, "created")
             self.assertEqual(event.event_source, "system")
 
-            with self.assertRaises(application_service.ApplicationConflictError):
-                application_service.create_application(
-                    db,
-                    owner_id="owner",
-                    resume_asset_id=resume.id,
-                    recruiter_opportunity_id=opportunity.id,
-                )
-
-    def test_status_transitions_set_milestones_and_events(self) -> None:
-        with Session(self.engine) as db:
-            resume, opportunity = self._sources(db)
-            application = application_service.create_application(
+            replay, created = application_service.create_application(
                 db,
                 owner_id="owner",
                 resume_asset_id=resume.id,
                 recruiter_opportunity_id=opportunity.id,
+                dedupe_key="create-snapshot",
+            )
+            self.assertFalse(created)
+            self.assertEqual(replay.id, application.id)
+
+    def test_status_transitions_set_milestones_and_events(self) -> None:
+        with Session(self.engine) as db:
+            resume, opportunity = self._sources(db)
+            application, _ = application_service.create_application(
+                db,
+                owner_id="owner",
+                resume_asset_id=resume.id,
+                recruiter_opportunity_id=opportunity.id,
+                dedupe_key="status-transitions",
             )
             application_service.update_status(db, application, new_status="resume_shared")
             self.assertIsNotNone(application.resume_shared_at)
@@ -226,6 +231,7 @@ class ApplicationServiceTests(unittest.TestCase):
             job_title_snapshot=job_title,
             end_client_snapshot=end_client,
             status=status,
+            resume_submission_status="submitted",
             created_at=now,
             updated_at=now,
             deleted_at=deleted_at,
@@ -299,11 +305,12 @@ class ApplicationServiceTests(unittest.TestCase):
     def test_rtr_proof_interviews_and_closed_reason_validation(self) -> None:
         with Session(self.engine) as db:
             resume, opportunity = self._sources(db)
-            application = application_service.create_application(
+            application, _ = application_service.create_application(
                 db,
                 owner_id="owner",
                 resume_asset_id=resume.id,
                 recruiter_opportunity_id=opportunity.id,
+                dedupe_key="rtr-interviews",
             )
             db.flush()
 
@@ -443,11 +450,12 @@ class ApplicationServiceTests(unittest.TestCase):
     def test_accept_and_dismiss_application_suggestions(self) -> None:
         with Session(self.engine) as db:
             resume, opportunity = self._sources(db)
-            application = application_service.create_application(
+            application, _ = application_service.create_application(
                 db,
                 owner_id="owner",
                 resume_asset_id=resume.id,
                 recruiter_opportunity_id=opportunity.id,
+                dedupe_key="suggestions",
             )
             email = RecruiterEmail(
                 owner_id="owner",

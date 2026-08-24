@@ -1209,6 +1209,10 @@ button.emailSearchResult:focus-visible {
   align-content: start;
 }
 
+.resumeDatabaseItem.focused {
+  outline: 2px solid var(--primary);
+}
+
 .resumeDatabaseHeader {
   display: flex;
   justify-content: space-between;
@@ -3688,3 +3692,40 @@ button.emailSearchResult:focus-visible {
     grid-template-columns: 1fr;
   }
 }
+.resumeTrackingPage { display: grid; gap: 1rem; }
+.resumeTrackingHeader, .resumeTrackingToolbar, .submissionActions, .buttonRow, .funnelStrip { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; }
+.resumeTrackingHeader { justify-content: space-between; }
+.tabBar { display: flex; gap: .25rem; }
+.tabBar button.active { background: var(--primary); color: white; }
+.resumeTrackingPanel { display: grid; gap: 1rem; }
+.resumeTrackingToolbar label, .resumeTrackingForm label, .submissionActions label { display: grid; gap: .3rem; }
+.resumeTrackingForm { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: .75rem; padding: 1rem; border: 1px solid var(--line); border-radius: .75rem; }
+.resumeTrackingForm .wideField, .resumeTrackingForm h3 { grid-column: 1 / -1; }
+.resumeTrackingForm textarea { min-height: 7rem; resize: vertical; }
+.resumeCardGrid { display: grid; gap: 12px; background: var(--surface-soft); border-radius: .75rem; padding: 12px; }
+.resumeCard, .submissionCard, .trackingSuggestions article { border: 1px solid var(--line); border-radius: .75rem; padding: 16px; background: var(--surface); }
+.resumeCard { display: grid; grid-template-columns: minmax(200px, 1.4fr) minmax(140px, 180px) minmax(200px, 1.6fr); align-items: center; gap: 1.25rem; box-shadow: 0 1px 3px rgb(15 23 42 / 7%); }
+.resumeCard.selected { outline: 2px solid var(--primary); }
+.resumeCardMain { display: grid; gap: .3rem; min-width: 0; }
+.resumeCardMain > button { display: grid; gap: .35rem; width: 100%; text-align: left; background: transparent; color: inherit; border: 0; padding: 0; font: inherit; cursor: pointer; }
+.resumeCardTitle { font-weight: 700; }
+.resumeCardMissingDetails { background: transparent; border: 0; padding: 0; margin: 0; color: var(--muted); font-size: .78rem; text-decoration: underline; cursor: pointer; width: fit-content; }
+.resumeCardBar { display: grid; gap: .4rem; }
+.resumeCardBarLabel { font-size: .78rem; font-weight: 600; color: #1c2535; }
+.resumeCardBarTrack { display: block; height: 8px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.resumeCardBarFill { display: block; height: 100%; border-radius: inherit; background: #94a3b8; }
+.resumeCardBarFill.high { background: #14b8a6; }
+.resumeCardBarFill.mid { background: #6366f1; }
+.resumeCardBarFill.zero { background: transparent; }
+.resumeCard .skillChips { justify-content: flex-end; margin-top: 0; }
+.skillChips, .gapPanel { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .65rem; align-items: center; }
+.trackingChip { display: inline-block; border-radius: 999px; padding: .2rem .55rem; background: #eef1f6; color: #475569; font-size: .8rem; }
+.funnelStrip { justify-content: space-between; padding: .75rem; background: #f6f8fc; border-radius: .75rem; }
+.submissionList { display: grid; gap: .75rem; }
+.submissionCard { display: grid; grid-template-columns: minmax(220px, 1fr) auto; gap: .75rem; }
+.submissionActions, .rejectionTagRow, .gapPanel, .aiTagPrompt { grid-column: 1 / -1; }
+.rejectionTagRow { display: flex; gap: .5rem; }
+.rejectionTagRow input { flex: 1; }
+.trackingSuggestions { display: grid; gap: .5rem; }
+.aiTagPrompt { padding: .5rem; background: #fff7d6; border-radius: .5rem; }
+@media (max-width: 700px) { .submissionCard { grid-template-columns: 1fr; } .statusBadge { justify-self: start; } .resumeCard { grid-template-columns: 1fr; } .resumeCard .skillChips { justify-content: flex-start; } }

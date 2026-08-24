@@ -69,11 +69,15 @@ describe('OpportunitiesTab application entry point', () => {
   })
 
   it('locks an enabled resume snapshot when tracking an opportunity', async () => {
+    let createAttempts = 0
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url.includes('/recruiter-opportunities?')) return jsonResponse({ items: [opportunity], next_cursor: null, has_next: false })
       if (url.endsWith('/settings/resumes')) return jsonResponse([{ id: 7, file_name: 'java-backend.pdf', version: 2, is_enabled: true, is_current: true }])
-      if (url.endsWith('/applications') && init?.method === 'POST') return jsonResponse({ id: 41 }, 201)
+      if (url.endsWith('/applications') && init?.method === 'POST') {
+        createAttempts += 1
+        return createAttempts === 1 ? jsonResponse({ detail: 'temporary failure' }, 503) : jsonResponse({ id: 41 }, 201)
+      }
       return jsonResponse({ detail: 'not found' }, 404)
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -115,8 +119,17 @@ describe('OpportunitiesTab application entry point', () => {
       confirm?.click()
       await new Promise((resolve) => window.setTimeout(resolve, 50))
     })
-    const createCall = fetchMock.mock.calls.find(([url, init]) => String(url).endsWith('/applications') && init?.method === 'POST')
-    expect(JSON.parse(String(createCall?.[1]?.body))).toEqual({ resume_asset_id: 7, recruiter_opportunity_id: 9 })
+    await act(async () => {
+      confirm?.click()
+      await new Promise((resolve) => window.setTimeout(resolve, 50))
+    })
+    const createCalls = fetchMock.mock.calls.filter(([url, init]) => String(url).endsWith('/applications') && init?.method === 'POST')
+    const firstPayload = JSON.parse(String(createCalls[0]?.[1]?.body)) as Record<string, unknown>
+    const secondPayload = JSON.parse(String(createCalls[1]?.[1]?.body)) as Record<string, unknown>
+    expect(firstPayload.resume_asset_id).toBe(7)
+    expect(firstPayload.recruiter_opportunity_id).toBe(9)
+    expect(firstPayload.dedupe_key).toEqual(expect.any(String))
+    expect(firstPayload.dedupe_key).toBe(secondPayload.dedupe_key)
     expect(onToast).toHaveBeenCalledWith('Application tracking started')
   })
 

@@ -52,18 +52,36 @@ class ResumeEvidence(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
 
-def _validate_evidence_json(raw: str) -> str:
+def _validate_evidence_json(raw: str) -> ResumeEvidence:
     text = (raw or "").strip()
     fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text, flags=re.DOTALL | re.IGNORECASE)
     if fenced:
         text = fenced.group(1).strip()
     try:
         payload = json.loads(text)
-        validated = ResumeEvidence.model_validate(payload)
+        return ResumeEvidence.model_validate(payload)
     except Exception as exc:
         logger.warning("Resume evidence JSON was invalid: %s", exc)
-        return "{}"
-    return validated.model_dump_json(exclude_none=False)
+        return ResumeEvidence()
+
+
+def _apply_role_and_label(resume: ResumeAsset, evidence: ResumeEvidence) -> None:
+    if not getattr(resume, "primary_role", "") and evidence.titles:
+        resume.primary_role = evidence.titles[0].strip()[:255]
+    if not getattr(resume, "variant_label", "") and evidence.domain:
+        resume.variant_label = evidence.domain.strip()[:120]
+
+
+def backfill_role_and_label(resume: ResumeAsset) -> bool:
+    """Fill primary_role/variant_label from evidence already on the resume. No LLM call."""
+    before = (resume.primary_role, resume.variant_label)
+    raw = str(getattr(resume, "content_evidence_json", "") or "").strip()
+    if raw:
+        try:
+            _apply_role_and_label(resume, ResumeEvidence.model_validate(json.loads(raw)))
+        except Exception as exc:
+            logger.warning("Resume evidence JSON was invalid during label backfill: %s", exc)
+    return (resume.primary_role, resume.variant_label) != before
 
 
 def enrich_resume(resume: ResumeAsset) -> None:
@@ -86,7 +104,9 @@ def enrich_resume(resume: ResumeAsset) -> None:
 
     try:
         response = llm.invoke(_EVIDENCE_PROMPT.format(text=resume.content_markdown))
-        resume.content_evidence_json = _validate_evidence_json(message_text(response.content))
+        evidence = _validate_evidence_json(message_text(response.content))
+        resume.content_evidence_json = evidence.model_dump_json(exclude_none=False)
+        _apply_role_and_label(resume, evidence)
     except Exception as exc:
         logger.warning("Resume evidence generation skipped: %s", exc)
 

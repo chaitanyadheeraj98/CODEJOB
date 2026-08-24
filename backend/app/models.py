@@ -213,6 +213,8 @@ class UserSettings(Base):
     feature_application_automation_enabled: Mapped[bool] = mapped_column(default=False)
     feature_application_outreach_drafts_enabled: Mapped[bool] = mapped_column(default=False)
     feature_reminder_sweep_interval_minutes: Mapped[int] = mapped_column(Integer, default=240)
+    feature_resume_tracking_enabled: Mapped[bool] = mapped_column(default=False)
+    feature_resume_tracking_sweep_interval_minutes: Mapped[int] = mapped_column(Integer, default=240)
     candidate_work_authorizations_json: Mapped[str] = mapped_column(Text, default="[]")
     preferred_employment_types_json: Mapped[str] = mapped_column(Text, default="[]")
     preferred_minimum_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -244,6 +246,9 @@ class ResumeAsset(Base):
     sha256: Mapped[str] = mapped_column(String(64), index=True)
     version: Mapped[int] = mapped_column(Integer, default=1)
     skills_text: Mapped[str] = mapped_column(Text, default="")
+    primary_role: Mapped[str] = mapped_column(String(255), default='')
+    structured_skills_json: Mapped[str] = mapped_column(Text, default='[]')
+    variant_label: Mapped[str] = mapped_column(String(120), default='')
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     is_current: Mapped[bool] = mapped_column(default=True)
     semantic_embedding: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -751,15 +756,35 @@ APPLICATION_CLOSED_STATUS_VALUES = (
     "duplicate",
 )
 
+RESUME_SUBMISSION_STATUS_VALUES = (
+    'not_submitted',
+    'submitted',
+    'viewed',
+    'shortlisted',
+    'interview_scheduled',
+    'offered',
+    'hired',
+    'rejected',
+    'withdrawn',
+)
+SUBMISSION_METHOD_VALUES = ('email',)
+REJECTION_DETAIL_TAG_VALUES = (
+    'missing_skill',
+    'missing_experience',
+    'missing_domain_knowledge',
+    'email_positioning',
+    'rate_mismatch',
+    'other',
+)
+
 
 class Application(Base):
     __tablename__ = "applications"
     __table_args__ = (
         UniqueConstraint(
-            "owner_id",
-            "resume_asset_id",
-            "recruiter_opportunity_id",
-            name="ux_applications_owner_resume_opportunity",
+            'owner_id',
+            'dedupe_key',
+            name='ux_applications_owner_dedupe_key',
         ),
     )
 
@@ -769,12 +794,29 @@ class Application(Base):
     resume_version_snapshot: Mapped[int] = mapped_column(Integer)
     resume_file_name_snapshot: Mapped[str] = mapped_column(String(255))
     resume_sha256_snapshot: Mapped[str] = mapped_column(String(64))
-    recruiter_opportunity_id: Mapped[int] = mapped_column(Integer, index=True)
-    recruiter_contact_id: Mapped[int] = mapped_column(Integer, index=True)
+    recruiter_opportunity_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    recruiter_contact_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     recruiter_name_snapshot: Mapped[str] = mapped_column(String(255), default="")
     recruiter_company_snapshot: Mapped[str] = mapped_column(String(255), default="")
     job_title_snapshot: Mapped[str] = mapped_column(Text, default="")
     end_client_snapshot: Mapped[str] = mapped_column(Text, default="")
+    manual_recruiter_name: Mapped[str] = mapped_column(String(255), default='')
+    manual_recruiter_company: Mapped[str] = mapped_column(String(255), default='')
+    manual_recruiter_email: Mapped[str] = mapped_column(String(255), default='')
+    manual_recruiter_phone: Mapped[str] = mapped_column(String(80), default='')
+    manual_recruiter_linkedin_url: Mapped[str] = mapped_column(Text, default='')
+    manual_job_title: Mapped[str] = mapped_column(Text, default='')
+    manual_end_client: Mapped[str] = mapped_column(Text, default='')
+    manual_jd_text: Mapped[str] = mapped_column(Text, default='')
+    manual_source_note: Mapped[str] = mapped_column(Text, default='')
+    resume_submission_status: Mapped[str] = mapped_column(String(30), index=True, default='not_submitted')
+    resume_submitted_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    submission_method: Mapped[str] = mapped_column(String(20), default='email')
+    rejection_detail_tags_json: Mapped[str] = mapped_column(Text, default='[]')
+    dedupe_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    resume_skills_snapshot_json: Mapped[str] = mapped_column(Text, default='[]')
+    resume_primary_role_snapshot: Mapped[str] = mapped_column(String(255), default='')
+    milestones_reached_json: Mapped[str] = mapped_column(Text, default='{}')
     status: Mapped[str] = mapped_column(String(40), index=True, default="matched")
     status_changed_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
     resume_shared_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
@@ -856,7 +898,15 @@ class ApplicationInterview(Base):
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
 
 
-APPLICATION_SUGGESTION_TYPE_VALUES = ("link_reply", "status_change", "next_action", "stale_prompt")
+APPLICATION_SUGGESTION_TYPE_VALUES = (
+    'link_reply',
+    'status_change',
+    'next_action',
+    'stale_prompt',
+    'new_variant_needed',
+    'email_positioning',
+    'skill_gap_pattern',
+)
 APPLICATION_SUGGESTION_STATUS_VALUES = ("pending", "accepted", "dismissed")
 APPLICATION_SUGGESTION_CONFIDENCE_VALUES = ("high", "medium")
 
@@ -876,8 +926,40 @@ class ApplicationSuggestion(Base):
     suggested_next_action_type: Mapped[str | None] = mapped_column(String(80), nullable=True)
     suggested_next_action_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     reason: Mapped[str] = mapped_column(Text, default="")
+    payload_json: Mapped[str] = mapped_column(Text, default='{}')
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, index=True)
     resolved_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+
+class ApplicationSkillGapSnapshot(Base):
+    __tablename__ = 'application_skill_gap_snapshots'
+    __table_args__ = (
+        UniqueConstraint('owner_id', 'application_id', name='ux_skill_gap_snapshot_application'),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), default='default-owner', index=True)
+    application_id: Mapped[int] = mapped_column(Integer, index=True)
+    source: Mapped[str] = mapped_column(String(20), default='fallback_text')
+    matched_required_json: Mapped[str] = mapped_column(Text, default='[]')
+    missing_required_json: Mapped[str] = mapped_column(Text, default='[]')
+    matched_preferred_json: Mapped[str] = mapped_column(Text, default='[]')
+    missing_preferred_json: Mapped[str] = mapped_column(Text, default='[]')
+    computed_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+
+
+class ApplicationOutreachMessage(Base):
+    __tablename__ = 'application_outreach_messages'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), default='default-owner', index=True)
+    application_id: Mapped[int] = mapped_column(Integer, index=True)
+    message_kind: Mapped[str] = mapped_column(String(40))
+    draft_source: Mapped[str] = mapped_column(String(20), default='unknown')
+    ai_model: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    subject: Mapped[str] = mapped_column(Text, default='')
+    body: Mapped[str] = mapped_column(Text, default='')
+    sent_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, index=True)
 
 
 class NumberReviewQueue(Base):

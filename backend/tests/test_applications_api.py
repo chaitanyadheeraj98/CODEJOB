@@ -97,7 +97,7 @@ class ApplicationsApiTests(unittest.TestCase):
 
         created = self.client.post(
             "/applications",
-            json={"resume_asset_id": resume.id, "recruiter_opportunity_id": opportunity.id},
+            json={"resume_asset_id": resume.id, "recruiter_opportunity_id": opportunity.id, "dedupe_key": "crud-1001"},
         )
         self.assertEqual(created.status_code, 201, created.text)
         application_id = created.json()["id"]
@@ -168,22 +168,28 @@ class ApplicationsApiTests(unittest.TestCase):
             resume_id = resume.id
             opportunity_id = opportunity.id
             other_opportunity_id = other_opportunity.id
-            other_application = application_service.create_application(
+            other_application, _ = application_service.create_application(
                 db,
                 owner_id="other-owner",
                 resume_asset_id=other_resume.id,
                 recruiter_opportunity_id=other_opportunity.id,
+                dedupe_key="other-owner-2002",
             )
             db.commit()
             other_application_id = other_application.id
 
-        payload = {"resume_asset_id": resume_id, "recruiter_opportunity_id": opportunity_id}
-        self.assertEqual(self.client.post("/applications", json=payload).status_code, 201)
+        payload = {"resume_asset_id": resume_id, "recruiter_opportunity_id": opportunity_id, "dedupe_key": "api-replay-2001"}
+        first = self.client.post("/applications", json=payload)
+        self.assertEqual(first.status_code, 201)
         duplicate = self.client.post("/applications", json=payload)
-        self.assertEqual(duplicate.status_code, 409, duplicate.text)
+        self.assertEqual(duplicate.status_code, 200, duplicate.text)
+        self.assertEqual(duplicate.json()["id"], first.json()["id"])
+        distinct = self.client.post("/applications", json={**payload, "dedupe_key": "api-distinct-2001"})
+        self.assertEqual(distinct.status_code, 201, distinct.text)
+        self.assertNotEqual(distinct.json()["id"], first.json()["id"])
         cross_owner = self.client.post(
             "/applications",
-            json={"resume_asset_id": resume_id, "recruiter_opportunity_id": other_opportunity_id},
+            json={"resume_asset_id": resume_id, "recruiter_opportunity_id": other_opportunity_id, "dedupe_key": "cross-owner-2001"},
         )
         self.assertEqual(cross_owner.status_code, 404, cross_owner.text)
         self.assertEqual(self.client.get(f"/applications/{other_application_id}").status_code, 404)
@@ -198,7 +204,7 @@ class ApplicationsApiTests(unittest.TestCase):
 
         created = self.client.post(
             "/applications",
-            json={"resume_asset_id": resume.id, "recruiter_opportunity_id": opportunity.id},
+            json={"resume_asset_id": resume.id, "recruiter_opportunity_id": opportunity.id, "dedupe_key": "guard-3001"},
         )
         self.assertEqual(created.status_code, 201, created.text)
         application_id = created.json()["id"]
@@ -241,7 +247,7 @@ class ApplicationsApiTests(unittest.TestCase):
 
         created = self.client.post(
             "/applications",
-            json={"resume_asset_id": resume_id, "recruiter_opportunity_id": opportunity_id},
+            json={"resume_asset_id": resume_id, "recruiter_opportunity_id": opportunity_id, "dedupe_key": "rtr-4001"},
         )
         application_id = created.json()["id"]
         requested = self.client.post(
@@ -344,6 +350,7 @@ class ApplicationsApiTests(unittest.TestCase):
             json={
                 "resume_asset_id": first_resume_id,
                 "recruiter_opportunity_id": first_opportunity_id,
+                "dedupe_key": "duplicate-first-5001",
             },
         ).json()
         second = self.client.post(
@@ -351,6 +358,7 @@ class ApplicationsApiTests(unittest.TestCase):
             json={
                 "resume_asset_id": second_resume_id,
                 "recruiter_opportunity_id": second_opportunity_id,
+                "dedupe_key": "duplicate-second-5002",
             },
         ).json()
 
@@ -447,7 +455,7 @@ class ApplicationsApiTests(unittest.TestCase):
 
         created = self.client.post(
             "/applications",
-            json={"resume_asset_id": resume_id, "recruiter_opportunity_id": opportunity_id},
+            json={"resume_asset_id": resume_id, "recruiter_opportunity_id": opportunity_id, "dedupe_key": "phase-three-6001"},
         )
         self.assertEqual(created.status_code, 201, created.text)
         application_id = created.json()["id"]
@@ -503,11 +511,12 @@ class ApplicationsApiTests(unittest.TestCase):
                 owner_id=main.settings.owner_id,
                 suffix="7001",
             )
-            application = application_service.create_application(
+            application, _ = application_service.create_application(
                 db,
                 owner_id=main.settings.owner_id,
                 resume_asset_id=resume.id,
                 recruiter_opportunity_id=opportunity.id,
+                dedupe_key="phase-four-draft-7001",
             )
             db.add(UserSettings(owner_id=main.settings.owner_id))
             db.commit()
@@ -518,11 +527,16 @@ class ApplicationsApiTests(unittest.TestCase):
             json={
                 "feature_applications_enabled": True,
                 "feature_application_outreach_drafts_enabled": True,
+                "feature_resume_tracking_enabled": True,
+                "feature_resume_tracking_sweep_interval_minutes": 1,
             },
         )
         self.assertEqual(saved_settings.status_code, 200, saved_settings.text)
         self.assertTrue(saved_settings.json()["feature_application_outreach_drafts_enabled"])
+        self.assertTrue(saved_settings.json()["feature_resume_tracking_enabled"])
+        self.assertEqual(saved_settings.json()["feature_resume_tracking_sweep_interval_minutes"], 30)
         self.assertTrue(self.client.get("/settings").json()["feature_application_outreach_drafts_enabled"])
+        self.assertTrue(self.client.get("/settings").json()["feature_resume_tracking_enabled"])
 
         draft_result = SimpleNamespace(
             to="recruiter@example.com",
@@ -598,11 +612,12 @@ class ApplicationsApiTests(unittest.TestCase):
                 owner_id=main.settings.owner_id,
                 suffix="7002",
             )
-            application = application_service.create_application(
+            application, _ = application_service.create_application(
                 db,
                 owner_id=main.settings.owner_id,
                 resume_asset_id=resume.id,
                 recruiter_opportunity_id=opportunity.id,
+                dedupe_key="phase-four-failure-7002",
             )
             db.commit()
             application_id = application.id
@@ -621,6 +636,97 @@ class ApplicationsApiTests(unittest.TestCase):
             )
         self.assertEqual(response.status_code, 502, response.text)
         self.assertIn("Gmail unavailable", response.json()["detail"])
+
+    def test_resume_tracking_routes_are_gated_idempotent_and_filterable(self) -> None:
+        submitted_at = "2026-08-20T12:00:00Z"
+        with Session(self.engine) as db:
+            resume, _ = self._sources(
+                db,
+                owner_id=main.settings.owner_id,
+                suffix="8001",
+            )
+            resume.primary_role = "Java Developer"
+            resume.structured_skills_json = '["Java","SQL"]'
+            db.add(UserSettings(owner_id=main.settings.owner_id, feature_resume_tracking_enabled=False))
+            db.commit()
+            resume_id = resume.id
+
+        payload = {
+            "resume_asset_id": resume_id,
+            "dedupe_key": "manual-api-8001",
+            "manual_recruiter_name": "Priya",
+            "manual_recruiter_company": "ABC Staffing",
+            "manual_recruiter_email": "priya.manual@example.com",
+            "manual_job_title": "Senior Java Developer",
+            "manual_end_client": "Bank X",
+            "manual_jd_text": "Java and AWS are required",
+            "resume_submitted_at": submitted_at,
+        }
+        self.assertEqual(self.client.post("/applications/manual", json=payload).status_code, 403)
+        with Session(self.engine) as db:
+            db.query(UserSettings).filter_by(owner_id=main.settings.owner_id).one().feature_resume_tracking_enabled = True
+            db.commit()
+
+        created = self.client.post("/applications/manual", json=payload)
+        self.assertEqual(created.status_code, 201, created.text)
+        application_id = created.json()["id"]
+        self.assertTrue(created.json()["is_manual_entry"])
+        self.assertEqual(created.json()["resume_submitted_at"], submitted_at)
+        self.assertIsNotNone(created.json()["skill_gap"])
+        replay = self.client.post("/applications/manual", json=payload)
+        self.assertEqual(replay.status_code, 200, replay.text)
+        self.assertEqual(replay.json()["id"], application_id)
+
+        filtered = self.client.get(
+            "/applications",
+            params={"resume_submission_status": "submitted", "q": "priya.manual@example.com"},
+        )
+        self.assertEqual([row["id"] for row in filtered.json()["items"]], [application_id])
+        advanced = self.client.patch(
+            f"/applications/{application_id}/resume-submission-status",
+            json={"new_status": "shortlisted"},
+        )
+        self.assertEqual(advanced.status_code, 200, advanced.text)
+        self.assertIn("shortlisted", advanced.json()["milestones_reached"])
+        self.assertEqual(self.client.get(f"/applications/{application_id}/skill-gap").status_code, 200)
+        self.assertEqual(self.client.post(f"/applications/{application_id}/skill-gap/recompute").status_code, 200)
+        funnel = self.client.get(f"/resumes/{resume_id}/funnel")
+        self.assertEqual(funnel.status_code, 200, funnel.text)
+        self.assertEqual(funnel.json()["acceptance_rate"], 1.0)
+        performance = self.client.get("/resumes/performance-summary")
+        self.assertEqual(performance.status_code, 200, performance.text)
+        self.assertEqual(performance.json()["items"][0]["submission_count"], 1)
+
+    def test_backfill_enrichment_force_reprocesses_every_resume(self) -> None:
+        with Session(self.engine) as db:
+            already_enriched, _ = self._sources(db, owner_id=main.settings.owner_id, suffix="9001")
+            already_enriched.content_markdown = "# Old content"
+            already_enriched.primary_role = "Manually Set Role"
+            never_enriched, _ = self._sources(db, owner_id=main.settings.owner_id, suffix="9002")
+            db.commit()
+            already_id, never_id = already_enriched.id, never_enriched.id
+
+        default_run = self.client.post("/settings/resumes/backfill-enrichment")
+        self.assertEqual(default_run.status_code, 200, default_run.text)
+        self.assertEqual(default_run.json()["enriched_ids"], [never_id])
+
+        processed_ids: list[int] = []
+
+        def fake_enrich(resume: object) -> None:
+            processed_ids.append(resume.id)
+            resume.content_markdown = f"# Reprocessed {resume.id}"
+
+        with patch("app.main.enrich_resume", side_effect=fake_enrich), patch("app.main._refresh_resume_embedding"):
+            forced_run = self.client.post("/settings/resumes/backfill-enrichment", params={"force": True})
+        self.assertEqual(forced_run.status_code, 200, forced_run.text)
+        self.assertEqual(sorted(processed_ids), sorted([already_id, never_id]))
+        self.assertEqual(sorted(forced_run.json()["enriched_ids"]), sorted([already_id, never_id]))
+        self.assertEqual(forced_run.json()["labeled_ids"], [])
+
+        with Session(self.engine) as db:
+            refreshed_already = db.get(ResumeAsset, already_id)
+            self.assertEqual(refreshed_already.content_markdown, f"# Reprocessed {already_id}")
+            self.assertEqual(refreshed_already.primary_role, "Manually Set Role")
 
 
 if __name__ == "__main__":

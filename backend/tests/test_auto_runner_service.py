@@ -29,6 +29,8 @@ class AutoRunnerApplicationReminderTests(unittest.TestCase):
             "feature_applications_enabled": True,
             "feature_application_automation_enabled": True,
             "feature_reminder_sweep_interval_minutes": 1,
+            "feature_resume_tracking_enabled": False,
+            "feature_resume_tracking_sweep_interval_minutes": 240,
         }
         values.update(overrides)
         return SimpleNamespace(**values)
@@ -43,6 +45,7 @@ class AutoRunnerApplicationReminderTests(unittest.TestCase):
             run_nvoids_once=Mock(),
             check_live_replies=Mock(),
             run_reminder_sweep=reminder,
+            run_resume_tracking_sweep=Mock(),
             action_lock=Lock(),
             stop_event=_OneIterationStop(),
         )

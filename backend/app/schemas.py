@@ -124,6 +124,8 @@ class SettingsRequest(BaseModel):
     feature_application_automation_enabled: bool = False
     feature_application_outreach_drafts_enabled: bool = False
     feature_reminder_sweep_interval_minutes: int = 240
+    feature_resume_tracking_enabled: bool = False
+    feature_resume_tracking_sweep_interval_minutes: int = 240
     candidate_work_authorizations: list[str] | None = Field(default_factory=list)
     preferred_employment_types: list[Literal["C2C", "W2", "1099", "FT"]] = Field(default_factory=list)
     preferred_minimum_rate: float | None = Field(default=None, ge=0)
@@ -168,7 +170,10 @@ class SettingsRequest(BaseModel):
     def validate_nvoids_poll_interval(cls, value: int) -> int:
         return max(1, min(int(value), 1440))
 
-    @field_validator("feature_reminder_sweep_interval_minutes")
+    @field_validator(
+        "feature_reminder_sweep_interval_minutes",
+        "feature_resume_tracking_sweep_interval_minutes",
+    )
     @classmethod
     def validate_reminder_sweep_interval(cls, value: int) -> int:
         return max(30, min(int(value), 1440))
@@ -235,6 +240,9 @@ class ResumeResponse(BaseModel):
     sha256: str
     version: int
     skills_text: str
+    primary_role: str = ""
+    structured_skills: list[str] = Field(default_factory=list)
+    variant_label: str = ""
     is_enabled: bool
     is_current: bool
     content_summary: str | None = None
@@ -247,6 +255,9 @@ class ResumeResponse(BaseModel):
 class ResumeUpdateRequest(BaseModel):
     is_enabled: bool | None = None
     skills_text: str | None = None
+    primary_role: str | None = None
+    structured_skills: list[str] | None = None
+    variant_label: str | None = None
 
 
 class AttachmentAssetResponse(BaseModel):
@@ -1116,6 +1127,49 @@ class RecruiterOpportunityPatchRequest(BaseModel):
 class ApplicationCreateRequest(BaseModel):
     resume_asset_id: int = Field(gt=0)
     recruiter_opportunity_id: int = Field(gt=0)
+    dedupe_key: str = Field(min_length=1, max_length=64)
+
+
+class ManualApplicationCreateRequest(BaseModel):
+    resume_asset_id: int = Field(gt=0)
+    dedupe_key: str = Field(min_length=1, max_length=64)
+    manual_recruiter_name: str = Field(min_length=1, max_length=255)
+    manual_recruiter_company: str = Field(min_length=1, max_length=255)
+    manual_recruiter_email: str = Field(default="", max_length=255)
+    manual_recruiter_phone: str = Field(default="", max_length=80)
+    manual_recruiter_linkedin_url: str = Field(default="", max_length=2000)
+    manual_job_title: str = Field(min_length=1)
+    manual_end_client: str = Field(min_length=1)
+    manual_jd_text: str = ""
+    manual_source_note: str = ""
+    submission_method: str = Field(default="email", min_length=1, max_length=20)
+    resume_submitted_at: datetime | None = None
+
+
+class RejectionDetailTagInput(BaseModel):
+    category: Literal[
+        "missing_skill",
+        "missing_experience",
+        "missing_domain_knowledge",
+        "rate_mismatch",
+        "email_positioning",
+        "other",
+    ]
+    value: str = ""
+
+
+class RejectionDetailTagResponse(BaseModel):
+    category: str
+    value: str
+    source: Literal["ai", "user"]
+    confirmed_at: datetime | None = None
+
+
+class ResumeSubmissionStatusUpdateRequest(BaseModel):
+    new_status: Literal["viewed", "shortlisted", "offered", "hired", "rejected", "withdrawn"]
+    rejection_detail_tags: list[RejectionDetailTagInput] = Field(default_factory=list)
+    note: str = ""
+    force: bool = False
 
 
 class ApplicationPatchRequest(BaseModel):
@@ -1235,6 +1289,8 @@ class ApplicationSendMessageRequest(BaseModel):
     message_kind: Literal["followup", "submission_to_recruiter"] = "followup"
     include_resume: bool = True
     attachment_asset_ids: list[int] = Field(default_factory=list)
+    draft_source: str = "unknown"
+    ai_model: str | None = None
 
     @field_validator("to")
     @classmethod
@@ -1252,6 +1308,15 @@ class ApplicationSendMessageRequest(BaseModel):
         return value
 
 
+class ApplicationSkillGapResponse(BaseModel):
+    source: str
+    matched_required: list[str]
+    missing_required: list[str]
+    matched_preferred: list[str]
+    missing_preferred: list[str]
+    computed_at: datetime
+
+
 class ApplicationResponse(BaseModel):
     id: int
     owner_id: str
@@ -1259,8 +1324,8 @@ class ApplicationResponse(BaseModel):
     resume_version_snapshot: int
     resume_file_name_snapshot: str
     resume_sha256_snapshot: str
-    recruiter_opportunity_id: int
-    recruiter_contact_id: int
+    recruiter_opportunity_id: int | None
+    recruiter_contact_id: int | None
     recruiter_name_snapshot: str
     recruiter_company_snapshot: str
     job_title_snapshot: str
@@ -1276,16 +1341,33 @@ class ApplicationResponse(BaseModel):
     closed_at: datetime | None
     closed_reason: str | None
     closed_reason_code: str | None
+    resume_submission_status: str
+    resume_submitted_at: datetime | None
+    submission_method: str
+    rejection_detail_tags: list[RejectionDetailTagResponse] = Field(default_factory=list)
+    dedupe_key: str | None
+    is_manual_entry: bool = False
+    milestones_reached: dict[str, datetime] = Field(default_factory=dict)
+    manual_recruiter_name: str = ""
+    manual_recruiter_company: str = ""
+    manual_recruiter_email: str = ""
+    manual_recruiter_phone: str = ""
+    manual_recruiter_linkedin_url: str = ""
+    manual_job_title: str = ""
+    manual_end_client: str = ""
     created_at: datetime
     updated_at: datetime
     current_recruiter_name: str = ""
     current_recruiter_company: str = ""
     current_recruiter_phone_display: str = ""
+    current_recruiter_email: str = ""
+    current_recruiter_linkedin_url: str = ""
     current_job_title: str = ""
     current_end_client: str = ""
     events: list[ApplicationEventResponse] = Field(default_factory=list)
     rtr_history: list[ApplicationRTRResponse] = Field(default_factory=list)
     interviews: list[ApplicationInterviewResponse] = Field(default_factory=list)
+    skill_gap: ApplicationSkillGapResponse | None = None
 
     model_config = {"from_attributes": True}
 
@@ -1337,7 +1419,15 @@ class RecruiterReputationResponse(BaseModel):
 class ApplicationSuggestionResponse(BaseModel):
     id: int
     application_id: int
-    suggestion_type: Literal["link_reply", "status_change", "next_action", "stale_prompt"]
+    suggestion_type: Literal[
+        "link_reply",
+        "status_change",
+        "next_action",
+        "stale_prompt",
+        "new_variant_needed",
+        "email_positioning",
+        "skill_gap_pattern",
+    ]
     status: Literal["pending", "accepted", "dismissed"]
     confidence: Literal["high", "medium"]
     recruiter_email_id: int | None
@@ -1345,6 +1435,7 @@ class ApplicationSuggestionResponse(BaseModel):
     suggested_next_action_type: str | None
     suggested_next_action_at: datetime | None
     reason: str
+    payload: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
     resolved_at: datetime | None
 
@@ -1353,6 +1444,45 @@ class ApplicationSuggestionResponse(BaseModel):
 
 class ApplicationSuggestionListResponse(BaseModel):
     items: list[ApplicationSuggestionResponse]
+
+
+class ResumeFunnelMetricsResponse(BaseModel):
+    resume_asset_id: int
+    total_submissions: int
+    not_submitted_count: int
+    view_rate: float
+    shortlist_rate: float
+    interview_rate: float
+    offer_rate: float
+    hire_rate: float
+    rejection_rate: float
+    acceptance_rate: float
+    median_days_to_shortlist: float | None
+    median_days_to_interview: float | None
+    median_days_to_offer: float | None
+    top_rejection_reasons: list[dict[str, Any]]
+    top_missing_skills: list[dict[str, Any]]
+
+
+class ResumePerformanceSummaryItem(BaseModel):
+    resume: ResumeResponse
+    submission_count: int
+    acceptance_rate: float
+
+
+class ResumePerformanceSummaryResponse(BaseModel):
+    items: list[ResumePerformanceSummaryItem]
+
+
+class ApplicationOutreachMessageResponse(BaseModel):
+    id: int
+    application_id: int
+    message_kind: str
+    draft_source: str
+    ai_model: str | None
+    subject: str
+    body: str
+    sent_at: datetime
 
 
 class ApplicationSuggestionResolveRequest(BaseModel):

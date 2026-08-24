@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import './App.css'
 import Sidebar from './components/Sidebar'
+import ResumeTrackingPage from './features/resume_tracking/ResumeTrackingPage'
 import TrustedGmailGroupsPanel, { type TrustedGmailGroup } from './features/gmail_groups/TrustedGmailGroupsPanel'
 import { getDraftSourceLabel } from './features/ai/ui'
 import QueryBucket from './features/query_bucket/QueryBucket'
@@ -207,6 +208,8 @@ type SettingsPayload = {
   feature_application_automation_enabled: boolean
   feature_application_outreach_drafts_enabled: boolean
   feature_reminder_sweep_interval_minutes: number
+  feature_resume_tracking_enabled: boolean
+  feature_resume_tracking_sweep_interval_minutes: number
   candidate_work_authorizations: string[]
   preferred_employment_types: Array<'C2C' | 'W2' | '1099' | 'FT'>
   preferred_minimum_rate: number | null
@@ -505,6 +508,9 @@ type ResumeAsset = {
   sha256: string
   version: number
   skills_text: string
+  primary_role: string
+  structured_skills: string[]
+  variant_label: string
   is_enabled: boolean
   is_current: boolean
   created_at: string
@@ -588,12 +594,21 @@ type ResumeDatabaseSectionProps = {
   activeResume: ResumeAsset | null
   resumeFile: File | null
   resumeSkillsInput: string
+  resumePrimaryRoleInput: string
+  resumeStructuredSkillsInput: string
+  resumeVariantLabelInput: string
   resumeSkillEdits: Record<number, string>
+  resumeMetadataEdits: Record<number, { primary_role: string; structured_skills: string; variant_label: string }>
   resumeAssets: ResumeAsset[]
   resumeUploading: boolean
+  focusResumeId: number | null
   setResumeFile: (file: File | null) => void
   setResumeSkillsInput: (value: string) => void
+  setResumePrimaryRoleInput: (value: string) => void
+  setResumeStructuredSkillsInput: (value: string) => void
+  setResumeVariantLabelInput: (value: string) => void
   setResumeSkillEdits: React.Dispatch<React.SetStateAction<Record<number, string>>>
+  setResumeMetadataEdits: React.Dispatch<React.SetStateAction<Record<number, { primary_role: string; structured_skills: string; variant_label: string }>>>
   uploadResume: () => void
   saveResumeSkills: (resumeId: number) => void
   toggleResumeAsset: (resumeId: number, isEnabled: boolean) => void
@@ -604,18 +619,38 @@ export function ResumeDatabaseSection({
   activeResume,
   resumeFile,
   resumeSkillsInput,
+  resumePrimaryRoleInput,
+  resumeStructuredSkillsInput,
+  resumeVariantLabelInput,
   resumeSkillEdits,
+  resumeMetadataEdits,
   resumeAssets,
   resumeUploading,
+  focusResumeId,
   setResumeFile,
   setResumeSkillsInput,
+  setResumePrimaryRoleInput,
+  setResumeStructuredSkillsInput,
+  setResumeVariantLabelInput,
   setResumeSkillEdits,
+  setResumeMetadataEdits,
   uploadResume,
   saveResumeSkills,
   toggleResumeAsset,
   deleteResumeAsset,
 }: ResumeDatabaseSectionProps) {
   const [expandedResumeIds, setExpandedResumeIds] = useState<Record<number, boolean>>({})
+  const [handledFocusResumeId, setHandledFocusResumeId] = useState<number | null>(null)
+
+  if (focusResumeId !== null && focusResumeId !== handledFocusResumeId && resumeAssets.some((resume) => resume.id === focusResumeId)) {
+    setHandledFocusResumeId(focusResumeId)
+    setExpandedResumeIds((prev) => ({ ...prev, [focusResumeId]: true }))
+  }
+
+  useEffect(() => {
+    if (focusResumeId === null) return
+    document.getElementById(`resume-row-${focusResumeId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [focusResumeId])
 
   const toggleResumeExpanded = (resumeId: number) => {
     setExpandedResumeIds((prev) => ({
@@ -659,6 +694,9 @@ export function ResumeDatabaseSection({
               placeholder="java, spring boot, microservices, aws"
             />
           </label>
+          <label className="resumeDatabaseField"><span>Primary role</span><input value={resumePrimaryRoleInput} onChange={(event) => setResumePrimaryRoleInput(event.target.value)} placeholder="Senior Java Developer" /></label>
+          <label className="resumeDatabaseField"><span>Structured skills</span><input value={resumeStructuredSkillsInput} onChange={(event) => setResumeStructuredSkillsInput(event.target.value)} placeholder="Java, Spring Boot, AWS" /></label>
+          <label className="resumeDatabaseField"><span>Variant label</span><input value={resumeVariantLabelInput} onChange={(event) => setResumeVariantLabelInput(event.target.value)} placeholder="Java / Banking" /></label>
           <p className="subtle resumeDatabaseHelp">Use clean comma-separated skills for faster and more accurate resume matching.</p>
           <button type="button" onClick={uploadResume} disabled={!resumeFile || resumeUploading}>
             {resumeUploading ? 'Processing Resume...' : 'Upload Resume To Database'}
@@ -674,7 +712,7 @@ export function ResumeDatabaseSection({
             {resumeAssets.map((resume) => {
               const isExpanded = !!expandedResumeIds[resume.id]
               return (
-                <article key={resume.id} className="resumeDatabaseItem pillRow">
+                <article key={resume.id} id={`resume-row-${resume.id}`} className={`resumeDatabaseItem pillRow ${resume.id === focusResumeId ? 'focused' : ''}`}>
                   <div className="resumeDatabaseHeader">
                     <div className="resumeDatabaseTitleBlock">
                       <strong className="resumeDatabaseFileName">{resume.file_name}</strong>
@@ -719,6 +757,9 @@ export function ResumeDatabaseSection({
                           ? `Matching skills: ${resume.skills_text}`
                           : 'No manual skills saved yet. File extraction will be used as fallback.'}
                       </p>
+                      <label className="resumeDatabaseField"><span>Primary role</span><input value={resumeMetadataEdits[resume.id]?.primary_role ?? ''} onChange={(event) => setResumeMetadataEdits((current) => ({ ...current, [resume.id]: { ...(current[resume.id] ?? { structured_skills: '', variant_label: '' }), primary_role: event.target.value } }))} /></label>
+                      <label className="resumeDatabaseField"><span>Structured skills</span><input value={resumeMetadataEdits[resume.id]?.structured_skills ?? ''} onChange={(event) => setResumeMetadataEdits((current) => ({ ...current, [resume.id]: { ...(current[resume.id] ?? { primary_role: '', variant_label: '' }), structured_skills: event.target.value } }))} /></label>
+                      <label className="resumeDatabaseField"><span>Variant label</span><input value={resumeMetadataEdits[resume.id]?.variant_label ?? ''} onChange={(event) => setResumeMetadataEdits((current) => ({ ...current, [resume.id]: { ...(current[resume.id] ?? { primary_role: '', structured_skills: '' }), variant_label: event.target.value } }))} /></label>
                       <div className="resumeDatabaseActions">
                         <label className="toggleRow pillRow resumeDatabaseToggle">
                           <span>{resume.is_enabled ? 'Enabled' : 'Disabled'}</span>
@@ -733,7 +774,7 @@ export function ResumeDatabaseSection({
                         </label>
                         <div className="resumeDatabaseButtons">
                           <button type="button" onClick={() => saveResumeSkills(resume.id)}>
-                            Save Skills
+                            Save resume details
                           </button>
                           <button type="button" onClick={() => deleteResumeAsset(resume.id)}>
                             Delete
@@ -2632,6 +2673,8 @@ function App() {
     feature_application_automation_enabled: false,
     feature_application_outreach_drafts_enabled: false,
     feature_reminder_sweep_interval_minutes: 240,
+    feature_resume_tracking_enabled: false,
+    feature_resume_tracking_sweep_interval_minutes: 240,
     candidate_work_authorizations: [],
     preferred_employment_types: [],
     preferred_minimum_rate: null,
@@ -2656,8 +2699,13 @@ function App() {
   }
   const [resumeFile, setResumeFile] = useState<File | null>(null)
   const [resumeSkillsInput, setResumeSkillsInput] = useState('')
+  const [resumePrimaryRoleInput, setResumePrimaryRoleInput] = useState('')
+  const [resumeStructuredSkillsInput, setResumeStructuredSkillsInput] = useState('')
+  const [resumeVariantLabelInput, setResumeVariantLabelInput] = useState('')
   const [resumeSkillEdits, setResumeSkillEdits] = useState<Record<number, string>>({})
+  const [resumeMetadataEdits, setResumeMetadataEdits] = useState<Record<number, { primary_role: string; structured_skills: string; variant_label: string }>>({})
   const [resumeUploading, setResumeUploading] = useState(false)
+  const [focusResumeId, setFocusResumeId] = useState<number | null>(null)
   const [attachmentUploadFiles, setAttachmentUploadFiles] = useState<File[]>([])
   const [gmailRequirementGroups, setGmailRequirementGroups] = useState<TrustedGmailGroup[]>([])
   const [gmailGroupsBusy, setGmailGroupsBusy] = useState(false)
@@ -2700,7 +2748,7 @@ function App() {
   const [routingFixes, setRoutingFixes] = useState<Record<number, { to: string; cc: string }>>({})
   const [fixingId, setFixingId] = useState<number | null>(null)
   const [deletingFailedId, setDeletingFailedId] = useState<number | null>(null)
-  const [activePage, setActivePage] = useState<'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'inbox' | 'premium_numbers' | 'settings'>('run_queue')
+  const [activePage, setActivePage] = useState<'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'inbox' | 'premium_numbers' | 'resume_tracking' | 'settings'>('run_queue')
   const [emailSearchTarget, setEmailSearchTarget] = useState<EmailSearchHit | null>(null)
   const [inboxConversations, setInboxConversations] = useState<ConversationSummary[]>([])
   const [inboxTab, setInboxTab] = useState<'all' | 'replies'>('all')
@@ -3009,6 +3057,8 @@ function App() {
       feature_application_automation_enabled: Boolean(payload.feature_application_automation_enabled),
       feature_application_outreach_drafts_enabled: Boolean(payload.feature_application_outreach_drafts_enabled),
       feature_reminder_sweep_interval_minutes: Math.max(30, Math.min(payload.feature_reminder_sweep_interval_minutes || 240, 1440)),
+      feature_resume_tracking_enabled: Boolean(payload.feature_resume_tracking_enabled),
+      feature_resume_tracking_sweep_interval_minutes: Math.max(30, Math.min(payload.feature_resume_tracking_sweep_interval_minutes || 240, 1440)),
       candidate_work_authorizations: payload.candidate_work_authorizations ?? [],
       preferred_employment_types: payload.preferred_employment_types ?? [],
       preferred_minimum_rate: payload.preferred_minimum_rate ?? null,
@@ -3047,6 +3097,7 @@ function App() {
     setGmailRequirementGroups(payload.gmail_requirement_groups ?? [])
     setResumeAssets(payload.resumes ?? [])
     setResumeSkillEdits(Object.fromEntries((payload.resumes ?? []).map((resume) => [resume.id, resume.skills_text ?? ''])))
+    setResumeMetadataEdits(Object.fromEntries((payload.resumes ?? []).map((resume) => [resume.id, { primary_role: resume.primary_role ?? '', structured_skills: (resume.structured_skills ?? []).join(', '), variant_label: resume.variant_label ?? '' }])))
     setAttachmentFiles(payload.attachments ?? [])
     setPendingSkills(payload.pending_skills ?? [])
     setPendingJobIntentSignals(payload.pending_job_intent_signals ?? [])
@@ -3509,6 +3560,7 @@ function App() {
       sent_items: 'view_sent_items',
       inbox: 'view_sent_items',
       premium_numbers: 'view_premium_numbers',
+      resume_tracking: 'view_premium_numbers',
       settings: 'view_run_queue',
     }
     const eventType = eventMap[page]
@@ -3874,12 +3926,18 @@ function App() {
     const fd = new FormData()
     fd.append('file', resumeFile)
     fd.append('skills_text', resumeSkillsInput)
+    fd.append('primary_role', resumePrimaryRoleInput)
+    fd.append('structured_skills_text', resumeStructuredSkillsInput)
+    fd.append('variant_label', resumeVariantLabelInput)
     setResumeUploading(true)
     try {
       const res = await fetch(`${apiBase}/settings/resume`, { method: 'POST', body: fd })
       if (!res.ok) throw new Error('Failed to upload resume')
       setResumeFile(null)
       setResumeSkillsInput('')
+      setResumePrimaryRoleInput('')
+      setResumeStructuredSkillsInput('')
+      setResumeVariantLabelInput('')
       await loadSettingsBootstrap()
     } catch (e) {
       setError((e as Error).message)
@@ -3894,7 +3952,12 @@ function App() {
       const res = await fetch(`${apiBase}/settings/resumes/${resumeId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ skills_text: resumeSkillEdits[resumeId] ?? '' }),
+        body: JSON.stringify({
+          skills_text: resumeSkillEdits[resumeId] ?? '',
+          primary_role: resumeMetadataEdits[resumeId]?.primary_role ?? '',
+          structured_skills: (resumeMetadataEdits[resumeId]?.structured_skills ?? '').split(',').map((value) => value.trim()).filter(Boolean),
+          variant_label: resumeMetadataEdits[resumeId]?.variant_label ?? '',
+        }),
       })
       if (!res.ok) throw new Error('Failed to save resume skills')
       await loadSettingsBootstrap()
@@ -4697,6 +4760,7 @@ function App() {
         sentCount={bucketMeta.approved_sent.total ?? sentQueue.length}
         inboxCount={inboxUnreadCount}
         premiumCount={premiumPendingCount}
+        resumeTrackingEnabled={settings.feature_resume_tracking_enabled}
         activePage={activePage}
         onNavigate={setActivePage}
       />
@@ -4800,7 +4864,7 @@ function App() {
 
         <div className="pageBody">
           <div className="titleBlock">
-            <h1>{activePage === 'settings' ? 'Settings' : activePage === 'inbox' ? 'Reply Inbox' : 'Run Queue Dashboard'}</h1>
+            <h1>{activePage === 'settings' ? 'Settings' : activePage === 'inbox' ? 'Reply Inbox' : activePage === 'resume_tracking' ? 'Resume Tracking' : 'Run Queue Dashboard'}</h1>
             <p>
               {activePage === 'settings'
                 ? 'Manage learning queues, trusted Gmail groups, and resume assets.'
@@ -5849,6 +5913,21 @@ function App() {
                       <span className="toggleTrack" />
                     </span>
                   </label>
+                  <label className="toggleRow pillRow">
+                    <span>Resume Tracking</span>
+                    <span className="toggleSwitch">
+                      <input
+                        type="checkbox"
+                        checked={settings.feature_resume_tracking_enabled}
+                        onChange={(e) => setSettings({ ...settings, feature_resume_tracking_enabled: e.target.checked })}
+                      />
+                      <span className="toggleTrack" />
+                    </span>
+                  </label>
+                  <label>
+                    Resume suggestion sweep (minutes)
+                    <input type="number" min={30} max={1440} value={settings.feature_resume_tracking_sweep_interval_minutes} onChange={(event) => setSettings({ ...settings, feature_resume_tracking_sweep_interval_minutes: Number(event.target.value) })} />
+                  </label>
                   <fieldset>
                     <legend>Preferred employment types</legend>
                     <div className="settingsCheckboxGrid">
@@ -6242,12 +6321,21 @@ function App() {
                 activeResume={activeResume}
                 resumeFile={resumeFile}
                 resumeSkillsInput={resumeSkillsInput}
+                resumePrimaryRoleInput={resumePrimaryRoleInput}
+                resumeStructuredSkillsInput={resumeStructuredSkillsInput}
+                resumeVariantLabelInput={resumeVariantLabelInput}
                 resumeSkillEdits={resumeSkillEdits}
+                resumeMetadataEdits={resumeMetadataEdits}
                 resumeAssets={resumeAssets}
                 resumeUploading={resumeUploading}
+                focusResumeId={focusResumeId}
                 setResumeFile={setResumeFile}
                 setResumeSkillsInput={setResumeSkillsInput}
+                setResumePrimaryRoleInput={setResumePrimaryRoleInput}
+                setResumeStructuredSkillsInput={setResumeStructuredSkillsInput}
+                setResumeVariantLabelInput={setResumeVariantLabelInput}
                 setResumeSkillEdits={setResumeSkillEdits}
+                setResumeMetadataEdits={setResumeMetadataEdits}
                 uploadResume={uploadResume}
                 saveResumeSkills={saveResumeSkills}
                 toggleResumeAsset={toggleResumeAsset}
@@ -6766,6 +6854,8 @@ function App() {
               onPendingCountChange={setPremiumPendingCount}
             />
           ) : null}
+
+          {activePage === 'resume_tracking' ? <ResumeTrackingPage apiBase={apiBase} onNavigateToSettings={(resumeId) => { setFocusResumeId(resumeId); setActivePage('settings') }} /> : null}
 
           {activePage === 'inbox' ? (
             <section className="card pageSection inboxSection">

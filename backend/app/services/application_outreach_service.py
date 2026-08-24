@@ -18,6 +18,7 @@ from app.models import (
     AttachmentAsset,
     Application,
     ApplicationEvent,
+    ApplicationOutreachMessage,
     PremiumNumberContact,
     RecruiterEmail,
     ResumeAsset,
@@ -28,6 +29,7 @@ from app.services.application_service import (
     ApplicationReferenceNotFoundError,
     ApplicationValidationError,
     append_event,
+    mark_resume_submitted_if_needed,
 )
 
 
@@ -78,7 +80,7 @@ def _latest_linked_email(db: Session, application: Application) -> RecruiterEmai
 
 
 def resolve_recipient(db: Session, application: Application) -> OutreachRecipient:
-    """Use the latest linked Gmail thread, then fall back to the recruiter contact."""
+    """Use linked Gmail, then the known contact, then a manual-entry email."""
     email = _latest_linked_email(db, application)
     if email is not None and (email.recipient_email or "").strip():
         return OutreachRecipient(
@@ -99,6 +101,13 @@ def resolve_recipient(db: Session, application: Application) -> OutreachRecipien
     if recruiter is not None and (recruiter.recruiter_email or "").strip():
         return OutreachRecipient(
             to=recruiter.recruiter_email.strip(),
+            cc=None,
+            thread_id=None,
+            source_recruiter_email_id=None,
+        )
+    if (application.manual_recruiter_email or "").strip():
+        return OutreachRecipient(
+            to=application.manual_recruiter_email.strip(),
             cc=None,
             thread_id=None,
             source_recruiter_email_id=None,
@@ -236,6 +245,8 @@ def send_application_message(
     message_kind: MessageKind,
     include_resume: bool,
     attachment_asset_ids: list[int],
+    draft_source: str = "unknown",
+    ai_model: str | None = None,
 ) -> tuple[Application, str]:
     to = to.strip()
     if not to:
@@ -302,6 +313,19 @@ def send_application_message(
     else:
         gmail_message_id = gmail_client.send_new_email_with_attachment(**send_args)
 
+    sent_at = utc_now()
+    db.add(
+        ApplicationOutreachMessage(
+            owner_id=application.owner_id,
+            application_id=application.id,
+            message_kind=message_kind,
+            draft_source=(draft_source or "unknown").strip()[:20] or "unknown",
+            ai_model=(ai_model or "").strip()[:80] or None,
+            subject=subject.strip(),
+            body=body,
+            sent_at=sent_at,
+        )
+    )
     append_event(
         db,
         application,
@@ -318,7 +342,9 @@ def send_application_message(
             "message_kind": message_kind,
         },
     )
-    application.last_contact_at = utc_now()
+    if message_kind == "submission_to_recruiter":
+        mark_resume_submitted_if_needed(db, application)
+    application.last_contact_at = sent_at
     application.follow_up_count = (application.follow_up_count or 0) + 1
     return application, gmail_message_id
 

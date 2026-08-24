@@ -78,7 +78,7 @@ describe('premium number API URLs', () => {
       headers: { 'Content-Type': 'application/json' },
     }))
     vi.stubGlobal('fetch', fetchMock)
-    await createApplication('http://localhost:8000', { resume_asset_id: 1, recruiter_opportunity_id: 2 })
+    await createApplication('http://localhost:8000', { resume_asset_id: 1, recruiter_opportunity_id: 2, dedupe_key: 'action-1' })
     await updateApplication('http://localhost:8000', 3, { status: 'contacted' })
     await createApplicationEvent('http://localhost:8000', 3, { event_type: 'note', note: 'Followed up' })
     await getApplicationsDashboardSummary('http://localhost:8000')

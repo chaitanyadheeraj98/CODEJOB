@@ -92,6 +92,7 @@ type ApplicationDraftEdit = {
   subject: string
   body: string
   source: string
+  ai_model: string | null
   include_resume: boolean
   attachment_asset_ids: number[]
 }
@@ -126,6 +127,7 @@ function emptyApplicationDraft(): ApplicationDraftEdit {
     subject: '',
     body: '',
     source: '',
+    ai_model: null,
     include_resume: true,
     attachment_asset_ids: [],
   }
@@ -516,6 +518,7 @@ export default function ApplicationsTab({ apiBase, refreshToken, onToast }: Appl
           subject: generated.subject,
           body: generated.body,
           source: generated.source,
+          ai_model: generated.ai_model,
         },
       }))
       onToast('Draft ready for review')
@@ -541,6 +544,8 @@ export default function ApplicationsTab({ apiBase, refreshToken, onToast }: Appl
         message_kind: draft.message_kind,
         include_resume: draft.include_resume,
         attachment_asset_ids: draft.attachment_asset_ids,
+        draft_source: draft.source || 'unknown',
+        ai_model: draft.ai_model,
       })
       replaceRow(result.application)
       setDetails((current) => ({ ...current, [applicationId]: result.application }))

@@ -35,6 +35,7 @@ describe('Sidebar', () => {
           sentCount={4}
           inboxCount={6}
           premiumCount={5}
+          resumeTrackingEnabled
           activePage="run_queue"
           onNavigate={vi.fn()}
         />,
@@ -64,6 +65,7 @@ describe('Sidebar', () => {
           runCount={0}
           sentCount={0}
           premiumCount={0}
+          resumeTrackingEnabled={false}
           activePage="run_queue"
           onNavigate={onNavigate}
         />,

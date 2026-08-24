@@ -68,11 +68,14 @@ from app.models import (
     APPLICATION_CLOSED_STATUS_VALUES,
     APPLICATION_STATUS_VALUES,
     APPLICATION_SUGGESTION_STATUS_VALUES,
+    RESUME_SUBMISSION_STATUS_VALUES,
     Application,
     ApplicationEvent,
     ApplicationInterview,
+    ApplicationOutreachMessage,
     ApplicationRTR,
     ApplicationSuggestion,
+    ApplicationSkillGapSnapshot,
     AttachmentAsset,
     CanonicalEntityTaxonomyEntry,
     CustomSkillTaxonomyEntry,
@@ -172,6 +175,7 @@ from app.services import (
     application_intelligence_service,
     application_outreach_service,
     application_service,
+    resume_tracking_service,
     email_lookup_service,
     opportunity_lineage_service,
     policy_service,
@@ -199,7 +203,7 @@ from app.services.email_inbox_service import TRANSPARENT_PIXEL_PNG, record_open,
 from app.services.github_issue_service import GithubIssueServiceError, create_github_issue
 from app.services.orchestration_service import OrchestrationDeps, OrchestrationService
 from app.services.requirement_expansion_service import RequirementExpansionService
-from app.services.resume_enrichment_service import enrich_resume
+from app.services.resume_enrichment_service import backfill_role_and_label, enrich_resume
 from app.services.role_manifest_pipeline import extract_and_score_children
 from app.services.role_manifest_service import RoleManifestService
 from app.services.sendability_service import apply_resume_sendability, resolve_sendability_status
@@ -227,6 +231,7 @@ from app.schemas import (
     ApplicationInterviewPatchRequest,
     ApplicationInterviewResponse,
     ApplicationListResponse,
+    ApplicationOutreachMessageResponse,
     ApplicationPatchRequest,
     ApplicationResponse,
     ApplicationRTRRequest,
@@ -238,6 +243,7 @@ from app.schemas import (
     ApplicationSuggestionListResponse,
     ApplicationSuggestionResolveRequest,
     ApplicationSuggestionResponse,
+    ApplicationSkillGapResponse,
     ApproveJobIntentSignalRequest,
     ApproveSendRequest,
     ApproveSkillRequest,
@@ -291,6 +297,7 @@ from app.schemas import (
     PremiumNumberListResponse,
     PremiumNumberResponse,
     ManualPremiumContactRequest,
+    ManualApplicationCreateRequest,
     PendingNumberReviewCountResponse,
     PendingSkillResponse,
     PendingEntityResponse,
@@ -309,6 +316,10 @@ from app.schemas import (
     RejectRequest,
     ResolveRecipientsRequest,
     ResumeResponse,
+    ResumeFunnelMetricsResponse,
+    ResumePerformanceSummaryItem,
+    ResumePerformanceSummaryResponse,
+    ResumeSubmissionStatusUpdateRequest,
     ResumeUpdateRequest,
     SentItemDetailsResponse,
     SettingsBootstrapResponse,
@@ -1160,6 +1171,15 @@ def _run_reminder_sweep(db: Session) -> None:
     db.commit()
 
 
+def _run_resume_tracking_sweep(db: Session) -> None:
+    user_settings = _get_settings(db)
+    resume_tracking_service.generate_resume_tracking_suggestions(
+        db,
+        owner_id=user_settings.owner_id,
+    )
+    db.commit()
+
+
 def _get_auto_runner_service() -> AutoRunnerService:
     global auto_runner_service
     if auto_runner_service is None:
@@ -1170,6 +1190,7 @@ def _get_auto_runner_service() -> AutoRunnerService:
             run_nvoids_once=lambda db, max_items: _enqueue_nvoids_sync(db, max_items=max_items),
             check_live_replies=_check_live_replies,
             run_reminder_sweep=_run_reminder_sweep,
+            run_resume_tracking_sweep=_run_resume_tracking_sweep,
             action_lock=telegram_action_lock,
             stop_event=auto_runner_stop_event,
         )
@@ -1446,6 +1467,12 @@ def _list_resumes(db: Session) -> list[ResumeAsset]:
         .filter(ResumeAsset.owner_id == settings.owner_id)
         .order_by(ResumeAsset.version.desc(), ResumeAsset.updated_at.desc())
         .all()
+    )
+
+
+def _resume_response(resume: ResumeAsset) -> ResumeResponse:
+    return ResumeResponse.model_validate(resume).model_copy(
+        update={"structured_skills": _json_string_list(resume.structured_skills_json)}
     )
 
 
@@ -2143,6 +2170,11 @@ def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
             30,
             min(int(s.feature_reminder_sweep_interval_minutes or 240), 1440),
         ),
+        feature_resume_tracking_enabled=s.feature_resume_tracking_enabled,
+        feature_resume_tracking_sweep_interval_minutes=max(
+            30,
+            min(int(s.feature_resume_tracking_sweep_interval_minutes or 240), 1440),
+        ),
         candidate_work_authorizations=_json_string_list(s.candidate_work_authorizations_json),
         preferred_employment_types=_json_string_list(s.preferred_employment_types_json),
         preferred_minimum_rate=s.preferred_minimum_rate,
@@ -2347,7 +2379,7 @@ def get_settings_bootstrap(
         settings=_settings_response_from_model(user_settings),
         role_manifest_child_creation_enabled=settings.role_manifest_child_creation_enabled,
         gmail_requirement_groups=[_gmail_requirement_group_response(item) for item in _list_gmail_requirement_groups(db)],
-        resumes=[ResumeResponse.model_validate(item) for item in _list_resumes(db)],
+        resumes=[_resume_response(item) for item in _list_resumes(db)],
         attachments=[AttachmentAssetResponse.model_validate(item) for item in _list_attachment_assets(db)],
         pending_skills=pending_skills,
         pending_job_intent_signals=pending_job_intent_signals,
@@ -2401,6 +2433,11 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
     s.feature_reminder_sweep_interval_minutes = max(
         30,
         min(int(payload.feature_reminder_sweep_interval_minutes), 1440),
+    )
+    s.feature_resume_tracking_enabled = payload.feature_resume_tracking_enabled
+    s.feature_resume_tracking_sweep_interval_minutes = max(
+        30,
+        min(int(payload.feature_resume_tracking_sweep_interval_minutes), 1440),
     )
     provided_fields = payload.model_fields_set
     if "feature_role_manifest_enabled" in provided_fields:
@@ -2525,6 +2562,9 @@ def delete_gmail_requirement_group(group_id: int, db: Session = Depends(get_db))
 def upload_resume(
     file: UploadFile = File(...),
     skills_text: str = Form(""),
+    primary_role: str = Form(""),
+    structured_skills_text: str = Form(""),
+    variant_label: str = Form(""),
     db: Session = Depends(get_db),
 ) -> ResumeResponse:
     if not file.filename:
@@ -2562,6 +2602,12 @@ def upload_resume(
         sha256=sha256,
         version=next_version,
         skills_text=_normalize_resume_skills_text(skills_text),
+        primary_role=primary_role.strip(),
+        structured_skills_json=json.dumps(
+            [value for value in _normalize_resume_skills_text(structured_skills_text).split(",") if value],
+            separators=(",", ":"),
+        ),
+        variant_label=variant_label.strip(),
         is_enabled=True,
         is_current=True,
     )
@@ -2573,22 +2619,21 @@ def upload_resume(
     db.add(resume)
     db.commit()
     db.refresh(resume)
-    return ResumeResponse.model_validate(resume)
+    return _resume_response(resume)
 
 
 @app.get("/settings/resumes", response_model=list[ResumeResponse])
-def list_resumes(db: Session = Depends(get_db)) -> list[ResumeAsset]:
-    return _list_resumes(db)
+def list_resumes(db: Session = Depends(get_db)) -> list[ResumeResponse]:
+    return [_resume_response(item) for item in _list_resumes(db)]
 
 
 @app.post("/settings/resumes/backfill-enrichment")
-def backfill_resume_enrichment(db: Session = Depends(get_db)) -> dict[str, object]:
-    rows = (
-        db.query(ResumeAsset)
-        .filter(ResumeAsset.owner_id == settings.owner_id, ResumeAsset.content_markdown.is_(None))
-        .order_by(ResumeAsset.id)
-        .all()
-    )
+def backfill_resume_enrichment(force: bool = False, db: Session = Depends(get_db)) -> dict[str, object]:
+    query = db.query(ResumeAsset).filter(ResumeAsset.owner_id == settings.owner_id)
+    if not force:
+        query = query.filter(ResumeAsset.content_markdown.is_(None))
+    rows = query.order_by(ResumeAsset.id).all()
+
     enriched_ids: list[int] = []
     failed: list[dict[str, object]] = []
     for resume in rows:
@@ -2601,7 +2646,32 @@ def backfill_resume_enrichment(db: Session = Depends(get_db)) -> dict[str, objec
             db.rollback()
             logger.warning("Resume enrichment backfill failed for %s: %s", resume.id, exc)
             failed.append({"id": resume.id, "error": str(exc)[:500]})
-    return {"enriched_count": len(enriched_ids), "enriched_ids": enriched_ids, "failed": failed}
+
+    labeled_ids: list[int] = []
+    if not force:
+        label_rows = (
+            db.query(ResumeAsset)
+            .filter(
+                ResumeAsset.owner_id == settings.owner_id,
+                ResumeAsset.content_markdown.is_not(None),
+                or_(ResumeAsset.primary_role == "", ResumeAsset.variant_label == ""),
+            )
+            .order_by(ResumeAsset.id)
+            .all()
+        )
+        for resume in label_rows:
+            if backfill_role_and_label(resume):
+                labeled_ids.append(resume.id)
+    if labeled_ids:
+        db.commit()
+
+    return {
+        "enriched_count": len(enriched_ids),
+        "enriched_ids": enriched_ids,
+        "failed": failed,
+        "labeled_count": len(labeled_ids),
+        "labeled_ids": labeled_ids,
+    }
 
 
 @app.patch("/settings/resumes/{resume_id}", response_model=ResumeResponse)
@@ -2614,12 +2684,22 @@ def update_resume(resume_id: int, payload: ResumeUpdateRequest, db: Session = De
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found")
 
-    if payload.is_enabled is None and payload.skills_text is None:
+    if not payload.model_fields_set:
         raise HTTPException(status_code=400, detail="At least one resume update field is required")
 
     if payload.skills_text is not None:
         resume.skills_text = _normalize_resume_skills_text(payload.skills_text)
         _refresh_resume_embedding(resume)
+
+    if payload.primary_role is not None:
+        resume.primary_role = payload.primary_role.strip()
+    if payload.structured_skills is not None:
+        resume.structured_skills_json = json.dumps(
+            list(dict.fromkeys(value.strip() for value in payload.structured_skills if value.strip())),
+            separators=(",", ":"),
+        )
+    if payload.variant_label is not None:
+        resume.variant_label = payload.variant_label.strip()
 
     if payload.is_enabled is not None:
         resume.is_enabled = payload.is_enabled
@@ -2631,7 +2711,7 @@ def update_resume(resume_id: int, payload: ResumeUpdateRequest, db: Session = De
             _set_legacy_current_resume(db, target_resume=replacement)
     db.commit()
     db.refresh(resume)
-    return ResumeResponse.model_validate(resume)
+    return _resume_response(resume)
 
 
 @app.delete("/settings/resumes/{resume_id}")
@@ -3895,6 +3975,41 @@ def _get_application_suggestion(db: Session, suggestion_id: int) -> ApplicationS
     return row
 
 
+def _require_resume_tracking_enabled(db: Session) -> UserSettings:
+    user_settings = _get_settings(db)
+    if not user_settings.feature_resume_tracking_enabled:
+        raise HTTPException(status_code=403, detail="Resume tracking is disabled")
+    return user_settings
+
+
+def _skill_gap_response(row: ApplicationSkillGapSnapshot) -> ApplicationSkillGapResponse:
+    return ApplicationSkillGapResponse(
+        source=row.source,
+        matched_required=_json_string_list(row.matched_required_json),
+        missing_required=_json_string_list(row.missing_required_json),
+        matched_preferred=_json_string_list(row.matched_preferred_json),
+        missing_preferred=_json_string_list(row.missing_preferred_json),
+        computed_at=row.computed_at,
+    )
+
+
+def _application_suggestion_response(row: ApplicationSuggestion) -> ApplicationSuggestionResponse:
+    return ApplicationSuggestionResponse.model_validate(row).model_copy(
+        update={"payload": _json_object(row.payload_json) or {}}
+    )
+
+
+def _milestones_response(raw: str | None) -> dict[str, datetime]:
+    parsed: dict[str, datetime] = {}
+    for name, value in (_json_object(raw) or {}).items():
+        try:
+            timestamp = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        parsed[name] = timestamp if timestamp.tzinfo else timestamp.replace(tzinfo=UTC)
+    return parsed
+
+
 def _application_response(
     db: Session,
     row: Application,
@@ -3956,16 +4071,34 @@ def _application_response(
         if include_events
         else []
     )
+    skill_gap = (
+        db.query(ApplicationSkillGapSnapshot)
+        .filter(
+            ApplicationSkillGapSnapshot.owner_id == settings.owner_id,
+            ApplicationSkillGapSnapshot.application_id == row.id,
+        )
+        .first()
+    )
+    try:
+        rejection_detail_tags = json.loads(row.rejection_detail_tags_json or "[]")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        rejection_detail_tags = []
     return ApplicationResponse.model_validate(row).model_copy(
         update={
             "current_recruiter_name": recruiter.recruiter_name if recruiter else "",
             "current_recruiter_company": recruiter.company if recruiter else "",
             "current_recruiter_phone_display": recruiter.display_phone_number if recruiter else "",
+            "current_recruiter_email": recruiter.recruiter_email if recruiter else "",
+            "current_recruiter_linkedin_url": recruiter.linkedin_url if recruiter else "",
             "current_job_title": opportunity.job_title if opportunity else "",
             "current_end_client": opportunity.end_client if opportunity else "",
             "events": [ApplicationEventResponse.model_validate(event) for event in events],
             "rtr_history": [ApplicationRTRResponse.model_validate(rtr) for rtr in rtr_history],
             "interviews": [ApplicationInterviewResponse.model_validate(interview) for interview in interviews],
+            "is_manual_entry": row.recruiter_opportunity_id is None,
+            "rejection_detail_tags": rejection_detail_tags if isinstance(rejection_detail_tags, list) else [],
+            "milestones_reached": _milestones_response(row.milestones_reached_json),
+            "skill_gap": _skill_gap_response(skill_gap) if skill_gap else None,
         }
     )
 
@@ -6119,22 +6252,46 @@ def refresh_recruiter_opportunity_ai_metadata(
 @app.post("/applications", response_model=ApplicationResponse, status_code=201)
 def create_application_route(
     payload: ApplicationCreateRequest,
+    response: Response,
     db: Session = Depends(get_db),
 ) -> ApplicationResponse:
     try:
-        row = application_service.create_application(
+        row, created = application_service.create_application(
             db,
             owner_id=settings.owner_id,
             resume_asset_id=payload.resume_asset_id,
             recruiter_opportunity_id=payload.recruiter_opportunity_id,
+            dedupe_key=payload.dedupe_key,
         )
     except application_service.ApplicationReferenceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except application_service.ApplicationConflictError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
     db.commit()
     db.refresh(row)
+    response.status_code = 201 if created else 200
     return _application_response(db, row)
+
+
+@app.post("/applications/manual", response_model=ApplicationResponse, status_code=201)
+def create_manual_application_route(
+    payload: ManualApplicationCreateRequest,
+    response: Response,
+    db: Session = Depends(get_db),
+) -> ApplicationResponse:
+    _require_resume_tracking_enabled(db)
+    try:
+        row, created = resume_tracking_service.create_manual_application(
+            db,
+            owner_id=settings.owner_id,
+            **payload.model_dump(),
+        )
+    except application_service.ApplicationReferenceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except application_service.ApplicationValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    db.commit()
+    db.refresh(row)
+    response.status_code = 201 if created else 200
+    return _application_response(db, row, include_events=True)
 
 
 @app.get("/applications", response_model=ApplicationListResponse)
@@ -6142,6 +6299,7 @@ def list_applications(
     cursor: int = Query(0, ge=0),
     limit: int = Query(25, ge=1, le=100),
     status: str | None = Query(default=None),
+    resume_submission_status: str | None = Query(default=None),
     resume_asset_id: int | None = Query(default=None, gt=0),
     recruiter_contact_id: int | None = Query(default=None, gt=0),
     q: str | None = Query(default=None),
@@ -6155,6 +6313,10 @@ def list_applications(
         if status not in APPLICATION_STATUS_VALUES:
             raise HTTPException(status_code=422, detail="Invalid application status")
         query = query.filter(Application.status == status)
+    if resume_submission_status:
+        if resume_submission_status not in RESUME_SUBMISSION_STATUS_VALUES:
+            raise HTTPException(status_code=422, detail="Invalid resume submission status")
+        query = query.filter(Application.resume_submission_status == resume_submission_status)
     if resume_asset_id is not None:
         query = query.filter(Application.resume_asset_id == resume_asset_id)
     if recruiter_contact_id is not None:
@@ -6168,6 +6330,7 @@ def list_applications(
                 Application.recruiter_company_snapshot.ilike(needle),
                 Application.job_title_snapshot.ilike(needle),
                 Application.end_client_snapshot.ilike(needle),
+                Application.manual_recruiter_email.ilike(needle),
             )
         )
     rows = query.order_by(Application.created_at.desc(), Application.id.desc()).all()
@@ -6300,7 +6463,7 @@ def list_application_suggestions(
         .all()
     )
     return ApplicationSuggestionListResponse(
-        items=[ApplicationSuggestionResponse.model_validate(row) for row in rows]
+        items=[_application_suggestion_response(row) for row in rows]
     )
 
 
@@ -6337,7 +6500,7 @@ def dismiss_application_suggestion(
     application_service.dismiss_suggestion(db, suggestion)
     db.commit()
     db.refresh(suggestion)
-    return ApplicationSuggestionResponse.model_validate(suggestion)
+    return _application_suggestion_response(suggestion)
 
 
 @app.post("/applications/reminders/run", response_model=ApplicationSuggestionListResponse)
@@ -6348,8 +6511,145 @@ def run_reminder_sweep_now(db: Session = Depends(get_db)) -> ApplicationSuggesti
     )
     db.commit()
     return ApplicationSuggestionListResponse(
-        items=[ApplicationSuggestionResponse.model_validate(row) for row in created]
+        items=[_application_suggestion_response(row) for row in created]
     )
+
+
+@app.post("/applications/resume-tracking/suggestions/run", response_model=ApplicationSuggestionListResponse)
+def run_resume_tracking_sweep_now(db: Session = Depends(get_db)) -> ApplicationSuggestionListResponse:
+    _require_resume_tracking_enabled(db)
+    created = resume_tracking_service.generate_resume_tracking_suggestions(
+        db,
+        owner_id=settings.owner_id,
+    )
+    db.commit()
+    return ApplicationSuggestionListResponse(
+        items=[_application_suggestion_response(row) for row in created]
+    )
+
+
+@app.get("/resumes/performance-summary", response_model=ResumePerformanceSummaryResponse)
+def resume_performance_summary_route(db: Session = Depends(get_db)) -> ResumePerformanceSummaryResponse:
+    _require_resume_tracking_enabled(db)
+    items = resume_tracking_service.resume_performance_summary(db, owner_id=settings.owner_id)
+    return ResumePerformanceSummaryResponse(
+        items=[
+            ResumePerformanceSummaryItem(
+                resume=_resume_response(item["resume"]),
+                submission_count=int(item["submission_count"]),
+                acceptance_rate=float(item["acceptance_rate"]),
+            )
+            for item in items
+        ]
+    )
+
+
+@app.get("/resumes/{resume_asset_id}/funnel", response_model=ResumeFunnelMetricsResponse)
+def resume_funnel_route(
+    resume_asset_id: int,
+    db: Session = Depends(get_db),
+) -> ResumeFunnelMetricsResponse:
+    _require_resume_tracking_enabled(db)
+    resume = (
+        db.query(ResumeAsset.id)
+        .filter(ResumeAsset.owner_id == settings.owner_id, ResumeAsset.id == resume_asset_id)
+        .first()
+    )
+    if resume is None:
+        raise HTTPException(status_code=404, detail="Resume not found")
+    return ResumeFunnelMetricsResponse(
+        **resume_tracking_service.resume_funnel_metrics(
+            db,
+            owner_id=settings.owner_id,
+            resume_asset_id=resume_asset_id,
+        )
+    )
+
+
+@app.patch(
+    "/applications/{application_id}/resume-submission-status",
+    response_model=ApplicationResponse,
+)
+def update_resume_submission_status_route(
+    application_id: int,
+    payload: ResumeSubmissionStatusUpdateRequest,
+    db: Session = Depends(get_db),
+) -> ApplicationResponse:
+    _require_resume_tracking_enabled(db)
+    application = _get_application(db, application_id)
+    try:
+        resume_tracking_service.update_resume_submission_status(
+            db,
+            application,
+            new_status=payload.new_status,
+            rejection_detail_tags=payload.rejection_detail_tags,
+            note=payload.note,
+            force=payload.force,
+        )
+    except application_service.ApplicationValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    db.commit()
+    db.refresh(application)
+    return _application_response(db, application, include_events=True)
+
+
+@app.get(
+    "/applications/{application_id}/skill-gap",
+    response_model=ApplicationSkillGapResponse,
+)
+def get_application_skill_gap(
+    application_id: int,
+    db: Session = Depends(get_db),
+) -> ApplicationSkillGapResponse:
+    _require_resume_tracking_enabled(db)
+    snapshot = resume_tracking_service.compute_skill_gap(db, _get_application(db, application_id))
+    db.commit()
+    db.refresh(snapshot)
+    return _skill_gap_response(snapshot)
+
+
+@app.post(
+    "/applications/{application_id}/skill-gap/recompute",
+    response_model=ApplicationSkillGapResponse,
+)
+def recompute_application_skill_gap(
+    application_id: int,
+    db: Session = Depends(get_db),
+) -> ApplicationSkillGapResponse:
+    _require_resume_tracking_enabled(db)
+    snapshot = resume_tracking_service.compute_skill_gap(
+        db,
+        _get_application(db, application_id),
+        force_recompute=True,
+    )
+    db.commit()
+    db.refresh(snapshot)
+    return _skill_gap_response(snapshot)
+
+
+@app.get(
+    "/applications/{application_id}/outreach-messages/{message_id}",
+    response_model=ApplicationOutreachMessageResponse,
+)
+def get_application_outreach_message(
+    application_id: int,
+    message_id: int,
+    db: Session = Depends(get_db),
+) -> ApplicationOutreachMessageResponse:
+    _require_resume_tracking_enabled(db)
+    _get_application(db, application_id)
+    row = (
+        db.query(ApplicationOutreachMessage)
+        .filter(
+            ApplicationOutreachMessage.owner_id == settings.owner_id,
+            ApplicationOutreachMessage.application_id == application_id,
+            ApplicationOutreachMessage.id == message_id,
+        )
+        .first()
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Outreach message not found")
+    return ApplicationOutreachMessageResponse.model_validate(row)
 
 
 @app.post("/applications/{application_id}/draft-message", response_model=ApplicationDraftMessageResponse)
@@ -6394,6 +6694,8 @@ def send_application_message(
             message_kind=payload.message_kind,
             include_resume=payload.include_resume,
             attachment_asset_ids=payload.attachment_asset_ids,
+            draft_source=payload.draft_source,
+            ai_model=payload.ai_model,
         )
     except application_service.ApplicationReferenceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

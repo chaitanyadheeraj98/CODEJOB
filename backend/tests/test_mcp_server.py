@@ -946,17 +946,19 @@ class MCPServerToolTests(unittest.TestCase):
             )
             db.add(second_resume)
             db.flush()
-            first = application_service.create_application(
+            first, _ = application_service.create_application(
                 db,
                 owner_id=settings.owner_id,
                 resume_asset_id=self.resume_id,
                 recruiter_opportunity_id=self.opportunity_id,
+                dedupe_key="mcp-record-first",
             )
-            second = application_service.create_application(
+            second, _ = application_service.create_application(
                 db,
                 owner_id=settings.owner_id,
                 resume_asset_id=second_resume.id,
                 recruiter_opportunity_id=self.opportunity_id,
+                dedupe_key="mcp-record-second",
             )
             application_service.update_status(db, first, new_status="contacted")
             rtr = application_service.request_rtr(
@@ -1031,11 +1033,12 @@ class MCPServerToolTests(unittest.TestCase):
 
     def test_record_details_retains_history_after_opportunity_deletion(self) -> None:
         with self.SessionLocal() as db:
-            application = application_service.create_application(
+            application, _ = application_service.create_application(
                 db,
                 owner_id=settings.owner_id,
                 resume_asset_id=self.resume_id,
                 recruiter_opportunity_id=self.opportunity_id,
+                dedupe_key="mcp-history-delete",
             )
             application_service.update_status(
                 db,

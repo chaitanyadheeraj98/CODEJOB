@@ -9,6 +9,8 @@ from sqlalchemy.pool import StaticPool
 from app.db import Base
 from app.models import (
     ApplicationEvent,
+    ApplicationOutreachMessage,
+    ApplicationSkillGapSnapshot,
     AttachmentAsset,
     PremiumNumberContact,
     RecruiterEmail,
@@ -72,11 +74,12 @@ class ApplicationOutreachServiceTests(unittest.TestCase):
         )
         db.add(opportunity)
         db.flush()
-        application = application_service.create_application(
+        application, _ = application_service.create_application(
             db,
             owner_id="owner",
             resume_asset_id=resume.id,
             recruiter_opportunity_id=opportunity.id,
+            dedupe_key="outreach-fixture",
         )
         db.flush()
         return application, resume, current_resume, recruiter
@@ -309,6 +312,68 @@ class ApplicationOutreachServiceTests(unittest.TestCase):
                 )
             self.assertEqual(message_id, "gmail-new-1")
             new.assert_called_once()
+
+    def test_manual_recipient_and_submission_send_persist_full_message_and_snapshot(self) -> None:
+        with Session(self.engine) as db:
+            application, _, _, _ = self._application(db, recruiter_email="")
+            application.recruiter_contact_id = None
+            application.manual_recruiter_email = "manual@example.com"
+            application.manual_recruiter_name = "Manual Recruiter"
+            recipient = application_outreach_service.resolve_recipient(db, application)
+            self.assertEqual(recipient.to, "manual@example.com")
+
+            body = "Full reviewed submission body. " * 30
+            with patch(
+                "app.services.application_outreach_service.gmail_client.send_new_email_with_attachment",
+                return_value="gmail-manual-1",
+            ):
+                application_outreach_service.send_application_message(
+                    db,
+                    application,
+                    to=recipient.to,
+                    cc=None,
+                    subject="Reviewed submission",
+                    body=body,
+                    thread_id=None,
+                    message_kind="submission_to_recruiter",
+                    include_resume=False,
+                    attachment_asset_ids=[],
+                    draft_source="deepseek",
+                    ai_model="deepseek-fast",
+                )
+            db.flush()
+
+            stored = db.query(ApplicationOutreachMessage).one()
+            self.assertEqual(stored.body, body)
+            self.assertEqual(stored.draft_source, "deepseek")
+            self.assertEqual(stored.ai_model, "deepseek-fast")
+            self.assertEqual(application.resume_submission_status, "submitted")
+            self.assertIsNotNone(application.resume_submitted_at)
+            self.assertEqual(json.loads(application.resume_skills_snapshot_json), [])
+            self.assertIsNotNone(
+                db.query(ApplicationSkillGapSnapshot).filter_by(application_id=application.id).first()
+            )
+
+            submitted_at = application.resume_submitted_at
+            with patch(
+                "app.services.application_outreach_service.gmail_client.send_new_email_with_attachment",
+                return_value="gmail-manual-2",
+            ):
+                application_outreach_service.send_application_message(
+                    db,
+                    application,
+                    to=recipient.to,
+                    cc=None,
+                    subject="Follow-up",
+                    body="Following up",
+                    thread_id=None,
+                    message_kind="followup",
+                    include_resume=False,
+                    attachment_asset_ids=[],
+                )
+            self.assertEqual(application.resume_submitted_at, submitted_at)
+            self.assertEqual(application.follow_up_count, 2)
+            self.assertEqual(db.query(ApplicationOutreachMessage).count(), 2)
 
 
 if __name__ == "__main__":

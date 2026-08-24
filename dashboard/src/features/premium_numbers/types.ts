@@ -193,8 +193,8 @@ export type ApplicationCard = {
   resume_asset_id: number
   resume_version_snapshot: number
   resume_file_name_snapshot: string
-  recruiter_opportunity_id: number
-  recruiter_contact_id: number
+  recruiter_opportunity_id: number | null
+  recruiter_contact_id: number | null
   recruiter_name_snapshot: string
   recruiter_company_snapshot: string
   job_title_snapshot: string
@@ -202,6 +202,8 @@ export type ApplicationCard = {
   current_recruiter_name: string
   current_recruiter_company: string
   current_recruiter_phone_display: string
+  current_recruiter_email: string
+  current_recruiter_linkedin_url: string
   current_job_title: string
   current_end_client: string
   status: ApplicationStatus
@@ -215,11 +217,33 @@ export type ApplicationCard = {
   closed_at: string | null
   closed_reason: string | null
   closed_reason_code: string | null
+  resume_submission_status: 'not_submitted' | 'submitted' | 'viewed' | 'shortlisted' | 'interview_scheduled' | 'offered' | 'hired' | 'rejected' | 'withdrawn'
+  resume_submitted_at: string | null
+  submission_method: string
+  rejection_detail_tags: Array<{ category: string; value: string; source: 'ai' | 'user'; confirmed_at: string | null }>
+  dedupe_key: string | null
+  is_manual_entry: boolean
+  milestones_reached: Record<string, string>
+  manual_recruiter_name: string
+  manual_recruiter_company: string
+  manual_recruiter_email: string
+  manual_recruiter_phone: string
+  manual_recruiter_linkedin_url: string
+  manual_job_title: string
+  manual_end_client: string
   created_at: string
   updated_at: string
   events: ApplicationEventCard[]
   rtr_history: ApplicationRTR[]
   interviews: ApplicationInterview[]
+  skill_gap: {
+    source: string
+    matched_required: string[]
+    missing_required: string[]
+    matched_preferred: string[]
+    missing_preferred: string[]
+    computed_at: string
+  } | null
 }
 
 export type ApplicationDashboardSummary = {
@@ -251,7 +275,7 @@ export type RecruiterReputation = {
 export type ApplicationSuggestion = {
   id: number
   application_id: number
-  suggestion_type: 'link_reply' | 'status_change' | 'next_action' | 'stale_prompt'
+  suggestion_type: 'link_reply' | 'status_change' | 'next_action' | 'stale_prompt' | 'new_variant_needed' | 'email_positioning' | 'skill_gap_pattern'
   status: 'pending' | 'accepted' | 'dismissed'
   confidence: 'high' | 'medium'
   recruiter_email_id: number | null
@@ -259,6 +283,7 @@ export type ApplicationSuggestion = {
   suggested_next_action_type: string | null
   suggested_next_action_at: string | null
   reason: string
+  payload: Record<string, unknown>
   created_at: string
   resolved_at: string | null
 }
@@ -288,12 +313,18 @@ export type ApplicationSendMessagePayload = {
   message_kind: ApplicationMessageKind
   include_resume: boolean
   attachment_asset_ids: number[]
+  draft_source?: string
+  ai_model?: string | null
 }
 
 export type ResumeAssetOption = {
   id: number
   file_name: string
   version: number
+  skills_text: string
+  primary_role: string
+  structured_skills: string[]
+  variant_label: string
   is_enabled: boolean
   is_current: boolean
 }
