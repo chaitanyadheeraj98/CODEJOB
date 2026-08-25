@@ -37,6 +37,7 @@ class AppRuntimeState:
     chat_last_success_at: datetime | None = None
     chat_last_duration_ms: int | None = None
     chat_mcp_status: str = "disabled"
+    chat_active_model: str | None = None
     telegram_service: TelegramBotService | None = None
     telegram_action_lock: threading.Lock = field(default_factory=threading.Lock)
     telegram_auth_sessions: dict[int, datetime] = field(default_factory=dict)

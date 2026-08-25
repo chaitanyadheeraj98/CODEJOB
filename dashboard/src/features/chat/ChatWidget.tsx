@@ -11,18 +11,26 @@ type ChatWidgetProps = {
 }
 
 function renderInline(line: string) {
-  return line.split(/(\*\*[^*]+\*\*|\*[^*]+\*)/).map((chunk, i) => {
+  return line.split(/(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)/).map((chunk, i) => {
+    if (chunk.startsWith('`') && chunk.endsWith('`') && chunk.length > 1) return <code key={i}>{chunk.slice(1, -1)}</code>
     if (chunk.startsWith('**') && chunk.endsWith('**')) return <strong key={i}>{chunk.slice(2, -2)}</strong>
     if (chunk.startsWith('*') && chunk.endsWith('*') && chunk.length > 1) return <em key={i}>{chunk.slice(1, -1)}</em>
     return chunk
   })
 }
 
-// ponytail: headings/bold/italic/bullets only, not full markdown. Swap for a real parser if tables/links/code blocks show up.
+const TABLE_SEPARATOR_ROW = /^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?$/
+
+function splitTableRow(line: string): string[] {
+  return line.replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim())
+}
+
+// ponytail: headings/bold/italic/bullets/numbered lists/tables/inline code only, not full markdown. Swap for a real parser if fenced code blocks or links show up.
 function renderMarkdownLite(text: string) {
   const blocks: ReactNode[] = []
   let paragraph: string[] = []
   let list: string[] = []
+  let listOrdered = false
 
   const flushParagraph = () => {
     if (!paragraph.length) return
@@ -40,25 +48,56 @@ function renderMarkdownLite(text: string) {
   }
   const flushList = () => {
     if (!list.length) return
+    const ListTag = listOrdered ? 'ol' : 'ul'
     blocks.push(
-      <ul key={blocks.length}>
+      <ListTag key={blocks.length}>
         {list.map((line, i) => (
           <li key={i}>{renderInline(line)}</li>
         ))}
-      </ul>,
+      </ListTag>,
     )
     list = []
   }
 
-  for (const raw of text.split('\n')) {
-    const line = raw.trim()
+  const lines = text.split('\n')
+  let i = 0
+  while (i < lines.length) {
+    const line = lines[i].trim()
     if (!line) {
       flushParagraph()
       flushList()
+      i += 1
+      continue
+    }
+    const nextLine = (lines[i + 1] ?? '').trim()
+    const isTable = line.startsWith('|') && line.endsWith('|') && TABLE_SEPARATOR_ROW.test(nextLine)
+    if (isTable) {
+      flushParagraph()
+      flushList()
+      const header = splitTableRow(line)
+      const rows: string[][] = []
+      i += 2
+      while (i < lines.length && lines[i].trim().startsWith('|')) {
+        rows.push(splitTableRow(lines[i].trim()))
+        i += 1
+      }
+      blocks.push(
+        <table key={blocks.length}>
+          <thead>
+            <tr>{header.map((cell, c) => <th key={c}>{renderInline(cell)}</th>)}</tr>
+          </thead>
+          <tbody>
+            {rows.map((row, r) => (
+              <tr key={r}>{row.map((cell, c) => <td key={c}>{renderInline(cell)}</td>)}</tr>
+            ))}
+          </tbody>
+        </table>,
+      )
       continue
     }
     const heading = line.match(/^(#{1,6})\s+(.*)/)
-    const listItem = line.match(/^[-*]\s+(.*)/)
+    const orderedItem = line.match(/^\d+\.\s+(.*)/)
+    const bulletItem = line.match(/^[-*]\s+(.*)/)
     if (heading) {
       flushParagraph()
       flushList()
@@ -73,24 +112,37 @@ function renderMarkdownLite(text: string) {
           <h6 key={blocks.length}>{headingContent}</h6>
         ),
       )
-    } else if (listItem) {
+    } else if (orderedItem || bulletItem) {
       flushParagraph()
-      list.push(listItem[1])
+      const ordered = Boolean(orderedItem)
+      if (list.length && listOrdered !== ordered) flushList()
+      listOrdered = ordered
+      list.push(ordered ? orderedItem![1] : bulletItem![1])
     } else {
       flushList()
       paragraph.push(line)
     }
+    i += 1
   }
   flushParagraph()
   flushList()
   return blocks
 }
 
+const MODEL_STORAGE_KEY = 'codejob.chat.model'
+
 export default function ChatWidget({ apiBase }: ChatWidgetProps) {
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState('')
   const [status, setStatus] = useState<ChatStatus | null>(null)
   const [statusError, setStatusError] = useState('')
+  const [selectedModel, setSelectedModel] = useState(() => {
+    try {
+      return window.localStorage.getItem(MODEL_STORAGE_KEY) || 'auto'
+    } catch {
+      return 'auto'
+    }
+  })
   const [proposalResults, setProposalResults] = useState<Record<number, { approved: boolean; detail: string } | 'cancelled'>>({})
   const [proposalBusyId, setProposalBusyId] = useState<number | null>(null)
   const messagesEndRef = useRef<HTMLDivElement | null>(null)
@@ -129,12 +181,28 @@ export default function ChatWidget({ apiBase }: ChatWidgetProps) {
     if (open) chat.markSeen()
   }, [open, chat.markSeen])
 
+  // A model saved from a previous session may no longer be configured -
+  // fall back to Auto rather than silently sending an unknown model name.
+  useEffect(() => {
+    if (!status || selectedModel === 'auto') return
+    if (!(status.available_models ?? []).includes(selectedModel)) setSelectedModel('auto')
+  }, [status, selectedModel])
+
+  const selectModel = (model: string) => {
+    setSelectedModel(model)
+    try {
+      window.localStorage.setItem(MODEL_STORAGE_KEY, model)
+    } catch {
+      // ignore - per-device convenience only
+    }
+  }
+
   const submit = async (event: FormEvent) => {
     event.preventDefault()
     const text = draft.trim()
     if (!text || chat.busy) return
     setDraft('')
-    await chat.sendMessage(text)
+    await chat.sendMessage(text, selectedModel)
   }
 
   const currentSession = chat.sessions.find((session) => session.id === chat.sessionId)
@@ -170,7 +238,9 @@ export default function ChatWidget({ apiBase }: ChatWidgetProps) {
           <header className="chatHeader">
             <div>
               <strong>CodeJob Assistant</strong>
-              <small>{status?.model ?? 'Checking Ollama...'}</small>
+              <small>
+                {!status ? 'Checking Ollama...' : selectedModel === 'auto' ? `Auto · ${status.model}` : selectedModel}
+              </small>
             </div>
             <div className="chatHeaderActions">
               <button type="button" onClick={() => void chat.startSession()} disabled={!ready || chat.busy} aria-label="New chat">+</button>
@@ -202,36 +272,55 @@ export default function ChatWidget({ apiBase }: ChatWidgetProps) {
           {ready ? (
             <>
               <div className="chatHistoryBar">
-                <label>
-                  <span className="visuallyHidden">Chat history</span>
-                  <select
-                    aria-label="Chat history"
-                    value={chat.sessionId ?? ''}
-                    onChange={(event) => void chat.selectSession(Number(event.target.value))}
-                    disabled={chat.busy || !chat.sessions.length}
+                <div className="chatHistoryRow">
+                  <label>
+                    <span className="visuallyHidden">Chat history</span>
+                    <select
+                      aria-label="Chat history"
+                      value={chat.sessionId ?? ''}
+                      onChange={(event) => void chat.selectSession(Number(event.target.value))}
+                      disabled={chat.busy || !chat.sessions.length}
+                    >
+                      {!chat.sessions.length ? <option value="">New conversation</option> : null}
+                      {chat.sessions.map((session) => (
+                        <option key={session.id} value={session.id}>{session.title || `Chat ${session.id}`}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => void renameCurrent()}
+                    disabled={chat.busy || chat.sessionId == null}
+                    aria-label="Rename current chat"
                   >
-                    {!chat.sessions.length ? <option value="">New conversation</option> : null}
-                    {chat.sessions.map((session) => (
-                      <option key={session.id} value={session.id}>{session.title || `Chat ${session.id}`}</option>
-                    ))}
-                  </select>
-                </label>
-                <button
-                  type="button"
-                  onClick={() => void renameCurrent()}
-                  disabled={chat.busy || chat.sessionId == null}
-                  aria-label="Rename current chat"
-                >
-                  Rename
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void chat.removeCurrentSession()}
-                  disabled={chat.busy || chat.sessionId == null}
-                  aria-label="Delete current chat"
-                >
-                  Delete
-                </button>
+                    Rename
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void chat.removeCurrentSession()}
+                    disabled={chat.busy || chat.sessionId == null}
+                    aria-label="Delete current chat"
+                  >
+                    Delete
+                  </button>
+                </div>
+                <div className="chatModelRow">
+                  <label className="chatModelPicker">
+                    <span>Model</span>
+                    <select
+                      aria-label="Chat model"
+                      value={selectedModel}
+                      onChange={(event) => selectModel(event.target.value)}
+                      disabled={chat.busy}
+                      title="Auto picks the primary model and falls back automatically if it's unavailable"
+                    >
+                      <option value="auto">Auto</option>
+                      {(status?.available_models ?? []).map((model) => (
+                        <option key={model} value={model}>{model}</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
               </div>
               <div className="chatMessages" aria-live="polite">
                 {!chat.messages.length ? (

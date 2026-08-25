@@ -25,4 +25,5 @@ export type ChatStatus = {
   chat_last_error: string | null
   mcp_status: string
   model: string
+  available_models: string[]
 }

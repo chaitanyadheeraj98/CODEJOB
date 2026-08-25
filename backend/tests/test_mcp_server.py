@@ -15,6 +15,7 @@ from app.mcp_server.tools.candidates import (
     count_received_emails,
     get_candidate,
     get_draft_status,
+    propose_bulk_approve_candidates,
     search_candidates,
 )
 from app.external_feeds.models import ExternalFeedSource, ExternalOpportunity, ExternalScrapeRun
@@ -443,6 +444,22 @@ class MCPServerToolTests(unittest.TestCase):
         for variant in ("need_review", "needs review", "Needs-Review", "nead review"):
             candidates = search_candidates("Python", variant, 10)
             self.assertEqual(candidates["count"], 1, f"variant={variant!r} failed: {candidates}")
+
+    def test_search_candidates_matches_by_record_id_not_query_digit_substrings(self) -> None:
+        candidates = search_candidates(status="needs_review", record_ids=[self.record_id])
+        self.assertEqual(candidates["count"], 1, candidates)
+        self.assertEqual(candidates["candidates"][0]["id"], self.owned_id)
+
+        # A record_id that only coincidentally contains digits matching a real
+        # row id must not match via record_ids - it's an exact-UUID lookup, not
+        # the free-text query path's digit-substring extraction (issue #22).
+        no_match = search_candidates(status="needs_review", record_ids=["00000000-0000-0000-0000-000000000000"])
+        self.assertEqual(no_match["count"], 0, no_match)
+
+        proposal = propose_bulk_approve_candidates(
+            record_ids=[self.record_id, "00000000-0000-0000-0000-000000000000"]
+        )
+        self.assertEqual(proposal["candidate_ids"], [self.owned_id], proposal)
 
     def test_search_candidates_query_matches_by_numeric_id(self) -> None:
         candidates = search_candidates(str(self.owned_id), "needs_review", 10)

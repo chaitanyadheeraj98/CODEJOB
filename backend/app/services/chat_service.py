@@ -82,7 +82,9 @@ class ChatService:
         db.delete(row)
         db.commit()
 
-    async def send_message(self, db: Session, session_id: int, user_text: str) -> AsyncIterator[str]:
+    async def send_message(
+        self, db: Session, session_id: int, user_text: str, model: str | None = None
+    ) -> AsyncIterator[str]:
         text = self.validate_message(user_text)
         session = self._session_or_404(db, session_id)
         now = datetime.now(UTC)
@@ -102,7 +104,7 @@ class ChatService:
         history = db_messages_to_langchain(list(reversed(recent)))
         streamed_text = ""
         generated: list[BaseMessage] = []
-        async for kind, payload in chat_agent.stream_chat_agent(history):
+        async for kind, payload in chat_agent.stream_chat_agent(history, model=model):
             if kind == "delta":
                 delta = str(payload)
                 streamed_text += delta

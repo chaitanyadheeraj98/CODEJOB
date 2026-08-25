@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     role_manifest_max_source_chars: int = 12000
     ollama_base_url: str = "http://localhost:11434"
     ollama_chat_model: str = "gemma4:31b-cloud"
+    ollama_chat_model_fallback: str = "minimax-m3:cloud"
+    ollama_chat_model_fallback2: str = "nemotron-3-nano:30b-cloud"
     ollama_timeout_seconds: float = 60.0
     ollama_max_tool_iterations: int = 6
     feature_chat_enabled: bool = False

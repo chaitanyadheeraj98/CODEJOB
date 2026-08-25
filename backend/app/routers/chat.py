@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
+from app.ai.chat.agent import chat_models
 from app.config import settings
 from app.db import get_db
 from app.runtime_state import runtime_state
@@ -73,7 +74,8 @@ async def chat_status() -> ChatStatusResponse:
         ollama_last_success_at=runtime_state.ollama_last_success_at,
         chat_last_error=runtime_state.chat_last_error,
         mcp_status=runtime_state.chat_mcp_status,
-        model=settings.ollama_chat_model,
+        model=runtime_state.chat_active_model or settings.ollama_chat_model,
+        available_models=chat_models(),
     )
 
 
@@ -160,7 +162,7 @@ def send_chat_message(
     text = service.validate_message(payload.text)
     service._session_or_404(db, session_id)
     return StreamingResponse(
-        service.send_message(db, session_id, text),
+        service.send_message(db, session_id, text, model=payload.model),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

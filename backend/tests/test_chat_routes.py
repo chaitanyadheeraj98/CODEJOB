@@ -44,6 +44,7 @@ class ChatRouteTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         main.settings.feature_chat_enabled = self.previous_enabled
+        runtime_state.chat_active_model = None
         main.app.dependency_overrides.clear()
         Base.metadata.drop_all(self.engine)
         self.engine.dispose()
@@ -90,6 +91,51 @@ class ChatRouteTests(unittest.TestCase):
         self.assertTrue(response.headers["content-type"].startswith("text/event-stream"))
         self.assertIn('event: message\ndata: {"delta":"Hello"}\n\n', response.text)
         self.assertIn("event: done", response.text)
+
+    def test_session_message_route_fails_over_to_second_model(self) -> None:
+        main.settings.feature_chat_enabled = True
+        created = self.client.post("/chat/sessions")
+        session_id = created.json()["id"]
+        with patch(
+            "app.ai.chat.agent.build_chat_agent",
+            new=AsyncMock(side_effect=[RuntimeError("503 overloaded"), FakeGraph()]),
+        ):
+            response = self.client.post(
+                f"/chat/sessions/{session_id}/messages",
+                json={"text": "Hi"},
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIn('event: message\ndata: {"delta":"Hello"}\n\n', response.text)
+        self.assertNotIn("temporarily unavailable", response.text)
+
+        status = self.client.get("/chat/status")
+        self.assertEqual(status.json()["model"], main.settings.ollama_chat_model_fallback)
+
+    def test_status_lists_all_configured_models(self) -> None:
+        main.settings.feature_chat_enabled = True
+        status = self.client.get("/chat/status")
+        self.assertEqual(
+            status.json()["available_models"],
+            [
+                main.settings.ollama_chat_model,
+                main.settings.ollama_chat_model_fallback,
+                main.settings.ollama_chat_model_fallback2,
+            ],
+        )
+
+    def test_manual_model_selection_does_not_fail_over_on_error(self) -> None:
+        main.settings.feature_chat_enabled = True
+        created = self.client.post("/chat/sessions")
+        session_id = created.json()["id"]
+        build_mock = AsyncMock(side_effect=RuntimeError("503 overloaded"))
+        with patch("app.ai.chat.agent.build_chat_agent", new=build_mock):
+            response = self.client.post(
+                f"/chat/sessions/{session_id}/messages",
+                json={"text": "Hi", "model": main.settings.ollama_chat_model_fallback2},
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIn("temporarily unavailable", response.text)
+        build_mock.assert_awaited_once_with(main.settings.ollama_chat_model_fallback2)
 
 
 if __name__ == "__main__":

@@ -97,11 +97,12 @@ export async function sendChatMessage(
   sessionId: number,
   text: string,
   onEvent: (event: ChatStreamEvent) => void,
+  model?: string,
 ): Promise<void> {
   const response = await fetch(`${apiBase}/chat/sessions/${sessionId}/messages`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text, model: model || undefined }),
   })
   if (!response.ok) throw await responseError(response, 'Failed to send message')
   if (!response.body) throw new Error('Chat response did not include a stream')

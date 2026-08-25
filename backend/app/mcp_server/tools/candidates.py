@@ -79,12 +79,19 @@ def _sent_attachment_names(row: RecruiterEmail) -> list[str]:
     return [str(value) for value in values] if isinstance(values, list) else []
 
 
-def search_candidates(query: str = "", status: str = "", limit: int = 10) -> dict[str, object]:
+def search_candidates(
+    query: str = "", status: str = "", limit: int = 10, record_ids: list[str] | None = None
+) -> dict[str, object]:
     """Search the owner's candidates by text and optional queue status (fuzzy-matched).
 
     Each result has both "score" (AI match score x100, not ATS) and "ats_score"
     (the real ATS score) - use ats_score when the user asks about ATS scores,
     ranking, or "best" candidates by ATS.
+
+    Pass record_ids (the permanent Record IDs shown to the user, e.g. from an
+    earlier search or get_record_details) to look candidates up by exact
+    Record ID instead of text - do not put Record IDs in query, they are UUIDs
+    and will not match the text/numeric-id search there.
     """
     db = SessionLocal()
     try:
@@ -94,7 +101,9 @@ def search_candidates(query: str = "", status: str = "", limit: int = 10) -> dic
         rows = db.query(RecruiterEmail).filter(RecruiterEmail.owner_id == settings.owner_id)
         if resolved_status:
             rows = rows.filter(RecruiterEmail.state == resolved_status)
-        if query.strip():
+        if record_ids:
+            rows = rows.filter(RecruiterEmail.record_id.in_(record_ids))
+        elif query.strip():
             stripped = query.strip()
             term = f"%{stripped}%"
             conditions = [
@@ -115,10 +124,14 @@ def search_candidates(query: str = "", status: str = "", limit: int = 10) -> dic
 
 
 def propose_bulk_approve_candidates(
-    query: str = "", status: str = "needs_review", limit: int = 25
+    query: str = "", status: str = "needs_review", limit: int = 25, record_ids: list[str] | None = None
 ) -> dict[str, object]:
-    """Prepare, but never execute, a proposal to approve matching review candidates."""
-    result = search_candidates(query=query, status=status, limit=limit)
+    """Prepare, but never execute, a proposal to approve matching review candidates.
+
+    Pass record_ids when the user names specific Record IDs to approve (e.g.
+    "approve these record ids") - do not put Record IDs in query.
+    """
+    result = search_candidates(query=query, status=status, limit=limit, record_ids=record_ids)
     if "error" in result:
         return result
     candidates = [

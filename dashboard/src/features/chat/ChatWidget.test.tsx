@@ -7,6 +7,8 @@ import ChatWidget from './ChatWidget'
 import { consumeSseStream } from './api'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+// jsdom doesn't implement scrollIntoView; ChatWidget calls it when new messages arrive.
+if (!Element.prototype.scrollIntoView) Element.prototype.scrollIntoView = () => {}
 
 describe('ChatWidget', () => {
   let root: Root | null = null
@@ -18,6 +20,7 @@ describe('ChatWidget', () => {
     root = null
     container = null
     vi.restoreAllMocks()
+    window.localStorage.clear()
   })
 
   it('shows why chat is disabled instead of hiding the widget', async () => {
@@ -204,5 +207,188 @@ describe('ChatWidget', () => {
 
     expect(actionCalls).toEqual([{ url: `http://localhost:8000${endpoint}`, body }])
     expect(container.textContent).toContain(outcome)
+  })
+
+  it('renders a markdown table with inline code spans instead of raw pipes and backticks', async () => {
+    const tableMarkdown = [
+      'Here are the Java-based roles with an ATS score greater than 60:',
+      '',
+      '| Record ID | Role | ATS Score |',
+      '| :--- | :--- | :--- |',
+      '| `cdbd9c9b-d38b-474a-8df6-68e848fecc6c` | Senior Full Stack Engineer | 72.08 |',
+      '| `3857a0a1-e127-4b41-b01e-40fbf1de5ed0` | Senior Java/Kotlin Backend Developer | 66.82 |',
+    ].join('\n')
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/chat/status')) {
+        return new Response(JSON.stringify({
+          enabled: true,
+          ollama_running: true,
+          ollama_last_error: null,
+          ollama_last_success_at: null,
+          chat_last_error: null,
+          mcp_status: 'ok',
+          model: 'gemma4:31b-cloud',
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      if (url.endsWith('/chat/sessions')) {
+        return new Response(JSON.stringify([{ id: 1, title: 'Java roles', created_at: '2026-01-01', updated_at: '2026-01-01' }]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+      if (url.endsWith('/chat/sessions/1')) {
+        return new Response(JSON.stringify({
+          id: 1,
+          title: 'Java roles',
+          created_at: '2026-01-01',
+          updated_at: '2026-01-01',
+          messages: [{ id: 7, role: 'assistant', tool_name: null, content: tableMarkdown, created_at: '2026-01-01' }],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    }))
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+    await act(async () => {
+      root?.render(<ChatWidget apiBase="http://localhost:8000" />)
+      for (let tick = 0; tick < 4; tick += 1) await new Promise((resolve) => window.setTimeout(resolve, 0))
+    })
+    await act(async () => {
+      container?.querySelector<HTMLButtonElement>('[aria-label="Open CodeJob assistant"]')?.click()
+    })
+
+    const table = container.querySelector('.chatBubble.assistant table')
+    expect(table).not.toBeNull()
+    expect(Array.from(table!.querySelectorAll('thead th')).map((th) => th.textContent)).toEqual([
+      'Record ID', 'Role', 'ATS Score',
+    ])
+    expect(table!.querySelectorAll('tbody tr')).toHaveLength(2)
+    const firstIdCell = table!.querySelector('tbody tr td code')
+    expect(firstIdCell?.textContent).toBe('cdbd9c9b-d38b-474a-8df6-68e848fecc6c')
+    expect(container.querySelector('.chatBubble.assistant')?.textContent).not.toContain('|')
+    expect(container.querySelector('.chatBubble.assistant')?.textContent).not.toContain('`')
+  })
+
+  it('renders numbered lists as an ordered list, not flattened paragraph text', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/chat/status')) {
+        return new Response(JSON.stringify({
+          enabled: true,
+          ollama_running: true,
+          ollama_last_error: null,
+          ollama_last_success_at: null,
+          chat_last_error: null,
+          mcp_status: 'ok',
+          model: 'gemma4:31b-cloud',
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      if (url.endsWith('/chat/sessions')) {
+        return new Response(JSON.stringify([{ id: 1, title: 'Steps', created_at: '2026-01-01', updated_at: '2026-01-01' }]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+      if (url.endsWith('/chat/sessions/1')) {
+        return new Response(JSON.stringify({
+          id: 1,
+          title: 'Steps',
+          created_at: '2026-01-01',
+          updated_at: '2026-01-01',
+          messages: [{ id: 7, role: 'assistant', tool_name: null, content: '1. First step\n2. Second step\n3. Third step', created_at: '2026-01-01' }],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    }))
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+    await act(async () => {
+      root?.render(<ChatWidget apiBase="http://localhost:8000" />)
+      for (let tick = 0; tick < 4; tick += 1) await new Promise((resolve) => window.setTimeout(resolve, 0))
+    })
+    await act(async () => {
+      container?.querySelector<HTMLButtonElement>('[aria-label="Open CodeJob assistant"]')?.click()
+    })
+
+    const list = container.querySelector('.chatBubble.assistant ol')
+    expect(list).not.toBeNull()
+    expect(Array.from(list!.querySelectorAll('li')).map((li) => li.textContent)).toEqual([
+      'First step', 'Second step', 'Third step',
+    ])
+  })
+
+  it('lists the configured models plus Auto, and sends the manually picked model with the message', async () => {
+    const session = { id: 1, title: 'Models', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' }
+    const sentBodies: Array<{ text: string; model?: string }> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/chat/status')) {
+        return new Response(JSON.stringify({
+          enabled: true,
+          ollama_running: true,
+          ollama_last_error: null,
+          ollama_last_success_at: null,
+          chat_last_error: null,
+          mcp_status: 'ok',
+          model: 'gemma4:31b-cloud',
+          available_models: ['gemma4:31b-cloud', 'minimax-m3:cloud', 'nemotron-3-nano:30b-cloud'],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      if (url.endsWith('/chat/sessions') && (!init || init.method === undefined)) {
+        return new Response(JSON.stringify([session]), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      if (url.endsWith('/chat/sessions/1/messages') && init?.method === 'POST') {
+        sentBodies.push(JSON.parse(String(init.body)))
+        const encoder = new TextEncoder()
+        return new Response(new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode('event: message\ndata: {"delta":"Hi"}\n\nevent: done\ndata: {"message_id":9}\n\n'))
+            controller.close()
+          },
+        }), { status: 200, headers: { 'Content-Type': 'text/event-stream' } })
+      }
+      if (url.endsWith('/chat/sessions/1')) {
+        return new Response(JSON.stringify({ ...session, messages: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    }))
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+    await act(async () => {
+      root?.render(<ChatWidget apiBase="http://localhost:8000" />)
+      for (let tick = 0; tick < 4; tick += 1) await new Promise((resolve) => window.setTimeout(resolve, 0))
+    })
+    await act(async () => {
+      container?.querySelector<HTMLButtonElement>('[aria-label="Open CodeJob assistant"]')?.click()
+    })
+
+    const modelSelect = container.querySelector<HTMLSelectElement>('[aria-label="Chat model"]')!
+    expect(Array.from(modelSelect.options).map((option) => option.value)).toEqual([
+      'auto', 'gemma4:31b-cloud', 'minimax-m3:cloud', 'nemotron-3-nano:30b-cloud',
+    ])
+
+    const selectSetter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')!.set!
+    await act(async () => {
+      selectSetter.call(modelSelect, 'nemotron-3-nano:30b-cloud')
+      modelSelect.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+
+    const textarea = container.querySelector<HTMLTextAreaElement>('#chat-message')!
+    const textareaSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')!.set!
+    await act(async () => {
+      textareaSetter.call(textarea, 'Which model is this?')
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    const sendButton = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'Send')
+    await act(async () => {
+      sendButton?.click()
+      for (let tick = 0; tick < 4; tick += 1) await new Promise((resolve) => window.setTimeout(resolve, 0))
+    })
+
+    expect(sentBodies).toEqual([{ text: 'Which model is this?', model: 'nemotron-3-nano:30b-cloud' }])
   })
 })
