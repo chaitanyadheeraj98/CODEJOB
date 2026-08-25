@@ -152,6 +152,7 @@ from app.skill_taxonomy import (
 from app.premium_numbers.intelligence import OPPORTUNITY_STATUS_VALUES
 from app.premium_numbers.domain_guard import (
     employer_domains_for_owner,
+    is_derivable_company_domain,
     is_hidden_invalid_employer_number,
     is_hidden_nvoids_placeholder_recruiter,
 )
@@ -830,20 +831,52 @@ def _load_recruiter_number_for_sent_details(
     )
 
 
-def _load_premium_lead_for_sent_details(db: Session, email: RecruiterEmail) -> PremiumNumberLead | None:
-    return (
-        db.query(PremiumNumberLead)
+def _load_employer_number_for_sent_details(
+    db: Session,
+    email: RecruiterEmail,
+    employer_email: str | None,
+) -> PremiumNumberContact | None:
+    row = (
+        db.query(PremiumNumberContact)
         .filter(
-            PremiumNumberLead.owner_id == settings.owner_id,
-            PremiumNumberLead.recruiter_email_id == email.id,
-        )
-        .order_by(
-            PremiumNumberLead.is_recruiter_relevant.desc(),
-            PremiumNumberLead.recruiter_relevance_score.desc(),
-            PremiumNumberLead.id.desc(),
+            PremiumNumberContact.owner_id == settings.owner_id,
+            PremiumNumberContact.is_employer.is_(True),
+            PremiumNumberContact.first_detected_email_id == email.id,
+            PremiumNumberContact.deleted_at.is_(None),
         )
         .first()
     )
+    if row:
+        return row
+    if not employer_email:
+        return None
+    return (
+        db.query(PremiumNumberContact)
+        .filter(
+            PremiumNumberContact.owner_id == settings.owner_id,
+            PremiumNumberContact.is_employer.is_(True),
+            PremiumNumberContact.employer_email == employer_email,
+            PremiumNumberContact.deleted_at.is_(None),
+        )
+        .order_by(PremiumNumberContact.updated_at.desc(), PremiumNumberContact.id.desc())
+        .first()
+    )
+
+
+def _load_premium_lead_for_sent_details(
+    db: Session, email: RecruiterEmail, *, role: str | None = None
+) -> PremiumNumberLead | None:
+    query = db.query(PremiumNumberLead).filter(
+        PremiumNumberLead.owner_id == settings.owner_id,
+        PremiumNumberLead.recruiter_email_id == email.id,
+    )
+    if role is not None:
+        query = query.filter(PremiumNumberLead.role == role)
+    return query.order_by(
+        PremiumNumberLead.is_recruiter_relevant.desc(),
+        PremiumNumberLead.recruiter_relevance_score.desc(),
+        PremiumNumberLead.id.desc(),
+    ).first()
 
 
 def _sent_item_requirement_link(email: RecruiterEmail, external: ExternalOpportunity | None) -> str | None:
@@ -892,12 +925,29 @@ def _build_sent_item_details(db: Session, email: RecruiterEmail) -> SentItemDeta
     external = _load_external_opportunity_for_sent_details(db, email) if email.source == "nvoids" else None
     recruiter_opportunity = _load_recruiter_opportunity_for_sent_details(db, email)
     premium_lead = _load_premium_lead_for_sent_details(db, email)
+    recruiter_premium_lead = _load_premium_lead_for_sent_details(db, email, role="recruiter")
+
+    employer_domains = employer_domains_for_owner(db, email.owner_id)
+
+    def _domain_matched_address(address: str | None, *, want_employer_domain: bool) -> str | None:
+        cleaned = _clean_optional_text(address)
+        if not cleaned:
+            return None
+        is_employer = email_domain(cleaned) in employer_domains
+        return cleaned if is_employer == want_employer_domain else None
+
+    recipient_clean = _clean_optional_text(email.recipient_email)
     recruiter_email = (
         _clean_optional_text(external.recruiter_email if external else None)
-        or _clean_optional_text(email.recipient_email)
-        or sender_email
+        or _domain_matched_address(recipient_clean, want_employer_domain=False)
+        or _domain_matched_address(sender_email, want_employer_domain=False)
+    )
+    employer_email_guess = (
+        _domain_matched_address(recipient_clean, want_employer_domain=True)
+        or _domain_matched_address(sender_email, want_employer_domain=True)
     )
     recruiter_number = _load_recruiter_number_for_sent_details(db, email, recruiter_email)
+    employer_number = _load_employer_number_for_sent_details(db, email, employer_email_guess)
     company = (
         _clean_optional_text(external.company if external else None)
         or _clean_optional_text(recruiter_opportunity.end_client if recruiter_opportunity else None)
@@ -916,15 +966,25 @@ def _build_sent_item_details(db: Session, email: RecruiterEmail) -> SentItemDeta
         recruiter_name=(
             _clean_optional_text(external.recruiter_name if external else None)
             or _clean_optional_text(recruiter_number.recruiter_name if recruiter_number else None)
-            or _clean_optional_text(premium_lead.owner_name if premium_lead else None)
-            or sender_name
+            or _clean_optional_text(recruiter_premium_lead.owner_name if recruiter_premium_lead else None)
+            or (
+                sender_name
+                if sender_email and recruiter_email and sender_email.lower() == recruiter_email.lower()
+                else None
+            )
         ),
         recruiter_email=recruiter_email,
         recruiter_phone=(
             _clean_optional_text(external.recruiter_phone if external else None)
             or _clean_optional_text(recruiter_number.display_phone_number if recruiter_number else None)
-            or _clean_optional_text(premium_lead.phone_number_display if premium_lead else None)
+            or _clean_optional_text(recruiter_premium_lead.phone_number_display if recruiter_premium_lead else None)
         ),
+        employer_name=_clean_optional_text(employer_number.owner_name if employer_number else None),
+        employer_email=(
+            _clean_optional_text(employer_number.employer_email if employer_number else None)
+            or employer_email_guess
+        ),
+        employer_phone=_clean_optional_text(employer_number.display_phone_number if employer_number else None),
         end_client=(
             _extract_labeled_value(body_text, "end client", "end-client")
             or _extract_labeled_value(body_text, "client")
@@ -4847,7 +4907,8 @@ def _mark_number_as_recruiter(
     if not values["owner_name"] or values["owner_name"].strip().lower() == "unknown":
         values["owner_name"] = derive_name_from_contact_email(candidate_email) or "Unknown"
     if not values["company"] or values["company"].strip().lower() == "unknown":
-        values["company"] = derive_company_from_email_domain(candidate_email) or "Unknown"
+        if is_derivable_company_domain(db, settings.owner_id, candidate_email):
+            values["company"] = derive_company_from_email_domain(candidate_email) or "Unknown"
     values["contact_email"] = candidate_email
     contact = _contact_for_review(db, card, values)
     version = _review_version(
@@ -4858,7 +4919,7 @@ def _mark_number_as_recruiter(
         edited=_review_fields_edited(card, submit),
     )
     version.contact_id = contact.id
-    apply_contact_version(contact, version, "recruiter")
+    apply_contact_version(db, contact, version, "recruiter")
     contact.first_detected_email_id = contact.first_detected_email_id or card.source_email_id
     if submit and submit.linkedin_url is not None:
         contact.linkedin_url = _normalize_linkedin_url(submit.linkedin_url)
@@ -4886,7 +4947,7 @@ def _mark_number_as_employer(
         edited=_review_fields_edited(card, submit),
     )
     version.contact_id = contact.id
-    apply_contact_version(contact, version, "employer")
+    apply_contact_version(db, contact, version, "employer")
     contact.source_email_id = contact.source_email_id or card.source_email_id
     if submit and submit.linkedin_url is not None:
         contact.linkedin_url = _normalize_linkedin_url(submit.linkedin_url)
@@ -5078,6 +5139,12 @@ def _is_missing_value(value: str | None) -> bool:
 
 
 def _contact_is_flagged(contact: PremiumNumberContact, role: str) -> bool:
+    if (
+        contact.is_recruiter
+        and contact.is_employer
+        and contact.recruiter_verification_level == "unverified"
+    ):
+        return True
     if role == "recruiter":
         if is_hidden_nvoids_placeholder_recruiter(contact):
             return True
@@ -5165,6 +5232,7 @@ def _employer_number_response(db: Session, contact: PremiumNumberContact) -> Emp
         display_phone_number=contact.display_phone_number,
         owner_name=contact.owner_name,
         company=contact.company,
+        employer_email=contact.employer_email,
         source_email_id=contact.source_email_id,
         source_type=source_type,
         source_id=source_id,
@@ -5289,6 +5357,8 @@ def patch_employer_number(
         contact.owner_name = payload.owner_name.strip() or "Unknown"
     if payload.company is not None:
         contact.company = payload.company.strip() or "Unknown"
+    if payload.employer_email is not None:
+        contact.employer_email = payload.employer_email.strip()
     contact.updated_at = datetime.now(UTC)
     db.commit()
     db.refresh(contact)
@@ -5339,7 +5409,7 @@ def _select_contact_version(
     ).first()
     if not contact or not lead:
         raise HTTPException(status_code=404, detail="Contact version not found")
-    apply_contact_version(contact, lead, role)
+    apply_contact_version(db, contact, lead, role)
     contact.updated_at = datetime.now(UTC)
     db.commit()
     return contact
@@ -5359,7 +5429,7 @@ def _add_employer_role(db: Session, contact: PremiumNumberContact) -> None:
     if contact.active_employer_lead_id:
         lead = db.get(PremiumNumberLead, contact.active_employer_lead_id)
         if lead:
-            apply_contact_version(contact, lead, "employer")
+            apply_contact_version(db, contact, lead, "employer")
     contact.updated_at = datetime.now(UTC)
 
 
@@ -5377,7 +5447,7 @@ def _add_recruiter_role(db: Session, contact: PremiumNumberContact) -> None:
     if contact.active_recruiter_lead_id:
         lead = db.get(PremiumNumberLead, contact.active_recruiter_lead_id)
         if lead:
-            apply_contact_version(contact, lead, "recruiter")
+            apply_contact_version(db, contact, lead, "recruiter")
     contact.updated_at = datetime.now(UTC)
 
 
@@ -5536,9 +5606,9 @@ def _delete_contact_version(db: Session, contact_id: int, lead_id: int, role: st
         )
     replacement = remaining[0]
     if contact.active_recruiter_lead_id == lead_id:
-        apply_contact_version(contact, replacement, "recruiter")
+        apply_contact_version(db, contact, replacement, "recruiter")
     if contact.active_employer_lead_id == lead_id:
-        apply_contact_version(contact, replacement, "employer")
+        apply_contact_version(db, contact, replacement, "employer")
     contact.updated_at = datetime.now(UTC)
     db.delete(lead)
     db.commit()
@@ -5650,7 +5720,7 @@ def _rescore_contact(db: Session, contact_id: int, role: str) -> str:
     )
     active = db.get(PremiumNumberLead, active_id) if active_id else None
     if active:
-        apply_contact_version(refreshed, active, role)
+        apply_contact_version(db, refreshed, active, role)
     refreshed.updated_at = datetime.now(UTC)
     db.commit()
     return "rescored"

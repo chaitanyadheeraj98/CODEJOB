@@ -5,7 +5,7 @@ import { CategoryChip, StatusBadge } from './StatusBadge'
 import type { EmployerNumberCard, InventoryAction, InventoryRow, PremiumNumberVersion, RecruiterNumberCard, RecruiterReputation, ReviewEdits } from './types'
 
 type RecruiterEdits = Partial<Pick<RecruiterNumberCard, 'recruiter_name' | 'company' | 'designation' | 'recruiter_email' | 'linkedin_url' | 'recruiter_verification_level' | 'do_not_work_again' | 'do_not_work_again_reason'>>
-type EmployerEdits = Partial<Pick<EmployerNumberCard, 'owner_name' | 'company'>>
+type EmployerEdits = Partial<Pick<EmployerNumberCard, 'owner_name' | 'company' | 'employer_email'>>
 
 type DetailPanelProps = {
   apiBase: string
@@ -290,7 +290,7 @@ export default function DetailPanel({
                   <button
                     type="button"
                     onClick={() => {
-                      setEmployerEdits({ owner_name: employer.owner_name, company: employer.company })
+                      setEmployerEdits({ owner_name: employer.owner_name, company: employer.company, employer_email: employer.employer_email })
                       setEditingEmployer(true)
                     }}
                     disabled={busy}
@@ -303,11 +303,13 @@ export default function DetailPanel({
                 <div className="detailFormGrid">
                   <label>Owner<input value={employerEdits.owner_name ?? ''} onChange={(event) => setEmployerEdits((value) => ({ ...value, owner_name: event.target.value }))} /></label>
                   <label>Company<input value={employerEdits.company ?? ''} onChange={(event) => setEmployerEdits((value) => ({ ...value, company: event.target.value }))} /></label>
+                  <label>Email<input type="email" value={employerEdits.employer_email ?? ''} onChange={(event) => setEmployerEdits((value) => ({ ...value, employer_email: event.target.value }))} /></label>
                 </div>
               ) : (
                 <dl className="detailList">
                   <div><dt>Owner</dt><dd>{employer.owner_name}</dd></div>
                   <div><dt>Company</dt><dd>{employer.company}</dd></div>
+                  <div><dt>Email</dt><dd>{employer.employer_email || '--'}</dd></div>
                 </dl>
               )}
               {editingEmployer ? (

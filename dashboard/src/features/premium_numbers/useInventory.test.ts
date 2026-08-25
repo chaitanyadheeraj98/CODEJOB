@@ -40,6 +40,7 @@ describe('inventory normalization', () => {
     const employer: EmployerNumberCard = {
       ...baseContact,
       owner_name: 'Hiring Desk',
+      employer_email: '',
       source_email_id: 10,
       is_recruiter: true,
       is_employer: true,

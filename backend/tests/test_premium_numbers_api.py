@@ -1947,6 +1947,38 @@ class PremiumNumbersApiTests(unittest.TestCase):
         self.assertEqual(len(flagged_employers.json()["items"]), 1)
         self.assertTrue(flagged_employers.json()["items"][0]["flagged"])
 
+    def test_unresolved_dual_role_unverified_contact_is_flagged(self) -> None:
+        now = datetime.now(UTC)
+        with Session(self.engine) as db:
+            contact = PremiumNumberContact(
+                owner_id=main.settings.owner_id,
+                normalized_phone_number="12145550401",
+                display_phone_number="+1 (214) 555-0401",
+                is_recruiter=True,
+                is_employer=True,
+                recruiter_verification_level="unverified",
+                recruiter_name="Some Recruiter",
+                owner_name="Some Employer",
+                company="Some Co",
+                recruiter_email="recruiter@agency.example",
+                source_type="gmail",
+                source_id=401,
+                created_at=now,
+                updated_at=now,
+            )
+            db.add(contact)
+            db.commit()
+
+        flagged_recruiters = self.client.get("/recruiter-numbers?flagged=true")
+        self.assertEqual(flagged_recruiters.status_code, 200, flagged_recruiters.text)
+        self.assertEqual(len(flagged_recruiters.json()["items"]), 1)
+        self.assertEqual(flagged_recruiters.json()["items"][0]["status"], "Flagged")
+
+        flagged_employers = self.client.get("/employer-numbers?flagged=true")
+        self.assertEqual(flagged_employers.status_code, 200, flagged_employers.text)
+        self.assertEqual(len(flagged_employers.json()["items"]), 1)
+        self.assertEqual(flagged_employers.json()["items"][0]["status"], "Flagged")
+
     def test_unknown_designation_alone_is_not_flagged_and_falls_back_by_domain(self) -> None:
         now = datetime.now(UTC)
         with Session(self.engine) as db:

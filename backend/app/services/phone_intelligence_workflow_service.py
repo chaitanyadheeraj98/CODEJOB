@@ -16,7 +16,7 @@ from app.models import (
 )
 from app.parsing.jd_requirements import extract_work_authorizations
 from app.phase0 import email_domain
-from app.premium_numbers.domain_guard import employer_domains_for_owner
+from app.premium_numbers.domain_guard import employer_domains_for_owner, is_derivable_company_domain
 from app.premium_numbers.extraction import ExtractedContactGroup, extract_phone_leads
 from app.services import opportunity_lineage_service
 
@@ -39,6 +39,12 @@ def derive_company_from_email_domain(email: str | None) -> str:
     domain = email_domain(email or "")
     base = domain.split(".", 1)[0].strip() if domain else ""
     return base.title() if base else ""
+
+
+def company_fallback_for_unknown(db: Session, owner_id: str, contact_email: str | None) -> str:
+    if not is_derivable_company_domain(db, owner_id, contact_email):
+        return ""
+    return derive_company_from_email_domain(contact_email)
 
 
 @dataclass(frozen=True)
@@ -219,6 +225,7 @@ class _IdempotencyPoint:
 
 
 def apply_contact_version(
+    db: Session,
     contact: PremiumNumberContact,
     lead: PremiumNumberLead,
     role: str,
@@ -231,12 +238,21 @@ def apply_contact_version(
         contact.recruiter_email = lead.contact_email or ""
         if lead.company and lead.company.strip().lower() != "unknown":
             contact.company = lead.company
+        else:
+            fallback = company_fallback_for_unknown(db, contact.owner_id, lead.contact_email)
+            if fallback:
+                contact.company = fallback
     else:
         contact.is_employer = True
         contact.active_employer_lead_id = lead.id
         contact.owner_name = lead.owner_name or "Unknown"
+        contact.employer_email = lead.contact_email or ""
         if lead.company and lead.company.strip().lower() != "unknown":
             contact.company = lead.company
+        else:
+            fallback = company_fallback_for_unknown(db, contact.owner_id, lead.contact_email)
+            if fallback:
+                contact.company = fallback
     if lead.linkedin_url:
         contact.linkedin_url = lead.linkedin_url
     if lead.external_opportunity_id:
@@ -398,7 +414,7 @@ class PhoneIntelligenceWorkflowService:
                     continue
 
                 point = self._idempotency_point(db, context, lead)
-                promotion_role = self._promotion_role(lead)
+                promotion_role = self._promotion_role(lead, point.contact)
                 if point.existing_review:
                     review_existing += 1
                     self._refresh_review(point.existing_review, context, lead, version)
@@ -413,9 +429,9 @@ class PhoneIntelligenceWorkflowService:
                     if not created:
                         self._snapshot_legacy_contact_if_needed(db, contact, promotion_role)
                     if version:
-                        self._link_lead_to_contact(contact, version, promotion_role)
+                        self._link_lead_to_contact(db, contact, version, promotion_role)
                     else:
-                        self._apply_unversioned_contact_fields(contact, lead, promotion_role)
+                        self._apply_unversioned_contact_fields(db, contact, lead, promotion_role)
 
                     if promotion_role == "recruiter":
                         recruiter_matches += 1
@@ -600,7 +616,10 @@ class PhoneIntelligenceWorkflowService:
         row.extraction_source = lead.extraction_source
         row.contact_email = lead.contact_email
         row.owner_name = lead.owner_name
-        row.company = lead.company
+        if lead.company and lead.company.strip().lower() != "unknown":
+            row.company = lead.company
+        else:
+            row.company = company_fallback_for_unknown(db, context.owner_id, lead.contact_email) or lead.company
         row.linkedin_url = lead.linkedin_url
         row.designation = lead.designation
         row.purpose = lead.purpose
@@ -659,7 +678,9 @@ class PhoneIntelligenceWorkflowService:
         return _IdempotencyPoint(contact, existing_review, existing_opportunity)
 
     @staticmethod
-    def _promotion_role(lead: ExtractedContactGroup) -> str | None:
+    def _promotion_role(
+        lead: ExtractedContactGroup, existing_contact: PremiumNumberContact | None
+    ) -> str | None:
         if lead.role == "employer" and "employer_domain" in lead.relevance_reason:
             return "employer"
         if (
@@ -667,6 +688,13 @@ class PhoneIntelligenceWorkflowService:
             and lead.is_recruiter_relevant
             and lead.recruiter_relevance_score >= 70
         ):
+            if (
+                existing_contact is not None
+                and existing_contact.is_employer
+                and not existing_contact.is_recruiter
+                and existing_contact.recruiter_verification_level == "unverified"
+            ):
+                return None
             return "recruiter"
         return None
 
@@ -724,6 +752,7 @@ class PhoneIntelligenceWorkflowService:
 
     @staticmethod
     def _apply_unversioned_contact_fields(
+        db: Session,
         contact: PremiumNumberContact,
         lead: ExtractedContactGroup,
         role: str,
@@ -736,8 +765,13 @@ class PhoneIntelligenceWorkflowService:
         else:
             contact.is_employer = True
             contact.owner_name = lead.owner_name or "Unknown"
+            contact.employer_email = lead.contact_email or ""
         if lead.company and lead.company.strip().lower() != "unknown":
             contact.company = lead.company
+        else:
+            fallback = company_fallback_for_unknown(db, contact.owner_id, lead.contact_email)
+            if fallback:
+                contact.company = fallback
         if lead.linkedin_url:
             contact.linkedin_url = lead.linkedin_url
 
@@ -779,7 +813,7 @@ class PhoneIntelligenceWorkflowService:
             phone_number_display=contact.display_phone_number,
             role=role,
             extraction_source="legacy_snapshot",
-            contact_email=contact.recruiter_email if role == "recruiter" else "",
+            contact_email=contact.recruiter_email if role == "recruiter" else contact.employer_email,
             owner_name=(contact.recruiter_name if role == "recruiter" else contact.owner_name),
             company=contact.company,
             linkedin_url=contact.linkedin_url,
@@ -796,10 +830,11 @@ class PhoneIntelligenceWorkflowService:
         )
         db.add(snapshot)
         db.flush()
-        apply_contact_version(contact, snapshot, role)
+        apply_contact_version(db, contact, snapshot, role)
 
     @staticmethod
     def _link_lead_to_contact(
+        db: Session,
         contact: PremiumNumberContact,
         lead: PremiumNumberLead,
         role: str,
@@ -811,7 +846,7 @@ class PhoneIntelligenceWorkflowService:
             else contact.active_employer_lead_id
         )
         if pointer is None:
-            apply_contact_version(contact, lead, role)
+            apply_contact_version(db, contact, lead, role)
         elif role == "recruiter":
             contact.is_recruiter = True
         else:

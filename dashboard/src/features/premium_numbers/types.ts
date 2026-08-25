@@ -82,6 +82,7 @@ export type RecruiterNumberCard = ContactCardBase & {
 
 export type EmployerNumberCard = ContactCardBase & {
   owner_name: string
+  employer_email: string
   source_email_id: number | null
 }
 

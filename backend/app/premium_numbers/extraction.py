@@ -529,7 +529,7 @@ def extract_phone_leads(
             role = lead.role
             if _is_employer_domain(lead.contact_email, normalized_domains):
                 role = "employer"
-            elif is_relevant:
+            elif lead.role != "employer" and is_relevant:
                 role = "recruiter"
             enriched_ai_leads.append(
                 ExtractedContactGroup(

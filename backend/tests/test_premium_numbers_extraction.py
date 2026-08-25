@@ -163,6 +163,38 @@ class PremiumNumbersExtractionTests(unittest.TestCase):
         self.assertEqual(leads[0].phone_number_normalized, "15551112222")
         self.assertEqual(leads[0].extraction_source, "ai")
 
+    def test_llm_stated_employer_role_is_not_downgraded_to_recruiter(self) -> None:
+        # An LLM-stated role="employer" must survive even when the contact's email domain
+        # isn't (yet) in the owner's configured Employer Domains list and the relevance
+        # score would otherwise be high enough to trigger the recruiter-upgrade path -
+        # only a positive employer-domain match may ever *change* a stated role.
+        ai_lead = extraction.ExtractedContactGroup(
+            role="employer",
+            phone_number_display="(555) 222-3333",
+            phone_number_normalized="15552223333",
+            owner_name="Hiring Manager",
+            contact_email="manager@newclient.example",
+            company="New Client Co",
+            designation="Hiring Manager",
+            purpose="Direct contact",
+            confidence="high",
+            contact_type="unknown",
+            recruiter_relevance_score=0,
+            is_recruiter_relevant=False,
+            relevance_reason="",
+            source_fragment="Call me at 555-222-3333",
+            extraction_source="ai",
+        )
+        with patch.object(extraction, "_llm_extract", return_value=[ai_lead]):
+            leads = extraction.extract_phone_leads(
+                "Hiring Manager <manager@newclient.example>",
+                "Role",
+                "Call me at 555-222-3333.",
+                employer_domains={"horizonsofttech.net"},
+            )
+        self.assertEqual(len(leads), 1)
+        self.assertEqual(leads[0].role, "employer")
+
     def test_fallback_never_guesses_identity(self) -> None:
         with patch.object(extraction, "_llm_extract", return_value=[]):
             leads = extraction.extract_phone_leads(

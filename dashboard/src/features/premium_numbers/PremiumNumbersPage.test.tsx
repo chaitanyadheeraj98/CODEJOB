@@ -76,6 +76,7 @@ const recruiter: RecruiterNumberCard = {
 const employer: EmployerNumberCard = {
   ...contactBase,
   owner_name: 'Hiring Desk',
+  employer_email: '',
   source_email_id: null,
 }
 

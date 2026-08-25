@@ -808,6 +808,7 @@ class ChatSessionDetailResponse(ChatSessionResponse):
 
 class ChatMessageRequest(BaseModel):
     text: str
+    model: str | None = None
 
 
 class ChatSessionRenameRequest(BaseModel):
@@ -827,6 +828,7 @@ class ChatStatusResponse(BaseModel):
     chat_last_error: str | None = None
     mcp_status: str
     model: str
+    available_models: list[str]
 
 
 class SentItemDetailsResponse(BaseModel):
@@ -841,6 +843,9 @@ class SentItemDetailsResponse(BaseModel):
     recruiter_name: str | None = None
     recruiter_email: str | None = None
     recruiter_phone: str | None = None
+    employer_name: str | None = None
+    employer_email: str | None = None
+    employer_phone: str | None = None
     end_client: str | None = None
     implementation_partner: str | None = None
     vendor: str | None = None
@@ -1015,6 +1020,7 @@ class EmployerNumberResponse(BaseModel):
     display_phone_number: str
     owner_name: str
     company: str
+    employer_email: str = ""
     source_email_id: int | None
     source_type: str | None = None
     source_id: int | None = None
@@ -1546,6 +1552,7 @@ class RecruiterNumberPatchRequest(BaseModel):
 class EmployerNumberPatchRequest(BaseModel):
     owner_name: str | None = None
     company: str | None = None
+    employer_email: str | None = None
 
 
 class RecruiterOpportunityDeleteResponse(BaseModel):

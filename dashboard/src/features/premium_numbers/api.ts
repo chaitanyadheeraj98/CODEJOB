@@ -236,7 +236,7 @@ export function updateRecruiterNumber(
 export function updateEmployerNumber(
   apiBase: string,
   contactId: number,
-  patch: Partial<Pick<EmployerNumberCard, 'owner_name' | 'company'>>,
+  patch: Partial<Pick<EmployerNumberCard, 'owner_name' | 'company' | 'employer_email'>>,
 ): Promise<EmployerNumberCard> {
   return requestJson(`${apiBase}/employer-numbers/${contactId}`, jsonInit('PATCH', patch))
 }

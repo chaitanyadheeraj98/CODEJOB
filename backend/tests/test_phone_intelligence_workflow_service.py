@@ -1043,6 +1043,170 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
             self.assertEqual(_outcome(gmail_result), _outcome(nvoids_result))
             self.assertEqual(gmail_result.recruiter_matches, 1)
 
+    def test_company_derived_from_recruiter_domain_when_unknown(self) -> None:
+        with Session(self.engine) as db:
+            email = self._email(db, "gmail-company-derive")
+            lead = _lead(
+                role="recruiter",
+                owner_name="Ram",
+                contact_email="ram@tekwings.com",
+                company="Unknown",
+                relevance_score=90,
+                relevant=True,
+                reason="external_domain",
+            )
+            with patch(
+                "app.services.phone_intelligence_workflow_service.extract_phone_leads",
+                return_value=[lead],
+            ):
+                PhoneIntelligenceWorkflowService().capture_premium_numbers(db, email)
+
+            contact = db.query(PremiumNumberContact).filter(
+                PremiumNumberContact.normalized_phone_number == "12145551212"
+            ).one()
+            self.assertEqual(contact.company, "Tekwings")
+
+    def test_company_not_derived_from_personal_email_domain(self) -> None:
+        with Session(self.engine) as db:
+            email = self._email(db, "gmail-company-personal")
+            lead = _lead(
+                role="recruiter",
+                owner_name="Ram",
+                contact_email="ram@gmail.com",
+                company="Unknown",
+                relevance_score=90,
+                relevant=True,
+                reason="external_domain",
+            )
+            with patch(
+                "app.services.phone_intelligence_workflow_service.extract_phone_leads",
+                return_value=[lead],
+            ):
+                PhoneIntelligenceWorkflowService().capture_premium_numbers(db, email)
+
+            contact = db.query(PremiumNumberContact).filter(
+                PremiumNumberContact.normalized_phone_number == "12145551212"
+            ).one()
+            self.assertEqual(contact.company, "Unknown")
+
+    def test_company_not_derived_from_employer_domain(self) -> None:
+        with Session(self.engine) as db:
+            email = self._email(db, "gmail-company-employer-domain")
+            lead = _lead(
+                role="recruiter",
+                owner_name="HR",
+                contact_email="hr@horizonsofttech.net",
+                company="Unknown",
+                relevance_score=90,
+                relevant=True,
+                reason="external_domain",
+            )
+            with patch(
+                "app.services.phone_intelligence_workflow_service.extract_phone_leads",
+                return_value=[lead],
+            ):
+                PhoneIntelligenceWorkflowService().capture_premium_numbers(db, email)
+
+            contact = db.query(PremiumNumberContact).filter(
+                PremiumNumberContact.normalized_phone_number == "12145551212"
+            ).one()
+            self.assertEqual(contact.company, "Unknown")
+
+    def test_unpromoted_lead_still_gets_premium_number_lead_company_derived(self) -> None:
+        with Session(self.engine) as db:
+            email = self._email(db, "gmail-company-unpromoted")
+            lead = _lead(
+                role="unknown",
+                owner_name="Unknown",
+                contact_email="ram@tekwings.com",
+                company="Unknown",
+                relevance_score=0,
+                relevant=False,
+                reason="insufficient_signals",
+            )
+            with patch(
+                "app.services.phone_intelligence_workflow_service.extract_phone_leads",
+                return_value=[lead],
+            ):
+                PhoneIntelligenceWorkflowService().capture_premium_numbers(db, email)
+
+            stored = db.query(PremiumNumberLead).filter(
+                PremiumNumberLead.phone_number_normalized == "12145551212"
+            ).one()
+            self.assertEqual(stored.company, "Tekwings")
+
+    def test_recruiter_promotion_blocked_for_unverified_employer_contact(self) -> None:
+        with Session(self.engine) as db:
+            contact = PremiumNumberContact(
+                owner_id="default-owner",
+                normalized_phone_number="12145551212",
+                display_phone_number="(214) 555-1212",
+                is_employer=True,
+                is_recruiter=False,
+                owner_name="Hiring Desk",
+                company="Client Co",
+                recruiter_verification_level="unverified",
+            )
+            db.add(contact)
+            db.commit()
+
+            email = self._email(db, "gmail-flagged-conflict")
+            lead = _lead(
+                role="recruiter",
+                owner_name="New Recruiter",
+                contact_email="new@agency.example",
+                company="Agency Co",
+                relevance_score=95,
+                relevant=True,
+                reason="external_domain",
+            )
+            with patch(
+                "app.services.phone_intelligence_workflow_service.extract_phone_leads",
+                return_value=[lead],
+            ):
+                PhoneIntelligenceWorkflowService().capture_premium_numbers(db, email)
+
+            db.refresh(contact)
+            self.assertFalse(contact.is_recruiter)
+            pending = db.query(NumberReviewQueue).filter(
+                NumberReviewQueue.normalized_phone_number == "12145551212"
+            ).one()
+            self.assertEqual(pending.state, "pending")
+
+    def test_recruiter_promotion_allowed_when_contact_verified(self) -> None:
+        with Session(self.engine) as db:
+            contact = PremiumNumberContact(
+                owner_id="default-owner",
+                normalized_phone_number="12145551212",
+                display_phone_number="(214) 555-1212",
+                is_employer=True,
+                is_recruiter=False,
+                owner_name="Hiring Desk",
+                company="Client Co",
+                recruiter_verification_level="verified",
+            )
+            db.add(contact)
+            db.commit()
+
+            email = self._email(db, "gmail-flagged-verified")
+            lead = _lead(
+                role="recruiter",
+                owner_name="New Recruiter",
+                contact_email="new@agency.example",
+                company="Agency Co",
+                relevance_score=95,
+                relevant=True,
+                reason="external_domain",
+            )
+            with patch(
+                "app.services.phone_intelligence_workflow_service.extract_phone_leads",
+                return_value=[lead],
+            ):
+                PhoneIntelligenceWorkflowService().capture_premium_numbers(db, email)
+
+            db.refresh(contact)
+            self.assertTrue(contact.is_recruiter)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -12,7 +12,7 @@ from sqlalchemy.pool import StaticPool
 from app import main
 from app.db import Base
 from app.external_feeds.models import ExternalFeedSource, ExternalOpportunity
-from app.models import RecruiterEmail
+from app.models import PremiumNumberContact, PremiumNumberLead, RecruiterEmail
 
 
 class SentItemDetailsApiTests(unittest.TestCase):
@@ -100,6 +100,177 @@ class SentItemDetailsApiTests(unittest.TestCase):
         self.assertEqual(payload["recruiter_name"], "Recruiter Name")
         self.assertEqual(payload["recruiter_email"], "recruiter@example.com")
         self.assertEqual(payload["recruiter_phone"], None)
+
+    def test_employer_domain_recipient_resolves_employer_fields_and_blanks_recruiter_email(self) -> None:
+        with Session(self.engine) as db:
+            row = RecruiterEmail(
+                owner_id=main.settings.owner_id,
+                sender="HR Desk <hr@horizonsofttech.net>",
+                subject="Java role",
+                body="Need Java and Spring Boot",
+                role="Java Developer",
+                location="Remote",
+                salary_text="",
+                skills_text="Java, Spring Boot",
+                score=88,
+                decision="Qualified",
+                state="approved_sent",
+                draft_reply="Hi",
+                approval_status="approved",
+                sent_status="sent",
+                source="gmail",
+                external_message_id="msg-employer-1",
+                external_thread_id="thread-employer-1",
+                recipient_email="hr@horizonsofttech.net",
+                routing_status="safe",
+                routing_confidence=0.9,
+                routing_reason="ok",
+                routing_evidence="[]",
+                routing_candidates="[]",
+                routing_confirmed=True,
+                resume_file_name="resume.pdf",
+                sent_at=datetime(2026, 6, 27, 18, 0, tzinfo=UTC),
+                gmail_sent_id="sent-employer-1",
+                created_at=datetime(2026, 6, 27, 17, 0, tzinfo=UTC),
+                updated_at=datetime(2026, 6, 27, 18, 0, tzinfo=UTC),
+            )
+            db.add(row)
+            db.flush()
+            email_id = row.id
+            db.add(
+                PremiumNumberContact(
+                    owner_id=main.settings.owner_id,
+                    normalized_phone_number="12145550401",
+                    display_phone_number="+1 (214) 555-0401",
+                    is_employer=True,
+                    owner_name="HR Desk",
+                    employer_email="hr@horizonsofttech.net",
+                    first_detected_email_id=email_id,
+                )
+            )
+            db.commit()
+
+        response = self.client.get(f"/candidates/{email_id}/sent-details")
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertIsNone(payload["recruiter_email"])
+        self.assertEqual(payload["employer_name"], "HR Desk")
+        self.assertEqual(payload["employer_email"], "hr@horizonsofttech.net")
+        self.assertEqual(payload["employer_phone"], "+1 (214) 555-0401")
+
+    def test_employer_domain_recipient_with_no_matching_contact_falls_back_to_guess(self) -> None:
+        with Session(self.engine) as db:
+            row = RecruiterEmail(
+                owner_id=main.settings.owner_id,
+                sender="HR Desk <hr@horizonsofttech.net>",
+                subject="Java role",
+                body="Need Java and Spring Boot",
+                role="Java Developer",
+                location="Remote",
+                salary_text="",
+                skills_text="Java, Spring Boot",
+                score=88,
+                decision="Qualified",
+                state="approved_sent",
+                draft_reply="Hi",
+                approval_status="approved",
+                sent_status="sent",
+                source="gmail",
+                external_message_id="msg-employer-2",
+                external_thread_id="thread-employer-2",
+                recipient_email="hr@horizonsofttech.net",
+                routing_status="safe",
+                routing_confidence=0.9,
+                routing_reason="ok",
+                routing_evidence="[]",
+                routing_candidates="[]",
+                routing_confirmed=True,
+                resume_file_name="resume.pdf",
+                sent_at=datetime(2026, 6, 27, 18, 0, tzinfo=UTC),
+                gmail_sent_id="sent-employer-2",
+                created_at=datetime(2026, 6, 27, 17, 0, tzinfo=UTC),
+                updated_at=datetime(2026, 6, 27, 18, 0, tzinfo=UTC),
+            )
+            db.add(row)
+            db.commit()
+            email_id = row.id
+
+        response = self.client.get(f"/candidates/{email_id}/sent-details")
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertIsNone(payload["recruiter_email"])
+        self.assertIsNone(payload["employer_name"])
+        self.assertEqual(payload["employer_email"], "hr@horizonsofttech.net")
+        self.assertIsNone(payload["employer_phone"])
+
+    def test_employer_signature_lead_does_not_leak_into_recruiter_name_or_phone(self) -> None:
+        with Session(self.engine) as db:
+            row = RecruiterEmail(
+                owner_id=main.settings.owner_id,
+                sender="Asiya Shaik <asiya@horizonsofttech.net>",
+                subject="Java Tech Lead",
+                body="Kindly share resume at aniket.chaturvedi@pacerstaffing.com\n\nAsiya Shaik\nPh : (248) 237-3497",
+                role="Java Tech Lead",
+                location="Remote",
+                salary_text="",
+                skills_text="Java",
+                score=88,
+                decision="Qualified",
+                state="approved_sent",
+                draft_reply="Hi",
+                approval_status="approved",
+                sent_status="sent",
+                source="gmail",
+                external_message_id="msg-mixed-role-1",
+                external_thread_id="thread-mixed-role-1",
+                recipient_email="aniket.chaturvedi@pacerstaffing.com",
+                cc_email="asiya@horizonsofttech.net",
+                routing_status="safe",
+                routing_confidence=0.9,
+                routing_reason="ok",
+                routing_evidence="[]",
+                routing_candidates="[]",
+                routing_confirmed=True,
+                resume_file_name="resume.pdf",
+                sent_at=datetime(2026, 6, 27, 18, 0, tzinfo=UTC),
+                gmail_sent_id="sent-mixed-role-1",
+                created_at=datetime(2026, 6, 27, 17, 0, tzinfo=UTC),
+                updated_at=datetime(2026, 6, 27, 18, 0, tzinfo=UTC),
+            )
+            db.add(row)
+            db.flush()
+            email_id = row.id
+            db.add(
+                PremiumNumberLead(
+                    owner_id=main.settings.owner_id,
+                    recruiter_email_id=email_id,
+                    phone_number_normalized="12482373497",
+                    phone_number_display="(248) 237-3497",
+                    role="employer",
+                    contact_email="asiya@horizonsofttech.net",
+                    owner_name="Asiya Shaik",
+                    company="Horizons of Tech",
+                    designation="Unknown",
+                    purpose="Employer contact",
+                    confidence="high",
+                    contact_type="employer",
+                    recruiter_relevance_score=15,
+                    is_recruiter_relevant=False,
+                    relevance_reason="employer_domain",
+                    extraction_source="ai",
+                    source_fragment="",
+                    source_email_sender="",
+                    source_email_subject="",
+                )
+            )
+            db.commit()
+
+        response = self.client.get(f"/candidates/{email_id}/sent-details")
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(payload["recruiter_email"], "aniket.chaturvedi@pacerstaffing.com")
+        self.assertIsNone(payload["recruiter_name"])
+        self.assertIsNone(payload["recruiter_phone"])
 
     def test_nvoids_sent_details_resolve_external_opportunity_fields(self) -> None:
         with Session(self.engine) as db:

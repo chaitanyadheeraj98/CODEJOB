@@ -634,6 +634,7 @@ class PremiumNumberContact(Base):
     designation: Mapped[str] = mapped_column(String(255), default="Unknown")
     recruiter_email: Mapped[str] = mapped_column(String(255), default="")
     owner_name: Mapped[str] = mapped_column(String(255), default="Unknown")
+    employer_email: Mapped[str] = mapped_column(String(255), default="")
     company: Mapped[str] = mapped_column(String(255), default="Unknown")
     first_detected_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
