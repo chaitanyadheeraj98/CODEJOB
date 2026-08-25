@@ -20,6 +20,17 @@ import type { ApplicationOutreachMessage, ManualApplicationInput, ResumeSubmissi
 
 const STATUS_OPTIONS = ['viewed', 'shortlisted', 'offered', 'hired', 'rejected', 'withdrawn'] as const
 const REJECTION_CATEGORIES = ['missing_skill', 'missing_experience', 'missing_domain_knowledge', 'email_positioning', 'rate_mismatch', 'other']
+const STATUS_TONE: Record<string, 'active' | 'pending' | 'flagged' | 'neutral'> = {
+  not_submitted: 'neutral',
+  submitted: 'neutral',
+  viewed: 'pending',
+  shortlisted: 'pending',
+  interview_scheduled: 'pending',
+  offered: 'active',
+  hired: 'active',
+  rejected: 'flagged',
+  withdrawn: 'flagged',
+}
 
 type Props = {
   apiBase: string
@@ -53,8 +64,7 @@ export default function SubmissionsTab({ apiBase, resumes, resumeAssetId = null 
   const [error, setError] = useState('')
   const [manual, setManual] = useState<ManualApplicationInput | null>(null)
   const [expandedGapId, setExpandedGapId] = useState<number | null>(null)
-  const [tagCategory, setTagCategory] = useState('missing_skill')
-  const [tagValue, setTagValue] = useState('')
+  const [pendingRejection, setPendingRejection] = useState<{ id: number; force: boolean; category: string; value: string } | null>(null)
   const [outreach, setOutreach] = useState<ApplicationOutreachMessage | null>(null)
 
   const load = useCallback(async () => {
@@ -83,22 +93,43 @@ export default function SubmissionsTab({ apiBase, resumes, resumeAssetId = null 
     setRows((current) => current.map((row) => row.id === updated.id ? updated : row))
   }
 
-  const updateStatus = async (row: ApplicationCard, next: typeof STATUS_OPTIONS[number], force = false) => {
+  const updateStatus = async (
+    row: ApplicationCard,
+    next: typeof STATUS_OPTIONS[number],
+    force = false,
+    tag?: { category: string; value: string },
+  ) => {
     setBusyId(row.id)
     setError('')
     try {
       const updated = await updateResumeSubmissionStatus(apiBase, row.id, next, {
         force,
-        rejection_detail_tags: next === 'rejected' ? [{ category: tagCategory, value: tagValue }] : [],
+        rejection_detail_tags: next === 'rejected' && tag ? [{ category: tag.category, value: tag.value }] : [],
       })
       replaceRow(updated)
-      setTagValue('')
+      setPendingRejection((current) => (current?.id === row.id ? null : current))
     } catch (reason) {
       setError((reason as Error).message)
     } finally {
       setBusyId(null)
     }
   }
+
+  const chooseStatus = (row: ApplicationCard, value: string, force: boolean) => {
+    if (!value) return
+    if (value === 'rejected') {
+      setPendingRejection({ id: row.id, force, category: 'missing_skill', value: '' })
+      return
+    }
+    void updateStatus(row, value as typeof STATUS_OPTIONS[number], force)
+  }
+
+  const confirmRejection = (row: ApplicationCard) => {
+    if (!pendingRejection || pendingRejection.id !== row.id) return
+    void updateStatus(row, 'rejected', pendingRejection.force, { category: pendingRejection.category, value: pendingRejection.value })
+  }
+
+  const cancelRejection = () => setPendingRejection(null)
 
   const logInterview = async (row: ApplicationCard) => {
     setBusyId(row.id)
@@ -194,14 +225,21 @@ export default function SubmissionsTab({ apiBase, resumes, resumeAssetId = null 
           const unconfirmed = row.rejection_detail_tags.filter((tag) => tag.source === 'ai' && !tag.confirmed_at)
           return <article className="submissionCard" key={row.id}>
             <div><h3>{row.job_title_snapshot || 'Untitled role'}</h3><p>{row.recruiter_name_snapshot} · {row.recruiter_company_snapshot} · {row.end_client_snapshot}</p><p className="subtle">{email || 'No email'}{phone ? ` · ${phone}` : ''}{linkedIn ? <> · <a href={linkedIn} target="_blank" rel="noreferrer">LinkedIn</a></> : null}</p></div>
-            <span className="statusBadge">{row.resume_submission_status.replaceAll('_', ' ')}</span>
+            <span className={`statusBadge statusBadge--${STATUS_TONE[row.resume_submission_status] ?? 'neutral'}`}>{row.resume_submission_status.replaceAll('_', ' ')}</span>
             <div className="submissionActions">
-              {row.resume_submission_status === 'not_submitted' ? <span className="subtle">Not yet submitted</span> : <label>Advance<select defaultValue="" disabled={busyId === row.id} onChange={(event) => { if (event.target.value) void updateStatus(row, event.target.value as typeof STATUS_OPTIONS[number]) }}><option value="">Choose status</option>{STATUS_OPTIONS.map((value) => <option key={value} value={value}>{value.replaceAll('_', ' ')}</option>)}</select></label>}
+              {row.resume_submission_status === 'not_submitted' ? <span className="subtle">Not yet submitted</span> : <label>Advance<select value={pendingRejection?.id === row.id && !pendingRejection.force ? 'rejected' : ''} disabled={busyId === row.id} onChange={(event) => chooseStatus(row, event.target.value, false)}><option value="">Choose status</option>{STATUS_OPTIONS.map((value) => <option key={value} value={value}>{value.replaceAll('_', ' ')}</option>)}</select></label>}
               <button type="button" disabled={busyId === row.id} onClick={() => void logInterview(row)}>Log interview</button>
-              <label>Correct status<select defaultValue="" disabled={busyId === row.id} onChange={(event) => { if (event.target.value) void updateStatus(row, event.target.value as typeof STATUS_OPTIONS[number], true) }}><option value="">Choose correction</option>{STATUS_OPTIONS.map((value) => <option key={value} value={value}>{value.replaceAll('_', ' ')}</option>)}</select></label>
+              <label>Correct status<select value={pendingRejection?.id === row.id && pendingRejection.force ? 'rejected' : ''} disabled={busyId === row.id} onChange={(event) => chooseStatus(row, event.target.value, true)}><option value="">Choose correction</option>{STATUS_OPTIONS.map((value) => <option key={value} value={value}>{value.replaceAll('_', ' ')}</option>)}</select></label>
               <button type="button" onClick={() => setExpandedGapId(expandedGapId === row.id ? null : row.id)}>View gap analysis</button>
             </div>
-            <div className="rejectionTagRow"><select aria-label="Rejection category" value={tagCategory} onChange={(event) => setTagCategory(event.target.value)}>{REJECTION_CATEGORIES.map((value) => <option key={value} value={value}>{value.replaceAll('_', ' ')}</option>)}</select><input aria-label="Rejection detail" value={tagValue} onChange={(event) => setTagValue(event.target.value)} placeholder="Reason or skill" /></div>
+            {pendingRejection?.id === row.id ? (
+              <div className="rejectionTagRow">
+                <select aria-label="Rejection category" value={pendingRejection.category} onChange={(event) => setPendingRejection({ ...pendingRejection, category: event.target.value })}>{REJECTION_CATEGORIES.map((value) => <option key={value} value={value}>{value.replaceAll('_', ' ')}</option>)}</select>
+                <input aria-label="Rejection detail" value={pendingRejection.value} onChange={(event) => setPendingRejection({ ...pendingRejection, value: event.target.value })} placeholder="Reason or skill" autoFocus />
+                <button type="button" disabled={busyId === row.id} onClick={() => confirmRejection(row)}>Confirm rejection</button>
+                <button type="button" disabled={busyId === row.id} onClick={cancelRejection}>Cancel</button>
+              </div>
+            ) : null}
             {unconfirmed.map((tag) => <p key={`${tag.category}:${tag.value}`} className="aiTagPrompt">AI suggests {tag.category.replaceAll('_', ' ')}: {tag.value || 'unspecified'} <button type="button" onClick={() => void updateResumeSubmissionStatus(apiBase, row.id, 'rejected', { force: true, rejection_detail_tags: [{ category: tag.category, value: tag.value }] }).then(replaceRow)}>Confirm</button></p>)}
             {expandedGapId === row.id ? <div className="gapPanel"><div><strong>Missing required</strong>{row.skill_gap?.missing_required.length ? row.skill_gap.missing_required.map((skill) => <span className="trackingChip" key={skill}>{skill}</span>) : <span className="subtle"> None</span>}</div>{row.skill_gap?.source === 'structured' ? <div><strong>Missing preferred</strong>{row.skill_gap.missing_preferred.map((skill) => <span className="trackingChip" key={skill}>{skill}</span>)}</div> : <p className="subtle">Requirement tiers were unavailable for this JD.</p>}<button type="button" onClick={() => void recomputeSkillGap(apiBase, row.id).then((gap) => replaceRow({ ...row, skill_gap: gap })).catch((reason) => setError((reason as Error).message))}>Recompute</button></div> : null}
           </article>

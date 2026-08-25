@@ -11,9 +11,14 @@ export default function ResumesTab({ apiBase, onNavigateToSettings }: Props) {
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [funnel, setFunnel] = useState<ResumeFunnelMetrics | null>(null)
   const [error, setError] = useState('')
+  const [loading, setLoading] = useState(true)
 
   const load = useCallback(() => {
-    getResumePerformanceSummary(apiBase).then(setItems).catch((reason) => setError((reason as Error).message))
+    setLoading(true)
+    getResumePerformanceSummary(apiBase)
+      .then(setItems)
+      .catch((reason) => setError((reason as Error).message))
+      .finally(() => setLoading(false))
   }, [apiBase])
 
   useEffect(() => { load() }, [load])
@@ -35,25 +40,41 @@ export default function ResumesTab({ apiBase, onNavigateToSettings }: Props) {
         {items.map((item) => {
           const pct = Math.round(item.acceptance_rate * 100)
           const tier = item.acceptance_rate >= 0.4 ? 'high' : item.acceptance_rate > 0 ? 'mid' : 'zero'
-          return <article className={`resumeCard ${selectedId === item.resume.id ? 'selected' : ''}`} key={item.resume.id}>
-            <div className="resumeCardMain">
-              <button type="button" onClick={() => select(item.resume.id)} aria-expanded={selectedId === item.resume.id}>
-                <span className="resumeCardTitle">{item.resume.variant_label || item.resume.file_name}</span>
-                <span>{item.resume.primary_role || 'Role not set'}</span>
-                <span>{item.submission_count} submissions · {pct}% acceptance</span>
-              </button>
-              {onNavigateToSettings && (!item.resume.primary_role || !item.resume.variant_label) ? <button type="button" className="resumeCardMissingDetails" onClick={() => onNavigateToSettings(item.resume.id)}>Add role & label</button> : null}
-            </div>
+          const fullLabel = item.resume.variant_label || item.resume.file_name
+          return <article className={`resumeCard ${tier} ${selectedId === item.resume.id ? 'selected' : ''}`} key={item.resume.id}>
+            <header>
+              <div className="resumeCardMain">
+                <button type="button" onClick={() => select(item.resume.id)} aria-expanded={selectedId === item.resume.id}>
+                  <span className="resumeCardTitle" title={fullLabel}>{fullLabel}</span>
+                  <span className="resumeCardRole">{item.resume.primary_role || 'Role not set'}</span>
+                </button>
+                {onNavigateToSettings && (!item.resume.primary_role || !item.resume.variant_label) ? <button type="button" className="resumeCardMissingDetails" onClick={() => onNavigateToSettings(item.resume.id)}>Add role & label</button> : null}
+              </div>
+              <div className={`resumeCardStat ${tier}`}>
+                <span className="resumeCardPct">{pct}%</span>
+                <span className="resumeCardStatLabel">Acceptance</span>
+              </div>
+            </header>
             <div className="resumeCardBar" aria-hidden="true">
-              <span className="resumeCardBarLabel">{pct}% acceptance</span>
               <span className="resumeCardBarTrack"><span className={`resumeCardBarFill ${tier}`} style={{ width: `${pct}%` }} /></span>
+              <span className="resumeCardBarLabel">{item.submission_count} submission{item.submission_count === 1 ? '' : 's'}</span>
             </div>
-            <div className="skillChips">{item.resume.structured_skills.map((skill) => <span className="trackingChip" key={skill}>{skill}</span>)}</div>
+            {item.resume.structured_skills.length ? <div className="skillChips">{item.resume.structured_skills.map((skill) => <span className="trackingChip" key={skill}>{skill}</span>)}</div> : null}
           </article>
         })}
       </div>
-      {!items.length ? <p className="subtle">Upload a resume to start tracking performance.</p> : null}
-      {selectedId && funnel ? <section className="funnelStrip" aria-label="Resume funnel"><span>Submitted <strong>{funnel.total_submissions}</strong></span><span>Viewed <strong>{Math.round(funnel.view_rate * 100)}%</strong></span><span>Shortlisted <strong>{Math.round(funnel.shortlist_rate * 100)}%</strong></span><span>Interviewed <strong>{Math.round(funnel.interview_rate * 100)}%</strong></span><span>Offered <strong>{Math.round(funnel.offer_rate * 100)}%</strong></span><span>Hired <strong>{Math.round(funnel.hire_rate * 100)}%</strong></span></section> : null}
+      {loading ? <p className="subtle">Loading resumes...</p> : null}
+      {!loading && !items.length ? <p className="subtle">Upload a resume to start tracking performance.</p> : null}
+      {selectedId && funnel ? (
+        <section className="funnelStrip" aria-label="Resume funnel">
+          <div className="funnelStat"><strong>{funnel.total_submissions}</strong><span>Submitted</span></div>
+          <div className="funnelStat"><strong>{Math.round(funnel.view_rate * 100)}%</strong><span>Viewed</span></div>
+          <div className="funnelStat"><strong>{Math.round(funnel.shortlist_rate * 100)}%</strong><span>Shortlisted</span></div>
+          <div className="funnelStat"><strong>{Math.round(funnel.interview_rate * 100)}%</strong><span>Interviewed</span></div>
+          <div className="funnelStat"><strong>{Math.round(funnel.offer_rate * 100)}%</strong><span>Offered</span></div>
+          <div className="funnelStat"><strong>{Math.round(funnel.hire_rate * 100)}%</strong><span>Hired</span></div>
+        </section>
+      ) : null}
       {selectedId ? <SubmissionsTab apiBase={apiBase} resumes={items.map((item) => item.resume)} resumeAssetId={selectedId} /> : null}
     </section>
   )

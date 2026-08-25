@@ -254,7 +254,6 @@ describe('Sent Items audit view', () => {
     expect(links).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ text: 'Open requirement', href: 'https://mail.google.com/mail/u/0/#all/msg-1' }),
-        expect.objectContaining({ text: 'Open original email', href: 'https://mail.google.com/mail/u/0/#all/msg-1' }),
         expect.objectContaining({ text: 'Open sent message', href: 'https://mail.google.com/mail/u/0/#all/sent-1' }),
       ]),
     )

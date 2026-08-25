@@ -24,7 +24,8 @@ describe('ResumesTab', () => {
     await act(async () => { root.render(<ResumesTab apiBase="http://localhost:8000" />); await new Promise((resolve) => setTimeout(resolve, 20)) })
     expect(container.textContent).toContain('Banking')
     expect(container.textContent).toContain('Java Developer')
-    expect(container.textContent).toContain('4 submissions · 50% acceptance')
+    expect(container.textContent).toContain('50%')
+    expect(container.textContent).toContain('4 submissions')
     expect(container.textContent).toContain('AWS')
   })
 

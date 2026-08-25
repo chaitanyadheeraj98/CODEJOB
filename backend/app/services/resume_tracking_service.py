@@ -4,6 +4,7 @@ import json
 import re
 from collections import Counter, defaultdict
 from datetime import UTC, datetime
+from email.utils import parseaddr
 from statistics import median
 
 from sqlalchemy.exc import IntegrityError
@@ -199,6 +200,36 @@ def create_manual_application(
     )
     compute_skill_gap(db, application)
     return application, True
+
+
+def create_application_from_recruiter_email(
+    db: Session,
+    email: RecruiterEmail,
+    *,
+    owner_id: str,
+) -> tuple[Application, bool] | None:
+    """Log a Run Queue / Needs Review send as a tracked Application.
+
+    Reused by both the live approve-send hook and the one-time backfill
+    script so the field mapping only lives in one place.
+    """
+    if not email.resume_asset_id:
+        return None
+    recruiter_name, recruiter_email = parseaddr(email.sender or '')
+    recruiter_company = (email.company or '').strip() or 'Unknown'
+    return create_manual_application(
+        db,
+        owner_id=owner_id,
+        resume_asset_id=email.resume_asset_id,
+        dedupe_key=f'recruiter_email:{email.id}',
+        manual_recruiter_name=recruiter_name.strip() or recruiter_email or 'Unknown',
+        manual_recruiter_company=recruiter_company,
+        manual_recruiter_email=recruiter_email,
+        manual_job_title=(email.role or '').strip() or 'Not specified',
+        manual_end_client=(email.end_client or '').strip() or recruiter_company,
+        manual_source_note=f'Auto-logged from Run Queue/Needs Review send (email id {email.id})',
+        resume_submitted_at=email.sent_at,
+    )
 
 
 def _validated_tags(tags: list[object] | None) -> list[tuple[str, str]]:
@@ -459,6 +490,22 @@ def resume_funnel_metrics(
     elapsed: dict[str, list[float]] = defaultdict(list)
     rejection_reasons: Counter[str] = Counter()
     missing_skills: Counter[str] = Counter()
+    # ponytail: one batched lookup instead of one skill-gap query per application --
+    # this loop runs per resume in resume_performance_summary(), so N+1 here became
+    # thousands of queries once the resume-tracking backfill raised row counts.
+    skill_gap_by_application_id = {
+        snapshot.application_id: snapshot
+        for snapshot in (
+            db.query(ApplicationSkillGapSnapshot)
+            .filter(
+                ApplicationSkillGapSnapshot.owner_id == owner_id,
+                ApplicationSkillGapSnapshot.application_id.in_([row.id for row in submitted]),
+            )
+            .all()
+            if submitted
+            else []
+        )
+    }
     for application in submitted:
         milestones = _json_dict(application.milestones_reached_json)
         for name in milestone_names:
@@ -484,14 +531,7 @@ def resume_funnel_metrics(
             and tag.get('category') == 'missing_skill'
             and str(tag.get('value') or '').strip()
         }
-        snapshot = (
-            db.query(ApplicationSkillGapSnapshot)
-            .filter(
-                ApplicationSkillGapSnapshot.owner_id == owner_id,
-                ApplicationSkillGapSnapshot.application_id == application.id,
-            )
-            .first()
-        )
+        snapshot = skill_gap_by_application_id.get(application.id)
         if snapshot is not None:
             per_application_missing.update(
                 str(value).strip()

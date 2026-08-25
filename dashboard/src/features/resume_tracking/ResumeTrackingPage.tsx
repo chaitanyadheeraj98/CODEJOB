@@ -19,7 +19,6 @@ export default function ResumeTrackingPage({ apiBase, onNavigateToSettings }: Pr
   return (
     <section className="card pageSection resumeTrackingPage">
       <div className="resumeTrackingHeader">
-        <div><h2>Resume Tracking</h2><p className="subtle">See which resume variants move through the funnel and why others stall.</p></div>
         <div className="tabBar" role="tablist" aria-label="Resume tracking views">
           <button type="button" role="tab" aria-selected={tab === 'resumes'} className={tab === 'resumes' ? 'active' : ''} onClick={() => setTab('resumes')}>Resumes</button>
           <button type="button" role="tab" aria-selected={tab === 'submissions'} className={tab === 'submissions' ? 'active' : ''} onClick={openSubmissions}>Submissions</button>

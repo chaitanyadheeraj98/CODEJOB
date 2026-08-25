@@ -1366,6 +1366,9 @@ type SentItemDetails = {
   recruiter_name: string | null
   recruiter_email: string | null
   recruiter_phone: string | null
+  employer_name: string | null
+  employer_email: string | null
+  employer_phone: string | null
   end_client: string | null
   implementation_partner: string | null
   vendor: string | null
@@ -4750,6 +4753,109 @@ function App() {
 
   const inboxUnreadCount = inboxConversations.reduce((total, row) => total + row.unread_reply_count, 0)
 
+  const renderQueueStatusBar = () => (
+    <>
+      <section className="statsGrid">
+        <article className="statCard">
+          <p>Needs Review</p>
+          <strong>{bucketMeta.needs_review.total ?? queue.length}</strong>
+        </article>
+        <article className="statCard error">
+          <p>Failed Mapping</p>
+          <strong>{bucketMeta.failed.total ?? failedQueue.length}</strong>
+        </article>
+        <article className="statCard">
+          <p>Recent Runs</p>
+          <strong>{logs.length}</strong>
+        </article>
+      </section>
+      {isCandidateRefreshing ? <p className="subtle">Refreshing filtered counts...</p> : null}
+      {candidateRefreshError ? <p className="subtle">Counts refresh issue: {candidateRefreshError}</p> : null}
+
+      <section className="actionBar">
+        <QueryBucket
+          queryValue={settings.gmail_query}
+          savedQueries={settings.saved_gmail_queries}
+          onQueryChange={(value) => setSettings({ ...settings, gmail_query: value })}
+          onQuerySelect={(value) => setSettings({ ...settings, gmail_query: value })}
+          onSavedQueriesChange={updateSavedQueries}
+        />
+        <button
+          type="button"
+          className="syncBtn topBarAction"
+          onClick={status?.authenticated ? runAutomation : connectGmail}
+          disabled={running || oauthInProgress}
+        >
+          {running ? 'Running...' : status?.authenticated ? 'Sync + Queue' : oauthInProgress ? 'OAuth In Progress...' : 'Connect Gmail'}
+        </button>
+        <EmailSearch apiBase={apiBase} onNavigate={navigateFromEmailSearch} currentSection={activePage} />
+        <button
+          type="button"
+          className="syncBtn topBarAction"
+          onClick={runNvoidsSync}
+          disabled={nvoidsRunning || !settings.feature_nvoids_enabled}
+        >
+          {nvoidsRunning ? 'Syncing Nvoids...' : 'Sync + Queue Nvoids'}
+        </button>
+      </section>
+      {automationJob || nvoidsJob ? (
+        <section className="jobProgressGrid" aria-label="Background job progress">
+          {[
+            automationJob ? { job: automationJob, liveSkipped: automationLiveSkipped } : null,
+            nvoidsJob ? { job: nvoidsJob, liveSkipped: nvoidsLiveSkipped } : null,
+          ]
+            .filter((entry): entry is { job: BackgroundJob; liveSkipped: RecentRunItem[] } => entry !== null)
+            .map(({ job, liveSkipped }) => {
+              const meta = jobStatusMeta(job.status)
+              const isTerminal = job.status !== 'queued' && job.status !== 'running'
+              const total = Math.max(job.total_items ?? job.processed_items, job.processed_items, 1)
+              const skippedCount = isTerminal
+                ? (job.skipped_item_count ?? liveSkipped.length)
+                : liveSkipped.length
+              const doneCount = Math.max(0, job.processed_items - skippedCount)
+              const donePct = Math.min(100, (doneCount / total) * 100)
+              const skippedPct = Math.min(100 - donePct, (skippedCount / total) * 100)
+              return (
+                <article className={`jobProgressCard jobProgressCard--${meta.className}`} key={job.run_key}>
+                  <div>
+                    <strong>{job.queue_name === 'nvoids_sync' ? 'Nvoids sync' : 'Gmail automation'}</strong>
+                    <span className={`jobStatusPill jobStatusPill--${meta.className}`}>
+                      <i className="jobStatusDot" aria-hidden="true" />
+                      {meta.checkmark ? '✓ ' : ''}{meta.label}
+                    </span>
+                  </div>
+                  <div>
+                    <span>{job.processed_items}/{job.total_items ?? '?'} processed</span>
+                    <span>{job.progress_pct ?? Math.round(donePct + skippedPct)}%</span>
+                  </div>
+                  <div className="jobProgressBar" role="progressbar" aria-valuenow={job.progress_pct ?? 0} aria-valuemin={0} aria-valuemax={100}>
+                    <div className="jobProgressBar__segment jobProgressBar__segment--done" style={{ flexBasis: `${donePct}%` }} />
+                    <div className="jobProgressBar__segment jobProgressBar__segment--skipped" style={{ flexBasis: `${skippedPct}%` }} />
+                    <div className="jobProgressBar__segment jobProgressBar__segment--remaining" style={{ flexBasis: `${Math.max(0, 100 - donePct - skippedPct)}%` }} />
+                  </div>
+                  <div className="jobProgressLegend">
+                    <span><i style={{ background: '#1e9e4c' }} />Processed {doneCount}</span>
+                    <span><i style={{ background: 'var(--danger)' }} />Skipped {skippedCount}</span>
+                  </div>
+                  <p>{job.detail}</p>
+                  {liveSkipped.length > 0 ? (
+                    <div className="jobLiveSkipped" aria-label="Recently skipped items">
+                      {liveSkipped.slice(0, 8).map((item) => (
+                        <div className="jobLiveSkippedRow" key={item.id}>
+                          <p>{renderTextOrDash(item.title_or_subject)}</p>
+                          <p>{renderTextOrDash(item.reason_detail || item.reason_code)}</p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </article>
+              )
+            })}
+        </section>
+      ) : null}
+    </>
+  )
+
   return (
     <main className="gmailShell">
       <Sidebar
@@ -4870,108 +4976,13 @@ function App() {
                 ? 'Manage learning queues, trusted Gmail groups, and resume assets.'
                 : activePage === 'inbox'
                   ? 'Review recruiter replies and continue Gmail conversations.'
-                : 'Manage and monitor your automated recruitment email operations.'}
+                  : activePage === 'resume_tracking'
+                    ? 'See which resume variants move through the funnel and why others stall.'
+                    : 'Manage and monitor your automated recruitment email operations.'}
             </p>
           </div>
 
-          <section className="statsGrid">
-            <article className="statCard">
-              <p>Needs Review</p>
-              <strong>{bucketMeta.needs_review.total ?? queue.length}</strong>
-            </article>
-            <article className="statCard error">
-              <p>Failed Mapping</p>
-              <strong>{bucketMeta.failed.total ?? failedQueue.length}</strong>
-            </article>
-            <article className="statCard">
-              <p>Recent Runs</p>
-              <strong>{logs.length}</strong>
-            </article>
-          </section>
-          {isCandidateRefreshing ? <p className="subtle">Refreshing filtered counts...</p> : null}
-          {candidateRefreshError ? <p className="subtle">Counts refresh issue: {candidateRefreshError}</p> : null}
-
-          <section className="actionBar">
-            <QueryBucket
-              queryValue={settings.gmail_query}
-              savedQueries={settings.saved_gmail_queries}
-              onQueryChange={(value) => setSettings({ ...settings, gmail_query: value })}
-              onQuerySelect={(value) => setSettings({ ...settings, gmail_query: value })}
-              onSavedQueriesChange={updateSavedQueries}
-            />
-            <button
-              type="button"
-              className="syncBtn topBarAction"
-              onClick={status?.authenticated ? runAutomation : connectGmail}
-              disabled={running || oauthInProgress}
-            >
-              {running ? 'Running...' : status?.authenticated ? 'Sync + Queue' : oauthInProgress ? 'OAuth In Progress...' : 'Connect Gmail'}
-            </button>
-            <EmailSearch apiBase={apiBase} onNavigate={navigateFromEmailSearch} currentSection={activePage} />
-            <button
-              type="button"
-              className="syncBtn topBarAction"
-              onClick={runNvoidsSync}
-              disabled={nvoidsRunning || !settings.feature_nvoids_enabled}
-            >
-              {nvoidsRunning ? 'Syncing Nvoids...' : 'Sync + Queue Nvoids'}
-            </button>
-          </section>
-          {automationJob || nvoidsJob ? (
-            <section className="jobProgressGrid" aria-label="Background job progress">
-              {[
-                automationJob ? { job: automationJob, liveSkipped: automationLiveSkipped } : null,
-                nvoidsJob ? { job: nvoidsJob, liveSkipped: nvoidsLiveSkipped } : null,
-              ]
-                .filter((entry): entry is { job: BackgroundJob; liveSkipped: RecentRunItem[] } => entry !== null)
-                .map(({ job, liveSkipped }) => {
-                  const meta = jobStatusMeta(job.status)
-                  const isTerminal = job.status !== 'queued' && job.status !== 'running'
-                  const total = Math.max(job.total_items ?? job.processed_items, job.processed_items, 1)
-                  const skippedCount = isTerminal
-                    ? (job.skipped_item_count ?? liveSkipped.length)
-                    : liveSkipped.length
-                  const doneCount = Math.max(0, job.processed_items - skippedCount)
-                  const donePct = Math.min(100, (doneCount / total) * 100)
-                  const skippedPct = Math.min(100 - donePct, (skippedCount / total) * 100)
-                  return (
-                    <article className={`jobProgressCard jobProgressCard--${meta.className}`} key={job.run_key}>
-                      <div>
-                        <strong>{job.queue_name === 'nvoids_sync' ? 'Nvoids sync' : 'Gmail automation'}</strong>
-                        <span className={`jobStatusPill jobStatusPill--${meta.className}`}>
-                          <i className="jobStatusDot" aria-hidden="true" />
-                          {meta.checkmark ? '✓ ' : ''}{meta.label}
-                        </span>
-                      </div>
-                      <div>
-                        <span>{job.processed_items}/{job.total_items ?? '?'} processed</span>
-                        <span>{job.progress_pct ?? Math.round(donePct + skippedPct)}%</span>
-                      </div>
-                      <div className="jobProgressBar" role="progressbar" aria-valuenow={job.progress_pct ?? 0} aria-valuemin={0} aria-valuemax={100}>
-                        <div className="jobProgressBar__segment jobProgressBar__segment--done" style={{ flexBasis: `${donePct}%` }} />
-                        <div className="jobProgressBar__segment jobProgressBar__segment--skipped" style={{ flexBasis: `${skippedPct}%` }} />
-                        <div className="jobProgressBar__segment jobProgressBar__segment--remaining" style={{ flexBasis: `${Math.max(0, 100 - donePct - skippedPct)}%` }} />
-                      </div>
-                      <div className="jobProgressLegend">
-                        <span><i style={{ background: '#1e9e4c' }} />Processed {doneCount}</span>
-                        <span><i style={{ background: 'var(--danger)' }} />Skipped {skippedCount}</span>
-                      </div>
-                      <p>{job.detail}</p>
-                      {liveSkipped.length > 0 ? (
-                        <div className="jobLiveSkipped" aria-label="Recently skipped items">
-                          {liveSkipped.slice(0, 8).map((item) => (
-                            <div className="jobLiveSkippedRow" key={item.id}>
-                              <p>{renderTextOrDash(item.title_or_subject)}</p>
-                              <p>{renderTextOrDash(item.reason_detail || item.reason_code)}</p>
-                            </div>
-                          ))}
-                        </div>
-                      ) : null}
-                    </article>
-                  )
-                })}
-            </section>
-          ) : null}
+          {activePage !== 'settings' ? renderQueueStatusBar() : null}
 
           {activePage === 'run_queue' ? (
             <section className="liveMonitorCard">
@@ -7104,14 +7115,6 @@ function App() {
                                 ) : '-'}
                               </p>
                               <p>
-                                <strong>Original Gmail Link:</strong>{' '}
-                                {item.gmail_message_url ? (
-                                  <a href={item.gmail_message_url} target="_blank" rel="noreferrer">
-                                    Open original email
-                                  </a>
-                                ) : '-'}
-                              </p>
-                              <p>
                                 <strong>Source Listing Link:</strong>{' '}
                                 {listingUrl ? (
                                   <a href={listingUrl} target="_blank" rel="noreferrer">
@@ -7160,6 +7163,13 @@ function App() {
                               `Recruiter Name: ${renderTextOrDash(sentDetails.recruiter_name)}`,
                               `Recruiter Email: ${renderTextOrDash(sentDetails.recruiter_email)}`,
                               `Recruiter Phone: ${renderTextOrDash(sentDetails.recruiter_phone)}`,
+                            ].join('\n')}</pre>
+                          </ParserDetailsCard>
+                          <ParserDetailsCard title="Employer" className="parserDetailsSummaryBlock">
+                            <pre className="parserCardPre">{[
+                              `Employer Name: ${renderTextOrDash(sentDetails.employer_name)}`,
+                              `Employer Email: ${renderTextOrDash(sentDetails.employer_email)}`,
+                              `Employer Phone: ${renderTextOrDash(sentDetails.employer_phone)}`,
                             ].join('\n')}</pre>
                           </ParserDetailsCard>
                         </div>
