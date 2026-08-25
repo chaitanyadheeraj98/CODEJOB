@@ -719,7 +719,19 @@ class RecruiterOpportunity(Base):
     cold_call_script_updated_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     record_id: Mapped[str | None] = mapped_column(
         String(36),
-        ForeignKey("candidate_records.id", name="fk_recruiter_opportunities_record"),
+        ForeignKey(
+            "candidate_records.id",
+            name="fk_recruiter_opportunities_record",
+            # Breaks the recruiter_opportunities -> candidate_records ->
+            # opportunity_lineages -> recruiter_opportunities FK cycle for
+            # Base.metadata.create_all()/drop_all() (used by unit tests), which
+            # can't otherwise topologically sort the three tables. Matches
+            # production reality: migration 20260826_0032 already adds this exact
+            # constraint via a separate ALTER after all three tables exist, not
+            # inline at CREATE TABLE time - use_alter just tells the ORM-level
+            # DDL sorter the same thing. No migration or schema change implied.
+            use_alter=True,
+        ),
         nullable=True,
         index=True,
     )
