@@ -294,7 +294,7 @@ describe('Failed Mapping delete flow', () => {
       await Promise.resolve()
     })
 
-    expect(container.textContent ?? '').toContain('No failed emails.')
+    expect(container.textContent ?? '').toContain('No failed emails match these filters.')
     expect(globalThis.confirm).toHaveBeenCalled()
   })
 })

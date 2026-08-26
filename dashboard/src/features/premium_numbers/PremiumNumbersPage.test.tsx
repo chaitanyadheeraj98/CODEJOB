@@ -95,6 +95,10 @@ describe('PremiumNumbersPage', () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url.endsWith('/number-review/pending-count')) return jsonResponse({ count: 1 })
+      if (url.includes('/premium-numbers/inventory?')) return jsonResponse({ items: [
+        { key: `review:${review.id}`, kind: 'review', id: review.id, number: review.display_phone_number, owner: review.owner_name, company: review.company, categories: ['Recruiter'], status: 'Pending', score: review.recruiter_relevance_score, sourceType: 'gmail', lastCheckedAt: review.updated_at, review },
+        { key: `contact:${recruiter.id}`, kind: 'contact', id: recruiter.id, number: recruiter.display_phone_number, owner: recruiter.recruiter_name, company: recruiter.company, categories: ['Recruiter', 'Employer'], status: 'Flagged', score: recruiter.recruiter_relevance_score, sourceType: 'nvoids', lastCheckedAt: recruiter.updated_at, recruiter, employer },
+      ], total: 2, next_cursor: null, has_next: false })
       if (url.includes('/number-review?')) return jsonResponse({ items: [review], next_cursor: null, has_next: false })
       if (url.includes('/recruiter-numbers?')) return jsonResponse({ items: url.includes('flagged=true') ? [] : [recruiter], next_cursor: null, has_next: false })
       if (url.includes('/employer-numbers?')) return jsonResponse({ items: url.includes('flagged=true') ? [] : [employer], next_cursor: null, has_next: false })
@@ -169,6 +173,7 @@ describe('PremiumNumbersPage', () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
       if (url.endsWith('/number-review/pending-count')) return jsonResponse({ count: 0 })
+      if (url.includes('/premium-numbers/inventory?')) return jsonResponse({ items: [{ key: `contact:${recruiter.id}`, kind: 'contact', id: recruiter.id, number: recruiter.display_phone_number, owner: recruiter.recruiter_name, company: recruiter.company, categories: ['Recruiter', 'Employer'], status: 'Flagged', score: recruiter.recruiter_relevance_score, sourceType: 'nvoids', lastCheckedAt: recruiter.updated_at, recruiter }], total: 1, next_cursor: null, has_next: false })
       if (url.includes('/number-review?')) return jsonResponse({ items: [], next_cursor: null, has_next: false })
       if (url.includes('/recruiter-numbers?')) return jsonResponse({ items: [recruiter], next_cursor: null, has_next: false })
       if (url.includes('/employer-numbers?')) return jsonResponse({ items: [], next_cursor: null, has_next: false })

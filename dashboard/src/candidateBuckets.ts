@@ -35,16 +35,20 @@ export function buildCandidatesUrl(
   limit: number,
   mailDate: string | null,
   cursor?: number | null,
+  queryOptions?: CandidateQueryOptions,
 ): string {
   const params = new URLSearchParams({
     state,
     limit: String(limit),
-    sort: 'newest',
+    sort: queryOptions?.sort ?? 'newest',
   })
   if (typeof cursor === 'number') params.set('cursor', String(cursor))
   if (mailDate) params.set('mail_date', mailDate)
+  for (const [key, value] of Object.entries(queryOptions?.filters ?? {})) params.set(key, value)
   return `${apiBase}/candidates?${params.toString()}`
 }
+
+export type CandidateQueryOptions = { sort?: string; filters?: Record<string, string>; signal?: AbortSignal }
 
 export type CandidatePage = {
   items: Candidate[]
@@ -60,9 +64,9 @@ export async function fetchCandidatesPageByState(
   mailDate: string | null,
   fetchImpl: typeof fetch,
   cursor?: number | null,
-  signal?: AbortSignal,
+  queryOptions?: CandidateQueryOptions,
 ): Promise<CandidatePage> {
-  const res = await fetchImpl(buildCandidatesUrl(apiBase, state, limit, mailDate, cursor), { signal })
+  const res = await fetchImpl(buildCandidatesUrl(apiBase, state, limit, mailDate, cursor, queryOptions), { signal: queryOptions?.signal })
   if (!res.ok) {
     throw new Error(`Failed to load ${state} queue`)
   }
@@ -133,7 +137,7 @@ export function useCandidateBuckets<TCandidate extends Candidate>(
     async (
       state: CandidateState,
       mailDate: string | null,
-      opts?: { append?: boolean; cursor?: number | null; limit?: number; markRefreshing?: boolean },
+      opts?: { append?: boolean; cursor?: number | null; limit?: number; markRefreshing?: boolean; queryOptions?: CandidateQueryOptions },
     ) => {
       const append = Boolean(opts?.append)
       const cursor = opts?.cursor ?? null
@@ -146,7 +150,7 @@ export function useCandidateBuckets<TCandidate extends Candidate>(
         setCandidateRefreshError('')
       }
       try {
-        const page = await fetchCandidatesPageByState(apiBase, state, limit, mailDate, fetchFn, cursor)
+        const page = await fetchCandidatesPageByState(apiBase, state, limit, mailDate, fetchFn, cursor, opts?.queryOptions)
         if (requestId !== candidateRefreshTrackerRef.current.current) return
         applyQueueForBucket(state, page.items as TCandidate[], append)
         setBucketMeta((prev) => ({
@@ -154,7 +158,7 @@ export function useCandidateBuckets<TCandidate extends Candidate>(
           [state]: { nextCursor: page.nextCursor, hasNext: page.hasNext, loaded: true, total: page.total },
         }))
       } catch (error) {
-        if (requestId === candidateRefreshTrackerRef.current.current) {
+        if (requestId === candidateRefreshTrackerRef.current.current && (error as Error).name !== 'AbortError') {
           setCandidateRefreshError((error as Error).message)
         }
       } finally {
@@ -170,7 +174,7 @@ export function useCandidateBuckets<TCandidate extends Candidate>(
     async (
       mailDate: string | null,
       activeBucket: CandidateState,
-      opts?: { activeOnly?: boolean; includeLoaded?: boolean; initialLoad?: boolean },
+      opts?: { activeOnly?: boolean; includeLoaded?: boolean; initialLoad?: boolean; queryOptions?: CandidateQueryOptions },
     ) => {
       const targets: CandidateState[] = []
       if (opts?.activeOnly !== false) {
@@ -191,6 +195,7 @@ export function useCandidateBuckets<TCandidate extends Candidate>(
           cursor: null,
           limit: opts?.initialLoad ? initialBucketLimit : pageBucketLimit,
           markRefreshing: i === 0,
+          queryOptions: opts?.queryOptions,
         })
       }
     },
@@ -198,7 +203,7 @@ export function useCandidateBuckets<TCandidate extends Candidate>(
   )
 
   const loadMoreCandidates = useCallback(
-    async (state: CandidateState, mailDate: string | null) => {
+    async (state: CandidateState, mailDate: string | null, queryOptions?: CandidateQueryOptions) => {
       const meta = bucketMeta[state]
       if (!meta.hasNext || meta.nextCursor === null || loadingMoreKey) return
       setLoadingMoreKey(state)
@@ -207,6 +212,7 @@ export function useCandidateBuckets<TCandidate extends Candidate>(
           append: true,
           cursor: meta.nextCursor,
           limit: pageBucketLimit,
+          queryOptions,
         })
       } finally {
         setLoadingMoreKey(null)

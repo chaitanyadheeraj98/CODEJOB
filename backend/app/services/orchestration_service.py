@@ -1587,10 +1587,10 @@ class OrchestrationService:
 
         return email
 
-    def list_inbox_conversations(self, db: Session, only_replies: bool = False) -> list[ConversationSummaryResponse]:
-        return list_conversations(db, self.deps.owner_id, only_replies=only_replies)
+    def list_inbox_conversations(self, db: Session, **filters: object) -> list[ConversationSummaryResponse]:
+        return list_conversations(db, self.deps.owner_id, **filters)
 
-    def refresh_inbox_replies(self, db: Session, only_replies: bool = False) -> list[ConversationSummaryResponse]:
+    def refresh_inbox_replies(self, db: Session, **filters: object) -> list[ConversationSummaryResponse]:
         """Cheap reply-only refresh for the inbox refresh icon: no candidate import/scoring/queueing."""
         if not self.deps.is_gmail_configured():
             raise HTTPException(status_code=400, detail="Gmail OAuth is not configured")
@@ -1598,7 +1598,7 @@ class OrchestrationService:
         if not user_settings.enabled:
             raise HTTPException(status_code=400, detail="Pipeline is disabled in settings")
         self._capture_inbound_replies(db, user_settings)
-        return list_conversations(db, self.deps.owner_id, only_replies=only_replies)
+        return list_conversations(db, self.deps.owner_id, **filters)
 
     def get_inbox_conversation(self, conversation_id: int, db: Session) -> ConversationDetailResponse:
         return conversation_detail(db, self.deps.owner_id, conversation_id)

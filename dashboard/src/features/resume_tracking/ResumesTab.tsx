@@ -1,25 +1,29 @@
 import { useCallback, useEffect, useState } from 'react'
+import FilterSortBar, { type FilterValues } from '../../components/FilterSortBar'
 
 import { getResumeFunnel, getResumePerformanceSummary } from './api'
 import SubmissionsTab from './SubmissionsTab'
 import type { ResumeFunnelMetrics, ResumePerformanceSummaryItem } from './types'
+import { submissionDefaultFilterValues } from './submissionFilters'
 
-type Props = { apiBase: string; onNavigateToSettings?: (resumeId: number) => void }
+type Props = { apiBase: string; onNavigateToSettings?: (resumeId: number) => void;filterValues?:FilterValues;onFilterChange?:(values:FilterValues)=>void;applicationsSortValue?:string;onApplicationsSortChange?:(value:string)=>void }
+const resumeSortOptions=[{value:'recent',label:'Most recently updated'},{value:'acceptance_desc',label:'Highest acceptance rate'},{value:'acceptance_asc',label:'Lowest acceptance rate'},{value:'submissions_desc',label:'Most submissions'}]
 
-export default function ResumesTab({ apiBase, onNavigateToSettings }: Props) {
+export default function ResumesTab({ apiBase, onNavigateToSettings, filterValues=submissionDefaultFilterValues,onFilterChange=()=>undefined,applicationsSortValue='newest',onApplicationsSortChange=()=>undefined }: Props) {
   const [items, setItems] = useState<ResumePerformanceSummaryItem[]>([])
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [funnel, setFunnel] = useState<ResumeFunnelMetrics | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
+  const [sort,setSort]=useState('recent')
 
   const load = useCallback(() => {
     setLoading(true)
-    getResumePerformanceSummary(apiBase)
+    getResumePerformanceSummary(apiBase,sort)
       .then(setItems)
       .catch((reason) => setError((reason as Error).message))
       .finally(() => setLoading(false))
-  }, [apiBase])
+  }, [apiBase,sort])
 
   useEffect(() => { load() }, [load])
 
@@ -35,6 +39,7 @@ export default function ResumesTab({ apiBase, onNavigateToSettings }: Props) {
 
   return (
     <section className="resumeTrackingPanel">
+      <FilterSortBar fields={[]} values={{}} onFieldChange={()=>{}} onClear={()=>setSort('recent')} sortOptions={resumeSortOptions} sortValue={sort} onSortChange={setSort} loading={loading} />
       {error ? <p className="errorText" role="alert">{error}</p> : null}
       <div className="resumeCardGrid">
         {items.map((item) => {
@@ -75,7 +80,7 @@ export default function ResumesTab({ apiBase, onNavigateToSettings }: Props) {
           <div className="funnelStat"><strong>{Math.round(funnel.hire_rate * 100)}%</strong><span>Hired</span></div>
         </section>
       ) : null}
-      {selectedId ? <SubmissionsTab apiBase={apiBase} resumes={items.map((item) => item.resume)} resumeAssetId={selectedId} /> : null}
+      {selectedId ? <SubmissionsTab apiBase={apiBase} resumes={items.map((item) => item.resume)} resumeAssetId={selectedId} filterValues={filterValues} onFilterChange={onFilterChange} sortValue={applicationsSortValue} onSortChange={onApplicationsSortChange} /> : null}
     </section>
   )
 }

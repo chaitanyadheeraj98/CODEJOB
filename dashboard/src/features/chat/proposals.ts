@@ -92,9 +92,9 @@ export function proposalForMessage(message: ChatMessage): { handler: ProposalHan
 }
 
 export function proposalResultDetail(payload: Record<string, unknown>): string {
-  if (typeof payload.approved_count === 'number') {
+  if (Array.isArray(payload.succeeded_ids)) {
     const failed = Array.isArray(payload.failed) ? payload.failed.length : 0
-    return `${payload.approved_count} approved${failed ? `; ${failed} failed` : ''}.`
+    return `${payload.succeeded_ids.length} approved${failed ? `; ${failed} failed` : ''}.`
   }
   if (payload.sent) return 'Email sent.'
   if (typeof payload.issue_number === 'number') return `Issue #${payload.issue_number} created.`

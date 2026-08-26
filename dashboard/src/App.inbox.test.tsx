@@ -158,7 +158,7 @@ describe('Inbox dashboard', () => {
       if (url.includes('/recruiter-numbers')) return makeResponse({ items: [], next_cursor: null, has_next: false })
       if (url.includes('/employer-numbers')) return makeResponse({ items: [], next_cursor: null, has_next: false })
       if (url.includes('/recruiter-opportunities')) return makeResponse({ items: [], next_cursor: null, has_next: false })
-      if (url.endsWith('/inbox/conversations')) return makeResponse(conversations)
+      if (url.includes('/inbox/conversations?')) return makeResponse(conversations)
       if (url.endsWith('/inbox/conversations/1')) return makeResponse(detail)
       throw new Error(`Unhandled fetch: ${url}`)
     }))

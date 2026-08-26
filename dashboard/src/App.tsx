@@ -11,6 +11,11 @@ import { getChatStatus } from './features/chat/api'
 import type { ChatStatus } from './features/chat/types'
 import PremiumNumbersPage from './features/premium_numbers/PremiumNumbersPage'
 import { type CandidateState, useCandidateBuckets } from './candidateBuckets'
+import type { CandidateQueryOptions } from './candidateBuckets'
+import FilterSortBar, { type FilterValues } from './components/FilterSortBar'
+import SelectionActionBar from './components/SelectionActionBar'
+import { filterSortRegistry } from './filterSortRegistry'
+import { submissionDefaultFilterValues } from './features/resume_tracking/submissionFilters'
 import { addCcEmail, removeCcEmail } from './ccEmails'
 import { addEmployerDomain, removeEmployerDomain } from './employerDomains'
 import { formatRelativeInboxTime, getInitials } from './inboxFormat'
@@ -49,6 +54,32 @@ const DRAFT_TEXT_SIZE_STYLES: Record<DraftTextSize, { fontSize: string; lineHeig
   normal: { fontSize: '16px', lineHeight: '1.5' },
   large: { fontSize: '20px', lineHeight: '1.5' },
   huge: { fontSize: '28px', lineHeight: '1.4' },
+}
+
+type ActivePage = 'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'inbox' | 'premium_numbers' | 'resume_tracking' | 'settings'
+
+const PAGE_TITLES: Record<ActivePage, string> = {
+  run_queue: 'Run Queue Dashboard',
+  needs_review: 'Needs Review',
+  failed_mapping: 'Failed Mapping',
+  recent_runs: 'Recent Runs',
+  sent_items: 'Sent Items',
+  inbox: 'Reply Inbox',
+  premium_numbers: 'Premium Numbers',
+  resume_tracking: 'Resume Tracking',
+  settings: 'Settings',
+}
+
+const PAGE_SUBTITLES: Record<ActivePage, string> = {
+  run_queue: 'Manage and monitor your automated recruitment email operations.',
+  needs_review: 'Approve, edit, or reject AI-drafted replies before they send.',
+  failed_mapping: 'Fix recipient routing for emails the parser could not map.',
+  recent_runs: 'See automation run history and outcomes.',
+  sent_items: 'Review emails that have already been sent.',
+  inbox: 'Review recruiter replies and continue Gmail conversations.',
+  premium_numbers: 'Manage inventory, assignments, and rescoring operations.',
+  resume_tracking: 'See which resume variants move through the funnel and why others stall.',
+  settings: 'Manage learning queues, trusted Gmail groups, and resume assets.',
 }
 
 export function shouldTrackViewEvent(
@@ -2754,10 +2785,17 @@ function App() {
   const [routingFixes, setRoutingFixes] = useState<Record<number, { to: string; cc: string }>>({})
   const [fixingId, setFixingId] = useState<number | null>(null)
   const [deletingFailedId, setDeletingFailedId] = useState<number | null>(null)
-  const [activePage, setActivePage] = useState<'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'inbox' | 'premium_numbers' | 'resume_tracking' | 'settings'>('run_queue')
+  const [activePage, setActivePage] = useState<ActivePage>('run_queue')
+  const [pageFilterValues, setPageFilterValues] = useState<Partial<Record<string, FilterValues>>>({})
+  const [pageSortValues, setPageSortValues] = useState<Partial<Record<string, string>>>({})
+  const [applicationsSharedFilters, setApplicationsSharedFilters] = useState<FilterValues>(submissionDefaultFilterValues)
+  const [applicationsSharedSort, setApplicationsSharedSort] = useState('newest')
+  const [needsReviewSelected, setNeedsReviewSelected] = useState<Set<number>>(new Set())
+  const [needsReviewBulkAction, setNeedsReviewBulkAction] = useState<string | null>(null)
+  const [failedMappingSelected, setFailedMappingSelected] = useState<Set<number>>(new Set())
+  const [failedMappingBulkAction, setFailedMappingBulkAction] = useState<string | null>(null)
   const [emailSearchTarget, setEmailSearchTarget] = useState<EmailSearchHit | null>(null)
   const [inboxConversations, setInboxConversations] = useState<ConversationSummary[]>([])
-  const [inboxTab, setInboxTab] = useState<'all' | 'replies'>('all')
   const [selectedConversationId, setSelectedConversationId] = useState<number | null>(null)
   const [selectedConversation, setSelectedConversation] = useState<ConversationDetail | null>(null)
   const [inboxLoading, setInboxLoading] = useState(false)
@@ -2791,6 +2829,7 @@ function App() {
   const hasBootstrappedCandidatesRef = useRef(false)
   const oauthPollingStartedAtRef = useRef<number | null>(null)
   const refreshTimerRef = useRef<number | null>(null)
+  const filterRequestControllerRef = useRef<AbortController | null>(null)
 
   const {
     queue,
@@ -3279,6 +3318,11 @@ function App() {
     return null
   }
 
+  const activeFilterSortConfig = filterSortRegistry[activePage] ?? null
+  const activeFilterValues = activeFilterSortConfig ? pageFilterValues[activePage] ?? activeFilterSortConfig.defaultFilterValues : {}
+  const activeSortValue = activeFilterSortConfig ? pageSortValues[activePage] ?? activeFilterSortConfig.sortOptions[0].value : 'newest'
+  const activeQueryOptions = useCallback((): CandidateQueryOptions | undefined => activeFilterSortConfig ? { sort: activeSortValue, filters: activeFilterSortConfig.toParams(activeFilterValues) } : undefined, [activeFilterSortConfig, activeFilterValues, activeSortValue])
+
   const refreshVisibleCandidates = async (
     mailDate: string | null,
     options?: { activeOnly?: boolean; includeLoaded?: boolean; initialLoad?: boolean },
@@ -3329,18 +3373,19 @@ function App() {
     )
   }
 
-  const loadInboxConversations = async (): Promise<ConversationSummary[]> => {
+  const loadInboxConversations = async (options?: { signal?: AbortSignal }): Promise<ConversationSummary[]> => {
     setInboxLoading(true)
     setInboxError('')
     try {
-      const suffix = inboxTab === 'replies' ? '?only_replies=true' : ''
-      const res = await fetch(`${apiBase}/inbox/conversations${suffix}`)
+      const params = new URLSearchParams({ sort: activeSortValue })
+      for (const [key, value] of Object.entries(activeFilterSortConfig?.toParams(activeFilterValues) ?? {})) params.set(key, value)
+      const res = await fetch(`${apiBase}/inbox/conversations?${params}`, { signal: options?.signal })
       if (!res.ok) throw new Error('Failed to load inbox conversations')
       const payload = (await res.json()) as ConversationSummary[]
       setInboxConversations(payload)
       return payload
     } catch (e) {
-      setInboxError((e as Error).message)
+      if ((e as Error).name !== 'AbortError') setInboxError((e as Error).message)
       return []
     } finally {
       setInboxLoading(false)
@@ -3351,8 +3396,9 @@ function App() {
     setInboxLoading(true)
     setInboxError('')
     try {
-      const suffix = inboxTab === 'replies' ? '?only_replies=true' : ''
-      const res = await fetch(`${apiBase}/inbox/conversations/refresh${suffix}`, { method: 'POST' })
+      const params = new URLSearchParams({ sort: activeSortValue })
+      for (const [key, value] of Object.entries(activeFilterSortConfig?.toParams(activeFilterValues) ?? {})) params.set(key, value)
+      const res = await fetch(`${apiBase}/inbox/conversations/refresh?${params}`, { method: 'POST' })
       if (!res.ok) {
         const details = await res.json().catch(() => null)
         throw new Error(details?.detail ?? 'Failed to refresh conversations')
@@ -3607,6 +3653,45 @@ function App() {
     }, 200)
   }
 
+  const runNeedsReviewBulk = async (action: 'approve' | 'regenerate' | 'reject' | 'send-to-failed-mapping') => {
+    const ids = [...needsReviewSelected]
+    if (!ids.length) return
+    const messages = { approve: `Send ${ids.length} application${ids.length === 1 ? '' : 's'} now? This emails each recruiter directly and cannot be undone.`, regenerate: `Regenerate AI replies for ${ids.length} candidate${ids.length === 1 ? '' : 's'}? This overwrites the current draft reply for each.`, reject: `Reject ${ids.length} candidate${ids.length === 1 ? '' : 's'}?`, 'send-to-failed-mapping': `Move ${ids.length} candidate${ids.length === 1 ? '' : 's'} to Failed Mapping?` }
+    let message = messages[action]
+    if (action === 'approve') { const count = ids.filter((id) => draftEdits[id] !== undefined && draftEdits[id] !== queue.find((item) => item.id === id)?.draft_reply).length; if (count) message += ` ${count} of these have unsaved draft edits that will be sent as-is.` }
+    if (!window.confirm(message)) return
+    setNeedsReviewBulkAction(action)
+    try {
+      const endpoint = { approve: 'approve-bulk', regenerate: 'regenerate-bulk', reject: 'reject-bulk', 'send-to-failed-mapping': 'send-to-failed-mapping-bulk' }[action]
+      const body = action === 'approve' ? { ids, edited_replies: Object.fromEntries(ids.map((id) => [id, draftEdits[id] ?? queue.find((item) => item.id === id)?.draft_reply ?? ''])), idempotency_key: crypto.randomUUID() } : { ids }
+      const response = await fetch(`${apiBase}/candidates/${endpoint}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      if (!response.ok) throw new Error((await response.json().catch(() => null))?.detail ?? `Bulk ${action} failed`)
+      const result = await response.json() as { succeeded_ids: number[]; failed: Array<{ id: number; error: string }> }
+      if (result.failed.length) setError(`${result.succeeded_ids.length} succeeded, ${result.failed.length} failed: ${result.failed.map((item) => `#${item.id} (${item.error})`).join(', ')}`)
+      setNeedsReviewSelected(new Set())
+      schedulePostMutationRefresh()
+    } catch (e) { setError((e as Error).message) } finally { setNeedsReviewBulkAction(null) }
+  }
+
+  const runFailedMappingBulk = async (action: 'save' | 'delete') => {
+    const ids = [...failedMappingSelected]
+    const fixes = Object.fromEntries(ids.filter((id) => routingFixes[id]?.to && routingFixes[id]?.cc).map((id) => [id, { to_email: routingFixes[id].to, cc_email: routingFixes[id].cc }]))
+    const ready = Object.keys(fixes).length
+    if (!ids.length || (action === 'save' && !ready)) return
+    if (!window.confirm(action === 'save' ? `Save routing corrections and move ${ready} candidate${ready === 1 ? '' : 's'} to Review?${ready < ids.length ? ` ${ids.length - ready} selected rows have no correction entered and will be skipped.` : ''}` : `Delete ${ids.length} failed mapping card${ids.length === 1 ? '' : 's'} from the dashboard?`)) return
+    setFailedMappingBulkAction(action)
+    try {
+      const response = await fetch(`${apiBase}/candidates/${action === 'save' ? 'resolve-recipients-bulk' : 'delete-bulk'}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(action === 'save' ? { fixes } : { ids }) })
+      if (!response.ok) throw new Error((await response.json().catch(() => null))?.detail ?? `Bulk ${action} failed`)
+      const result = await response.json() as { succeeded_ids: number[]; failed: Array<{ id: number; error: string }> }
+      const skipped = action === 'save' ? ids.filter((id) => !(id in fixes)).map((id) => ({ id, error: 'No correction entered' })) : []
+      const failed = [...result.failed, ...skipped]
+      if (failed.length) setError(`${result.succeeded_ids.length} succeeded, ${failed.length} skipped: ${failed.map((item) => `#${item.id} (${item.error})`).join(', ')}`)
+      setFailedMappingSelected(new Set())
+      schedulePostMutationRefresh()
+    } catch (e) { setError((e as Error).message) } finally { setFailedMappingBulkAction(null) }
+  }
+
   const retrySettingsBootstrap = async () => {
     setError('')
     try {
@@ -3667,16 +3752,32 @@ function App() {
   }, [activePage, settings.mail_date, bucketMeta.failed.loaded, bucketMeta.needs_review.loaded, bucketMeta.approved_sent.loaded, settingsBootstrapReady])
 
   useEffect(() => {
+    if (!hasBootstrappedCandidatesRef.current || !settingsBootstrapReady || !activeFilterSortConfig) return
+    filterRequestControllerRef.current?.abort()
+    const controller = new AbortController()
+    filterRequestControllerRef.current = controller
+    const request = activeFilterSortConfig.bucket === 'inbox_conversations' ? loadInboxConversations({ signal: controller.signal }) : refreshCandidates(settings.mail_date ?? null, activeFilterSortConfig.bucket, { activeOnly: true, queryOptions: { ...activeQueryOptions(), signal: controller.signal } })
+    request.catch((e) => {
+      if ((e as Error).name !== 'AbortError') setError((e as Error).message)
+    })
+    return () => controller.abort()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activePage, pageFilterValues[activePage], pageSortValues[activePage]])
+
+  useEffect(() => setNeedsReviewSelected(new Set()), [pageFilterValues.needs_review, pageSortValues.needs_review])
+  useEffect(() => setFailedMappingSelected(new Set()), [pageFilterValues.failed_mapping, pageSortValues.failed_mapping])
+
+  useEffect(() => {
     if (!emailSearchTarget) return
     const relatedId = emailSearchRelatedId(emailSearchTarget)
     if (relatedId == null) return
     const section = emailSearchTarget.section
     if (section === 'needs_review' && bucketMeta.needs_review.hasNext && !queue.some((item) => String(item.id) === relatedId)) {
-      loadMoreCandidates('needs_review', settings.mail_date ?? null)
+      loadMoreCandidates('needs_review', settings.mail_date ?? null, activeQueryOptions())
     } else if (section === 'failed_mapping' && bucketMeta.failed.hasNext && !failedQueue.some((item) => String(item.id) === relatedId)) {
-      loadMoreCandidates('failed', settings.mail_date ?? null)
+      loadMoreCandidates('failed', settings.mail_date ?? null, activeQueryOptions())
     } else if (section === 'sent_items' && bucketMeta.approved_sent.hasNext && !sentQueue.some((item) => String(item.id) === relatedId)) {
-      loadMoreCandidates('approved_sent', settings.mail_date ?? null)
+      loadMoreCandidates('approved_sent', settings.mail_date ?? null, activeQueryOptions())
     }
   }, [emailSearchTarget, queue, failedQueue, sentQueue, bucketMeta, settings.mail_date])
 
@@ -3690,7 +3791,7 @@ function App() {
       if (selectedId) openInboxConversation(selectedId).catch((e) => setInboxError((e as Error).message))
       else setSelectedConversation(null)
     }).catch((e) => setInboxError((e as Error).message))
-  }, [activePage, inboxTab])
+  }, [activePage])
 
   useEffect(() => {
     loadProductivityAnalytics(timeRange).catch((e) => setError((e as Error).message))
@@ -4801,6 +4902,17 @@ function App() {
           {nvoidsRunning ? 'Syncing Nvoids...' : 'Sync + Queue Nvoids'}
         </button>
       </section>
+      <FilterSortBar
+        fields={activeFilterSortConfig?.fields ?? []}
+        values={activeFilterValues}
+        onFieldChange={(key, value) => setPageFilterValues((prev) => ({ ...prev, [activePage]: { ...(prev[activePage] ?? activeFilterSortConfig?.defaultFilterValues ?? {}), [key]: value } }))}
+        onClear={() => setPageFilterValues((prev) => ({ ...prev, [activePage]: activeFilterSortConfig?.defaultFilterValues ?? {} }))}
+        sortOptions={activeFilterSortConfig?.sortOptions ?? []}
+        sortValue={activeSortValue}
+        onSortChange={(value) => setPageSortValues((prev) => ({ ...prev, [activePage]: value }))}
+        disabled={!activeFilterSortConfig}
+        loading={activeFilterSortConfig?.bucket === 'inbox_conversations' ? inboxLoading : isCandidateRefreshing}
+      />
       {automationJob || nvoidsJob ? (
         <section className="jobProgressGrid" aria-label="Background job progress">
           {[
@@ -4973,15 +5085,9 @@ function App() {
 
         <div className="pageBody">
           <div className="titleBlock">
-            <h1>{activePage === 'settings' ? 'Settings' : activePage === 'inbox' ? 'Reply Inbox' : activePage === 'resume_tracking' ? 'Resume Tracking' : 'Run Queue Dashboard'}</h1>
+            <h1>{PAGE_TITLES[activePage]}</h1>
             <p>
-              {activePage === 'settings'
-                ? 'Manage learning queues, trusted Gmail groups, and resume assets.'
-                : activePage === 'inbox'
-                  ? 'Review recruiter replies and continue Gmail conversations.'
-                  : activePage === 'resume_tracking'
-                    ? 'See which resume variants move through the funnel and why others stall.'
-                    : 'Manage and monitor your automated recruitment email operations.'}
+              {PAGE_SUBTITLES[activePage]}
             </p>
           </div>
 
@@ -6363,7 +6469,9 @@ function App() {
           {activePage === 'needs_review' ? (
             <section className="card pageSection">
           <h2>Needs Review (Manual Approval Required)</h2>
-          {queue.filter((item) => !item.is_source_parent).length === 0 ? <p className="subtle">No queued emails.</p> : null}
+          <label className="selectAllRow"><input type="checkbox" checked={queue.filter((item) => !item.is_source_parent).length > 0 && queue.filter((item) => !item.is_source_parent).every((item) => needsReviewSelected.has(item.id))} onChange={(event) => setNeedsReviewSelected(event.target.checked ? new Set(queue.filter((item) => !item.is_source_parent).map((item) => item.id)) : new Set())} /> Select all visible</label>
+          <SelectionActionBar selectedCount={needsReviewSelected.size} busyKey={needsReviewBulkAction} onClearSelection={() => setNeedsReviewSelected(new Set())} actions={[{ key: 'approve', label: 'Approve & Send', onClick: () => void runNeedsReviewBulk('approve') }, { key: 'regenerate', label: 'Regenerate', onClick: () => void runNeedsReviewBulk('regenerate') }, { key: 'reject', label: 'Reject', onClick: () => void runNeedsReviewBulk('reject'), variant: 'danger' }, { key: 'send-to-failed-mapping', label: 'Send to Failed Mapping', onClick: () => void runNeedsReviewBulk('send-to-failed-mapping') }]} />
+          {queue.filter((item) => !item.is_source_parent).length === 0 ? <p className="subtle">No queued emails match these filters.</p> : null}
           {queue.filter((item) => !item.is_source_parent).map((item, index, visibleQueue) => {
             const effectiveDraft = draftEdits[item.id] ?? item.draft_reply
             const routingTrusted = canTrustRouting(item)
@@ -6413,6 +6521,7 @@ function App() {
                 data-email-search-section="needs_review"
                 data-email-search-related-id={item.id}
               >
+                <input type="checkbox" className="emailItemCheckbox" aria-label={`Select candidate ${item.id}`} checked={needsReviewSelected.has(item.id)} onChange={() => setNeedsReviewSelected((previous) => { const next = new Set(previous); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next })} />
                 <p><strong>Record ID:</strong> {item.record_id ?? '-'}</p>
                 {item.is_multi_role_child ? (
                   <p><strong>Requirement:</strong> {item.requirement_index ?? '-'} of {item.requirement_count ?? '-'}</p>
@@ -6570,7 +6679,7 @@ function App() {
           {bucketMeta.needs_review.hasNext ? (
             <button
               type="button"
-              onClick={() => loadMoreCandidates('needs_review', settings.mail_date ?? null)}
+              onClick={() => loadMoreCandidates('needs_review', settings.mail_date ?? null, activeQueryOptions())}
               disabled={loadingMoreKey === 'needs_review'}
             >
               {loadingMoreKey === 'needs_review' ? 'Loading...' : 'Load More'}
@@ -6582,7 +6691,9 @@ function App() {
           {activePage === 'failed_mapping' ? (
             <section className="card pageSection">
           <h2>Failed Recipient Mapping (Teach the model)</h2>
-          {failedQueue.length === 0 ? <p className="subtle">No failed emails.</p> : null}
+          <label className="selectAllRow"><input type="checkbox" checked={failedQueue.length > 0 && failedQueue.every((item) => failedMappingSelected.has(item.id))} onChange={(event) => setFailedMappingSelected(event.target.checked ? new Set(failedQueue.map((item) => item.id)) : new Set())} /> Select all visible</label>
+          <SelectionActionBar selectedCount={failedMappingSelected.size} busyKey={failedMappingBulkAction} onClearSelection={() => setFailedMappingSelected(new Set())} actions={[{ key: 'save', label: 'Save Mapping & Move to Review', onClick: () => void runFailedMappingBulk('save'), disabled: ![...failedMappingSelected].some((id) => routingFixes[id]?.to && routingFixes[id]?.cc) }, { key: 'delete', label: 'Delete', onClick: () => void runFailedMappingBulk('delete'), variant: 'danger' }]} />
+          {failedQueue.length === 0 ? <p className="subtle">No failed emails match these filters.</p> : null}
           {failedQueue.map((item) => {
             const fix = routingFixes[item.id] ?? { to: '', cc: '' }
             const openUrl = sourceListingUrl(item) ?? item.gmail_message_url
@@ -6593,6 +6704,7 @@ function App() {
                 data-email-search-section="failed_mapping"
                 data-email-search-related-id={item.id}
               >
+                <input type="checkbox" className="emailItemCheckbox" aria-label={`Select candidate ${item.id}`} checked={failedMappingSelected.has(item.id)} onChange={() => setFailedMappingSelected((previous) => { const next = new Set(previous); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next })} />
                 <p><strong>Record ID:</strong> {item.record_id ?? '-'}</p>
                 <p><strong>From:</strong> {item.sender}</p>
                 <p><strong>Subject:</strong> {item.subject}</p>
@@ -6652,7 +6764,7 @@ function App() {
           {bucketMeta.failed.hasNext ? (
             <button
               type="button"
-              onClick={() => loadMoreCandidates('failed', settings.mail_date ?? null)}
+              onClick={() => loadMoreCandidates('failed', settings.mail_date ?? null, activeQueryOptions())}
               disabled={loadingMoreKey === 'failed'}
             >
               {loadingMoreKey === 'failed' ? 'Loading...' : 'Load More'}
@@ -6866,10 +6978,14 @@ function App() {
               refreshToken={premiumRefreshToken}
               applicationsEnabled={settings.feature_applications_enabled}
               onPendingCountChange={setPremiumPendingCount}
+              applicationsFilterValues={applicationsSharedFilters}
+              onApplicationsFilterChange={setApplicationsSharedFilters}
+              applicationsSortValue={applicationsSharedSort}
+              onApplicationsSortChange={setApplicationsSharedSort}
             />
           ) : null}
 
-          {activePage === 'resume_tracking' ? <ResumeTrackingPage apiBase={apiBase} onNavigateToSettings={(resumeId) => { setFocusResumeId(resumeId); setActivePage('settings') }} /> : null}
+          {activePage === 'resume_tracking' ? <ResumeTrackingPage apiBase={apiBase} onNavigateToSettings={(resumeId) => { setFocusResumeId(resumeId); setActivePage('settings') }} applicationsFilterValues={applicationsSharedFilters} onApplicationsFilterChange={setApplicationsSharedFilters} applicationsSortValue={applicationsSharedSort} onApplicationsSortChange={setApplicationsSharedSort} /> : null}
 
           {activePage === 'inbox' ? (
             <section className="card pageSection inboxSection">
@@ -6879,26 +6995,6 @@ function App() {
                   <p className="subtle">Replies are authoritative. Open counts are only a best-effort image signal.</p>
                 </div>
                 <div className="inboxHeaderActions">
-                  <div className="inboxTabGroup" role="tablist" aria-label="Inbox view">
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={inboxTab === 'all'}
-                      className={`inboxTabBtn ${inboxTab === 'all' ? 'active' : ''}`}
-                      onClick={() => setInboxTab('all')}
-                    >
-                      All
-                    </button>
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={inboxTab === 'replies'}
-                      className={`inboxTabBtn ${inboxTab === 'replies' ? 'active' : ''}`}
-                      onClick={() => setInboxTab('replies')}
-                    >
-                      Received Replies
-                    </button>
-                  </div>
                   <button
                     type="button"
                     className={`iconBtn inboxRefreshBtn ${inboxLoading ? 'loading' : ''}`}
@@ -7197,7 +7293,7 @@ function App() {
           {bucketMeta.approved_sent.hasNext ? (
             <button
               type="button"
-              onClick={() => loadMoreCandidates('approved_sent', settings.mail_date ?? null)}
+              onClick={() => loadMoreCandidates('approved_sent', settings.mail_date ?? null, activeQueryOptions())}
               disabled={loadingMoreKey === 'approved_sent'}
             >
               {loadingMoreKey === 'approved_sent' ? 'Loading...' : 'Load More'}

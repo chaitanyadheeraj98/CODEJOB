@@ -44,8 +44,8 @@ export function getResumeFunnel(apiBase: string, resumeId: number): Promise<Resu
   return requestJson(`${apiBase}/resumes/${resumeId}/funnel`)
 }
 
-export async function getResumePerformanceSummary(apiBase: string): Promise<ResumePerformanceSummaryItem[]> {
-  return (await requestJson<{ items: ResumePerformanceSummaryItem[] }>(`${apiBase}/resumes/performance-summary`)).items
+export async function getResumePerformanceSummary(apiBase: string, sort = 'recent'): Promise<ResumePerformanceSummaryItem[]> {
+  return (await requestJson<{ items: ResumePerformanceSummaryItem[] }>(`${apiBase}/resumes/performance-summary?sort=${encodeURIComponent(sort)}`)).items
 }
 
 export function getOutreachMessage(apiBase: string, applicationId: number, messageId: number): Promise<ApplicationOutreachMessage> {

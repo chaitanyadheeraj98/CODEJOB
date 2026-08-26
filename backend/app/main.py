@@ -17,7 +17,8 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request,
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from sqlalchemy import func, or_
-from sqlalchemy.exc import OperationalError
+import sqlalchemy as sa
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 from rq import Retry
 from rq.registry import StartedJobRegistry
@@ -77,6 +78,7 @@ from app.models import (
     ApplicationSuggestion,
     ApplicationSkillGapSnapshot,
     AttachmentAsset,
+    BulkActionIdempotencyKey,
     CanonicalEntityTaxonomyEntry,
     CustomSkillTaxonomyEntry,
     DraftEditFeedback,
@@ -208,7 +210,7 @@ from app.services.requirement_expansion_service import RequirementExpansionServi
 from app.services.resume_enrichment_service import backfill_role_and_label, enrich_resume
 from app.services.role_manifest_pipeline import extract_and_score_children
 from app.services.role_manifest_service import RoleManifestService
-from app.services.sendability_service import apply_resume_sendability, resolve_sendability_status
+from app.services.sendability_service import SENDABILITY_BUCKETS, apply_resume_sendability, resolve_sendability_status
 from app.services.routing_runtime_service import RoutingRuntimeDeps, RoutingRuntimeService
 from app.services.scoring_runtime_service import ScoringRuntimeDeps, ScoringRuntimeService
 from app.services.settings_bootstrap_service import SettingsBootstrapService
@@ -263,7 +265,12 @@ from app.schemas import (
     BulkApproveSkillsResponse,
     BulkApproveEntitiesResponse,
     BulkApproveRequest,
+    BulkCandidateActionResponse,
+    BulkDeleteCandidatesRequest,
+    BulkRegenerateRequest,
     BulkRejectRequest,
+    BulkResolveRecipientsRequest,
+    BulkSendToFailedMappingRequest,
     CandidateListResponse,
     ConversationDetailResponse,
     ConversationReplyRequest,
@@ -299,6 +306,8 @@ from app.schemas import (
     ExtractionAuditEntryResponse,
     ExtractionAuditListResponse,
     PremiumNumberListResponse,
+    PremiumNumberInventoryItemResponse,
+    PremiumNumberInventoryListResponse,
     PremiumNumberResponse,
     ManualPremiumContactRequest,
     ManualApplicationCreateRequest,
@@ -4363,8 +4372,26 @@ def list_candidates(
     limit: int = Query(20, ge=1, le=100),
     sort: str = Query("newest"),
     mail_date: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    source: str | None = Query(default=None),
+    sendability: str | None = Query(default=None),
+    has_resume: bool | None = Query(default=None),
+    min_ats_score: float | None = Query(default=None, ge=0, le=100),
+    max_ats_score: float | None = Query(default=None, ge=0, le=100),
+    role: str | None = Query(default=None, max_length=200),
+    subject: str | None = Query(default=None, max_length=500),
+    location: str | None = Query(default=None, max_length=200),
+    sender: str | None = Query(default=None, max_length=255),
+    routing_status: str | None = Query(default=None),
+    reason: str | None = Query(default=None, max_length=500),
+    opened: bool | None = Query(default=None),
+    company: str | None = Query(default=None, max_length=255),
     db: Session = Depends(get_db),
 ) -> CandidateListResponse:
+    valid_sorts = {"newest", "oldest", "highest_score", "lowest_score"}
+    if sort not in valid_sorts:
+        raise HTTPException(status_code=422, detail=f"Invalid sort. Must be one of: {', '.join(sorted(valid_sorts))}")
+    if min_ats_score is not None and max_ats_score is not None and min_ats_score > max_ats_score:
+        raise HTTPException(status_code=422, detail="min_ats_score must be <= max_ats_score")
     states = [s.strip() for s in state.split(",") if s.strip()]
     query = db.query(RecruiterEmail).filter(RecruiterEmail.owner_id == settings.owner_id)
     if states:
@@ -4393,18 +4420,55 @@ def list_candidates(
                 )
             )
 
+    if source:
+        values = [value.strip() for value in source.split(",") if value.strip()]
+        if values:
+            query = query.filter(RecruiterEmail.source.in_(values))
+    if sendability:
+        statuses = set().union(*(SENDABILITY_BUCKETS.get(value.strip(), frozenset()) for value in sendability.split(",")))
+        if statuses:
+            query = query.filter(RecruiterEmail.sendability_status.in_(statuses))
+    if has_resume is not None:
+        clause = RecruiterEmail.resume_file_name.is_not(None) & (RecruiterEmail.resume_file_name != "")
+        query = query.filter(clause if has_resume else ~clause)
+    if min_ats_score is not None:
+        query = query.filter(RecruiterEmail.ats_score >= min_ats_score)
+    if max_ats_score is not None:
+        query = query.filter(RecruiterEmail.ats_score <= max_ats_score)
+    for value, column in ((role, RecruiterEmail.role), (subject, RecruiterEmail.subject), (location, RecruiterEmail.location), (sender, RecruiterEmail.sender)):
+        if value and value.strip():
+            query = query.filter(column.ilike(f"%{value.strip()}%"))
+    if routing_status:
+        values = [value.strip() for value in routing_status.split(",") if value.strip()]
+        if values:
+            query = query.filter(RecruiterEmail.routing_status.in_(values))
+    if reason and reason.strip():
+        query = query.filter(RecruiterEmail.last_error.ilike(f"%{reason.strip()}%"))
+    if opened is not None:
+        query = query.filter(RecruiterEmail.open_count > 0 if opened else RecruiterEmail.open_count == 0)
+    if company and company.strip():
+        query = query.join(RecruiterOpportunity, RecruiterOpportunity.source_email_id == RecruiterEmail.id, isouter=True)
+        query = query.filter(RecruiterOpportunity.end_client.ilike(f"%{company.strip()}%"))
+
     total = query.count()
 
     if sort == "highest_score":
-        query = query.order_by(RecruiterEmail.score.desc(), RecruiterEmail.created_at.desc())
+        query = query.order_by(RecruiterEmail.ats_score.desc(), RecruiterEmail.created_at.desc(), RecruiterEmail.id.desc())
+    elif sort == "lowest_score":
+        query = query.order_by(RecruiterEmail.ats_score.asc(), RecruiterEmail.created_at.desc(), RecruiterEmail.id.desc())
+    elif sort == "oldest" and _is_approved_sent_only(states):
+        query = query.order_by(RecruiterEmail.sent_at.is_(None), RecruiterEmail.sent_at.asc(), RecruiterEmail.created_at.asc(), RecruiterEmail.id.asc())
+    elif sort == "oldest":
+        query = query.order_by(RecruiterEmail.created_at.asc(), RecruiterEmail.id.asc())
     elif _is_approved_sent_only(states):
         query = query.order_by(
             RecruiterEmail.sent_at.is_(None),
             RecruiterEmail.sent_at.desc(),
             RecruiterEmail.created_at.desc(),
+            RecruiterEmail.id.desc(),
         )
     else:
-        query = query.order_by(RecruiterEmail.created_at.desc())
+        query = query.order_by(RecruiterEmail.created_at.desc(), RecruiterEmail.id.desc())
 
     items = query.offset(cursor).limit(limit + 1).all()
     has_next = len(items) > limit
@@ -4523,6 +4587,53 @@ def list_premium_numbers(
     )
 
 
+def _contact_is_flagged_expr():
+    def missing(column):
+        return sa.or_(column.is_(None), sa.func.trim(column) == "", sa.func.lower(sa.func.trim(column)) == "unknown")
+    dual = sa.and_(PremiumNumberContact.is_recruiter, PremiumNumberContact.is_employer, PremiumNumberContact.recruiter_verification_level == "unverified")
+    recruiter = sa.and_(PremiumNumberContact.is_recruiter, sa.or_(dual, sa.and_(PremiumNumberContact.normalized_phone_number.ilike("nvoids-%"), sa.func.lower(PremiumNumberContact.display_phone_number) == "unknown", PremiumNumberContact.first_detected_email_id.is_(None)), missing(PremiumNumberContact.recruiter_name), missing(PremiumNumberContact.company)))
+    employer = sa.and_(PremiumNumberContact.is_employer, sa.or_(dual, sa.and_(sa.not_(missing(PremiumNumberContact.display_phone_number)), PremiumNumberContact.phone_is_valid.is_(False)), missing(PremiumNumberContact.owner_name), missing(PremiumNumberContact.company)))
+    return sa.or_(recruiter, employer)
+
+
+@app.get("/premium-numbers/inventory", response_model=PremiumNumberInventoryListResponse)
+def list_premium_number_inventory(cursor: int = Query(0, ge=0), limit: int = Query(25, ge=1, le=100), q: str | None = Query(default=None, max_length=255), status: str | None = Query(default=None), category: str | None = Query(default=None), source_type: str | None = Query(default=None), min_score: int | None = Query(default=None, ge=0), max_score: int | None = Query(default=None, ge=0), sort: str = Query("newest"), db: Session = Depends(get_db)) -> PremiumNumberInventoryListResponse:
+    if sort not in {"newest", "oldest", "highest_score", "lowest_score"}: raise HTTPException(status_code=422, detail="Invalid sort. Must be one of: newest, oldest, highest_score, lowest_score")
+    if min_score is not None and max_score is not None and min_score > max_score: raise HTTPException(status_code=422, detail="min_score must be <= max_score")
+    owner = settings.owner_id
+    review = sa.select(NumberReviewQueue.id.label("id"), sa.literal("review").label("kind"), NumberReviewQueue.display_phone_number.label("number"), NumberReviewQueue.owner_name.label("owner"), NumberReviewQueue.company.label("company"), (NumberReviewQueue.role == "recruiter").label("is_recruiter"), (NumberReviewQueue.role == "employer").label("is_employer"), sa.literal("Pending").label("status"), NumberReviewQueue.recruiter_relevance_score.label("score"), sa.case((NumberReviewQueue.source_external_opportunity_id.is_not(None), "nvoids"), else_="gmail").label("source_type"), NumberReviewQueue.updated_at.label("last_checked_at")).where(NumberReviewQueue.owner_id == owner, NumberReviewQueue.state == "pending")
+    active_score = sa.func.coalesce(sa.select(PremiumNumberLead.recruiter_relevance_score).where(PremiumNumberLead.id == PremiumNumberContact.active_recruiter_lead_id).scalar_subquery(), sa.select(PremiumNumberLead.recruiter_relevance_score).where(PremiumNumberLead.id == PremiumNumberContact.active_employer_lead_id).scalar_subquery(), 0)
+    flagged = _contact_is_flagged_expr()
+    contact = sa.select(PremiumNumberContact.id.label("id"), sa.literal("contact").label("kind"), PremiumNumberContact.display_phone_number.label("number"), sa.func.coalesce(sa.case((PremiumNumberContact.is_recruiter, PremiumNumberContact.recruiter_name)), sa.case((PremiumNumberContact.is_employer, PremiumNumberContact.owner_name))).label("owner"), PremiumNumberContact.company.label("company"), PremiumNumberContact.is_recruiter.label("is_recruiter"), PremiumNumberContact.is_employer.label("is_employer"), sa.case((flagged, "Flagged"), else_="Active").label("status"), active_score.label("score"), PremiumNumberContact.source_type.label("source_type"), PremiumNumberContact.updated_at.label("last_checked_at")).where(PremiumNumberContact.owner_id == owner, PremiumNumberContact.deleted_at.is_(None))
+    unified = sa.union_all(review, contact).subquery()
+    query = sa.select(unified)
+    if q and q.strip():
+        like=f"%{q.strip()}%"; query=query.where(sa.or_(unified.c.number.ilike(like),unified.c.owner.ilike(like),unified.c.company.ilike(like)))
+    if status:
+        values=[value.strip().capitalize() for value in status.split(",") if value.strip()]
+        if values: query=query.where(unified.c.status.in_(values))
+    if category:
+        values={value.strip().lower() for value in category.split(",")}; clauses=[]
+        if "recruiter" in values: clauses.append(unified.c.is_recruiter.is_(True))
+        if "employer" in values: clauses.append(unified.c.is_employer.is_(True))
+        if clauses: query=query.where(sa.or_(*clauses))
+    if source_type:
+        values=[value.strip() for value in source_type.split(",") if value.strip()]
+        if values: query=query.where(unified.c.source_type.in_(values))
+    if min_score is not None: query=query.where(unified.c.score >= min_score)
+    if max_score is not None: query=query.where(unified.c.score <= max_score)
+    total=db.execute(sa.select(sa.func.count()).select_from(query.subquery())).scalar_one()
+    order={"oldest":(unified.c.last_checked_at.asc(),unified.c.kind.asc(),unified.c.id.asc()),"highest_score":(unified.c.score.desc(),unified.c.kind.asc(),unified.c.id.asc()),"lowest_score":(unified.c.score.asc(),unified.c.kind.asc(),unified.c.id.asc())}.get(sort,(unified.c.last_checked_at.desc(),unified.c.kind.asc(),unified.c.id.asc()))
+    rows=db.execute(query.order_by(*order).offset(cursor).limit(limit+1)).all(); visible=rows[:limit]
+    review_ids=[row.id for row in visible if row.kind=="review"]; contact_ids=[row.id for row in visible if row.kind=="contact"]
+    review_by_id={row.id:UnknownNumberReviewCardResponse.model_validate(row) for row in db.query(NumberReviewQueue).filter(NumberReviewQueue.owner_id==owner,NumberReviewQueue.id.in_(review_ids)).all()} if review_ids else {}
+    contacts=db.query(PremiumNumberContact).filter(PremiumNumberContact.owner_id==owner,PremiumNumberContact.id.in_(contact_ids)).all() if contact_ids else []
+    employer_domains=employer_domains_for_owner(db,owner) if any(row.is_recruiter for row in contacts) else set()
+    recruiter_by_id={row.id:_recruiter_number_response(db,row,employer_domains) for row in contacts if row.is_recruiter}; employer_by_id={row.id:_employer_number_response(db,row) for row in contacts if row.is_employer}
+    items=[PremiumNumberInventoryItemResponse(key=f"{row.kind}:{row.id}",kind=row.kind,id=row.id,number=row.number,owner=row.owner or "Unknown",company=row.company or "Unknown",categories=[name for name,flag in (("Recruiter",row.is_recruiter),("Employer",row.is_employer)) if flag],status=row.status,score=row.score,sourceType=row.source_type if row.source_type in {"gmail","nvoids"} else None,lastCheckedAt=row.last_checked_at,review=review_by_id.get(row.id) if row.kind=="review" else None,recruiter=recruiter_by_id.get(row.id),employer=employer_by_id.get(row.id)) for row in visible]
+    return PremiumNumberInventoryListResponse(items=items,next_cursor=cursor+limit if len(rows)>limit else None,has_next=len(rows)>limit,total=total)
+
+
 @app.post(
     "/premium-numbers/contacts",
     dependencies=[Depends(require_chat_actions_enabled)],
@@ -4556,6 +4667,7 @@ def create_premium_contact(
         db.add(contact)
 
     contact.display_phone_number = best_display_phone(payload.phone, fallback=payload.phone)
+    contact.phone_is_valid = bool(canonicalize_phone(contact.normalized_phone_number) or canonicalize_phone(contact.display_phone_number))
     contact.is_recruiter = payload.role == "recruiter"
     contact.is_employer = payload.role == "employer"
     contact.recruiter_name = payload.name.strip() if payload.role == "recruiter" else contact.recruiter_name
@@ -5496,6 +5608,7 @@ def _add_employer_role(db: Session, contact: PremiumNumberContact) -> None:
         lead = db.get(PremiumNumberLead, contact.active_employer_lead_id)
         if lead:
             apply_contact_version(db, contact, lead, "employer", overwrite=True)
+    contact.phone_is_valid = bool(canonicalize_phone(contact.normalized_phone_number) or canonicalize_phone(contact.display_phone_number))
     contact.updated_at = datetime.now(UTC)
 
 
@@ -5514,6 +5627,7 @@ def _add_recruiter_role(db: Session, contact: PremiumNumberContact) -> None:
         lead = db.get(PremiumNumberLead, contact.active_recruiter_lead_id)
         if lead:
             apply_contact_version(db, contact, lead, "recruiter", overwrite=True)
+    contact.phone_is_valid = bool(canonicalize_phone(contact.normalized_phone_number) or canonicalize_phone(contact.display_phone_number))
     contact.updated_at = datetime.now(UTC)
 
 
@@ -5864,9 +5978,14 @@ def list_recruiter_opportunities(
     source_type: str | None = Query(default=None),
     q: str | None = Query(default=None),
     mail_date: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    job_title: str | None = Query(default=None, max_length=255),
+    end_client: str | None = Query(default=None, max_length=255),
+    location: str | None = Query(default=None, max_length=255),
+    sort: str = Query("newest"),
     db: Session = Depends(get_db),
 ) -> RecruiterOpportunityListResponse:
-    query = db.query(RecruiterOpportunity).filter(RecruiterOpportunity.owner_id == settings.owner_id)
+    if sort not in {"newest", "oldest"}: raise HTTPException(status_code=422, detail="Invalid sort. Must be one of: newest, oldest")
+    query = db.query(RecruiterOpportunity).outerjoin(PremiumNumberContact, PremiumNumberContact.id == RecruiterOpportunity.recruiter_number_id).filter(RecruiterOpportunity.owner_id == settings.owner_id)
     if status and status in OPPORTUNITY_STATUS_VALUES:
         query = query.filter(RecruiterOpportunity.status == status)
     if source_type in {"gmail", "nvoids"}:
@@ -5876,7 +5995,13 @@ def list_recruiter_opportunities(
         start, end = _mail_date_utc_window(selected)
         query = query.filter(RecruiterOpportunity.received_at.is_not(None))
         query = query.filter(RecruiterOpportunity.received_at >= start, RecruiterOpportunity.received_at < end)
-    rows = query.order_by(RecruiterOpportunity.received_at.desc(), RecruiterOpportunity.created_at.desc()).all()
+    if q and q.strip():
+        needle=f"%{q.strip()}%"; query=query.filter(or_(RecruiterOpportunity.email_subject.ilike(needle),RecruiterOpportunity.email_sender.ilike(needle),RecruiterOpportunity.job_title.ilike(needle),RecruiterOpportunity.end_client.ilike(needle),RecruiterOpportunity.location.ilike(needle),RecruiterOpportunity.extracted_skills.ilike(needle),PremiumNumberContact.recruiter_name.ilike(needle),PremiumNumberContact.recruiter_email.ilike(needle),PremiumNumberContact.display_phone_number.ilike(needle)))
+    for value,column in ((job_title,RecruiterOpportunity.job_title),(end_client,RecruiterOpportunity.end_client),(location,RecruiterOpportunity.location)):
+        if value and value.strip(): query=query.filter(column.ilike(f"%{value.strip()}%"))
+    total=query.count()
+    order=(RecruiterOpportunity.received_at.asc(),RecruiterOpportunity.id.asc()) if sort=="oldest" else (RecruiterOpportunity.received_at.desc(),RecruiterOpportunity.id.desc())
+    rows=query.order_by(*order).offset(cursor).limit(limit+1).all(); has_next=len(rows)>limit; rows=rows[:limit]
     recruiter_ids = sorted({row.recruiter_number_id for row in rows})
     recruiter_rows = (
         db.query(PremiumNumberContact)
@@ -5898,23 +6023,7 @@ def list_recruiter_opportunities(
         for recruiter in [recruiter_map.get(row.recruiter_number_id)]
         if not is_hidden_nvoids_placeholder_recruiter(recruiter)
     ]
-    if q:
-        needle = q.strip().lower()
-        items = [
-            item
-            for item in items
-            if needle in (item.email_subject or "").lower()
-            or needle in (item.email_sender or "").lower()
-            or needle in (item.job_title or "").lower()
-            or needle in (item.end_client or "").lower()
-            or needle in (item.location or "").lower()
-            or needle in (item.extracted_skills or "").lower()
-            or needle in (item.recruiter_name or "").lower()
-            or needle in (item.recruiter_email or "").lower()
-            or needle in (item.recruiter_phone_display or "").lower()
-        ]
-    visible, next_cursor, has_next = _paginate_items(items, cursor=cursor, limit=limit)
-    return RecruiterOpportunityListResponse(items=visible, next_cursor=next_cursor, has_next=has_next)
+    return RecruiterOpportunityListResponse(items=items, next_cursor=cursor+limit if has_next else None, has_next=has_next, total=total)
 
 
 @app.post("/external-feeds/nvoids/sync", response_model=ExternalFeedSyncResponse)
@@ -6443,9 +6552,18 @@ def list_applications(
     resume_asset_id: int | None = Query(default=None, gt=0),
     recruiter_contact_id: int | None = Query(default=None, gt=0),
     q: str | None = Query(default=None),
+    company: str | None = Query(default=None, max_length=255),
+    recruiter: str | None = Query(default=None, max_length=255),
+    opportunity_domain: str | None = Query(default=None, max_length=255),
+    implementation_partner: str | None = Query(default=None, max_length=255),
+    end_client: str | None = Query(default=None, max_length=255),
+    has_premium_contact: bool | None = Query(default=None),
+    tracked: bool | None = Query(default=None),
+    sort: str = Query("newest"),
     db: Session = Depends(get_db),
 ) -> ApplicationListResponse:
-    query = db.query(Application).filter(
+    if sort not in {"newest", "oldest", "next_action"}: raise HTTPException(status_code=422, detail="Invalid sort. Must be one of: newest, oldest, next_action")
+    query = db.query(Application).outerjoin(RecruiterOpportunity, RecruiterOpportunity.id == Application.recruiter_opportunity_id).outerjoin(PremiumNumberContact, PremiumNumberContact.id == Application.recruiter_contact_id).filter(
         Application.owner_id == settings.owner_id,
         Application.deleted_at.is_(None),
     )
@@ -6473,11 +6591,23 @@ def list_applications(
                 Application.manual_recruiter_email.ilike(needle),
             )
         )
-    rows = query.order_by(Application.created_at.desc(), Application.id.desc()).all()
-    visible, next_cursor, has_next = _paginate_items(rows, cursor=cursor, limit=limit)
+    if company and company.strip():
+        like=f"%{company.strip()}%"; query=query.filter(or_(Application.recruiter_company_snapshot.ilike(like),Application.end_client_snapshot.ilike(like)))
+    if recruiter and recruiter.strip():
+        like=f"%{recruiter.strip()}%"; query=query.filter(or_(Application.recruiter_name_snapshot.ilike(like),Application.manual_recruiter_email.ilike(like),PremiumNumberContact.recruiter_email.ilike(like)))
+    if opportunity_domain and opportunity_domain.strip(): query=query.filter(RecruiterOpportunity.domain.ilike(f"%{opportunity_domain.strip()}%"))
+    if implementation_partner and implementation_partner.strip(): query=query.filter(RecruiterOpportunity.implementation_partner.ilike(f"%{implementation_partner.strip()}%"))
+    if end_client and end_client.strip(): query=query.filter(RecruiterOpportunity.end_client.ilike(f"%{end_client.strip()}%"))
+    if has_premium_contact is not None: query=query.filter(Application.recruiter_contact_id.is_not(None) if has_premium_contact else Application.recruiter_contact_id.is_(None))
+    if tracked is not None: query=query.filter(Application.recruiter_opportunity_id.is_not(None) if tracked else Application.recruiter_opportunity_id.is_(None))
+    total=query.count()
+    if sort=="oldest": query=query.order_by(Application.created_at.asc(),Application.id.asc())
+    elif sort=="next_action": query=query.order_by(Application.next_action_at.is_(None),Application.next_action_at.asc(),Application.id.asc())
+    else: query=query.order_by(Application.created_at.desc(),Application.id.desc())
+    rows=query.offset(cursor).limit(limit+1).all(); visible=rows[:limit]; has_next=len(rows)>limit; next_cursor=cursor+limit if has_next else None
     # ponytail: one current-source lookup pair per visible row; batch only if this tab outgrows 100 rows/page.
     items = [_application_response(db, row) for row in visible]
-    return ApplicationListResponse(items=items, next_cursor=next_cursor, has_next=has_next)
+    return ApplicationListResponse(items=items, next_cursor=next_cursor, has_next=has_next, total=total)
 
 
 @app.get("/applications/dashboard-summary", response_model=ApplicationDashboardSummaryResponse)
@@ -6669,9 +6799,10 @@ def run_resume_tracking_sweep_now(db: Session = Depends(get_db)) -> ApplicationS
 
 
 @app.get("/resumes/performance-summary", response_model=ResumePerformanceSummaryResponse)
-def resume_performance_summary_route(db: Session = Depends(get_db)) -> ResumePerformanceSummaryResponse:
+def resume_performance_summary_route(sort: str = Query("recent"), db: Session = Depends(get_db)) -> ResumePerformanceSummaryResponse:
     _require_resume_tracking_enabled(db)
-    items = resume_tracking_service.resume_performance_summary(db, owner_id=settings.owner_id)
+    if sort not in {"recent", "acceptance_desc", "acceptance_asc", "submissions_desc"}: raise HTTPException(status_code=422, detail="Invalid sort")
+    items = resume_tracking_service.resume_performance_summary(db, owner_id=settings.owner_id, sort=sort)
     return ResumePerformanceSummaryResponse(
         items=[
             ResumePerformanceSummaryItem(
@@ -7100,18 +7231,26 @@ def get_sent_item_details(email_id: int, db: Session = Depends(get_db)) -> SentI
 
 @app.get("/inbox/conversations", response_model=list[ConversationSummaryResponse])
 def get_inbox_conversations(
-    only_replies: bool = Query(False),
+    recruiter: str | None = Query(default=None, max_length=255),
+    subject: str | None = Query(default=None, max_length=500),
+    status: str | None = Query(default=None),
+    unread_only: bool | None = Query(default=None),
+    sort: str = Query("newest"),
     db: Session = Depends(get_db),
 ) -> list[ConversationSummaryResponse]:
-    return _get_orchestration_service().list_inbox_conversations(db, only_replies=only_replies)
+    return _get_orchestration_service().list_inbox_conversations(db, recruiter=recruiter, subject=subject, status=status, unread_only=unread_only, sort=sort)
 
 
 @app.post("/inbox/conversations/refresh", response_model=list[ConversationSummaryResponse])
 def refresh_inbox_conversations(
-    only_replies: bool = Query(False),
+    recruiter: str | None = Query(default=None, max_length=255),
+    subject: str | None = Query(default=None, max_length=500),
+    status: str | None = Query(default=None),
+    unread_only: bool | None = Query(default=None),
+    sort: str = Query("newest"),
     db: Session = Depends(get_db),
 ) -> list[ConversationSummaryResponse]:
-    return _get_orchestration_service().refresh_inbox_replies(db, only_replies=only_replies)
+    return _get_orchestration_service().refresh_inbox_replies(db, recruiter=recruiter, subject=subject, status=status, unread_only=unread_only, sort=sort)
 
 
 @app.get("/inbox/conversations/{conversation_id}", response_model=ConversationDetailResponse)
@@ -7210,6 +7349,10 @@ def regenerate_candidate(
     payload: RegenerateCandidateRequest,
     db: Session = Depends(get_db),
 ) -> RecruiterEmail:
+    return _regenerate_single_candidate(email_id, payload, db)
+
+
+def _regenerate_single_candidate(email_id: int, payload: RegenerateCandidateRequest, db: Session) -> RecruiterEmail:
     requested = _get_candidate_for_review(db, email_id)
     user_settings = _get_settings(db)
     if user_settings.feature_role_manifest_enabled and not requested.is_multi_role_child:
@@ -7264,51 +7407,107 @@ def dismiss_failed_candidate(email_id: int, db: Session = Depends(get_db)) -> di
     return _get_orchestration_service().dismiss_failed_candidate(email_id, db)
 
 
-@app.post("/candidates/reject-bulk")
-def reject_bulk(payload: BulkRejectRequest, db: Session = Depends(get_db)) -> dict[str, int]:
-    if not payload.ids:
-        return {"rejected_count": 0}
-
+@app.post("/candidates/reject-bulk", response_model=BulkCandidateActionResponse)
+def reject_bulk(payload: BulkRejectRequest, db: Session = Depends(get_db)) -> BulkCandidateActionResponse:
     rows = (
         db.query(RecruiterEmail)
         .filter(RecruiterEmail.owner_id == settings.owner_id)
         .filter(RecruiterEmail.id.in_(payload.ids))
         .all()
     )
-    rejected = 0
-    for row in rows:
-        if row.state == "needs_review":
-            row.state = "rejected"
-            row.decision = "Reject"
-            row.decision_reason = payload.reason or "Bulk rejected by user"
-            row.approval_status = "rejected"
-            row.sent_status = "not_sent"
-            rejected += 1
-    db.commit()
-    return {"rejected_count": rejected}
-
-
-@app.post(
-    "/candidates/approve-bulk",
-    dependencies=[Depends(require_chat_actions_enabled)],
-)
-def approve_bulk_candidates(payload: BulkApproveRequest, db: Session = Depends(get_db)) -> dict[str, object]:
-    approved_ids: list[int] = []
+    rows_by_id = {row.id: row for row in rows}
+    succeeded_ids: list[int] = []
     failed: list[dict[str, object]] = []
     for candidate_id in dict.fromkeys(payload.ids):
+        row = rows_by_id.get(candidate_id)
+        if row is None:
+            failed.append({"id": candidate_id, "error": "Not found"})
+            continue
+        if row.state != "needs_review":
+            failed.append({"id": candidate_id, "error": f"Not in needs_review (state={row.state})"})
+            continue
+        row.state = "rejected"
+        row.decision = "Reject"
+        row.decision_reason = payload.reason or "Bulk rejected by user"
+        row.approval_status = "rejected"
+        row.sent_status = "not_sent"
+        succeeded_ids.append(candidate_id)
+    db.commit()
+    return BulkCandidateActionResponse(succeeded_ids=succeeded_ids, failed=failed)
+
+
+@app.post("/candidates/approve-bulk", response_model=BulkCandidateActionResponse)
+def approve_bulk_candidates(payload: BulkApproveRequest, db: Session = Depends(get_db)) -> BulkCandidateActionResponse:
+    claim: BulkActionIdempotencyKey | None = None
+    if payload.idempotency_key:
+        db.query(BulkActionIdempotencyKey).filter(BulkActionIdempotencyKey.created_at < datetime.now(UTC) - timedelta(hours=24)).delete()
+        db.commit()
+        cached = db.get(BulkActionIdempotencyKey, (settings.owner_id, payload.idempotency_key))
+        if cached is not None:
+            if cached.response_json is None:
+                raise HTTPException(status_code=409, detail="A request with this idempotency_key is already in progress")
+            return BulkCandidateActionResponse.model_validate_json(cached.response_json)
+        claim = BulkActionIdempotencyKey(owner_id=settings.owner_id, key=payload.idempotency_key, response_json=None)
+        db.add(claim)
         try:
-            _get_orchestration_service().approve_send(candidate_id, ApproveSendRequest(), db)
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            raise HTTPException(status_code=409, detail="A request with this idempotency_key is already in progress")
+
+    succeeded_ids: list[int] = []
+    failed: list[dict[str, object]] = []
+    edited_replies = payload.edited_replies or {}
+    for candidate_id in dict.fromkeys(payload.ids):
+        try:
+            _get_orchestration_service().approve_send(candidate_id, ApproveSendRequest(edited_reply=edited_replies.get(candidate_id)), db)
             _record_productivity_event(
                 db,
                 event_type="approved_sent",
-                event_source="chat_assistant",
+                event_source="bulk_action",
                 entity_id=candidate_id,
-                metadata={"via": "chat"},
+                metadata={},
             )
-            approved_ids.append(candidate_id)
+            succeeded_ids.append(candidate_id)
         except HTTPException as exc:
             failed.append({"id": candidate_id, "error": str(exc.detail)})
-    return {"approved_count": len(approved_ids), "approved_ids": approved_ids, "failed": failed}
+    response = BulkCandidateActionResponse(succeeded_ids=succeeded_ids, failed=failed)
+    if claim is not None:
+        claim.response_json = response.model_dump_json()
+        db.commit()
+    return response
+
+
+@app.post("/candidates/regenerate-bulk", response_model=BulkCandidateActionResponse)
+def regenerate_bulk_candidates(payload: BulkRegenerateRequest, db: Session = Depends(get_db)) -> BulkCandidateActionResponse:
+    return _run_bulk(payload.ids, lambda candidate_id: _regenerate_single_candidate(candidate_id, RegenerateCandidateRequest(), db))
+
+
+def _run_bulk(ids: list[int], action: Callable[[int], object]) -> BulkCandidateActionResponse:
+    succeeded_ids: list[int] = []
+    failed: list[dict[str, object]] = []
+    for candidate_id in dict.fromkeys(ids):
+        try:
+            action(candidate_id)
+            succeeded_ids.append(candidate_id)
+        except HTTPException as exc:
+            failed.append({"id": candidate_id, "error": str(exc.detail)})
+    return BulkCandidateActionResponse(succeeded_ids=succeeded_ids, failed=failed)
+
+
+@app.post("/candidates/send-to-failed-mapping-bulk", response_model=BulkCandidateActionResponse)
+def send_to_failed_mapping_bulk(payload: BulkSendToFailedMappingRequest, db: Session = Depends(get_db)) -> BulkCandidateActionResponse:
+    return _run_bulk(payload.ids, lambda candidate_id: _get_orchestration_service().send_to_failed_mapping(candidate_id, db))
+
+
+@app.post("/candidates/resolve-recipients-bulk", response_model=BulkCandidateActionResponse)
+def resolve_recipients_bulk(payload: BulkResolveRecipientsRequest, db: Session = Depends(get_db)) -> BulkCandidateActionResponse:
+    return _run_bulk(list(payload.fixes), lambda candidate_id: _get_orchestration_service().resolve_recipients(candidate_id, payload.fixes[candidate_id], db))
+
+
+@app.post("/candidates/delete-bulk", response_model=BulkCandidateActionResponse)
+def delete_candidates_bulk(payload: BulkDeleteCandidatesRequest, db: Session = Depends(get_db)) -> BulkCandidateActionResponse:
+    return _run_bulk(payload.ids, lambda candidate_id: _get_orchestration_service().dismiss_failed_candidate(candidate_id, db))
 
 
 @app.post("/candidates/{email_id}/resolve-recipients", response_model=EmailResponse)

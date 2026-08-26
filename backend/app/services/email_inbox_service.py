@@ -309,16 +309,9 @@ def _summary(db: Session, conversation: EmailConversation, root_email: Recruiter
     )
 
 
-def list_conversations(db: Session, owner_id: str, only_replies: bool = False) -> list[ConversationSummaryResponse]:
-    if not only_replies:
-        rows = (
-            db.query(EmailConversation, RecruiterEmail)
-            .join(RecruiterEmail, RecruiterEmail.id == EmailConversation.root_recruiter_email_id)
-            .filter(EmailConversation.owner_id == owner_id, RecruiterEmail.owner_id == owner_id)
-            .order_by(EmailConversation.last_message_at.desc(), EmailConversation.id.desc())
-            .all()
-        )
-        return [_summary(db, conversation, root_email) for conversation, root_email in rows]
+def list_conversations(db: Session, owner_id: str, *, recruiter: str | None = None, subject: str | None = None, status: str | None = None, unread_only: bool | None = None, sort: str = "newest") -> list[ConversationSummaryResponse]:
+    if sort not in {"newest", "oldest", "unread_first"}:
+        raise HTTPException(status_code=422, detail="Invalid sort. Must be one of: newest, oldest, unread_first")
 
     # last_message_at also moves on outbound replies (see send_conversation_reply), so it
     # can't be trusted as "when they replied" — compute that straight from inbound messages.
@@ -331,22 +324,22 @@ def list_conversations(db: Session, owner_id: str, only_replies: bool = False) -
         .group_by(EmailReplyMessage.conversation_id)
         .subquery()
     )
-    rows = (
+    query = (
         db.query(EmailConversation, RecruiterEmail, last_inbound.c.last_inbound_at)
         .join(RecruiterEmail, RecruiterEmail.id == EmailConversation.root_recruiter_email_id)
-        .join(last_inbound, last_inbound.c.conversation_id == EmailConversation.id)
-        .filter(
-            EmailConversation.owner_id == owner_id,
-            RecruiterEmail.owner_id == owner_id,
-            EmailConversation.status == "replied",
-        )
-        .order_by(
-            (EmailConversation.unread_reply_count > 0).desc(),
-            last_inbound.c.last_inbound_at.desc(),
-            EmailConversation.id.desc(),
-        )
-        .all()
+        .outerjoin(last_inbound, last_inbound.c.conversation_id == EmailConversation.id)
+        .filter(EmailConversation.owner_id == owner_id, RecruiterEmail.owner_id == owner_id)
     )
+    if recruiter and recruiter.strip(): query = query.filter(RecruiterEmail.sender.ilike(f"%{recruiter.strip()}%"))
+    if subject and subject.strip(): query = query.filter(RecruiterEmail.subject.ilike(f"%{subject.strip()}%"))
+    if status:
+        values = [value.strip() for value in status.split(",") if value.strip()]
+        if values: query = query.filter(EmailConversation.status.in_(values))
+    if unread_only is not None: query = query.filter(EmailConversation.unread_reply_count > 0 if unread_only else EmailConversation.unread_reply_count == 0)
+    if sort == "oldest": query = query.order_by(EmailConversation.last_message_at.asc(), EmailConversation.id.asc())
+    elif sort == "unread_first": query = query.order_by((EmailConversation.unread_reply_count > 0).desc(), func.coalesce(last_inbound.c.last_inbound_at, EmailConversation.last_message_at).desc(), EmailConversation.id.desc())
+    else: query = query.order_by(EmailConversation.last_message_at.desc(), EmailConversation.id.desc())
+    rows = query.all()
     return [
         _summary(db, conversation, root_email).model_copy(update={"last_inbound_reply_at": last_inbound_at})
         for conversation, root_email, last_inbound_at in rows

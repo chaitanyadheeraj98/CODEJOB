@@ -123,7 +123,7 @@ describe('ChatWidget', () => {
       label: 'Approve 2 Emails',
       endpoint: '/candidates/approve-bulk',
       body: { ids: [11, 12] },
-      response: { approved_count: 2, failed: [] },
+      response: { succeeded_ids: [1, 2], failed: [] },
       outcome: '2 approved.',
     },
     {

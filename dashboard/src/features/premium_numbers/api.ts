@@ -128,6 +128,10 @@ export function listOpportunities(args: {
   return listAll((cursor) => buildOpportunityListUrl({ ...args, cursor }))
 }
 
+export function listOpportunityPage(args:{apiBase:string;cursor:number;limit:number;q:string;status:'all'|OpportunityStatus;sourceType:'all'|'gmail'|'nvoids';mailDate:string|null;sort:string;filters?:Record<string,string>}):Promise<{items:RecruiterOpportunityCard[];total:number}>{
+  const url=buildOpportunityListUrl(args);const params=new URLSearchParams(url.split('?')[1]);params.set('limit',String(args.limit));params.set('sort',args.sort);for(const [key,value] of Object.entries(args.filters??{}))params.set(key,value);return requestJson(`${args.apiBase}/recruiter-opportunities?${params}`)
+}
+
 export function buildOpportunityListUrl(args: {
   apiBase: string
   cursor: number
@@ -149,9 +153,13 @@ export function listApplications(args: {
   status: 'all' | ApplicationStatus
   resumeAssetId?: number | null
   resumeSubmissionStatus?: ApplicationCard['resume_submission_status'] | 'all'
+  filters?: Record<string,string>
+  sort?: string
 }): Promise<ApplicationCard[]> {
   return listAll((cursor) => buildApplicationListUrl({ ...args, cursor }))
 }
+
+export function listApplicationPage(args:{apiBase:string;cursor:number;limit:number;q:string;status:'all'|ApplicationStatus;resumeAssetId?:number|null;resumeSubmissionStatus?:ApplicationCard['resume_submission_status']|'all';filters?:Record<string,string>;sort?:string}):Promise<{items:ApplicationCard[];total:number}>{const url=buildApplicationListUrl(args);const params=new URLSearchParams(url.split('?')[1]);params.set('limit',String(args.limit));return requestJson(`${args.apiBase}/applications?${params}`)}
 
 export function buildApplicationListUrl(args: {
   apiBase: string
@@ -160,11 +168,15 @@ export function buildApplicationListUrl(args: {
   status: 'all' | ApplicationStatus
   resumeAssetId?: number | null
   resumeSubmissionStatus?: ApplicationCard['resume_submission_status'] | 'all'
+  filters?: Record<string,string>
+  sort?: string
 }): string {
   const params = listParams(args.cursor, args.q)
   if (args.status !== 'all') params.set('status', args.status)
   if (args.resumeAssetId != null) params.set('resume_asset_id', String(args.resumeAssetId))
   if (args.resumeSubmissionStatus && args.resumeSubmissionStatus !== 'all') params.set('resume_submission_status', args.resumeSubmissionStatus)
+  params.set('sort',args.sort ?? 'newest')
+  for(const [key,value] of Object.entries(args.filters ?? {})) params.set(key,value)
   return `${args.apiBase}/applications?${params}`
 }
 

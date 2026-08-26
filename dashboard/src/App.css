@@ -12,6 +12,11 @@
   --ok: #0f4bcf;
 }
 
+input[type='checkbox'],
+input[type='radio'] {
+  accent-color: var(--primary);
+}
+
 .gmailShell {
   display: grid;
   grid-template-columns: 326px minmax(0, 1fr);
@@ -3120,6 +3125,21 @@ button.emailSearchResult:focus-visible {
   flex: 1 1 300px;
 }
 
+.selectAllRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 10px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.selectAllRow input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+}
+
 .selectionBar {
   display: flex;
   flex-wrap: wrap;
@@ -3869,3 +3889,21 @@ button.emailSearchResult:focus-visible {
   .resumeCardGrid { grid-template-columns: 1fr; }
   .funnelStrip { justify-content: flex-start; gap: 1.5rem; }
 }
+.filterFieldWithHint label span:first-child { text-decoration: underline dotted; text-underline-offset: 3px; cursor: help; }
+.filterSortClearButton { align-self: end; min-height: 40px; }
+.filterSortBar--disabled { opacity: .55; }
+.filterSortBar--active { border-color: var(--primary); background: #e6edff; }
+.filterSortMoreToggle { flex-basis: 100%; }
+.filterSortMoreToggle > summary { min-height: 40px; display: flex; align-items: center; width: fit-content; padding: 0 4px; color: var(--primary); font-weight: 700; font-size: 13px; cursor: pointer; list-style: none; }
+.filterSortMoreToggle > summary:hover, .filterSortMoreToggle > summary:focus-visible { color: var(--primary-strong); }
+.filterSortMoreFields { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); }
+.filterSortStatus { display: flex; align-items: center; gap: 8px; align-self: center; color: var(--muted); font-size: 12px; font-weight: 600; }
+.filterSortSpinner { flex: none; width: 16px; height: 16px; border: 2px solid var(--line); border-top-color: var(--primary); border-radius: 50%; }
+@media (prefers-reduced-motion: no-preference) { .filterSortSpinner { animation: inbox-spin 700ms linear infinite; } }
+.filterRangeInputs { display: flex; align-items: center; gap: 6px; }
+.filterRangeInputs input { width: 80px; }
+.filterMultiselectPopover summary { min-height: 40px; display: flex; align-items: center; padding: 0 10px; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; list-style: none; }
+.filterMultiselectOptions { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); margin-top: 4px; }
+.filterMultiselectOption { display: flex; align-items: center; gap: 6px; font-weight: 400; text-transform: none; }
+@media (max-width: 640px) { .filterSortBar { flex-direction: column; align-items: stretch; } .filterSortBar > label, .filterSortBar .filterRangeField, .filterSortBar .filterMultiselectField { width: 100%; } .filterSortMoreFields { flex-direction: column; } }
+.emailItemCheckbox { float: left; margin-right: 10px; }

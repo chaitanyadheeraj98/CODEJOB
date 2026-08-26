@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import FilterSortBar, { type FilterValues } from '../../components/FilterSortBar'
+import { opportunityDefaultFilterValues, opportunityFilterFields, opportunityFiltersToParams, opportunitySortOptions } from './opportunityFilters'
 
 import {
   createApplication,
   deleteOpportunity,
   generateColdCallScript,
-  listOpportunities,
+  listOpportunityPage,
   listResumeOptions,
   matchOpportunitiesForResume,
   refreshOpportunityAiMetadata,
@@ -41,6 +43,9 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
   const [status, setStatus] = useState<'all' | OpportunityStatus>('all')
   const [source, setSource] = useState<'all' | 'gmail' | 'nvoids'>('all')
   const [page, setPage] = useState(1)
+  const [total,setTotal]=useState(0)
+  const [filterValues,setFilterValues]=useState<FilterValues>(opportunityDefaultFilterValues)
+  const [sort,setSort]=useState('newest')
   const [loading, setLoading] = useState(false)
   const [busyId, setBusyId] = useState<number | null>(null)
   const [error, setError] = useState('')
@@ -63,15 +68,15 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
           setMatchesByOpportunity(Object.fromEntries(matches.map((match) => [match.opportunity.id, match])) as Record<number, OpportunityMatch>)
           return matches.map((match) => match.opportunity)
         })
-      : listOpportunities({ apiBase, q: search, status, sourceType: source, mailDate }).then((items) => {
+      : listOpportunityPage({ apiBase, cursor:(page-1)*PAGE_SIZE,limit:PAGE_SIZE,q:search,status,sourceType:source,mailDate,sort,filters:opportunityFiltersToParams(filterValues) }).then((payload) => {
           setMatchesByOpportunity({})
-          return items
+          setTotal(payload.total)
+          return payload.items
         })
     return request
       .then((items) => {
         if (requestId !== requestIdRef.current) return
         setRows(items)
-        setPage(1)
       })
       .catch((reason) => {
         if (requestId === requestIdRef.current) setError((reason as Error).message)
@@ -85,7 +90,7 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
     const timer = window.setTimeout(() => { load().catch(() => undefined) }, 150)
     return () => window.clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [apiBase, mailDate, refreshToken, search, selectedResumeId, sortByMatch, source, status])
+  }, [apiBase, filterValues, mailDate, page, refreshToken, search, selectedResumeId, sort, sortByMatch, source, status])
 
   useEffect(() => {
     if (!applicationsEnabled) return
@@ -110,8 +115,8 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
     }, 0)
   }, [highlightedId, rows])
 
-  const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE))
-  const visible = useMemo(() => rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), [page, rows])
+  const totalPages = Math.max(1, Math.ceil((sortByMatch ? rows.length : total) / PAGE_SIZE))
+  const visible = sortByMatch ? rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE) : rows
 
   const patchRow = async (id: number, patch: Partial<RecruiterOpportunityCard>) => {
     setBusyId(id)
@@ -210,10 +215,11 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
 
   return (
     <div className="opportunitiesTab">
+      <FilterSortBar fields={opportunityFilterFields} values={filterValues} onFieldChange={(key,value)=>{setFilterValues((current)=>({...current,[key]:value}));setPage(1)}} onClear={()=>{setFilterValues(opportunityDefaultFilterValues);setPage(1)}} sortOptions={opportunitySortOptions} sortValue={sort} onSortChange={(value)=>{setSort(value);setPage(1)}} loading={loading} disabled={sortByMatch} disabledMessage="Turn off resume-match sorting to filter opportunities." />
       <div className="inventoryToolbar opportunitiesToolbar">
         <label className="inventorySearchField">
           <span>Search opportunities</span>
-          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search role, recruiter, client..." disabled={sortByMatch} />
+          <input value={search} onChange={(event) => { setSearch(event.target.value); setPage(1) }} placeholder="Search role, recruiter, client..." disabled={sortByMatch} />
         </label>
         <label><span>Status</span><select value={status} onChange={(event) => setStatus(event.target.value as 'all' | OpportunityStatus)} disabled={sortByMatch}><option value="all">All statuses</option>{STATUSES.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
         <label><span>Source</span><select value={source} onChange={(event) => setSource(event.target.value as 'all' | 'gmail' | 'nvoids')} disabled={sortByMatch}><option value="all">All sources</option><option value="gmail">Gmail</option><option value="nvoids">Nvoids</option></select></label>

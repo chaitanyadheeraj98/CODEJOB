@@ -145,12 +145,98 @@ class ChatActionTests(unittest.TestCase):
         with patch.object(main, "_get_orchestration_service", return_value=FakeService()):
             response = self.client.post("/candidates/approve-bulk", json={"ids": [1, 2, 1]})
         self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(response.json()["approved_ids"], [1])
+        self.assertEqual(response.json()["succeeded_ids"], [1])
         self.assertEqual(response.json()["failed"], [{"id": 2, "error": "Missing routing"}])
+
+    def test_bulk_approve_idempotency_key_dedupes_repeated_request(self) -> None:
+        candidate_id = self._candidate()
+        approve_calls: list[int] = []
+
+        class FakeService:
+            def approve_send(self, candidate_id, _payload, _db):
+                approve_calls.append(candidate_id)
+
+        with patch.object(main, "_get_orchestration_service", return_value=FakeService()):
+            first = self.client.post(
+                "/candidates/approve-bulk",
+                json={"ids": [candidate_id], "idempotency_key": "dedupe-key-1"},
+            )
+            second = self.client.post(
+                "/candidates/approve-bulk",
+                json={"ids": [candidate_id], "idempotency_key": "dedupe-key-1"},
+            )
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertEqual(second.status_code, 200, second.text)
+        self.assertEqual(first.json(), second.json())
+        self.assertEqual(approve_calls, [candidate_id])
+
+    def test_bulk_approve_without_idempotency_key_skips_dedup(self) -> None:
+        candidate_id = self._candidate()
+        approve_calls: list[int] = []
+
+        class FakeService:
+            def approve_send(self, candidate_id, _payload, _db):
+                approve_calls.append(candidate_id)
+
+        with patch.object(main, "_get_orchestration_service", return_value=FakeService()):
+            self.client.post("/candidates/approve-bulk", json={"ids": [candidate_id]})
+            self.client.post("/candidates/approve-bulk", json={"ids": [candidate_id]})
+        self.assertEqual(approve_calls, [candidate_id, candidate_id])
+        with self.SessionLocal() as db:
+            self.assertEqual(db.query(main.BulkActionIdempotencyKey).count(), 0)
+
+    def test_bulk_approve_idempotency_in_progress_claim_returns_409(self) -> None:
+        candidate_id = self._candidate()
+        with self.SessionLocal() as db:
+            db.add(main.BulkActionIdempotencyKey(owner_id=main.settings.owner_id, key="in-flight-key", response_json=None))
+            db.commit()
+
+        approve_calls: list[int] = []
+
+        class FakeService:
+            def approve_send(self, candidate_id, _payload, _db):
+                approve_calls.append(candidate_id)
+
+        with patch.object(main, "_get_orchestration_service", return_value=FakeService()):
+            response = self.client.post(
+                "/candidates/approve-bulk",
+                json={"ids": [candidate_id], "idempotency_key": "in-flight-key"},
+            )
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(approve_calls, [])
+
+    def test_bulk_approve_idempotency_concurrent_claim_insert_returns_409(self) -> None:
+        from sqlalchemy.exc import IntegrityError
+        from sqlalchemy.orm import Session as OrmSession
+
+        candidate_id = self._candidate()
+        approve_calls: list[int] = []
+
+        class FakeService:
+            def approve_send(self, candidate_id, _payload, _db):
+                approve_calls.append(candidate_id)
+
+        original_commit = OrmSession.commit
+        call_count = {"n": 0}
+
+        def flaky_commit(self_session):
+            call_count["n"] += 1
+            if call_count["n"] == 2:
+                raise IntegrityError("insert", {}, Exception("UNIQUE constraint failed"))
+            return original_commit(self_session)
+
+        with patch.object(OrmSession, "commit", flaky_commit), \
+                patch.object(main, "_get_orchestration_service", return_value=FakeService()):
+            response = self.client.post(
+                "/candidates/approve-bulk",
+                json={"ids": [candidate_id], "idempotency_key": "race-key"},
+            )
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(approve_calls, [])
 
     def test_action_routes_are_flag_gated_and_not_mcp_tools(self) -> None:
         main.settings.feature_chat_actions_enabled = False
-        self.assertEqual(self.client.post("/candidates/approve-bulk", json={"ids": []}).status_code, 404)
+        self.assertEqual(self.client.post("/candidates/approve-bulk", json={"ids": []}).status_code, 200)
         self.assertEqual(
             self.client.post(
                 "/support/github-issues",

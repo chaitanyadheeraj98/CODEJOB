@@ -24,12 +24,35 @@ class RejectRequest(BaseModel):
 
 
 class BulkRejectRequest(BaseModel):
-    ids: list[int]
+    ids: list[int] = Field(max_length=25)
     reason: str | None = None
 
 
 class BulkApproveRequest(BaseModel):
     ids: list[int] = Field(max_length=25)
+    edited_replies: dict[int, str] | None = None
+    idempotency_key: str | None = Field(default=None, max_length=64)
+
+
+class BulkRegenerateRequest(BaseModel):
+    ids: list[int] = Field(max_length=25)
+
+
+class BulkSendToFailedMappingRequest(BaseModel):
+    ids: list[int] = Field(max_length=25)
+
+
+class BulkResolveRecipientsRequest(BaseModel):
+    fixes: dict[int, "ResolveRecipientsRequest"] = Field(max_length=25)
+
+
+class BulkDeleteCandidatesRequest(BaseModel):
+    ids: list[int] = Field(max_length=25)
+
+
+class BulkCandidateActionResponse(BaseModel):
+    succeeded_ids: list[int]
+    failed: list[dict[str, object]]
 
 
 class ManualPremiumContactRequest(BaseModel):
@@ -1069,6 +1092,30 @@ class EmployerNumberResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class PremiumNumberInventoryItemResponse(BaseModel):
+    key: str
+    kind: Literal["review", "contact"]
+    id: int
+    number: str
+    owner: str
+    company: str
+    categories: list[Literal["Recruiter", "Employer"]]
+    status: Literal["Pending", "Active", "Flagged"]
+    score: int | None
+    sourceType: Literal["gmail", "nvoids"] | None
+    lastCheckedAt: datetime
+    review: UnknownNumberReviewCardResponse | None = None
+    recruiter: RecruiterNumberResponse | None = None
+    employer: EmployerNumberResponse | None = None
+
+
+class PremiumNumberInventoryListResponse(BaseModel):
+    items: list[PremiumNumberInventoryItemResponse]
+    next_cursor: int | None
+    has_next: bool
+    total: int
+
+
 class RecruiterNumberListResponse(BaseModel):
     items: list[RecruiterNumberResponse]
     next_cursor: int | None
@@ -1419,6 +1466,7 @@ class ApplicationListResponse(BaseModel):
     items: list[ApplicationResponse]
     next_cursor: int | None
     has_next: bool
+    total: int
 
 
 class ApplicationDashboardSummaryResponse(BaseModel):

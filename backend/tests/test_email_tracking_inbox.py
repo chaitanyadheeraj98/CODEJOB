@@ -404,16 +404,49 @@ class EmailTrackingInboxTests(unittest.TestCase):
             unread_conversation.unread_reply_count = 1
             db.commit()
 
-        listing = self.client.get("/inbox/conversations?only_replies=true")
+        listing = self.client.get("/inbox/conversations?sort=unread_first")
         self.assertEqual(listing.status_code, 200, listing.text)
         rows = listing.json()
         thread_order = [row["subject"] for row in rows]
-        self.assertEqual(len(rows), 2, thread_order)  # thread-no-reply excluded
+        self.assertEqual(len(rows), 3, thread_order)
         self.assertEqual(rows[0]["unread_reply_count"], 1)  # unread reply sorts first
         self.assertTrue(rows[0]["last_inbound_reply_at"].startswith("2026-03-01"))
-        self.assertEqual(rows[1]["unread_reply_count"], 0)
-        # last_inbound_reply_at reflects the reply itself, not the later outbound bump.
-        self.assertTrue(rows[1]["last_inbound_reply_at"].startswith("2026-01-01"))
+        old_row = next(row for row in rows if row["last_inbound_reply_at"] and row["last_inbound_reply_at"].startswith("2026-01-01"))
+        self.assertEqual(old_row["unread_reply_count"], 0)
+
+    def test_unread_only_tri_state_is_distinct_for_true_false_and_omitted(self) -> None:
+        # Regression guard: a naive `if unread_only:` check treats False the same as
+        # unset, silently making "No" a no-op. This asserts all three states differ.
+        with Session(self.engine) as db:
+            self._add_settings(db)
+            read_email = self._add_sent_email(
+                db, token="tok-read", external_message_id="msg-read", external_thread_id="thread-read"
+            )
+            read_conversation = ensure_sent_conversation(
+                db, owner_id=main.settings.owner_id, root_email=read_email, thread_id="thread-read"
+            )
+            read_conversation.unread_reply_count = 0
+
+            unread_email = self._add_sent_email(
+                db, token="tok-unread2", external_message_id="msg-unread2", external_thread_id="thread-unread2"
+            )
+            unread_conversation = ensure_sent_conversation(
+                db, owner_id=main.settings.owner_id, root_email=unread_email, thread_id="thread-unread2"
+            )
+            unread_conversation.unread_reply_count = 2
+            db.commit()
+
+        omitted = self.client.get("/inbox/conversations")
+        self.assertEqual(omitted.status_code, 200, omitted.text)
+        self.assertEqual(len(omitted.json()), 2)
+
+        unread_true = self.client.get("/inbox/conversations?unread_only=true")
+        self.assertEqual(unread_true.status_code, 200, unread_true.text)
+        self.assertEqual([row["unread_reply_count"] for row in unread_true.json()], [2])
+
+        unread_false = self.client.get("/inbox/conversations?unread_only=false")
+        self.assertEqual(unread_false.status_code, 200, unread_false.text)
+        self.assertEqual([row["unread_reply_count"] for row in unread_false.json()], [0])
 
 
 if __name__ == "__main__":

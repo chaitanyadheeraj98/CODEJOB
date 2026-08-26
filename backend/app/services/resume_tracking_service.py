@@ -568,14 +568,14 @@ def resume_funnel_metrics(
     }
 
 
-def resume_performance_summary(db: Session, *, owner_id: str) -> list[dict[str, object]]:
+def resume_performance_summary(db: Session, *, owner_id: str, sort: str = "recent") -> list[dict[str, object]]:
     resumes = (
         db.query(ResumeAsset)
         .filter(ResumeAsset.owner_id == owner_id)
         .order_by(ResumeAsset.updated_at.desc(), ResumeAsset.id.desc())
         .all()
     )
-    return [
+    items = [
         {
             'resume': resume,
             'submission_count': (metrics := resume_funnel_metrics(
@@ -587,6 +587,10 @@ def resume_performance_summary(db: Session, *, owner_id: str) -> list[dict[str, 
         }
         for resume in resumes
     ]
+    if sort == "acceptance_desc": items.sort(key=lambda item: item["acceptance_rate"], reverse=True)
+    elif sort == "acceptance_asc": items.sort(key=lambda item: item["acceptance_rate"])
+    elif sort == "submissions_desc": items.sort(key=lambda item: item["submission_count"], reverse=True)
+    return items
 
 
 def _pending_suggestion(

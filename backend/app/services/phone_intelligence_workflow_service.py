@@ -20,6 +20,7 @@ from app.phase0 import email_domain
 from app.premium_numbers.domain_guard import employer_domains_for_owner, is_derivable_company_domain
 from app.premium_numbers.extraction import ExtractedContactGroup, extract_phone_leads
 from app.premium_numbers.identity_matching import classify_identity_match
+from app.premium_numbers.phone_normalization import canonicalize_phone
 from app.services import opportunity_lineage_service
 
 
@@ -283,6 +284,7 @@ def apply_contact_version(
         contact.source_type = "gmail"
         contact.source_id = lead.recruiter_email_id
     contact.source_link_url = lead.source_url
+    contact.phone_is_valid = bool(canonicalize_phone(contact.normalized_phone_number) or canonicalize_phone(contact.display_phone_number))
 
 
 class PhoneIntelligenceWorkflowService:

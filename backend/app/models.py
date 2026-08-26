@@ -12,6 +12,15 @@ def utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+class BulkActionIdempotencyKey(Base):
+    __tablename__ = "bulk_action_idempotency_keys"
+
+    owner_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    response_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, index=True)
+
+
 class RecruiterEmail(Base):
     __tablename__ = "recruiter_emails"
     __table_args__ = (
@@ -648,6 +657,7 @@ class PremiumNumberContact(Base):
     owner_id: Mapped[str] = mapped_column(String(100), index=True)
     normalized_phone_number: Mapped[str] = mapped_column(String(40), index=True)
     display_phone_number: Mapped[str] = mapped_column(String(80))
+    phone_is_valid: Mapped[bool] = mapped_column(Boolean, default=True)
     is_recruiter: Mapped[bool] = mapped_column(Boolean, default=False)
     is_employer: Mapped[bool] = mapped_column(Boolean, default=False)
     recruiter_name: Mapped[str] = mapped_column(String(255), default="Unknown")

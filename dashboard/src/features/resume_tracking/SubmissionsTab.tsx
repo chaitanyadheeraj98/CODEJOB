@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
+import FilterSortBar, { type FilterValues } from '../../components/FilterSortBar'
+import { submissionDefaultFilterValues, submissionFilterFields, submissionFiltersToParams, submissionSortOptions } from './submissionFilters'
 import type { FormEvent } from 'react'
 
 import {
@@ -36,6 +38,10 @@ type Props = {
   apiBase: string
   resumes: ResumeAssetOption[]
   resumeAssetId?: number | null
+  filterValues?: FilterValues
+  onFilterChange?: (values: FilterValues) => void
+  sortValue?: string
+  onSortChange?: (value: string) => void
 }
 
 const blankManual = (resumes: ResumeAssetOption[], resumeAssetId?: number | null): ManualApplicationInput => ({
@@ -54,10 +60,9 @@ const blankManual = (resumes: ResumeAssetOption[], resumeAssetId?: number | null
   resume_submitted_at: new Date().toISOString().slice(0, 10),
 })
 
-export default function SubmissionsTab({ apiBase, resumes, resumeAssetId = null }: Props) {
+export default function SubmissionsTab({ apiBase, resumes, resumeAssetId = null, filterValues = submissionDefaultFilterValues, onFilterChange = () => undefined, sortValue = 'newest', onSortChange = () => undefined }: Props) {
   const [rows, setRows] = useState<ApplicationCard[]>([])
   const [suggestions, setSuggestions] = useState<ApplicationSuggestion[]>([])
-  const [search, setSearch] = useState('')
   const [status, setStatus] = useState<ResumeSubmissionStatus | 'all'>('all')
   const [loading, setLoading] = useState(false)
   const [busyId, setBusyId] = useState<number | null>(null)
@@ -72,7 +77,7 @@ export default function SubmissionsTab({ apiBase, resumes, resumeAssetId = null 
     setError('')
     try {
       const [applications, pending] = await Promise.all([
-        listApplications({ apiBase, q: search, status: 'all', resumeAssetId, resumeSubmissionStatus: status }),
+        listApplications({ apiBase, q: '', status: 'all', resumeAssetId, resumeSubmissionStatus: status, filters: submissionFiltersToParams(filterValues), sort: sortValue }),
         listApplicationSuggestions(apiBase),
       ])
       setRows(applications)
@@ -82,7 +87,7 @@ export default function SubmissionsTab({ apiBase, resumes, resumeAssetId = null 
     } finally {
       setLoading(false)
     }
-  }, [apiBase, resumeAssetId, search, status])
+  }, [apiBase, filterValues, resumeAssetId, sortValue, status])
 
   useEffect(() => {
     const timer = window.setTimeout(() => { void load() }, 120)
@@ -185,8 +190,8 @@ export default function SubmissionsTab({ apiBase, resumes, resumeAssetId = null 
 
   return (
     <section className="resumeTrackingPanel">
+      <FilterSortBar fields={submissionFilterFields} values={filterValues} onFieldChange={(key,value)=>onFilterChange({...filterValues,[key]:value})} onClear={()=>onFilterChange(submissionDefaultFilterValues)} sortOptions={submissionSortOptions} sortValue={sortValue} onSortChange={onSortChange} loading={loading} />
       <div className="resumeTrackingToolbar">
-        <label>Search<input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Recruiter, company, role, email" /></label>
         <label>Status<select value={status} onChange={(event) => setStatus(event.target.value as ResumeSubmissionStatus | 'all')}><option value="all">All</option><option value="not_submitted">Not submitted</option><option value="submitted">Submitted</option>{STATUS_OPTIONS.map((value) => <option key={value} value={value}>{value.replaceAll('_', ' ')}</option>)}<option value="interview_scheduled">Interview scheduled</option></select></label>
         <button type="button" onClick={() => setManual(blankManual(resumes, resumeAssetId))}>Log submission</button>
       </div>

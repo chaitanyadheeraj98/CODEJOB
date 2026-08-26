@@ -9,6 +9,11 @@ import OpportunitiesTab from './OpportunitiesTab'
 import { ToastHost, useToast } from './Toast'
 import type { InventoryAction, InventoryRow, ReviewEdits } from './types'
 import { useInventory } from './useInventory'
+import FilterSortBar from '../../components/FilterSortBar'
+import SelectionActionBar from '../../components/SelectionActionBar'
+import type { FilterValues } from '../../components/FilterSortBar'
+import { inventoryDefaultFilterValues, inventoryFilterFields, inventorySortOptions } from './inventoryFilters'
+import { submissionDefaultFilterValues } from '../resume_tracking/submissionFilters'
 
 const ACTION_TOAST_LABELS: Record<InventoryAction, string> = {
   'mark-recruiter': 'Marked as recruiter',
@@ -24,6 +29,10 @@ type PremiumNumbersPageProps = {
   refreshToken: number
   applicationsEnabled: boolean
   onPendingCountChange: (count: number) => void
+  applicationsFilterValues?: FilterValues
+  onApplicationsFilterChange?: (values: FilterValues) => void
+  applicationsSortValue?: string
+  onApplicationsSortChange?: (value: string) => void
 }
 
 function inventoryTargetKey(target: EmailSearchHit | null): string | null {
@@ -48,6 +57,7 @@ export default function PremiumNumbersPage({
   refreshToken,
   applicationsEnabled,
   onPendingCountChange,
+  applicationsFilterValues=submissionDefaultFilterValues,onApplicationsFilterChange=()=>undefined,applicationsSortValue='newest',onApplicationsSortChange=()=>undefined,
 }: PremiumNumbersPageProps) {
   const targetOpportunityId = opportunityTargetId(emailSearchTarget)
   const targetInventoryKey = inventoryTargetKey(emailSearchTarget)
@@ -140,35 +150,26 @@ export default function PremiumNumbersPage({
 
       {activeTab === 'inventory' ? (
         <div role="tabpanel" className="inventoryPanel">
-          <div className="inventoryToolbar">
-            <label className="inventorySearchField">
-              <span>Search inventory</span>
-              <input value={inventory.search} onChange={(event) => inventory.setSearch(event.target.value)} placeholder="Search number, owner, company..." />
-            </label>
-            <label><span>Status</span><select value={inventory.status} onChange={(event) => inventory.setStatus(event.target.value as typeof inventory.status)}><option value="all">All statuses</option><option value="Pending">Pending</option><option value="Active">Active</option><option value="Flagged">Flagged</option></select></label>
-            <label><span>Category</span><select value={inventory.category} onChange={(event) => inventory.setCategory(event.target.value as typeof inventory.category)}><option value="all">All categories</option><option value="Recruiter">Recruiter</option><option value="Employer">Employer</option></select></label>
-            <label><span>Source</span><select value={inventory.source} onChange={(event) => inventory.setSource(event.target.value as typeof inventory.source)}><option value="all">All sources</option><option value="gmail">Gmail</option><option value="nvoids">Nvoids</option></select></label>
-          </div>
+          <FilterSortBar fields={inventoryFilterFields} values={inventory.filterValues} onFieldChange={inventory.updateFilter} onClear={() => { inventory.setFilterValues(inventoryDefaultFilterValues); inventory.setPage(1) }} sortOptions={inventorySortOptions} sortValue={inventory.sort} onSortChange={inventory.setSort} loading={inventory.loading} />
 
-          {inventory.selected.size > 0 ? (
-            <div className="selectionBar">
-              <strong>{inventory.selected.size} Selected</strong>
-              <span>Bulk actions active</span>
-              <div className="selectionActions">
-                <button type="button" onClick={() => runBulk('mark-recruiter')} disabled={inventory.busy}>{inventory.busy ? 'Working...' : 'Mark as Recruiter'}</button>
-                <button type="button" onClick={() => runBulk('mark-employer')} disabled={inventory.busy}>{inventory.busy ? 'Working...' : 'Mark as Employer'}</button>
-                <button type="button" onClick={() => runBulk('rescore')} disabled={inventory.busy}>{inventory.busy ? 'Working...' : 'Rescore'}</button>
-                <button type="button" className="dangerButton" onClick={() => runBulk('delete')} disabled={inventory.busy}>{inventory.busy ? 'Working...' : 'Delete'}</button>
-              </div>
-            </div>
-          ) : null}
+          <SelectionActionBar
+            selectedCount={inventory.selected.size}
+            busyKey={inventory.busyBulkAction}
+            onClearSelection={() => inventory.selectVisible(false)}
+            actions={[
+              { key: 'mark-recruiter', label: 'Mark as Recruiter', onClick: () => runBulk('mark-recruiter') },
+              { key: 'mark-employer', label: 'Mark as Employer', onClick: () => runBulk('mark-employer') },
+              { key: 'rescore', label: 'Rescore', onClick: () => runBulk('rescore') },
+              { key: 'delete', label: 'Delete', onClick: () => runBulk('delete'), variant: 'danger' },
+            ]}
+          />
 
           <p className="inventoryNote">Rescoring re-checks every selected number in its original source. Bulk actions ignore unsaved detail-panel edits.</p>
           {inventory.loading ? <p className="subtle">Loading premium numbers...</p> : null}
           {inventory.error ? <p className="errorBanner">Premium numbers error: {inventory.error}</p> : null}
           <InventoryTable
             rows={inventory.visibleRows}
-            allRowsCount={inventory.rows.length}
+            allRowsCount={inventory.total}
             selected={inventory.selected}
             busy={inventory.busy}
             page={inventory.page}
@@ -181,7 +182,6 @@ export default function PremiumNumbersPage({
             onOpen={openDetail}
             onAction={(row, action) => { runRowAction(row, action).catch(() => undefined) }}
           />
-          <p className="inventoryApproximation">Counts reflect up to 300 loaded rows per source; source endpoints remain independently paginated.</p>
         </div>
       ) : activeTab === 'opportunities' ? (
         <div role="tabpanel">
@@ -189,7 +189,7 @@ export default function PremiumNumbersPage({
         </div>
       ) : (
         <div role="tabpanel">
-          <ApplicationsTab apiBase={apiBase} refreshToken={refreshToken} onToast={toast.show} />
+          <ApplicationsTab apiBase={apiBase} refreshToken={refreshToken} onToast={toast.show} filterValues={applicationsFilterValues} onFilterChange={onApplicationsFilterChange} sortValue={applicationsSortValue} onSortChange={onApplicationsSortChange} />
         </div>
       )}
 

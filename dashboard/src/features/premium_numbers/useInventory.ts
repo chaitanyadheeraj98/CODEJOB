@@ -1,112 +1,30 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { FilterValues } from '../../components/FilterSortBar'
+import { inventoryDefaultFilterValues, inventoryFiltersToParams } from './inventoryFilters'
 
 import {
-  listEmployerNumbers,
-  listRecruiterNumbers,
-  listReviewNumbers,
   runContactBulkAction,
   runReviewAction,
   runReviewBulkAction,
 } from './api'
 import type {
-  EmployerNumberCard,
   InventoryAction,
-  InventoryCategoryFilter,
   InventoryRow,
-  InventorySourceFilter,
-  InventoryStatusFilter,
-  RecruiterNumberCard,
   ReviewEdits,
 } from './types'
 
 const PAGE_SIZE = 10
 
-export function reviewRow(review: NonNullable<InventoryRow['review']>): InventoryRow {
-  return {
-    key: `review:${review.id}`,
-    kind: 'review',
-    id: review.id,
-    number: review.display_phone_number,
-    owner: review.owner_name,
-    company: review.company,
-    categories: [],
-    status: 'Pending',
-    score: review.recruiter_relevance_score || null,
-    sourceType: review.source_external_opportunity_id ? 'nvoids' : 'gmail',
-    lastCheckedAt: review.updated_at,
-    review,
-  }
-}
-
-export function mergeContacts(recruiters: RecruiterNumberCard[], employers: EmployerNumberCard[]): InventoryRow[] {
-  const contacts = new Map<number, InventoryRow>()
-  for (const recruiter of recruiters) {
-    contacts.set(recruiter.id, {
-      key: `contact:${recruiter.id}`,
-      kind: 'contact',
-      id: recruiter.id,
-      number: recruiter.display_phone_number,
-      owner: recruiter.recruiter_name,
-      company: recruiter.company,
-      categories: [
-        ...(recruiter.is_recruiter ? ['Recruiter' as const] : []),
-        ...(recruiter.is_employer ? ['Employer' as const] : []),
-      ],
-      status: recruiter.flagged ? 'Flagged' : 'Active',
-      score: recruiter.recruiter_relevance_score,
-      sourceType: recruiter.source_type,
-      lastCheckedAt: recruiter.updated_at,
-      recruiter,
-    })
-  }
-  for (const employer of employers) {
-    const existing = contacts.get(employer.id)
-    if (existing) {
-      existing.employer = employer
-      existing.categories = Array.from(new Set([
-        ...existing.categories,
-        ...(employer.is_recruiter ? ['Recruiter' as const] : []),
-        ...(employer.is_employer ? ['Employer' as const] : []),
-      ]))
-      if (employer.flagged) existing.status = 'Flagged'
-      if (existing.score == null) existing.score = employer.recruiter_relevance_score
-      if (!existing.sourceType) existing.sourceType = employer.source_type
-      if (new Date(employer.updated_at).getTime() > new Date(existing.lastCheckedAt).getTime()) {
-        existing.lastCheckedAt = employer.updated_at
-      }
-      continue
-    }
-    contacts.set(employer.id, {
-      key: `contact:${employer.id}`,
-      kind: 'contact',
-      id: employer.id,
-      number: employer.display_phone_number,
-      owner: employer.owner_name,
-      company: employer.company,
-      categories: [
-        ...(employer.is_recruiter ? ['Recruiter' as const] : []),
-        ...(employer.is_employer ? ['Employer' as const] : []),
-      ],
-      status: employer.flagged ? 'Flagged' : 'Active',
-      score: employer.recruiter_relevance_score,
-      sourceType: employer.source_type,
-      lastCheckedAt: employer.updated_at,
-      employer,
-    })
-  }
-  return [...contacts.values()]
-}
-
 export function useInventory(apiBase: string, refreshToken = 0) {
   const [rows, setRows] = useState<InventoryRow[]>([])
-  const [search, setSearch] = useState('')
-  const [status, setStatus] = useState<InventoryStatusFilter>('all')
-  const [category, setCategory] = useState<InventoryCategoryFilter>('all')
-  const [source, setSource] = useState<InventorySourceFilter>('all')
+  const [filterValues, setFilterValues] = useState<FilterValues>(inventoryDefaultFilterValues)
+  const [sort, setSort] = useState('newest')
+  const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [busyBulkAction, setBusyBulkAction] = useState<InventoryAction | null>(null)
   const [error, setError] = useState('')
   const requestIdRef = useRef(0)
 
@@ -116,48 +34,31 @@ export function useInventory(apiBase: string, refreshToken = 0) {
     setLoading(true)
     setError('')
     try {
-      const includePending = status === 'all' || status === 'Pending'
-      const flagModes = status === 'Flagged' ? [true] : status === 'Active' ? [false] : [false, true]
-      const reviewPromise = includePending ? listReviewNumbers(apiBase, search) : Promise.resolve([])
-      const contactPromises = status === 'Pending' ? [] : flagModes.flatMap((flagged) => [
-        listRecruiterNumbers(apiBase, search, source, flagged),
-        listEmployerNumbers(apiBase, search, source, flagged),
-      ])
-      const [reviews, ...contactResults] = await Promise.all([reviewPromise, ...contactPromises])
+      const params = new URLSearchParams({ cursor:String((page-1)*PAGE_SIZE),limit:String(PAGE_SIZE),sort })
+      for(const [key,value] of Object.entries(inventoryFiltersToParams(filterValues))) params.set(key,value)
+      const response=await fetch(`${apiBase}/premium-numbers/inventory?${params}`)
+      if(!response.ok) throw new Error('Failed to load premium number inventory')
+      const payload=await response.json() as {items:InventoryRow[];total:number}
       if (requestId !== requestIdRef.current) return
-      const recruiters: RecruiterNumberCard[] = []
-      const employers: EmployerNumberCard[] = []
-      contactResults.forEach((result, index) => {
-        if (index % 2 === 0) recruiters.push(...result as RecruiterNumberCard[])
-        else employers.push(...result as EmployerNumberCard[])
-      })
-      const normalized = [
-        ...reviews.map((review) => reviewRow(review)),
-        ...mergeContacts(recruiters, employers),
-      ]
-        .filter((row) => source === 'all' || row.sourceType === source)
-        .filter((row) => category === 'all' || row.categories.includes(category))
-        .filter((row) => status === 'all' || row.status === status)
-        .sort((left, right) => new Date(right.lastCheckedAt).getTime() - new Date(left.lastCheckedAt).getTime())
-      setRows(normalized)
-      setSelected((current) => new Set([...current].filter((key) => normalized.some((row) => row.key === key))))
+      setRows(payload.items);setTotal(payload.total)
+      setSelected((current) => new Set([...current].filter((key) => payload.items.some((row) => row.key === key))))
     } catch (reason) {
       if (requestId === requestIdRef.current) setError((reason as Error).message)
     } finally {
       if (requestId === requestIdRef.current) setLoading(false)
     }
-  }, [apiBase, category, search, source, status])
+  }, [apiBase, filterValues, page, sort])
 
   useEffect(() => {
     const timer = window.setTimeout(() => { load().catch(() => undefined) }, 150)
     return () => window.clearTimeout(timer)
   }, [load, refreshToken])
 
-  const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE))
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
   const safePage = Math.min(page, totalPages)
   const visibleRows = useMemo(
-    () => rows.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE),
-    [rows, safePage],
+    () => rows,
+    [rows],
   )
 
   const toggle = (key: string) => setSelected((current) => {
@@ -202,24 +103,18 @@ export function useInventory(apiBase: string, refreshToken = 0) {
     }
   }, [apiBase, load])
 
-  const runBulkAction = (action: InventoryAction) => dispatch(rows.filter((row) => selected.has(row.key)), action)
+  const runBulkAction = (action: InventoryAction) => {
+    setBusyBulkAction(action)
+    return dispatch(rows.filter((row) => selected.has(row.key)), action).finally(() => setBusyBulkAction(null))
+  }
   const runRowAction = (row: InventoryRow, action: InventoryAction, edits?: ReviewEdits) => dispatch([row], action, edits)
-  const updateSearch = (value: string) => { setSearch(value); setPage(1) }
-  const updateStatus = (value: InventoryStatusFilter) => { setStatus(value); setPage(1) }
-  const updateCategory = (value: InventoryCategoryFilter) => { setCategory(value); setPage(1) }
-  const updateSource = (value: InventorySourceFilter) => { setSource(value); setPage(1) }
+  const updateFilter = (key:string,value:FilterValues[string]) => { setFilterValues((current)=>({...current,[key]:value}));setPage(1) }
 
   return {
     rows,
+    total,
     visibleRows,
-    search,
-    setSearch: updateSearch,
-    status,
-    setStatus: updateStatus,
-    category,
-    setCategory: updateCategory,
-    source,
-    setSource: updateSource,
+    filterValues,setFilterValues,updateFilter,sort,setSort:(value:string)=>{setSort(value);setPage(1)},
     page: safePage,
     setPage,
     totalPages,
@@ -229,6 +124,7 @@ export function useInventory(apiBase: string, refreshToken = 0) {
     selectVisible,
     loading,
     busy,
+    busyBulkAction,
     error,
     setError,
     reload: load,

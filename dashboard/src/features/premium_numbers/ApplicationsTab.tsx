@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import FilterSortBar, { type FilterValues } from '../../components/FilterSortBar'
+import { submissionDefaultFilterValues, submissionFilterFields, submissionFiltersToParams, submissionSortOptions } from '../resume_tracking/submissionFilters'
 
 import {
   ApplicationDuplicateConflictError,
@@ -12,7 +14,7 @@ import {
   getApplication,
   getApplicationsDashboardSummary,
   listAttachmentOptions,
-  listApplications,
+  listApplicationPage,
   listApplicationSuggestions,
   requestApplicationRtr,
   runReminderSweepNow,
@@ -101,6 +103,10 @@ type ApplicationsTabProps = {
   apiBase: string
   refreshToken: number
   onToast: (message: string) => void
+  filterValues?: FilterValues
+  onFilterChange?: (values: FilterValues) => void
+  sortValue?: string
+  onSortChange?: (value: string) => void
 }
 
 function label(value: string): string {
@@ -140,13 +146,13 @@ function draftSourceLabel(source: string): string {
   return ''
 }
 
-export default function ApplicationsTab({ apiBase, refreshToken, onToast }: ApplicationsTabProps) {
+export default function ApplicationsTab({ apiBase, refreshToken, onToast, filterValues = submissionDefaultFilterValues, onFilterChange = () => undefined, sortValue = 'newest', onSortChange = () => undefined }: ApplicationsTabProps) {
   const [rows, setRows] = useState<ApplicationCard[]>([])
   const [summary, setSummary] = useState<ApplicationDashboardSummary>({ due_today: 0, waiting_on_recruiter: 0, interviews: 0, closed_recent: 0, pending_suggestions: 0 })
   const [suggestions, setSuggestions] = useState<ApplicationSuggestion[]>([])
-  const [search, setSearch] = useState('')
   const [status, setStatus] = useState<'all' | ApplicationStatus>('all')
   const [page, setPage] = useState(1)
+  const [total,setTotal]=useState(0)
   const [loading, setLoading] = useState(false)
   const [busyId, setBusyId] = useState<number | null>(null)
   const [expandedId, setExpandedId] = useState<number | null>(null)
@@ -169,16 +175,16 @@ export default function ApplicationsTab({ apiBase, refreshToken, onToast }: Appl
     setLoading(true)
     setError('')
     return Promise.all([
-      listApplications({ apiBase, q: search, status }),
+      listApplicationPage({ apiBase, cursor:(page-1)*PAGE_SIZE,limit:PAGE_SIZE,q:'',status,filters:submissionFiltersToParams(filterValues),sort:sortValue }),
       getApplicationsDashboardSummary(apiBase),
       listApplicationSuggestions(apiBase),
     ])
-      .then(([items, counts, pendingSuggestions]) => {
+      .then(([pageResult, counts, pendingSuggestions]) => {
         if (requestId !== requestIdRef.current) return
-        setRows(items)
+        setRows(pageResult.items)
+        setTotal(pageResult.total ?? pageResult.items.length)
         setSummary(counts)
         setSuggestions(pendingSuggestions)
-        setPage(1)
       })
       .catch((reason) => {
         if (requestId === requestIdRef.current) setError((reason as Error).message)
@@ -192,7 +198,7 @@ export default function ApplicationsTab({ apiBase, refreshToken, onToast }: Appl
     const timer = window.setTimeout(() => { load().catch(() => undefined) }, 150)
     return () => window.clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [apiBase, refreshToken, search, status])
+  }, [apiBase, page, refreshToken, filterValues, sortValue, status])
 
   useEffect(() => {
     listAttachmentOptions(apiBase)
@@ -200,8 +206,8 @@ export default function ApplicationsTab({ apiBase, refreshToken, onToast }: Appl
       .catch((reason) => setError((reason as Error).message))
   }, [apiBase])
 
-  const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE))
-  const visible = useMemo(() => rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), [page, rows])
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  const visible = rows
 
   const refreshSummary = () => {
     getApplicationsDashboardSummary(apiBase).then(setSummary).catch(() => undefined)
@@ -614,14 +620,11 @@ export default function ApplicationsTab({ apiBase, refreshToken, onToast }: Appl
         <div><strong>{summary.closed_recent}</strong><span>Closed in 14 days</span></div>
         <div><strong>{summary.pending_suggestions}</strong><span>Pending suggestions</span></div>
       </div>
+      <FilterSortBar fields={submissionFilterFields} values={filterValues} onFieldChange={(key,value)=>{onFilterChange({...filterValues,[key]:value});setPage(1)}} onClear={()=>{onFilterChange(submissionDefaultFilterValues);setPage(1)}} sortOptions={submissionSortOptions} sortValue={sortValue} onSortChange={(value)=>{onSortChange(value);setPage(1)}} loading={loading} />
       <div className="inventoryToolbar">
-        <label className="inventorySearchField">
-          <span>Search applications</span>
-          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search resume, role, recruiter, client..." />
-        </label>
         <label>
           <span>Status</span>
-          <select value={status} onChange={(event) => setStatus(event.target.value as 'all' | ApplicationStatus)}>
+          <select value={status} onChange={(event) => {setStatus(event.target.value as 'all' | ApplicationStatus);setPage(1)}}>
             <option value="all">All statuses</option>
             {STATUSES.map((value) => <option key={value} value={value}>{label(value)}</option>)}
           </select>
@@ -1024,7 +1027,7 @@ export default function ApplicationsTab({ apiBase, refreshToken, onToast }: Appl
       </div>
       {rows.length > 0 ? (
         <footer className="inventoryPaginationFooter">
-          <span>Showing {(page - 1) * PAGE_SIZE + 1} to {Math.min(page * PAGE_SIZE, rows.length)} of {rows.length} loaded entries</span>
+          <span>Showing {(page - 1) * PAGE_SIZE + 1} to {Math.min(page * PAGE_SIZE, total)} of {total} entries</span>
           <nav className="pagination" aria-label="Application pages">
             <button type="button" onClick={() => setPage((value) => Math.max(1, value - 1))} disabled={page === 1}>‹</button>
             <span>Page {page} of {totalPages}</span>
