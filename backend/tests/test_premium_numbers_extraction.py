@@ -4,6 +4,10 @@ from unittest.mock import patch
 
 os.environ["DEBUG"] = "false"
 
+import sqlalchemy as sa
+from sqlalchemy.orm import Session
+
+from app.models import PremiumNumberExtractionAudit
 from app.premium_numbers import extraction
 from app.premium_numbers.phone_normalization import format_phone
 
@@ -485,6 +489,7 @@ class PremiumNumbersExtractionTests(unittest.TestCase):
         try:
             extraction._llm_extract = lambda _content, _domains: []
             extraction._sbert_prototype_centroids.cache_clear()
+
             with patch("app.premium_numbers.extraction._sbert_embedding") as mocked:
                 body = (
                     "To unsubscribe from this group send an email to hstjava+unsubscribe@googlegroups.com. "
@@ -501,6 +506,135 @@ class PremiumNumbersExtractionTests(unittest.TestCase):
         finally:
             extraction._llm_extract = original_llm
             extraction._sbert_prototype_centroids.cache_clear()
+
+    def test_numeric_labels_and_rate_units_are_noise(self) -> None:
+        for text, raw_phone in (
+            ("Duration: 2145551212 months", "2145551212"),
+            ("Experience: 4695551212 years", "4695551212"),
+            ("Rate: 9725551212 $/hr", "9725551212"),
+        ):
+            with self.subTest(text=text):
+                self.assertTrue(extraction._is_noise_context(text, text, raw_phone))
+
+    def test_rejection_and_acceptance_paths_write_audit_rows(self) -> None:
+        engine = sa.create_engine("sqlite://")
+        PremiumNumberExtractionAudit.__table__.create(engine)
+        with Session(engine) as db:
+            with patch.object(extraction, "_sbert_keep_candidate", return_value=(False, "sbert_noise")):
+                extraction._fallback_extract(
+                    "Recruiter <r@example.com>",
+                    "Please phone 469-555-1212 for details.",
+                    set(),
+                    db=db,
+                    owner_id="owner",
+                    source_email_id=1,
+                )
+            extraction._fallback_extract(
+                "Recruiter <r@example.com>",
+                "Duration: 2145551212 months",
+                set(),
+                db=db,
+                owner_id="owner",
+                source_email_id=1,
+            )
+            base = extraction.ExtractedContactGroup(
+                phone_number_display="(214) 555-1212",
+                phone_number_normalized="12145551212",
+                owner_name="Ada",
+                contact_email="ada@example.com",
+                company="Example",
+                designation="Recruiter",
+                purpose="Direct contact",
+                confidence="high",
+                contact_type="recruiter_direct",
+                recruiter_relevance_score=90,
+                is_recruiter_relevant=True,
+                relevance_reason="external_domain",
+                source_fragment="Ada (214) 555-1212",
+                role="recruiter",
+                colocation_verified=True,
+            )
+            extraction._finalize_extraction(
+                [base, extraction.replace(
+                    base,
+                    phone_number_display="(972) 555-1212",
+                    phone_number_normalized="19725551212",
+                    colocation_verified=False,
+                )],
+                db=db,
+                owner_id="owner",
+                source_email_id=1,
+                source_external_opportunity_id=None,
+            )
+            db.flush()
+            decisions = {(row.stage, row.status) for row in db.query(PremiumNumberExtractionAudit)}
+        engine.dispose()
+        self.assertTrue({
+            ("noise_prefilter", "rejected"),
+            ("sbert", "rejected"),
+            ("colocation_check", "rejected"),
+            ("accepted", "accepted"),
+        }.issubset(decisions))
+
+    def test_colocation_rejects_body_phone_attributed_to_distant_signature(self) -> None:
+        body = (
+            "Java Lead Developer role. Call +1 214 555 1212 for the role."
+            + chr(10)
+            + ("job details " * 70)
+            + chr(10)
+            + "Regards, Harshitha <harshitha@example.com>"
+        )
+        verified, offset = extraction._verify_colocation(
+            "Regards, Harshitha <harshitha@example.com>",
+            "+1 214 555 1212",
+            body,
+        )
+        self.assertFalse(verified)
+        self.assertIsNotNone(offset)
+
+    def test_colocation_accepts_signature_phone_and_identity(self) -> None:
+        evidence = "Harshitha | harshitha@example.com | +1 214 555 1212"
+        self.assertEqual(
+            extraction._verify_colocation(evidence, "(214) 555-1212", evidence),
+            (True, 0),
+        )
+
+    def test_signature_block_groups_two_phone_numbers_under_one_identity(self) -> None:
+        blank = extraction.ExtractedContactGroup(
+            phone_number_display="(214) 555-1212",
+            phone_number_normalized="12145551212",
+            owner_name="Unknown",
+            contact_email="",
+            company="Unknown",
+            designation="Unknown",
+            purpose="Signature",
+            confidence="high",
+            contact_type="unknown",
+            recruiter_relevance_score=0,
+            is_recruiter_relevant=False,
+            relevance_reason="",
+            source_fragment="Phone one",
+            block_id="sig-1",
+        )
+        identified = extraction.ExtractedContactGroup(
+            phone_number_display="(469) 555-1212",
+            phone_number_normalized="14695551212",
+            owner_name="Harshitha",
+            contact_email="harshitha@example.com",
+            company="SysIntelli",
+            designation="Recruiter",
+            purpose="Signature",
+            confidence="high",
+            contact_type="unknown",
+            recruiter_relevance_score=0,
+            is_recruiter_relevant=False,
+            relevance_reason="",
+            source_fragment="Phone two",
+            block_id="sig-1",
+        )
+        grouped = extraction._group_candidates_by_block([blank, identified])
+        self.assertEqual({lead.owner_name for lead in grouped}, {"Harshitha"})
+        self.assertEqual({lead.contact_email for lead in grouped}, {"harshitha@example.com"})
 
 
 if __name__ == "__main__":

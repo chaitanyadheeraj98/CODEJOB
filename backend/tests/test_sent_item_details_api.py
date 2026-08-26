@@ -99,6 +99,7 @@ class SentItemDetailsApiTests(unittest.TestCase):
         self.assertEqual(payload["missing_skills"], ["Spring Boot"])
         self.assertEqual(payload["recruiter_name"], "Recruiter Name")
         self.assertEqual(payload["recruiter_email"], "recruiter@example.com")
+        self.assertEqual(payload["recruiter_email_domain"], "example.com")
         self.assertEqual(payload["recruiter_phone"], None)
 
     def test_employer_domain_recipient_resolves_employer_fields_and_blanks_recruiter_email(self) -> None:
@@ -154,6 +155,7 @@ class SentItemDetailsApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         payload = response.json()
         self.assertIsNone(payload["recruiter_email"])
+        self.assertIsNone(payload["recruiter_email_domain"])
         self.assertEqual(payload["employer_name"], "HR Desk")
         self.assertEqual(payload["employer_email"], "hr@horizonsofttech.net")
         self.assertEqual(payload["employer_phone"], "+1 (214) 555-0401")
@@ -348,6 +350,48 @@ class SentItemDetailsApiTests(unittest.TestCase):
         self.assertEqual(payload["vendor"], "Example Vendor")
         self.assertEqual(payload["experience_required"], "8+ years")
         self.assertEqual(payload["attached_files"], ["portfolio.zip"])
+
+    def test_nvoids_sent_details_requirement_link_falls_back_to_message_id(self) -> None:
+        with Session(self.engine) as db:
+            row = RecruiterEmail(
+                owner_id=main.settings.owner_id,
+                sender="nvoids@example.com",
+                subject="Senior Java Developer",
+                body="Vendor: Example Vendor",
+                role="Senior Java Developer",
+                location="Dallas, TX",
+                salary_text="$70/hr",
+                skills_text="Java, Spring Boot",
+                score=90,
+                decision="Qualified",
+                state="approved_sent",
+                draft_reply="Hi",
+                approval_status="approved",
+                sent_status="sent",
+                source="nvoids",
+                external_message_id="nvoids:4471002",
+                external_thread_id="nvoids:4471002",
+                recipient_email="nvoids@example.com",
+                cc_email="employer@example.com",
+                routing_status="safe",
+                routing_confidence=0.95,
+                routing_reason="ok",
+                routing_evidence="[]",
+                routing_candidates="[]",
+                routing_confirmed=True,
+                sent_at=datetime(2026, 6, 27, 18, 0, tzinfo=UTC),
+                gmail_sent_id="sent-nvoids-2",
+                created_at=datetime(2026, 6, 27, 17, 0, tzinfo=UTC),
+                updated_at=datetime(2026, 6, 27, 18, 0, tzinfo=UTC),
+            )
+            db.add(row)
+            db.commit()
+            email_id = row.id
+
+        response = self.client.get(f"/candidates/{email_id}/sent-details")
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(payload["requirement_received_link"], "https://nvoids.com/job_details.jsp?id=4471002")
 
 
 if __name__ == "__main__":

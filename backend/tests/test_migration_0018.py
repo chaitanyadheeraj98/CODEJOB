@@ -5,6 +5,7 @@ from pathlib import Path
 import sqlalchemy as sa
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 
 from app.config import settings
 from scripts.verify_schema_equivalence import compare
@@ -49,7 +50,7 @@ class DeclarativeBaselineMigrationTests(unittest.TestCase):
                         revision = connection.exec_driver_sql(
                             "SELECT version_num FROM alembic_version"
                         ).scalar_one()
-                    self.assertEqual(revision, "20260818_0022")
+                    self.assertEqual(revision, ScriptDirectory.from_config(config).get_current_head())
                     self.assertEqual(compare(database_url), [])
                 finally:
                     engine.dispose()

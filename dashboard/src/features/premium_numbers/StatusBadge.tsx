@@ -1,9 +1,24 @@
 type StatusBadgeProps = {
   status: 'Active' | 'Pending' | 'Flagged'
+  reasonCode?: string | null
 }
 
-export function StatusBadge({ status }: StatusBadgeProps) {
-  return <span className={`statusBadge statusBadge--${status.toLowerCase()}`}>{status}</span>
+const REASON_LABELS: Record<string, string> = {
+  identity_conflict: 'Identity Conflict',
+  insufficient_evidence: 'Needs More Evidence',
+  source_attribution_failure: 'Source Mismatch',
+  international_number_needs_verification: 'International — Needs Verification',
+  new_number: 'Pending',
+}
+
+function reviewReasonLabel(reasonCode: string): string {
+  return REASON_LABELS[reasonCode] ?? reasonCode.replaceAll('_', ' ')
+}
+
+export function StatusBadge({ status, reasonCode }: StatusBadgeProps) {
+  const label = reasonCode ? reviewReasonLabel(reasonCode) : status
+  const tone = reasonCode && reasonCode !== 'new_number' ? reasonCode.replaceAll('_', '-') : status.toLowerCase()
+  return <span className={`statusBadge statusBadge--${tone}`}>{label}</span>
 }
 
 export function CategoryChip({ category }: { category: 'Recruiter' | 'Employer' }) {

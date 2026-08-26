@@ -13,6 +13,7 @@ const baseContact = {
   source_link_url: null,
   active_lead_id: 20,
   version_count: 2,
+  seen_count: 3,
   recruiter_relevance_score: 92,
   created_at: '2026-08-18T10:00:00Z',
   updated_at: '2026-08-18T12:00:00Z',
@@ -79,6 +80,9 @@ describe('inventory normalization', () => {
       scored_with: 'current',
       gmail_open_url: '',
       state: 'pending',
+      role: null,
+      reason_code: 'new_number',
+      occurrence_count: 1,
       created_at: '2026-08-18T10:00:00Z',
       updated_at: '2026-08-18T12:00:00Z',
     } satisfies NumberReviewCard

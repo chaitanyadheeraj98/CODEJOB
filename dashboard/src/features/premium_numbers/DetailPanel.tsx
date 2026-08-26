@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type RefObject } from 'react'
 
-import { deleteContactVersion, getRecruiterReputation, listContactVersions, selectContactVersion, updateEmployerNumber, updateRecruiterNumber } from './api'
+import { deleteContactVersion, getRecruiterReputation, listContactVersions, listExtractionAudit, selectContactVersion, updateEmployerNumber, updateRecruiterNumber } from './api'
 import { CategoryChip, StatusBadge } from './StatusBadge'
-import type { EmployerNumberCard, InventoryAction, InventoryRow, PremiumNumberVersion, RecruiterNumberCard, RecruiterReputation, ReviewEdits } from './types'
+import type { EmployerNumberCard, ExtractionAuditEntry, InventoryAction, InventoryRow, PremiumNumberVersion, RecruiterNumberCard, RecruiterReputation, ReviewEdits } from './types'
 
 type RecruiterEdits = Partial<Pick<RecruiterNumberCard, 'recruiter_name' | 'company' | 'designation' | 'recruiter_email' | 'linkedin_url' | 'recruiter_verification_level' | 'do_not_work_again' | 'do_not_work_again_reason'>>
 type EmployerEdits = Partial<Pick<EmployerNumberCard, 'owner_name' | 'company' | 'employer_email'>>
@@ -33,6 +33,11 @@ export default function DetailPanel({
   const panelRef = useRef<HTMLDivElement>(null)
   const primaryRole = row.recruiter ? 'recruiter' : 'employer'
   const primaryContact = row.recruiter ?? row.employer
+  const auditSourceEmailId = row.review?.source_email_id
+    ?? (primaryContact?.source_type === 'gmail' ? primaryContact.source_id : null)
+    ?? row.recruiter?.first_detected_email_id
+    ?? row.employer?.source_email_id
+    ?? null
   const [reviewEdits, setReviewEdits] = useState<ReviewEdits>({})
   const [versions, setVersions] = useState<PremiumNumberVersion[]>([])
   const [versionsLoading, setVersionsLoading] = useState(Boolean(primaryContact))
@@ -46,6 +51,8 @@ export default function DetailPanel({
   const [deletingVersion, setDeletingVersion] = useState(false)
   const [syncingVersion, setSyncingVersion] = useState(false)
   const [reputation, setReputation] = useState<RecruiterReputation | null>(null)
+  const [auditEntries, setAuditEntries] = useState<ExtractionAuditEntry[]>([])
+  const [auditLoading, setAuditLoading] = useState(Boolean(auditSourceEmailId))
 
   useEffect(() => {
     const panel = panelRef.current
@@ -68,6 +75,14 @@ export default function DetailPanel({
       .then(setReputation)
       .catch((reason) => onError((reason as Error).message))
   }, [apiBase, onError, row.id, row.recruiter])
+
+  useEffect(() => {
+    if (!auditSourceEmailId) return
+    listExtractionAudit(apiBase, auditSourceEmailId)
+      .then(setAuditEntries)
+      .catch((reason) => onError((reason as Error).message))
+      .finally(() => setAuditLoading(false))
+  }, [apiBase, auditSourceEmailId, onError, row.key])
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key === 'Escape') {
@@ -137,7 +152,7 @@ export default function DetailPanel({
             <h3>{row.number}</h3>
             <div className="categoryChips">
               {row.categories.map((category) => <CategoryChip key={category} category={category} />)}
-              <StatusBadge status={row.status} />
+              <StatusBadge status={row.status} reasonCode={row.review?.reason_code} />
             </div>
           </div>
           <button type="button" className="iconBtn" aria-label="Close details" onClick={onClose}>×</button>
@@ -166,6 +181,8 @@ export default function DetailPanel({
                   <div><dt>Relevance score</dt><dd>{review.recruiter_relevance_score}/100</dd></div>
                   <div><dt>Signal</dt><dd>{review.relevance_reason || '--'}</dd></div>
                   <div><dt>Extraction source</dt><dd>{review.extraction_source}</dd></div>
+                  <div><dt>Review reason</dt><dd><StatusBadge status={'Pending'} reasonCode={review.reason_code} /></dd></div>
+                  <div><dt>Occurrences</dt><dd>{review.occurrence_count}</dd></div>
                   <div><dt>Score basis</dt><dd>{review.scored_with === 'legacy' ? 'Legacy (rescore recommended)' : 'Current'}</dd></div>
                   <div><dt>Email sender</dt><dd>{review.email_sender || '--'}</dd></div>
                   <div><dt>Email subject</dt><dd>{review.email_subject || '--'}</dd></div>
@@ -174,6 +191,24 @@ export default function DetailPanel({
                 {review.gmail_open_url ? <a href={review.gmail_open_url} target="_blank" rel="noreferrer">{review.source_external_opportunity_id ? 'Open original post' : 'Open exact email in Gmail'}</a> : null}
               </section>
             </>
+          ) : null}
+
+          {auditSourceEmailId ? (
+            <details className={'detailSection'}>
+              <summary>Extraction audit</summary>
+              {auditLoading ? <p className={'subtle'}>Loading extraction decisions...</p> : null}
+              {!auditLoading && auditEntries.length === 0 ? <p className={'subtle'}>No extraction audit entries.</p> : null}
+              {auditEntries.length ? (
+                <ul>
+                  {auditEntries.map((entry) => (
+                    <li key={entry.id}>
+                      <strong>{entry.status === 'accepted' ? 'Accepted' : 'Rejected'}:</strong>{' '}
+                      {entry.raw_value} — {entry.reason}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </details>
           ) : null}
 
           {recruiter ? (
@@ -233,6 +268,7 @@ export default function DetailPanel({
                   <div><dt>Verification</dt><dd>{recruiter.recruiter_verification_level}</dd></div>
                   <div><dt>Do not work again</dt><dd>{recruiter.do_not_work_again ? recruiter.do_not_work_again_reason || 'Yes' : 'No'}</dd></div>
                   <div><dt>Opportunities</dt><dd>{recruiter.total_opportunity_count}</dd></div>
+                  <div><dt>Seen</dt><dd>{recruiter.seen_count} times</dd></div>
                   <div><dt>Last email</dt><dd>{recruiter.last_email_received_at ? new Date(recruiter.last_email_received_at).toLocaleString() : '--'}</dd></div>
                 </dl>
               )}
@@ -310,6 +346,7 @@ export default function DetailPanel({
                   <div><dt>Owner</dt><dd>{employer.owner_name}</dd></div>
                   <div><dt>Company</dt><dd>{employer.company}</dd></div>
                   <div><dt>Email</dt><dd>{employer.employer_email || '--'}</dd></div>
+                  <div><dt>Seen</dt><dd>{employer.seen_count} times</dd></div>
                 </dl>
               )}
               {editingEmployer ? (

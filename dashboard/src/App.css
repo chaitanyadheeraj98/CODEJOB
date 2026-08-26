@@ -3278,6 +3278,25 @@ button.emailSearchResult:focus-visible {
   color: var(--danger);
 }
 
+.statusBadge--identity-conflict {
+  border-color: #efb7bd;
+  background: #fff0f2;
+  color: var(--danger);
+}
+
+.statusBadge--insufficient-evidence,
+.statusBadge--source-attribution-failure {
+  border-color: #efd49b;
+  background: #fff7df;
+  color: #9a5b00;
+}
+
+.statusBadge--international-number-needs-verification {
+  border-color: #b9d5f5;
+  background: #eef6ff;
+  color: #245d9c;
+}
+
 .inventoryMenuCell {
   width: 40px;
   position: relative;

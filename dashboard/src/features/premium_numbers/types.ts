@@ -27,9 +27,24 @@ export type NumberReviewCard = {
   scored_with: string
   gmail_open_url: string
   state: string
+  role: 'recruiter' | 'employer' | null
+  reason_code: string
+  occurrence_count: number
   created_at: string
   updated_at: string
   linkedin_url?: string
+}
+
+export type ExtractionAuditEntry = {
+  id: number
+  source_email_id: number | null
+  source_external_opportunity_id: number | null
+  raw_value: string
+  normalized_value: string | null
+  status: 'accepted' | 'rejected'
+  stage: string
+  reason: string
+  created_at: string
 }
 
 export type PremiumNumberVersion = {
@@ -58,6 +73,7 @@ type ContactCardBase = {
   source_link_url: string | null
   active_lead_id: number | null
   version_count: number
+  seen_count: number
   is_recruiter: boolean
   is_employer: boolean
   recruiter_relevance_score: number | null

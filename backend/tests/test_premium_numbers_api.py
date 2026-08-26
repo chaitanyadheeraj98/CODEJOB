@@ -18,6 +18,7 @@ from app.models import (
     OpportunityLifecycleEvent,
     OpportunityLineage,
     PremiumNumberContact,
+    PremiumNumberExtractionAudit,
     PremiumNumberLead,
     RecruiterEmail,
     RecruiterOpportunity,
@@ -2250,6 +2251,80 @@ class PremiumNumbersApiTests(unittest.TestCase):
             self.assertGreater(refreshed.updated_at, old)
             self.assertEqual(refreshed.source_type, "gmail")
             self.assertEqual(refreshed.source_id, email_id)
+
+    def test_partial_digit_search_covers_all_number_lists(self) -> None:
+        with Session(self.engine) as db:
+            db.add(PremiumNumberLead(
+                owner_id=main.settings.owner_id,
+                phone_number_normalized="12145551212",
+                phone_number_display="(214) 555-1212",
+                owner_name="Ada",
+                company="Example",
+                designation="Recruiter",
+                is_recruiter_relevant=True,
+            ))
+            db.add(NumberReviewQueue(
+                owner_id=main.settings.owner_id,
+                source_email_id=9,
+                normalized_phone_number="12145551212",
+                display_phone_number="(214) 555-1212",
+                state="pending",
+            ))
+            db.add(PremiumNumberContact(
+                owner_id=main.settings.owner_id,
+                normalized_phone_number="12145551212",
+                display_phone_number="(214) 555-1212",
+                is_recruiter=True,
+                is_employer=True,
+                recruiter_name="Ada",
+                owner_name="Hiring Desk",
+                company="Example",
+                designation="Recruiter",
+                recruiter_email="ada@example.com",
+                employer_email="hr@example.com",
+                recruiter_verification_level="verified",
+            ))
+            db.commit()
+
+        for query in ("12145551212", "55512", "(214) 555"):
+            for path in ("/premium-numbers", "/number-review", "/recruiter-numbers", "/employer-numbers"):
+                response = self.client.get(path, params={"q": query})
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(len(response.json()["items"]), 1, (query, path))
+
+    def test_extraction_audit_is_owner_scoped_and_filterable(self) -> None:
+        with Session(self.engine) as db:
+            db.add_all([
+                PremiumNumberExtractionAudit(
+                    owner_id=main.settings.owner_id,
+                    source_email_id=42,
+                    raw_value="(214) 555-1212",
+                    normalized_value="12145551212",
+                    status="accepted",
+                    stage="accepted",
+                    reason="candidate_accepted",
+                ),
+                PremiumNumberExtractionAudit(
+                    owner_id="other-owner",
+                    source_email_id=42,
+                    raw_value="(469) 555-1212",
+                    normalized_value="14695551212",
+                    status="rejected",
+                    stage="sbert",
+                    reason="noise",
+                ),
+            ])
+            db.commit()
+
+        response = self.client.get(
+            "/premium-numbers/extraction-audit",
+            params={"source_email_id": 42, "status": "accepted"},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(len(response.json()["items"]), 1)
+        self.assertEqual(response.json()["items"][0]["reason"], "candidate_accepted")
+        invalid = self.client.get("/premium-numbers/extraction-audit")
+        self.assertEqual(invalid.status_code, 422)
 
 
 if __name__ == "__main__":

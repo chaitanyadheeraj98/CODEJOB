@@ -24,11 +24,14 @@ For EACH phone number found, identify:
 7. LinkedIn Profile URL (if mentioned)
 8. Why the number is present
 9. Confidence Level (High / Medium / Low)
+10. Source section: body, signature, or unknown
+11. Block ID shared by every phone and identity field in the same signature block
+12. Verbatim evidence text containing the phone number
 
 Rules:
 - Carefully distinguish between main submission contacts, recruiter signatures, and office numbers.
 - Use surrounding context to determine ownership.
-- Each contact object's phone, email, and name must come from the SAME signature block or the same person's mention - never combine attributes from two different people (e.g. do not pair one person's phone with another person's email).
+- Each contact object's phone, email, and name must come from the SAME signature block or the same person's mention - never combine attributes from two different people (e.g. do not pair one person's phone with another person's email). Python verifies this attribution after extraction.
 - Do NOT guess unknown names.
 - If ownership is unclear, mark it as "Unknown".
 - Return results in structured JSON format only.
@@ -51,7 +54,10 @@ Expected JSON format:
       "designation": "Unknown",
       "linkedin_url": "",
       "purpose": "Resume submission contact",
-      "confidence": "High"
+      "confidence": "High",
+      "source_section": "signature",
+      "block_id": "signature-1",
+      "evidence_text": "RAM | ram@example.com | +1 512 271 9173"
     }}
   ]
 }}

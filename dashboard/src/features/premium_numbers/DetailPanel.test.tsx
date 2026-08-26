@@ -22,6 +22,7 @@ const recruiter: RecruiterNumberCard = {
   source_link_url: null,
   active_lead_id: 2147,
   version_count: 2,
+  seen_count: 4,
   is_recruiter: true,
   is_employer: false,
   recruiter_relevance_score: 75,
@@ -225,5 +226,66 @@ describe('DetailPanel', () => {
       do_not_work_again: true,
       do_not_work_again_reason: 'Duplicate submissions',
     })
+  })
+
+  it('shows seen count and source extraction decisions', async () => {
+    const gmailRecruiter = { ...recruiter, source_type: 'gmail' as const, source_id: 42 }
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/versions')) return jsonResponse(versions)
+      if (url.endsWith('/reputation')) return jsonResponse({
+        recruiter_contact_id: 613,
+        history_label: 'limited_history',
+        outreach_count: 0,
+        replies_count: 0,
+        median_first_reply_business_days: null,
+        submissions_count: 0,
+        interviews_after_submission_count: 0,
+        offers_count: 0,
+        last_active_at: null,
+      })
+      if (url.includes('/premium-numbers/extraction-audit?')) return jsonResponse({ items: [{
+        id: 1,
+        source_email_id: 42,
+        source_external_opportunity_id: null,
+        raw_value: '(614) 495-9222',
+        normalized_value: '16144959222',
+        status: 'accepted',
+        stage: 'accepted',
+        reason: 'candidate_accepted',
+        created_at: '2026-08-20T10:00:00Z',
+      }] })
+      return jsonResponse({ detail: 'not found' }, 404)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+      vi.unstubAllGlobals()
+    })
+
+    await act(async () => {
+      root.render(
+        <DetailPanel
+          apiBase="http://localhost:8000"
+          row={{ ...row, recruiter: gmailRecruiter }}
+          busy={false}
+          returnFocusRef={{ current: null }}
+          onClose={vi.fn()}
+          onAction={vi.fn().mockResolvedValue(undefined)}
+          onReload={vi.fn().mockResolvedValue(undefined)}
+          onError={vi.fn()}
+          onToast={vi.fn()}
+        />,
+      )
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).toContain('4 times')
+    expect(container.textContent).toContain('Extraction audit')
+    expect(container.textContent).toContain('candidate_accepted')
   })
 })

@@ -36,6 +36,9 @@ const review: NumberReviewCard = {
   scored_with: 'current',
   gmail_open_url: 'https://mail.google.test/100',
   state: 'pending',
+  role: 'recruiter',
+  reason_code: 'new_number',
+  occurrence_count: 1,
   created_at: '2026-08-18T10:00:00Z',
   updated_at: '2026-08-18T12:00:00Z',
 }
@@ -50,6 +53,7 @@ const contactBase = {
   source_link_url: 'https://nvoids.test/200',
   active_lead_id: 2000,
   version_count: 1,
+  seen_count: 1,
   is_recruiter: true,
   is_employer: true,
   recruiter_relevance_score: 92,

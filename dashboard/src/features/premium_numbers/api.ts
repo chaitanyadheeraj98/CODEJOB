@@ -11,6 +11,7 @@ import type {
   ApplicationSuggestion,
   AttachmentAssetOption,
   EmployerNumberCard,
+  ExtractionAuditEntry,
   NumberReviewCard,
   OpportunityStatus,
   OpportunityMatch,
@@ -78,6 +79,11 @@ function listParams(cursor: number, q: string): URLSearchParams {
 
 export function listReviewNumbers(apiBase: string, q: string): Promise<NumberReviewCard[]> {
   return listAll((cursor) => `${apiBase}/number-review?${listParams(cursor, q)}`)
+}
+
+export async function listExtractionAudit(apiBase: string, sourceEmailId: number): Promise<ExtractionAuditEntry[]> {
+  const params = new URLSearchParams({ source_email_id: String(sourceEmailId) })
+  return (await requestJson<{ items: ExtractionAuditEntry[] }>(`${apiBase}/premium-numbers/extraction-audit?${params}`)).items
 }
 
 export function buildContactListUrl(args: {

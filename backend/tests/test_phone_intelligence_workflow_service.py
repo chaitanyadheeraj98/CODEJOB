@@ -38,10 +38,14 @@ def _lead(
     relevance_score: int = 0,
     relevant: bool = False,
     reason: str = "insufficient_signals",
+    phone_display: str = "(214) 555-1212",
+    phone_normalized: str = "12145551212",
+    evidence_text: str = "",
+    colocation_verified: bool = False,
 ) -> ExtractedContactGroup:
     return ExtractedContactGroup(
-        phone_number_display="(214) 555-1212",
-        phone_number_normalized="12145551212",
+        phone_number_display=phone_display,
+        phone_number_normalized=phone_normalized,
         owner_name=owner_name,
         contact_email=contact_email,
         company=company,
@@ -55,6 +59,8 @@ def _lead(
         source_fragment="Call this contact",
         role=role,
         extraction_source="ai",
+        evidence_text=evidence_text,
+        colocation_verified=colocation_verified,
     )
 
 
@@ -132,7 +138,7 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
         db.refresh(item)
         return item
 
-    def test_version_append_does_not_overwrite_active_fields(self) -> None:
+    def test_conflicting_identity_does_not_overwrite_active_fields(self) -> None:
         with Session(self.engine) as db:
             contact = PremiumNumberContact(
                 owner_id="default-owner",
@@ -166,22 +172,11 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
 
             db.refresh(contact)
             versions = db.query(PremiumNumberLead).filter(PremiumNumberLead.contact_id == contact.id).all()
-            self.assertEqual(len(versions), 2)
-            active = db.get(PremiumNumberLead, contact.active_recruiter_lead_id)
-            self.assertIsNotNone(active)
-            self.assertEqual(active.extraction_source, "legacy_snapshot")
+            self.assertEqual(versions, [])
+            review = db.query(NumberReviewQueue).one()
+            self.assertEqual(review.reason_code, "identity_conflict")
             self.assertEqual(contact.recruiter_name, "Legacy Name")
-            self.assertEqual(db.query(RecruiterOpportunity).count(), 1)
-            opportunity = db.query(RecruiterOpportunity).one()
-            lineage = db.query(OpportunityLineage).one()
-            self.assertEqual(lineage.recruiter_opportunity_id, opportunity.id)
-            self.assertEqual(lineage.origin_type, "gmail")
-            self.assertEqual(
-                db.query(OpportunityLifecycleEvent)
-                .filter_by(lineage_id=lineage.id, event_type="ingested")
-                .count(),
-                1,
-            )
+            self.assertEqual(db.query(RecruiterOpportunity).count(), 0)
 
     def test_legacy_snapshot_created_on_first_new_version(self) -> None:
         """temp122.md `## 7. Workstream D` cutover behavior: the first new-model
@@ -213,9 +208,9 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
             email = self._email(db, "gmail-legacy-snapshot")
             current = _lead(
                 role="recruiter",
-                owner_name="New Name",
-                contact_email="new@agency.example",
-                company="New Co",
+                owner_name="Legacy Name",
+                contact_email="legacy@example.com",
+                company="Legacy Co",
                 relevance_score=95,
                 relevant=True,
                 reason="external_domain",
@@ -235,7 +230,7 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
             self.assertIsNotNone(active)
             self.assertEqual(active.extraction_source, "legacy_snapshot")
 
-    def test_shared_switchboard_number_gets_both_role_flags(self) -> None:
+    def test_shared_switchboard_without_identity_evidence_routes_to_review(self) -> None:
         with Session(self.engine) as db:
             contact = PremiumNumberContact(
                 owner_id="default-owner",
@@ -263,9 +258,9 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
 
             db.refresh(contact)
             self.assertTrue(contact.is_recruiter)
-            self.assertTrue(contact.is_employer)
-            self.assertEqual(contact.owner_name, "Hiring Desk")
-            self.assertIsNotNone(contact.active_employer_lead_id)
+            self.assertFalse(contact.is_employer)
+            self.assertIsNone(contact.active_employer_lead_id)
+            self.assertEqual(db.query(NumberReviewQueue).one().reason_code, "insufficient_evidence")
 
     def test_nvoids_uncertain_lead_lands_in_needs_review_with_row2_email(self) -> None:
         with Session(self.engine) as db:
@@ -860,8 +855,8 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
 
             # capture_premium_numbers delegates to process_email(source="gmail")
             # (phone_intelligence_workflow_service.py:199) — prove the
-            # delegation is intact: equivalent input through either entry
-            # point produces identical outcomes.
+            # delegation is intact. The second equivalent input is a no-op
+            # version write, while its routing outcomes remain identical.
             email_a = self._email(db, "gmail-unchanged-a")
             email_b = self._email(db, "gmail-unchanged-b")
             with patch(
@@ -873,15 +868,15 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
 
             self.assertEqual(via_capture.source, "gmail")
             self.assertEqual(via_process.source, "gmail")
+            self.assertEqual(via_capture.stored_count, 1)
+            self.assertEqual(via_process.stored_count, 0)
             self.assertEqual(
                 (
-                    via_capture.stored_count,
                     via_capture.review_created,
                     via_capture.recruiter_matches,
                     via_capture.opportunity_created,
                 ),
                 (
-                    via_process.stored_count,
                     via_process.review_created,
                     via_process.recruiter_matches,
                     via_process.opportunity_created,
@@ -890,8 +885,9 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
             self.assertEqual(via_capture.recruiter_matches, 1)
             self.assertEqual(db.query(PremiumNumberContact).count(), 1)
 
-            # extract_only: stores the lead version but performs no
-            # classification/routing (include_intelligence=False); returns
+            # extract_only performs no classification/routing
+            # (include_intelligence=False) and skips the identical version;
+            # it returns
             # stored_count as a plain int (premium_numbers/service.py:11's
             # calling convention).
             email_c = self._email(db, "gmail-unchanged-extract")
@@ -901,14 +897,14 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
             ):
                 stored = service.extract_only(db, email_c, source="legacy_extract")
             self.assertIsInstance(stored, int)
-            self.assertEqual(stored, 1)
+            self.assertEqual(stored, 0)
             self.assertEqual(db.query(NumberReviewQueue).count(), 0)
             version = (
                 db.query(PremiumNumberLead)
                 .filter(PremiumNumberLead.recruiter_email_id == email_c.id)
-                .one()
+                .one_or_none()
             )
-            self.assertEqual(version.contact_email, "recruiter@agency.example")
+            self.assertIsNone(version)
 
             # classify_only: performs classification/routing but does not
             # upsert a premium_number_leads version
@@ -1022,9 +1018,11 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
 
             # The shared extraction call itself received equivalent
             # sender/subject/body/employer_domains regardless of source.
+            first_call, second_call = mocked_extract.call_args_list
+            self.assertEqual(first_call.args, second_call.args)
             self.assertEqual(
-                mocked_extract.call_args_list[0],
-                mocked_extract.call_args_list[1],
+                first_call.kwargs["employer_domains"],
+                second_call.kwargs["employer_domains"],
             )
 
             def _outcome(result: object) -> tuple:
@@ -1173,7 +1171,7 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
             ).one()
             self.assertEqual(pending.state, "pending")
 
-    def test_recruiter_promotion_allowed_when_contact_verified(self) -> None:
+    def test_verified_contact_is_never_auto_promoted(self) -> None:
         with Session(self.engine) as db:
             contact = PremiumNumberContact(
                 owner_id="default-owner",
@@ -1205,7 +1203,155 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
                 PhoneIntelligenceWorkflowService().capture_premium_numbers(db, email)
 
             db.refresh(contact)
-            self.assertTrue(contact.is_recruiter)
+            self.assertFalse(contact.is_recruiter)
+            review = db.query(NumberReviewQueue).one()
+            self.assertEqual(review.reason_code, "identity_conflict")
+            self.assertIn("verified_contact_locked", review.relevance_reason)
+
+    def test_confirmed_match_fills_blanks_and_increments_seen_count(self) -> None:
+        with Session(self.engine) as db:
+            contact = PremiumNumberContact(
+                owner_id="default-owner",
+                normalized_phone_number="12145551212",
+                display_phone_number="(214) 555-1212",
+                is_recruiter=True,
+                recruiter_name="Stable Name",
+                recruiter_email="stable@agency.example",
+                company="Unknown",
+                designation="Unknown",
+            )
+            db.add(contact)
+            db.commit()
+            email = self._email(db, "gmail-confirmed-fill")
+            candidate = _lead(
+                role="recruiter",
+                owner_name="Different Model Name",
+                contact_email="stable@agency.example",
+                company="Agency Co",
+                relevance_score=95,
+                relevant=True,
+                reason="external_domain",
+            )
+            with patch(
+                "app.services.phone_intelligence_workflow_service.extract_phone_leads",
+                return_value=[candidate],
+            ):
+                PhoneIntelligenceWorkflowService().capture_premium_numbers(db, email)
+
+            db.refresh(contact)
+            self.assertEqual(contact.recruiter_name, "Stable Name")
+            self.assertEqual(contact.company, "Agency Co")
+            self.assertEqual(contact.designation, "Recruiter")
+            self.assertEqual(contact.seen_count, 2)
+
+    def test_identical_repeat_skips_new_version(self) -> None:
+        with Session(self.engine) as db:
+            first_email = self._email(db, "gmail-repeat-1")
+            second_email = self._email(db, "gmail-repeat-2")
+            candidate = _lead(
+                role="recruiter",
+                owner_name="Stable Name",
+                contact_email="stable@agency.example",
+                company="Agency Co",
+                relevance_score=95,
+                relevant=True,
+                reason="external_domain",
+            )
+            with patch(
+                "app.services.phone_intelligence_workflow_service.extract_phone_leads",
+                return_value=[candidate],
+            ):
+                first = PhoneIntelligenceWorkflowService().capture_premium_numbers(db, first_email)
+                second = PhoneIntelligenceWorkflowService().capture_premium_numbers(db, second_email)
+
+            self.assertEqual(first.stored_count, 1)
+            self.assertEqual(second.stored_count, 0)
+            self.assertEqual(db.query(PremiumNumberLead).count(), 1)
+            self.assertEqual(db.query(PremiumNumberContact).one().seen_count, 2)
+
+    def test_recurring_identity_conflict_reuses_open_review(self) -> None:
+        with Session(self.engine) as db:
+            contact = PremiumNumberContact(
+                owner_id="default-owner",
+                normalized_phone_number="12145551212",
+                display_phone_number="(214) 555-1212",
+                is_recruiter=True,
+                recruiter_name="Existing Name",
+                recruiter_email="existing@agency.example",
+                company="Existing Co",
+            )
+            db.add(contact)
+            db.commit()
+            candidate = _lead(
+                role="recruiter",
+                owner_name="Conflicting Name",
+                contact_email="conflict@other.example",
+                company="Other Co",
+                relevance_score=95,
+                relevant=True,
+                reason="external_domain",
+            )
+            with patch(
+                "app.services.phone_intelligence_workflow_service.extract_phone_leads",
+                return_value=[candidate],
+            ):
+                PhoneIntelligenceWorkflowService().capture_premium_numbers(db, self._email(db, "conflict-1"))
+                PhoneIntelligenceWorkflowService().capture_premium_numbers(db, self._email(db, "conflict-2"))
+
+            review = db.query(NumberReviewQueue).one()
+            self.assertEqual(review.reason_code, "identity_conflict")
+            self.assertEqual(review.occurrence_count, 2)
+            db.refresh(contact)
+            self.assertEqual(contact.recruiter_name, "Existing Name")
+
+    def test_untrusted_international_and_source_mismatch_route_to_review(self) -> None:
+        cases = (
+            (
+                "international_number_needs_verification",
+                _lead(
+                    role="recruiter",
+                    owner_name="Global Recruiter",
+                    contact_email="global@agency.example",
+                    company="Global Agency",
+                    relevance_score=95,
+                    relevant=True,
+                    reason="external_domain",
+                    phone_display="+442079460958",
+                    phone_normalized="+442079460958",
+                    colocation_verified=True,
+                ),
+            ),
+            (
+                "source_attribution_failure",
+                _lead(
+                    role="recruiter",
+                    owner_name="Distant Signature",
+                    contact_email="signature@agency.example",
+                    company="Agency Co",
+                    relevance_score=95,
+                    relevant=True,
+                    reason="external_domain",
+                    evidence_text="Distant signature evidence",
+                    colocation_verified=False,
+                ),
+            ),
+        )
+        with Session(self.engine) as db:
+            for index, (reason_code, candidate) in enumerate(cases):
+                with self.subTest(reason_code=reason_code), patch(
+                    "app.services.phone_intelligence_workflow_service.extract_phone_leads",
+                    return_value=[candidate],
+                ):
+                    PhoneIntelligenceWorkflowService().capture_premium_numbers(
+                        db,
+                        self._email(db, f"review-route-{index}"),
+                    )
+                review = db.query(NumberReviewQueue).filter(
+                    NumberReviewQueue.normalized_phone_number == candidate.phone_number_normalized
+                ).one()
+                self.assertEqual(review.reason_code, reason_code)
+                self.assertEqual(review.role, "recruiter")
+            self.assertEqual(db.query(PremiumNumberContact).count(), 0)
 
 
 if __name__ == "__main__":

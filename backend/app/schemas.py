@@ -842,10 +842,13 @@ class SentItemDetailsResponse(BaseModel):
     company: str | None = None
     recruiter_name: str | None = None
     recruiter_email: str | None = None
+    recruiter_email_domain: str | None = None
     recruiter_phone: str | None = None
+    recruiter_company: str | None = None
     employer_name: str | None = None
     employer_email: str | None = None
     employer_phone: str | None = None
+    employer_company: str | None = None
     end_client: str | None = None
     implementation_partner: str | None = None
     vendor: str | None = None
@@ -938,6 +941,11 @@ class PremiumNumberResponse(BaseModel):
     source_email_message_id: str | None
     source_url: str | None = None
     linkedin_url: str = ""
+    source_section: str | None = None
+    block_id: str | None = None
+    evidence_offset_start: int | None = None
+    evidence_offset_end: int | None = None
+    colocation_verified: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -973,6 +981,9 @@ class UnknownNumberReviewCardResponse(BaseModel):
     scored_with: str = "legacy"
     gmail_open_url: str
     state: str
+    role: str | None = None
+    reason_code: str = "new_number"
+    occurrence_count: int = 1
     created_at: datetime
     updated_at: datetime
 
@@ -983,6 +994,24 @@ class UnknownNumberReviewCardListResponse(BaseModel):
     items: list[UnknownNumberReviewCardResponse]
     next_cursor: int | None
     has_next: bool
+
+
+class ExtractionAuditEntryResponse(BaseModel):
+    id: int
+    source_email_id: int | None
+    source_external_opportunity_id: int | None
+    raw_value: str
+    normalized_value: str | None
+    status: str
+    stage: str
+    reason: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ExtractionAuditListResponse(BaseModel):
+    items: list[ExtractionAuditEntryResponse]
 
 
 class RecruiterNumberResponse(BaseModel):
@@ -999,6 +1028,7 @@ class RecruiterNumberResponse(BaseModel):
     source_link_url: str | None = None
     active_lead_id: int | None = None
     version_count: int = 0
+    seen_count: int = 1
     linkedin_url: str = ""
     recruiter_verification_level: str = "unverified"
     do_not_work_again: bool = False
@@ -1027,6 +1057,7 @@ class EmployerNumberResponse(BaseModel):
     source_link_url: str | None = None
     active_lead_id: int | None = None
     version_count: int = 0
+    seen_count: int = 1
     is_recruiter: bool = False
     is_employer: bool = True
     recruiter_relevance_score: int | None = None

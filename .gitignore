@@ -5,7 +5,7 @@ backend/test-data/
 data/
 dashboard/.tsbuildinfo/
 .github/agents/
-.agents/skills/
+.agents/
 tmp_resume_match_report*.json
 docs/temp files/
 .codex/

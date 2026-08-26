@@ -84,6 +84,7 @@ from app.models import (
     JobIntentTaxonomyEntry,
     NumberReviewQueue,
     PremiumNumberContact,
+    PremiumNumberExtractionAudit,
     PremiumNumberLead,
     ProductivityEvent,
     RecentRun,
@@ -295,6 +296,8 @@ from app.schemas import (
     EmployerNumberPatchRequest,
     EmployerNumberResponse,
     EmployerNumberListResponse,
+    ExtractionAuditEntryResponse,
+    ExtractionAuditListResponse,
     PremiumNumberListResponse,
     PremiumNumberResponse,
     ManualPremiumContactRequest,
@@ -879,9 +882,19 @@ def _load_premium_lead_for_sent_details(
     ).first()
 
 
+_NVOIDS_MESSAGE_ID_PATTERN = re.compile(r"^nvoids:(?:nvoids:)?(\d+)$", re.IGNORECASE)
+
+
 def _sent_item_requirement_link(email: RecruiterEmail, external: ExternalOpportunity | None) -> str | None:
     if email.source == "nvoids":
-        return _clean_optional_text((external.source_url if external else None) or email.external_thread_id)
+        candidate = _clean_optional_text((external.source_url if external else None) or email.external_thread_id)
+        if candidate and candidate.lower().startswith(("http://", "https://")):
+            return candidate
+        message_id = _clean_optional_text(email.external_message_id)
+        match = _NVOIDS_MESSAGE_ID_PATTERN.match(message_id) if message_id else None
+        if match:
+            return f"https://nvoids.com/job_details.jsp?id={match.group(1)}"
+        return candidate
     return email.gmail_message_url
 
 
@@ -974,10 +987,15 @@ def _build_sent_item_details(db: Session, email: RecruiterEmail) -> SentItemDeta
             )
         ),
         recruiter_email=recruiter_email,
+        recruiter_email_domain=(_clean_optional_text(email_domain(recruiter_email)) if recruiter_email else None),
         recruiter_phone=(
             _clean_optional_text(external.recruiter_phone if external else None)
             or _clean_optional_text(recruiter_number.display_phone_number if recruiter_number else None)
             or _clean_optional_text(recruiter_premium_lead.phone_number_display if recruiter_premium_lead else None)
+        ),
+        recruiter_company=(
+            _clean_optional_text(recruiter_number.company if recruiter_number else None)
+            or _clean_optional_text(recruiter_premium_lead.company if recruiter_premium_lead else None)
         ),
         employer_name=_clean_optional_text(employer_number.owner_name if employer_number else None),
         employer_email=(
@@ -985,6 +1003,7 @@ def _build_sent_item_details(db: Session, email: RecruiterEmail) -> SentItemDeta
             or employer_email_guess
         ),
         employer_phone=_clean_optional_text(employer_number.display_phone_number if employer_number else None),
+        employer_company=_clean_optional_text(employer_number.company if employer_number else None),
         end_client=(
             _extract_labeled_value(body_text, "end client", "end-client")
             or _extract_labeled_value(body_text, "client")
@@ -4466,9 +4485,13 @@ def list_premium_numbers(
 
     if q:
         like = f"%{q.strip()}%"
+        digits_only = re.sub(r"\D", "", q)
+        phone_filters = [PremiumNumberLead.phone_number_display.ilike(like)]
+        if digits_only:
+            phone_filters.append(PremiumNumberLead.phone_number_normalized.ilike(f"%{digits_only}%"))
         query = query.filter(
             or_(
-                PremiumNumberLead.phone_number_display.ilike(like),
+                *phone_filters,
                 PremiumNumberLead.owner_name.ilike(like),
                 PremiumNumberLead.company.ilike(like),
                 PremiumNumberLead.designation.ilike(like),
@@ -4559,6 +4582,39 @@ def create_premium_contact(
     }
 
 
+@app.get("/premium-numbers/extraction-audit", response_model=ExtractionAuditListResponse)
+def list_premium_number_extraction_audit(
+    source_email_id: int | None = Query(default=None, ge=1),
+    source_external_opportunity_id: int | None = Query(default=None, ge=1),
+    status: str | None = Query(default=None, pattern=r"^(accepted|rejected)$"),
+    db: Session = Depends(get_db),
+) -> ExtractionAuditListResponse:
+    if (source_email_id is None) == (source_external_opportunity_id is None):
+        raise HTTPException(
+            status_code=422,
+            detail="Provide exactly one source_email_id or source_external_opportunity_id",
+        )
+    query = db.query(PremiumNumberExtractionAudit).filter(
+        PremiumNumberExtractionAudit.owner_id == settings.owner_id
+    )
+    if source_email_id is not None:
+        query = query.filter(PremiumNumberExtractionAudit.source_email_id == source_email_id)
+    else:
+        query = query.filter(
+            PremiumNumberExtractionAudit.source_external_opportunity_id
+            == source_external_opportunity_id
+        )
+    if status:
+        query = query.filter(PremiumNumberExtractionAudit.status == status)
+    rows = query.order_by(
+        PremiumNumberExtractionAudit.created_at.asc(),
+        PremiumNumberExtractionAudit.id.asc(),
+    ).all()
+    return ExtractionAuditListResponse(
+        items=[ExtractionAuditEntryResponse.model_validate(row) for row in rows]
+    )
+
+
 @app.get("/premium-numbers/{lead_id}", response_model=PremiumNumberResponse)
 def get_premium_number(lead_id: int, db: Session = Depends(get_db)) -> PremiumNumberLead:
     lead = (
@@ -4615,9 +4671,13 @@ def list_number_review_queue(
     )
     if q:
         like = f"%{q.strip()}%"
+        digits_only = re.sub(r"\D", "", q)
+        phone_filters = [NumberReviewQueue.display_phone_number.ilike(like)]
+        if digits_only:
+            phone_filters.append(NumberReviewQueue.normalized_phone_number.ilike(f"%{digits_only}%"))
         query = query.filter(
             or_(
-                NumberReviewQueue.display_phone_number.ilike(like),
+                *phone_filters,
                 NumberReviewQueue.owner_name.ilike(like),
                 NumberReviewQueue.company.ilike(like),
                 NumberReviewQueue.designation.ilike(like),
@@ -4919,7 +4979,7 @@ def _mark_number_as_recruiter(
         edited=_review_fields_edited(card, submit),
     )
     version.contact_id = contact.id
-    apply_contact_version(db, contact, version, "recruiter")
+    apply_contact_version(db, contact, version, "recruiter", overwrite=True)
     contact.first_detected_email_id = contact.first_detected_email_id or card.source_email_id
     if submit and submit.linkedin_url is not None:
         contact.linkedin_url = _normalize_linkedin_url(submit.linkedin_url)
@@ -4947,7 +5007,7 @@ def _mark_number_as_employer(
         edited=_review_fields_edited(card, submit),
     )
     version.contact_id = contact.id
-    apply_contact_version(db, contact, version, "employer")
+    apply_contact_version(db, contact, version, "employer", overwrite=True)
     contact.source_email_id = contact.source_email_id or card.source_email_id
     if submit and submit.linkedin_url is not None:
         contact.linkedin_url = _normalize_linkedin_url(submit.linkedin_url)
@@ -5205,6 +5265,7 @@ def _recruiter_number_response(
         source_link_url=source_link,
         active_lead_id=active_id,
         version_count=version_count,
+        seen_count=contact.seen_count,
         linkedin_url=contact.linkedin_url,
         recruiter_verification_level=contact.recruiter_verification_level,
         do_not_work_again=contact.do_not_work_again,
@@ -5239,6 +5300,7 @@ def _employer_number_response(db: Session, contact: PremiumNumberContact) -> Emp
         source_link_url=source_link,
         active_lead_id=active_id,
         version_count=version_count,
+        seen_count=contact.seen_count,
         is_recruiter=contact.is_recruiter,
         is_employer=contact.is_employer,
         recruiter_relevance_score=score,
@@ -5267,9 +5329,13 @@ def list_recruiter_numbers(
         query = query.filter(PremiumNumberContact.source_type == source_type)
     if q:
         like = f"%{q.strip()}%"
+        digits_only = re.sub(r"\D", "", q)
+        phone_filters = [PremiumNumberContact.display_phone_number.ilike(like)]
+        if digits_only:
+            phone_filters.append(PremiumNumberContact.normalized_phone_number.ilike(f"%{digits_only}%"))
         query = query.filter(
             or_(
-                PremiumNumberContact.display_phone_number.ilike(like),
+                *phone_filters,
                 PremiumNumberContact.recruiter_name.ilike(like),
                 PremiumNumberContact.company.ilike(like),
                 PremiumNumberContact.designation.ilike(like),
@@ -5409,7 +5475,7 @@ def _select_contact_version(
     ).first()
     if not contact or not lead:
         raise HTTPException(status_code=404, detail="Contact version not found")
-    apply_contact_version(db, contact, lead, role)
+    apply_contact_version(db, contact, lead, role, overwrite=True)
     contact.updated_at = datetime.now(UTC)
     db.commit()
     return contact
@@ -5429,7 +5495,7 @@ def _add_employer_role(db: Session, contact: PremiumNumberContact) -> None:
     if contact.active_employer_lead_id:
         lead = db.get(PremiumNumberLead, contact.active_employer_lead_id)
         if lead:
-            apply_contact_version(db, contact, lead, "employer")
+            apply_contact_version(db, contact, lead, "employer", overwrite=True)
     contact.updated_at = datetime.now(UTC)
 
 
@@ -5447,7 +5513,7 @@ def _add_recruiter_role(db: Session, contact: PremiumNumberContact) -> None:
     if contact.active_recruiter_lead_id:
         lead = db.get(PremiumNumberLead, contact.active_recruiter_lead_id)
         if lead:
-            apply_contact_version(db, contact, lead, "recruiter")
+            apply_contact_version(db, contact, lead, "recruiter", overwrite=True)
     contact.updated_at = datetime.now(UTC)
 
 
@@ -5501,9 +5567,13 @@ def list_employer_numbers(
         query = query.filter(PremiumNumberContact.source_type == source_type)
     if q:
         like = f"%{q.strip()}%"
+        digits_only = re.sub(r"\D", "", q)
+        phone_filters = [PremiumNumberContact.display_phone_number.ilike(like)]
+        if digits_only:
+            phone_filters.append(PremiumNumberContact.normalized_phone_number.ilike(f"%{digits_only}%"))
         query = query.filter(
             or_(
-                PremiumNumberContact.display_phone_number.ilike(like),
+                *phone_filters,
                 PremiumNumberContact.owner_name.ilike(like),
                 PremiumNumberContact.company.ilike(like),
             )
@@ -5606,9 +5676,9 @@ def _delete_contact_version(db: Session, contact_id: int, lead_id: int, role: st
         )
     replacement = remaining[0]
     if contact.active_recruiter_lead_id == lead_id:
-        apply_contact_version(db, contact, replacement, "recruiter")
+        apply_contact_version(db, contact, replacement, "recruiter", overwrite=True)
     if contact.active_employer_lead_id == lead_id:
-        apply_contact_version(db, contact, replacement, "employer")
+        apply_contact_version(db, contact, replacement, "employer", overwrite=True)
     contact.updated_at = datetime.now(UTC)
     db.delete(lead)
     db.commit()
@@ -5720,7 +5790,7 @@ def _rescore_contact(db: Session, contact_id: int, role: str) -> str:
     )
     active = db.get(PremiumNumberLead, active_id) if active_id else None
     if active:
-        apply_contact_version(db, refreshed, active, role)
+        apply_contact_version(db, refreshed, active, role, overwrite=True)
     refreshed.updated_at = datetime.now(UTC)
     db.commit()
     return "rescored"

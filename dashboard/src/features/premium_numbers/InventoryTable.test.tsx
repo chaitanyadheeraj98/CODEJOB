@@ -21,6 +21,35 @@ const rows: InventoryRow[] = [
     score: 98,
     sourceType: 'gmail',
     lastCheckedAt: new Date().toISOString(),
+    review: {
+      id: 1,
+      source_email_id: 10,
+      source_external_opportunity_id: null,
+      source_lead_id: 20,
+      normalized_phone_number: '15550192834',
+      display_phone_number: '+1 (555) 019-2834',
+      owner_name: 'TechFlow Inc.',
+      company: 'TechFlow Inc.',
+      designation: 'Recruiter',
+      confidence: 'high',
+      purpose: 'Contact',
+      evidence_snippet: 'Call me',
+      email_subject: 'Role',
+      email_sender: 'sender@example.com',
+      contact_email: 'sender@example.com',
+      contact_type: 'recruiter',
+      recruiter_relevance_score: 98,
+      relevance_reason: 'external_domain',
+      extraction_source: 'ai',
+      scored_with: 'current',
+      gmail_open_url: '',
+      state: 'pending',
+      role: 'recruiter',
+      reason_code: 'identity_conflict',
+      occurrence_count: 2,
+      created_at: '2026-08-18T10:00:00Z',
+      updated_at: '2026-08-18T12:00:00Z',
+    },
   },
   {
     key: 'contact:2',
@@ -77,6 +106,7 @@ describe('InventoryTable', () => {
     expect(container.textContent).toContain('Global Talent Ltd')
     expect(container.textContent).toContain('Recruiter')
     expect(container.textContent).toContain('Employer')
+    expect(container.textContent).toContain('Identity Conflict')
     expect(container.textContent).toContain('Showing 1 to 10 of 12 loaded entries')
 
     const contactCheckbox = container.querySelector<HTMLInputElement>('input[aria-label="Select +44 20 7946 0958"]')

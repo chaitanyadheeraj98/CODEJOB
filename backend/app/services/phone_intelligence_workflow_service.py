@@ -14,10 +14,12 @@ from app.models import (
     RecruiterEmail,
     RecruiterOpportunity,
 )
+from app.parsing.document_extraction import extract_gmail_reply_body
 from app.parsing.jd_requirements import extract_work_authorizations
 from app.phase0 import email_domain
 from app.premium_numbers.domain_guard import employer_domains_for_owner, is_derivable_company_domain
 from app.premium_numbers.extraction import ExtractedContactGroup, extract_phone_leads
+from app.premium_numbers.identity_matching import classify_identity_match
 from app.services import opportunity_lineage_service
 
 
@@ -45,6 +47,14 @@ def company_fallback_for_unknown(db: Session, owner_id: str, contact_email: str 
     if not is_derivable_company_domain(db, owner_id, contact_email):
         return ""
     return derive_company_from_email_domain(contact_email)
+
+
+def _is_blank_or_unknown(value: str | None) -> bool:
+    return not (value or "").strip() or (value or "").strip().lower() == "unknown"
+
+
+def _fill_if_blank(current: str | None, candidate: str | None) -> str:
+    return (candidate or "").strip() if _is_blank_or_unknown(current) and not _is_blank_or_unknown(candidate) else (current or "")
 
 
 @dataclass(frozen=True)
@@ -229,32 +239,43 @@ def apply_contact_version(
     contact: PremiumNumberContact,
     lead: PremiumNumberLead,
     role: str,
+    *,
+    overwrite: bool = False,
+    set_active: bool = True,
 ) -> None:
     if role == "recruiter":
         contact.is_recruiter = True
-        contact.active_recruiter_lead_id = lead.id
-        contact.recruiter_name = lead.owner_name or "Unknown"
-        contact.designation = lead.designation or "Unknown"
-        contact.recruiter_email = lead.contact_email or ""
-        if lead.company and lead.company.strip().lower() != "unknown":
+        if set_active:
+            contact.active_recruiter_lead_id = lead.id
+        contact.recruiter_name = lead.owner_name or "Unknown" if overwrite else _fill_if_blank(contact.recruiter_name, lead.owner_name)
+        contact.designation = lead.designation or "Unknown" if overwrite else _fill_if_blank(contact.designation, lead.designation)
+        contact.recruiter_email = lead.contact_email or "" if overwrite else _fill_if_blank(contact.recruiter_email, lead.contact_email)
+        if overwrite and not _is_blank_or_unknown(lead.company):
             contact.company = lead.company
-        else:
+        elif _is_blank_or_unknown(contact.company):
+            contact.company = _fill_if_blank(contact.company, lead.company)
+        if _is_blank_or_unknown(contact.company):
             fallback = company_fallback_for_unknown(db, contact.owner_id, lead.contact_email)
             if fallback:
                 contact.company = fallback
     else:
         contact.is_employer = True
-        contact.active_employer_lead_id = lead.id
-        contact.owner_name = lead.owner_name or "Unknown"
-        contact.employer_email = lead.contact_email or ""
-        if lead.company and lead.company.strip().lower() != "unknown":
+        if set_active:
+            contact.active_employer_lead_id = lead.id
+        contact.owner_name = lead.owner_name or "Unknown" if overwrite else _fill_if_blank(contact.owner_name, lead.owner_name)
+        contact.employer_email = lead.contact_email or "" if overwrite else _fill_if_blank(contact.employer_email, lead.contact_email)
+        if overwrite and not _is_blank_or_unknown(lead.company):
             contact.company = lead.company
-        else:
+        elif _is_blank_or_unknown(contact.company):
+            contact.company = _fill_if_blank(contact.company, lead.company)
+        if _is_blank_or_unknown(contact.company):
             fallback = company_fallback_for_unknown(db, contact.owner_id, lead.contact_email)
             if fallback:
                 contact.company = fallback
-    if lead.linkedin_url:
+    if overwrite and lead.linkedin_url:
         contact.linkedin_url = lead.linkedin_url
+    elif not overwrite:
+        contact.linkedin_url = _fill_if_blank(contact.linkedin_url, lead.linkedin_url)
     if lead.external_opportunity_id:
         contact.source_type = "nvoids"
         contact.source_id = lead.external_opportunity_id
@@ -415,6 +436,46 @@ class PhoneIntelligenceWorkflowService:
 
                 point = self._idempotency_point(db, context, lead)
                 promotion_role = self._promotion_role(lead, point.contact)
+                review_role = promotion_role or (lead.role if lead.role in {"recruiter", "employer"} else None)
+                review_reason: str | None = None
+                if lead.phone_number_normalized.startswith("+"):
+                    review_reason = "international_number_needs_verification"
+                elif lead.evidence_text and not lead.colocation_verified:
+                    review_reason = "source_attribution_failure"
+                elif point.contact is not None and promotion_role:
+                    if point.contact.recruiter_verification_level in {"verified", "trusted"}:
+                        review_reason = "identity_conflict"
+                        lead = replace(
+                            lead,
+                            relevance_reason=f"{lead.relevance_reason},verified_contact_locked".strip(","),
+                        )
+                    else:
+                        match = classify_identity_match(point.contact, lead, promotion_role)
+                        if match.outcome != "confirmed":
+                            review_reason = (
+                                "identity_conflict"
+                                if match.outcome == "conflicting"
+                                else "insufficient_evidence"
+                            )
+                            lead = replace(
+                                lead,
+                                relevance_reason=f"{lead.relevance_reason},{match.reason}".strip(","),
+                            )
+
+                if review_reason:
+                    created = self._upsert_open_conflict_review(
+                        db,
+                        context,
+                        lead,
+                        version,
+                        role=review_role,
+                        reason_code=review_reason,
+                        source_review=point.existing_review,
+                    )
+                    review_created += int(created)
+                    review_existing += int(not created)
+                    continue
+
                 if point.existing_review:
                     review_existing += 1
                     self._refresh_review(point.existing_review, context, lead, version)
@@ -428,6 +489,7 @@ class PhoneIntelligenceWorkflowService:
                     )
                     if not created:
                         self._snapshot_legacy_contact_if_needed(db, contact, promotion_role)
+                        contact.seen_count += 1
                     if version:
                         self._link_lead_to_contact(db, contact, version, promotion_role)
                     else:
@@ -493,57 +555,13 @@ class PhoneIntelligenceWorkflowService:
                 if point.existing_review:
                     continue
 
-                source_type = "nvoids" if context.source == "nvoids" else "gmail"
-                source_row_id = (
-                    context.external_opportunity_row_id
-                    if source_type == "nvoids"
-                    else context.recruiter_email_row_id
-                )
-                record_id = opportunity_lineage_service.resolve_record_id(
+                self._create_review(
                     db,
-                    owner_id=context.owner_id,
-                    source_type=source_type,
-                    external_id=str(source_row_id) if source_row_id is not None else "",
-                )
-                lineage = opportunity_lineage_service.create_lineage(
-                    db,
-                    owner_id=context.owner_id,
-                    origin_type=source_type,
-                    source_type=source_type,
-                    external_id=str(source_row_id) if source_row_id is not None else "",
-                    source_url=context.open_url,
-                    process_name="phone_intelligence_workflow",
-                )
-                opportunity_lineage_service.link_record_to_lineage(
-                    db, record_id=record_id, lineage_id=lineage.id
-                )
-                db.add(
-                    NumberReviewQueue(
-                        owner_id=context.owner_id,
-                        lineage_id=lineage.id,
-                        record_id=record_id,
-                        source_email_id=context.recruiter_email_row_id,
-                        source_external_opportunity_id=context.external_opportunity_row_id,
-                        source_lead_id=version.id if version else None,
-                        normalized_phone_number=lead.phone_number_normalized,
-                        display_phone_number=lead.phone_number_display,
-                        owner_name=lead.owner_name,
-                        company=lead.company,
-                        designation=lead.designation,
-                        confidence=lead.confidence,
-                        purpose=lead.purpose,
-                        evidence_snippet=lead.source_fragment,
-                        email_subject=context.subject,
-                        email_sender=context.sender,
-                        contact_email=lead.contact_email,
-                        contact_type=lead.contact_type,
-                        recruiter_relevance_score=lead.recruiter_relevance_score,
-                        relevance_reason=lead.relevance_reason,
-                        extraction_source=lead.extraction_source,
-                        scored_with="current",
-                        gmail_open_url=context.open_url,
-                        state="pending",
-                    )
+                    context,
+                    lead,
+                    version,
+                    role=None,
+                    reason_code="new_number",
                 )
                 review_created += 1
 
@@ -572,8 +590,12 @@ class PhoneIntelligenceWorkflowService:
         leads = extract_phone_leads(
             context.sender,
             context.subject,
-            context.body,
+            extract_gmail_reply_body(context.body),
             employer_domains=employer_domains_for_owner(db, context.owner_id),
+            db=db,
+            owner_id=context.owner_id,
+            source_email_id=context.recruiter_email_row_id,
+            source_external_opportunity_id=context.external_opportunity_row_id,
         )
         if context.source == "nvoids" and context.sender:
             leads = [
@@ -590,6 +612,75 @@ class PhoneIntelligenceWorkflowService:
         context: PhoneWorkflowSourceContext,
         lead: ExtractedContactGroup,
     ) -> tuple[PremiumNumberLead, int]:
+        contact = (
+            db.query(PremiumNumberContact)
+            .filter(
+                PremiumNumberContact.owner_id == context.owner_id,
+                PremiumNumberContact.normalized_phone_number == lead.phone_number_normalized,
+            )
+            .first()
+        )
+        resolved_company = (
+            lead.company
+            if not _is_blank_or_unknown(lead.company)
+            else company_fallback_for_unknown(db, context.owner_id, lead.contact_email) or lead.company
+        )
+        candidate_values = (
+            lead.phone_number_display,
+            lead.extraction_source,
+            lead.contact_email,
+            lead.owner_name,
+            resolved_company,
+            lead.linkedin_url,
+            lead.designation,
+            lead.purpose,
+            lead.confidence,
+            lead.contact_type,
+            lead.recruiter_relevance_score,
+            lead.is_recruiter_relevant,
+            lead.relevance_reason,
+            lead.source_fragment,
+            lead.source_section,
+            lead.block_id or None,
+            lead.evidence_offset_start,
+            lead.evidence_offset_end,
+            lead.colocation_verified,
+        )
+        if contact is not None:
+            latest = (
+                db.query(PremiumNumberLead)
+                .filter(
+                    PremiumNumberLead.owner_id == context.owner_id,
+                    PremiumNumberLead.phone_number_normalized == lead.phone_number_normalized,
+                    PremiumNumberLead.role == lead.role,
+                    PremiumNumberLead.contact_id == contact.id,
+                )
+                .order_by(PremiumNumberLead.created_at.desc(), PremiumNumberLead.id.desc())
+                .first()
+            )
+            if latest and candidate_values == (
+                latest.phone_number_display,
+                latest.extraction_source,
+                latest.contact_email,
+                latest.owner_name,
+                latest.company,
+                latest.linkedin_url,
+                latest.designation,
+                latest.purpose,
+                latest.confidence,
+                latest.contact_type,
+                latest.recruiter_relevance_score,
+                latest.is_recruiter_relevant,
+                latest.relevance_reason,
+                latest.source_fragment,
+                latest.source_section,
+                latest.block_id,
+                latest.evidence_offset_start,
+                latest.evidence_offset_end,
+                latest.colocation_verified,
+            ):
+                return latest, 0
+
         query = db.query(PremiumNumberLead).filter(
             PremiumNumberLead.owner_id == context.owner_id,
             PremiumNumberLead.phone_number_normalized == lead.phone_number_normalized,
@@ -616,10 +707,7 @@ class PhoneIntelligenceWorkflowService:
         row.extraction_source = lead.extraction_source
         row.contact_email = lead.contact_email
         row.owner_name = lead.owner_name
-        if lead.company and lead.company.strip().lower() != "unknown":
-            row.company = lead.company
-        else:
-            row.company = company_fallback_for_unknown(db, context.owner_id, lead.contact_email) or lead.company
+        row.company = resolved_company
         row.linkedin_url = lead.linkedin_url
         row.designation = lead.designation
         row.purpose = lead.purpose
@@ -633,6 +721,11 @@ class PhoneIntelligenceWorkflowService:
         row.source_email_subject = context.subject
         row.source_email_message_id = context.dedupe_key
         row.source_url = context.open_url or None
+        row.source_section = lead.source_section or None
+        row.block_id = lead.block_id or None
+        row.evidence_offset_start = lead.evidence_offset_start
+        row.evidence_offset_end = lead.evidence_offset_end
+        row.colocation_verified = lead.colocation_verified
         db.flush()
         return row, 1
 
@@ -653,6 +746,7 @@ class PhoneIntelligenceWorkflowService:
         review_query = db.query(NumberReviewQueue).filter(
             NumberReviewQueue.owner_id == context.owner_id,
             NumberReviewQueue.normalized_phone_number == lead.phone_number_normalized,
+            NumberReviewQueue.state == "pending",
         )
         if context.recruiter_email_row_id is not None:
             review_query = review_query.filter(
@@ -722,6 +816,121 @@ class PhoneIntelligenceWorkflowService:
         review.source_lead_id = version.id if version else review.source_lead_id
         review.scored_with = "current"
         review.gmail_open_url = context.open_url
+        review.updated_at = datetime.now(UTC)
+
+    def _create_review(
+        self,
+        db: Session,
+        context: PhoneWorkflowSourceContext,
+        lead: ExtractedContactGroup,
+        version: PremiumNumberLead | None,
+        *,
+        role: str | None,
+        reason_code: str,
+    ) -> NumberReviewQueue:
+        source_type = "nvoids" if context.source == "nvoids" else "gmail"
+        source_row_id = (
+            context.external_opportunity_row_id
+            if source_type == "nvoids"
+            else context.recruiter_email_row_id
+        )
+        record_id = opportunity_lineage_service.resolve_record_id(
+            db,
+            owner_id=context.owner_id,
+            source_type=source_type,
+            external_id=str(source_row_id) if source_row_id is not None else "",
+        )
+        lineage = opportunity_lineage_service.create_lineage(
+            db,
+            owner_id=context.owner_id,
+            origin_type=source_type,
+            source_type=source_type,
+            external_id=str(source_row_id) if source_row_id is not None else "",
+            source_url=context.open_url,
+            process_name="phone_intelligence_workflow",
+        )
+        opportunity_lineage_service.link_record_to_lineage(
+            db, record_id=record_id, lineage_id=lineage.id
+        )
+        review = NumberReviewQueue(
+            owner_id=context.owner_id,
+            lineage_id=lineage.id,
+            record_id=record_id,
+            source_email_id=context.recruiter_email_row_id,
+            source_external_opportunity_id=context.external_opportunity_row_id,
+            source_lead_id=version.id if version else None,
+            normalized_phone_number=lead.phone_number_normalized,
+            display_phone_number=lead.phone_number_display,
+            owner_name=lead.owner_name,
+            company=lead.company,
+            designation=lead.designation,
+            confidence=lead.confidence,
+            purpose=lead.purpose,
+            evidence_snippet=lead.source_fragment,
+            email_subject=context.subject,
+            email_sender=context.sender,
+            contact_email=lead.contact_email,
+            contact_type=lead.contact_type,
+            recruiter_relevance_score=lead.recruiter_relevance_score,
+            relevance_reason=lead.relevance_reason,
+            extraction_source=lead.extraction_source,
+            scored_with="current",
+            gmail_open_url=context.open_url,
+            state="pending",
+            role=role,
+            reason_code=reason_code,
+        )
+        db.add(review)
+        return review
+
+    def _upsert_open_conflict_review(
+        self,
+        db: Session,
+        context: PhoneWorkflowSourceContext,
+        lead: ExtractedContactGroup,
+        version: PremiumNumberLead | None,
+        *,
+        role: str | None,
+        reason_code: str,
+        source_review: NumberReviewQueue | None = None,
+    ) -> bool:
+        review = (
+            db.query(NumberReviewQueue)
+            .filter(
+                NumberReviewQueue.owner_id == context.owner_id,
+                NumberReviewQueue.normalized_phone_number == lead.phone_number_normalized,
+                NumberReviewQueue.role == role,
+                NumberReviewQueue.reason_code == reason_code,
+                NumberReviewQueue.state == "pending",
+            )
+            .order_by(NumberReviewQueue.updated_at.desc(), NumberReviewQueue.id.desc())
+            .first()
+        )
+        if review is None and source_review is not None:
+            review = source_review
+            review.role = role
+            review.reason_code = reason_code
+        if review is None:
+            self._create_review(
+                db,
+                context,
+                lead,
+                version,
+                role=role,
+                reason_code=reason_code,
+            )
+            return True
+
+        same_source = (
+            review.source_email_id == context.recruiter_email_row_id
+            and review.source_external_opportunity_id == context.external_opportunity_row_id
+        )
+        self._refresh_review(review, context, lead, version)
+        review.source_email_id = context.recruiter_email_row_id
+        review.source_external_opportunity_id = context.external_opportunity_row_id
+        if not same_source:
+            review.occurrence_count += 1
+        return False
 
     @staticmethod
     def _find_or_create_contact(
@@ -759,21 +968,19 @@ class PhoneIntelligenceWorkflowService:
     ) -> None:
         if role == "recruiter":
             contact.is_recruiter = True
-            contact.recruiter_name = lead.owner_name or "Unknown"
-            contact.designation = lead.designation or "Unknown"
-            contact.recruiter_email = lead.contact_email or ""
+            contact.recruiter_name = _fill_if_blank(contact.recruiter_name, lead.owner_name)
+            contact.designation = _fill_if_blank(contact.designation, lead.designation)
+            contact.recruiter_email = _fill_if_blank(contact.recruiter_email, lead.contact_email)
         else:
             contact.is_employer = True
-            contact.owner_name = lead.owner_name or "Unknown"
-            contact.employer_email = lead.contact_email or ""
-        if lead.company and lead.company.strip().lower() != "unknown":
-            contact.company = lead.company
-        else:
+            contact.owner_name = _fill_if_blank(contact.owner_name, lead.owner_name)
+            contact.employer_email = _fill_if_blank(contact.employer_email, lead.contact_email)
+        contact.company = _fill_if_blank(contact.company, lead.company)
+        if _is_blank_or_unknown(contact.company):
             fallback = company_fallback_for_unknown(db, contact.owner_id, lead.contact_email)
             if fallback:
                 contact.company = fallback
-        if lead.linkedin_url:
-            contact.linkedin_url = lead.linkedin_url
+        contact.linkedin_url = _fill_if_blank(contact.linkedin_url, lead.linkedin_url)
 
     def _snapshot_legacy_contact_if_needed(
         self,
@@ -830,7 +1037,10 @@ class PhoneIntelligenceWorkflowService:
         )
         db.add(snapshot)
         db.flush()
-        apply_contact_version(db, contact, snapshot, role)
+        if role == "recruiter":
+            contact.active_recruiter_lead_id = snapshot.id
+        else:
+            contact.active_employer_lead_id = snapshot.id
 
     @staticmethod
     def _link_lead_to_contact(
@@ -845,12 +1055,7 @@ class PhoneIntelligenceWorkflowService:
             if role == "recruiter"
             else contact.active_employer_lead_id
         )
-        if pointer is None:
-            apply_contact_version(db, contact, lead, role)
-        elif role == "recruiter":
-            contact.is_recruiter = True
-        else:
-            contact.is_employer = True
+        apply_contact_version(db, contact, lead, role, set_active=pointer is None)
 
     @staticmethod
     def _extract_job_metadata(subject: str, body: str) -> tuple[str, str, str, str]:

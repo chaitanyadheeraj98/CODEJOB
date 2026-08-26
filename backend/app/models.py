@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from urllib.parse import quote
 
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, synonym
 
 from app.ai.draft_quality import assess_draft_quality
@@ -574,8 +574,28 @@ class PremiumNumberLead(Base):
     source_email_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     source_url: Mapped[str | None] = mapped_column(String(1200), nullable=True)
     linkedin_url: Mapped[str] = mapped_column(String(500), default="")
+    source_section: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    block_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    evidence_offset_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    evidence_offset_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    colocation_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
+
+
+class PremiumNumberExtractionAudit(Base):
+    __tablename__ = "premium_number_extraction_audit"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    source_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    source_external_opportunity_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    raw_value: Mapped[str] = mapped_column(String(120))
+    normalized_value: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    status: Mapped[str] = mapped_column(String(20))
+    stage: Mapped[str] = mapped_column(String(40))
+    reason: Mapped[str] = mapped_column(String(160))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
 
 
 class RecruiterNumber(Base):
@@ -663,6 +683,7 @@ class PremiumNumberContact(Base):
     source_type: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
     source_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source_link_url: Mapped[str | None] = mapped_column(String(1200), nullable=True)
+    seen_count: Mapped[int] = mapped_column(Integer, default=1)
     deleted_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
@@ -984,6 +1005,13 @@ class NumberReviewQueue(Base):
             "source_email_id",
             name="ux_number_review_queue_owner_phone_email",
         ),
+        Index(
+            "ix_number_review_queue_conflict_lookup",
+            "owner_id",
+            "normalized_phone_number",
+            "role",
+            "reason_code",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
@@ -1037,6 +1065,9 @@ class NumberReviewQueue(Base):
     scored_with: Mapped[str] = mapped_column(String(20), default="legacy")
     gmail_open_url: Mapped[str] = mapped_column(String(1000), default="")
     state: Mapped[str] = mapped_column(String(40), default="pending")
+    role: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    reason_code: Mapped[str] = mapped_column(String(40), default="new_number")
+    occurrence_count: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
 

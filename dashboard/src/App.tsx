@@ -1365,10 +1365,13 @@ type SentItemDetails = {
   company: string | null
   recruiter_name: string | null
   recruiter_email: string | null
+  recruiter_email_domain: string | null
   recruiter_phone: string | null
+  recruiter_company: string | null
   employer_name: string | null
   employer_email: string | null
   employer_phone: string | null
+  employer_company: string | null
   end_client: string | null
   implementation_partner: string | null
   vendor: string | null
@@ -7063,7 +7066,6 @@ function App() {
             const sentDetailError = sentDetailErrors[item.id]
             const sentDetailLoading = Boolean(sentDetailLoadingIds[item.id])
             const parserExpanded = Boolean(expandedParserDetailIds[item.id])
-            const listingUrl = sourceListingUrl(item)
             return (
               <article
                 key={`sent-${item.id}`}
@@ -7115,14 +7117,6 @@ function App() {
                                 ) : '-'}
                               </p>
                               <p>
-                                <strong>Source Listing Link:</strong>{' '}
-                                {listingUrl ? (
-                                  <a href={listingUrl} target="_blank" rel="noreferrer">
-                                    Open source listing
-                                  </a>
-                                ) : '-'}
-                              </p>
-                              <p>
                                 <strong>Sent Gmail Link:</strong>{' '}
                                 {sentDetails.sent_gmail_message_link ? (
                                   <a href={sentDetails.sent_gmail_message_link} target="_blank" rel="noreferrer">
@@ -7162,7 +7156,9 @@ function App() {
                             <pre className="parserCardPre">{[
                               `Recruiter Name: ${renderTextOrDash(sentDetails.recruiter_name)}`,
                               `Recruiter Email: ${renderTextOrDash(sentDetails.recruiter_email)}`,
+                              `Recruiter Email Domain: ${renderTextOrDash(sentDetails.recruiter_email_domain)}`,
                               `Recruiter Phone: ${renderTextOrDash(sentDetails.recruiter_phone)}`,
+                              `Recruiter Company: ${renderTextOrDash(sentDetails.recruiter_company)}`,
                             ].join('\n')}</pre>
                           </ParserDetailsCard>
                           <ParserDetailsCard title="Employer" className="parserDetailsSummaryBlock">
@@ -7170,6 +7166,7 @@ function App() {
                               `Employer Name: ${renderTextOrDash(sentDetails.employer_name)}`,
                               `Employer Email: ${renderTextOrDash(sentDetails.employer_email)}`,
                               `Employer Phone: ${renderTextOrDash(sentDetails.employer_phone)}`,
+                              `Employer Company: ${renderTextOrDash(sentDetails.employer_company)}`,
                             ].join('\n')}</pre>
                           </ParserDetailsCard>
                         </div>

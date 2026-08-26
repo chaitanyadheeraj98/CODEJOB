@@ -113,7 +113,7 @@ export default function InventoryTable({
                   </div>
                 </td>
                 <td className="inventoryScore">{formatScore(row.score)}</td>
-                <td><StatusBadge status={row.status} /></td>
+                <td><StatusBadge status={row.status} reasonCode={row.review?.reason_code} /></td>
                 <td>{formatRelativeTime(row.lastCheckedAt)}</td>
                 <td className="inventoryMenuCell" onClick={stop}>
                   <details className="inventoryMenu">

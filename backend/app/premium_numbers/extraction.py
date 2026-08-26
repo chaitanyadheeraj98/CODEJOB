@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
+
+from sqlalchemy.orm import Session
 
 from app.ai.deepseek_client import deepseek_json_completion
 from app.config import settings
+from app.models import PremiumNumberExtractionAudit
 from app.premium_numbers.phone_normalization import format_phone
 from app.premium_numbers.prompting import build_premium_numbers_prompts
 from app.semantic.embeddings_service import _sbert_embedding
@@ -47,6 +50,15 @@ NOISE_CONTEXT_TERMS = (
     "http://",
     "https://",
     "www.",
+)
+NUMERIC_LABEL_NOISE_TERMS = (
+    "duration:",
+    "experience:",
+    "rate:",
+    "salary:",
+    "ctc:",
+    "/hr",
+    "per hour",
 )
 CONTACT_INTENT_TERMS = (
     "call",
@@ -93,6 +105,12 @@ class ExtractedContactGroup:
     role: str = "unknown"
     extraction_source: str = "ai"
     linkedin_url: str = ""
+    source_section: str = "unknown"
+    block_id: str = ""
+    evidence_text: str = ""
+    evidence_offset_start: int | None = None
+    evidence_offset_end: int | None = None
+    colocation_verified: bool = False
 
 
 # Backward-compatible import name for existing callers outside the shared workflow.
@@ -118,7 +136,43 @@ def _normalize_confidence(raw: str) -> str:
     return "low"
 
 
-def _llm_extract(email_content: str, employer_domains: set[str]) -> list[ExtractedContactGroup]:
+def record_extraction_audit(
+    db: Session | None,
+    *,
+    owner_id: str,
+    source_email_id: int | None,
+    source_external_opportunity_id: int | None,
+    raw_value: str,
+    normalized_value: str | None,
+    status: str,
+    stage: str,
+    reason: str,
+) -> None:
+    if db is None:
+        return
+    db.add(
+        PremiumNumberExtractionAudit(
+            owner_id=owner_id,
+            source_email_id=source_email_id,
+            source_external_opportunity_id=source_external_opportunity_id,
+            raw_value=(raw_value or "")[:120],
+            normalized_value=normalized_value or None,
+            status=status,
+            stage=stage,
+            reason=(reason or "")[:160],
+        )
+    )
+
+
+def _llm_extract(
+    email_content: str,
+    employer_domains: set[str],
+    *,
+    db: Session | None = None,
+    owner_id: str = "",
+    source_email_id: int | None = None,
+    source_external_opportunity_id: int | None = None,
+) -> list[ExtractedContactGroup]:
     system_prompt, user_prompt = build_premium_numbers_prompts(email_content, employer_domains)
     # thinking="disabled": deepseek-v4-flash is a reasoning model that otherwise spends the
     # max_tokens budget on invisible chain-of-thought and returns empty content (finish_reason
@@ -137,10 +191,26 @@ def _llm_extract(email_content: str, employer_domains: set[str]) -> list[Extract
     for item in items:
         if not isinstance(item, dict):
             continue
-        display = _display_phone(str(item.get("phone_number", "")))
+        raw_phone = str(item.get("phone_number", ""))
+        display = _display_phone(raw_phone)
         normalized = _normalize_phone(display)
         if not normalized:
+            record_extraction_audit(
+                db,
+                owner_id=owner_id,
+                source_email_id=source_email_id,
+                source_external_opportunity_id=source_external_opportunity_id,
+                raw_value=raw_phone,
+                normalized_value=None,
+                status="rejected",
+                stage="noise_prefilter",
+                reason="invalid_phone_shape",
+            )
             continue
+        source_section = str(item.get("source_section", "unknown")).strip().lower()
+        if source_section not in {"body", "signature", "unknown"}:
+            source_section = "unknown"
+        evidence_text = str(item.get("evidence_text", "")).strip()
         leads.append(
             ExtractedContactGroup(
                 role=str(item.get("role", "unknown")).strip().lower()
@@ -158,9 +228,12 @@ def _llm_extract(email_content: str, employer_domains: set[str]) -> list[Extract
                 recruiter_relevance_score=0,
                 is_recruiter_relevant=False,
                 relevance_reason="llm_only_unclassified",
-                source_fragment="Extracted by AI from email context",
+                source_fragment=evidence_text or "Extracted by AI from email context",
                 extraction_source="ai",
                 linkedin_url=str(item.get("linkedin_url", "")).strip(),
+                source_section=source_section,
+                block_id=str(item.get("block_id", "")).strip()[:64],
+                evidence_text=evidence_text,
             )
         )
     return leads
@@ -250,6 +323,72 @@ def _extract_owner_name(fragment: str, sender: str, employer_domains: set[str]) 
             continue
         return local.title()
     return _sender_name(sender)
+
+
+def _verify_colocation(
+    evidence_text: str,
+    phone_raw: str,
+    email_content: str,
+    *,
+    max_distance: int = 500,
+) -> tuple[bool, int | None]:
+    evidence_parts = (evidence_text or "").split()
+    phone_normalized = _normalize_phone(phone_raw)
+    if not evidence_parts or not phone_normalized:
+        return False, None
+
+    collapsed: list[str] = []
+    offsets: list[int] = []
+    for index, char in enumerate(email_content or ""):
+        if char.isspace():
+            if collapsed and collapsed[-1] != " ":
+                collapsed.append(" ")
+                offsets.append(index)
+        else:
+            collapsed.append(char.casefold())
+            offsets.append(index)
+    normalized_evidence = " ".join(evidence_parts).casefold()
+    evidence_at = "".join(collapsed).find(normalized_evidence)
+    if evidence_at < 0:
+        return False, None
+    evidence_start = offsets[evidence_at]
+    evidence_end = offsets[evidence_at + len(normalized_evidence) - 1] + 1
+    phone_spans = [
+        match.span()
+        for match in PHONE_RE.finditer(email_content or "")
+        if _normalize_phone(match.group(0)) == phone_normalized
+    ]
+    if not phone_spans:
+        return False, evidence_start
+    distance = min(
+        max(evidence_start - phone_end, phone_start - evidence_end, 0)
+        for phone_start, phone_end in phone_spans
+    )
+    return distance <= max_distance, evidence_start
+
+
+def _group_candidates_by_block(leads: list[ExtractedContactGroup]) -> list[ExtractedContactGroup]:
+    grouped: dict[str, list[ExtractedContactGroup]] = {}
+    for lead in leads:
+        if lead.block_id:
+            grouped.setdefault(lead.block_id, []).append(lead)
+
+    identities = {
+        block_id: max(items, key=_lead_quality_score)
+        for block_id, items in grouped.items()
+    }
+    return [
+        replace(
+            lead,
+            owner_name=identities[lead.block_id].owner_name,
+            contact_email=identities[lead.block_id].contact_email,
+            company=identities[lead.block_id].company,
+            designation=identities[lead.block_id].designation,
+        )
+        if lead.block_id in identities
+        else lead
+        for lead in leads
+    ]
 
 
 def _lead_quality_score(lead: ExtractedContactGroup) -> int:
@@ -353,6 +492,14 @@ def _is_noise_context(raw_fragment: str, normalized_fragment: str, raw_phone: st
         return True
     if any(term in norm_text for term in NOISE_CONTEXT_TERMS):
         return True
+    phone_at = raw_text.find((raw_phone or "").lower())
+    proximity = (
+        raw_text[max(0, phone_at - 48):phone_at + len(raw_phone) + 24]
+        if phone_at >= 0
+        else raw_text
+    )
+    if any(term in proximity for term in NUMERIC_LABEL_NOISE_TERMS):
+        return True
     if "mailto:" in raw_text and ("unsubscribe" in raw_text or "googlegroups" in raw_text):
         return True
     if "mailto:" in norm_text and ("unsubscribe" in norm_text or "googlegroups" in norm_text):
@@ -412,23 +559,71 @@ def _fallback_extract(
     employer_domains: set[str],
     *,
     extraction_source: str = "regex_fallback",
+    db: Session | None = None,
+    owner_id: str = "",
+    source_email_id: int | None = None,
+    source_external_opportunity_id: int | None = None,
 ) -> list[ExtractedContactGroup]:
     leads: list[ExtractedContactGroup] = []
     for match in PHONE_RE.finditer(body or ""):
         raw_phone = match.group(0)
         normalized, display_phone, _ext = format_phone(raw_phone)
         if not normalized:
+            record_extraction_audit(
+                db,
+                owner_id=owner_id,
+                source_email_id=source_email_id,
+                source_external_opportunity_id=source_external_opportunity_id,
+                raw_value=raw_phone,
+                normalized_value=None,
+                status="rejected",
+                stage="international_unsupported" if raw_phone.strip().startswith("+") else "noise_prefilter",
+                reason="unsupported_phone_shape",
+            )
             continue
         start = max(0, match.start() - 160)
         end = min(len(body), match.end() + 200)
         raw_fragment = body[start:end]
         fragment = raw_fragment.replace("\n", " ").strip()
         if _is_noise_context(raw_fragment, fragment, raw_phone):
+            record_extraction_audit(
+                db,
+                owner_id=owner_id,
+                source_email_id=source_email_id,
+                source_external_opportunity_id=source_external_opportunity_id,
+                raw_value=raw_phone,
+                normalized_value=normalized,
+                status="rejected",
+                stage="noise_prefilter",
+                reason="numeric_or_footer_noise_context",
+            )
             continue
         if _looks_like_weak_numeric_candidate(raw_phone) and not _has_contact_intent(fragment):
+            record_extraction_audit(
+                db,
+                owner_id=owner_id,
+                source_email_id=source_email_id,
+                source_external_opportunity_id=source_external_opportunity_id,
+                raw_value=raw_phone,
+                normalized_value=normalized,
+                status="rejected",
+                stage="noise_prefilter",
+                reason="weak_numeric_candidate_without_contact_intent",
+            )
             continue
         sbert_keep, sbert_reason = _sbert_keep_candidate(fragment)
         if not sbert_keep:
+            record_extraction_audit(
+                db,
+                owner_id=owner_id,
+                source_email_id=source_email_id,
+                source_external_opportunity_id=source_external_opportunity_id,
+                raw_value=raw_phone,
+                normalized_value=normalized,
+                status="rejected",
+                stage="sbert",
+                reason=sbert_reason,
+            )
             continue
         fragment_l = fragment.lower()
 
@@ -470,6 +665,11 @@ def _fallback_extract(
                 relevance_reason=relevance_reason,
                 source_fragment=fragment[:240],
                 extraction_source=extraction_source,
+                source_section="body",
+                evidence_text=fragment[:240],
+                evidence_offset_start=match.start(),
+                evidence_offset_end=match.end(),
+                colocation_verified=True,
             )
         )
     return leads
@@ -494,11 +694,60 @@ def dedupe_phone_leads(leads: list[ExtractedContactGroup]) -> list[ExtractedCont
     return list(deduped.values())
 
 
+def _finalize_extraction(
+    leads: list[ExtractedContactGroup],
+    *,
+    db: Session | None,
+    owner_id: str,
+    source_email_id: int | None,
+    source_external_opportunity_id: int | None,
+) -> list[ExtractedContactGroup]:
+    deduped = dedupe_phone_leads(leads)
+    kept_ids = {id(lead) for lead in deduped}
+    for lead in leads:
+        if id(lead) not in kept_ids:
+            record_extraction_audit(
+                db,
+                owner_id=owner_id,
+                source_email_id=source_email_id,
+                source_external_opportunity_id=source_external_opportunity_id,
+                raw_value=lead.phone_number_display,
+                normalized_value=lead.phone_number_normalized,
+                status="rejected",
+                stage="dedupe",
+                reason="duplicate_phone_and_role_in_source",
+            )
+    for lead in deduped:
+        if not lead.colocation_verified:
+            status, stage, reason = "rejected", "colocation_check", "source_attribution_failure"
+        elif lead.phone_number_normalized.startswith("+"):
+            status, stage, reason = "rejected", "international_unsupported", "international_number_needs_verification"
+        else:
+            status, stage, reason = "accepted", "accepted", "candidate_accepted"
+        record_extraction_audit(
+            db,
+            owner_id=owner_id,
+            source_email_id=source_email_id,
+            source_external_opportunity_id=source_external_opportunity_id,
+            raw_value=lead.phone_number_display,
+            normalized_value=lead.phone_number_normalized,
+            status=status,
+            stage=stage,
+            reason=reason,
+        )
+    return deduped
+
+
 def extract_phone_leads(
     sender: str,
     subject: str,
     body: str,
     employer_domains: set[str] | None = None,
+    *,
+    db: Session | None = None,
+    owner_id: str = "",
+    source_email_id: int | None = None,
+    source_external_opportunity_id: int | None = None,
 ) -> list[ExtractedContactGroup]:
     email_content = f"Sender: {sender}\nSubject: {subject}\n\n{body}"
     normalized_domains = {domain.strip().lower() for domain in (employer_domains or set()) if domain.strip()}
@@ -506,7 +755,18 @@ def extract_phone_leads(
     ai_unavailable = not bool(settings.deepseek_api_key)
     if not ai_unavailable:
         try:
-            ai_leads = _llm_extract(email_content, normalized_domains)
+            ai_leads = (
+                _llm_extract(email_content, normalized_domains)
+                if db is None
+                else _llm_extract(
+                    email_content,
+                    normalized_domains,
+                    db=db,
+                    owner_id=owner_id,
+                    source_email_id=source_email_id,
+                    source_external_opportunity_id=source_external_opportunity_id,
+                )
+            )
         except Exception:
             ai_unavailable = True
             logger.exception("Premium-number AI extraction failed; using regex fallback")
@@ -517,7 +777,13 @@ def extract_phone_leads(
         # for when AI is disabled/unavailable/fails/finds nothing, not a second opinion to
         # merge in alongside a successful AI result.
         enriched_ai_leads: list[ExtractedContactGroup] = []
-        for lead in ai_leads:
+        for lead in _group_candidates_by_block(ai_leads):
+            evidence_text = lead.evidence_text or lead.source_fragment
+            colocation_verified, evidence_start = _verify_colocation(
+                evidence_text,
+                lead.phone_number_display,
+                email_content,
+            )
             contact_type, relevance_score, is_relevant, relevance_reason = _classify_recruiter_relevance(
                 candidate_email=lead.contact_email,
                 sender=sender,
@@ -531,26 +797,31 @@ def extract_phone_leads(
                 role = "employer"
             elif lead.role != "employer" and is_relevant:
                 role = "recruiter"
+            if not colocation_verified:
+                relevance_reason = f"{relevance_reason},source_attribution_failure"
             enriched_ai_leads.append(
-                ExtractedContactGroup(
+                replace(
+                    lead,
                     role=role,
-                    phone_number_display=lead.phone_number_display,
-                    phone_number_normalized=lead.phone_number_normalized,
-                    owner_name=lead.owner_name,
-                    contact_email=lead.contact_email,
-                    company=lead.company,
-                    designation=lead.designation,
-                    purpose=lead.purpose,
-                    confidence=lead.confidence,
+                    confidence=lead.confidence if colocation_verified else "low",
                     contact_type=contact_type,
                     recruiter_relevance_score=relevance_score,
                     is_recruiter_relevant=is_relevant,
                     relevance_reason=relevance_reason,
-                    source_fragment=lead.source_fragment,
                     extraction_source="ai",
+                    evidence_text=evidence_text,
+                    evidence_offset_start=evidence_start,
+                    evidence_offset_end=(evidence_start + len(evidence_text)) if evidence_start is not None else None,
+                    colocation_verified=colocation_verified,
                 )
             )
-        return dedupe_phone_leads(enriched_ai_leads)
+        return _finalize_extraction(
+            enriched_ai_leads,
+            db=db,
+            owner_id=owner_id,
+            source_email_id=source_email_id,
+            source_external_opportunity_id=source_external_opportunity_id,
+        )
 
     # AI disabled, unavailable, failed, or found nothing - regex is the sole source.
     fallback_leads = _fallback_extract(
@@ -558,5 +829,15 @@ def extract_phone_leads(
         body,
         normalized_domains,
         extraction_source="regex_fallback_ai_unavailable" if ai_unavailable else "regex_fallback",
+        db=db,
+        owner_id=owner_id,
+        source_email_id=source_email_id,
+        source_external_opportunity_id=source_external_opportunity_id,
     )
-    return dedupe_phone_leads(fallback_leads)
+    return _finalize_extraction(
+        fallback_leads,
+        db=db,
+        owner_id=owner_id,
+        source_email_id=source_email_id,
+        source_external_opportunity_id=source_external_opportunity_id,
+    )
