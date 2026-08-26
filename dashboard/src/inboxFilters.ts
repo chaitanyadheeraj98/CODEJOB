@@ -1,0 +1,5 @@
+import type { FilterFieldConfig, FilterValues, SortOption } from './components/FilterSortBar'
+export const inboxFilterFields:FilterFieldConfig[]=[{key:'recruiter',label:'Recruiter',type:'text'},{key:'subject',label:'Subject',type:'text'},{key:'status',label:'Status',type:'multiselect',options:[{value:'sent',label:'Sent'},{value:'opened',label:'Opened'},{value:'replied',label:'Replied'}]},{key:'unread_only',label:'Unread only',type:'boolean'}]
+export const inboxSortOptions:SortOption[]=[{value:'newest',label:'Newest first'},{value:'oldest',label:'Oldest first'},{value:'unread_first',label:'Unread first'}]
+export const inboxDefaultFilterValues:FilterValues={recruiter:'',subject:'',status:[],unread_only:null}
+export function inboxFiltersToParams(v:FilterValues){const p:Record<string,string>={};for(const k of ['recruiter','subject']){const x=v[k] as string;if(x?.trim())p[k]=x.trim()}const status=v.status as string[];if(status?.length)p.status=status.join(',');if(v.unread_only!=null)p.unread_only=String(v.unread_only);return p}

@@ -1,0 +1,8 @@
+import type { CandidateState } from './candidateBuckets'
+import type { FilterFieldConfig, FilterValues, SortOption } from './components/FilterSortBar'
+import { needsReviewFilterFields as nFields, needsReviewSortOptions as nSort, needsReviewDefaultFilterValues as nDefaults, needsReviewFiltersToParams as nParams } from './needsReviewFilters'
+import { failedMappingFilterFields as fFields, failedMappingSortOptions as fSort, failedMappingDefaultFilterValues as fDefaults, failedMappingFiltersToParams as fParams } from './failedMappingFilters'
+import { sentItemsFilterFields as sFields, sentItemsSortOptions as sSort, sentItemsDefaultFilterValues as sDefaults, sentItemsFiltersToParams as sParams } from './sentItemsFilters'
+import { inboxFilterFields as iFields, inboxSortOptions as iSort, inboxDefaultFilterValues as iDefaults, inboxFiltersToParams as iParams } from './inboxFilters'
+export type FilterSortPageConfig={bucket:CandidateState|'inbox_conversations';fields:FilterFieldConfig[];sortOptions:SortOption[];defaultFilterValues:FilterValues;toParams:(values:FilterValues)=>Record<string,string>}
+export const filterSortRegistry:Partial<Record<string,FilterSortPageConfig>>={needs_review:{bucket:'needs_review',fields:nFields,sortOptions:nSort,defaultFilterValues:nDefaults,toParams:nParams},failed_mapping:{bucket:'failed',fields:fFields,sortOptions:fSort,defaultFilterValues:fDefaults,toParams:fParams},sent_items:{bucket:'approved_sent',fields:sFields,sortOptions:sSort,defaultFilterValues:sDefaults,toParams:sParams},inbox:{bucket:'inbox_conversations',fields:iFields,sortOptions:iSort,defaultFilterValues:iDefaults,toParams:iParams}}
