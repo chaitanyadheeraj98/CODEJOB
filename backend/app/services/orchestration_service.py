@@ -27,7 +27,7 @@ from app.automation import RunOrchestrator, RunOrchestratorDependencies, RunOrch
 from app.external_feeds.models import ExternalOpportunity
 from app.external_feeds.parser import parse_nvoids_detail
 from app.job_intent_learning import approved_learning_signals_for_owner, record_pending_job_intent_learning
-from app.services import application_intelligence_service, opportunity_lineage_service, policy_service, resume_tracking_service
+from app.services import application_intelligence_service, appts_service, opportunity_lineage_service, policy_service
 from app.services.policy_service import EffectiveRunInputs
 from app.gmail_client import GmailMessageCandidate, MailAttachment
 from app.models import AttachmentAsset, DraftEditFeedback, EmailConversation, EmailReplyMessage, GmailRequirementGroup, RecipientRoutingFeedback, RecentRun, RecentRunSkippedItem, RecruiterEmail, ResumeAsset, SyncRun, UserSettings
@@ -1575,15 +1575,17 @@ class OrchestrationService:
             db.commit()
             db.refresh(email)
 
-        if user_settings.feature_resume_tracking_enabled:
+        if email.marked_for_tracking:
             try:
-                resume_tracking_service.create_application_from_recruiter_email(
+                result = appts_service.create_tracked_application_from_email(
                     db, email, owner_id=self.deps.owner_id,
                 )
                 db.commit()
+                if result and result[1]:
+                    appts_service.enqueue_embedding_generation(result[0].id)
             except Exception as exc:
                 db.rollback()
-                logger.warning("Failed to auto-log resume tracking application for email_id=%s: %s", email.id, exc)
+                logger.warning("Failed to create tracked AppTS application for email_id=%s: %s", email.id, exc)
 
         return email
 
@@ -1647,6 +1649,7 @@ class OrchestrationService:
         email.decision_reason = payload.reason or "Rejected by user"
         email.approval_status = "rejected"
         email.sent_status = "not_sent"
+        email.marked_for_tracking = False
         db.commit()
         db.refresh(email)
         return email
@@ -1674,9 +1677,21 @@ class OrchestrationService:
         email.decision_reason = "Moved to failed mapping by user"
         email.approval_status = "pending"
         email.sent_status = "not_sent"
+        email.marked_for_tracking = False
         db.commit()
         db.refresh(email)
         self.deps.record_productivity_event(db, event_type="failed_mapping_marked", event_source="action", entity_id=email.id, metadata={"source": "manual_move_to_failed_mapping"})
+        return email
+
+    def set_tracking(self, email_id: int, tracked: bool, db: Session) -> RecruiterEmail:
+        email = db.query(RecruiterEmail).filter(RecruiterEmail.owner_id == self.deps.owner_id, RecruiterEmail.id == email_id).first()
+        if not email:
+            raise HTTPException(status_code=404, detail="Candidate not found")
+        if email.state != "needs_review":
+            raise HTTPException(status_code=400, detail="Only needs_review candidates can be tracked/untracked")
+        email.marked_for_tracking = tracked
+        db.commit()
+        db.refresh(email)
         return email
 
     def regenerate_candidate(self, email_id: int, payload: RegenerateCandidateRequest, db: Session) -> RecruiterEmail:

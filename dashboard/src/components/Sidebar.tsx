@@ -7,7 +7,8 @@ type SidebarProps = {
   inboxCount?: number
   premiumCount: number
   resumeTrackingEnabled: boolean
-  activePage: 'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'inbox' | 'premium_numbers' | 'resume_tracking' | 'settings'
+  applicationsEnabled?: boolean
+  activePage: 'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'inbox' | 'premium_numbers' | 'resume_tracking' | 'application_tracking' | 'settings'
   onNavigate: (section: SidebarProps['activePage']) => void
 }
 
@@ -20,6 +21,7 @@ export default function Sidebar({
   inboxCount = 0,
   premiumCount,
   resumeTrackingEnabled,
+  applicationsEnabled = false,
   activePage,
   onNavigate,
 }: SidebarProps) {
@@ -33,7 +35,8 @@ export default function Sidebar({
     { key: 'run_queue', label: 'Run Queue' },
     { key: 'needs_review', label: 'Needs Review', count: queueCount },
     { key: 'failed_mapping', label: 'Failed Mapping', count: failedCount },
-    { key: 'premium_numbers', label: 'Premium Numbers', count: premiumCount },
+    { key: 'premium_numbers', label: 'Premium Contacts', count: premiumCount },
+    ...(applicationsEnabled ? [{ key: 'application_tracking' as const, label: 'Application Tracking' }] : []),
     ...(resumeTrackingEnabled ? [{ key: 'resume_tracking' as const, label: 'Resume Tracking' }] : []),
     { key: 'sent_items', label: 'Sent Items', count: sentCount },
     { key: 'inbox', label: 'Inbox', count: inboxCount },

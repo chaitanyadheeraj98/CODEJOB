@@ -903,7 +903,7 @@ button.emailSearchResult:focus-visible {
 
 .search,
 .actionBar input,
-.card input,
+.card input:not([type="checkbox"]):not([type="radio"]),
 .card textarea,
 .card select {
   width: 100%;
@@ -3176,6 +3176,21 @@ button.emailSearchResult:focus-visible {
   color: var(--danger) !important;
 }
 
+.sendActionButton {
+  border-color: var(--primary) !important;
+  background: var(--primary) !important;
+  color: #fff !important;
+  font-weight: 600;
+}
+
+.sendActionButton:hover:not(:disabled) {
+  background: var(--primary-strong) !important;
+}
+
+.sendActionButton:disabled {
+  opacity: 0.55;
+}
+
 .dangerText {
   color: var(--danger) !important;
 }
@@ -3241,11 +3256,37 @@ button.emailSearchResult:focus-visible {
   text-align: center !important;
 }
 
+.inventoryFavoriteCell {
+  width: 34px;
+  text-align: center !important;
+  cursor: default;
+}
+
+.inventoryFavoriteToggle {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  padding: 2px;
+  color: #cbd5e1;
+}
+
+.inventoryFavoriteToggle--active {
+  color: #f2b705;
+}
+
 .inventoryNumber,
 .inventoryScore {
   color: #073eaf;
   font-weight: 600;
   white-space: nowrap;
+}
+
+.inventoryNumber--empty {
+  color: var(--muted);
+  font-weight: 400;
+  font-style: italic;
 }
 
 .inventoryTable td small {
@@ -3449,6 +3490,11 @@ button.emailSearchResult:focus-visible {
   margin: 0;
 }
 
+.detailPanelNumberEmpty {
+  color: var(--muted);
+  font-style: italic;
+}
+
 .detailPanelEyebrow {
   margin-bottom: 3px !important;
   color: var(--muted);
@@ -3477,6 +3523,43 @@ button.emailSearchResult:focus-visible {
 
 .detailSection h4 {
   margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #3c465a;
+}
+
+:where(.detailSection > p:not(.subtle):not(.errorMessage)) {
+  margin: 0;
+  font-size: 14px;
+  color: #333c50;
+  font-weight: 500;
+}
+
+:where(.detailSection > p:not(.subtle):not(.errorMessage)) strong {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.emailItem > .detailSection {
+  margin-top: 20px;
+  padding-bottom: 18px;
+}
+
+.emailItem > .detailSection:last-of-type {
+  border-bottom: 0;
+  padding-bottom: 4px;
+}
+
+.emailItem .rowBtns {
+  margin-top: 4px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.emailItem .rowBtns .verdictBadge {
+  margin-left: auto;
 }
 
 .detailSectionHeader {
@@ -3902,8 +3985,179 @@ button.emailSearchResult:focus-visible {
 @media (prefers-reduced-motion: no-preference) { .filterSortSpinner { animation: inbox-spin 700ms linear infinite; } }
 .filterRangeInputs { display: flex; align-items: center; gap: 6px; }
 .filterRangeInputs input { width: 80px; }
-.filterMultiselectPopover summary { min-height: 40px; display: flex; align-items: center; padding: 0 10px; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; list-style: none; }
-.filterMultiselectOptions { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); margin-top: 4px; }
-.filterMultiselectOption { display: flex; align-items: center; gap: 6px; font-weight: 400; text-transform: none; }
+.filterMultiselectField { position: relative; }
+.filterMultiselectPopover { position: relative; }
+.filterMultiselectPopover summary {
+  position: relative;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 0 34px 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+  list-style: none;
+  font-size: 14px;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+}
+.filterMultiselectPopover summary::-webkit-details-marker { display: none; }
+.filterMultiselectPopover summary::after {
+  content: "";
+  position: absolute;
+  right: 12px;
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid var(--muted);
+  border-bottom: 1.5px solid var(--muted);
+  transform: rotate(45deg);
+}
+.filterMultiselectPopover[open] summary {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgb(37 99 235 / 12%);
+}
+.filterMultiselectPopover[open] summary::after { transform: translateY(3px) rotate(225deg); }
+.filterMultiselectOptions {
+  position: absolute;
+  z-index: 50;
+  top: calc(100% + 6px);
+  left: 0;
+  display: grid;
+  gap: 2px;
+  min-width: 220px;
+  max-height: 260px;
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+  box-shadow: 0 16px 32px rgb(15 23 42 / 16%);
+}
+.filterMultiselectOption {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  min-height: 32px;
+  padding: 6px 8px;
+  border-radius: 5px;
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: normal;
+  text-transform: none;
+}
+.filterMultiselectOption:hover { background: var(--surface-soft); }
+.filterMultiselectOption input[type='checkbox'] {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+  margin: 0;
+  accent-color: var(--primary);
+}
 @media (max-width: 640px) { .filterSortBar { flex-direction: column; align-items: stretch; } .filterSortBar > label, .filterSortBar .filterRangeField, .filterSortBar .filterMultiselectField { width: 100%; } .filterSortMoreFields { flex-direction: column; } }
-.emailItemCheckbox { float: left; margin-right: 10px; }
+.emailItemCheckbox { float: left; margin-right: 10px; width: 16px; height: 16px; }
+
+.candidateCardTop {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.candidateCardCheckbox {
+  float: none;
+  margin: 4px 0 0;
+  flex: 0 0 auto;
+}
+
+.candidateCardHeaderMain {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.candidateCardTitle {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--ink);
+  line-height: 1.3;
+}
+
+.candidateCardSubtitle {
+  margin: 0 0 4px;
+  color: #3c465a;
+  font-size: 13.5px;
+  font-weight: 500;
+}
+
+.candidateCardMeta {
+  margin: 0;
+  font-size: 13px;
+  color: #333c50;
+  font-weight: 500;
+}
+
+.candidateCardMeta strong {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.candidateCardLinks {
+  display: flex;
+  gap: 14px;
+}
+
+.candidateCardRecordId {
+  margin: 6px 0 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.01em;
+}
+
+.candidateCardBadges {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 7px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-soft);
+  min-width: 176px;
+}
+
+.candidateCardBadges .statusBadge {
+  width: fit-content;
+}
+
+.statusBadge--lg {
+  font-size: 13px;
+  padding: 5px 12px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+@media (max-width: 720px) {
+  .candidateCardTop {
+    flex-direction: column;
+  }
+
+  .candidateCardBadges {
+    align-items: flex-start;
+    width: 100%;
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+}

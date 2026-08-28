@@ -98,6 +98,7 @@ describe('InventoryTable', () => {
           onPageChange={vi.fn()}
           onOpen={vi.fn()}
           onAction={vi.fn()}
+          onToggleFavorite={vi.fn()}
         />,
       )
     })

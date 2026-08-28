@@ -232,7 +232,7 @@ describe('Sent Items audit view', () => {
     expect(container.textContent ?? '').toContain('record-sent-99')
 
     const viewDetailsButton = Array.from(container.querySelectorAll('button')).find((button) =>
-      button.textContent === 'View Details',
+      button.textContent === 'Sourcing Audit Trail',
     ) as HTMLButtonElement | undefined
     expect(viewDetailsButton).toBeDefined()
 

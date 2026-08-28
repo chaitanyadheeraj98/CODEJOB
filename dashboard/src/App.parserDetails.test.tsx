@@ -403,6 +403,7 @@ describe('ParserDetailsPanel', () => {
             external_message_id: 'm-3988',
             external_thread_id: 't-3988',
             gmail_sent_id: null,
+            marked_for_tracking: false,
           }}
         />,
       )

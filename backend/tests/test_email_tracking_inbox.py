@@ -448,6 +448,31 @@ class EmailTrackingInboxTests(unittest.TestCase):
         self.assertEqual(unread_false.status_code, 200, unread_false.text)
         self.assertEqual([row["unread_reply_count"] for row in unread_false.json()], [0])
 
+    def test_inbox_conversations_filter_by_last_message_date(self) -> None:
+        with Session(self.engine) as db:
+            self._add_settings(db)
+            old_email = self._add_sent_email(
+                db, token="tok-old-date", external_message_id="msg-old-date", external_thread_id="thread-old-date"
+            )
+            old_conversation = ensure_sent_conversation(
+                db, owner_id=main.settings.owner_id, root_email=old_email, thread_id="thread-old-date"
+            )
+            old_conversation.last_message_at = datetime(2026, 1, 15, tzinfo=UTC)
+
+            new_email = self._add_sent_email(
+                db, token="tok-new-date", external_message_id="msg-new-date", external_thread_id="thread-new-date"
+            )
+            new_conversation = ensure_sent_conversation(
+                db, owner_id=main.settings.owner_id, root_email=new_email, thread_id="thread-new-date"
+            )
+            new_conversation.last_message_at = datetime(2026, 3, 15, tzinfo=UTC)
+            db.commit()
+
+        listing = self.client.get("/inbox/conversations?date_filter=custom&date_from=2026-03-01&date_to=2026-03-31")
+        self.assertEqual(listing.status_code, 200, listing.text)
+        self.assertEqual([row["subject"] for row in listing.json()], ["Java role"])
+        self.assertTrue(listing.json()[0]["last_message_at"].startswith("2026-03-15"))
+
 
 if __name__ == "__main__":
     unittest.main()

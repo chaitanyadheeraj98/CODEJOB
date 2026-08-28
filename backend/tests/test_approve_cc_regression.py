@@ -14,7 +14,7 @@ from sqlalchemy.pool import StaticPool
 
 from app import main
 from app.db import Base
-from app.models import AttachmentAsset, Application, RecruiterEmail, ResumeAsset, UserSettings
+from app.models import AppTSApplication, AttachmentAsset, Application, RecruiterEmail, ResumeAsset, UserSettings
 
 
 class ApproveCcRegressionTests(unittest.TestCase):
@@ -366,7 +366,10 @@ class ApproveCcRegressionTests(unittest.TestCase):
             main.mark_message_processed = original_mark_processed
             main.append_tracking_sheet_row = original_append_tracking
 
-    def test_approve_send_auto_logs_resume_tracking_application_when_enabled(self) -> None:
+    def test_approve_send_does_not_auto_log_application_when_not_tracked(self) -> None:
+        # AppTS superseded the old "auto-log every approved send" behavior: an
+        # application row (legacy or AppTS) is only created when the user explicitly
+        # flags the card via Track Application (RecruiterEmail.marked_for_tracking).
         original_send_reply = main.send_reply_with_attachment
         original_send_new = main.send_new_email_with_attachment
         original_mark_processed = main.mark_message_processed
@@ -385,6 +388,7 @@ class ApproveCcRegressionTests(unittest.TestCase):
                 email = self._add_needs_review_email(db, cc_email="vaishnavi@horizonsoftech.net")
                 email.company = "Horizon Softech"
                 email.end_client = "Acme Bank"
+                email.marked_for_tracking = False
                 db.commit()
                 email_id = email.id
 
@@ -394,17 +398,48 @@ class ApproveCcRegressionTests(unittest.TestCase):
             summary = self.client.get("/resumes/performance-summary")
             self.assertEqual(summary.status_code, 200, summary.text)
             items = {item["resume"]["id"]: item for item in summary.json()["items"]}
-            self.assertIn(resume_id, items)
-            self.assertEqual(items[resume_id]["submission_count"], 1)
+            self.assertEqual(items.get(resume_id, {}).get("submission_count", 0), 0)
 
             with Session(self.engine) as db:
-                application = db.query(Application).filter(Application.resume_asset_id == resume_id).first()
+                self.assertIsNone(db.query(Application).filter(Application.resume_asset_id == resume_id).first())
+                self.assertIsNone(db.query(AppTSApplication).filter(AppTSApplication.resume_asset_id == resume_id).first())
+        finally:
+            main.send_reply_with_attachment = original_send_reply
+            main.send_new_email_with_attachment = original_send_new
+            main.mark_message_processed = original_mark_processed
+            main.append_tracking_sheet_row = original_append_tracking
+
+    def test_approve_send_creates_appts_application_when_tracked(self) -> None:
+        original_send_reply = main.send_reply_with_attachment
+        original_send_new = main.send_new_email_with_attachment
+        original_mark_processed = main.mark_message_processed
+        original_append_tracking = main.append_tracking_sheet_row
+        try:
+            main.send_reply_with_attachment = lambda *_args, **_kwargs: "sent-rt-1"
+            main.send_new_email_with_attachment = lambda *_args, **_kwargs: "new-rt-1"
+            main.mark_message_processed = lambda *_args, **_kwargs: None
+            main.append_tracking_sheet_row = lambda **_kwargs: None
+            with Session(self.engine) as db:
+                resume = self._add_resume(db)
+                resume_id = resume.id
+                email = self._add_needs_review_email(db, cc_email="vaishnavi@horizonsoftech.net")
+                email.company = "Horizon Softech"
+                email.end_client = "Acme Bank"
+                email.marked_for_tracking = True
+                db.commit()
+                email_id = email.id
+
+            response = self.client.post(f"/candidates/{email_id}/approve-send", json={"edited_reply": None})
+            self.assertEqual(response.status_code, 200, response.text)
+
+            with Session(self.engine) as db:
+                application = db.query(AppTSApplication).filter(AppTSApplication.resume_asset_id == resume_id).first()
                 assert application is not None
                 self.assertEqual(application.resume_submission_status, "submitted")
-                self.assertEqual(application.dedupe_key, f"recruiter_email:{email_id}")
-                self.assertEqual(application.manual_recruiter_company, "Horizon Softech")
-                self.assertEqual(application.manual_end_client, "Acme Bank")
-                self.assertEqual(application.manual_job_title, "Java Developer")
+                self.assertEqual(application.dedupe_key, f"appts_email:{email_id}")
+                self.assertEqual(application.recruiter_company_snapshot, "Horizon Softech")
+                self.assertEqual(application.end_client_snapshot, "Acme Bank")
+                self.assertIsNone(db.query(Application).filter(Application.resume_asset_id == resume_id).first())
         finally:
             main.send_reply_with_attachment = original_send_reply
             main.send_new_email_with_attachment = original_send_new

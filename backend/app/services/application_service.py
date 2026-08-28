@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func
@@ -15,6 +16,7 @@ from app.models import (
     Application,
     ApplicationEvent,
     ApplicationInterview,
+    ApplicationOutreachMessage,
     ApplicationRTR,
     ApplicationSuggestion,
     ApplicationSkillGapSnapshot,
@@ -31,6 +33,30 @@ from app.services import opportunity_lineage_service
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ApplicationModels:
+    application_cls: type
+    event_cls: type
+    rtr_cls: type
+    interview_cls: type
+    suggestion_cls: type
+    skill_gap_snapshot_cls: type
+    outreach_message_cls: type
+    related_record_type: str
+
+
+LEGACY_MODELS = ApplicationModels(
+    Application,
+    ApplicationEvent,
+    ApplicationRTR,
+    ApplicationInterview,
+    ApplicationSuggestion,
+    ApplicationSkillGapSnapshot,
+    ApplicationOutreachMessage,
+    "Application",
+)
 
 
 APPLICATION_EVENT_TYPE_VALUES = (
@@ -193,6 +219,7 @@ def _set_resume_submission_status(
     *,
     new_status: str,
     trigger: str,
+    models: ApplicationModels = LEGACY_MODELS,
 ) -> bool:
     old_status = application.resume_submission_status
     if old_status == new_status:
@@ -204,11 +231,18 @@ def _set_resume_submission_status(
         event_type='resume_submission_status_changed',
         event_source='system',
         metadata={'from': old_status, 'to': new_status, 'trigger': trigger},
+        models=models,
     )
     return True
 
 
-def _mark_submitted(db: Session, application: Application, *, trigger: str) -> None:
+def _mark_submitted(
+    db: Session,
+    application: Application,
+    *,
+    trigger: str,
+    models: ApplicationModels = LEGACY_MODELS,
+) -> None:
     if application.resume_submission_status != 'not_submitted':
         return
     resume = (
@@ -234,23 +268,32 @@ def _mark_submitted(db: Session, application: Application, *, trigger: str) -> N
         application,
         new_status='submitted',
         trigger=trigger,
+        models=models,
     )
-    resume_tracking_service.compute_skill_gap(db, application)
+    resume_tracking_service.compute_skill_gap(db, application, models=models)
 
 
-def mark_resume_submitted_if_needed(db: Session, application: Application) -> None:
-    _mark_submitted(db, application, trigger='outreach_send')
+def mark_resume_submitted_if_needed(
+    db: Session,
+    application: Application,
+    *,
+    models: ApplicationModels = LEGACY_MODELS,
+) -> None:
+    _mark_submitted(db, application, trigger='outreach_send', models=models)
 
 
 def _append_ai_missing_skill_tags(
     db: Session,
     application: Application,
+    *,
+    models: ApplicationModels = LEGACY_MODELS,
 ) -> None:
+    snapshot_cls = models.skill_gap_snapshot_cls
     snapshot = (
-        db.query(ApplicationSkillGapSnapshot)
+        db.query(snapshot_cls)
         .filter(
-            ApplicationSkillGapSnapshot.owner_id == application.owner_id,
-            ApplicationSkillGapSnapshot.application_id == application.id,
+            snapshot_cls.owner_id == application.owner_id,
+            snapshot_cls.application_id == application.id,
         )
         .first()
     )
@@ -285,6 +328,7 @@ def update_status(
     new_status: str,
     note: str | None = None,
     closed_reason_code: str | None = None,
+    models: ApplicationModels = LEGACY_MODELS,
 ) -> Application:
     if new_status not in APPLICATION_STATUS_VALUES:
         raise ApplicationValidationError("Invalid application status")
@@ -313,6 +357,7 @@ def update_status(
         event_type="status_changed",
         note=note or "",
         metadata={"from": old_status, "to": new_status},
+        models=models,
     )
     should_derive = new_status in APPLICATION_CLOSED_STATUS_VALUES
     if (
@@ -328,7 +373,7 @@ def update_status(
     milestone: str | None = None
     if new_status not in APPLICATION_CLOSED_STATUS_VALUES:
         if APPLICATION_STATUS_VALUES.index(new_status) >= APPLICATION_STATUS_VALUES.index('resume_shared'):
-            _mark_submitted(db, application, trigger='status_derivation')
+            _mark_submitted(db, application, trigger='status_derivation', models=models)
         if new_status in INTERVIEW_STATUS_VALUES:
             desired_status = 'interview_scheduled'
             milestone = 'interview_scheduled'
@@ -349,11 +394,12 @@ def update_status(
             application,
             new_status=desired_status,
             trigger='status_derivation',
+            models=models,
         )
     if milestone is not None:
         _record_milestone(application, milestone, now)
     if new_status == 'rejected':
-        _append_ai_missing_skill_tags(db, application)
+        _append_ai_missing_skill_tags(db, application, models=models)
     return application
 
 
@@ -366,6 +412,7 @@ def append_event(
     event_source: str = "user",
     linked_recruiter_email_id: int | None = None,
     metadata: dict[str, object] | None = None,
+    models: ApplicationModels = LEGACY_MODELS,
 ) -> ApplicationEvent:
     if event_type not in APPLICATION_EVENT_TYPE_VALUES:
         raise ApplicationValidationError("Invalid application event type")
@@ -386,7 +433,7 @@ def append_event(
             raise ApplicationReferenceNotFoundError("Recruiter email not found")
 
     now = utc_now()
-    event = ApplicationEvent(
+    event = models.event_cls(
         owner_id=application.owner_id,
         application_id=application.id,
         event_type=event_type,
@@ -424,7 +471,7 @@ def append_event(
             event_type=event_type,
             actor=event_source,
             process_name="application_service",
-            related_record_type="Application",
+            related_record_type=models.related_record_type,
             related_record_id=application.id,
             note=note,
             metadata=lineage_metadata,
@@ -440,6 +487,7 @@ def set_next_action(
     *,
     next_action_type: str | None,
     next_action_at: datetime | None,
+    models: ApplicationModels = LEGACY_MODELS,
 ) -> Application:
     application.next_action_type = next_action_type
     application.next_action_at = next_action_at
@@ -451,6 +499,7 @@ def set_next_action(
             "next_action_type": next_action_type,
             "next_action_at": next_action_at.isoformat() if next_action_at else None,
         },
+        models=models,
     )
     return application
 
@@ -466,21 +515,22 @@ def find_duplicate_candidates(
     end_client: str,
     job_title: str,
     exclude_application_id: int,
+    models: ApplicationModels = LEGACY_MODELS,
 ) -> list[Application]:
     normalized_client = _normalize_text(end_client)
     normalized_title = _normalize_text(job_title)
     if not normalized_client or not normalized_title:
         return []
     rows = (
-        db.query(Application)
+        db.query(models.application_cls)
         .filter(
-            Application.owner_id == owner_id,
-            Application.deleted_at.is_(None),
-            Application.status.not_in(APPLICATION_CLOSED_STATUS_VALUES),
-            Application.id != exclude_application_id,
-            Application.created_at >= utc_now() - timedelta(days=DUPLICATE_LOOKBACK_DAYS),
+            models.application_cls.owner_id == owner_id,
+            models.application_cls.deleted_at.is_(None),
+            models.application_cls.status.not_in(APPLICATION_CLOSED_STATUS_VALUES),
+            models.application_cls.id != exclude_application_id,
+            models.application_cls.created_at >= utc_now() - timedelta(days=DUPLICATE_LOOKBACK_DAYS),
         )
-        .order_by(Application.created_at.desc(), Application.id.desc())
+        .order_by(models.application_cls.created_at.desc(), models.application_cls.id.desc())
         .all()
     )
     return [
@@ -503,9 +553,10 @@ def request_rtr(
     role_scope: str,
     end_client_scope: str,
     expires_at: datetime | None = None,
+    models: ApplicationModels = LEGACY_MODELS,
 ) -> ApplicationRTR:
     now = utc_now()
-    rtr = ApplicationRTR(
+    rtr = models.rtr_cls(
         owner_id=application.owner_id,
         application_id=application.id,
         status="requested",
@@ -517,7 +568,7 @@ def request_rtr(
         updated_at=now,
     )
     db.add(rtr)
-    update_status(db, application, new_status="rtr_requested")
+    update_status(db, application, new_status="rtr_requested", models=models)
     return rtr
 
 
@@ -528,6 +579,7 @@ def confirm_rtr(
     *,
     proof_attachment_id: int | None = None,
     proof_recruiter_email_id: int | None = None,
+    models: ApplicationModels = LEGACY_MODELS,
 ) -> ApplicationRTR:
     if rtr.owner_id != application.owner_id or rtr.application_id != application.id:
         raise ApplicationReferenceNotFoundError("RTR not found")
@@ -561,7 +613,7 @@ def confirm_rtr(
     rtr.proof_attachment_id = proof_attachment_id
     rtr.proof_recruiter_email_id = proof_recruiter_email_id
     rtr.updated_at = now
-    update_status(db, application, new_status="rtr_confirmed")
+    update_status(db, application, new_status="rtr_confirmed", models=models)
     return rtr
 
 
@@ -571,6 +623,7 @@ def expire_or_revoke_rtr(
     rtr: ApplicationRTR,
     *,
     new_status: str,
+    models: ApplicationModels = LEGACY_MODELS,
 ) -> ApplicationRTR:
     if new_status not in {"expired", "revoked"}:
         raise ApplicationValidationError("RTR status must be expired or revoked")
@@ -581,6 +634,7 @@ def expire_or_revoke_rtr(
         application,
         event_type="rtr_status_changed",
         metadata={"rtr_id": rtr.id, "to": new_status},
+        models=models,
     )
     return rtr
 
@@ -590,6 +644,7 @@ def submit_to_client(
     application: Application,
     *,
     override_duplicate_warning: bool = False,
+    models: ApplicationModels = LEGACY_MODELS,
 ) -> tuple[Application, list[Application]]:
     candidates = find_duplicate_candidates(
         db,
@@ -597,16 +652,18 @@ def submit_to_client(
         end_client=application.end_client_snapshot,
         job_title=application.job_title_snapshot,
         exclude_application_id=application.id,
+        models=models,
     )
     if candidates and not override_duplicate_warning:
         raise ApplicationDuplicateWarning(candidates)
-    update_status(db, application, new_status="submitted_to_client")
+    update_status(db, application, new_status="submitted_to_client", models=models)
     if candidates:
         append_event(
             db,
             application,
             event_type="duplicate_override",
             metadata={"acknowledged_duplicate_ids": [candidate.id for candidate in candidates]},
+            models=models,
         )
     return application, candidates
 
@@ -620,11 +677,12 @@ def add_interview(
     format: str = "",
     interviewer_names: str = "",
     sync_application_status: bool = True,
+    models: ApplicationModels = LEGACY_MODELS,
 ) -> ApplicationInterview:
     if round_type not in INTERVIEW_ROUND_TYPE_VALUES:
         raise ApplicationValidationError("Invalid interview round type")
     now = utc_now()
-    interview = ApplicationInterview(
+    interview = models.interview_cls(
         owner_id=application.owner_id,
         application_id=application.id,
         round_type=round_type,
@@ -636,7 +694,7 @@ def add_interview(
     )
     db.add(interview)
     if sync_application_status and round_type in INTERVIEW_STATUS_VALUES:
-        update_status(db, application, new_status=round_type)
+        update_status(db, application, new_status=round_type, models=models)
     return interview
 
 
@@ -650,7 +708,9 @@ def update_interview(
     feedback: str | None = None,
     result: str | None = None,
     follow_up_task_note: str | None = None,
+    models: ApplicationModels = LEGACY_MODELS,
 ) -> ApplicationInterview:
+    _ = models
     if result is not None and result not in INTERVIEW_RESULT_VALUES:
         raise ApplicationValidationError("Invalid interview result")
     if scheduled_at is not None:
@@ -668,7 +728,13 @@ def update_interview(
     return interview
 
 
-def delete_interview(db: Session, interview: ApplicationInterview) -> None:
+def delete_interview(
+    db: Session,
+    interview: ApplicationInterview,
+    *,
+    models: ApplicationModels = LEGACY_MODELS,
+) -> None:
+    _ = (db, models)
     interview.deleted_at = utc_now()
 
 

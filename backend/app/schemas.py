@@ -42,6 +42,11 @@ class BulkSendToFailedMappingRequest(BaseModel):
     ids: list[int] = Field(max_length=25)
 
 
+class BulkTrackRequest(BaseModel):
+    ids: list[int] = Field(max_length=25)
+    tracked: bool
+
+
 class BulkResolveRecipientsRequest(BaseModel):
     fixes: dict[int, "ResolveRecipientsRequest"] = Field(max_length=25)
 
@@ -547,6 +552,11 @@ class EmailResponse(BaseModel):
     score: int
     decision: str
     state: str
+    marked_for_tracking: bool = False
+    premium_status: str | None = None
+    premium_verification_level: str | None = None
+    following_badge: Literal["bookmarked", "tracked", "active"] | None = None
+    following_warning: str | None = None
     decision_reason: str | None
     hard_filter_result: str | None
     auto_reject_reason: str | None
@@ -870,6 +880,7 @@ class SentItemDetailsResponse(BaseModel):
     recruiter_company: str | None = None
     employer_name: str | None = None
     employer_email: str | None = None
+    employer_email_domain: str | None = None
     employer_phone: str | None = None
     employer_company: str | None = None
     end_client: str | None = None
@@ -986,6 +997,8 @@ class UnknownNumberReviewCardResponse(BaseModel):
     source_email_id: int | None
     source_external_opportunity_id: int | None = None
     source_lead_id: int | None = None
+    target_contact_id: int | None = None
+    secondary_contact_id: int | None = None
     normalized_phone_number: str
     display_phone_number: str
     owner_name: str
@@ -1039,12 +1052,17 @@ class ExtractionAuditListResponse(BaseModel):
 
 class RecruiterNumberResponse(BaseModel):
     id: int
-    normalized_phone_number: str
+    normalized_phone_number: str | None
     display_phone_number: str
     recruiter_name: str
     company: str
     designation: str
     recruiter_email: str
+    recruiter_email_domain: str = ""
+    employer_email_domain: str = ""
+    is_favorite: bool = False
+    emails: list[dict[str, object]] = Field(default_factory=list)
+    phones: list[dict[str, object]] = Field(default_factory=list)
     first_detected_email_id: int | None
     source_type: str | None = None
     source_id: int | None = None
@@ -1069,11 +1087,13 @@ class RecruiterNumberResponse(BaseModel):
 
 class EmployerNumberResponse(BaseModel):
     id: int
-    normalized_phone_number: str
+    normalized_phone_number: str | None
     display_phone_number: str
     owner_name: str
     company: str
     employer_email: str = ""
+    employer_email_domain: str = ""
+    is_favorite: bool = False
     source_email_id: int | None
     source_type: str | None = None
     source_id: int | None = None
@@ -1100,7 +1120,7 @@ class PremiumNumberInventoryItemResponse(BaseModel):
     owner: str
     company: str
     categories: list[Literal["Recruiter", "Employer"]]
-    status: Literal["Pending", "Active", "Flagged"]
+    status: Literal["Pending", "Active", "Flagged", "Unscored"]
     score: int | None
     sourceType: Literal["gmail", "nvoids"] | None
     lastCheckedAt: datetime
@@ -1228,6 +1248,7 @@ class ManualApplicationCreateRequest(BaseModel):
     manual_source_note: str = ""
     submission_method: str = Field(default="email", min_length=1, max_length=20)
     resume_submitted_at: datetime | None = None
+    location_snapshot: str = ""
 
 
 class RejectionDetailTagInput(BaseModel):
@@ -1414,6 +1435,7 @@ class ApplicationResponse(BaseModel):
     recruiter_company_snapshot: str
     job_title_snapshot: str
     end_client_snapshot: str
+    location_snapshot: str = ""
     status: str
     status_changed_at: datetime
     resume_shared_at: datetime | None
@@ -1617,6 +1639,10 @@ class NumberReviewSubmitRequest(BaseModel):
     linkedin_url: str | None = None
 
 
+class ContactMergeApprovalRequest(BaseModel):
+    canonical_contact_id: int | None = Field(default=None, gt=0)
+
+
 class RecruiterNumberPatchRequest(BaseModel):
     recruiter_name: str | None = None
     company: str | None = None
@@ -1626,10 +1652,12 @@ class RecruiterNumberPatchRequest(BaseModel):
     recruiter_verification_level: Literal["unverified", "verified", "trusted"] | None = None
     do_not_work_again: bool | None = None
     do_not_work_again_reason: str | None = None
+    is_favorite: bool | None = None
 
 
 class EmployerNumberPatchRequest(BaseModel):
     owner_name: str | None = None
+    is_favorite: bool | None = None
     company: str | None = None
     employer_email: str | None = None
 

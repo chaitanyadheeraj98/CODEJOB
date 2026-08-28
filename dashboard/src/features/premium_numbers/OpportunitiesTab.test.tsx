@@ -212,15 +212,12 @@ describe('OpportunitiesTab application entry point', () => {
           highlightedId={null}
           applicationsEnabled
           onToast={vi.fn()}
+          filterValues={{ resume_fit: '7' }}
+          sortValue="resume_fit"
         />,
       )
-      await new Promise((resolve) => window.setTimeout(resolve, 300))
     })
-    const sortToggle = Array.from(container.querySelectorAll('label')).find((label) => label.textContent?.includes('Sort by resume fit'))?.querySelector<HTMLInputElement>('input')
-    await act(async () => {
-      sortToggle?.click()
-      await new Promise((resolve) => window.setTimeout(resolve, 300))
-    })
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 300)) })
     expect(container.textContent).toContain('92.4% match')
     expect(container.textContent).toContain('Strong Java overlap')
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/applications/match?resume_asset_id=7'))).toBe(true)

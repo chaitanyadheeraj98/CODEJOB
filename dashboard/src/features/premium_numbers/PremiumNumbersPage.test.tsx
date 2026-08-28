@@ -159,14 +159,8 @@ describe('PremiumNumbersPage', () => {
     expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith('/recruiter-numbers/bulk-rescore') && init?.method === 'POST')).toBe(true)
     expect(container.textContent).toContain('Rescored')
 
-    const applicationsTab = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find((button) => button.textContent === 'Applications')
-    expect(applicationsTab).toBeDefined()
-    await act(async () => {
-      applicationsTab?.click()
-      await new Promise((resolve) => window.setTimeout(resolve, 300))
-    })
-    expect(container.textContent).toContain('Due today')
-    expect(container.textContent).toContain('No tracked applications match these filters.')
+    const tabs = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="tab"]')).map((button) => button.textContent)
+    expect(tabs).toEqual(['Number Inventory', 'Recruiter Opportunities'])
   })
 
   it('highlights a promoted premium_number_lead hit via its detail.contact_id', async () => {

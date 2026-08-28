@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import FilterSortBar, { type FilterValues } from '../../components/FilterSortBar'
-import { opportunityDefaultFilterValues, opportunityFilterFields, opportunityFiltersToParams, opportunitySortOptions } from './opportunityFilters'
+import type { FilterValues } from '../../components/FilterSortBar'
+import SelectionActionBar from '../../components/SelectionActionBar'
+import { opportunityFiltersToParams } from './opportunityFilters'
 
 import {
-  createApplication,
   deleteOpportunity,
   generateColdCallScript,
   listOpportunityPage,
@@ -12,9 +12,11 @@ import {
   refreshOpportunityAiMetadata,
   updateOpportunity,
 } from './api'
+import { createAppTSApplicationFromOpportunity } from '../application_tracking/api'
 import type { OpportunityMatch, OpportunityStatus, RecruiterOpportunityCard, ResumeAssetOption } from './types'
 
 const PAGE_SIZE = 10
+const EMPTY_FILTER_VALUES: FilterValues = {}
 const STATUSES: OpportunityStatus[] = ['New', 'Called', 'Applied', 'Follow Up', 'Closed', 'Not Interested']
 const EDITABLE_FIELDS = [
   ['job_title', 'Job Title'],
@@ -35,17 +37,14 @@ type OpportunitiesTabProps = {
   highlightedId: number | null
   applicationsEnabled: boolean
   onToast: (message: string) => void
+  filterValues?: FilterValues
+  sortValue?: string
 }
 
-export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, highlightedId, applicationsEnabled, onToast }: OpportunitiesTabProps) {
+export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, highlightedId, applicationsEnabled, onToast, filterValues = EMPTY_FILTER_VALUES, sortValue = 'newest' }: OpportunitiesTabProps) {
   const [rows, setRows] = useState<RecruiterOpportunityCard[]>([])
-  const [search, setSearch] = useState('')
-  const [status, setStatus] = useState<'all' | OpportunityStatus>('all')
-  const [source, setSource] = useState<'all' | 'gmail' | 'nvoids'>('all')
   const [page, setPage] = useState(1)
   const [total,setTotal]=useState(0)
-  const [filterValues,setFilterValues]=useState<FilterValues>(opportunityDefaultFilterValues)
-  const [sort,setSort]=useState('newest')
   const [loading, setLoading] = useState(false)
   const [busyId, setBusyId] = useState<number | null>(null)
   const [error, setError] = useState('')
@@ -54,21 +53,29 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
   const [resumeOptions, setResumeOptions] = useState<ResumeAssetOption[]>([])
   const [selectedResumeId, setSelectedResumeId] = useState<number | null>(null)
   const [trackingDedupeKey, setTrackingDedupeKey] = useState('')
-  const [sortByMatch, setSortByMatch] = useState(false)
   const [matchesByOpportunity, setMatchesByOpportunity] = useState<Record<number, OpportunityMatch>>({})
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
+  const [bulkAction, setBulkAction] = useState<string | null>(null)
   const requestIdRef = useRef(0)
+  const search = String(filterValues.q ?? '')
+  const status = (filterValues.status || 'all') as 'all' | OpportunityStatus
+  const source = (filterValues.source_type || 'all') as 'all' | 'gmail' | 'nvoids'
+  const filterResumeId = filterValues.resume_fit && filterValues.resume_fit !== 'all' ? Number(filterValues.resume_fit) : null
+  const sortByMatch = sortValue === 'resume_fit' && filterResumeId != null
+
+  useEffect(() => { setPage(1); setSelectedIds(new Set()) }, [filterValues, sortValue])
 
   const load = () => {
     const requestId = requestIdRef.current + 1
     requestIdRef.current = requestId
     setLoading(true)
     setError('')
-    const request = sortByMatch && selectedResumeId != null
-      ? matchOpportunitiesForResume(apiBase, selectedResumeId).then((matches) => {
+    const request = sortByMatch && filterResumeId != null
+      ? matchOpportunitiesForResume(apiBase, filterResumeId).then((matches) => {
           setMatchesByOpportunity(Object.fromEntries(matches.map((match) => [match.opportunity.id, match])) as Record<number, OpportunityMatch>)
           return matches.map((match) => match.opportunity)
         })
-      : listOpportunityPage({ apiBase, cursor:(page-1)*PAGE_SIZE,limit:PAGE_SIZE,q:search,status,sourceType:source,mailDate,sort,filters:opportunityFiltersToParams(filterValues) }).then((payload) => {
+      : listOpportunityPage({ apiBase, cursor:(page-1)*PAGE_SIZE,limit:PAGE_SIZE,q:search,status,sourceType:source,mailDate,sort:sortValue,filters:opportunityFiltersToParams(filterValues) }).then((payload) => {
           setMatchesByOpportunity({})
           setTotal(payload.total)
           return payload.items
@@ -90,7 +97,7 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
     const timer = window.setTimeout(() => { load().catch(() => undefined) }, 150)
     return () => window.clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [apiBase, filterValues, mailDate, page, refreshToken, search, selectedResumeId, sort, sortByMatch, source, status])
+  }, [apiBase, filterValues, filterResumeId, mailDate, page, refreshToken, search, sortByMatch, sortValue, source, status])
 
   useEffect(() => {
     if (!applicationsEnabled) return
@@ -177,6 +184,47 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
     }
   }
 
+  const toggleSelected = (id: number) => setSelectedIds((current) => {
+    const next = new Set(current)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    return next
+  })
+
+  const bulkDelete = async () => {
+    const ids = [...selectedIds]
+    if (!ids.length || !window.confirm(`Delete ${ids.length} selected opportunit${ids.length === 1 ? 'y' : 'ies'}? This cannot be undone.`)) return
+    setBulkAction('delete')
+    setError('')
+    try {
+      const results = await Promise.allSettled(ids.map((id) => deleteOpportunity(apiBase, id)))
+      const succeededIds = ids.filter((_, index) => results[index].status === 'fulfilled')
+      const failed = results.filter((result) => result.status === 'rejected').length
+      setRows((current) => current.filter((row) => !succeededIds.includes(row.id)))
+      setSelectedIds(new Set())
+      onToast(failed ? `${succeededIds.length} deleted, ${failed} failed` : 'Deleted')
+    } finally {
+      setBulkAction(null)
+    }
+  }
+
+  const bulkRefreshAiMetadata = async () => {
+    const ids = [...selectedIds]
+    if (!ids.length) return
+    setBulkAction('refresh')
+    setError('')
+    try {
+      const results = await Promise.allSettled(ids.map((id) => refreshOpportunityAiMetadata(apiBase, id)))
+      const updatedById = new Map(results.flatMap((result, index) => result.status === 'fulfilled' ? [[ids[index], result.value] as const] : []))
+      setRows((current) => current.map((row) => updatedById.get(row.id) ?? row))
+      const failed = results.filter((result) => result.status === 'rejected').length
+      setSelectedIds(new Set())
+      onToast(failed ? `${ids.length - failed} refreshed, ${failed} failed` : 'AI metadata refreshed')
+    } finally {
+      setBulkAction(null)
+    }
+  }
+
   const openResumePicker = async (opportunityId: number) => {
     setTrackingId(opportunityId)
     setTrackingDedupeKey(crypto.randomUUID())
@@ -199,7 +247,7 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
     setBusyId(item.id)
     setError('')
     try {
-      await createApplication(apiBase, {
+      await createAppTSApplicationFromOpportunity(apiBase, {
         resume_asset_id: selectedResumeId,
         recruiter_opportunity_id: item.id,
         dedupe_key: trackingDedupeKey,
@@ -215,29 +263,15 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
 
   return (
     <div className="opportunitiesTab">
-      <FilterSortBar fields={opportunityFilterFields} values={filterValues} onFieldChange={(key,value)=>{setFilterValues((current)=>({...current,[key]:value}));setPage(1)}} onClear={()=>{setFilterValues(opportunityDefaultFilterValues);setPage(1)}} sortOptions={opportunitySortOptions} sortValue={sort} onSortChange={(value)=>{setSort(value);setPage(1)}} loading={loading} disabled={sortByMatch} disabledMessage="Turn off resume-match sorting to filter opportunities." />
-      <div className="inventoryToolbar opportunitiesToolbar">
-        <label className="inventorySearchField">
-          <span>Search opportunities</span>
-          <input value={search} onChange={(event) => { setSearch(event.target.value); setPage(1) }} placeholder="Search role, recruiter, client..." disabled={sortByMatch} />
-        </label>
-        <label><span>Status</span><select value={status} onChange={(event) => setStatus(event.target.value as 'all' | OpportunityStatus)} disabled={sortByMatch}><option value="all">All statuses</option>{STATUSES.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
-        <label><span>Source</span><select value={source} onChange={(event) => setSource(event.target.value as 'all' | 'gmail' | 'nvoids')} disabled={sortByMatch}><option value="all">All sources</option><option value="gmail">Gmail</option><option value="nvoids">Nvoids</option></select></label>
-        {applicationsEnabled ? (
-          <>
-            <label>
-              <span>Best matches for resume</span>
-              <select value={selectedResumeId ?? ''} onChange={(event) => setSelectedResumeId(Number(event.target.value))}>
-                {resumeOptions.map((resume) => <option key={resume.id} value={resume.id}>{resume.file_name} (v{resume.version})</option>)}
-              </select>
-            </label>
-            <label className="checkboxLabel matchSortToggle">
-              <input type="checkbox" checked={sortByMatch} onChange={(event) => setSortByMatch(event.target.checked)} disabled={selectedResumeId == null} />
-              Sort by resume fit
-            </label>
-          </>
-        ) : null}
-      </div>
+      <SelectionActionBar
+        selectedCount={selectedIds.size}
+        busyKey={bulkAction}
+        onClearSelection={() => setSelectedIds(new Set())}
+        actions={[
+          { key: 'refresh', label: 'Refresh AI Metadata', busyLabel: 'Refreshing...', onClick: () => void bulkRefreshAiMetadata() },
+          { key: 'delete', label: 'Delete', busyLabel: 'Deleting...', onClick: () => void bulkDelete(), variant: 'danger' },
+        ]}
+      />
       {loading ? <p className="subtle">Loading recruiter opportunities...</p> : null}
       {error ? <p className="errorBanner">Recruiter opportunities error: {error}</p> : null}
       {!loading && rows.length === 0 ? <p className="inventoryEmpty">No recruiter opportunities match these filters.</p> : null}
@@ -251,7 +285,10 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
             data-opportunity-id={item.id}
           >
             <header>
-              <div><span className="categoryChip">{item.source_type.toUpperCase()}</span><h3>{item.job_title || 'Recruiter opportunity'}</h3></div>
+              <div>
+                <input type="checkbox" aria-label={`Select ${item.job_title || 'opportunity'}`} checked={selectedIds.has(item.id)} onChange={() => toggleSelected(item.id)} />
+                <span className="categoryChip">{item.source_type.toUpperCase()}</span><h3>{item.job_title || 'Recruiter opportunity'}</h3>
+              </div>
               <select value={item.status} aria-label={`Status for ${item.job_title}`} onChange={(event) => patchRow(item.id, { status: event.target.value as OpportunityStatus })} disabled={busyId === item.id}>{STATUSES.map((value) => <option key={value} value={value}>{value}</option>)}</select>
             </header>
             {matchesByOpportunity[item.id] ? (

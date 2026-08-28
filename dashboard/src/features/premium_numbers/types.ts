@@ -9,6 +9,8 @@ export type NumberReviewCard = {
   source_email_id: number | null
   source_external_opportunity_id: number | null
   source_lead_id: number | null
+  target_contact_id?: number | null
+  secondary_contact_id?: number | null
   normalized_phone_number: string
   display_phone_number: string
   owner_name: string
@@ -65,7 +67,7 @@ export type PremiumNumberVersion = {
 
 type ContactCardBase = {
   id: number
-  normalized_phone_number: string
+  normalized_phone_number: string | null
   display_phone_number: string
   company: string
   source_type: 'gmail' | 'nvoids' | null
@@ -87,6 +89,11 @@ export type RecruiterNumberCard = ContactCardBase & {
   recruiter_name: string
   designation: string
   recruiter_email: string
+  recruiter_email_domain?: string
+  employer_email_domain?: string
+  is_favorite?: boolean
+  emails?: Array<{ email: string; domain: string; is_primary: boolean }>
+  phones?: Array<{ phone: string; is_primary: boolean; is_verified: boolean }>
   first_detected_email_id: number | null
   linkedin_url: string
   recruiter_verification_level: 'unverified' | 'verified' | 'trusted'
@@ -99,6 +106,8 @@ export type RecruiterNumberCard = ContactCardBase & {
 export type EmployerNumberCard = ContactCardBase & {
   owner_name: string
   employer_email: string
+  employer_email_domain?: string
+  is_favorite?: boolean
   source_email_id: number | null
 }
 
@@ -216,6 +225,7 @@ export type ApplicationCard = {
   recruiter_company_snapshot: string
   job_title_snapshot: string
   end_client_snapshot: string
+  location_snapshot?: string
   current_recruiter_name: string
   current_recruiter_company: string
   current_recruiter_phone_display: string
@@ -373,7 +383,7 @@ export type InventoryRow = {
   owner: string
   company: string
   categories: Array<'Recruiter' | 'Employer'>
-  status: 'Pending' | 'Active' | 'Flagged'
+  status: 'Pending' | 'Active' | 'Flagged' | 'Unscored'
   score: number | null
   sourceType: 'gmail' | 'nvoids' | null
   lastCheckedAt: string

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import json
 from typing import Any
 
 from app.db import SessionLocal
@@ -8,6 +9,37 @@ from app.jobs.progress import update_job_progress
 from app.schemas import AutomationRunRequest
 
 logger = logging.getLogger(__name__)
+
+
+def run_generate_embedding_job(*, record_type: str, record_id: int) -> dict[str, Any]:
+    from app.config import settings
+    from app.models import AppTSApplication, RecruiterEmail
+    from app.semantic.embeddings_service import generate_embedding
+
+    model_cls = RecruiterEmail if record_type == "recruiter_email" else AppTSApplication
+    db = SessionLocal()
+    try:
+        row = db.query(model_cls).filter(model_cls.id == record_id).first()
+        if row is None:
+            return {"status": "skipped", "reason": "record_not_found"}
+        role = row.role if record_type == "recruiter_email" else row.job_title_snapshot
+        skills = row.skills_text if record_type == "recruiter_email" else row.resume_skills_snapshot_json
+        text = f"{role or ''} {skills or ''}".strip()
+        if not text:
+            return {"status": "skipped", "reason": "no_text"}
+        vector, provider = generate_embedding(text)
+        if record_type == "recruiter_email":
+            row.semantic_embedding = json.dumps(vector)
+        else:
+            row.embedding = json.dumps(vector)
+        row.embedding_model = settings.semantic_embedding_sbert_model if provider == "sbert" else provider
+        db.commit()
+        return {"status": "ok", "provider": provider}
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
 
 def _mark_failed(run_key: str, exc: Exception) -> None:

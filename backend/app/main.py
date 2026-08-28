@@ -16,7 +16,7 @@ from zoneinfo import ZoneInfo
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 import sqlalchemy as sa
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
@@ -77,6 +77,11 @@ from app.models import (
     ApplicationRTR,
     ApplicationSuggestion,
     ApplicationSkillGapSnapshot,
+    AppTSApplication,
+    AppTSApplicationEvent,
+    AppTSApplicationInterview,
+    AppTSApplicationRTR,
+    AppTSApplicationSkillGapSnapshot,
     AttachmentAsset,
     BulkActionIdempotencyKey,
     CanonicalEntityTaxonomyEntry,
@@ -86,6 +91,8 @@ from app.models import (
     JobIntentTaxonomyEntry,
     NumberReviewQueue,
     PremiumNumberContact,
+    PremiumContactEmail,
+    PremiumContactPhone,
     PremiumNumberExtractionAudit,
     PremiumNumberLead,
     ProductivityEvent,
@@ -135,6 +142,7 @@ from app.recent_runs import (
 )
 from app.jobs.queues import (
     AUTOMATION_RUN_QUEUE,
+    EMBEDDING_QUEUE,
     GMAIL_SYNC_QUEUE,
     NVOIDS_SYNC_QUEUE,
     active_job_id,
@@ -142,7 +150,7 @@ from app.jobs.queues import (
     get_redis_connection,
     redis_is_ready,
 )
-from app.jobs.tasks import run_automation_job, run_gmail_sync_job, run_nvoids_sync_job, run_retry_selected_messages_job
+from app.jobs.tasks import run_automation_job, run_generate_embedding_job, run_gmail_sync_job, run_nvoids_sync_job, run_retry_selected_messages_job
 from app.skill_taxonomy import (
     TAXONOMY_PLACEHOLDER_KEYS,
     clear_skill_taxonomy_cache,
@@ -160,6 +168,7 @@ from app.premium_numbers.domain_guard import (
     is_hidden_nvoids_placeholder_recruiter,
 )
 from app.premium_numbers.phone_normalization import best_display_phone, canonicalize_phone
+from app.premium_numbers import contact_identity_service
 from app.query_bucket import sanitize_saved_queries
 from app.runtime_state import runtime_state
 from app.routers.chat import (
@@ -179,10 +188,12 @@ from app.services import (
     application_intelligence_service,
     application_outreach_service,
     application_service,
+    appts_service,
     resume_tracking_service,
     email_lookup_service,
     opportunity_lineage_service,
     policy_service,
+    role_similarity_service,
 )
 from app.services.auto_runner_service import AutoRunnerService
 from app.services.candidate_runtime_service import CandidateRuntimeDeps, CandidateRuntimeService, resolve_resume_display_name
@@ -271,6 +282,7 @@ from app.schemas import (
     BulkRejectRequest,
     BulkResolveRecipientsRequest,
     BulkSendToFailedMappingRequest,
+    BulkTrackRequest,
     CandidateListResponse,
     ConversationDetailResponse,
     ConversationReplyRequest,
@@ -326,6 +338,7 @@ from app.schemas import (
     OpportunityMatchListResponse,
     OpportunityMatchResponse,
     NumberReviewSubmitRequest,
+    ContactMergeApprovalRequest,
     RejectRequest,
     ResolveRecipientsRequest,
     ResumeResponse,
@@ -653,6 +666,41 @@ def _mail_date_utc_window(selected: date) -> tuple[datetime, datetime]:
     return start_local.astimezone(UTC), end_local.astimezone(UTC)
 
 
+def _enqueue_embedding_generation(*, record_type: str, record_id: int) -> None:
+    try:
+        get_queue(EMBEDDING_QUEUE).enqueue(
+            run_generate_embedding_job,
+            kwargs={"record_type": record_type, "record_id": record_id},
+            retry=Retry(max=3, interval=[10, 30, 90]),
+            job_timeout=60,
+            result_ttl=3600,
+            failure_ttl=86400,
+        )
+    except Exception:
+        logger.warning("embedding_enqueue_failed record_type=%s record_id=%s", record_type, record_id, exc_info=True)
+
+
+def _date_range_utc_window(
+    preset: str,
+    custom_from: date | None = None,
+    custom_to: date | None = None,
+) -> tuple[datetime, datetime]:
+    today = datetime.now(BUSINESS_TZ).date()
+    if preset == "today":
+        start, end = today, today
+    elif preset == "yesterday":
+        start = end = today - timedelta(days=1)
+    elif preset == "last_7_days":
+        start, end = today - timedelta(days=6), today
+    elif preset == "custom" and custom_from and custom_to and custom_from <= custom_to:
+        start, end = custom_from, custom_to
+    else:
+        raise HTTPException(status_code=422, detail="Invalid date filter")
+    start_utc, _ = _mail_date_utc_window(start)
+    _, end_utc = _mail_date_utc_window(end)
+    return start_utc, end_utc
+
+
 def _mail_date_filter_field(states: list[str]) -> str:
     normalized = {s.strip().lower() for s in states if s.strip()}
     if normalized == {"approved_sent"}:
@@ -814,13 +862,25 @@ def _load_recruiter_number_for_sent_details(
     email: RecruiterEmail,
     recruiter_email: str | None,
 ) -> PremiumNumberContact | None:
+    if email.resolved_recruiter_contact_id:
+        row = (
+            db.query(PremiumNumberContact)
+            .filter(
+                PremiumNumberContact.owner_id == settings.owner_id,
+                PremiumNumberContact.id == email.resolved_recruiter_contact_id,
+                PremiumNumberContact.is_recruiter.is_(True),
+                PremiumNumberContact.deleted_at.is_(None),
+            )
+            .first()
+        )
+        if row:
+            return row
     row = (
         db.query(PremiumNumberContact)
         .filter(
             PremiumNumberContact.owner_id == settings.owner_id,
             PremiumNumberContact.is_recruiter.is_(True),
             PremiumNumberContact.first_detected_email_id == email.id,
-            PremiumNumberContact.deleted_at.is_(None),
             PremiumNumberContact.deleted_at.is_(None),
         )
         .first()
@@ -834,13 +894,60 @@ def _load_recruiter_number_for_sent_details(
         .filter(
             PremiumNumberContact.owner_id == settings.owner_id,
             PremiumNumberContact.is_recruiter.is_(True),
-            PremiumNumberContact.recruiter_email == recruiter_email,
-            PremiumNumberContact.deleted_at.is_(None),
+            or_(
+                PremiumNumberContact.recruiter_email == recruiter_email,
+                PremiumNumberContact.id.in_(
+                    db.query(PremiumContactEmail.premium_contact_id).filter(
+                        PremiumContactEmail.owner_id == settings.owner_id,
+                        PremiumContactEmail.normalized_email == recruiter_email.strip().lower(),
+                    )
+                ),
+            ),
             PremiumNumberContact.deleted_at.is_(None),
         )
         .order_by(PremiumNumberContact.updated_at.desc(), PremiumNumberContact.id.desc())
         .first()
     )
+
+
+def _resolve_recruiter_contact_for_email(
+    db: Session,
+    email: RecruiterEmail,
+    *,
+    create_missing: bool = True,
+) -> tuple[str | None, PremiumNumberContact | None]:
+    sender_name, sender_email = _parse_sender_contact(email.sender)
+    external = _load_external_opportunity_for_sent_details(db, email) if email.source == "nvoids" else None
+    employer_domains = employer_domains_for_owner(db, email.owner_id)
+
+    def matched(address: str | None, *, employer: bool) -> str | None:
+        cleaned = _clean_optional_text(address)
+        return cleaned if cleaned and (email_domain(cleaned) in employer_domains) == employer else None
+
+    recruiter_email = (
+        _clean_optional_text(external.recruiter_email if external else None)
+        or matched(email.recipient_email, employer=False)
+        or matched(sender_email, employer=False)
+    )
+    normalized = recruiter_email.strip().lower() if recruiter_email else None
+    contact = _load_recruiter_number_for_sent_details(db, email, normalized)
+    if contact is None and normalized and create_missing:
+        name_from_sender = sender_name if normalized == (sender_email or "").strip().lower() else None
+        result = contact_identity_service.reconcile(
+            db,
+            owner_id=email.owner_id,
+            normalized_email=normalized,
+            name=name_from_sender or "",
+            company=(email.company or "").strip() or "Unknown",
+            role="recruiter",
+            source_email_id=email.id,
+            human_confirmed=False,
+        )
+        contact = result.contact
+    if create_missing:
+        email.resolved_recruiter_contact_id = contact.id if contact else None
+        email.resolved_recruiter_email = normalized
+    return normalized, contact
 
 
 def _load_employer_number_for_sent_details(
@@ -959,16 +1066,11 @@ def _build_sent_item_details(db: Session, email: RecruiterEmail) -> SentItemDeta
         return cleaned if is_employer == want_employer_domain else None
 
     recipient_clean = _clean_optional_text(email.recipient_email)
-    recruiter_email = (
-        _clean_optional_text(external.recruiter_email if external else None)
-        or _domain_matched_address(recipient_clean, want_employer_domain=False)
-        or _domain_matched_address(sender_email, want_employer_domain=False)
-    )
+    recruiter_email, recruiter_number = _resolve_recruiter_contact_for_email(db, email)
     employer_email_guess = (
         _domain_matched_address(recipient_clean, want_employer_domain=True)
         or _domain_matched_address(sender_email, want_employer_domain=True)
     )
-    recruiter_number = _load_recruiter_number_for_sent_details(db, email, recruiter_email)
     employer_number = _load_employer_number_for_sent_details(db, email, employer_email_guess)
     company = (
         _clean_optional_text(external.company if external else None)
@@ -1011,6 +1113,7 @@ def _build_sent_item_details(db: Session, email: RecruiterEmail) -> SentItemDeta
             _clean_optional_text(employer_number.employer_email if employer_number else None)
             or employer_email_guess
         ),
+        employer_email_domain=(_clean_optional_text(email_domain(employer_email_guess)) if employer_email_guess else None),
         employer_phone=_clean_optional_text(employer_number.display_phone_number if employer_number else None),
         employer_company=_clean_optional_text(employer_number.company if employer_number else None),
         end_client=(
@@ -2394,11 +2497,177 @@ def _compact_resume_picker_candidates(value: object) -> dict[str, object] | None
 
 def _serialize_candidate_for_review(db: Session, email: RecruiterEmail) -> EmailResponse:
     _hydrate_candidates_for_review(db, [email])
+    _resolve_recruiter_contact_for_email(db, email)
+    badge_fields = _populate_badge_fields(db, email.owner_id, [email])
+    if db.new or db.dirty:
+        db.commit()
+        db.refresh(email)
     payload = EmailResponse.model_validate(email).model_dump()
+    payload.update(badge_fields.get(email.id, {}))
     payload["attachment_file_names"] = _enabled_attachment_file_names(db)
     payload["parser_details"] = email.parser_details_json
     payload["sendability_status"] = resolve_sendability_status(email)
     return EmailResponse.model_validate(payload)
+
+
+def _identity_key(row: RecruiterEmail | AppTSApplication) -> str | None:
+    if row.resolved_recruiter_contact_id:
+        return f"contact:{row.resolved_recruiter_contact_id}"
+    return f"email:{row.resolved_recruiter_email}" if row.resolved_recruiter_email else None
+
+
+def _contact_status(contact: PremiumNumberContact) -> str:
+    unknown = lambda value: not str(value or "").strip() or str(value).strip().lower() == "unknown"
+    flagged = (
+        (contact.is_recruiter and (unknown(contact.recruiter_name) or unknown(contact.company)))
+        or (contact.is_employer and (unknown(contact.owner_name) or unknown(contact.company)))
+        or not contact.phone_is_valid
+    )
+    return "Flagged" if flagged else "Active"
+
+
+def _recruiter_email_guess_for_badges(
+    db: Session,
+    email: RecruiterEmail,
+    employer_domains: set[str],
+) -> str | None:
+    _sender_name, sender_email = _parse_sender_contact(email.sender)
+    external = _load_external_opportunity_for_sent_details(db, email) if email.source == "nvoids" else None
+
+    def matched(address: str | None, *, employer: bool) -> str | None:
+        cleaned = _clean_optional_text(address)
+        return cleaned if cleaned and (email_domain(cleaned) in employer_domains) == employer else None
+
+    recruiter_email = (
+        _clean_optional_text(external.recruiter_email if external else None)
+        or matched(email.recipient_email, employer=False)
+        or matched(sender_email, employer=False)
+    )
+    return recruiter_email.strip().lower() if recruiter_email else None
+
+
+def _existing_recruiter_contacts_for_badges(
+    db: Session,
+    owner_id: str,
+    emails: list[RecruiterEmail],
+) -> tuple[dict[int, str | None], dict[int, PremiumNumberContact | None]]:
+    ids = [email.id for email in emails]
+    employer_domains = employer_domains_for_owner(db, owner_id)
+    normalized_by_email_id = {
+        email.id: (_recruiter_email_guess_for_badges(db, email, employer_domains) or email.resolved_recruiter_email)
+        for email in emails
+    }
+    by_resolved_id: dict[int, PremiumNumberContact] = {}
+    resolved_ids = {email.resolved_recruiter_contact_id for email in emails if email.resolved_recruiter_contact_id}
+    if resolved_ids:
+        for contact in db.query(PremiumNumberContact).filter(PremiumNumberContact.owner_id == owner_id, PremiumNumberContact.id.in_(resolved_ids), PremiumNumberContact.is_recruiter.is_(True), PremiumNumberContact.deleted_at.is_(None)).all():
+            by_resolved_id[contact.id] = contact
+
+    by_first_email_id: dict[int, PremiumNumberContact] = {}
+    if ids:
+        for contact in db.query(PremiumNumberContact).filter(PremiumNumberContact.owner_id == owner_id, PremiumNumberContact.first_detected_email_id.in_(ids), PremiumNumberContact.is_recruiter.is_(True), PremiumNumberContact.deleted_at.is_(None)).order_by(PremiumNumberContact.updated_at.desc(), PremiumNumberContact.id.desc()).all():
+            if contact.first_detected_email_id is not None:
+                by_first_email_id.setdefault(contact.first_detected_email_id, contact)
+
+    by_normalized_email: dict[str, PremiumNumberContact] = {}
+    normalized_values = {value for value in normalized_by_email_id.values() if value}
+    if normalized_values:
+        for contact in db.query(PremiumNumberContact).filter(PremiumNumberContact.owner_id == owner_id, PremiumNumberContact.is_recruiter.is_(True), func.lower(PremiumNumberContact.recruiter_email).in_(normalized_values), PremiumNumberContact.deleted_at.is_(None)).order_by(PremiumNumberContact.updated_at.desc(), PremiumNumberContact.id.desc()).all():
+            key = (contact.recruiter_email or "").strip().lower()
+            if key:
+                by_normalized_email.setdefault(key, contact)
+        for normalized_email, contact in (
+            db.query(PremiumContactEmail.normalized_email, PremiumNumberContact)
+            .join(PremiumNumberContact, PremiumNumberContact.id == PremiumContactEmail.premium_contact_id)
+            .filter(
+                PremiumContactEmail.owner_id == owner_id,
+                PremiumContactEmail.normalized_email.in_(normalized_values),
+                PremiumNumberContact.owner_id == owner_id,
+                PremiumNumberContact.is_recruiter.is_(True),
+                PremiumNumberContact.deleted_at.is_(None),
+            )
+            .order_by(PremiumNumberContact.updated_at.desc(), PremiumNumberContact.id.desc())
+            .all()
+        ):
+            by_normalized_email.setdefault(normalized_email, contact)
+
+    contact_by_email_id: dict[int, PremiumNumberContact | None] = {}
+    for email in emails:
+        normalized = normalized_by_email_id.get(email.id)
+        contact = by_first_email_id.get(email.id)
+        if contact is None and email.resolved_recruiter_contact_id:
+            contact = by_resolved_id.get(email.resolved_recruiter_contact_id)
+        if contact is None and normalized:
+            contact = by_normalized_email.get(normalized)
+        contact_by_email_id[email.id] = contact
+    return normalized_by_email_id, contact_by_email_id
+
+
+def _populate_badge_fields(
+    db: Session,
+    owner_id: str,
+    emails: list[RecruiterEmail],
+) -> dict[int, dict[str, object]]:
+    normalized_by_email_id, resolved = _existing_recruiter_contacts_for_badges(db, owner_id, emails)
+    identity_keys: dict[int, str | None] = {}
+    for email in emails:
+        contact = resolved[email.id]
+        normalized = normalized_by_email_id.get(email.id)
+        identity_keys[email.id] = f"contact:{contact.id}" if contact else (_identity_key(email) or (f"email:{normalized}" if normalized else None))
+    keys = set(identity_keys.values()) - {None}
+    if not keys:
+        return {email.id: {"marked_for_tracking": bool(email.marked_for_tracking)} for email in emails}
+    contact_ids = {int(key.split(":", 1)[1]) for key in keys if key.startswith("contact:")}
+    bare_emails = {key.split(":", 1)[1] for key in keys if key.startswith("email:")}
+
+    def identity_clause(model: type):
+        clauses = []
+        if contact_ids:
+            clauses.append(model.resolved_recruiter_contact_id.in_(contact_ids))
+        if bare_emails:
+            clauses.append(and_(model.resolved_recruiter_contact_id.is_(None), model.resolved_recruiter_email.in_(bare_emails)))
+        return or_(*clauses)
+
+    bookmarked = db.query(RecruiterEmail).filter(RecruiterEmail.owner_id == owner_id, RecruiterEmail.state == "needs_review", RecruiterEmail.marked_for_tracking.is_(True), identity_clause(RecruiterEmail)).order_by(RecruiterEmail.created_at.desc(), RecruiterEmail.id.desc()).all()
+    tracked = db.query(AppTSApplication).filter(AppTSApplication.owner_id == owner_id, AppTSApplication.deleted_at.is_(None), identity_clause(AppTSApplication)).order_by(AppTSApplication.created_at.desc(), AppTSApplication.id.desc()).all()
+    active = db.query(RecruiterEmail).filter(RecruiterEmail.owner_id == owner_id, RecruiterEmail.state == "approved_sent", identity_clause(RecruiterEmail)).order_by(RecruiterEmail.sent_at.desc(), RecruiterEmail.id.desc()).all()
+
+    grouped: dict[str, dict[str, list[object]]] = {}
+    for kind, rows in (("bookmarked", bookmarked), ("tracked", tracked), ("active", active)):
+        for row in rows:
+            key = _identity_key(row)
+            if key:
+                grouped.setdefault(key, {"bookmarked": [], "tracked": [], "active": []})[kind].append(row)
+    result: dict[int, dict[str, object]] = {}
+    for email in emails:
+        contact = resolved[email.id]
+        values: dict[str, object] = {"marked_for_tracking": bool(email.marked_for_tracking)}
+        if contact and contact.normalized_phone_number:
+            values.update(premium_status=_contact_status(contact), premium_verification_level=contact.recruiter_verification_level)
+        matches = grouped.get(identity_keys.get(email.id) or "", {})
+        selected_kind = next((kind for kind in ("tracked", "bookmarked", "active") if any(getattr(row, "id", None) != email.id or kind == "tracked" for row in matches.get(kind, []))), None)
+        if selected_kind:
+            match = next(row for row in matches[selected_kind] if getattr(row, "id", None) != email.id or selected_kind == "tracked")
+            match_role = match.job_title_snapshot if selected_kind == "tracked" else match.role
+            match_skills = match.resume_skills_snapshot_json if selected_kind == "tracked" else match.skills_text
+            similarity = role_similarity_service.compute_role_similarity(
+                db, owner_id=owner_id, left_type="recruiter_email", left_id=email.id,
+                left_role_text=email.role or "", left_skills_text=email.skills_text or "",
+                right_type="appts_application" if selected_kind == "tracked" else "recruiter_email", right_id=match.id,
+                right_role_text=match_role or "", right_skills_text=match_skills or "",
+                left_embedding_cached=email.semantic_embedding,
+                right_embedding_cached=match.embedding if selected_kind == "tracked" else match.semantic_embedding,
+            )
+            values["following_badge"] = selected_kind
+            values["following_warning"] = (
+                "This recruiter has a previous requirement that may be similar — review before proceeding."
+                if similarity.tier == "related"
+                else f"This recruiter has a prior {selected_kind} requirement for {'a similar' if similarity.tier == 'same' else 'a different'} role ({match_role or 'Not specified'})."
+            )
+        result[email.id] = values
+    if db.new:
+        db.commit()
+    return result
 
 
 def _get_candidate_for_review(db: Session, email_id: int) -> RecruiterEmail:
@@ -4013,6 +4282,13 @@ def _get_application(db: Session, application_id: int) -> Application:
     return row
 
 
+def _get_appts_application(db: Session, application_id: int) -> AppTSApplication:
+    row = db.query(AppTSApplication).filter(AppTSApplication.owner_id == settings.owner_id, AppTSApplication.id == application_id, AppTSApplication.deleted_at.is_(None)).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="AppTS application not found")
+    return row
+
+
 def _get_application_rtr(db: Session, application: Application, rtr_id: int) -> ApplicationRTR:
     row = (
         db.query(ApplicationRTR)
@@ -4103,6 +4379,7 @@ def _application_response(
     row: Application,
     *,
     include_events: bool = False,
+    models: application_service.ApplicationModels = application_service.LEGACY_MODELS,
 ) -> ApplicationResponse:
     opportunity = (
         db.query(RecruiterOpportunity)
@@ -4122,48 +4399,48 @@ def _application_response(
         .first()
     )
     events = (
-        db.query(ApplicationEvent)
+        db.query(models.event_cls)
         .filter(
-            ApplicationEvent.owner_id == settings.owner_id,
-            ApplicationEvent.application_id == row.id,
+            models.event_cls.owner_id == settings.owner_id,
+            models.event_cls.application_id == row.id,
         )
-        .order_by(ApplicationEvent.occurred_at.asc(), ApplicationEvent.id.asc())
+        .order_by(models.event_cls.occurred_at.asc(), models.event_cls.id.asc())
         .all()
         if include_events
         else []
     )
     rtr_history = (
-        db.query(ApplicationRTR)
+        db.query(models.rtr_cls)
         .filter(
-            ApplicationRTR.owner_id == settings.owner_id,
-            ApplicationRTR.application_id == row.id,
+            models.rtr_cls.owner_id == settings.owner_id,
+            models.rtr_cls.application_id == row.id,
         )
-        .order_by(ApplicationRTR.requested_at.desc(), ApplicationRTR.id.desc())
+        .order_by(models.rtr_cls.requested_at.desc(), models.rtr_cls.id.desc())
         .all()
         if include_events
         else []
     )
     interviews = (
-        db.query(ApplicationInterview)
+        db.query(models.interview_cls)
         .filter(
-            ApplicationInterview.owner_id == settings.owner_id,
-            ApplicationInterview.application_id == row.id,
-            ApplicationInterview.deleted_at.is_(None),
+            models.interview_cls.owner_id == settings.owner_id,
+            models.interview_cls.application_id == row.id,
+            models.interview_cls.deleted_at.is_(None),
         )
         .order_by(
-            ApplicationInterview.scheduled_at.is_(None),
-            ApplicationInterview.scheduled_at.asc(),
-            ApplicationInterview.id.asc(),
+            models.interview_cls.scheduled_at.is_(None),
+            models.interview_cls.scheduled_at.asc(),
+            models.interview_cls.id.asc(),
         )
         .all()
         if include_events
         else []
     )
     skill_gap = (
-        db.query(ApplicationSkillGapSnapshot)
+        db.query(models.skill_gap_snapshot_cls)
         .filter(
-            ApplicationSkillGapSnapshot.owner_id == settings.owner_id,
-            ApplicationSkillGapSnapshot.application_id == row.id,
+            models.skill_gap_snapshot_cls.owner_id == settings.owner_id,
+            models.skill_gap_snapshot_cls.application_id == row.id,
         )
         .first()
     )
@@ -4372,6 +4649,9 @@ def list_candidates(
     limit: int = Query(20, ge=1, le=100),
     sort: str = Query("newest"),
     mail_date: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    date_filter: str | None = Query(default=None),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
     source: str | None = Query(default=None),
     sendability: str | None = Query(default=None),
     has_resume: bool | None = Query(default=None),
@@ -4397,7 +4677,11 @@ def list_candidates(
     if states:
         query = query.filter(or_(*[RecruiterEmail.state == s for s in states]))
 
-    if mail_date:
+    if date_filter:
+        start, end = _date_range_utc_window(date_filter, date_from, date_to)
+        field = RecruiterEmail.sent_at if _is_approved_sent_only(states) else RecruiterEmail.gmail_received_at
+        query = query.filter(field.is_not(None), field >= start, field < end)
+    elif mail_date:
         try:
             selected = date.fromisoformat(mail_date)
         except ValueError as exc:
@@ -4474,6 +4758,7 @@ def list_candidates(
     has_next = len(items) > limit
     visible = items[:limit]
     _hydrate_candidates_for_review(db, visible)
+    badge_fields = _populate_badge_fields(db, settings.owner_id, visible)
     next_cursor = cursor + limit if has_next else None
     attachment_file_names = _enabled_attachment_file_names(db)
     serialized_items: list[EmailResponse] = []
@@ -4483,6 +4768,7 @@ def list_candidates(
         payload["parser_details"] = item.parser_details_json
         payload["resume_picker_candidates"] = _compact_resume_picker_candidates(payload["resume_picker_candidates"])
         payload["sendability_status"] = resolve_sendability_status(item)
+        payload.update(badge_fields.get(item.id, {}))
         serialized_items.append(EmailResponse.model_validate(payload))
     return CandidateListResponse(
         items=serialized_items,
@@ -4597,18 +4883,33 @@ def _contact_is_flagged_expr():
 
 
 @app.get("/premium-numbers/inventory", response_model=PremiumNumberInventoryListResponse)
-def list_premium_number_inventory(cursor: int = Query(0, ge=0), limit: int = Query(25, ge=1, le=100), q: str | None = Query(default=None, max_length=255), status: str | None = Query(default=None), category: str | None = Query(default=None), source_type: str | None = Query(default=None), min_score: int | None = Query(default=None, ge=0), max_score: int | None = Query(default=None, ge=0), sort: str = Query("newest"), db: Session = Depends(get_db)) -> PremiumNumberInventoryListResponse:
+def list_premium_number_inventory(
+    cursor: int = Query(0, ge=0), limit: int = Query(25, ge=1, le=100), q: str | None = Query(default=None, max_length=255),
+    status: str | None = Query(default=None), category: str | None = Query(default=None), source_type: str | None = Query(default=None),
+    min_score: int | None = Query(default=None, ge=0), max_score: int | None = Query(default=None, ge=0), sort: str = Query("newest"),
+    domain: str | None = Query(default=None, max_length=255), favorite: str = Query("all", pattern="^(all|favorites_only|non_favorites_only)$"),
+    date_filter: str | None = Query(default=None), date_from: date | None = Query(default=None), date_to: date | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> PremiumNumberInventoryListResponse:
     if sort not in {"newest", "oldest", "highest_score", "lowest_score"}: raise HTTPException(status_code=422, detail="Invalid sort. Must be one of: newest, oldest, highest_score, lowest_score")
     if min_score is not None and max_score is not None and min_score > max_score: raise HTTPException(status_code=422, detail="min_score must be <= max_score")
     owner = settings.owner_id
     review = sa.select(NumberReviewQueue.id.label("id"), sa.literal("review").label("kind"), NumberReviewQueue.display_phone_number.label("number"), NumberReviewQueue.owner_name.label("owner"), NumberReviewQueue.company.label("company"), (NumberReviewQueue.role == "recruiter").label("is_recruiter"), (NumberReviewQueue.role == "employer").label("is_employer"), sa.literal("Pending").label("status"), NumberReviewQueue.recruiter_relevance_score.label("score"), sa.case((NumberReviewQueue.source_external_opportunity_id.is_not(None), "nvoids"), else_="gmail").label("source_type"), NumberReviewQueue.updated_at.label("last_checked_at")).where(NumberReviewQueue.owner_id == owner, NumberReviewQueue.state == "pending")
-    active_score = sa.func.coalesce(sa.select(PremiumNumberLead.recruiter_relevance_score).where(PremiumNumberLead.id == PremiumNumberContact.active_recruiter_lead_id).scalar_subquery(), sa.select(PremiumNumberLead.recruiter_relevance_score).where(PremiumNumberLead.id == PremiumNumberContact.active_employer_lead_id).scalar_subquery(), 0)
+    active_score = sa.func.coalesce(sa.select(PremiumNumberLead.recruiter_relevance_score).where(PremiumNumberLead.id == PremiumNumberContact.active_recruiter_lead_id).scalar_subquery(), sa.select(PremiumNumberLead.recruiter_relevance_score).where(PremiumNumberLead.id == PremiumNumberContact.active_employer_lead_id).scalar_subquery())
     flagged = _contact_is_flagged_expr()
-    contact = sa.select(PremiumNumberContact.id.label("id"), sa.literal("contact").label("kind"), PremiumNumberContact.display_phone_number.label("number"), sa.func.coalesce(sa.case((PremiumNumberContact.is_recruiter, PremiumNumberContact.recruiter_name)), sa.case((PremiumNumberContact.is_employer, PremiumNumberContact.owner_name))).label("owner"), PremiumNumberContact.company.label("company"), PremiumNumberContact.is_recruiter.label("is_recruiter"), PremiumNumberContact.is_employer.label("is_employer"), sa.case((flagged, "Flagged"), else_="Active").label("status"), active_score.label("score"), PremiumNumberContact.source_type.label("source_type"), PremiumNumberContact.updated_at.label("last_checked_at")).where(PremiumNumberContact.owner_id == owner, PremiumNumberContact.deleted_at.is_(None))
+    contact_status = sa.case((PremiumNumberContact.normalized_phone_number.is_(None), "Unscored"), (flagged, "Flagged"), else_="Active")
+    contact = sa.select(PremiumNumberContact.id.label("id"), sa.literal("contact").label("kind"), PremiumNumberContact.display_phone_number.label("number"), sa.func.coalesce(sa.case((PremiumNumberContact.is_recruiter, PremiumNumberContact.recruiter_name)), sa.case((PremiumNumberContact.is_employer, PremiumNumberContact.owner_name))).label("owner"), PremiumNumberContact.company.label("company"), PremiumNumberContact.is_recruiter.label("is_recruiter"), PremiumNumberContact.is_employer.label("is_employer"), contact_status.label("status"), active_score.label("score"), PremiumNumberContact.source_type.label("source_type"), PremiumNumberContact.updated_at.label("last_checked_at")).where(PremiumNumberContact.owner_id == owner, PremiumNumberContact.deleted_at.is_(None))
+    if domain and domain.strip(): contact = contact.where(or_(PremiumNumberContact.recruiter_email_domain.ilike(f"%{domain.strip()}%"), PremiumNumberContact.employer_email_domain.ilike(f"%{domain.strip()}%"), PremiumNumberContact.id.in_(db.query(PremiumContactEmail.premium_contact_id).filter(PremiumContactEmail.domain.ilike(f"%{domain.strip()}%")))))
+    if favorite == "favorites_only": contact = contact.where(PremiumNumberContact.is_favorite.is_(True)); review = review.where(sa.false())
+    elif favorite == "non_favorites_only": contact = contact.where(PremiumNumberContact.is_favorite.is_(False)); review = review.where(sa.false())
+    if date_filter:
+        start, end = _date_range_utc_window(date_filter, date_from, date_to)
+        contact = contact.where(PremiumNumberContact.created_at >= start, PremiumNumberContact.created_at < end)
+        review = review.where(NumberReviewQueue.created_at >= start, NumberReviewQueue.created_at < end)
     unified = sa.union_all(review, contact).subquery()
     query = sa.select(unified)
     if q and q.strip():
-        like=f"%{q.strip()}%"; query=query.where(sa.or_(unified.c.number.ilike(like),unified.c.owner.ilike(like),unified.c.company.ilike(like)))
+        like=f"%{q.strip()}%"; alternate_ids = db.query(PremiumContactEmail.premium_contact_id).filter(PremiumContactEmail.normalized_email.ilike(like)).union(db.query(PremiumContactPhone.premium_contact_id).filter(PremiumContactPhone.normalized_phone_number.ilike(like))); query=query.where(sa.or_(unified.c.number.ilike(like),unified.c.owner.ilike(like),unified.c.company.ilike(like), sa.and_(unified.c.kind == "contact", unified.c.id.in_(alternate_ids))))
     if status:
         values=[value.strip().capitalize() for value in status.split(",") if value.strip()]
         if values: query=query.where(unified.c.status.in_(values))
@@ -4623,7 +4924,7 @@ def list_premium_number_inventory(cursor: int = Query(0, ge=0), limit: int = Que
     if min_score is not None: query=query.where(unified.c.score >= min_score)
     if max_score is not None: query=query.where(unified.c.score <= max_score)
     total=db.execute(sa.select(sa.func.count()).select_from(query.subquery())).scalar_one()
-    order={"oldest":(unified.c.last_checked_at.asc(),unified.c.kind.asc(),unified.c.id.asc()),"highest_score":(unified.c.score.desc(),unified.c.kind.asc(),unified.c.id.asc()),"lowest_score":(unified.c.score.asc(),unified.c.kind.asc(),unified.c.id.asc())}.get(sort,(unified.c.last_checked_at.desc(),unified.c.kind.asc(),unified.c.id.asc()))
+    order={"oldest":(unified.c.last_checked_at.asc(),unified.c.kind.asc(),unified.c.id.asc()),"highest_score":(sa.nullslast(unified.c.score.desc()),unified.c.kind.asc(),unified.c.id.asc()),"lowest_score":(sa.nullslast(unified.c.score.asc()),unified.c.kind.asc(),unified.c.id.asc())}.get(sort,(unified.c.last_checked_at.desc(),unified.c.kind.asc(),unified.c.id.asc()))
     rows=db.execute(query.order_by(*order).offset(cursor).limit(limit+1)).all(); visible=rows[:limit]
     review_ids=[row.id for row in visible if row.kind=="review"]; contact_ids=[row.id for row in visible if row.kind=="contact"]
     review_by_id={row.id:UnknownNumberReviewCardResponse.model_validate(row) for row in db.query(NumberReviewQueue).filter(NumberReviewQueue.owner_id==owner,NumberReviewQueue.id.in_(review_ids)).all()} if review_ids else {}
@@ -4649,22 +4950,14 @@ def create_premium_contact(
     if email and ("@" not in email or parseaddr(email)[1].lower() != email):
         raise HTTPException(status_code=422, detail="A valid email address is required")
 
-    contact = (
-        db.query(PremiumNumberContact)
-        .filter(
-            PremiumNumberContact.owner_id == settings.owner_id,
-            PremiumNumberContact.normalized_phone_number == canonical_phone,
-        )
-        .first()
+    result = contact_identity_service.reconcile(
+        db, owner_id=settings.owner_id, normalized_phone=canonical_phone, normalized_email=email,
+        name=payload.name, company=payload.company, role=payload.role, human_confirmed=True,
     )
-    created = contact is None
-    if contact is None:
-        contact = PremiumNumberContact(
-            owner_id=settings.owner_id,
-            normalized_phone_number=canonical_phone,
-            display_phone_number=best_display_phone(payload.phone, fallback=payload.phone),
-        )
-        db.add(contact)
+    if result.contact is None:
+        raise HTTPException(status_code=409, detail="Contact identity requires approval")
+    contact = result.contact
+    created = result.status == "created"
 
     contact.display_phone_number = best_display_phone(payload.phone, fallback=payload.phone)
     contact.phone_is_valid = bool(canonicalize_phone(contact.normalized_phone_number) or canonicalize_phone(contact.display_phone_number))
@@ -4943,27 +5236,21 @@ def _contact_for_review(
     canonical_phone = canonicalize_phone(values["display_phone_number"])
     if not canonical_phone:
         raise HTTPException(status_code=422, detail="Invalid phone number on review card")
-    contact = (
-        db.query(PremiumNumberContact)
-        .filter(
-            PremiumNumberContact.owner_id == settings.owner_id,
-            PremiumNumberContact.normalized_phone_number == canonical_phone,
-        )
-        .first()
-    )
-    if contact:
-        contact.deleted_at = None
-        return contact
-    contact = PremiumNumberContact(
+    result = contact_identity_service.reconcile(
+        db,
         owner_id=settings.owner_id,
-        normalized_phone_number=canonical_phone,
-        display_phone_number=_standardized_display_phone(values["display_phone_number"], canonical_phone),
-        first_detected_email_id=card.source_email_id,
+        normalized_phone=canonical_phone,
+        normalized_email=values.get("contact_email", ""),
+        name=values.get("owner_name", ""),
+        company=values.get("company", ""),
+        role=card.role or "recruiter",
         source_email_id=card.source_email_id,
+        human_confirmed=True,
     )
-    db.add(contact)
-    db.flush()
-    return contact
+    if result.contact is None:
+        raise HTTPException(status_code=409, detail="Contact identity requires approval")
+    result.contact.deleted_at = None
+    return result.contact
 
 
 def _ensure_review_opportunity(
@@ -5270,6 +5557,36 @@ def mark_number_as_employer(
     return _mark_number_as_employer(db, review_id, payload)
 
 
+@app.post("/number-review/{review_id}/approve-link", response_model=dict[str, int | str])
+def approve_contact_link(review_id: int, db: Session = Depends(get_db)) -> dict[str, int | str]:
+    card = _review_card(db, review_id)
+    try:
+        contact = contact_identity_service.approve_link(db, card)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    db.commit()
+    return {"review_id": review_id, "contact_id": contact.id, "status": "resolved"}
+
+
+@app.post("/number-review/{review_id}/approve-merge", response_model=dict[str, int | str])
+def approve_contact_merge(review_id: int, payload: ContactMergeApprovalRequest | None = None, db: Session = Depends(get_db)) -> dict[str, int | str]:
+    card = _review_card(db, review_id)
+    try:
+        contact = contact_identity_service.approve_merge(db, card, payload.canonical_contact_id if payload else None)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    db.commit()
+    return {"review_id": review_id, "contact_id": contact.id, "status": "resolved"}
+
+
+@app.post("/number-review/{review_id}/dismiss", response_model=dict[str, int | str])
+def dismiss_contact_suggestion(review_id: int, db: Session = Depends(get_db)) -> dict[str, int | str]:
+    card = _review_card(db, review_id)
+    contact_identity_service.dismiss(card)
+    db.commit()
+    return {"review_id": review_id, "status": "dismissed"}
+
+
 @app.delete("/number-review/{review_id}", response_model=dict[str, int | str])
 def delete_number_review_card(
     review_id: int,
@@ -5363,6 +5680,8 @@ def _recruiter_number_response(
         db, contact, "recruiter"
     )
     flagged = _contact_is_flagged(contact, "recruiter")
+    emails = db.query(PremiumContactEmail).filter(PremiumContactEmail.premium_contact_id == contact.id).order_by(PremiumContactEmail.is_primary.desc(), PremiumContactEmail.id.asc()).all()
+    phones = db.query(PremiumContactPhone).filter(PremiumContactPhone.premium_contact_id == contact.id).order_by(PremiumContactPhone.is_primary.desc(), PremiumContactPhone.id.asc()).all()
     return RecruiterNumberResponse(
         id=contact.id,
         normalized_phone_number=contact.normalized_phone_number,
@@ -5371,6 +5690,11 @@ def _recruiter_number_response(
         company=contact.company,
         designation=contact.designation,
         recruiter_email=contact.recruiter_email,
+        recruiter_email_domain=contact.recruiter_email_domain,
+        employer_email_domain=contact.employer_email_domain,
+        is_favorite=contact.is_favorite,
+        emails=[{"email": row.normalized_email, "domain": row.domain, "is_primary": row.is_primary} for row in emails],
+        phones=[{"phone": row.normalized_phone_number, "is_primary": row.is_primary, "is_verified": row.is_verified} for row in phones],
         first_detected_email_id=contact.first_detected_email_id,
         source_type=source_type,
         source_id=source_id,
@@ -5406,6 +5730,8 @@ def _employer_number_response(db: Session, contact: PremiumNumberContact) -> Emp
         owner_name=contact.owner_name,
         company=contact.company,
         employer_email=contact.employer_email,
+        employer_email_domain=contact.employer_email_domain,
+        is_favorite=contact.is_favorite,
         source_email_id=contact.source_email_id,
         source_type=source_type,
         source_id=source_id,
@@ -5498,7 +5824,10 @@ def patch_recruiter_number(
     if payload.designation is not None:
         contact.designation = payload.designation.strip() or "Unknown"
     if payload.recruiter_email is not None:
-        contact.recruiter_email = payload.recruiter_email.strip()
+        contact.recruiter_email = payload.recruiter_email.strip().lower()
+        contact.recruiter_email_domain = contact.recruiter_email.rpartition("@")[2]
+    if payload.is_favorite is not None:
+        contact.is_favorite = payload.is_favorite
     if payload.linkedin_url is not None:
         contact.linkedin_url = _normalize_linkedin_url(payload.linkedin_url)
     if payload.recruiter_verification_level is not None:
@@ -5537,6 +5866,9 @@ def patch_employer_number(
         contact.company = payload.company.strip() or "Unknown"
     if payload.employer_email is not None:
         contact.employer_email = payload.employer_email.strip()
+        contact.employer_email_domain = contact.employer_email.rpartition("@")[2]
+    if payload.is_favorite is not None:
+        contact.is_favorite = payload.is_favorite
     contact.updated_at = datetime.now(UTC)
     db.commit()
     db.refresh(contact)
@@ -5978,6 +6310,9 @@ def list_recruiter_opportunities(
     source_type: str | None = Query(default=None),
     q: str | None = Query(default=None),
     mail_date: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    date_filter: str | None = Query(default=None),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
     job_title: str | None = Query(default=None, max_length=255),
     end_client: str | None = Query(default=None, max_length=255),
     location: str | None = Query(default=None, max_length=255),
@@ -5990,7 +6325,10 @@ def list_recruiter_opportunities(
         query = query.filter(RecruiterOpportunity.status == status)
     if source_type in {"gmail", "nvoids"}:
         query = query.filter(RecruiterOpportunity.source_type == source_type)
-    if mail_date:
+    if date_filter:
+        start, end = _date_range_utc_window(date_filter, date_from, date_to)
+        query = query.filter(RecruiterOpportunity.received_at >= start, RecruiterOpportunity.received_at < end)
+    elif mail_date:
         selected = date.fromisoformat(mail_date)
         start, end = _mail_date_utc_window(selected)
         query = query.filter(RecruiterOpportunity.received_at.is_not(None))
@@ -6498,6 +6836,165 @@ def refresh_recruiter_opportunity_ai_metadata(
     return _recruiter_opportunity_response(row, recruiter, row.record_id)
 
 
+@app.get("/appts/bookmarked-requirements", response_model=CandidateListResponse)
+def list_appts_bookmarked_requirements(
+    cursor: int = Query(0, ge=0),
+    limit: int = Query(25, ge=1, le=100),
+    date_filter: str | None = Query(default=None),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> CandidateListResponse:
+    query = db.query(RecruiterEmail).filter(RecruiterEmail.owner_id == settings.owner_id, RecruiterEmail.state == "needs_review", RecruiterEmail.marked_for_tracking.is_(True))
+    if date_filter:
+        start, end = _date_range_utc_window(date_filter, date_from, date_to)
+        query = query.filter(RecruiterEmail.created_at >= start, RecruiterEmail.created_at < end)
+    total = query.count()
+    rows = query.order_by(RecruiterEmail.created_at.desc(), RecruiterEmail.id.desc()).offset(cursor).limit(limit + 1).all()
+    visible = rows[:limit]
+    items = [_serialize_candidate_for_review(db, row) for row in visible]
+    return CandidateListResponse(items=items, next_cursor=cursor + limit if len(rows) > limit else None, has_next=len(rows) > limit, total=total)
+
+
+@app.post("/appts/applications/manual", response_model=ApplicationResponse, status_code=201)
+def create_appts_manual(payload: ManualApplicationCreateRequest, response: Response, db: Session = Depends(get_db)) -> ApplicationResponse:
+    try:
+        row, created = appts_service.create_tracked_application_manual(db, owner_id=settings.owner_id, **payload.model_dump())
+    except application_service.ApplicationReferenceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except application_service.ApplicationValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    db.commit(); db.refresh(row)
+    if created: appts_service.enqueue_embedding_generation(row.id)
+    response.status_code = 201 if created else 200
+    return _application_response(db, row, include_events=True, models=appts_service.APPTS_MODELS)
+
+
+@app.post("/appts/applications", response_model=ApplicationResponse, status_code=201)
+def create_appts_from_opportunity(payload: ApplicationCreateRequest, response: Response, db: Session = Depends(get_db)) -> ApplicationResponse:
+    try:
+        row, created = appts_service.create_tracked_application_from_opportunity(db, owner_id=settings.owner_id, **payload.model_dump())
+    except application_service.ApplicationReferenceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    db.commit(); db.refresh(row)
+    if created: appts_service.enqueue_embedding_generation(row.id)
+    response.status_code = 201 if created else 200
+    return _application_response(db, row, models=appts_service.APPTS_MODELS)
+
+
+@app.post("/appts/applications/from-submission/{legacy_application_id}", response_model=ApplicationResponse, status_code=201)
+def promote_submission_to_appts(legacy_application_id: int, response: Response, db: Session = Depends(get_db)) -> ApplicationResponse:
+    row, created = appts_service.promote_legacy_application(db, _get_application(db, legacy_application_id), owner_id=settings.owner_id)
+    db.commit(); db.refresh(row)
+    if created: appts_service.enqueue_embedding_generation(row.id)
+    response.status_code = 201 if created else 200
+    return _application_response(db, row, models=appts_service.APPTS_MODELS)
+
+
+@app.get("/appts/applications", response_model=ApplicationListResponse)
+def list_appts_applications(
+    cursor: int = Query(0, ge=0), limit: int = Query(25, ge=1, le=100), status: str | None = Query(default=None),
+    q: str | None = Query(default=None), sort: str = Query("newest"), date_filter: str | None = Query(default=None),
+    date_from: date | None = Query(default=None), date_to: date | None = Query(default=None), db: Session = Depends(get_db),
+) -> ApplicationListResponse:
+    if sort not in {"newest", "oldest", "next_action"}: raise HTTPException(status_code=422, detail="Invalid sort")
+    query = db.query(AppTSApplication).filter(AppTSApplication.owner_id == settings.owner_id, AppTSApplication.deleted_at.is_(None))
+    if status:
+        if status not in APPLICATION_STATUS_VALUES: raise HTTPException(status_code=422, detail="Invalid application status")
+        query = query.filter(AppTSApplication.status == status)
+    if q and q.strip():
+        like = f"%{q.strip()}%"; query = query.filter(or_(AppTSApplication.recruiter_name_snapshot.ilike(like), AppTSApplication.recruiter_company_snapshot.ilike(like), AppTSApplication.job_title_snapshot.ilike(like), AppTSApplication.end_client_snapshot.ilike(like), AppTSApplication.manual_recruiter_email.ilike(like)))
+    if date_filter:
+        start, end = _date_range_utc_window(date_filter, date_from, date_to); query = query.filter(AppTSApplication.created_at >= start, AppTSApplication.created_at < end)
+    total = query.count()
+    query = query.order_by(AppTSApplication.created_at.asc(), AppTSApplication.id.asc()) if sort == "oldest" else query.order_by(AppTSApplication.next_action_at.is_(None), AppTSApplication.next_action_at.asc(), AppTSApplication.id.asc()) if sort == "next_action" else query.order_by(AppTSApplication.created_at.desc(), AppTSApplication.id.desc())
+    rows = query.offset(cursor).limit(limit + 1).all(); visible = rows[:limit]
+    return ApplicationListResponse(items=[_application_response(db, row, models=appts_service.APPTS_MODELS) for row in visible], next_cursor=cursor + limit if len(rows) > limit else None, has_next=len(rows) > limit, total=total)
+
+
+@app.get("/appts/applications/{application_id}", response_model=ApplicationResponse)
+def get_appts_application(application_id: int, db: Session = Depends(get_db)) -> ApplicationResponse:
+    return _application_response(db, _get_appts_application(db, application_id), include_events=True, models=appts_service.APPTS_MODELS)
+
+
+@app.patch("/appts/applications/{application_id}", response_model=ApplicationResponse)
+def patch_appts_application(application_id: int, payload: ApplicationPatchRequest, db: Session = Depends(get_db)) -> ApplicationResponse:
+    row = _get_appts_application(db, application_id)
+    if payload.status: application_service.update_status(db, row, new_status=payload.status, closed_reason_code=payload.closed_reason_code, models=appts_service.APPTS_MODELS)
+    if payload.next_action_type is not None or payload.next_action_at is not None: application_service.set_next_action(db, row, next_action_type=payload.next_action_type, next_action_at=payload.next_action_at, models=appts_service.APPTS_MODELS)
+    if payload.closed_reason is not None: row.closed_reason = payload.closed_reason
+    db.commit(); db.refresh(row)
+    return _application_response(db, row, include_events=True, models=appts_service.APPTS_MODELS)
+
+
+@app.post("/appts/applications/{application_id}/events", response_model=ApplicationEventResponse, status_code=201)
+def create_appts_event(application_id: int, payload: ApplicationEventCreateRequest, db: Session = Depends(get_db)) -> ApplicationEventResponse:
+    event = application_service.append_event(db, _get_appts_application(db, application_id), event_type=payload.event_type, note=payload.note, linked_recruiter_email_id=payload.linked_recruiter_email_id, models=appts_service.APPTS_MODELS)
+    db.commit(); db.refresh(event); return ApplicationEventResponse.model_validate(event)
+
+
+@app.post("/appts/applications/{application_id}/rtr", response_model=ApplicationResponse, status_code=201)
+def create_appts_rtr(application_id: int, payload: ApplicationRTRRequest, db: Session = Depends(get_db)) -> ApplicationResponse:
+    row = _get_appts_application(db, application_id); application_service.request_rtr(db, row, **payload.model_dump(), models=appts_service.APPTS_MODELS); db.commit(); db.refresh(row)
+    return _application_response(db, row, include_events=True, models=appts_service.APPTS_MODELS)
+
+
+@app.patch("/appts/applications/{application_id}/rtr/{rtr_id}", response_model=ApplicationResponse)
+def update_appts_rtr(application_id: int, rtr_id: int, payload: ApplicationRTRUpdateRequest, db: Session = Depends(get_db)) -> ApplicationResponse:
+    row = _get_appts_application(db, application_id)
+    rtr = db.query(appts_service.APPTS_MODELS.rtr_cls).filter_by(owner_id=settings.owner_id, application_id=row.id, id=rtr_id).first()
+    if rtr is None:
+        raise HTTPException(status_code=404, detail="Application RTR not found")
+    try:
+        if payload.status == "confirmed":
+            application_service.confirm_rtr(db, row, rtr, proof_attachment_id=payload.proof_attachment_id, proof_recruiter_email_id=payload.proof_recruiter_email_id, models=appts_service.APPTS_MODELS)
+        else:
+            application_service.expire_or_revoke_rtr(db, row, rtr, new_status=payload.status, models=appts_service.APPTS_MODELS)
+    except application_service.ApplicationReferenceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except application_service.ApplicationValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    db.commit(); db.refresh(row)
+    return _application_response(db, row, include_events=True, models=appts_service.APPTS_MODELS)
+
+
+@app.post("/appts/applications/{application_id}/submit-to-client", response_model=ApplicationResponse)
+def submit_appts_to_client(application_id: int, payload: ApplicationSubmitToClientRequest, db: Session = Depends(get_db)) -> ApplicationResponse:
+    row = _get_appts_application(db, application_id)
+    try: application_service.submit_to_client(db, row, override_duplicate_warning=payload.override_duplicate_warning, models=appts_service.APPTS_MODELS)
+    except application_service.ApplicationDuplicateWarning as exc:
+        raise HTTPException(status_code=409, detail={"message": str(exc), "duplicates": [{"id": candidate.id, "job_title_snapshot": candidate.job_title_snapshot, "end_client_snapshot": candidate.end_client_snapshot, "status": candidate.status, "created_at": candidate.created_at.isoformat()} for candidate in exc.candidates]}) from exc
+    db.commit(); db.refresh(row); return _application_response(db, row, include_events=True, models=appts_service.APPTS_MODELS)
+
+
+@app.post("/appts/applications/{application_id}/interviews", response_model=ApplicationResponse, status_code=201)
+def create_appts_interview(application_id: int, payload: ApplicationInterviewCreateRequest, db: Session = Depends(get_db)) -> ApplicationResponse:
+    row = _get_appts_application(db, application_id); application_service.add_interview(db, row, **payload.model_dump(), models=appts_service.APPTS_MODELS); db.commit(); db.refresh(row)
+    return _application_response(db, row, include_events=True, models=appts_service.APPTS_MODELS)
+
+
+@app.patch("/appts/applications/{application_id}/interviews/{interview_id}", response_model=ApplicationResponse)
+def patch_appts_interview(application_id: int, interview_id: int, payload: ApplicationInterviewPatchRequest, db: Session = Depends(get_db)) -> ApplicationResponse:
+    row = _get_appts_application(db, application_id)
+    interview = db.query(appts_service.APPTS_MODELS.interview_cls).filter_by(owner_id=settings.owner_id, application_id=row.id, id=interview_id).first()
+    if interview is None:
+        raise HTTPException(status_code=404, detail="Application interview not found")
+    application_service.update_interview(db, interview, **payload.model_dump(exclude_unset=True), models=appts_service.APPTS_MODELS)
+    db.commit(); db.refresh(row)
+    return _application_response(db, row, include_events=True, models=appts_service.APPTS_MODELS)
+
+
+@app.delete("/appts/applications/{application_id}/interviews/{interview_id}", response_model=ApplicationResponse)
+def delete_appts_interview(application_id: int, interview_id: int, db: Session = Depends(get_db)) -> ApplicationResponse:
+    row = _get_appts_application(db, application_id)
+    interview = db.query(appts_service.APPTS_MODELS.interview_cls).filter_by(owner_id=settings.owner_id, application_id=row.id, id=interview_id).first()
+    if interview is None:
+        raise HTTPException(status_code=404, detail="Application interview not found")
+    application_service.delete_interview(db, interview, models=appts_service.APPTS_MODELS)
+    db.commit(); db.refresh(row)
+    return _application_response(db, row, include_events=True, models=appts_service.APPTS_MODELS)
+
+
 @app.post("/applications", response_model=ApplicationResponse, status_code=201)
 def create_application_route(
     payload: ApplicationCreateRequest,
@@ -6531,7 +7028,7 @@ def create_manual_application_route(
         row, created = resume_tracking_service.create_manual_application(
             db,
             owner_id=settings.owner_id,
-            **payload.model_dump(),
+            **payload.model_dump(exclude={"location_snapshot"}),
         )
     except application_service.ApplicationReferenceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -6560,6 +7057,9 @@ def list_applications(
     has_premium_contact: bool | None = Query(default=None),
     tracked: bool | None = Query(default=None),
     sort: str = Query("newest"),
+    date_filter: str | None = Query(default=None),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> ApplicationListResponse:
     if sort not in {"newest", "oldest", "next_action"}: raise HTTPException(status_code=422, detail="Invalid sort. Must be one of: newest, oldest, next_action")
@@ -6600,6 +7100,9 @@ def list_applications(
     if end_client and end_client.strip(): query=query.filter(RecruiterOpportunity.end_client.ilike(f"%{end_client.strip()}%"))
     if has_premium_contact is not None: query=query.filter(Application.recruiter_contact_id.is_not(None) if has_premium_contact else Application.recruiter_contact_id.is_(None))
     if tracked is not None: query=query.filter(Application.recruiter_opportunity_id.is_not(None) if tracked else Application.recruiter_opportunity_id.is_(None))
+    if date_filter:
+        start, end = _date_range_utc_window(date_filter, date_from, date_to)
+        query = query.filter(Application.resume_submitted_at >= start, Application.resume_submitted_at < end)
     total=query.count()
     if sort=="oldest": query=query.order_by(Application.created_at.asc(),Application.id.asc())
     elif sort=="next_action": query=query.order_by(Application.next_action_at.is_(None),Application.next_action_at.asc(),Application.id.asc())
@@ -7224,8 +7727,8 @@ def get_candidate(email_id: int, db: Session = Depends(get_db)) -> EmailResponse
 @app.get("/candidates/{email_id}/sent-details", response_model=SentItemDetailsResponse)
 def get_sent_item_details(email_id: int, db: Session = Depends(get_db)) -> SentItemDetailsResponse:
     email = _get_candidate_for_review(db, email_id)
-    if email.state != "approved_sent":
-        raise HTTPException(status_code=400, detail="Sent item details are only available for approved_sent candidates")
+    if email.state not in {"needs_review", "approved_sent"}:
+        raise HTTPException(status_code=400, detail="Details are only available for needs_review or approved_sent candidates")
     return _build_sent_item_details(db, email)
 
 
@@ -7236,9 +7739,13 @@ def get_inbox_conversations(
     status: str | None = Query(default=None),
     unread_only: bool | None = Query(default=None),
     sort: str = Query("newest"),
+    date_filter: str | None = Query(default=None),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> list[ConversationSummaryResponse]:
-    return _get_orchestration_service().list_inbox_conversations(db, recruiter=recruiter, subject=subject, status=status, unread_only=unread_only, sort=sort)
+    start, end = _date_range_utc_window(date_filter, date_from, date_to) if date_filter else (None, None)
+    return _get_orchestration_service().list_inbox_conversations(db, recruiter=recruiter, subject=subject, status=status, unread_only=unread_only, sort=sort, date_from=start, date_to=end)
 
 
 @app.post("/inbox/conversations/refresh", response_model=list[ConversationSummaryResponse])
@@ -7248,9 +7755,13 @@ def refresh_inbox_conversations(
     status: str | None = Query(default=None),
     unread_only: bool | None = Query(default=None),
     sort: str = Query("newest"),
+    date_filter: str | None = Query(default=None),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> list[ConversationSummaryResponse]:
-    return _get_orchestration_service().refresh_inbox_replies(db, recruiter=recruiter, subject=subject, status=status, unread_only=unread_only, sort=sort)
+    start, end = _date_range_utc_window(date_filter, date_from, date_to) if date_filter else (None, None)
+    return _get_orchestration_service().refresh_inbox_replies(db, recruiter=recruiter, subject=subject, status=status, unread_only=unread_only, sort=sort, date_from=start, date_to=end)
 
 
 @app.get("/inbox/conversations/{conversation_id}", response_model=ConversationDetailResponse)
@@ -7338,6 +7849,21 @@ def reject_candidate(
     return _get_orchestration_service().reject_candidate(email_id, payload, db)
 
 
+@app.post("/candidates/{email_id}/track", response_model=EmailResponse)
+def toggle_candidate_tracking(email_id: int, db: Session = Depends(get_db)) -> EmailResponse:
+    email = _get_candidate_for_review(db, email_id)
+    if email.state == "needs_review":
+        _get_orchestration_service().set_tracking(email_id, not email.marked_for_tracking, db)
+    elif email.state == "approved_sent":
+        result = appts_service.create_tracked_application_from_email(db, email, owner_id=settings.owner_id)
+        db.commit()
+        if result and result[1]:
+            appts_service.enqueue_embedding_generation(result[0].id)
+    else:
+        raise HTTPException(status_code=400, detail="Only needs_review or approved_sent candidates can be tracked")
+    return _serialize_candidate_for_review(db, email)
+
+
 @app.post("/candidates/{email_id}/send-to-failed-mapping", response_model=EmailResponse)
 def send_to_failed_mapping(email_id: int, db: Session = Depends(get_db)) -> RecruiterEmail:
     return _get_orchestration_service().send_to_failed_mapping(email_id, db)
@@ -7393,6 +7919,13 @@ def _retry_role_detection(email_id: int, db: Session, *, max_rung: int) -> RoleD
             parse_email_with_details=parse_email_with_details,
             regenerate_candidate=_get_orchestration_service().regenerate_candidate,
         )
+        rows = db.query(RecruiterEmail).filter(RecruiterEmail.id.in_(processing_ids)).all()
+        for row in rows:
+            row.semantic_embedding = None
+            row.embedding_model = None
+        db.commit()
+        for candidate_id in processing_ids:
+            _enqueue_embedding_generation(record_type="recruiter_email", record_id=candidate_id)
 
     return RoleDetectionRetryResponse(
         source_parent_id=expansion.source_parent_id,
@@ -7431,6 +7964,7 @@ def reject_bulk(payload: BulkRejectRequest, db: Session = Depends(get_db)) -> Bu
         row.decision_reason = payload.reason or "Bulk rejected by user"
         row.approval_status = "rejected"
         row.sent_status = "not_sent"
+        row.marked_for_tracking = False
         succeeded_ids.append(candidate_id)
     db.commit()
     return BulkCandidateActionResponse(succeeded_ids=succeeded_ids, failed=failed)
@@ -7493,6 +8027,11 @@ def _run_bulk(ids: list[int], action: Callable[[int], object]) -> BulkCandidateA
         except HTTPException as exc:
             failed.append({"id": candidate_id, "error": str(exc.detail)})
     return BulkCandidateActionResponse(succeeded_ids=succeeded_ids, failed=failed)
+
+
+@app.post("/candidates/track-bulk", response_model=BulkCandidateActionResponse)
+def track_bulk(payload: BulkTrackRequest, db: Session = Depends(get_db)) -> BulkCandidateActionResponse:
+    return _run_bulk(payload.ids, lambda candidate_id: _get_orchestration_service().set_tracking(candidate_id, payload.tracked, db))
 
 
 @app.post("/candidates/send-to-failed-mapping-bulk", response_model=BulkCandidateActionResponse)

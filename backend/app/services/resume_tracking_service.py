@@ -399,12 +399,14 @@ def compute_skill_gap(
     application: Application,
     *,
     force_recompute: bool = False,
+    models: application_service.ApplicationModels = application_service.LEGACY_MODELS,
 ) -> ApplicationSkillGapSnapshot:
+    snapshot_cls = models.skill_gap_snapshot_cls
     existing = (
-        db.query(ApplicationSkillGapSnapshot)
+        db.query(snapshot_cls)
         .filter(
-            ApplicationSkillGapSnapshot.owner_id == application.owner_id,
-            ApplicationSkillGapSnapshot.application_id == application.id,
+            snapshot_cls.owner_id == application.owner_id,
+            snapshot_cls.application_id == application.id,
         )
         .first()
     )
@@ -435,7 +437,7 @@ def compute_skill_gap(
         missing_preferred = []
         source = 'fallback_text'
 
-    snapshot = existing or ApplicationSkillGapSnapshot(
+    snapshot = existing or snapshot_cls(
         owner_id=application.owner_id,
         application_id=application.id,
     )

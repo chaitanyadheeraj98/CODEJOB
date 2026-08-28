@@ -35,6 +35,25 @@ type InventoryTableProps = {
   onPageChange: (page: number) => void
   onOpen: (row: InventoryRow, trigger: HTMLElement) => void
   onAction: (row: InventoryRow, action: InventoryAction) => void
+  onToggleFavorite: (row: InventoryRow) => void
+}
+
+const NO_NUMBER_PLACEHOLDER = '(XXX) XXX-XXXX'
+
+function rowNumberDisplay(row: InventoryRow): string {
+  return row.number || NO_NUMBER_PLACEHOLDER
+}
+
+function rowEmail(row: InventoryRow): string {
+  return row.recruiter?.recruiter_email || row.employer?.employer_email || ''
+}
+
+function rowEmailDomain(row: InventoryRow): string {
+  return row.recruiter?.recruiter_email_domain || row.employer?.employer_email_domain || ''
+}
+
+function rowIsFavorite(row: InventoryRow): boolean {
+  return Boolean(row.recruiter?.is_favorite ?? row.employer?.is_favorite ?? false)
 }
 
 export default function InventoryTable({
@@ -51,6 +70,7 @@ export default function InventoryTable({
   onPageChange,
   onOpen,
   onAction,
+  onToggleFavorite,
 }: InventoryTableProps) {
   const allVisibleSelected = rows.length > 0 && rows.every((row) => selected.has(row.key))
   const start = allRowsCount === 0 ? 0 : (page - 1) * pageSize + 1
@@ -74,8 +94,11 @@ export default function InventoryTable({
                   disabled={busy || rows.length === 0}
                 />
               </th>
-              <th>Number</th>
               <th>Owner</th>
+              <th><span className="visuallyHidden">Favorite</span></th>
+              <th>Number</th>
+              <th>Email</th>
+              <th>E-Domain</th>
               <th>Category</th>
               <th>Score</th>
               <th>Status</th>
@@ -95,17 +118,32 @@ export default function InventoryTable({
                 <td className="inventoryCheckboxCell" onClick={stop}>
                   <input
                     type="checkbox"
-                    aria-label={`Select ${row.number}`}
+                    aria-label={`Select ${rowNumberDisplay(row)}`}
                     checked={selected.has(row.key)}
                     onChange={() => onToggle(row.key)}
                     disabled={busy}
                   />
                 </td>
-                <td className="inventoryNumber">{row.number}</td>
                 <td>
                   <span>{row.owner || 'Unassigned'}</span>
                   {row.company && row.company !== 'Unknown' ? <small>{row.company}</small> : null}
                 </td>
+                <td className="inventoryFavoriteCell" onClick={stop}>
+                  {row.kind === 'contact' ? (
+                    <button
+                      type="button"
+                      className={`inventoryFavoriteToggle ${rowIsFavorite(row) ? 'inventoryFavoriteToggle--active' : ''}`}
+                      aria-label={rowIsFavorite(row) ? `Remove ${rowNumberDisplay(row)} from favorites` : `Mark ${rowNumberDisplay(row)} as favorite`}
+                      aria-pressed={rowIsFavorite(row)}
+                      onClick={() => onToggleFavorite(row)}
+                    >
+                      {rowIsFavorite(row) ? '★' : '☆'}
+                    </button>
+                  ) : null}
+                </td>
+                <td className={`inventoryNumber ${row.number ? '' : 'inventoryNumber--empty'}`}>{rowNumberDisplay(row)}</td>
+                <td>{rowEmail(row) || '--'}</td>
+                <td>{rowEmailDomain(row) || '--'}</td>
                 <td>
                   <div className="categoryChips">
                     {row.categories.length === 0 ? <span className="subtle">Pending</span> : null}
@@ -117,7 +155,7 @@ export default function InventoryTable({
                 <td>{formatRelativeTime(row.lastCheckedAt)}</td>
                 <td className="inventoryMenuCell" onClick={stop}>
                   <details className="inventoryMenu">
-                    <summary aria-label={`Actions for ${row.number}`}>⋮</summary>
+                    <summary aria-label={`Actions for ${rowNumberDisplay(row)}`}>⋮</summary>
                     <div className="inventoryMenuPopover">
                       <button type="button" onClick={(event) => onOpen(row, event.currentTarget)}>View details</button>
                       <button type="button" onClick={() => onAction(row, 'mark-recruiter')}>Mark as Recruiter</button>

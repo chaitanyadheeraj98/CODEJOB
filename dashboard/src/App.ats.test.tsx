@@ -264,7 +264,7 @@ describe('ATS review UI', () => {
     expect(container.textContent ?? '').toContain('Record ID:')
     expect(container.textContent ?? '').toContain('record-ats-42')
     expect(container.textContent ?? '').not.toContain('Email ID:')
-    expect(container.textContent ?? '').toContain('ATS Score:')
+    expect(container.textContent ?? '').toContain('ATS Strong')
     expect(container.textContent ?? '').toContain('84')
     expect(container.textContent ?? '').toContain('Strong')
     expect(container.textContent ?? '').toContain('Resume:')

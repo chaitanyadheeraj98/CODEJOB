@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import FilterSortBar, { type FilterValues } from '../../components/FilterSortBar'
-import { submissionDefaultFilterValues, submissionFilterFields, submissionFiltersToParams, submissionSortOptions } from './submissionFilters'
+import type { FilterValues } from '../../components/FilterSortBar'
+import { submissionDefaultFilterValues, submissionFiltersToParams } from './submissionFilters'
 import type { FormEvent } from 'react'
 
 import {
@@ -39,9 +39,7 @@ type Props = {
   resumes: ResumeAssetOption[]
   resumeAssetId?: number | null
   filterValues?: FilterValues
-  onFilterChange?: (values: FilterValues) => void
   sortValue?: string
-  onSortChange?: (value: string) => void
 }
 
 const blankManual = (resumes: ResumeAssetOption[], resumeAssetId?: number | null): ManualApplicationInput => ({
@@ -60,7 +58,7 @@ const blankManual = (resumes: ResumeAssetOption[], resumeAssetId?: number | null
   resume_submitted_at: new Date().toISOString().slice(0, 10),
 })
 
-export default function SubmissionsTab({ apiBase, resumes, resumeAssetId = null, filterValues = submissionDefaultFilterValues, onFilterChange = () => undefined, sortValue = 'newest', onSortChange = () => undefined }: Props) {
+export default function SubmissionsTab({ apiBase, resumes, resumeAssetId = null, filterValues = submissionDefaultFilterValues, sortValue = 'newest' }: Props) {
   const [rows, setRows] = useState<ApplicationCard[]>([])
   const [suggestions, setSuggestions] = useState<ApplicationSuggestion[]>([])
   const [status, setStatus] = useState<ResumeSubmissionStatus | 'all'>('all')
@@ -190,7 +188,6 @@ export default function SubmissionsTab({ apiBase, resumes, resumeAssetId = null,
 
   return (
     <section className="resumeTrackingPanel">
-      <FilterSortBar fields={submissionFilterFields} values={filterValues} onFieldChange={(key,value)=>onFilterChange({...filterValues,[key]:value})} onClear={()=>onFilterChange(submissionDefaultFilterValues)} sortOptions={submissionSortOptions} sortValue={sortValue} onSortChange={onSortChange} loading={loading} />
       <div className="resumeTrackingToolbar">
         <label>Status<select value={status} onChange={(event) => setStatus(event.target.value as ResumeSubmissionStatus | 'all')}><option value="all">All</option><option value="not_submitted">Not submitted</option><option value="submitted">Submitted</option>{STATUS_OPTIONS.map((value) => <option key={value} value={value}>{value.replaceAll('_', ' ')}</option>)}<option value="interview_scheduled">Interview scheduled</option></select></label>
         <button type="button" onClick={() => setManual(blankManual(resumes, resumeAssetId))}>Log submission</button>

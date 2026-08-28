@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import './App.css'
 import Sidebar from './components/Sidebar'
+import CandidateCard from './components/CandidateCard'
 import ResumeTrackingPage from './features/resume_tracking/ResumeTrackingPage'
 import TrustedGmailGroupsPanel, { type TrustedGmailGroup } from './features/gmail_groups/TrustedGmailGroupsPanel'
 import { getDraftSourceLabel } from './features/ai/ui'
@@ -10,12 +11,14 @@ import ChatWidget from './features/chat/ChatWidget'
 import { getChatStatus } from './features/chat/api'
 import type { ChatStatus } from './features/chat/types'
 import PremiumNumbersPage from './features/premium_numbers/PremiumNumbersPage'
+import AppTSPage from './features/application_tracking/AppTSPage'
+import VerificationBadge from './features/premium_numbers/VerificationBadge'
 import { type CandidateState, useCandidateBuckets } from './candidateBuckets'
 import type { CandidateQueryOptions } from './candidateBuckets'
 import FilterSortBar, { type FilterValues } from './components/FilterSortBar'
 import SelectionActionBar from './components/SelectionActionBar'
-import { filterSortRegistry } from './filterSortRegistry'
-import { submissionDefaultFilterValues } from './features/resume_tracking/submissionFilters'
+import { filterSortRegistry, resolveRegistryEntry } from './filterSortRegistry'
+import { buildUrlSearch, parseFilterValuesFromParams } from './useUrlSync'
 import { addCcEmail, removeCcEmail } from './ccEmails'
 import { addEmployerDomain, removeEmployerDomain } from './employerDomains'
 import { formatRelativeInboxTime, getInitials } from './inboxFormat'
@@ -56,7 +59,12 @@ const DRAFT_TEXT_SIZE_STYLES: Record<DraftTextSize, { fontSize: string; lineHeig
   huge: { fontSize: '28px', lineHeight: '1.4' },
 }
 
-type ActivePage = 'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'inbox' | 'premium_numbers' | 'resume_tracking' | 'settings'
+type ActivePage = 'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'inbox' | 'premium_numbers' | 'resume_tracking' | 'application_tracking' | 'settings'
+const ACTIVE_PAGES = new Set<ActivePage>(['run_queue', 'needs_review', 'failed_mapping', 'recent_runs', 'sent_items', 'inbox', 'premium_numbers', 'resume_tracking', 'application_tracking', 'settings'])
+const initialActivePage = (): ActivePage => {
+  const page = new URLSearchParams(window.location.search).get('page') as ActivePage | null
+  return page && ACTIVE_PAGES.has(page) ? page : 'run_queue'
+}
 
 const PAGE_TITLES: Record<ActivePage, string> = {
   run_queue: 'Run Queue Dashboard',
@@ -67,6 +75,7 @@ const PAGE_TITLES: Record<ActivePage, string> = {
   inbox: 'Reply Inbox',
   premium_numbers: 'Premium Numbers',
   resume_tracking: 'Resume Tracking',
+  application_tracking: 'Application Tracking',
   settings: 'Settings',
 }
 
@@ -79,6 +88,7 @@ const PAGE_SUBTITLES: Record<ActivePage, string> = {
   inbox: 'Review recruiter replies and continue Gmail conversations.',
   premium_numbers: 'Manage inventory, assignments, and rescoring operations.',
   resume_tracking: 'See which resume variants move through the funnel and why others stall.',
+  application_tracking: 'Review bookmarked requirements and explicitly tracked applications.',
   settings: 'Manage learning queues, trusted Gmail groups, and resume assets.',
 }
 
@@ -1323,7 +1333,7 @@ export function JobIntentLearningSection({
   )
 }
 
-type Candidate = {
+export type Candidate = {
   id: number
   record_id?: string | null
   subject: string
@@ -1383,9 +1393,14 @@ type Candidate = {
   eligibility_details?: Record<string, unknown> | null
   sendability_status?: string | null
   screening_mode?: 'compatibility' | 'strict' | null
+  marked_for_tracking: boolean
+  premium_status?: string | null
+  premium_verification_level?: 'unverified' | 'verified' | 'trusted' | null
+  following_badge?: 'bookmarked' | 'tracked' | 'active' | null
+  following_warning?: string | null
 }
 
-type SentItemDetails = {
+export type SentItemDetails = {
   email_id: number
   source_type: string
   source_label: string
@@ -1401,6 +1416,7 @@ type SentItemDetails = {
   recruiter_company: string | null
   employer_name: string | null
   employer_email: string | null
+  employer_email_domain: string | null
   employer_phone: string | null
   employer_company: string | null
   end_client: string | null
@@ -1490,7 +1506,7 @@ function jobStatusMeta(status: string): { label: string; className: string; chec
   }
 }
 
-function jdSummarySkills(item: Candidate): string[] {
+export function jdSummarySkills(item: Candidate): string[] {
   const breakdown = item.resume_picker_breakdown ?? {}
   const matchedPriority = Array.isArray(breakdown.matched_priority_skills)
     ? breakdown.matched_priority_skills.filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
@@ -1651,12 +1667,12 @@ export function clamp100(value: number): number {
   return Math.max(0, Math.min(Math.round(value), 100))
 }
 
-function formatAtsScore(value: number | null | undefined): string {
+export function formatAtsScore(value: number | null | undefined): string {
   if (typeof value !== 'number' || Number.isNaN(value)) return '-'
   return String(Math.round(value))
 }
 
-function getAtsStrengthLabel(value: number | null | undefined): string {
+export function getAtsStrengthLabel(value: number | null | undefined): string {
   if (typeof value !== 'number' || Number.isNaN(value)) return 'Unknown'
   if (value >= 80) return 'Strong'
   if (value >= 60) return 'Moderate'
@@ -1708,7 +1724,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function normalizeParserDetails(value: unknown): ParserDetailsPayload | null {
+export function normalizeParserDetails(value: unknown): ParserDetailsPayload | null {
   if (!isRecord(value)) return null
   return value as ParserDetailsPayload
 }
@@ -2089,6 +2105,91 @@ function ParserDetailsCard({
       <h3>{title}</h3>
       <div className={bodyClasses}>{children}</div>
     </section>
+  )
+}
+
+type ContactDetailsSourceItem = {
+  id: number
+  role?: string | null
+  location?: string | null
+  salary_text?: string | null
+  skills_text?: string | null
+  resume_file_name?: string | null
+  recipient_email?: string | null
+  cc_email?: string | null
+  ats_score?: number | null
+  ats_summary?: string | null
+}
+
+export function renderContactDetailsGrid(details: SentItemDetails, item: ContactDetailsSourceItem) {
+  return (
+    <div className="parserDetailsSummaryGrid">
+      <ParserDetailsCard title="Source" className="parserDetailsSummaryBlock">
+        <div className="sentItemLinkList">
+          <p><strong>Source:</strong> {renderTextOrDash(details.source_label)}</p>
+          <p>
+            <strong>Requirement Link:</strong>{' '}
+            {details.requirement_received_link ? (
+              <a href={details.requirement_received_link} target="_blank" rel="noreferrer">
+                Open requirement
+              </a>
+            ) : '-'}
+          </p>
+          <p>
+            <strong>Sent Gmail Link:</strong>{' '}
+            {details.sent_gmail_message_link ? (
+              <a href={details.sent_gmail_message_link} target="_blank" rel="noreferrer">
+                Open sent message
+              </a>
+            ) : '-'}
+          </p>
+        </div>
+      </ParserDetailsCard>
+      <ParserDetailsCard title="Requirement" className="parserDetailsSummaryBlock">
+        <pre className="parserCardPre">{[
+          `Role: ${renderTextOrDash(item.role)}`,
+          `Location: ${renderTextOrDash(item.location)}`,
+          `Salary: ${renderTextOrDash(item.salary_text)}`,
+          `Skills: ${renderTextOrDash(item.skills_text)}`,
+          `Company: ${renderTextOrDash(details.company)}`,
+          `End Client: ${renderTextOrDash(details.end_client)}`,
+          `Implementation Partner: ${renderTextOrDash(details.implementation_partner)}`,
+          `Vendor: ${renderTextOrDash(details.vendor)}`,
+          `Domain Mentioned: ${renderTextOrDash(details.domain_mentioned)}`,
+          `Experience Required: ${renderTextOrDash(details.experience_required)}`,
+          `Mandatory Skills: ${renderListOrDash(details.mandatory_skills)}`,
+          `Missing Skills: ${renderListOrDash(details.missing_skills)}`,
+        ].join('\n')}</pre>
+      </ParserDetailsCard>
+      <ParserDetailsCard title="Resume / Send Audit" className="parserDetailsSummaryBlock">
+        <pre className="parserCardPre">{[
+          `Resume Variant Sent: ${renderTextOrDash(details.resume_variant_sent ?? item.resume_file_name)}`,
+          `Attached Files: ${renderListOrDash(details.attached_files)}`,
+          `To: ${renderTextOrDash(details.to_email ?? item.recipient_email)}`,
+          `CC: ${renderTextOrDash(details.cc_email ?? item.cc_email)}`,
+          `ATS Score: ${formatAtsScore(details.ats_score ?? item.ats_score)}${(details.ats_score ?? item.ats_score) != null ? ` (${getAtsStrengthLabel(details.ats_score ?? item.ats_score)})` : ''}`,
+          `ATS Summary: ${renderTextOrDash(details.ats_summary ?? item.ats_summary)}`,
+        ].join('\n')}</pre>
+      </ParserDetailsCard>
+      <ParserDetailsCard title="Recruiter" className="parserDetailsSummaryBlock">
+        <pre className="parserCardPre">{[
+          `Recruiter Name: ${renderTextOrDash(details.recruiter_name)}`,
+          `Recruiter Email: ${renderTextOrDash(details.recruiter_email)}`,
+          `Recruiter Email Domain: ${renderTextOrDash(details.recruiter_email_domain)}`,
+          `Recruiter Phone: ${renderTextOrDash(details.recruiter_phone)}`,
+          `Recruiter Company: ${renderTextOrDash(details.recruiter_company)}`,
+        ].join('\n')}</pre>
+      </ParserDetailsCard>
+      <ParserDetailsCard title="Employer" className="parserDetailsSummaryBlock">
+        <pre className="parserCardPre">{[
+          `Employer Name: ${renderTextOrDash(details.employer_name)}`,
+          `Employer Email: ${renderTextOrDash(details.employer_email)}`,
+          `Employer Email Domain: ${renderTextOrDash(details.employer_email_domain)}`,
+          `Employer Phone: ${renderTextOrDash(details.employer_phone)}`,
+          `Employer Company: ${renderTextOrDash(details.employer_company)}`,
+        ].join('\n')}</pre>
+      </ParserDetailsCard>
+    </div>
   )
 }
 
@@ -2519,7 +2620,54 @@ export function getOverallVerdict(
   return { score, label: 'Risky', tone: 'risky' }
 }
 
-function getResumeContextLabel(value: string | null | undefined): string {
+export const canTrustRouting = (candidate: Candidate) =>
+  candidate.routing_confirmed ||
+  (['safe', 'confirmed'].includes(candidate.routing_status) && candidate.routing_confidence >= 0.8)
+
+export const sourceLabel = (source: string) =>
+  source
+    .split('_')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
+
+export const renderRoutingPanel = (item: Candidate) => (
+  <div className={`routingPanel ${canTrustRouting(item) ? 'safe' : 'blocked'}`}>
+    <div className="routingPanelHeader">
+      <strong>Routing: {item.routing_status || 'unverified'}</strong>
+      <span>{Math.round((item.routing_confidence ?? 0) * 100)}% confidence</span>
+    </div>
+    <p>{item.routing_reason || 'No routing evidence captured yet.'}</p>
+    {item.routing_evidence?.length ? (
+      <div className="evidenceGrid">
+        {item.routing_evidence.map((evidence, index) => (
+          <div key={`${item.id}-evidence-${index}`} className="evidenceItem">
+            <small>{evidence.role.toUpperCase()} from {sourceLabel(evidence.source)}</small>
+            <span>{evidence.email}</span>
+          </div>
+        ))}
+      </div>
+    ) : null}
+    {!canTrustRouting(item) ? (
+      <p className="routingWarning">Approval is blocked until routing is safe or manually confirmed.</p>
+    ) : null}
+  </div>
+)
+
+export const renderCandidateEmails = (item: Candidate) => {
+  if (!item.routing_candidates?.length) return null
+  return (
+    <div className="candidateEmailList">
+      <strong>Extracted email candidates</strong>
+      {item.routing_candidates.map((candidate, index) => (
+        <p key={`${item.id}-candidate-${index}`}>
+          <span>{candidate.role.toUpperCase()}</span> {candidate.email} <small>({sourceLabel(candidate.source)})</small>
+        </p>
+      ))}
+    </div>
+  )
+}
+
+export function getResumeContextLabel(value: string | null | undefined): string {
   if (value === 'injected') return 'Injected'
   if (value === 'limited') return 'Limited'
   if (value === 'missing_resume') return 'Missing Resume'
@@ -2747,6 +2895,8 @@ function App() {
   const [gmailRequirementGroups, setGmailRequirementGroups] = useState<TrustedGmailGroup[]>([])
   const [gmailGroupsBusy, setGmailGroupsBusy] = useState(false)
   const [resumeAssets, setResumeAssets] = useState<ResumeAsset[]>([])
+  const resumeAssetsRef = useRef(resumeAssets)
+  useEffect(() => { resumeAssetsRef.current = resumeAssets }, [resumeAssets])
   const [attachmentFiles, setAttachmentFiles] = useState<AttachmentAsset[]>([])
   const [pendingSkills, setPendingSkills] = useState<PendingSkill[]>([])
   const [pendingCompanies, setPendingCompanies] = useState<PendingEntity[]>([])
@@ -2785,11 +2935,12 @@ function App() {
   const [routingFixes, setRoutingFixes] = useState<Record<number, { to: string; cc: string }>>({})
   const [fixingId, setFixingId] = useState<number | null>(null)
   const [deletingFailedId, setDeletingFailedId] = useState<number | null>(null)
-  const [activePage, setActivePage] = useState<ActivePage>('run_queue')
+  const [activePage, setActivePage] = useState<ActivePage>(initialActivePage)
+  const [premiumTab, setPremiumTab] = useState<'inventory' | 'opportunities'>('inventory')
+  const [applicationTrackingTab, setApplicationTrackingTab] = useState<'bookmarked' | 'tracked'>('bookmarked')
+  const [resumeTrackingTab, setResumeTrackingTab] = useState<'resumes' | 'submissions'>('resumes')
   const [pageFilterValues, setPageFilterValues] = useState<Partial<Record<string, FilterValues>>>({})
   const [pageSortValues, setPageSortValues] = useState<Partial<Record<string, string>>>({})
-  const [applicationsSharedFilters, setApplicationsSharedFilters] = useState<FilterValues>(submissionDefaultFilterValues)
-  const [applicationsSharedSort, setApplicationsSharedSort] = useState('newest')
   const [needsReviewSelected, setNeedsReviewSelected] = useState<Set<number>>(new Set())
   const [needsReviewBulkAction, setNeedsReviewBulkAction] = useState<string | null>(null)
   const [failedMappingSelected, setFailedMappingSelected] = useState<Set<number>>(new Set())
@@ -3318,10 +3469,68 @@ function App() {
     return null
   }
 
-  const activeFilterSortConfig = filterSortRegistry[activePage] ?? null
-  const activeFilterValues = activeFilterSortConfig ? pageFilterValues[activePage] ?? activeFilterSortConfig.defaultFilterValues : {}
-  const activeSortValue = activeFilterSortConfig ? pageSortValues[activePage] ?? activeFilterSortConfig.sortOptions[0].value : 'newest'
+  const activeRegistryKey = activePage === 'premium_numbers'
+    ? `premium_numbers:${premiumTab}`
+    : activePage === 'application_tracking'
+      ? `application_tracking:${applicationTrackingTab}`
+      : activePage === 'resume_tracking'
+        ? `resume_tracking:${resumeTrackingTab}`
+        : activePage
+  const activeFilterSortConfig = resolveRegistryEntry(filterSortRegistry[activeRegistryKey], { resumeAssets }) ?? null
+  const activeFilterValues = activeFilterSortConfig ? pageFilterValues[activeRegistryKey] ?? activeFilterSortConfig.defaultFilterValues : {}
+  const activeSortValue = activeFilterSortConfig ? pageSortValues[activeRegistryKey] ?? activeFilterSortConfig.sortOptions[0]?.value ?? 'newest' : 'newest'
   const activeQueryOptions = useCallback((): CandidateQueryOptions | undefined => activeFilterSortConfig ? { sort: activeSortValue, filters: activeFilterSortConfig.toParams(activeFilterValues) } : undefined, [activeFilterSortConfig, activeFilterValues, activeSortValue])
+
+  // Must run (and read window.location.search) before the URL-sync-write effect below, so it
+  // captures the URL from actual browser navigation/popstate rather than a version the write
+  // effect already rewrote this same commit using stale (not-yet-restored) tab/page state.
+  useEffect(() => {
+    const restore = () => {
+      const params = new URLSearchParams(window.location.search)
+      const page = params.get('page') as ActivePage | null
+      if (!page || !ACTIVE_PAGES.has(page)) return
+      const tab = params.get('tab')
+      if (page === 'premium_numbers' && (tab === 'inventory' || tab === 'opportunities')) setPremiumTab(tab)
+      if (page === 'application_tracking' && (tab === 'bookmarked' || tab === 'tracked')) setApplicationTrackingTab(tab)
+      if (page === 'resume_tracking' && (tab === 'resumes' || tab === 'submissions')) setResumeTrackingTab(tab)
+      const key = tab && ['premium_numbers', 'application_tracking', 'resume_tracking'].includes(page) ? `${page}:${tab}` : page
+      const entry = resolveRegistryEntry(filterSortRegistry[key], { resumeAssets: resumeAssetsRef.current })
+      if (entry) {
+        setPageFilterValues((current) => ({ ...current, [key]: (entry.fromParams ?? ((value) => parseFilterValuesFromParams(entry.fields, entry.defaultFilterValues, value)))(params) }))
+        const sort = params.get('sort')
+        if (sort && entry.sortOptions.some((option) => option.value === sort)) setPageSortValues((current) => ({ ...current, [key]: sort }))
+      }
+      setActivePage(page)
+    }
+    window.addEventListener('popstate', restore)
+    restore()
+    return () => window.removeEventListener('popstate', restore)
+    // Runs once on mount plus on browser back/forward (popstate) only — resumeAssets is read
+    // via a ref (see resumeAssetsRef above) so a resumeAssets reload elsewhere (e.g. after
+    // Settings save) can't retrigger this and silently snap activePage back to a stale URL.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    if (!activeFilterSortConfig) return
+    // Deferred to a macrotask so this always runs after React (including StrictMode's
+    // dev-mode double-invoke of effects) has fully settled on the current render's state.
+    // Without this, StrictMode's synchronous mount->cleanup->remount cycle can run this
+    // effect a second time using a stale tab value captured before the restore-on-mount
+    // effect's setPremiumTab/etc had been applied, permanently overwriting the URL's tab
+    // with the wrong one (window.history, unlike component state, isn't reset between
+    // StrictMode's simulated passes).
+    const timer = window.setTimeout(() => {
+      const tab = activePage === 'premium_numbers' ? premiumTab : activePage === 'application_tracking' ? applicationTrackingTab : activePage === 'resume_tracking' ? resumeTrackingTab : null
+      // Pagination position is intentionally not encoded here (0 = omit) — the registry's
+      // paginationParamName for several pages is literally "page", which collides with the
+      // section-navigation "page" key (?page=premium_numbers) also written by buildUrlSearch;
+      // writing a real pagination value here would silently clobber the section identifier.
+      const search = buildUrlSearch(activePage, tab, activeSortValue, activeFilterValues, activeFilterSortConfig, 0)
+      window.history.replaceState(null, '', `${window.location.pathname}?${search}`)
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [activeFilterSortConfig, activeFilterValues, activePage, activeSortValue, applicationTrackingTab, premiumTab, resumeTrackingTab])
 
   const refreshVisibleCandidates = async (
     mailDate: string | null,
@@ -3613,6 +3822,7 @@ function App() {
       inbox: 'view_sent_items',
       premium_numbers: 'view_premium_numbers',
       resume_tracking: 'view_premium_numbers',
+      application_tracking: 'view_premium_numbers',
       settings: 'view_run_queue',
     }
     const eventType = eventMap[page]
@@ -3671,6 +3881,24 @@ function App() {
       setNeedsReviewSelected(new Set())
       schedulePostMutationRefresh()
     } catch (e) { setError((e as Error).message) } finally { setNeedsReviewBulkAction(null) }
+  }
+
+  const setBulkTracking = async (tracked: boolean) => {
+    const ids = [...needsReviewSelected]
+    if (!ids.length) return
+    setNeedsReviewBulkAction(tracked ? 'track' : 'untrack')
+    try {
+      const response = await fetch(`${apiBase}/candidates/track-bulk`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids, tracked }) })
+      if (!response.ok) throw new Error((await response.json().catch(() => null))?.detail ?? 'Bulk tracking update failed')
+      setNeedsReviewSelected(new Set())
+      schedulePostMutationRefresh()
+    } catch (reason) { setError((reason as Error).message) } finally { setNeedsReviewBulkAction(null) }
+  }
+
+  const toggleTracking = async (candidateId: number) => {
+    const response = await fetch(`${apiBase}/candidates/${candidateId}/track`, { method: 'POST' })
+    if (!response.ok) throw new Error((await response.json().catch(() => null))?.detail ?? 'Tracking update failed')
+    schedulePostMutationRefresh()
   }
 
   const runFailedMappingBulk = async (action: 'save' | 'delete') => {
@@ -3756,13 +3984,19 @@ function App() {
     filterRequestControllerRef.current?.abort()
     const controller = new AbortController()
     filterRequestControllerRef.current = controller
-    const request = activeFilterSortConfig.bucket === 'inbox_conversations' ? loadInboxConversations({ signal: controller.signal }) : refreshCandidates(settings.mail_date ?? null, activeFilterSortConfig.bucket, { activeOnly: true, queryOptions: { ...activeQueryOptions(), signal: controller.signal } })
-    request.catch((e) => {
+    const bucket = activeFilterSortConfig.bucket
+    const request =
+      bucket === 'inbox_conversations'
+        ? loadInboxConversations({ signal: controller.signal })
+        : bucket === 'needs_review' || bucket === 'failed' || bucket === 'approved_sent'
+          ? refreshCandidates(settings.mail_date ?? null, bucket, { activeOnly: true, queryOptions: { ...activeQueryOptions(), signal: controller.signal } })
+          : null
+    request?.catch((e) => {
       if ((e as Error).name !== 'AbortError') setError((e as Error).message)
     })
     return () => controller.abort()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activePage, pageFilterValues[activePage], pageSortValues[activePage]])
+  }, [activeRegistryKey, pageFilterValues[activeRegistryKey], pageSortValues[activeRegistryKey]])
 
   useEffect(() => setNeedsReviewSelected(new Set()), [pageFilterValues.needs_review, pageSortValues.needs_review])
   useEffect(() => setFailedMappingSelected(new Set()), [pageFilterValues.failed_mapping, pageSortValues.failed_mapping])
@@ -4582,10 +4816,6 @@ function App() {
     }
   }
 
-  const canTrustRouting = (candidate: Candidate) =>
-    candidate.routing_confirmed ||
-    (['safe', 'confirmed'].includes(candidate.routing_status) && candidate.routing_confidence >= 0.8)
-
   const fetchSentDetails = async (candidateId: number): Promise<SentItemDetails> => {
     const res = await fetch(`${apiBase}/candidates/${candidateId}/sent-details`)
     if (!res.ok) {
@@ -4614,12 +4844,6 @@ function App() {
       setSentDetailLoadingIds((prev) => ({ ...prev, [candidateId]: false }))
     }
   }
-
-  const sourceLabel = (source: string) =>
-    source
-      .split('_')
-      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-      .join(' ')
 
   const openDatePicker = () => {
     const picker = datePickerRef.current
@@ -4671,43 +4895,6 @@ function App() {
       return dt.toLocaleDateString([], { month: 'short', day: 'numeric' })
     }
     return dt.toLocaleDateString([], { month: 'short', year: '2-digit' })
-  }
-
-  const renderRoutingPanel = (item: Candidate) => (
-    <div className={`routingPanel ${canTrustRouting(item) ? 'safe' : 'blocked'}`}>
-      <div className="routingPanelHeader">
-        <strong>Routing: {item.routing_status || 'unverified'}</strong>
-        <span>{Math.round((item.routing_confidence ?? 0) * 100)}% confidence</span>
-      </div>
-      <p>{item.routing_reason || 'No routing evidence captured yet.'}</p>
-      {item.routing_evidence?.length ? (
-        <div className="evidenceGrid">
-          {item.routing_evidence.map((evidence, index) => (
-            <div key={`${item.id}-evidence-${index}`} className="evidenceItem">
-              <small>{evidence.role.toUpperCase()} from {sourceLabel(evidence.source)}</small>
-              <span>{evidence.email}</span>
-            </div>
-          ))}
-        </div>
-      ) : null}
-      {!canTrustRouting(item) ? (
-        <p className="routingWarning">Approval is blocked until routing is safe or manually confirmed.</p>
-      ) : null}
-    </div>
-  )
-
-  const renderCandidateEmails = (item: Candidate) => {
-    if (!item.routing_candidates?.length) return null
-    return (
-      <div className="candidateEmailList">
-        <strong>Extracted email candidates</strong>
-        {item.routing_candidates.map((candidate, index) => (
-          <p key={`${item.id}-candidate-${index}`}>
-            <span>{candidate.role.toUpperCase()}</span> {candidate.email} <small>({sourceLabel(candidate.source)})</small>
-          </p>
-        ))}
-      </div>
-    )
   }
 
   const addMustHaveSkill = (raw: string) => {
@@ -4905,11 +5092,11 @@ function App() {
       <FilterSortBar
         fields={activeFilterSortConfig?.fields ?? []}
         values={activeFilterValues}
-        onFieldChange={(key, value) => setPageFilterValues((prev) => ({ ...prev, [activePage]: { ...(prev[activePage] ?? activeFilterSortConfig?.defaultFilterValues ?? {}), [key]: value } }))}
-        onClear={() => setPageFilterValues((prev) => ({ ...prev, [activePage]: activeFilterSortConfig?.defaultFilterValues ?? {} }))}
+        onFieldChange={(key, value) => setPageFilterValues((prev) => ({ ...prev, [activeRegistryKey]: { ...(prev[activeRegistryKey] ?? activeFilterSortConfig?.defaultFilterValues ?? {}), [key]: value } }))}
+        onClear={() => setPageFilterValues((prev) => ({ ...prev, [activeRegistryKey]: activeFilterSortConfig?.defaultFilterValues ?? {} }))}
         sortOptions={activeFilterSortConfig?.sortOptions ?? []}
         sortValue={activeSortValue}
-        onSortChange={(value) => setPageSortValues((prev) => ({ ...prev, [activePage]: value }))}
+        onSortChange={(value) => setPageSortValues((prev) => ({ ...prev, [activeRegistryKey]: value }))}
         disabled={!activeFilterSortConfig}
         loading={activeFilterSortConfig?.bucket === 'inbox_conversations' ? inboxLoading : isCandidateRefreshing}
       />
@@ -4982,8 +5169,9 @@ function App() {
         inboxCount={inboxUnreadCount}
         premiumCount={premiumPendingCount}
         resumeTrackingEnabled={settings.feature_resume_tracking_enabled}
+        applicationsEnabled={settings.feature_applications_enabled}
         activePage={activePage}
-        onNavigate={setActivePage}
+        onNavigate={(page) => { window.history.pushState(null, '', `${window.location.pathname}?page=${page}`); setActivePage(page) }}
       />
 
       <section className="mainPane">
@@ -6470,37 +6658,10 @@ function App() {
             <section className="card pageSection">
           <h2>Needs Review (Manual Approval Required)</h2>
           <label className="selectAllRow"><input type="checkbox" checked={queue.filter((item) => !item.is_source_parent).length > 0 && queue.filter((item) => !item.is_source_parent).every((item) => needsReviewSelected.has(item.id))} onChange={(event) => setNeedsReviewSelected(event.target.checked ? new Set(queue.filter((item) => !item.is_source_parent).map((item) => item.id)) : new Set())} /> Select all visible</label>
-          <SelectionActionBar selectedCount={needsReviewSelected.size} busyKey={needsReviewBulkAction} onClearSelection={() => setNeedsReviewSelected(new Set())} actions={[{ key: 'approve', label: 'Approve & Send', onClick: () => void runNeedsReviewBulk('approve') }, { key: 'regenerate', label: 'Regenerate', onClick: () => void runNeedsReviewBulk('regenerate') }, { key: 'reject', label: 'Reject', onClick: () => void runNeedsReviewBulk('reject'), variant: 'danger' }, { key: 'send-to-failed-mapping', label: 'Send to Failed Mapping', onClick: () => void runNeedsReviewBulk('send-to-failed-mapping') }]} />
+          <SelectionActionBar selectedCount={needsReviewSelected.size} busyKey={needsReviewBulkAction} onClearSelection={() => setNeedsReviewSelected(new Set())} actions={[{ key: 'track', label: 'Track Application', onClick: () => void setBulkTracking(true) }, { key: 'untrack', label: 'Untrack selected', onClick: () => void setBulkTracking(false) }, { key: 'approve', label: 'Approve & Send', onClick: () => void runNeedsReviewBulk('approve') }, { key: 'regenerate', label: 'Regenerate', onClick: () => void runNeedsReviewBulk('regenerate') }, { key: 'reject', label: 'Reject', onClick: () => void runNeedsReviewBulk('reject'), variant: 'danger' }, { key: 'send-to-failed-mapping', label: 'Send to Failed Mapping', onClick: () => void runNeedsReviewBulk('send-to-failed-mapping') }]} />
           {queue.filter((item) => !item.is_source_parent).length === 0 ? <p className="subtle">No queued emails match these filters.</p> : null}
           {queue.filter((item) => !item.is_source_parent).map((item, index, visibleQueue) => {
             const effectiveDraft = draftEdits[item.id] ?? item.draft_reply
-            const routingTrusted = canTrustRouting(item)
-            const verdict = getOverallVerdict(item, effectiveDraft, routingTrusted)
-            const parserDetails = normalizeParserDetails(item.parser_details)
-            const parserExpanded = Boolean(expandedParserDetailIds[item.id])
-            const requiresResumeForApproval = item.source === 'gmail'
-            const structuralSendabilityBlock = [
-              'source_parent',
-              'superseded_multi_role',
-              'manifest_review',
-              'extraction_review',
-              'score_review',
-            ].includes(item.sendability_status ?? '')
-            const historicalSafetyBlock =
-              item.screening_mode == null &&
-              ['blocked_ineligible', 'eligibility_review', 'mandatory_resume_fail', 'mandatory_resume_review']
-                .includes(item.sendability_status ?? '')
-            const screeningAllowsApproval =
-              !structuralSendabilityBlock &&
-              !historicalSafetyBlock &&
-              (item.screening_mode !== 'strict' || item.sendability_status === 'sendable')
-            const canApprove =
-              screeningAllowsApproval &&
-              Boolean(item.recipient_email) &&
-              Boolean(item.cc_email) &&
-              Boolean(effectiveDraft?.trim()) &&
-              (!requiresResumeForApproval || Boolean(item.resume_file_name)) &&
-              routingTrusted
             const showSourceHeader = Boolean(
               item.source_parent_email_id &&
               visibleQueue[index - 1]?.source_parent_email_id !== item.source_parent_email_id,
@@ -6516,163 +6677,36 @@ function App() {
                   </button>
                 </div>
               ) : null}
-              <article
-                className={`emailItem ${isEmailSearchHighlight('needs_review', item.id) ? 'emailSearchHighlight' : ''}`}
-                data-email-search-section="needs_review"
-                data-email-search-related-id={item.id}
-              >
-                <input type="checkbox" className="emailItemCheckbox" aria-label={`Select candidate ${item.id}`} checked={needsReviewSelected.has(item.id)} onChange={() => setNeedsReviewSelected((previous) => { const next = new Set(previous); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next })} />
-                <p><strong>Record ID:</strong> {item.record_id ?? '-'}</p>
-                {item.is_multi_role_child ? (
-                  <p><strong>Requirement:</strong> {item.requirement_index ?? '-'} of {item.requirement_count ?? '-'}</p>
-                ) : null}
-                <p><strong>From:</strong> {item.sender}</p>
-                <p><strong>Subject:</strong> {item.subject}</p>
-                <p className="jdSummary">
-                  <strong>{item.role || 'Unknown Role'}</strong>
-                  {' · '}{item.location || '-'}
-                  {' · '}{item.salary_text || 'Salary not specified'}
-                  {' · '}{jdSummarySkills(item).join(', ') || '-'}
-                </p>
-                {sourceListingUrl(item) ? (
-                  <p>
-                    <strong>Source Listing:</strong>{' '}
-                    <a href={sourceListingUrl(item)!} target="_blank" rel="noreferrer">
-                      Open source listing
-                    </a>
-                  </p>
-                ) : null}
-                {item.gmail_message_url ? (
-                  <p>
-                    <strong>Open:</strong>{' '}
-                    <a href={item.gmail_message_url} target="_blank" rel="noreferrer">
-                      Open exact email in Gmail
-                    </a>
-                  </p>
-                ) : null}
-                <p><strong>To/CC:</strong> {item.recipient_email ?? '-'} / {item.cc_email ?? '-'}</p>
-                <p><strong>ATS Score:</strong> {formatAtsScore(item.ats_score)} {item.ats_score != null ? `(${getAtsStrengthLabel(item.ats_score)})` : ''}</p>
-                {renderRoutingPanel(item)}
-                <p><strong>Resume:</strong> {item.resume_file_name ?? '-'}</p>
-                <p><strong>Sendability:</strong> {item.sendability_status ?? 'legacy evaluation'}</p>
-                {item.role_manifest_status === 'single_fallback' ? (
-                  <p className="subtle">Auto-resolved as one role because a confident split was unavailable.</p>
-                ) : null}
-                <p><strong>Screening Mode:</strong> {item.screening_mode ?? 'historical / not recorded'}</p>
-                {item.eligibility_status ? <p><strong>Eligibility:</strong> {item.eligibility_status}</p> : null}
-                {item.eligibility_details ? (
-                  <details>
-                    <summary>Eligibility diagnostics</summary>
-                    <pre>{JSON.stringify(item.eligibility_details, null, 2)}</pre>
-                  </details>
-                ) : null}
-                {item.inherited_constraints?.length ? (
-                  <details>
-                    <summary>Inherited source constraints</summary>
-                    <pre>{JSON.stringify(item.inherited_constraints, null, 2)}</pre>
-                  </details>
-                ) : null}
-                {item.role_manifest_diagnostics ? (
-                  <details>
-                    <summary>Role manifest diagnostics</summary>
-                    <pre>{JSON.stringify(item.role_manifest_diagnostics, null, 2)}</pre>
-                  </details>
-                ) : null}
-                <ResumePickerPanel candidate={item} />
-                <p><strong>Attachment files:</strong> {(enabledAttachmentNames.length > 0 ? enabledAttachmentNames : item.attachment_file_names ?? []).join(', ') || '-'}</p>
-                <p>
-                  <strong>Draft source:</strong> {getDraftSourceLabel(item.draft_source)}
-                  {item.draft_model ? ` (${item.draft_model})` : ''}
-                </p>
-                <p><strong>Resume Context:</strong> {getResumeContextLabel(item.draft_resume_context_status)}</p>
-                <ParserDetailsPanel
-                  candidateId={item.id}
-                  source={item.source}
-                  parserDetails={parserDetails}
-                  atsScore={item.ats_score}
-                  atsSource={item.ats_score_source}
-                  atsSummary={item.ats_summary}
-                  atsBreakdown={item.ats_breakdown}
-                  resumePickerBreakdown={item.resume_picker_breakdown}
-                  expanded={parserExpanded}
-                  onToggle={(candidateId) =>
-                    setExpandedParserDetailIds((prev) => ({
-                      ...prev,
-                      [candidateId]: !prev[candidateId],
-                    }))
-                  }
-                />
-                {item.draft_ai_error ? <p className="subtle"><strong>AI fallback:</strong> {item.draft_ai_error}</p> : null}
-                <p><strong>Draft:</strong></p>
-                <div className="draftUnified">
-                  <label className="draftPaneLabel">Editable Draft</label>
-                  <textarea
-                    value={effectiveDraft}
-                    rows={10}
-                    onChange={(e) => setDraftEdits((prev) => ({ ...prev, [item.id]: e.target.value }))}
-                  />
-                  <label className="draftPaneLabel">Live Preview</label>
-                  <div
-                    className="draftPreview"
-                    style={draftTextSizeToPreviewStyle(settings.draft_text_size)}
-                    dangerouslySetInnerHTML={{ __html: draftToPreviewHtml(effectiveDraft) }}
-                  />
-                </div>
-                {item.last_error ? <p className="errorMessage"><strong>Last Error:</strong> {item.last_error}</p> : null}
-                <div className="rowBtns">
-                  <button
-                    type="button"
-                    onClick={() => approveSend(item)}
-                    disabled={!canApprove || sendingId === item.id}
-                    title={
-                      !canApprove
-                        ? requiresResumeForApproval
-                          ? 'Safe routing, To, CC, body, and resume are required before send'
-                          : 'Safe routing, To, CC, and body are required before approval'
-                        : requiresResumeForApproval
-                          ? 'Approve and send'
-                          : 'Approve candidate'
-                    }
-                  >
-                    {sendingId === item.id ? 'Sending...' : requiresResumeForApproval ? 'Approve & Send' : 'Approve'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => regenerateCandidate(item.id)}
-                    disabled={regeneratingId === item.id || sendingId === item.id || rejectingId === item.id || movingToFailedId === item.id}
-                    title="Re-run parser, resume match, ATS and semantic scoring, routing, and draft generation with current settings"
-                  >
-                    {regeneratingId === item.id ? 'Regenerating...' : 'Regenerate'}
-                  </button>
-                  {['invalid', 'uncertain'].includes(item.role_manifest_status ?? '') || item.sendability_status === 'superseded_multi_role' ? (
-                    <button
-                      type="button"
-                      onClick={() => retryRoleDetection(item.source_parent_email_id ?? item.id)}
-                      disabled={regeneratingId === item.id}
-                    >
-                      {regeneratingId === item.id ? 'Detecting...' : 'Retry Detection'}
-                    </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    onClick={() => rejectSend(item.id)}
-                    disabled={rejectingId === item.id}
-                  >
-                    {rejectingId === item.id ? 'Rejecting...' : 'Reject'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => moveToFailedMapping(item.id)}
-                    disabled={movingToFailedId === item.id}
-                    title="Move to Failed Mapping so recipients can be remapped"
-                  >
-                    {movingToFailedId === item.id ? 'Moving...' : 'Send to Failed Mapping'}
-                  </button>
-                  <span className={`verdictBadge verdict-${verdict.tone}`} title="Overall Verdict">
-                    {verdict.label} • {verdict.score}
-                  </span>
-                </div>
-              </article>
+              <CandidateCard
+                item={item}
+                searchSection="needs_review"
+                isSearchHighlighted={isEmailSearchHighlight('needs_review', item.id)}
+                draftValue={effectiveDraft}
+                onDraftChange={(value) => setDraftEdits((prev) => ({ ...prev, [item.id]: value }))}
+                draftTextSize={settings.draft_text_size}
+                enabledAttachmentNames={enabledAttachmentNames}
+                parserExpanded={Boolean(expandedParserDetailIds[item.id])}
+                onToggleParserExpanded={() => setExpandedParserDetailIds((prev) => ({ ...prev, [item.id]: !prev[item.id] }))}
+                selection={{
+                  checked: needsReviewSelected.has(item.id),
+                  onToggle: () => setNeedsReviewSelected((previous) => { const next = new Set(previous); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next }),
+                }}
+                isSending={sendingId === item.id}
+                onApprove={approveSend}
+                isRegenerating={regeneratingId === item.id}
+                onRegenerate={regenerateCandidate}
+                onRetryDetection={retryRoleDetection}
+                isRejecting={rejectingId === item.id}
+                onReject={rejectSend}
+                isMovingToFailedMapping={movingToFailedId === item.id}
+                onSendToFailedMapping={moveToFailedMapping}
+                onToggleTracking={(id) => void toggleTracking(id).catch((reason) => setError((reason as Error).message))}
+                sentDetailsExpanded={Boolean(expandedSentDetailIds[item.id])}
+                onToggleSentDetails={toggleSentDetails}
+                sentDetailsLoading={Boolean(sentDetailLoadingIds[item.id])}
+                sentDetailsError={sentDetailErrors[item.id]}
+                sentDetails={sentDetailsById[item.id]}
+              />
               </div>
             )
           })}
@@ -6697,6 +6731,11 @@ function App() {
           {failedQueue.map((item) => {
             const fix = routingFixes[item.id] ?? { to: '', cc: '' }
             const openUrl = sourceListingUrl(item) ?? item.gmail_message_url
+            const atsStrength = getAtsStrengthLabel(item.ats_score)
+            const atsTone = atsStrength === 'Strong' ? 'active' : atsStrength === 'Moderate' ? 'pending' : 'flagged'
+            const hasCandidateBadges = Boolean(
+              item.ats_score != null || item.premium_status || item.premium_verification_level || item.following_badge,
+            )
             return (
               <article
                 key={`failed-${item.id}`}
@@ -6704,46 +6743,79 @@ function App() {
                 data-email-search-section="failed_mapping"
                 data-email-search-related-id={item.id}
               >
-                <input type="checkbox" className="emailItemCheckbox" aria-label={`Select candidate ${item.id}`} checked={failedMappingSelected.has(item.id)} onChange={() => setFailedMappingSelected((previous) => { const next = new Set(previous); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next })} />
-                <p><strong>Record ID:</strong> {item.record_id ?? '-'}</p>
-                <p><strong>From:</strong> {item.sender}</p>
-                <p><strong>Subject:</strong> {item.subject}</p>
-                {openUrl ? (
-                  <p>
-                    <strong>Open:</strong>{' '}
-                    <a href={openUrl} target="_blank" rel="noreferrer">
-                      {item.source === 'nvoids' ? 'Open Original Post' : 'Open exact email in Gmail'}
-                    </a>
-                  </p>
-                ) : null}
-                <p><strong>Reason:</strong> {item.last_error ?? item.state}</p>
-                {renderRoutingPanel(item)}
-                {renderCandidateEmails(item)}
-                <label>
-                  Full Email Content (for recipient mapping)
-                  <textarea value={item.body ?? ''} readOnly rows={8} />
-                </label>
-                <label>
-                  Correct To
-                  <input
-                    value={fix.to}
-                    onChange={(e) =>
-                      setRoutingFixes((prev) => ({ ...prev, [item.id]: { ...fix, to: e.target.value } }))
-                    }
-                  />
-                </label>
-                <label>
-                  Correct CC
-                  <input
-                    value={fix.cc}
-                    onChange={(e) =>
-                      setRoutingFixes((prev) => ({ ...prev, [item.id]: { ...fix, cc: e.target.value } }))
-                    }
-                  />
-                </label>
+                <div className="candidateCardTop">
+                  <input type="checkbox" className="emailItemCheckbox candidateCardCheckbox" aria-label={`Select candidate ${item.id}`} checked={failedMappingSelected.has(item.id)} onChange={() => setFailedMappingSelected((previous) => { const next = new Set(previous); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next })} />
+
+                  <div className="candidateCardHeaderMain">
+                    <h3 className="candidateCardTitle">{item.role || item.subject || 'Unknown Role'}</h3>
+                    <p className="candidateCardSubtitle">
+                      {item.location || '-'}
+                      {' · '}{item.salary_text || 'Salary not specified'}
+                      {' · '}{jdSummarySkills(item).join(', ') || '-'}
+                    </p>
+                    <p className="candidateCardMeta"><strong>From:</strong> {item.sender}</p>
+                    <p className="candidateCardMeta"><strong>Subject:</strong> {item.subject}</p>
+                    {openUrl ? (
+                      <p className="candidateCardMeta candidateCardLinks">
+                        <a href={openUrl} target="_blank" rel="noreferrer">
+                          {item.source === 'nvoids' ? 'Open Original Post' : 'Open exact email in Gmail'}
+                        </a>
+                      </p>
+                    ) : null}
+                    <p className="candidateCardMeta"><strong>Reason:</strong> {item.last_error ?? item.state}</p>
+                    <p className="candidateCardRecordId">Record ID: {item.record_id ?? '-'}</p>
+                  </div>
+
+                  {hasCandidateBadges ? (
+                    <div className="candidateCardBadges" aria-label="Candidate status badges">
+                      {item.ats_score != null ? (
+                        <span className={`statusBadge statusBadge--lg statusBadge--${atsTone}`}>
+                          ATS {atsStrength} · {formatAtsScore(item.ats_score)}
+                        </span>
+                      ) : null}
+                      {item.premium_status ? <span className={`statusBadge statusBadge--${item.premium_status === 'Active' ? 'active' : 'flagged'}`}>{item.premium_status}</span> : null}
+                      {item.premium_verification_level ? <VerificationBadge level={item.premium_verification_level} /> : null}
+                      {item.following_badge ? <span className="statusBadge statusBadge--pending" title={item.following_warning ?? undefined}>{item.following_badge === 'active' ? 'Active Following' : item.following_badge === 'tracked' ? 'Tracked' : 'Bookmarked Requirement'}</span> : null}
+                    </div>
+                  ) : null}
+                </div>
+
+                <section className="detailSection">
+                  <h4>Routing &amp; Screening</h4>
+                  {renderRoutingPanel(item)}
+                  {renderCandidateEmails(item)}
+                </section>
+
+                <section className="detailSection">
+                  <h4>Correct Recipients</h4>
+                  <label>
+                    Full Email Content (for recipient mapping)
+                    <textarea value={item.body ?? ''} readOnly rows={8} />
+                  </label>
+                  <label>
+                    Correct To
+                    <input
+                      value={fix.to}
+                      onChange={(e) =>
+                        setRoutingFixes((prev) => ({ ...prev, [item.id]: { ...fix, to: e.target.value } }))
+                      }
+                    />
+                  </label>
+                  <label>
+                    Correct CC
+                    <input
+                      value={fix.cc}
+                      onChange={(e) =>
+                        setRoutingFixes((prev) => ({ ...prev, [item.id]: { ...fix, cc: e.target.value } }))
+                      }
+                    />
+                  </label>
+                </section>
+
                 <div className="rowBtns">
                   <button
                     type="button"
+                    className="sendActionButton"
                     onClick={() => saveRoutingAndRequeue(item.id)}
                     disabled={fixingId === item.id || deletingFailedId === item.id || !fix.to || !fix.cc}
                   >
@@ -6751,6 +6823,7 @@ function App() {
                   </button>
                   <button
                     type="button"
+                    className="dangerButton"
                     onClick={() => deleteFailedMapping(item.id)}
                     disabled={deletingFailedId === item.id || fixingId === item.id}
                     title="Delete this failed mapping card from the dashboard"
@@ -6978,14 +7051,16 @@ function App() {
               refreshToken={premiumRefreshToken}
               applicationsEnabled={settings.feature_applications_enabled}
               onPendingCountChange={setPremiumPendingCount}
-              applicationsFilterValues={applicationsSharedFilters}
-              onApplicationsFilterChange={setApplicationsSharedFilters}
-              applicationsSortValue={applicationsSharedSort}
-              onApplicationsSortChange={setApplicationsSharedSort}
+              activeTab={premiumTab}
+              onTabChange={setPremiumTab}
+              filterValues={activeFilterValues}
+              sortValue={activeSortValue}
             />
           ) : null}
 
-          {activePage === 'resume_tracking' ? <ResumeTrackingPage apiBase={apiBase} onNavigateToSettings={(resumeId) => { setFocusResumeId(resumeId); setActivePage('settings') }} applicationsFilterValues={applicationsSharedFilters} onApplicationsFilterChange={setApplicationsSharedFilters} applicationsSortValue={applicationsSharedSort} onApplicationsSortChange={setApplicationsSharedSort} /> : null}
+          {activePage === 'application_tracking' ? <AppTSPage apiBase={apiBase} refreshToken={premiumRefreshToken} activeTab={applicationTrackingTab} onTabChange={setApplicationTrackingTab} filterValues={activeFilterValues} sortValue={activeSortValue} /> : null}
+
+          {activePage === 'resume_tracking' ? <ResumeTrackingPage apiBase={apiBase} onNavigateToSettings={(resumeId) => { setFocusResumeId(resumeId); setActivePage('settings') }} activeTab={resumeTrackingTab} onTabChange={setResumeTrackingTab} filterValues={activeFilterValues} sortValue={activeSortValue} /> : null}
 
           {activePage === 'inbox' ? (
             <section className="card pageSection inboxSection">
@@ -7162,6 +7237,11 @@ function App() {
             const sentDetailError = sentDetailErrors[item.id]
             const sentDetailLoading = Boolean(sentDetailLoadingIds[item.id])
             const parserExpanded = Boolean(expandedParserDetailIds[item.id])
+            const atsStrength = getAtsStrengthLabel(item.ats_score)
+            const atsTone = atsStrength === 'Strong' ? 'active' : atsStrength === 'Moderate' ? 'pending' : 'flagged'
+            const hasCandidateBadges = Boolean(
+              item.ats_score != null || item.premium_status || item.premium_verification_level || item.following_badge,
+            )
             return (
               <article
                 key={`sent-${item.id}`}
@@ -7169,19 +7249,40 @@ function App() {
                 data-email-search-section="sent_items"
                 data-email-search-related-id={item.id}
               >
-                <div className="sentItemHeader">
-                  <div className="sentItemHeaderText">
-                    <p><strong>Record ID:</strong> {item.record_id ?? '-'}</p>
-                    <p><strong>From:</strong> {item.sender}</p>
-                    <p><strong>Subject:</strong> {item.subject}</p>
-                    <p><strong>Sent at:</strong> {item.sent_at ? new Date(item.sent_at).toLocaleString() : '-'}</p>
+                <div className="candidateCardTop">
+                  <div className="candidateCardHeaderMain">
+                    <h3 className="candidateCardTitle">{item.role || item.subject || 'Unknown Role'}</h3>
+                    <p className="candidateCardSubtitle">
+                      {item.location || '-'}
+                      {' · '}{item.salary_text || 'Salary not specified'}
+                      {' · '}{jdSummarySkills(item).join(', ') || '-'}
+                    </p>
+                    <p className="candidateCardMeta"><strong>From:</strong> {item.sender}</p>
+                    <p className="candidateCardMeta"><strong>Subject:</strong> {item.subject}</p>
+                    <p className="candidateCardMeta"><strong>Sent at:</strong> {item.sent_at ? new Date(item.sent_at).toLocaleString() : '-'}</p>
+                    <p className="candidateCardRecordId">Record ID: {item.record_id ?? '-'}</p>
                   </div>
-                  <div className="sentItemHeaderActions">
-                    <span className="sourceBadge">{getSourceLabel(item.source)}</span>
-                    <button type="button" onClick={() => void toggleSentDetails(item.id)}>
-                      {isExpanded ? 'Hide Details' : 'View Details'}
-                    </button>
-                  </div>
+
+                  {hasCandidateBadges ? (
+                    <div className="candidateCardBadges" aria-label="Candidate status badges">
+                      {item.ats_score != null ? (
+                        <span className={`statusBadge statusBadge--lg statusBadge--${atsTone}`}>
+                          ATS {atsStrength} · {formatAtsScore(item.ats_score)}
+                        </span>
+                      ) : null}
+                      {item.premium_status ? <span className={`statusBadge statusBadge--${item.premium_status === 'Active' ? 'active' : 'flagged'}`}>{item.premium_status}</span> : null}
+                      {item.premium_verification_level ? <VerificationBadge level={item.premium_verification_level} /> : null}
+                      {item.following_badge ? <span className="statusBadge statusBadge--pending" title={item.following_warning ?? undefined}>{item.following_badge === 'active' ? 'Active Following' : item.following_badge === 'tracked' ? 'Tracked' : 'Bookmarked Requirement'}</span> : null}
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="sentItemHeaderActions">
+                  <span className="sourceBadge">{getSourceLabel(item.source)}</span>
+                  <button type="button" onClick={() => void toggleTracking(item.id).catch((reason) => setError((reason as Error).message))}>Track Application</button>
+                  <button type="button" onClick={() => void toggleSentDetails(item.id)}>
+                    {isExpanded ? 'Hide Sourcing Audit Trail' : 'Sourcing Audit Trail'}
+                  </button>
                 </div>
                 {isExpanded ? (
                   <div className="parserDetailsPanel sentItemDetailsPanel">
@@ -7200,72 +7301,7 @@ function App() {
                           </span>
                           <span className="trackingBadge">Replies: {sentDetails.reply_count}</span>
                         </div>
-                        <div className="parserDetailsSummaryGrid">
-                          <ParserDetailsCard title="Source" className="parserDetailsSummaryBlock">
-                            <div className="sentItemLinkList">
-                              <p><strong>Source:</strong> {renderTextOrDash(sentDetails.source_label)}</p>
-                              <p>
-                                <strong>Requirement Link:</strong>{' '}
-                                {sentDetails.requirement_received_link ? (
-                                  <a href={sentDetails.requirement_received_link} target="_blank" rel="noreferrer">
-                                    Open requirement
-                                  </a>
-                                ) : '-'}
-                              </p>
-                              <p>
-                                <strong>Sent Gmail Link:</strong>{' '}
-                                {sentDetails.sent_gmail_message_link ? (
-                                  <a href={sentDetails.sent_gmail_message_link} target="_blank" rel="noreferrer">
-                                  Open sent message
-                                </a>
-                              ) : '-'}
-                              </p>
-                            </div>
-                          </ParserDetailsCard>
-                          <ParserDetailsCard title="Requirement" className="parserDetailsSummaryBlock">
-                            <pre className="parserCardPre">{[
-                              `Role: ${renderTextOrDash(item.role)}`,
-                              `Location: ${renderTextOrDash(item.location)}`,
-                              `Salary: ${renderTextOrDash(item.salary_text)}`,
-                              `Skills: ${renderTextOrDash(item.skills_text)}`,
-                              `Company: ${renderTextOrDash(sentDetails.company)}`,
-                              `End Client: ${renderTextOrDash(sentDetails.end_client)}`,
-                              `Implementation Partner: ${renderTextOrDash(sentDetails.implementation_partner)}`,
-                              `Vendor: ${renderTextOrDash(sentDetails.vendor)}`,
-                              `Domain Mentioned: ${renderTextOrDash(sentDetails.domain_mentioned)}`,
-                              `Experience Required: ${renderTextOrDash(sentDetails.experience_required)}`,
-                              `Mandatory Skills: ${renderListOrDash(sentDetails.mandatory_skills)}`,
-                              `Missing Skills: ${renderListOrDash(sentDetails.missing_skills)}`,
-                            ].join('\n')}</pre>
-                          </ParserDetailsCard>
-                          <ParserDetailsCard title="Resume / Send Audit" className="parserDetailsSummaryBlock">
-                            <pre className="parserCardPre">{[
-                              `Resume Variant Sent: ${renderTextOrDash(sentDetails.resume_variant_sent ?? item.resume_file_name)}`,
-                              `Attached Files: ${renderListOrDash(sentDetails.attached_files)}`,
-                              `To: ${renderTextOrDash(sentDetails.to_email ?? item.recipient_email)}`,
-                              `CC: ${renderTextOrDash(sentDetails.cc_email ?? item.cc_email)}`,
-                              `ATS Score: ${formatAtsScore(sentDetails.ats_score ?? item.ats_score)}${(sentDetails.ats_score ?? item.ats_score) != null ? ` (${getAtsStrengthLabel(sentDetails.ats_score ?? item.ats_score)})` : ''}`,
-                              `ATS Summary: ${renderTextOrDash(sentDetails.ats_summary ?? item.ats_summary)}`,
-                            ].join('\n')}</pre>
-                          </ParserDetailsCard>
-                          <ParserDetailsCard title="Recruiter" className="parserDetailsSummaryBlock">
-                            <pre className="parserCardPre">{[
-                              `Recruiter Name: ${renderTextOrDash(sentDetails.recruiter_name)}`,
-                              `Recruiter Email: ${renderTextOrDash(sentDetails.recruiter_email)}`,
-                              `Recruiter Email Domain: ${renderTextOrDash(sentDetails.recruiter_email_domain)}`,
-                              `Recruiter Phone: ${renderTextOrDash(sentDetails.recruiter_phone)}`,
-                              `Recruiter Company: ${renderTextOrDash(sentDetails.recruiter_company)}`,
-                            ].join('\n')}</pre>
-                          </ParserDetailsCard>
-                          <ParserDetailsCard title="Employer" className="parserDetailsSummaryBlock">
-                            <pre className="parserCardPre">{[
-                              `Employer Name: ${renderTextOrDash(sentDetails.employer_name)}`,
-                              `Employer Email: ${renderTextOrDash(sentDetails.employer_email)}`,
-                              `Employer Phone: ${renderTextOrDash(sentDetails.employer_phone)}`,
-                              `Employer Company: ${renderTextOrDash(sentDetails.employer_company)}`,
-                            ].join('\n')}</pre>
-                          </ParserDetailsCard>
-                        </div>
+                        {renderContactDetailsGrid(sentDetails, item)}
                         <ParserDetailsPanel
                           candidateId={item.id}
                           source={item.source}

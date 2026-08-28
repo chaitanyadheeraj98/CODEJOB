@@ -6,6 +6,8 @@ import {
   runContactBulkAction,
   runReviewAction,
   runReviewBulkAction,
+  updateEmployerNumber,
+  updateRecruiterNumber,
 } from './api'
 import type {
   InventoryAction,
@@ -15,7 +17,7 @@ import type {
 
 const PAGE_SIZE = 10
 
-export function useInventory(apiBase: string, refreshToken = 0) {
+export function useInventory(apiBase: string, refreshToken = 0, externalFilterValues?: FilterValues, externalSort?: string) {
   const [rows, setRows] = useState<InventoryRow[]>([])
   const [filterValues, setFilterValues] = useState<FilterValues>(inventoryDefaultFilterValues)
   const [sort, setSort] = useState('newest')
@@ -27,6 +29,10 @@ export function useInventory(apiBase: string, refreshToken = 0) {
   const [busyBulkAction, setBusyBulkAction] = useState<InventoryAction | null>(null)
   const [error, setError] = useState('')
   const requestIdRef = useRef(0)
+  const effectiveFilterValues = externalFilterValues ?? filterValues
+  const effectiveSort = externalSort ?? sort
+
+  useEffect(() => { setPage(1) }, [effectiveFilterValues, effectiveSort])
 
   const load = useCallback(async () => {
     const requestId = requestIdRef.current + 1
@@ -34,8 +40,8 @@ export function useInventory(apiBase: string, refreshToken = 0) {
     setLoading(true)
     setError('')
     try {
-      const params = new URLSearchParams({ cursor:String((page-1)*PAGE_SIZE),limit:String(PAGE_SIZE),sort })
-      for(const [key,value] of Object.entries(inventoryFiltersToParams(filterValues))) params.set(key,value)
+      const params = new URLSearchParams({ cursor:String((page-1)*PAGE_SIZE),limit:String(PAGE_SIZE),sort: effectiveSort })
+      for(const [key,value] of Object.entries(inventoryFiltersToParams(effectiveFilterValues))) params.set(key,value)
       const response=await fetch(`${apiBase}/premium-numbers/inventory?${params}`)
       if(!response.ok) throw new Error('Failed to load premium number inventory')
       const payload=await response.json() as {items:InventoryRow[];total:number}
@@ -47,7 +53,7 @@ export function useInventory(apiBase: string, refreshToken = 0) {
     } finally {
       if (requestId === requestIdRef.current) setLoading(false)
     }
-  }, [apiBase, filterValues, page, sort])
+  }, [apiBase, effectiveFilterValues, effectiveSort, page])
 
   useEffect(() => {
     const timer = window.setTimeout(() => { load().catch(() => undefined) }, 150)
@@ -108,6 +114,25 @@ export function useInventory(apiBase: string, refreshToken = 0) {
     return dispatch(rows.filter((row) => selected.has(row.key)), action).finally(() => setBusyBulkAction(null))
   }
   const runRowAction = (row: InventoryRow, action: InventoryAction, edits?: ReviewEdits) => dispatch([row], action, edits)
+
+  const toggleFavorite = useCallback(async (row: InventoryRow) => {
+    if (row.kind !== 'contact') return
+    const nextFavorite = !(row.recruiter?.is_favorite ?? row.employer?.is_favorite ?? false)
+    setRows((current) => current.map((candidate) => candidate.key === row.key
+      ? {
+          ...candidate,
+          recruiter: candidate.recruiter ? { ...candidate.recruiter, is_favorite: nextFavorite } : candidate.recruiter,
+          employer: candidate.employer ? { ...candidate.employer, is_favorite: nextFavorite } : candidate.employer,
+        }
+      : candidate))
+    try {
+      if (row.recruiter) await updateRecruiterNumber(apiBase, row.id, { is_favorite: nextFavorite })
+      else if (row.employer) await updateEmployerNumber(apiBase, row.id, { is_favorite: nextFavorite })
+    } catch (reason) {
+      setError((reason as Error).message)
+      await load()
+    }
+  }, [apiBase, load])
   const updateFilter = (key:string,value:FilterValues[string]) => { setFilterValues((current)=>({...current,[key]:value}));setPage(1) }
 
   return {
@@ -130,5 +155,6 @@ export function useInventory(apiBase: string, refreshToken = 0) {
     reload: load,
     runBulkAction,
     runRowAction,
+    toggleFavorite,
   }
 }

@@ -1,5 +1,5 @@
 type StatusBadgeProps = {
-  status: 'Active' | 'Pending' | 'Flagged'
+  status: 'Active' | 'Pending' | 'Flagged' | 'Unscored'
   reasonCode?: string | null
 }
 
@@ -17,7 +17,7 @@ function reviewReasonLabel(reasonCode: string): string {
 
 export function StatusBadge({ status, reasonCode }: StatusBadgeProps) {
   const label = reasonCode ? reviewReasonLabel(reasonCode) : status
-  const tone = reasonCode && reasonCode !== 'new_number' ? reasonCode.replaceAll('_', '-') : status.toLowerCase()
+  const tone = reasonCode && reasonCode !== 'new_number' ? reasonCode.replaceAll('_', '-') : status === 'Unscored' ? 'neutral' : status.toLowerCase()
   return <span className={`statusBadge statusBadge--${tone}`}>{label}</span>
 }
 

@@ -309,7 +309,7 @@ def _summary(db: Session, conversation: EmailConversation, root_email: Recruiter
     )
 
 
-def list_conversations(db: Session, owner_id: str, *, recruiter: str | None = None, subject: str | None = None, status: str | None = None, unread_only: bool | None = None, sort: str = "newest") -> list[ConversationSummaryResponse]:
+def list_conversations(db: Session, owner_id: str, *, recruiter: str | None = None, subject: str | None = None, status: str | None = None, unread_only: bool | None = None, sort: str = "newest", date_from: datetime | None = None, date_to: datetime | None = None) -> list[ConversationSummaryResponse]:
     if sort not in {"newest", "oldest", "unread_first"}:
         raise HTTPException(status_code=422, detail="Invalid sort. Must be one of: newest, oldest, unread_first")
 
@@ -336,6 +336,8 @@ def list_conversations(db: Session, owner_id: str, *, recruiter: str | None = No
         values = [value.strip() for value in status.split(",") if value.strip()]
         if values: query = query.filter(EmailConversation.status.in_(values))
     if unread_only is not None: query = query.filter(EmailConversation.unread_reply_count > 0 if unread_only else EmailConversation.unread_reply_count == 0)
+    if date_from is not None: query = query.filter(EmailConversation.last_message_at >= date_from)
+    if date_to is not None: query = query.filter(EmailConversation.last_message_at < date_to)
     if sort == "oldest": query = query.order_by(EmailConversation.last_message_at.asc(), EmailConversation.id.asc())
     elif sort == "unread_first": query = query.order_by((EmailConversation.unread_reply_count > 0).desc(), func.coalesce(last_inbound.c.last_inbound_at, EmailConversation.last_message_at).desc(), EmailConversation.id.desc())
     else: query = query.order_by(EmailConversation.last_message_at.desc(), EmailConversation.id.desc())

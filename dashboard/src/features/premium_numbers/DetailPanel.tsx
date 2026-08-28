@@ -142,14 +142,14 @@ export default function DetailPanel({
         className="detailPanel"
         role="dialog"
         aria-modal="true"
-        aria-label={`Premium number details for ${row.number}`}
+        aria-label={`Premium number details for ${row.number || '(XXX) XXX-XXXX'}`}
         tabIndex={-1}
         onKeyDown={handleKeyDown}
       >
         <header className="detailPanelHeader">
           <div>
             <p className="detailPanelEyebrow">{row.kind === 'review' ? 'Pending review' : 'Number contact'}</p>
-            <h3>{row.number}</h3>
+            <h3 className={row.number ? '' : 'detailPanelNumberEmpty'}>{row.number || '(XXX) XXX-XXXX'}</h3>
             <div className="categoryChips">
               {row.categories.map((category) => <CategoryChip key={category} category={category} />)}
               <StatusBadge status={row.status} reasonCode={row.review?.reason_code} />

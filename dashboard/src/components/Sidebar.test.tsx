@@ -41,7 +41,7 @@ describe('Sidebar', () => {
         />,
       )
     })
-    expect(container.textContent ?? '').toContain('Premium Numbers')
+    expect(container.textContent ?? '').toContain('Premium Contacts')
     expect(container.textContent ?? '').toContain('Inbox6')
   })
 

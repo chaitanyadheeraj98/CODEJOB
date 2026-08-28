@@ -2,18 +2,14 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { EmailSearchHit } from '../../emailSearch'
 import { pendingReviewCount } from './api'
-import ApplicationsTab from './ApplicationsTab'
 import DetailPanel from './DetailPanel'
 import InventoryTable from './InventoryTable'
 import OpportunitiesTab from './OpportunitiesTab'
 import { ToastHost, useToast } from './Toast'
 import type { InventoryAction, InventoryRow, ReviewEdits } from './types'
 import { useInventory } from './useInventory'
-import FilterSortBar from '../../components/FilterSortBar'
-import SelectionActionBar from '../../components/SelectionActionBar'
 import type { FilterValues } from '../../components/FilterSortBar'
-import { inventoryDefaultFilterValues, inventoryFilterFields, inventorySortOptions } from './inventoryFilters'
-import { submissionDefaultFilterValues } from '../resume_tracking/submissionFilters'
+import SelectionActionBar from '../../components/SelectionActionBar'
 
 const ACTION_TOAST_LABELS: Record<InventoryAction, string> = {
   'mark-recruiter': 'Marked as recruiter',
@@ -29,10 +25,10 @@ type PremiumNumbersPageProps = {
   refreshToken: number
   applicationsEnabled: boolean
   onPendingCountChange: (count: number) => void
-  applicationsFilterValues?: FilterValues
-  onApplicationsFilterChange?: (values: FilterValues) => void
-  applicationsSortValue?: string
-  onApplicationsSortChange?: (value: string) => void
+  activeTab?: 'inventory' | 'opportunities'
+  onTabChange?: (tab: 'inventory' | 'opportunities') => void
+  filterValues?: FilterValues
+  sortValue?: string
 }
 
 function inventoryTargetKey(target: EmailSearchHit | null): string | null {
@@ -57,16 +53,20 @@ export default function PremiumNumbersPage({
   refreshToken,
   applicationsEnabled,
   onPendingCountChange,
-  applicationsFilterValues=submissionDefaultFilterValues,onApplicationsFilterChange=()=>undefined,applicationsSortValue='newest',onApplicationsSortChange=()=>undefined,
+  activeTab: controlledTab,
+  onTabChange,
+  filterValues = {},
+  sortValue = 'newest',
 }: PremiumNumbersPageProps) {
   const targetOpportunityId = opportunityTargetId(emailSearchTarget)
   const targetInventoryKey = inventoryTargetKey(emailSearchTarget)
-  const [tab, setTab] = useState<'inventory' | 'opportunities' | 'applications'>(targetOpportunityId == null ? 'inventory' : 'opportunities')
-  const activeTab = !applicationsEnabled && tab === 'applications' ? 'inventory' : tab
+  const [tab, setLocalTab] = useState<'inventory' | 'opportunities'>(targetOpportunityId == null ? 'inventory' : 'opportunities')
+  const activeTab = controlledTab ?? tab
+  const setTab = (next: 'inventory' | 'opportunities') => { setLocalTab(next); onTabChange?.(next) }
   const [detailRow, setDetailRow] = useState<InventoryRow | null>(null)
   const returnFocusRef = useRef<HTMLElement | null>(null)
   const toast = useToast()
-  const inventory = useInventory(apiBase, refreshToken)
+  const inventory = useInventory(apiBase, refreshToken, filterValues, sortValue)
   const inventoryRows = inventory.rows
   const inventoryPageSize = inventory.pageSize
   const setInventoryPage = inventory.setPage
@@ -138,20 +138,17 @@ export default function PremiumNumbersPage({
     <section className="card pageSection premiumNumbersPage">
       <header className="premiumNumbersHeader">
         <div>
-          <h2>Premium Numbers</h2>
-          <p className="subtle">Manage inventory, assignments, and rescoring operations.</p>
+          <h2>Premium Contacts</h2>
+          <p className="subtle">Manage recruiter and employer identities, assignments, and review operations.</p>
         </div>
         <div className="premiumTabs" role="tablist" aria-label="Premium number views">
           <button type="button" role="tab" aria-selected={activeTab === 'inventory'} className={activeTab === 'inventory' ? 'active' : ''} onClick={() => setTab('inventory')}>Number Inventory</button>
           <button type="button" role="tab" aria-selected={activeTab === 'opportunities'} className={activeTab === 'opportunities' ? 'active' : ''} onClick={() => setTab('opportunities')}>Recruiter Opportunities</button>
-          {applicationsEnabled ? <button type="button" role="tab" aria-selected={activeTab === 'applications'} className={activeTab === 'applications' ? 'active' : ''} onClick={() => setTab('applications')}>Applications</button> : null}
         </div>
       </header>
 
       {activeTab === 'inventory' ? (
         <div role="tabpanel" className="inventoryPanel">
-          <FilterSortBar fields={inventoryFilterFields} values={inventory.filterValues} onFieldChange={inventory.updateFilter} onClear={() => { inventory.setFilterValues(inventoryDefaultFilterValues); inventory.setPage(1) }} sortOptions={inventorySortOptions} sortValue={inventory.sort} onSortChange={inventory.setSort} loading={inventory.loading} />
-
           <SelectionActionBar
             selectedCount={inventory.selected.size}
             busyKey={inventory.busyBulkAction}
@@ -181,15 +178,12 @@ export default function PremiumNumbersPage({
             onPageChange={inventory.setPage}
             onOpen={openDetail}
             onAction={(row, action) => { runRowAction(row, action).catch(() => undefined) }}
+            onToggleFavorite={(row) => { inventory.toggleFavorite(row).catch(() => undefined) }}
           />
-        </div>
-      ) : activeTab === 'opportunities' ? (
-        <div role="tabpanel">
-          <OpportunitiesTab apiBase={apiBase} mailDate={mailDate} refreshToken={refreshToken} highlightedId={targetOpportunityId} applicationsEnabled={applicationsEnabled} onToast={toast.show} />
         </div>
       ) : (
         <div role="tabpanel">
-          <ApplicationsTab apiBase={apiBase} refreshToken={refreshToken} onToast={toast.show} filterValues={applicationsFilterValues} onFilterChange={onApplicationsFilterChange} sortValue={applicationsSortValue} onSortChange={onApplicationsSortChange} />
+          <OpportunitiesTab apiBase={apiBase} mailDate={mailDate} refreshToken={refreshToken} highlightedId={targetOpportunityId} applicationsEnabled={applicationsEnabled} onToast={toast.show} filterValues={filterValues} sortValue={sortValue} />
         </div>
       )}
 

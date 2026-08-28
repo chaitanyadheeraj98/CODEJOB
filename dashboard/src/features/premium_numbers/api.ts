@@ -246,7 +246,7 @@ export async function deleteContactVersion(
 export function updateRecruiterNumber(
   apiBase: string,
   contactId: number,
-  patch: Partial<Pick<RecruiterNumberCard, 'recruiter_name' | 'company' | 'designation' | 'recruiter_email' | 'linkedin_url' | 'recruiter_verification_level' | 'do_not_work_again' | 'do_not_work_again_reason'>>,
+  patch: Partial<Pick<RecruiterNumberCard, 'recruiter_name' | 'company' | 'designation' | 'recruiter_email' | 'linkedin_url' | 'recruiter_verification_level' | 'do_not_work_again' | 'do_not_work_again_reason' | 'is_favorite'>>,
 ): Promise<RecruiterNumberCard> {
   return requestJson(`${apiBase}/recruiter-numbers/${contactId}`, jsonInit('PATCH', patch))
 }
@@ -254,7 +254,7 @@ export function updateRecruiterNumber(
 export function updateEmployerNumber(
   apiBase: string,
   contactId: number,
-  patch: Partial<Pick<EmployerNumberCard, 'owner_name' | 'company' | 'employer_email'>>,
+  patch: Partial<Pick<EmployerNumberCard, 'owner_name' | 'company' | 'employer_email' | 'is_favorite'>>,
 ): Promise<EmployerNumberCard> {
   return requestJson(`${apiBase}/employer-numbers/${contactId}`, jsonInit('PATCH', patch))
 }

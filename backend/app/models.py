@@ -84,6 +84,10 @@ class RecruiterEmail(Base):
     draft_ai_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     draft_resume_context_status: Mapped[str | None] = mapped_column(String(40), nullable=True)
     semantic_embedding: Mapped[str | None] = mapped_column(Text, nullable=True)
+    embedding_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    marked_for_tracking: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    resolved_recruiter_contact_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    resolved_recruiter_email: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     approval_status: Mapped[str] = mapped_column(String(50), default="pending")
     sent_status: Mapped[str] = mapped_column(String(50), default="not_sent")
     source: Mapped[str] = mapped_column(String(20), default="manual")
@@ -655,7 +659,7 @@ class PremiumNumberContact(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     owner_id: Mapped[str] = mapped_column(String(100), index=True)
-    normalized_phone_number: Mapped[str] = mapped_column(String(40), index=True)
+    normalized_phone_number: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     display_phone_number: Mapped[str] = mapped_column(String(80))
     phone_is_valid: Mapped[bool] = mapped_column(Boolean, default=True)
     is_recruiter: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -663,8 +667,10 @@ class PremiumNumberContact(Base):
     recruiter_name: Mapped[str] = mapped_column(String(255), default="Unknown")
     designation: Mapped[str] = mapped_column(String(255), default="Unknown")
     recruiter_email: Mapped[str] = mapped_column(String(255), default="")
+    recruiter_email_domain: Mapped[str] = mapped_column(String(255), default="", index=True)
     owner_name: Mapped[str] = mapped_column(String(255), default="Unknown")
     employer_email: Mapped[str] = mapped_column(String(255), default="")
+    employer_email_domain: Mapped[str] = mapped_column(String(255), default="", index=True)
     company: Mapped[str] = mapped_column(String(255), default="Unknown")
     first_detected_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -690,6 +696,7 @@ class PremiumNumberContact(Base):
     recruiter_verification_level: Mapped[str] = mapped_column(String(20), default="unverified")
     do_not_work_again: Mapped[bool] = mapped_column(Boolean, default=False)
     do_not_work_again_reason: Mapped[str] = mapped_column(Text, default="")
+    is_favorite: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     source_type: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
     source_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source_link_url: Mapped[str | None] = mapped_column(String(1200), nullable=True)
@@ -697,6 +704,34 @@ class PremiumNumberContact(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
+
+
+class PremiumContactEmail(Base):
+    __tablename__ = "premium_contact_emails"
+    __table_args__ = (UniqueConstraint("owner_id", "normalized_email", name="ux_premium_contact_emails_owner_email"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    premium_contact_id: Mapped[int] = mapped_column(Integer, ForeignKey("premium_number_contacts.id"), index=True)
+    normalized_email: Mapped[str] = mapped_column(String(255), index=True)
+    domain: Mapped[str] = mapped_column(String(255), default="", index=True)
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
+    source_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+
+
+class PremiumContactPhone(Base):
+    __tablename__ = "premium_contact_phones"
+    __table_args__ = (UniqueConstraint("owner_id", "normalized_phone_number", name="ux_premium_contact_phones_owner_phone"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    premium_contact_id: Mapped[int] = mapped_column(Integer, ForeignKey("premium_number_contacts.id"), index=True)
+    normalized_phone_number: Mapped[str] = mapped_column(String(40), index=True)
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    source: Mapped[str] = mapped_column(String(50), default="unknown")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
 
 
 class RecruiterOpportunity(Base):
@@ -1006,6 +1041,171 @@ class ApplicationOutreachMessage(Base):
     sent_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, index=True)
 
 
+class AppTSApplication(Base):
+    __tablename__ = "appts_applications"
+    __table_args__ = (UniqueConstraint("owner_id", "dedupe_key", name="ux_appts_applications_owner_dedupe_key"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), default="default-owner", index=True)
+    resume_asset_id: Mapped[int] = mapped_column(Integer, index=True)
+    resume_version_snapshot: Mapped[int] = mapped_column(Integer)
+    resume_file_name_snapshot: Mapped[str] = mapped_column(String(255))
+    resume_sha256_snapshot: Mapped[str] = mapped_column(String(64))
+    recruiter_opportunity_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    recruiter_contact_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    recruiter_name_snapshot: Mapped[str] = mapped_column(String(255), default="")
+    recruiter_company_snapshot: Mapped[str] = mapped_column(String(255), default="")
+    job_title_snapshot: Mapped[str] = mapped_column(Text, default="")
+    end_client_snapshot: Mapped[str] = mapped_column(Text, default="")
+    location_snapshot: Mapped[str] = mapped_column(Text, default="")
+    manual_recruiter_name: Mapped[str] = mapped_column(String(255), default="")
+    manual_recruiter_company: Mapped[str] = mapped_column(String(255), default="")
+    manual_recruiter_email: Mapped[str] = mapped_column(String(255), default="")
+    manual_recruiter_phone: Mapped[str] = mapped_column(String(80), default="")
+    manual_recruiter_linkedin_url: Mapped[str] = mapped_column(Text, default="")
+    manual_job_title: Mapped[str] = mapped_column(Text, default="")
+    manual_end_client: Mapped[str] = mapped_column(Text, default="")
+    manual_jd_text: Mapped[str] = mapped_column(Text, default="")
+    manual_source_note: Mapped[str] = mapped_column(Text, default="")
+    resume_submission_status: Mapped[str] = mapped_column(String(30), index=True, default="not_submitted")
+    resume_submitted_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    submission_method: Mapped[str] = mapped_column(String(20), default="email")
+    rejection_detail_tags_json: Mapped[str] = mapped_column(Text, default="[]")
+    dedupe_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    resume_skills_snapshot_json: Mapped[str] = mapped_column(Text, default="[]")
+    resume_primary_role_snapshot: Mapped[str] = mapped_column(String(255), default="")
+    milestones_reached_json: Mapped[str] = mapped_column(Text, default="{}")
+    status: Mapped[str] = mapped_column(String(40), index=True, default="matched")
+    status_changed_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    resume_shared_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    submitted_to_client_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    next_action_type: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    next_action_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
+    follow_up_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_contact_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    closed_reason: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    closed_reason_code: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    embedding: Mapped[str | None] = mapped_column(Text, nullable=True)
+    embedding_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    resolved_recruiter_contact_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    resolved_recruiter_email: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
+
+
+class AppTSApplicationEvent(Base):
+    __tablename__ = "appts_application_events"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), default="default-owner", index=True)
+    application_id: Mapped[int] = mapped_column(Integer, ForeignKey("appts_applications.id"), index=True)
+    event_type: Mapped[str] = mapped_column(String(80), index=True)
+    event_source: Mapped[str] = mapped_column(String(40), default="user")
+    note: Mapped[str] = mapped_column(Text, default="")
+    linked_recruiter_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    occurred_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+
+
+class AppTSApplicationRTR(Base):
+    __tablename__ = "appts_application_rtrs"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), default="default-owner", index=True)
+    application_id: Mapped[int] = mapped_column(Integer, ForeignKey("appts_applications.id"), index=True)
+    status: Mapped[str] = mapped_column(String(20), index=True, default="requested")
+    role_scope: Mapped[str] = mapped_column(Text, default="")
+    end_client_scope: Mapped[str] = mapped_column(Text, default="")
+    requested_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    confirmed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    proof_attachment_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    proof_recruiter_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    note: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
+
+
+class AppTSApplicationInterview(Base):
+    __tablename__ = "appts_application_interviews"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), default="default-owner", index=True)
+    application_id: Mapped[int] = mapped_column(Integer, ForeignKey("appts_applications.id"), index=True)
+    round_type: Mapped[str] = mapped_column(String(40), default="interview_1")
+    scheduled_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
+    format: Mapped[str] = mapped_column(String(40), default="")
+    interviewer_names: Mapped[str] = mapped_column(Text, default="")
+    feedback: Mapped[str] = mapped_column(Text, default="")
+    result: Mapped[str] = mapped_column(String(20), default="scheduled")
+    follow_up_task_note: Mapped[str] = mapped_column(Text, default="")
+    deleted_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
+
+
+class AppTSApplicationSuggestion(Base):
+    __tablename__ = "appts_application_suggestions"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), default="default-owner", index=True)
+    application_id: Mapped[int] = mapped_column(Integer, ForeignKey("appts_applications.id"), index=True)
+    suggestion_type: Mapped[str] = mapped_column(String(20), index=True)
+    status: Mapped[str] = mapped_column(String(20), index=True, default="pending")
+    confidence: Mapped[str] = mapped_column(String(10), default="high")
+    reply_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    recruiter_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    suggested_status: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    suggested_next_action_type: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    suggested_next_action_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    reason: Mapped[str] = mapped_column(Text, default="")
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, index=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+
+class AppTSApplicationSkillGapSnapshot(Base):
+    __tablename__ = "appts_application_skill_gap_snapshots"
+    __table_args__ = (UniqueConstraint("owner_id", "application_id", name="ux_appts_skill_gap_snapshot_application"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), default="default-owner", index=True)
+    application_id: Mapped[int] = mapped_column(Integer, ForeignKey("appts_applications.id"), index=True)
+    source: Mapped[str] = mapped_column(String(20), default="fallback_text")
+    matched_required_json: Mapped[str] = mapped_column(Text, default="[]")
+    missing_required_json: Mapped[str] = mapped_column(Text, default="[]")
+    matched_preferred_json: Mapped[str] = mapped_column(Text, default="[]")
+    missing_preferred_json: Mapped[str] = mapped_column(Text, default="[]")
+    computed_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+
+
+class AppTSApplicationOutreachMessage(Base):
+    __tablename__ = "appts_application_outreach_messages"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), default="default-owner", index=True)
+    application_id: Mapped[int] = mapped_column(Integer, ForeignKey("appts_applications.id"), index=True)
+    message_kind: Mapped[str] = mapped_column(String(40))
+    draft_source: Mapped[str] = mapped_column(String(20), default="unknown")
+    ai_model: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    subject: Mapped[str] = mapped_column(Text, default="")
+    body: Mapped[str] = mapped_column(Text, default="")
+    sent_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, index=True)
+
+
+class RoleSimilarityCheck(Base):
+    __tablename__ = "role_similarity_checks"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    left_record_type: Mapped[str] = mapped_column(String(40))
+    left_record_id: Mapped[int] = mapped_column(Integer)
+    right_record_type: Mapped[str] = mapped_column(String(40))
+    right_record_id: Mapped[int] = mapped_column(Integer)
+    skill_overlap_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    embedding_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    final_score: Mapped[float] = mapped_column(Float)
+    tier: Mapped[str] = mapped_column(String(20))
+    method: Mapped[str] = mapped_column(String(20))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, index=True)
+
+
 class NumberReviewQueue(Base):
     __tablename__ = "number_review_queue"
     __table_args__ = (
@@ -1057,6 +1257,8 @@ class NumberReviewQueue(Base):
         nullable=True,
         index=True,
     )
+    target_contact_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    secondary_contact_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     normalized_phone_number: Mapped[str] = mapped_column(String(40), index=True)
     display_phone_number: Mapped[str] = mapped_column(String(80))
     owner_name: Mapped[str] = mapped_column(String(255), default="Unknown")
@@ -1080,6 +1282,18 @@ class NumberReviewQueue(Base):
     occurrence_count: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
+
+
+class ContactIdentityAction(Base):
+    __tablename__ = "contact_identity_actions"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    action_type: Mapped[str] = mapped_column(String(30), index=True)
+    primary_contact_id: Mapped[int] = mapped_column(Integer, index=True)
+    secondary_contact_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    value: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    source: Mapped[str] = mapped_column(String(40))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, index=True)
 
 
 class ProductivityEvent(Base):
