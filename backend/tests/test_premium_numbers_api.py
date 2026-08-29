@@ -198,6 +198,66 @@ class PremiumNumbersApiTests(unittest.TestCase):
             )
             self.assertEqual(count, 1)
 
+    def test_mark_number_as_recruiter_accepts_phone_less_review_card(self) -> None:
+        now = datetime.now(UTC)
+        with Session(self.engine) as db:
+            email = RecruiterEmail(
+                owner_id=main.settings.owner_id,
+                sender="Mani <mani@itbtalent.com>",
+                subject="Java Developer opening",
+                body="Reach me at mani@itbtalent.com, no direct line available.",
+                role="Java Developer",
+                location="remote",
+                salary_text="",
+                skills_text="java",
+                score=80,
+                decision="Qualified",
+                state="needs_review",
+                draft_reply="Thanks",
+                source="gmail",
+                external_message_id="m-no-phone",
+                external_thread_id="t-no-phone",
+                gmail_received_at=now,
+            )
+            db.add(email)
+            db.commit()
+            db.refresh(email)
+            db.add(
+                NumberReviewQueue(
+                    owner_id=main.settings.owner_id,
+                    source_email_id=email.id,
+                    normalized_phone_number="",
+                    display_phone_number="",
+                    owner_name="Mani",
+                    company="ITB Talent",
+                    designation="Recruiter",
+                    confidence="medium",
+                    purpose="Recruiter contact",
+                    evidence_snippet="Reach me at mani@itbtalent.com",
+                    email_subject=email.subject,
+                    email_sender="mani@itbtalent.com",
+                    contact_email="mani@itbtalent.com",
+                    gmail_open_url=email.gmail_message_url or "",
+                    state="pending",
+                )
+            )
+            db.commit()
+            review_id = (
+                db.query(NumberReviewQueue.id)
+                .filter(NumberReviewQueue.owner_id == main.settings.owner_id)
+                .scalar()
+            )
+
+        mark_res = self.client.post(f"/number-review/{review_id}/mark-recruiter")
+        self.assertEqual(mark_res.status_code, 200, mark_res.text)
+
+        with Session(self.engine) as db:
+            contact = db.query(PremiumNumberContact).filter(
+                PremiumNumberContact.recruiter_email == "mani@itbtalent.com"
+            ).one()
+            self.assertIsNone(contact.normalized_phone_number)
+            self.assertTrue(contact.is_recruiter)
+
     def test_recruiter_opportunity_includes_recruiter_phone_fields(self) -> None:
         now = datetime.now(UTC)
         with Session(self.engine) as db:

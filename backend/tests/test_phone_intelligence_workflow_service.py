@@ -1133,6 +1133,93 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
             ).one()
             self.assertEqual(stored.company, "Tekwings")
 
+    def test_phone_less_recruiter_lead_creates_contact_with_null_phone(self) -> None:
+        with Session(self.engine) as db:
+            email = self._email(db, "gmail-no-phone")
+            lead = _lead(
+                role="recruiter",
+                owner_name="Mani",
+                contact_email="mani@itbtalent.com",
+                company="ITB Talent",
+                relevance_score=90,
+                relevant=True,
+                reason="external_domain",
+                phone_display="",
+                phone_normalized="",
+            )
+            with patch(
+                "app.services.phone_intelligence_workflow_service.extract_phone_leads",
+                return_value=[lead],
+            ):
+                PhoneIntelligenceWorkflowService().capture_premium_numbers(db, email)
+
+            contact = db.query(PremiumNumberContact).filter(
+                PremiumNumberContact.recruiter_email == "mani@itbtalent.com"
+            ).one()
+            self.assertIsNone(contact.normalized_phone_number)
+            self.assertFalse(contact.phone_is_valid)
+            self.assertTrue(contact.is_recruiter)
+            opportunity = db.query(RecruiterOpportunity).filter(
+                RecruiterOpportunity.recruiter_number_id == contact.id
+            ).one_or_none()
+            self.assertIsNotNone(opportunity)
+
+    def test_two_phone_less_recruiters_from_same_email_do_not_collide(self) -> None:
+        with Session(self.engine) as db:
+            email = self._email(db, "gmail-two-no-phone")
+            lead_a = _lead(
+                role="recruiter", owner_name="Mani", contact_email="mani@itbtalent.com",
+                company="ITB Talent", relevance_score=90, relevant=True, reason="external_domain",
+                phone_display="", phone_normalized="",
+            )
+            lead_b = _lead(
+                role="recruiter", owner_name="Priya", contact_email="priya@otheragency.example",
+                company="Other Agency", relevance_score=90, relevant=True, reason="external_domain",
+                phone_display="", phone_normalized="",
+            )
+            with patch(
+                "app.services.phone_intelligence_workflow_service.extract_phone_leads",
+                return_value=[lead_a, lead_b],
+            ):
+                PhoneIntelligenceWorkflowService().capture_premium_numbers(db, email)
+
+            contacts = db.query(PremiumNumberContact).filter(
+                PremiumNumberContact.normalized_phone_number.is_(None)
+            ).all()
+            self.assertEqual(
+                {c.recruiter_email for c in contacts},
+                {"mani@itbtalent.com", "priya@otheragency.example"},
+            )
+            leads = db.query(PremiumNumberLead).filter(
+                PremiumNumberLead.phone_number_normalized == ""
+            ).all()
+            self.assertEqual(
+                {lead.contact_email for lead in leads},
+                {"mani@itbtalent.com", "priya@otheragency.example"},
+            )
+
+    def test_rescore_of_phone_less_lead_matches_existing_contact_by_email(self) -> None:
+        with Session(self.engine) as db:
+            email = self._email(db, "gmail-rescore-no-phone")
+            lead = _lead(
+                role="recruiter", owner_name="Mani", contact_email="mani@itbtalent.com",
+                company="ITB Talent", relevance_score=90, relevant=True, reason="external_domain",
+                phone_display="", phone_normalized="",
+            )
+            with patch(
+                "app.services.phone_intelligence_workflow_service.extract_phone_leads",
+                return_value=[lead],
+            ):
+                service = PhoneIntelligenceWorkflowService()
+                service.capture_premium_numbers(db, email)
+                service.capture_premium_numbers(db, email)
+
+            contacts = db.query(PremiumNumberContact).filter(
+                PremiumNumberContact.recruiter_email == "mani@itbtalent.com"
+            ).all()
+            self.assertEqual(len(contacts), 1)
+            self.assertEqual(contacts[0].seen_count, 2)
+
     def test_recruiter_promotion_blocked_for_unverified_employer_contact(self) -> None:
         with Session(self.engine) as db:
             contact = PremiumNumberContact(

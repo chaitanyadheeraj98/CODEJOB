@@ -5234,13 +5234,14 @@ def _contact_for_review(
     values: dict[str, str],
 ) -> PremiumNumberContact:
     canonical_phone = canonicalize_phone(values["display_phone_number"])
-    if not canonical_phone:
-        raise HTTPException(status_code=422, detail="Invalid phone number on review card")
+    candidate_email = (values.get("contact_email") or "").strip()
+    if not canonical_phone and not candidate_email:
+        raise HTTPException(status_code=422, detail="Review card has no phone number or email to identify a contact")
     result = contact_identity_service.reconcile(
         db,
         owner_id=settings.owner_id,
         normalized_phone=canonical_phone,
-        normalized_email=values.get("contact_email", ""),
+        normalized_email=candidate_email,
         name=values.get("owner_name", ""),
         company=values.get("company", ""),
         role=card.role or "recruiter",

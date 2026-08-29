@@ -599,6 +599,62 @@ class PremiumNumbersExtractionTests(unittest.TestCase):
             (True, 0),
         )
 
+    def test_colocation_anchors_to_email_when_no_phone(self) -> None:
+        evidence = "Harshitha | harshitha@example.com | Talent Acquisition"
+        verified, offset = extraction._verify_colocation(
+            evidence, "", evidence, email_raw="harshitha@example.com"
+        )
+        self.assertTrue(verified)
+        self.assertEqual(offset, 0)
+
+    def test_colocation_rejects_email_attributed_to_distant_signature(self) -> None:
+        body = (
+            "Java Lead Developer role. Reply to hr@example.com for this role."
+            + chr(10)
+            + ("job details " * 70)
+            + chr(10)
+            + "Regards, Harshitha <harshitha@example.com>"
+        )
+        verified, offset = extraction._verify_colocation(
+            "Regards, Harshitha <harshitha@example.com>",
+            "",
+            body,
+            email_raw="hr@example.com",
+        )
+        self.assertFalse(verified)
+        self.assertIsNotNone(offset)
+
+    def test_ai_extract_keeps_email_only_contact_without_phone(self) -> None:
+        payload = {
+            "contacts": [
+                {
+                    "role": "recruiter",
+                    "phone_number": "",
+                    "name": "Mani",
+                    "email": "mani@itbtalent.com",
+                    "company": "ITB Talent",
+                    "designation": "Recruiter",
+                    "confidence": "medium",
+                }
+            ]
+        }
+        with patch("app.premium_numbers.extraction.deepseek_json_completion", return_value=payload):
+            leads = extraction._llm_extract("body", set())
+        self.assertEqual(len(leads), 1)
+        self.assertEqual(leads[0].phone_number_normalized, "")
+        self.assertEqual(leads[0].phone_number_display, "")
+        self.assertEqual(leads[0].contact_email, "mani@itbtalent.com")
+
+    def test_ai_extract_drops_contact_with_neither_phone_nor_email(self) -> None:
+        payload = {
+            "contacts": [
+                {"role": "recruiter", "phone_number": "", "name": "Priya", "email": ""}
+            ]
+        }
+        with patch("app.premium_numbers.extraction.deepseek_json_completion", return_value=payload):
+            leads = extraction._llm_extract("body", set())
+        self.assertEqual(leads, [])
+
     def test_signature_block_groups_two_phone_numbers_under_one_identity(self) -> None:
         blank = extraction.ExtractedContactGroup(
             phone_number_display="(214) 555-1212",

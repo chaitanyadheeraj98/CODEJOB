@@ -194,6 +194,7 @@ def _llm_extract(
         raw_phone = str(item.get("phone_number", ""))
         display = _display_phone(raw_phone)
         normalized = _normalize_phone(display)
+        contact_email = str(item.get("email", "")).strip().lower()
         if not normalized:
             record_extraction_audit(
                 db,
@@ -204,9 +205,13 @@ def _llm_extract(
                 normalized_value=None,
                 status="rejected",
                 stage="noise_prefilter",
-                reason="invalid_phone_shape",
+                reason="invalid_phone_shape" if raw_phone.strip() else "phone_absent",
             )
-            continue
+            display = ""
+            if not contact_email:
+                # No phone and no email: nothing to key this contact on later, so it
+                # can't be reliably re-found on the next rescore. Drop it, same as before.
+                continue
         source_section = str(item.get("source_section", "unknown")).strip().lower()
         if source_section not in {"body", "signature", "unknown"}:
             source_section = "unknown"
@@ -219,7 +224,7 @@ def _llm_extract(
                 phone_number_display=display,
                 phone_number_normalized=normalized,
                 owner_name=str(item.get("name", item.get("owner_name", "Unknown"))).strip() or "Unknown",
-                contact_email=str(item.get("email", "")).strip().lower(),
+                contact_email=contact_email,
                 company=str(item.get("company", "Unknown")).strip() or "Unknown",
                 designation=str(item.get("designation", "Unknown")).strip() or "Unknown",
                 purpose=str(item.get("purpose", "Recruiter contact")).strip() or "Recruiter contact",
@@ -330,11 +335,15 @@ def _verify_colocation(
     phone_raw: str,
     email_content: str,
     *,
+    email_raw: str = "",
     max_distance: int = 500,
 ) -> tuple[bool, int | None]:
+    # No phone: anchor the evidence to the recruiter's email address instead, same
+    # proximity check, same anti-hallucination guarantee.
     evidence_parts = (evidence_text or "").split()
     phone_normalized = _normalize_phone(phone_raw)
-    if not evidence_parts or not phone_normalized:
+    anchor_email = (email_raw or "").strip().lower()
+    if not evidence_parts or not (phone_normalized or anchor_email):
         return False, None
 
     collapsed: list[str] = []
@@ -353,16 +362,23 @@ def _verify_colocation(
         return False, None
     evidence_start = offsets[evidence_at]
     evidence_end = offsets[evidence_at + len(normalized_evidence) - 1] + 1
-    phone_spans = [
-        match.span()
-        for match in PHONE_RE.finditer(email_content or "")
-        if _normalize_phone(match.group(0)) == phone_normalized
-    ]
-    if not phone_spans:
+    if phone_normalized:
+        anchor_spans = [
+            match.span()
+            for match in PHONE_RE.finditer(email_content or "")
+            if _normalize_phone(match.group(0)) == phone_normalized
+        ]
+    else:
+        anchor_spans = [
+            match.span()
+            for match in EMAIL_RE.finditer(email_content or "")
+            if match.group(0).lower() == anchor_email
+        ]
+    if not anchor_spans:
         return False, evidence_start
     distance = min(
-        max(evidence_start - phone_end, phone_start - evidence_end, 0)
-        for phone_start, phone_end in phone_spans
+        max(evidence_start - anchor_end, anchor_start - evidence_end, 0)
+        for anchor_start, anchor_end in anchor_spans
     )
     return distance <= max_distance, evidence_start
 
@@ -783,6 +799,7 @@ def extract_phone_leads(
                 evidence_text,
                 lead.phone_number_display,
                 email_content,
+                email_raw=lead.contact_email,
             )
             contact_type, relevance_score, is_relevant, relevance_reason = _classify_recruiter_relevance(
                 candidate_email=lead.contact_email,

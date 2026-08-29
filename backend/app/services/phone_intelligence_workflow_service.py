@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.external_feeds.models import ExternalOpportunity
@@ -608,20 +609,44 @@ class PhoneIntelligenceWorkflowService:
             ]
         return leads
 
+    @staticmethod
+    def _find_contact_for_lead(
+        db: Session, owner_id: str, lead: ExtractedContactGroup
+    ) -> PremiumNumberContact | None:
+        # Identity priority: phone (exact, cheap) first, then email — a lead can lack a phone
+        # but extraction.py guarantees it always carries at least one of the two.
+        if lead.phone_number_normalized:
+            contact = (
+                db.query(PremiumNumberContact)
+                .filter(
+                    PremiumNumberContact.owner_id == owner_id,
+                    PremiumNumberContact.normalized_phone_number == lead.phone_number_normalized,
+                )
+                .first()
+            )
+            if contact is not None:
+                return contact
+        if lead.contact_email:
+            return (
+                db.query(PremiumNumberContact)
+                .filter(
+                    PremiumNumberContact.owner_id == owner_id,
+                    or_(
+                        PremiumNumberContact.recruiter_email == lead.contact_email,
+                        PremiumNumberContact.employer_email == lead.contact_email,
+                    ),
+                )
+                .first()
+            )
+        return None
+
     def _upsert_premium_lead(
         self,
         db: Session,
         context: PhoneWorkflowSourceContext,
         lead: ExtractedContactGroup,
     ) -> tuple[PremiumNumberLead, int]:
-        contact = (
-            db.query(PremiumNumberContact)
-            .filter(
-                PremiumNumberContact.owner_id == context.owner_id,
-                PremiumNumberContact.normalized_phone_number == lead.phone_number_normalized,
-            )
-            .first()
-        )
+        contact = self._find_contact_for_lead(db, context.owner_id, lead)
         resolved_company = (
             lead.company
             if not _is_blank_or_unknown(lead.company)
@@ -688,6 +713,10 @@ class PhoneIntelligenceWorkflowService:
             PremiumNumberLead.phone_number_normalized == lead.phone_number_normalized,
             PremiumNumberLead.role == lead.role,
         )
+        if not lead.phone_number_normalized:
+            # Phone-less leads all normalize to "" - without this, two different phone-less
+            # recruiters from the same source email would collide onto one version row.
+            query = query.filter(PremiumNumberLead.contact_email == lead.contact_email)
         if context.recruiter_email_row_id is not None:
             query = query.filter(PremiumNumberLead.recruiter_email_id == context.recruiter_email_row_id)
         else:
@@ -737,19 +766,15 @@ class PhoneIntelligenceWorkflowService:
         context: PhoneWorkflowSourceContext,
         lead: ExtractedContactGroup,
     ) -> _IdempotencyPoint:
-        contact = (
-            db.query(PremiumNumberContact)
-            .filter(
-                PremiumNumberContact.owner_id == context.owner_id,
-                PremiumNumberContact.normalized_phone_number == lead.phone_number_normalized,
-            )
-            .first()
-        )
+        contact = self._find_contact_for_lead(db, context.owner_id, lead)
         review_query = db.query(NumberReviewQueue).filter(
             NumberReviewQueue.owner_id == context.owner_id,
             NumberReviewQueue.normalized_phone_number == lead.phone_number_normalized,
             NumberReviewQueue.state == "pending",
         )
+        if not lead.phone_number_normalized:
+            # Same collision as the lead-version lookup: every phone-less candidate shares "".
+            review_query = review_query.filter(NumberReviewQueue.contact_email == lead.contact_email)
         if context.recruiter_email_row_id is not None:
             review_query = review_query.filter(
                 NumberReviewQueue.source_email_id == context.recruiter_email_row_id
@@ -854,6 +879,11 @@ class PhoneIntelligenceWorkflowService:
         opportunity_lineage_service.link_record_to_lineage(
             db, record_id=record_id, lineage_id=lineage.id
         )
+        # ponytail: ux_number_review_queue_owner_phone_email is (owner_id, normalized_phone_number,
+        # source_email_id) - two *different* phone-less recruiters from the same source email that
+        # both land here (still open, still unmatched) would collide on "". The lookups above now
+        # disambiguate by contact_email so this is rare in practice; widen the unique constraint to
+        # include contact_email (needs a migration) if a real IntegrityError shows up here.
         review = NumberReviewQueue(
             owner_id=context.owner_id,
             lineage_id=lineage.id,
@@ -896,18 +926,18 @@ class PhoneIntelligenceWorkflowService:
         reason_code: str,
         source_review: NumberReviewQueue | None = None,
     ) -> bool:
-        review = (
-            db.query(NumberReviewQueue)
-            .filter(
-                NumberReviewQueue.owner_id == context.owner_id,
-                NumberReviewQueue.normalized_phone_number == lead.phone_number_normalized,
-                NumberReviewQueue.role == role,
-                NumberReviewQueue.reason_code == reason_code,
-                NumberReviewQueue.state == "pending",
-            )
-            .order_by(NumberReviewQueue.updated_at.desc(), NumberReviewQueue.id.desc())
-            .first()
+        conflict_query = db.query(NumberReviewQueue).filter(
+            NumberReviewQueue.owner_id == context.owner_id,
+            NumberReviewQueue.normalized_phone_number == lead.phone_number_normalized,
+            NumberReviewQueue.role == role,
+            NumberReviewQueue.reason_code == reason_code,
+            NumberReviewQueue.state == "pending",
         )
+        if not lead.phone_number_normalized:
+            conflict_query = conflict_query.filter(NumberReviewQueue.contact_email == lead.contact_email)
+        review = conflict_query.order_by(
+            NumberReviewQueue.updated_at.desc(), NumberReviewQueue.id.desc()
+        ).first()
         if review is None and source_review is not None:
             review = source_review
             review.role = role
@@ -949,8 +979,11 @@ class PhoneIntelligenceWorkflowService:
             return contact, False
         contact = PremiumNumberContact(
             owner_id=context.owner_id,
-            normalized_phone_number=lead.phone_number_normalized,
+            # NULL, not "" - the (owner_id, normalized_phone_number) unique constraint would
+            # otherwise collide on the second phone-less contact for this owner.
+            normalized_phone_number=lead.phone_number_normalized or None,
             display_phone_number=lead.phone_number_display,
+            phone_is_valid=bool(lead.phone_number_normalized),
             first_detected_email_id=context.recruiter_email_row_id,
             source_email_id=context.recruiter_email_row_id,
             source_type=context.source,
@@ -1018,7 +1051,7 @@ class PhoneIntelligenceWorkflowService:
                 contact.first_detected_email_id if role == "recruiter" else contact.source_email_id
             ),
             contact_id=contact.id,
-            phone_number_normalized=contact.normalized_phone_number,
+            phone_number_normalized=contact.normalized_phone_number or "",
             phone_number_display=contact.display_phone_number,
             role=role,
             extraction_source="legacy_snapshot",
