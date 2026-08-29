@@ -19,7 +19,7 @@ from app.parsing.document_extraction import extract_gmail_reply_body
 from app.parsing.jd_requirements import extract_work_authorizations
 from app.phase0 import email_domain
 from app.premium_numbers.domain_guard import employer_domains_for_owner, is_derivable_company_domain
-from app.premium_numbers.extraction import ExtractedContactGroup, extract_phone_leads
+from app.premium_numbers.extraction import EMAIL_RE, ExtractedContactGroup, extract_phone_leads
 from app.premium_numbers.identity_matching import classify_identity_match
 from app.premium_numbers.phone_normalization import canonicalize_phone
 from app.services import opportunity_lineage_service
@@ -603,12 +603,44 @@ class PhoneIntelligenceWorkflowService:
             source_external_opportunity_id=context.external_opportunity_row_id,
         )
         if context.source == "nvoids" and context.sender:
-            leads = [
-                replace(lead, contact_email=context.sender)
-                if not lead.contact_email and index == 0
-                else lead
-                for index, lead in enumerate(leads)
-            ]
+            if leads:
+                leads = [
+                    replace(lead, contact_email=context.sender)
+                    if not lead.contact_email and index == 0
+                    else lead
+                    for index, lead in enumerate(leads)
+                ]
+            elif not EMAIL_RE.search(context.body):
+                # nvoids masks the recruiter's email out of the scraped posting text
+                # (confirmed live: 0 of 300 sampled postings have a real address in
+                # raw_body), so extraction never finds anything to work with even though
+                # the address is already known - it's the same context.sender used to
+                # backfill an existing lead above. Only fires when the body genuinely has
+                # no email anywhere (confirmed via the same EMAIL_RE extraction already
+                # uses) - a posting with a real, visible-but-otherwise-unextracted email
+                # keeps the existing zero-lead/"ignored" bridge behavior untouched.
+                # Synthesized lead is left unscored/unclassified (no signal was actually
+                # verified against the text) so it lands in Needs Review rather than
+                # auto-promoting.
+                leads = [
+                    ExtractedContactGroup(
+                        phone_number_display="",
+                        phone_number_normalized="",
+                        owner_name="Unknown",
+                        contact_email=context.sender,
+                        company="Unknown",
+                        designation="Unknown",
+                        purpose="Recruiter contact",
+                        confidence="low",
+                        contact_type="unknown",
+                        recruiter_relevance_score=0,
+                        is_recruiter_relevant=False,
+                        relevance_reason="nvoids_masked_email_fallback",
+                        source_fragment="Recruiter email from nvoids posting metadata (masked in the scraped body)",
+                        role="recruiter",
+                        extraction_source="nvoids_metadata_fallback",
+                    )
+                ]
         return leads
 
     @staticmethod

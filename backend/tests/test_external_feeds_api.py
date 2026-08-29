@@ -1052,6 +1052,11 @@ Job ID: ENG-2"""
             self.assertTrue(all((row.bridge_status or "") == "needs_review" for row in ext_rows))
 
     def test_manual_sync_keeps_nvoids_candidate_but_skips_unknown_phone_bridge(self) -> None:
+        # Policy: a nvoids posting with zero phone signal but a known recruiter_email now
+        # surfaces via Needs Review instead of being silently ignored (matching the same
+        # "email is a valid identity on its own" fix applied to gmail extraction) - it does
+        # not auto-promote to a contact/opportunity, since no evidence was actually verified
+        # against the posting text, only the platform's own structured metadata.
         sync = self.client.post("/external-feeds/nvoids/sync")
         self.assertEqual(sync.status_code, 200, sync.text)
 
@@ -1063,7 +1068,7 @@ Job ID: ENG-2"""
                 .all()
             )
             self.assertGreaterEqual(len(ext_rows), 1)
-            self.assertTrue(all((row.bridge_status or "") == "ignored" for row in ext_rows))
+            self.assertTrue(all((row.bridge_status or "") == "needs_review" for row in ext_rows))
 
             email_rows = (
                 db.query(RecruiterEmail)
@@ -1084,6 +1089,14 @@ Job ID: ENG-2"""
             )
             self.assertEqual(recruiter_numbers, [])
             self.assertEqual(recruiter_opportunities, [])
+
+            number_review_rows = (
+                db.query(NumberReviewQueue)
+                .filter(NumberReviewQueue.owner_id == main.settings.owner_id, NumberReviewQueue.reason_code == "new_number")
+                .all()
+            )
+            self.assertEqual(len(number_review_rows), len(ext_rows))
+            self.assertTrue(all(row.contact_email.endswith("@example.com") for row in number_review_rows))
 
     def test_nvoids_bridge_calls_shared_workflow(self) -> None:
         # Regression guard for the Premium Numbers Redesign: `_bridge_to_recruiter_opportunity`
@@ -1203,10 +1216,15 @@ Job ID: ENG-2"""
 
             self.assertEqual(db.query(PremiumNumberContact).filter(PremiumNumberContact.owner_id == main.settings.owner_id).count(), 0)
 
-    def test_nvoids_zero_leads_sets_bridge_status_ignored(self) -> None:
-        # §25.8 fallback: when neither AI nor the regex fallback finds any phone lead at all for a
-        # posting, the bridge must set ExternalOpportunity.bridge_status to "ignored" and create
-        # neither a NumberReviewQueue row nor a PremiumNumberContact row for it.
+    def test_nvoids_zero_leads_with_known_email_sets_bridge_status_needs_review(self) -> None:
+        # Was "§25.8 ignored": when neither AI nor the regex fallback finds any phone lead at
+        # all for a posting, the bridge used to set bridge_status to "ignored" and create
+        # neither a NumberReviewQueue row nor a PremiumNumberContact row. Policy changed to
+        # match the "email is a valid identity on its own" fix applied to gmail extraction -
+        # a known recruiter_email (from the platform's own structured metadata, even when
+        # absent from the JD body used for extraction) now surfaces via Needs Review instead
+        # of vanishing with zero trace. It still does not auto-promote to a contact, since no
+        # evidence was actually verified against the posting text.
         class _NoPhoneSingleItemCollector(_FakeCollector):
             def fetch_page(self, _base_url: str, page: int) -> CollectedPage:
                 if page > 0:
@@ -1243,14 +1261,17 @@ Job ID: ENG-2"""
                 .filter(ExternalOpportunity.owner_id == main.settings.owner_id, ExternalOpportunity.source_type == "nvoids")
                 .one()
             )
-            self.assertEqual(ext_row.bridge_status, "ignored")
+            self.assertEqual(ext_row.bridge_status, "needs_review")
 
-            self.assertEqual(
+            review_rows = (
                 db.query(NumberReviewQueue)
                 .filter(NumberReviewQueue.source_external_opportunity_id == ext_row.id)
-                .count(),
-                0,
+                .all()
             )
+            self.assertEqual(len(review_rows), 1)
+            self.assertEqual(review_rows[0].contact_email, "recruiter@example.com")
+            self.assertEqual(review_rows[0].reason_code, "new_number")
+            self.assertEqual(review_rows[0].normalized_phone_number, "")
             self.assertEqual(db.query(PremiumNumberContact).filter(PremiumNumberContact.owner_id == main.settings.owner_id).count(), 0)
 
     def test_settings_round_trip_includes_nvoids_locations_and_preferred_employer_cc(self) -> None:

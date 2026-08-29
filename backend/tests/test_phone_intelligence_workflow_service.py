@@ -1287,6 +1287,47 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
             self.assertEqual(contact.employer_email, "hr@acme.example")
             self.assertEqual(contact.employer_email_domain, "acme.example")
 
+    def test_nvoids_masked_email_synthesizes_review_when_extraction_finds_nothing(self) -> None:
+        with Session(self.engine) as db:
+            item = self._external(db)
+            with patch(
+                "app.services.phone_intelligence_workflow_service.extract_phone_leads",
+                return_value=[],
+            ):
+                result = PhoneIntelligenceWorkflowService().capture_premium_numbers_for_nvoids(
+                    db, item, item.raw_body,
+                )
+
+            self.assertEqual(result.review_created, 1)
+            self.assertEqual(db.query(PremiumNumberContact).count(), 0)
+            review = db.query(NumberReviewQueue).one()
+            self.assertEqual(review.contact_email, "row2@agency.example")
+            self.assertEqual(review.reason_code, "new_number")
+            self.assertEqual(review.normalized_phone_number, "")
+
+    def test_phone_less_nvoids_lead_creates_contact_with_source_link(self) -> None:
+        with Session(self.engine) as db:
+            item = self._external(db)
+            lead = _lead(
+                role="recruiter", owner_name="Priya", contact_email="priya@otheragency.example",
+                company="Other Agency", relevance_score=90, relevant=True, reason="external_domain",
+                phone_display="", phone_normalized="",
+            )
+            with patch(
+                "app.services.phone_intelligence_workflow_service.extract_phone_leads",
+                return_value=[lead],
+            ):
+                PhoneIntelligenceWorkflowService().capture_premium_numbers_for_nvoids(
+                    db, item, item.raw_body,
+                )
+
+            contact = db.query(PremiumNumberContact).filter(
+                PremiumNumberContact.recruiter_email == "priya@otheragency.example"
+            ).one()
+            self.assertIsNone(contact.normalized_phone_number)
+            self.assertEqual(contact.source_type, "nvoids")
+            self.assertEqual(contact.source_link_url, item.source_url)
+
     def test_recruiter_promotion_blocked_for_unverified_employer_contact(self) -> None:
         with Session(self.engine) as db:
             contact = PremiumNumberContact(
