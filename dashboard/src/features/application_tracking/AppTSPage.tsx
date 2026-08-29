@@ -2,12 +2,17 @@ import { useEffect, useRef, useState } from 'react'
 import type { FilterValues } from '../../components/FilterSortBar'
 import CandidateCard from '../../components/CandidateCard'
 import type { Candidate, SentItemDetails } from '../../App'
+import { formatAtsScore, getAtsStrengthLabel, renderContactDetailsGrid } from '../../App'
+import { filterSortRegistry, resolveRegistryEntry } from '../../filterSortRegistry'
+import { CategoryChip, StatusBadge } from '../premium_numbers/StatusBadge'
+import VerificationBadge from '../premium_numbers/VerificationBadge'
 import {
   ApplicationDuplicateConflictError,
   addApplicationInterview,
   approveSendCandidate,
   createApplicationEvent,
   deleteApplicationInterview,
+  fetchApplicationSentDetails,
   fetchCandidateSentDetails,
   getApplication,
   listApplicationPage,
@@ -86,24 +91,32 @@ export default function AppTSPage({ apiBase, refreshToken, activeTab = 'bookmark
   const [interviewDrafts, setInterviewDrafts] = useState<Record<number, InterviewDraft>>({})
   const [interviewEdits, setInterviewEdits] = useState<Record<number, Partial<ApplicationInterview>>>({})
   const [duplicateConflicts, setDuplicateConflicts] = useState<Record<number, ApplicationDuplicateSummary[]>>({})
+  const [trackedSentDetailsExpanded, setTrackedSentDetailsExpanded] = useState<Record<number, boolean>>({})
+  const [trackedSentDetailsLoading, setTrackedSentDetailsLoading] = useState<Record<number, boolean>>({})
+  const [trackedSentDetailsError, setTrackedSentDetailsError] = useState<Record<number, string | undefined>>({})
+  const [trackedSentDetails, setTrackedSentDetails] = useState<Record<number, SentItemDetails>>({})
   const [error, setError] = useState('')
   const requestIdRef = useRef(0)
 
   useEffect(() => { setPage(1) }, [filterValues, sortValue, status, activeTab])
 
   useEffect(() => {
-    const filters = Object.fromEntries(Object.entries(filterValues).filter(([, value]) => typeof value === 'string' && value && value !== 'all') as Array<[string, string]>)
     const requestId = requestIdRef.current + 1
     requestIdRef.current = requestId
     setLoading(true)
     setError('')
     const timer = window.setTimeout(() => {
-      const request = activeTab === 'bookmarked'
-        ? listBookmarkedRequirements(apiBase, filters).then((items) => { setBookmarked(items) })
-        : listApplicationPage({ apiBase, cursor: (page - 1) * PAGE_SIZE, limit: PAGE_SIZE, q: '', status, filters, sort: sortValue }).then((result) => {
-            setRows(result.items)
-            setTotal(result.total)
-          })
+      let request: Promise<void>
+      if (activeTab === 'bookmarked') {
+        const bookmarkedParams = resolveRegistryEntry(filterSortRegistry['application_tracking:bookmarked'], { resumeAssets: [] })?.toParams(filterValues) ?? {}
+        request = listBookmarkedRequirements(apiBase, bookmarkedParams, sortValue).then((items) => { setBookmarked(items) })
+      } else {
+        const filters = Object.fromEntries(Object.entries(filterValues).filter(([, value]) => typeof value === 'string' && value && value !== 'all') as Array<[string, string]>)
+        request = listApplicationPage({ apiBase, cursor: (page - 1) * PAGE_SIZE, limit: PAGE_SIZE, q: '', status, filters, sort: sortValue }).then((result) => {
+          setRows(result.items)
+          setTotal(result.total)
+        })
+      }
       request
         .catch((reason) => { if (requestId === requestIdRef.current) setError(reason instanceof Error ? reason.message : String(reason)) })
         .finally(() => { if (requestId === requestIdRef.current) setLoading(false) })
@@ -325,6 +338,25 @@ export default function AppTSPage({ apiBase, refreshToken, activeTab = 'bookmark
     }
   }
 
+  const toggleTrackedSentDetails = async (id: number) => {
+    if (trackedSentDetailsExpanded[id]) {
+      setTrackedSentDetailsExpanded((prev) => ({ ...prev, [id]: false }))
+      return
+    }
+    setTrackedSentDetailsExpanded((prev) => ({ ...prev, [id]: true }))
+    if (trackedSentDetails[id] || trackedSentDetailsLoading[id]) return
+    setTrackedSentDetailsLoading((prev) => ({ ...prev, [id]: true }))
+    setTrackedSentDetailsError((prev) => ({ ...prev, [id]: undefined }))
+    try {
+      const payload = await fetchApplicationSentDetails(apiBase, id)
+      setTrackedSentDetails((prev) => ({ ...prev, [id]: payload }))
+    } catch (reason) {
+      setTrackedSentDetailsError((prev) => ({ ...prev, [id]: reason instanceof Error ? reason.message : String(reason) }))
+    } finally {
+      setTrackedSentDetailsLoading((prev) => ({ ...prev, [id]: false }))
+    }
+  }
+
   return (
     <section className="card pageSection">
       <header><h2>Application Tracking System</h2><p className="subtle">Explicitly bookmarked and tracked applications.</p></header>
@@ -390,25 +422,44 @@ export default function AppTSPage({ apiBase, refreshToken, activeTab = 'bookmark
               const currentTitle = item.current_job_title || item.job_title_snapshot
               const currentCompany = item.current_recruiter_company || item.recruiter_company_snapshot
               const sourceChanged = currentTitle !== item.job_title_snapshot || currentCompany !== item.recruiter_company_snapshot
+              const atsStrength = getAtsStrengthLabel(item.ats_score)
+              const atsTone = atsStrength === 'Strong' ? 'active' : atsStrength === 'Moderate' ? 'pending' : 'flagged'
               return (
                 <article key={item.id} className="opportunityCard applicationCard" data-application-id={item.id}>
-                  <header>
-                    <div>
+                  <div className="candidateCardTop">
+                    <div className="candidateCardHeaderMain">
                       <span className="categoryChip">{item.resume_file_name_snapshot} · v{item.resume_version_snapshot}</span>
-                      <h3>{currentTitle || 'Tracked application'}</h3>
+                      <h3 className="candidateCardTitle">{currentTitle || 'Tracked application'}</h3>
+                      <p className="candidateCardSubtitle">
+                        {item.location_snapshot || '-'}
+                        {' · '}{item.resume_skills_snapshot.length ? item.resume_skills_snapshot.slice(0, 3).join(', ') : '-'}
+                      </p>
+                      <p className="candidateCardMeta"><strong>Applied:</strong> {dateTimeLabel(item.created_at)}</p>
+                      {item.current_source_url ? (
+                        <p className="candidateCardMeta candidateCardLinks">
+                          <a href={item.current_source_url} target="_blank" rel="noreferrer">Open source listing</a>
+                        </p>
+                      ) : null}
+                      {sourceChanged ? <p className="snapshotNotice">Source details changed; the original resume/recruiter/job snapshot is preserved.</p> : null}
+                      <p className="candidateCardRecordId">Record ID: {item.record_id ?? '-'}</p>
                     </div>
-                    <select aria-label={`Application status for ${currentTitle}`} value={item.status} onChange={(event) => patchRow(item.id, { status: event.target.value as ApplicationStatus })} disabled={busyId === item.id}>
-                      {item.status === 'submitted_to_client' ? <option value="submitted_to_client" disabled>Submitted To Client</option> : null}
-                      {EDITABLE_STATUSES.map((value) => <option key={value} value={value}>{label(value)}</option>)}
-                    </select>
-                  </header>
-                  <div className="opportunitySummary">
-                    <p><strong>Recruiter:</strong> {item.current_recruiter_name || item.recruiter_name_snapshot || '--'}</p>
-                    <p><strong>Company:</strong> {currentCompany || '--'}</p>
-                    <p><strong>Phone:</strong> {item.current_recruiter_phone_display || '--'}</p>
-                    <p><strong>End client:</strong> {item.current_end_client || item.end_client_snapshot || '--'}</p>
-                    <p><strong>Last contact:</strong> {dateTimeLabel(item.last_contact_at)}</p>
-                    {sourceChanged ? <p className="snapshotNotice">Source details changed; the original resume/recruiter/job snapshot is preserved.</p> : null}
+                    <div className="applicationCardTopRight">
+                      <div className="candidateCardBadges" aria-label="Application status badges">
+                        {item.ats_score != null ? (
+                          <span className={`statusBadge statusBadge--lg statusBadge--${atsTone}`}>
+                            ATS {atsStrength} · {formatAtsScore(item.ats_score)}
+                          </span>
+                        ) : null}
+                        <span className="statusBadge statusBadge--neutral" title="Current status (read-only)">{label(item.status)}</span>
+                        {item.current_recruiter_categories.map((category) => <CategoryChip key={category} category={category} />)}
+                        {item.current_recruiter_status ? <StatusBadge status={item.current_recruiter_status as 'Active' | 'Flagged'} /> : null}
+                        {item.current_recruiter_verification_level ? <VerificationBadge level={item.current_recruiter_verification_level} /> : null}
+                      </div>
+                      <select aria-label={`Application status for ${currentTitle}`} value={item.status} onChange={(event) => patchRow(item.id, { status: event.target.value as ApplicationStatus })} disabled={busyId === item.id}>
+                        {item.status === 'submitted_to_client' ? <option value="submitted_to_client" disabled>Submitted To Client</option> : null}
+                        {EDITABLE_STATUSES.map((value) => <option key={value} value={value}>{label(value)}</option>)}
+                      </select>
+                    </div>
                   </div>
                   <div className="detailFormGrid">
                     <label>Next action<input value={edits[item.id]?.next_action_type ?? item.next_action_type ?? ''} onChange={(event) => setEdits((current) => ({ ...current, [item.id]: { ...current[item.id], next_action_type: event.target.value } }))} /></label>
@@ -424,7 +475,30 @@ export default function AppTSPage({ apiBase, refreshToken, activeTab = 'bookmark
                   <div className="rowBtns">
                     <button type="button" onClick={() => saveNextAction(item)} disabled={busyId === item.id || !edits[item.id]}>Save reminder</button>
                     <button type="button" onClick={() => toggleDetails(item.id)} disabled={busyId === item.id}>{expandedId === item.id ? 'Hide timeline' : 'View timeline'}</button>
+                    <button type="button" onClick={() => toggleTrackedSentDetails(item.id)} disabled={!item.source_recruiter_email_id} title={item.source_recruiter_email_id ? undefined : 'No linked sourcing email for this application'}>
+                      {trackedSentDetailsExpanded[item.id] ? 'Hide Details' : 'View Details'}
+                    </button>
+                    {item.sent_gmail_message_link ? (
+                      <a className="linkButton" href={item.sent_gmail_message_link} target="_blank" rel="noreferrer">Message</a>
+                    ) : (
+                      <button type="button" disabled title="No sent Gmail message linked to this application">Message</button>
+                    )}
                   </div>
+                  {trackedSentDetailsExpanded[item.id] ? (
+                    <div className="parserDetailsPanel">
+                      {trackedSentDetailsLoading[item.id] ? <p className="subtle">Loading contact details...</p> : null}
+                      {trackedSentDetailsError[item.id] ? <p className="errorMessage">{trackedSentDetailsError[item.id]}</p> : null}
+                      {trackedSentDetails[item.id] ? renderContactDetailsGrid(trackedSentDetails[item.id], {
+                        id: item.source_recruiter_email_id ?? item.id,
+                        role: currentTitle,
+                        location: item.location_snapshot,
+                        skills_text: item.resume_skills_snapshot.join(', '),
+                        resume_file_name: item.resume_file_name_snapshot,
+                        ats_score: item.ats_score,
+                        ats_summary: item.ats_summary,
+                      }) : null}
+                    </div>
+                  ) : null}
                   {expandedId === item.id ? (
                     <section className="applicationTimeline" aria-label={`Timeline for ${currentTitle}`}>
                       {!detail ? <p className="subtle">Loading timeline...</p> : (

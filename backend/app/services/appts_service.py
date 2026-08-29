@@ -123,6 +123,7 @@ def create_tracked_application_manual(
     submission_method: str = "email",
     resume_submitted_at: datetime | None = None,
     location_snapshot: str = "",
+    source_recruiter_email_id: int | None = None,
 ) -> tuple[AppTSApplication, bool]:
     resume = db.query(ResumeAsset).filter(ResumeAsset.owner_id == owner_id, ResumeAsset.id == resume_asset_id).first()
     if resume is None:
@@ -148,7 +149,8 @@ def create_tracked_application_manual(
         resume_submission_status="submitted", resume_submitted_at=submitted_at, submission_method=submission_method.strip(),
         dedupe_key=dedupe_key, resume_skills_snapshot_json=json.dumps(resume_tracking_service.snapshot_resume_skills(resume), separators=(",", ":")),
         resume_primary_role_snapshot=(resume.primary_role or "").strip(), resolved_recruiter_contact_id=contact_id,
-        resolved_recruiter_email=resolved_email, created_at=utc_now(), updated_at=utc_now(),
+        resolved_recruiter_email=resolved_email, source_recruiter_email_id=source_recruiter_email_id,
+        created_at=utc_now(), updated_at=utc_now(),
     )
     result = _insert(db, row)
     if result[1]:
@@ -172,6 +174,7 @@ def create_tracked_application_from_email(
         manual_recruiter_email=recruiter_email, manual_job_title=(email.role or "").strip() or "Not specified",
         manual_end_client=(email.end_client or "").strip() or company, manual_source_note=f"Tracked from email {email.id}",
         resume_submitted_at=email.sent_at, location_snapshot=email.location or "",
+        source_recruiter_email_id=email.id,
     )
 
 

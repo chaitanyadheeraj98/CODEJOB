@@ -2516,6 +2516,10 @@ def _identity_key(row: RecruiterEmail | AppTSApplication) -> str | None:
     return f"email:{row.resolved_recruiter_email}" if row.resolved_recruiter_email else None
 
 
+def _contact_categories(contact: PremiumNumberContact) -> list[str]:
+    return [name for name, flag in (("Recruiter", contact.is_recruiter), ("Employer", contact.is_employer)) if flag]
+
+
 def _contact_status(contact: PremiumNumberContact) -> str:
     unknown = lambda value: not str(value or "").strip() or str(value).strip().lower() == "unknown"
     flagged = (
@@ -4389,6 +4393,11 @@ def _application_response(
         )
         .first()
     )
+    source_email_id = getattr(row, "source_recruiter_email_id", None)
+    source_email = (
+        db.query(RecruiterEmail).filter(RecruiterEmail.owner_id == settings.owner_id, RecruiterEmail.id == source_email_id).first()
+        if source_email_id else None
+    )
     recruiter = (
         db.query(PremiumNumberContact)
         .filter(
@@ -4448,8 +4457,14 @@ def _application_response(
         rejection_detail_tags = json.loads(row.rejection_detail_tags_json or "[]")
     except (TypeError, ValueError, json.JSONDecodeError):
         rejection_detail_tags = []
+    try:
+        resume_skills_snapshot = json.loads(row.resume_skills_snapshot_json or "[]")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        resume_skills_snapshot = []
     return ApplicationResponse.model_validate(row).model_copy(
         update={
+            "resume_skills_snapshot": resume_skills_snapshot if isinstance(resume_skills_snapshot, list) else [],
+            "record_id": source_email.record_id if source_email else (opportunity.record_id if opportunity else None),
             "current_recruiter_name": recruiter.recruiter_name if recruiter else "",
             "current_recruiter_company": recruiter.company if recruiter else "",
             "current_recruiter_phone_display": recruiter.display_phone_number if recruiter else "",
@@ -4457,6 +4472,14 @@ def _application_response(
             "current_recruiter_linkedin_url": recruiter.linkedin_url if recruiter else "",
             "current_job_title": opportunity.job_title if opportunity else "",
             "current_end_client": opportunity.end_client if opportunity else "",
+            "current_recruiter_categories": _contact_categories(recruiter) if recruiter else [],
+            "current_recruiter_status": _contact_status(recruiter) if recruiter else "",
+            "current_recruiter_verification_level": recruiter.recruiter_verification_level if recruiter else "",
+            "current_source_url": (opportunity.source_url or opportunity.gmail_open_url or None) if opportunity else None,
+            "source_recruiter_email_id": source_email_id,
+            "ats_score": source_email.ats_score if source_email else None,
+            "ats_summary": source_email.ats_summary if source_email else None,
+            "sent_gmail_message_link": source_email.gmail_sent_message_url if source_email else None,
             "events": [ApplicationEventResponse.model_validate(event) for event in events],
             "rtr_history": [ApplicationRTRResponse.model_validate(rtr) for rtr in rtr_history],
             "interviews": [ApplicationInterviewResponse.model_validate(interview) for interview in interviews],
@@ -4931,7 +4954,7 @@ def list_premium_number_inventory(
     contacts=db.query(PremiumNumberContact).filter(PremiumNumberContact.owner_id==owner,PremiumNumberContact.id.in_(contact_ids)).all() if contact_ids else []
     employer_domains=employer_domains_for_owner(db,owner) if any(row.is_recruiter for row in contacts) else set()
     recruiter_by_id={row.id:_recruiter_number_response(db,row,employer_domains) for row in contacts if row.is_recruiter}; employer_by_id={row.id:_employer_number_response(db,row) for row in contacts if row.is_employer}
-    items=[PremiumNumberInventoryItemResponse(key=f"{row.kind}:{row.id}",kind=row.kind,id=row.id,number=row.number,owner=row.owner or "Unknown",company=row.company or "Unknown",categories=[name for name,flag in (("Recruiter",row.is_recruiter),("Employer",row.is_employer)) if flag],status=row.status,score=row.score,sourceType=row.source_type if row.source_type in {"gmail","nvoids"} else None,lastCheckedAt=row.last_checked_at,review=review_by_id.get(row.id) if row.kind=="review" else None,recruiter=recruiter_by_id.get(row.id),employer=employer_by_id.get(row.id)) for row in visible]
+    items=[PremiumNumberInventoryItemResponse(key=f"{row.kind}:{row.id}",kind=row.kind,id=row.id,number=row.number,owner=row.owner or "Unknown",company=row.company or "Unknown",categories=_contact_categories(row),status=row.status,score=row.score,sourceType=row.source_type if row.source_type in {"gmail","nvoids"} else None,lastCheckedAt=row.last_checked_at,review=review_by_id.get(row.id) if row.kind=="review" else None,recruiter=recruiter_by_id.get(row.id),employer=employer_by_id.get(row.id)) for row in visible]
     return PremiumNumberInventoryListResponse(items=items,next_cursor=cursor+limit if len(rows)>limit else None,has_next=len(rows)>limit,total=total)
 
 
@@ -6841,17 +6864,62 @@ def refresh_recruiter_opportunity_ai_metadata(
 def list_appts_bookmarked_requirements(
     cursor: int = Query(0, ge=0),
     limit: int = Query(25, ge=1, le=100),
+    sort: str = Query("newest"),
     date_filter: str | None = Query(default=None),
     date_from: date | None = Query(default=None),
     date_to: date | None = Query(default=None),
+    source: str | None = Query(default=None),
+    sendability: str | None = Query(default=None),
+    has_resume: bool | None = Query(default=None),
+    min_ats_score: float | None = Query(default=None, ge=0, le=100),
+    max_ats_score: float | None = Query(default=None, ge=0, le=100),
+    role: str | None = Query(default=None, max_length=200),
+    location: str | None = Query(default=None, max_length=200),
+    sender: str | None = Query(default=None, max_length=255),
     db: Session = Depends(get_db),
 ) -> CandidateListResponse:
+    valid_sorts = {"newest", "oldest", "highest_score", "lowest_score"}
+    if sort not in valid_sorts:
+        raise HTTPException(status_code=422, detail=f"Invalid sort. Must be one of: {', '.join(sorted(valid_sorts))}")
+    if min_ats_score is not None and max_ats_score is not None and min_ats_score > max_ats_score:
+        raise HTTPException(status_code=422, detail="min_ats_score must be <= max_ats_score")
     query = db.query(RecruiterEmail).filter(RecruiterEmail.owner_id == settings.owner_id, RecruiterEmail.state == "needs_review", RecruiterEmail.marked_for_tracking.is_(True))
     if date_filter:
         start, end = _date_range_utc_window(date_filter, date_from, date_to)
         query = query.filter(RecruiterEmail.created_at >= start, RecruiterEmail.created_at < end)
+    # ponytail: filter/sort fields mirror list_candidates (main.py ~4645), scoped to the
+    # Bookmarked Requirements tab's smaller field set. Duplicated rather than extracted
+    # since list_candidates carries state/mail_date/company-join logic this endpoint
+    # doesn't need; pull into a shared helper if a third caller needs this subset.
+    if source:
+        values = [value.strip() for value in source.split(",") if value.strip()]
+        if values:
+            query = query.filter(RecruiterEmail.source.in_(values))
+    if sendability:
+        statuses = set().union(*(SENDABILITY_BUCKETS.get(value.strip(), frozenset()) for value in sendability.split(",")))
+        if statuses:
+            query = query.filter(RecruiterEmail.sendability_status.in_(statuses))
+    if has_resume is not None:
+        clause = RecruiterEmail.resume_file_name.is_not(None) & (RecruiterEmail.resume_file_name != "")
+        query = query.filter(clause if has_resume else ~clause)
+    if min_ats_score is not None:
+        query = query.filter(RecruiterEmail.ats_score >= min_ats_score)
+    if max_ats_score is not None:
+        query = query.filter(RecruiterEmail.ats_score <= max_ats_score)
+    for value, column in ((role, RecruiterEmail.role), (location, RecruiterEmail.location), (sender, RecruiterEmail.sender)):
+        if value and value.strip():
+            query = query.filter(column.ilike(f"%{value.strip()}%"))
+
     total = query.count()
-    rows = query.order_by(RecruiterEmail.created_at.desc(), RecruiterEmail.id.desc()).offset(cursor).limit(limit + 1).all()
+    if sort == "highest_score":
+        query = query.order_by(RecruiterEmail.ats_score.desc(), RecruiterEmail.created_at.desc(), RecruiterEmail.id.desc())
+    elif sort == "lowest_score":
+        query = query.order_by(RecruiterEmail.ats_score.asc(), RecruiterEmail.created_at.desc(), RecruiterEmail.id.desc())
+    elif sort == "oldest":
+        query = query.order_by(RecruiterEmail.created_at.asc(), RecruiterEmail.id.asc())
+    else:
+        query = query.order_by(RecruiterEmail.created_at.desc(), RecruiterEmail.id.desc())
+    rows = query.offset(cursor).limit(limit + 1).all()
     visible = rows[:limit]
     items = [_serialize_candidate_for_review(db, row) for row in visible]
     return CandidateListResponse(items=items, next_cursor=cursor + limit if len(rows) > limit else None, has_next=len(rows) > limit, total=total)
@@ -6916,6 +6984,15 @@ def list_appts_applications(
 @app.get("/appts/applications/{application_id}", response_model=ApplicationResponse)
 def get_appts_application(application_id: int, db: Session = Depends(get_db)) -> ApplicationResponse:
     return _application_response(db, _get_appts_application(db, application_id), include_events=True, models=appts_service.APPTS_MODELS)
+
+
+@app.get("/appts/applications/{application_id}/sent-details", response_model=SentItemDetailsResponse)
+def get_appts_application_sent_details(application_id: int, db: Session = Depends(get_db)) -> SentItemDetailsResponse:
+    row = _get_appts_application(db, application_id)
+    if not row.source_recruiter_email_id:
+        raise HTTPException(status_code=404, detail="This application has no linked sourcing details")
+    email = _get_candidate_for_review(db, row.source_recruiter_email_id)
+    return _build_sent_item_details(db, email)
 
 
 @app.patch("/appts/applications/{application_id}", response_model=ApplicationResponse)

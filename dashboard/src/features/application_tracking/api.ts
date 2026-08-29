@@ -7,8 +7,8 @@ export { ApplicationDuplicateConflictError }
 const json = (method: string, body?: unknown): RequestInit => ({ method, headers: body === undefined ? undefined : { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
 export type BookmarkedRequirement = Candidate
 
-export async function listBookmarkedRequirements(apiBase: string, filters: Record<string, string> = {}): Promise<BookmarkedRequirement[]> {
-  const params = new URLSearchParams(filters)
+export async function listBookmarkedRequirements(apiBase: string, filters: Record<string, string> = {}, sort = 'newest'): Promise<BookmarkedRequirement[]> {
+  const params = new URLSearchParams({ ...filters, sort })
   return (await requestJson<{ items: BookmarkedRequirement[] }>(`${apiBase}/appts/bookmarked-requirements?${params}`)).items
 }
 export async function listApplications(apiBase: string, filters: Record<string, string> = {}, sort = 'newest'): Promise<ApplicationCard[]> {
@@ -49,3 +49,5 @@ export const toggleCandidateTracking = (apiBase: string, id: number) =>
   requestJson<void>(`${apiBase}/candidates/${id}/track`, { method: 'POST' })
 export const fetchCandidateSentDetails = (apiBase: string, id: number) =>
   requestJson<SentItemDetails>(`${apiBase}/candidates/${id}/sent-details`)
+export const fetchApplicationSentDetails = (apiBase: string, id: number) =>
+  requestJson<SentItemDetails>(`${apiBase}/appts/applications/${id}/sent-details`)

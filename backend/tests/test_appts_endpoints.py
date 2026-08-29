@@ -29,6 +29,7 @@ from app.models import (
     AppTSApplicationRTR,
     PremiumNumberContact,
     RecruiterEmail,
+    RecruiterOpportunity,
     ResumeAsset,
     UserSettings,
 )
@@ -177,6 +178,8 @@ class AppTSEndpointTestBase(unittest.TestCase):
         created_at: datetime | None = None,
         recruiter_name: str = "Some Recruiter",
         company: str = "Some Co",
+        is_recruiter: bool = True,
+        is_employer: bool = False,
     ) -> PremiumNumberContact:
         now = created_at or datetime.now(UTC)
         contact = PremiumNumberContact(
@@ -184,7 +187,8 @@ class AppTSEndpointTestBase(unittest.TestCase):
             normalized_phone_number=phone,
             display_phone_number=phone or "",
             phone_is_valid=True,
-            is_recruiter=True,
+            is_recruiter=is_recruiter,
+            is_employer=is_employer,
             recruiter_name=recruiter_name,
             company=company,
             recruiter_email=recruiter_email.strip().lower(),
@@ -231,6 +235,44 @@ class AppTSEndpointTestBase(unittest.TestCase):
         }
         payload.update(overrides)
         return payload
+
+    def _add_tracked_application(
+        self,
+        db: Session,
+        *,
+        contact: PremiumNumberContact | None,
+        source_url: str | None = None,
+        gmail_open_url: str = "",
+        source_recruiter_email_id: int | None = None,
+    ) -> AppTSApplication:
+        resume = self._add_resume(db)
+        opportunity = None
+        if source_url is not None or gmail_open_url:
+            opportunity = RecruiterOpportunity(
+                owner_id=main.settings.owner_id,
+                recruiter_number_id=contact.id if contact else 0,
+                gmail_message_id=f"msg-{uuid.uuid4().hex[:10]}",
+                source_url=source_url,
+                gmail_open_url=gmail_open_url,
+            )
+            db.add(opportunity)
+            db.commit()
+            db.refresh(opportunity)
+        row = AppTSApplication(
+            owner_id=main.settings.owner_id,
+            resume_asset_id=resume.id,
+            resume_version_snapshot=resume.version,
+            resume_file_name_snapshot=resume.file_name,
+            resume_sha256_snapshot=resume.sha256,
+            recruiter_opportunity_id=opportunity.id if opportunity else None,
+            recruiter_contact_id=contact.id if contact else None,
+            dedupe_key=f"tracked-{uuid.uuid4().hex[:10]}",
+            source_recruiter_email_id=source_recruiter_email_id,
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return row
 
 
 # ---------------------------------------------------------------------------
@@ -863,6 +905,325 @@ class SentDetailsGuardTests(AppTSEndpointTestBase):
 
         response = self.client.get(f"/candidates/{email.id}/sent-details")
         self.assertEqual(response.status_code, 400, response.text)
+
+
+# ---------------------------------------------------------------------------
+# 10. Bookmarked Requirements filter + sort
+# ---------------------------------------------------------------------------
+
+
+class BookmarkedRequirementsFilterSortTests(AppTSEndpointTestBase):
+    def _set_fields(self, db: Session, email: RecruiterEmail, **fields: object) -> None:
+        row = db.get(RecruiterEmail, email.id)
+        assert row is not None
+        for key, value in fields.items():
+            setattr(row, key, value)
+        db.commit()
+
+    def test_sort_highest_and_lowest_ats_score(self) -> None:
+        with Session(self.engine) as db:
+            low = self._add_email(db, state="needs_review", marked=True)
+            high = self._add_email(db, state="needs_review", marked=True)
+            self._set_fields(db, low, ats_score=40)
+            self._set_fields(db, high, ats_score=95)
+            low_id, high_id = low.id, high.id
+
+        highest = self.client.get("/appts/bookmarked-requirements", params={"sort": "highest_score"})
+        self.assertEqual(highest.status_code, 200, highest.text)
+        self.assertEqual([item["id"] for item in highest.json()["items"]], [high_id, low_id])
+
+        lowest = self.client.get("/appts/bookmarked-requirements", params={"sort": "lowest_score"})
+        self.assertEqual(lowest.status_code, 200, lowest.text)
+        self.assertEqual([item["id"] for item in lowest.json()["items"]], [low_id, high_id])
+
+    def test_invalid_sort_returns_422(self) -> None:
+        response = self.client.get("/appts/bookmarked-requirements", params={"sort": "bogus"})
+        self.assertEqual(response.status_code, 422, response.text)
+
+    def test_source_filter(self) -> None:
+        with Session(self.engine) as db:
+            gmail = self._add_email(db, state="needs_review", marked=True, source="gmail")
+            manual = self._add_email(db, state="needs_review", marked=True, source="manual")
+            gmail_id, manual_id = gmail.id, manual.id
+
+        response = self.client.get("/appts/bookmarked-requirements", params={"source": "gmail"})
+        self.assertEqual(response.status_code, 200, response.text)
+        ids = {item["id"] for item in response.json()["items"]}
+        self.assertIn(gmail_id, ids)
+        self.assertNotIn(manual_id, ids)
+
+    def test_has_resume_filter(self) -> None:
+        with Session(self.engine) as db:
+            with_resume = self._add_email(db, state="needs_review", marked=True)
+            without_resume = self._add_email(db, state="needs_review", marked=True)
+            self._set_fields(db, with_resume, resume_file_name="resume.pdf")
+            with_id, without_id = with_resume.id, without_resume.id
+
+        response = self.client.get("/appts/bookmarked-requirements", params={"has_resume": "true"})
+        self.assertEqual(response.status_code, 200, response.text)
+        ids = {item["id"] for item in response.json()["items"]}
+        self.assertIn(with_id, ids)
+        self.assertNotIn(without_id, ids)
+
+    def test_ats_score_range_filter(self) -> None:
+        with Session(self.engine) as db:
+            low = self._add_email(db, state="needs_review", marked=True)
+            mid = self._add_email(db, state="needs_review", marked=True)
+            high = self._add_email(db, state="needs_review", marked=True)
+            self._set_fields(db, low, ats_score=20)
+            self._set_fields(db, mid, ats_score=55)
+            self._set_fields(db, high, ats_score=90)
+            mid_id = mid.id
+
+        response = self.client.get("/appts/bookmarked-requirements", params={"min_ats_score": 40, "max_ats_score": 80})
+        self.assertEqual(response.status_code, 200, response.text)
+        ids = {item["id"] for item in response.json()["items"]}
+        self.assertEqual(ids, {mid_id})
+
+    def test_sendability_filter(self) -> None:
+        with Session(self.engine) as db:
+            sendable = self._add_email(db, state="needs_review", marked=True)
+            blocked = self._add_email(db, state="needs_review", marked=True)
+            self._set_fields(db, sendable, sendability_status="sendable")
+            self._set_fields(db, blocked, sendability_status="mandatory_resume_fail")
+            sendable_id, blocked_id = sendable.id, blocked.id
+
+        response = self.client.get("/appts/bookmarked-requirements", params={"sendability": "sendable"})
+        self.assertEqual(response.status_code, 200, response.text)
+        ids = {item["id"] for item in response.json()["items"]}
+        self.assertIn(sendable_id, ids)
+        self.assertNotIn(blocked_id, ids)
+
+    def test_text_filters_role_location_sender(self) -> None:
+        with Session(self.engine) as db:
+            match = self._add_email(db, state="needs_review", marked=True, role="Java Developer", sender="Recruiter <pat@example.com>")
+            self._set_fields(db, match, location="Austin, TX")
+            other = self._add_email(db, state="needs_review", marked=True, role="Python Developer", sender="Other <someone@example.com>")
+            self._set_fields(db, other, location="Remote")
+            match_id, other_id = match.id, other.id
+
+        for params in ({"role": "java"}, {"location": "austin"}, {"sender": "pat@example"}):
+            response = self.client.get("/appts/bookmarked-requirements", params=params)
+            self.assertEqual(response.status_code, 200, response.text)
+            ids = {item["id"] for item in response.json()["items"]}
+            self.assertIn(match_id, ids, params)
+            self.assertNotIn(other_id, ids, params)
+
+    def test_sort_and_filter_combine(self) -> None:
+        with Session(self.engine) as db:
+            gmail_low = self._add_email(db, state="needs_review", marked=True, source="gmail")
+            gmail_high = self._add_email(db, state="needs_review", marked=True, source="gmail")
+            manual_high = self._add_email(db, state="needs_review", marked=True, source="manual")
+            self._set_fields(db, gmail_low, ats_score=30)
+            self._set_fields(db, gmail_high, ats_score=90)
+            self._set_fields(db, manual_high, ats_score=95)
+            gmail_low_id, gmail_high_id, manual_high_id = gmail_low.id, gmail_high.id, manual_high.id
+
+        response = self.client.get(
+            "/appts/bookmarked-requirements",
+            params={"source": "gmail", "sort": "highest_score"},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        ids = [item["id"] for item in response.json()["items"]]
+        self.assertEqual(ids, [gmail_high_id, gmail_low_id])
+        self.assertNotIn(manual_high_id, ids)
+
+    def test_applications_endpoint_sort_vocabulary_unchanged(self) -> None:
+        # Regression guard: this fix only touches /appts/bookmarked-requirements. The
+        # sibling Tracked and Applied endpoint must keep its own, smaller sort vocabulary.
+        response = self.client.get("/appts/applications", params={"sort": "highest_score"})
+        self.assertEqual(response.status_code, 422, response.text)
+        unaffected = self.client.get("/appts/applications", params={"sort": "next_action"})
+        self.assertEqual(unaffected.status_code, 200, unaffected.text)
+
+
+# ---------------------------------------------------------------------------
+# 11. Tracked and Applied card: recruiter classification/verification/source-link
+# ---------------------------------------------------------------------------
+
+
+class TrackedCardContactDetailsTests(AppTSEndpointTestBase):
+    def test_employer_contact_reports_employer_category_not_recruiter(self) -> None:
+        with Session(self.engine) as db:
+            contact = self._add_contact(
+                db,
+                recruiter_email="harshitha@ideate.example.com",
+                phone="+15551230000",
+                is_recruiter=False,
+                is_employer=True,
+                recruiter_name="Harshitha Voddepally",
+                company="Ideate Technologies LLC",
+            )
+            app_row = self._add_tracked_application(db, contact=contact)
+            app_id = app_row.id
+
+        response = self.client.get("/appts/applications")
+        self.assertEqual(response.status_code, 200, response.text)
+        item = next(item for item in response.json()["items"] if item["id"] == app_id)
+        self.assertEqual(item["current_recruiter_categories"], ["Employer"])
+        self.assertEqual(item["current_recruiter_phone_display"], "+15551230000")
+
+    def test_verification_level_and_source_url_surfaced(self) -> None:
+        with Session(self.engine) as db:
+            contact = self._add_contact(
+                db,
+                recruiter_email="verified@example.com",
+                phone="+15559990000",
+                verification_level="trusted",
+            )
+            app_row = self._add_tracked_application(
+                db, contact=contact, source_url="https://nvoids.com/job_details.jsp?id=42",
+            )
+            app_id = app_row.id
+
+        response = self.client.get(f"/appts/applications/{app_id}")
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body["current_recruiter_categories"], ["Recruiter"])
+        self.assertEqual(body["current_recruiter_verification_level"], "trusted")
+        self.assertEqual(body["current_source_url"], "https://nvoids.com/job_details.jsp?id=42")
+
+    def test_source_url_falls_back_to_gmail_open_url(self) -> None:
+        with Session(self.engine) as db:
+            contact = self._add_contact(db, recruiter_email="gmail-source@example.com")
+            app_row = self._add_tracked_application(
+                db, contact=contact, source_url=None, gmail_open_url="https://mail.google.com/mail/u/0/#inbox/abc",
+            )
+            app_id = app_row.id
+
+        response = self.client.get(f"/appts/applications/{app_id}")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["current_source_url"], "https://mail.google.com/mail/u/0/#inbox/abc")
+
+    def test_manual_entry_without_contact_or_opportunity_defaults_safely(self) -> None:
+        with Session(self.engine) as db:
+            app_row = self._add_tracked_application(db, contact=None)
+            app_id = app_row.id
+
+        response = self.client.get(f"/appts/applications/{app_id}")
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body["current_recruiter_categories"], [])
+        self.assertEqual(body["current_recruiter_status"], "")
+        self.assertEqual(body["current_recruiter_verification_level"], "")
+        self.assertIsNone(body["current_source_url"])
+
+    def test_ats_score_and_sent_gmail_link_surfaced_when_source_email_linked(self) -> None:
+        with Session(self.engine) as db:
+            email = self._add_email(db, state="approved_sent", source="gmail")
+            email.ats_score = 91.0
+            email.ats_summary = "Excellent skills match."
+            email.gmail_sent_id = "sent-thread-xyz"
+            db.commit()
+            app_row = self._add_tracked_application(db, contact=None, source_recruiter_email_id=email.id)
+            app_id, email_id = app_row.id, email.id
+
+        response = self.client.get(f"/appts/applications/{app_id}")
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body["source_recruiter_email_id"], email_id)
+        self.assertEqual(body["ats_score"], 91.0)
+        self.assertEqual(body["ats_summary"], "Excellent skills match.")
+        self.assertIn("sent-thread-xyz", body["sent_gmail_message_link"])
+
+    def test_ats_score_and_sent_gmail_link_null_without_source_email(self) -> None:
+        with Session(self.engine) as db:
+            app_row = self._add_tracked_application(db, contact=None)
+            app_id = app_row.id
+
+        response = self.client.get(f"/appts/applications/{app_id}")
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertIsNone(body["source_recruiter_email_id"])
+        self.assertIsNone(body["ats_score"])
+        self.assertIsNone(body["ats_summary"])
+        self.assertIsNone(body["sent_gmail_message_link"])
+
+    def test_location_and_resume_skills_snapshot_surfaced_for_a_historical_row(self) -> None:
+        with Session(self.engine) as db:
+            app_row = self._add_tracked_application(db, contact=None)
+            app_row.location_snapshot = "Charlotte, NC"
+            app_row.resume_skills_snapshot_json = '["Java", "Spring Boot", "AWS"]'
+            db.commit()
+            app_id = app_row.id
+
+        response = self.client.get(f"/appts/applications/{app_id}")
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body["location_snapshot"], "Charlotte, NC")
+        self.assertEqual(body["resume_skills_snapshot"], ["Java", "Spring Boot", "AWS"])
+
+    def test_resume_skills_snapshot_defaults_to_empty_list_for_legacy_rows(self) -> None:
+        with Session(self.engine) as db:
+            app_row = self._add_tracked_application(db, contact=None)
+            app_id = app_row.id
+
+        response = self.client.get(f"/appts/applications/{app_id}")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["resume_skills_snapshot"], [])
+
+    def test_record_id_uses_the_linked_source_emails_candidate_record_when_present(self) -> None:
+        with Session(self.engine) as db:
+            email = self._add_email(db, state="approved_sent", source="gmail")
+            email.record_id = "11111111-1111-4111-8111-111111111111"
+            db.commit()
+            app_row = self._add_tracked_application(db, contact=None, source_recruiter_email_id=email.id)
+            app_id = app_row.id
+
+        response = self.client.get(f"/appts/applications/{app_id}")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["record_id"], "11111111-1111-4111-8111-111111111111")
+
+    def test_record_id_falls_back_to_the_linked_opportunitys_candidate_record_without_a_source_email(self) -> None:
+        with Session(self.engine) as db:
+            app_row = self._add_tracked_application(db, contact=None, source_url="https://nvoids.com/job_details.jsp?id=42")
+            opportunity = db.get(RecruiterOpportunity, app_row.recruiter_opportunity_id)
+            assert opportunity is not None
+            opportunity.record_id = "22222222-2222-4222-8222-222222222222"
+            db.commit()
+            app_id = app_row.id
+
+        response = self.client.get(f"/appts/applications/{app_id}")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["record_id"], "22222222-2222-4222-8222-222222222222")
+
+    def test_record_id_is_none_for_a_pure_manual_entry(self) -> None:
+        with Session(self.engine) as db:
+            app_row = self._add_tracked_application(db, contact=None)
+            app_id = app_row.id
+
+        response = self.client.get(f"/appts/applications/{app_id}")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIsNone(response.json()["record_id"])
+
+
+class AppTSApplicationSentDetailsEndpointTests(AppTSEndpointTestBase):
+    def test_returns_sent_details_for_linked_application(self) -> None:
+        with Session(self.engine) as db:
+            email = self._add_email(db, state="approved_sent", source="gmail", role="Java Full Stack Developer")
+            email.ats_score = 91.0
+            email.gmail_sent_id = "sent-thread-xyz"
+            db.commit()
+            app_row = self._add_tracked_application(db, contact=None, source_recruiter_email_id=email.id)
+            app_id = app_row.id
+
+        response = self.client.get(f"/appts/applications/{app_id}/sent-details")
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body["ats_score"], 91.0)
+        self.assertIn("sent-thread-xyz", body["sent_gmail_message_link"])
+
+    def test_404_when_application_has_no_linked_email(self) -> None:
+        with Session(self.engine) as db:
+            app_row = self._add_tracked_application(db, contact=None)
+            app_id = app_row.id
+
+        response = self.client.get(f"/appts/applications/{app_id}/sent-details")
+        self.assertEqual(response.status_code, 404, response.text)
+
+    def test_404_for_unknown_application_id(self) -> None:
+        response = self.client.get("/appts/applications/999999/sent-details")
+        self.assertEqual(response.status_code, 404, response.text)
 
 
 if __name__ == "__main__":

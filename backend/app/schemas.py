@@ -1436,6 +1436,8 @@ class ApplicationResponse(BaseModel):
     job_title_snapshot: str
     end_client_snapshot: str
     location_snapshot: str = ""
+    resume_skills_snapshot: list[str] = Field(default_factory=list)
+    record_id: str | None = None
     status: str
     status_changed_at: datetime
     resume_shared_at: datetime | None
@@ -1470,6 +1472,14 @@ class ApplicationResponse(BaseModel):
     current_recruiter_linkedin_url: str = ""
     current_job_title: str = ""
     current_end_client: str = ""
+    current_recruiter_categories: list[str] = Field(default_factory=list)
+    current_recruiter_status: str = ""
+    current_recruiter_verification_level: str = ""
+    current_source_url: str | None = None
+    source_recruiter_email_id: int | None = None
+    ats_score: float | None = None
+    ats_summary: str | None = None
+    sent_gmail_message_link: str | None = None
     events: list[ApplicationEventResponse] = Field(default_factory=list)
     rtr_history: list[ApplicationRTRResponse] = Field(default_factory=list)
     interviews: list[ApplicationInterviewResponse] = Field(default_factory=list)

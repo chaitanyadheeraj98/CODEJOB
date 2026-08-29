@@ -226,6 +226,8 @@ export type ApplicationCard = {
   job_title_snapshot: string
   end_client_snapshot: string
   location_snapshot?: string
+  resume_skills_snapshot: string[]
+  record_id: string | null
   current_recruiter_name: string
   current_recruiter_company: string
   current_recruiter_phone_display: string
@@ -233,6 +235,14 @@ export type ApplicationCard = {
   current_recruiter_linkedin_url: string
   current_job_title: string
   current_end_client: string
+  current_recruiter_categories: Array<'Recruiter' | 'Employer'>
+  current_recruiter_status: string
+  current_recruiter_verification_level: 'unverified' | 'verified' | 'trusted' | ''
+  current_source_url: string | null
+  source_recruiter_email_id: number | null
+  ats_score: number | null
+  ats_summary: string | null
+  sent_gmail_message_link: string | null
   status: ApplicationStatus
   status_changed_at: string
   resume_shared_at: string | null

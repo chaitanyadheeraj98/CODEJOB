@@ -1155,13 +1155,21 @@ button.emailSearchResult:focus-visible {
 }
 
 .rowBtns button,
-.card button {
+.card button,
+.rowBtns .linkButton {
   height: 42px;
   border-radius: 7px;
   border: 1px solid var(--line-strong);
   background: var(--surface);
   padding: 0 14px;
   color: #1c2535;
+}
+
+.rowBtns .linkButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
 }
 
 .rowBtns button[type='submit'],
@@ -3656,6 +3664,20 @@ button.emailSearchResult:focus-visible {
 .opportunityCard > header select {
   width: 160px;
   flex-shrink: 0;
+}
+
+.applicationCardTopRight {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.candidateCardHeaderMain .categoryChip {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .opportunitySummary {
