@@ -111,6 +111,24 @@ export type EmployerNumberCard = ContactCardBase & {
   source_email_id: number | null
 }
 
+export type ManualContactPayload = {
+  name: string
+  title?: string
+  company?: string
+  email?: string
+  phone?: string
+  role: 'recruiter' | 'employer'
+}
+
+export type ManualContactResult = {
+  id: number
+  created: boolean
+  status: 'created' | 'confirmed' | 'pending_merge_approval' | 'pending_link_approval'
+  review_id: number | null
+  phone_display: string
+  role: 'recruiter' | 'employer'
+}
+
 export type OpportunityStatus = 'New' | 'Called' | 'Applied' | 'Follow Up' | 'Closed' | 'Not Interested'
 
 export type RecruiterOpportunityCard = {

@@ -4958,20 +4958,20 @@ def list_premium_number_inventory(
     return PremiumNumberInventoryListResponse(items=items,next_cursor=cursor+limit if len(rows)>limit else None,has_next=len(rows)>limit,total=total)
 
 
-@app.post(
-    "/premium-numbers/contacts",
-    dependencies=[Depends(require_chat_actions_enabled)],
-)
+@app.post("/premium-numbers/contacts")
 def create_premium_contact(
     payload: ManualPremiumContactRequest,
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
-    canonical_phone = canonicalize_phone(payload.phone)
-    if not canonical_phone:
-        raise HTTPException(status_code=422, detail="A valid US phone number is required")
+    raw_phone = payload.phone.strip()
+    canonical_phone = canonicalize_phone(raw_phone)
+    if raw_phone and not canonical_phone:
+        raise HTTPException(status_code=422, detail="Enter a valid US phone number")
     email = payload.email.strip().lower()
     if email and ("@" not in email or parseaddr(email)[1].lower() != email):
         raise HTTPException(status_code=422, detail="A valid email address is required")
+    if not canonical_phone and not email:
+        raise HTTPException(status_code=422, detail="Provide a phone number, an email address, or both")
 
     result = contact_identity_service.reconcile(
         db, owner_id=settings.owner_id, normalized_phone=canonical_phone, normalized_email=email,
@@ -4982,19 +4982,24 @@ def create_premium_contact(
     contact = result.contact
     created = result.status == "created"
 
-    contact.display_phone_number = best_display_phone(payload.phone, fallback=payload.phone)
-    contact.phone_is_valid = bool(canonicalize_phone(contact.normalized_phone_number) or canonicalize_phone(contact.display_phone_number))
+    if canonical_phone:
+        contact.display_phone_number = best_display_phone(raw_phone, fallback=raw_phone)
+    contact.phone_is_valid = bool(canonicalize_phone(contact.normalized_phone_number or "") or canonicalize_phone(contact.display_phone_number))
     contact.is_recruiter = payload.role == "recruiter"
     contact.is_employer = payload.role == "employer"
     contact.recruiter_name = payload.name.strip() if payload.role == "recruiter" else contact.recruiter_name
     contact.owner_name = payload.name.strip() if payload.role == "employer" else contact.owner_name
     contact.designation = payload.title.strip() or "Unknown"
     contact.company = payload.company.strip() or "Unknown"
-    contact.recruiter_email = email
+    if email:
+        contact.recruiter_email = email
     contact.source_type = "manual"
     contact.deleted_at = None
     db.commit()
     db.refresh(contact)
+    # ponytail: event_source stays "chat_assistant" even for inventory-page creates
+    # (test_chat_actions.py asserts on this label) - split it out if per-surface
+    # attribution ever matters for analytics.
     _record_productivity_event(
         db,
         event_type="premium_contact_created",
@@ -5005,6 +5010,8 @@ def create_premium_contact(
     return {
         "id": contact.id,
         "created": created,
+        "status": result.status,
+        "review_id": result.review_id,
         "phone_display": contact.display_phone_number,
         "role": payload.role,
     }

@@ -136,6 +136,53 @@ class ChatActionTests(unittest.TestCase):
             sources = {row.event_source for row in db.query(ProductivityEvent).all()}
             self.assertEqual(sources, {"chat_assistant"})
 
+    def test_create_premium_contact_accepts_email_only_and_requires_one_identifier(self) -> None:
+        missing_both = self.client.post(
+            "/premium-numbers/contacts",
+            json={"name": "No Contact Info", "role": "recruiter"},
+        )
+        self.assertEqual(missing_both.status_code, 422, missing_both.text)
+
+        email_only = self.client.post(
+            "/premium-numbers/contacts",
+            json={"name": "Jamie Recruiter", "email": "jamie@example.com", "role": "recruiter"},
+        )
+        self.assertEqual(email_only.status_code, 200, email_only.text)
+        body = email_only.json()
+        self.assertTrue(body["created"])
+        self.assertEqual(body["status"], "created")
+        self.assertEqual(body["phone_display"], "")
+
+        with self.SessionLocal() as db:
+            contact = db.get(PremiumNumberContact, body["id"])
+            self.assertIsNone(contact.normalized_phone_number)
+            self.assertEqual(contact.recruiter_email, "jamie@example.com")
+
+    def test_create_premium_contact_flags_cross_identity_conflict_instead_of_erroring(self) -> None:
+        first = self.client.post(
+            "/premium-numbers/contacts",
+            json={"name": "Alex Recruiter", "phone": "214-555-1212", "role": "recruiter"},
+        )
+        self.assertEqual(first.status_code, 200, first.text)
+        second = self.client.post(
+            "/premium-numbers/contacts",
+            json={"name": "Alex Recruiter", "email": "alex@example.com", "role": "recruiter"},
+        )
+        self.assertEqual(second.status_code, 200, second.text)
+
+        conflict = self.client.post(
+            "/premium-numbers/contacts",
+            json={
+                "name": "Alex Recruiter",
+                "phone": "214-555-1212",
+                "email": "alex@example.com",
+                "role": "recruiter",
+            },
+        )
+        self.assertEqual(conflict.status_code, 200, conflict.text)
+        self.assertEqual(conflict.json()["status"], "pending_merge_approval")
+        self.assertIsNotNone(conflict.json()["review_id"])
+
     def test_bulk_approve_returns_partial_success(self) -> None:
         class FakeService:
             def approve_send(self, candidate_id, _payload, _db):

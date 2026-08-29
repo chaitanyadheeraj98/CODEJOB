@@ -65,7 +65,7 @@ class ManualPremiumContactRequest(BaseModel):
     title: str = Field(default="", max_length=255)
     company: str = Field(default="", max_length=255)
     email: str = Field(default="", max_length=255)
-    phone: str = Field(min_length=1, max_length=80)
+    phone: str = Field(default="", max_length=80)
     role: Literal["recruiter", "employer"] = "recruiter"
 
 

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { EmailSearchHit } from '../../emailSearch'
 import { pendingReviewCount } from './api'
+import CreateContactPanel, { STATUS_MESSAGES } from './CreateContactPanel'
 import DetailPanel from './DetailPanel'
 import InventoryTable from './InventoryTable'
 import OpportunitiesTab from './OpportunitiesTab'
@@ -64,6 +65,7 @@ export default function PremiumNumbersPage({
   const activeTab = controlledTab ?? tab
   const setTab = (next: 'inventory' | 'opportunities') => { setLocalTab(next); onTabChange?.(next) }
   const [detailRow, setDetailRow] = useState<InventoryRow | null>(null)
+  const [creatingContact, setCreatingContact] = useState(false)
   const returnFocusRef = useRef<HTMLElement | null>(null)
   const toast = useToast()
   const inventory = useInventory(apiBase, refreshToken, filterValues, sortValue)
@@ -149,6 +151,9 @@ export default function PremiumNumbersPage({
 
       {activeTab === 'inventory' ? (
         <div role="tabpanel" className="inventoryPanel">
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <button type="button" onClick={() => setCreatingContact(true)}>+ Create Contact</button>
+          </div>
           <SelectionActionBar
             selectedCount={inventory.selected.size}
             busyKey={inventory.busyBulkAction}
@@ -201,6 +206,19 @@ export default function PremiumNumbersPage({
           onReload={inventory.reload}
           onError={inventory.setError}
           onToast={toast.show}
+        />
+      ) : null}
+
+      {creatingContact ? (
+        <CreateContactPanel
+          apiBase={apiBase}
+          onClose={() => setCreatingContact(false)}
+          onCreated={(result) => {
+            setCreatingContact(false)
+            toast.show(STATUS_MESSAGES[result.status])
+            refreshCount()
+            inventory.reload().catch(() => undefined)
+          }}
         />
       ) : null}
     </section>

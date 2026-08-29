@@ -12,6 +12,8 @@ import type {
   AttachmentAssetOption,
   EmployerNumberCard,
   ExtractionAuditEntry,
+  ManualContactPayload,
+  ManualContactResult,
   NumberReviewCard,
   OpportunityStatus,
   OpportunityMatch,
@@ -257,6 +259,10 @@ export function updateEmployerNumber(
   patch: Partial<Pick<EmployerNumberCard, 'owner_name' | 'company' | 'employer_email' | 'is_favorite'>>,
 ): Promise<EmployerNumberCard> {
   return requestJson(`${apiBase}/employer-numbers/${contactId}`, jsonInit('PATCH', patch))
+}
+
+export function createManualContact(apiBase: string, payload: ManualContactPayload): Promise<ManualContactResult> {
+  return requestJson(`${apiBase}/premium-numbers/contacts`, jsonInit('POST', payload))
 }
 
 export function updateOpportunity(
