@@ -25,6 +25,7 @@ from app.services.phone_intelligence_workflow_service import (
     PhoneWorkflowSourceContext,
     _context_from_external_opportunity,
     _context_from_recruiter_email,
+    apply_contact_version,
     job_metadata_ai_extraction_from_parsed,
 )
 
@@ -1219,6 +1220,72 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
             ).all()
             self.assertEqual(len(contacts), 1)
             self.assertEqual(contacts[0].seen_count, 2)
+
+    def test_apply_contact_version_recomputes_recruiter_email_domain_on_overwrite(self) -> None:
+        with Session(self.engine) as db:
+            contact = PremiumNumberContact(
+                owner_id="default-owner",
+                normalized_phone_number="12145551212",
+                display_phone_number="(214) 555-1212",
+                is_recruiter=True,
+                recruiter_name="Shubham Rajak",
+                company="Evizot",
+                recruiter_email="Shubham Rajak <shubham@horizonsoftech.net>",
+                recruiter_email_domain="horizonsoftech.net>",
+            )
+            db.add(contact)
+            db.commit()
+            db.refresh(contact)
+            version = PremiumNumberLead(
+                owner_id="default-owner",
+                phone_number_normalized="12145551212",
+                phone_number_display="(214) 555-1212",
+                role="recruiter",
+                contact_email="shubham.rajak@evizot.com",
+                owner_name="Shubham Rajak",
+                company="Evizot",
+            )
+            db.add(version)
+            db.commit()
+            db.refresh(version)
+
+            apply_contact_version(db, contact, version, "recruiter", overwrite=True)
+
+            self.assertEqual(contact.recruiter_email, "shubham.rajak@evizot.com")
+            self.assertEqual(contact.recruiter_email_domain, "evizot.com")
+
+    def test_apply_contact_version_recomputes_employer_email_domain_fill_only(self) -> None:
+        with Session(self.engine) as db:
+            contact = PremiumNumberContact(
+                owner_id="default-owner",
+                normalized_phone_number="12145551213",
+                display_phone_number="(214) 555-1213",
+                is_employer=True,
+                owner_name="Unknown",
+                company="Unknown",
+                employer_email="",
+                employer_email_domain="",
+            )
+            db.add(contact)
+            db.commit()
+            db.refresh(contact)
+            version = PremiumNumberLead(
+                owner_id="default-owner",
+                phone_number_normalized="12145551213",
+                phone_number_display="(214) 555-1213",
+                role="employer",
+                contact_email="hr@acme.example",
+                owner_name="HR Team",
+                company="Acme",
+            )
+            db.add(version)
+            db.commit()
+            db.refresh(version)
+
+            apply_contact_version(db, contact, version, "employer")
+
+            self.assertEqual(contact.employer_email, "hr@acme.example")
+            self.assertEqual(contact.employer_email_domain, "acme.example")
 
     def test_recruiter_promotion_blocked_for_unverified_employer_contact(self) -> None:
         with Session(self.engine) as db:

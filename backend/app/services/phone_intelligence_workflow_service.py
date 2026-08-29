@@ -252,6 +252,7 @@ def apply_contact_version(
         contact.recruiter_name = lead.owner_name or "Unknown" if overwrite else _fill_if_blank(contact.recruiter_name, lead.owner_name)
         contact.designation = lead.designation or "Unknown" if overwrite else _fill_if_blank(contact.designation, lead.designation)
         contact.recruiter_email = lead.contact_email or "" if overwrite else _fill_if_blank(contact.recruiter_email, lead.contact_email)
+        contact.recruiter_email_domain = email_domain(contact.recruiter_email)
         if overwrite and not _is_blank_or_unknown(lead.company):
             contact.company = lead.company
         elif _is_blank_or_unknown(contact.company):
@@ -266,6 +267,7 @@ def apply_contact_version(
             contact.active_employer_lead_id = lead.id
         contact.owner_name = lead.owner_name or "Unknown" if overwrite else _fill_if_blank(contact.owner_name, lead.owner_name)
         contact.employer_email = lead.contact_email or "" if overwrite else _fill_if_blank(contact.employer_email, lead.contact_email)
+        contact.employer_email_domain = email_domain(contact.employer_email)
         if overwrite and not _is_blank_or_unknown(lead.company):
             contact.company = lead.company
         elif _is_blank_or_unknown(contact.company):
@@ -1006,10 +1008,12 @@ class PhoneIntelligenceWorkflowService:
             contact.recruiter_name = _fill_if_blank(contact.recruiter_name, lead.owner_name)
             contact.designation = _fill_if_blank(contact.designation, lead.designation)
             contact.recruiter_email = _fill_if_blank(contact.recruiter_email, lead.contact_email)
+            contact.recruiter_email_domain = email_domain(contact.recruiter_email)
         else:
             contact.is_employer = True
             contact.owner_name = _fill_if_blank(contact.owner_name, lead.owner_name)
             contact.employer_email = _fill_if_blank(contact.employer_email, lead.contact_email)
+            contact.employer_email_domain = email_domain(contact.employer_email)
         contact.company = _fill_if_blank(contact.company, lead.company)
         if _is_blank_or_unknown(contact.company):
             fallback = company_fallback_for_unknown(db, contact.owner_id, lead.contact_email)
