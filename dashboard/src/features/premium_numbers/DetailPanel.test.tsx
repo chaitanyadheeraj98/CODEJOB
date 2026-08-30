@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import DetailPanel from './DetailPanel'
-import type { InventoryRow, PremiumNumberVersion, RecruiterNumberCard } from './types'
+import type { InventoryRow, NumberReviewCard, PremiumNumberVersion, RecruiterNumberCard } from './types'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -287,5 +287,111 @@ describe('DetailPanel', () => {
     expect(container.textContent).toContain('4 times')
     expect(container.textContent).toContain('Extraction audit')
     expect(container.textContent).toContain('candidate_accepted')
+  })
+
+  it('resolves a phone/email cross-conflict review by merging into the chosen contact', async () => {
+    const review: NumberReviewCard = {
+      id: 900,
+      source_email_id: 501,
+      source_external_opportunity_id: null,
+      source_lead_id: null,
+      target_contact_id: 562,
+      secondary_contact_id: 588,
+      normalized_phone_number: '19802650643',
+      display_phone_number: '(980) 265-0643',
+      owner_name: 'Harshitha Voddepally',
+      company: 'Horizons of Tech',
+      designation: 'Unknown',
+      confidence: 'low',
+      purpose: 'Call/Text for application',
+      evidence_snippet: 'Call/Text: 980-265-0643',
+      email_subject: '#Senior Java Spring Boot Microservices Developer',
+      email_sender: 'Harshitha Voddepally <harshitha@horizonsoftech.net>',
+      contact_email: 'harshitha@horizonsoftech.net',
+      contact_type: 'employer_internal',
+      recruiter_relevance_score: 5,
+      relevance_reason: 'employer_domain,identity_fields_conflict:company',
+      extraction_source: 'ai',
+      scored_with: 'current',
+      gmail_open_url: 'https://mail.google.test/501',
+      state: 'pending',
+      role: 'recruiter',
+      reason_code: 'phone_email_cross_conflict',
+      occurrence_count: 1,
+      created_at: '2026-08-29T10:00:00Z',
+      updated_at: '2026-08-29T10:00:00Z',
+    }
+    const reviewRow: InventoryRow = {
+      key: 'review:900',
+      kind: 'review',
+      id: 900,
+      number: review.display_phone_number,
+      owner: review.owner_name,
+      company: review.company,
+      categories: ['Employer'],
+      status: 'Pending',
+      score: review.recruiter_relevance_score,
+      sourceType: 'gmail',
+      lastCheckedAt: review.updated_at,
+      review,
+    }
+    const target = { ...recruiter, id: 562, recruiter_name: 'Vankayalapati Saicharan', company: 'Eversoft IT', recruiter_email: 'vankayalapati.saicharan@eversoftit.com' }
+    const secondary = { ...recruiter, id: 588, recruiter_name: 'Harshitha Voddepally', company: 'Horizons of Tech', recruiter_email: '' }
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/recruiter-numbers/562')) return jsonResponse(target)
+      if (url.endsWith('/recruiter-numbers/588')) return jsonResponse(secondary)
+      if (url.endsWith('/number-review/900/approve-merge') && init?.method === 'POST') {
+        expect(JSON.parse(String(init.body))).toEqual({ canonical_contact_id: 588 })
+        return jsonResponse({ review_id: 900, contact_id: 588, status: 'resolved' })
+      }
+      return jsonResponse({ detail: 'not found' }, 404)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    const onClose = vi.fn()
+    const onReload = vi.fn().mockResolvedValue(undefined)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+      vi.unstubAllGlobals()
+    })
+
+    await act(async () => {
+      root.render(
+        <DetailPanel
+          apiBase="http://localhost:8000"
+          row={reviewRow}
+          busy={false}
+          returnFocusRef={{ current: null }}
+          onClose={onClose}
+          onAction={vi.fn().mockResolvedValue(undefined)}
+          onReload={onReload}
+          onError={vi.fn()}
+          onToast={vi.fn()}
+        />,
+      )
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).toContain('Resolve identity conflict')
+    expect(container.textContent).toContain('Vankayalapati Saicharan')
+    expect(container.textContent).toContain('Harshitha Voddepally')
+
+    const mergeIntoSecondary = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.startsWith('Merge into "Harshitha Voddepally'))
+    expect(mergeIntoSecondary).toBeDefined()
+    await act(async () => {
+      mergeIntoSecondary?.click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith('/number-review/900/approve-merge') && init?.method === 'POST')).toBe(true)
+    expect(onClose).toHaveBeenCalled()
+    expect(onReload).toHaveBeenCalled()
   })
 })

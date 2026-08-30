@@ -7,6 +7,7 @@ type CreateContactPanelProps = {
   apiBase: string
   onClose: () => void
   onCreated: (result: ManualContactResult) => void
+  onError: (message: string) => void
 }
 
 const STATUS_MESSAGES: Record<ManualContactResult['status'], string> = {
@@ -27,7 +28,7 @@ function parseErrorMessage(error: unknown): string {
   return raw
 }
 
-export default function CreateContactPanel({ apiBase, onClose, onCreated }: CreateContactPanelProps) {
+export default function CreateContactPanel({ apiBase, onClose, onCreated, onError }: CreateContactPanelProps) {
   const [name, setName] = useState('')
   const [title, setTitle] = useState('')
   const [company, setCompany] = useState('')
@@ -35,16 +36,15 @@ export default function CreateContactPanel({ apiBase, onClose, onCreated }: Crea
   const [phone, setPhone] = useState('')
   const [role, setRole] = useState<'recruiter' | 'employer'>('recruiter')
   const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
     if (!name.trim()) {
-      setError('Name is required.')
+      onError('Name is required.')
       return
     }
     if (!phone.trim() && !email.trim()) {
-      setError('Provide a phone number, an email address, or both.')
+      onError('Provide a phone number, an email address, or both.')
       return
     }
     const payload: ManualContactPayload = {
@@ -56,10 +56,9 @@ export default function CreateContactPanel({ apiBase, onClose, onCreated }: Crea
       role,
     }
     setSaving(true)
-    setError(null)
     createManualContact(apiBase, payload)
       .then((result) => onCreated(result))
-      .catch((reason) => setError(parseErrorMessage(reason)))
+      .catch((reason) => onError(parseErrorMessage(reason)))
       .finally(() => setSaving(false))
   }
 
@@ -74,7 +73,6 @@ export default function CreateContactPanel({ apiBase, onClose, onCreated }: Crea
           <button type="button" className="iconBtn" aria-label="Close" onClick={onClose}>×</button>
         </header>
         <form className="detailPanelBody" onSubmit={submit}>
-          {error ? <p className="errorBanner">{error}</p> : null}
           <section className="detailSection">
             <h4>Contact details</h4>
             <p className="subtle">Enter a phone number, an email address, or both.</p>

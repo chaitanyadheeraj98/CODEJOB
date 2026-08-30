@@ -2936,7 +2936,7 @@ function App() {
   const [fixingId, setFixingId] = useState<number | null>(null)
   const [deletingFailedId, setDeletingFailedId] = useState<number | null>(null)
   const [activePage, setActivePage] = useState<ActivePage>(initialActivePage)
-  const [premiumTab, setPremiumTab] = useState<'inventory' | 'opportunities'>('inventory')
+  const [premiumTab, setPremiumTab] = useState<'inventory' | 'opportunities' | 'recycle_bin'>('inventory')
   const [applicationTrackingTab, setApplicationTrackingTab] = useState<'bookmarked' | 'tracked'>('bookmarked')
   const [resumeTrackingTab, setResumeTrackingTab] = useState<'resumes' | 'submissions'>('resumes')
   const [pageFilterValues, setPageFilterValues] = useState<Partial<Record<string, FilterValues>>>({})
@@ -3490,7 +3490,7 @@ function App() {
       const page = params.get('page') as ActivePage | null
       if (!page || !ACTIVE_PAGES.has(page)) return
       const tab = params.get('tab')
-      if (page === 'premium_numbers' && (tab === 'inventory' || tab === 'opportunities')) setPremiumTab(tab)
+      if (page === 'premium_numbers' && (tab === 'inventory' || tab === 'opportunities' || tab === 'recycle_bin')) setPremiumTab(tab)
       if (page === 'application_tracking' && (tab === 'bookmarked' || tab === 'tracked')) setApplicationTrackingTab(tab)
       if (page === 'resume_tracking' && (tab === 'resumes' || tab === 'submissions')) setResumeTrackingTab(tab)
       const key = tab && ['premium_numbers', 'application_tracking', 'resume_tracking'].includes(page) ? `${page}:${tab}` : page

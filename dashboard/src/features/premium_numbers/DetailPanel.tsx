@@ -1,11 +1,44 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type RefObject } from 'react'
 
-import { deleteContactVersion, getRecruiterReputation, listContactVersions, listExtractionAudit, selectContactVersion, updateEmployerNumber, updateRecruiterNumber } from './api'
+import {
+  approveContactLink,
+  approveContactMerge,
+  deleteContactVersion,
+  dismissReviewSuggestion,
+  getEmployerNumber,
+  getRecruiterNumber,
+  getRecruiterReputation,
+  listContactVersions,
+  listExtractionAudit,
+  deleteOlderContactVersions,
+  selectContactVersion,
+  unmarkContactRole,
+  updateEmployerNumber,
+  updateRecruiterNumber,
+} from './api'
 import { CategoryChip, StatusBadge } from './StatusBadge'
 import type { EmployerNumberCard, ExtractionAuditEntry, InventoryAction, InventoryRow, PremiumNumberVersion, RecruiterNumberCard, RecruiterReputation, ReviewEdits } from './types'
 
 type RecruiterEdits = Partial<Pick<RecruiterNumberCard, 'recruiter_name' | 'company' | 'designation' | 'recruiter_email' | 'linkedin_url' | 'recruiter_verification_level' | 'do_not_work_again' | 'do_not_work_again_reason'>>
 type EmployerEdits = Partial<Pick<EmployerNumberCard, 'owner_name' | 'company' | 'employer_email'>>
+
+type ConflictContact = { recruiter?: RecruiterNumberCard; employer?: EmployerNumberCard }
+
+// Review rows created by contact_identity_service's identity-conflict path are always
+// tagged role="recruiter" even when the matched contact is employer-only, so the id alone
+// doesn't say which endpoint owns it - try recruiter first, fall back to employer.
+function fetchConflictContact(apiBase: string, contactId: number): Promise<ConflictContact> {
+  return getRecruiterNumber(apiBase, contactId)
+    .then((recruiter) => ({ recruiter }) as ConflictContact)
+    .catch(() => getEmployerNumber(apiBase, contactId).then((employer) => ({ employer }) as ConflictContact).catch(() => ({}) as ConflictContact))
+}
+
+function conflictContactLabel(contact: ConflictContact | null): string {
+  if (!contact) return 'existing contact'
+  const name = contact.recruiter?.recruiter_name ?? contact.employer?.owner_name
+  const company = contact.recruiter?.company ?? contact.employer?.company
+  return name ? `${name}${company ? ` · ${company}` : ''}` : 'existing contact'
+}
 
 type DetailPanelProps = {
   apiBase: string
@@ -48,11 +81,17 @@ export default function DetailPanel({
   const [employerEdits, setEmployerEdits] = useState<EmployerEdits>({})
   const [savingEmployer, setSavingEmployer] = useState(false)
   const [pendingAction, setPendingAction] = useState<InventoryAction | null>(null)
+  const [removingRole, setRemovingRole] = useState<'recruiter' | 'employer' | null>(null)
   const [deletingVersion, setDeletingVersion] = useState(false)
+  const [deletingOlderVersions, setDeletingOlderVersions] = useState(false)
   const [syncingVersion, setSyncingVersion] = useState(false)
   const [reputation, setReputation] = useState<RecruiterReputation | null>(null)
   const [auditEntries, setAuditEntries] = useState<ExtractionAuditEntry[]>([])
   const [auditLoading, setAuditLoading] = useState(Boolean(auditSourceEmailId))
+  const [conflictTarget, setConflictTarget] = useState<ConflictContact | null>(null)
+  const [conflictSecondary, setConflictSecondary] = useState<ConflictContact | null>(null)
+  const [conflictLoading, setConflictLoading] = useState(Boolean(row.review?.target_contact_id))
+  const [resolvingConflict, setResolvingConflict] = useState<'link' | 'merge-target' | 'merge-secondary' | 'dismiss' | null>(null)
 
   useEffect(() => {
     const panel = panelRef.current
@@ -83,6 +122,27 @@ export default function DetailPanel({
       .catch((reason) => onError((reason as Error).message))
       .finally(() => setAuditLoading(false))
   }, [apiBase, auditSourceEmailId, onError, row.key])
+
+  const targetContactId = row.review?.target_contact_id
+  const secondaryContactId = row.review?.secondary_contact_id
+  useEffect(() => {
+    if (!targetContactId) {
+      setConflictTarget(null)
+      setConflictSecondary(null)
+      return
+    }
+    setConflictLoading(true)
+    Promise.all([
+      fetchConflictContact(apiBase, targetContactId),
+      secondaryContactId ? fetchConflictContact(apiBase, secondaryContactId) : Promise.resolve(null),
+    ])
+      .then(([target, secondary]) => {
+        setConflictTarget(target)
+        setConflictSecondary(secondary)
+      })
+      .catch((reason) => onError((reason as Error).message))
+      .finally(() => setConflictLoading(false))
+  }, [apiBase, onError, targetContactId, secondaryContactId])
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key === 'Escape') {
@@ -116,6 +176,37 @@ export default function DetailPanel({
     onAction(row, action, edits)
       .catch((reason) => onError((reason as Error).message))
       .finally(() => setPendingAction(null))
+  }
+
+  const removeRole = (role: 'recruiter' | 'employer') => {
+    if (!window.confirm(`Remove the ${role} role from this contact? Its ${role} profile will be hidden until the role is added again.`)) return
+    setRemovingRole(role)
+    unmarkContactRole(apiBase, role, row.id)
+      .then(() => {
+        onToast('Removed')
+        return onReload()
+      })
+      .catch((reason) => onError((reason as Error).message))
+      .finally(() => setRemovingRole(null))
+  }
+
+  const resolveConflict = (kind: 'link' | 'merge-target' | 'merge-secondary' | 'dismiss') => {
+    if (!row.review) return
+    const reviewId = row.review.id
+    setResolvingConflict(kind)
+    const request =
+      kind === 'link' ? approveContactLink(apiBase, reviewId)
+      : kind === 'merge-target' ? approveContactMerge(apiBase, reviewId, targetContactId ?? undefined)
+      : kind === 'merge-secondary' ? approveContactMerge(apiBase, reviewId, secondaryContactId ?? undefined)
+      : dismissReviewSuggestion(apiBase, reviewId)
+    request
+      .then(() => {
+        onToast(kind === 'dismiss' ? 'Dismissed' : kind === 'link' ? 'Linked to existing contact' : 'Merged')
+        onClose()
+        return onReload()
+      })
+      .catch((reason) => onError((reason as Error).message))
+      .finally(() => setResolvingConflict(null))
   }
 
   const review = row.review
@@ -190,6 +281,42 @@ export default function DetailPanel({
                 </dl>
                 {review.gmail_open_url ? <a href={review.gmail_open_url} target="_blank" rel="noreferrer">{review.source_external_opportunity_id ? 'Open original post' : 'Open exact email in Gmail'}</a> : null}
               </section>
+              {review.target_contact_id ? (
+                <section className="detailSection">
+                  <h4>Resolve identity conflict</h4>
+                  {conflictLoading ? <p className="subtle">Loading matched contact...</p> : null}
+                  <dl className="detailList">
+                    <div><dt>Existing contact</dt><dd>{conflictContactLabel(conflictTarget)}</dd></div>
+                    {review.secondary_contact_id ? (
+                      <div><dt>Second matched contact</dt><dd>{conflictContactLabel(conflictSecondary)}</dd></div>
+                    ) : null}
+                  </dl>
+                  <div className="detailEditActions">
+                    {review.secondary_contact_id ? (
+                      <>
+                        <button type="button" onClick={() => resolveConflict('merge-target')} disabled={busy || resolvingConflict !== null}>
+                          {resolvingConflict === 'merge-target' ? 'Merging...' : `Merge into "${conflictContactLabel(conflictTarget)}"`}
+                        </button>
+                        <button type="button" onClick={() => resolveConflict('merge-secondary')} disabled={busy || resolvingConflict !== null}>
+                          {resolvingConflict === 'merge-secondary' ? 'Merging...' : `Merge into "${conflictContactLabel(conflictSecondary)}"`}
+                        </button>
+                        <button type="button" className="dangerButton" onClick={() => resolveConflict('dismiss')} disabled={busy || resolvingConflict !== null}>
+                          {resolvingConflict === 'dismiss' ? 'Dismissing...' : 'Keep separate'}
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button type="button" onClick={() => resolveConflict('link')} disabled={busy || resolvingConflict !== null}>
+                          {resolvingConflict === 'link' ? 'Linking...' : 'Yes, same person — link'}
+                        </button>
+                        <button type="button" className="dangerButton" onClick={() => resolveConflict('dismiss')} disabled={busy || resolvingConflict !== null}>
+                          {resolvingConflict === 'dismiss' ? 'Dismissing...' : 'No, different person — dismiss'}
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </section>
+              ) : null}
             </>
           ) : null}
 
@@ -215,6 +342,12 @@ export default function DetailPanel({
             <section className="detailSection">
               <div className="detailSectionHeader">
                 <h4>Recruiter profile</h4>
+                <div className="detailEditActions">
+                {row.kind === 'contact' && employer ? (
+                  <button type="button" className="dangerText" onClick={() => removeRole('recruiter')} disabled={busy || removingRole !== null}>
+                    {removingRole === 'recruiter' ? 'Removing...' : 'Remove Recruiter Role'}
+                  </button>
+                ) : null}
                 {!editingRecruiter ? (
                   <button
                     type="button"
@@ -236,6 +369,7 @@ export default function DetailPanel({
                     Edit
                   </button>
                 ) : null}
+                </div>
               </div>
               {editingRecruiter ? (
                 <div className="detailFormGrid">
@@ -322,6 +456,12 @@ export default function DetailPanel({
             <section className="detailSection">
               <div className="detailSectionHeader">
                 <h4>Employer profile</h4>
+                <div className="detailEditActions">
+                {row.kind === 'contact' && recruiter ? (
+                  <button type="button" className="dangerText" onClick={() => removeRole('employer')} disabled={busy || removingRole !== null}>
+                    {removingRole === 'employer' ? 'Removing...' : 'Remove Employer Role'}
+                  </button>
+                ) : null}
                 {!editingEmployer ? (
                   <button
                     type="button"
@@ -334,6 +474,7 @@ export default function DetailPanel({
                     Edit
                   </button>
                 ) : null}
+                </div>
               </div>
               {editingEmployer ? (
                 <div className="detailFormGrid">
@@ -451,6 +592,24 @@ export default function DetailPanel({
                   }}
                 >
                   {deletingVersion ? 'Deleting version...' : 'Delete this version'}
+                </button>
+                <button
+                  type="button"
+                  className="dangerButton"
+                  disabled={versionsLoading || busy || deletingOlderVersions || versions.length <= 1}
+                  onClick={() => {
+                    if (!window.confirm(`Delete all ${versions.length - 1} older version(s)? This keeps only the current active version and cannot be undone.`)) return
+                    setDeletingOlderVersions(true)
+                    deleteOlderContactVersions(apiBase, primaryRole, row.id)
+                      .then((result) => {
+                        onToast(`Deleted ${result.deleted_count} older version(s)`)
+                        return onReload()
+                      })
+                      .catch((reason) => onError((reason as Error).message))
+                      .finally(() => setDeletingOlderVersions(false))
+                  }}
+                >
+                  {deletingOlderVersions ? 'Deleting older versions...' : 'Delete older versions'}
                 </button>
               </div>
               {primaryContact.source_link_url ? <a href={primaryContact.source_link_url} target="_blank" rel="noreferrer">{primaryContact.source_type === 'nvoids' ? 'Open original post' : 'Open exact email in Gmail'}</a> : null}

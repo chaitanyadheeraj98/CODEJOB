@@ -9,6 +9,9 @@ const REASON_LABELS: Record<string, string> = {
   source_attribution_failure: 'Source Mismatch',
   international_number_needs_verification: 'International — Needs Verification',
   new_number: 'Pending',
+  suggested_email_match: 'Suggested Email Match',
+  suggested_phone_match: 'Suggested Phone Match',
+  phone_email_cross_conflict: 'Identity Conflict',
 }
 
 function reviewReasonLabel(reasonCode: string): string {

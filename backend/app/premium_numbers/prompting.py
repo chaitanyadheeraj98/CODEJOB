@@ -39,6 +39,7 @@ Rules:
 - Ignore invalid or incomplete numbers.
 - Support international phone number formats.
 - Known employer domains are employer contacts, not recruiter contacts.
+- If the phone number has an extension (e.g. "Ext: 2162", "x2162", "extension 2162"), include it verbatim in "phone_number" (e.g. "+1 (609) 897-9670 ext 2162") - never drop it. Different people at the same company often share one switchboard number with different extensions, and the extension is what tells them apart.
 
 Known employer domains: {', '.join(sorted(employer_domains or set())) or 'none'}
 
@@ -58,6 +59,20 @@ Expected JSON format:
       "source_section": "signature",
       "block_id": "signature-1",
       "evidence_text": "RAM | ram@example.com | +1 512 271 9173"
+    }},
+    {{
+      "role": "recruiter",
+      "phone_number": "+1 (609) 897-9670 ext 2162",
+      "name": "Priya",
+      "email": "priya@example.com",
+      "company": "TekWings",
+      "designation": "Sr. Technical Recruiter",
+      "linkedin_url": "",
+      "purpose": "Recruiter direct number",
+      "confidence": "High",
+      "source_section": "signature",
+      "block_id": "signature-2",
+      "evidence_text": "Priya | priya@example.com | Cell: +1 (609) 897-9670 Ext: 2162"
     }}
   ]
 }}

@@ -12,6 +12,7 @@ import type {
   AttachmentAssetOption,
   EmployerNumberCard,
   ExtractionAuditEntry,
+  InventoryRow,
   ManualContactPayload,
   ManualContactResult,
   NumberReviewCard,
@@ -210,6 +211,10 @@ export async function runContactBulkAction(
   await requestJson(`${apiBase}/${role}-numbers/bulk-${action}`, jsonInit('POST', { contact_ids: contactIds }))
 }
 
+export function unmarkContactRole(apiBase: string, role: 'recruiter' | 'employer', contactId: number): Promise<{ id: number; status: string }> {
+  return requestJson(`${apiBase}/${role}-numbers/${contactId}/unmark`, { method: 'POST' })
+}
+
 export async function runReviewAction(
   apiBase: string,
   reviewId: number,
@@ -217,6 +222,18 @@ export async function runReviewAction(
   edits: ReviewEdits,
 ): Promise<void> {
   await requestJson(`${apiBase}/number-review/${reviewId}/${action}`, jsonInit('POST', edits))
+}
+
+export function approveContactLink(apiBase: string, reviewId: number): Promise<{ review_id: number; contact_id: number; status: string }> {
+  return requestJson(`${apiBase}/number-review/${reviewId}/approve-link`, { method: 'POST' })
+}
+
+export function approveContactMerge(apiBase: string, reviewId: number, canonicalContactId?: number): Promise<{ review_id: number; contact_id: number; status: string }> {
+  return requestJson(`${apiBase}/number-review/${reviewId}/approve-merge`, jsonInit('POST', canonicalContactId != null ? { canonical_contact_id: canonicalContactId } : {}))
+}
+
+export function dismissReviewSuggestion(apiBase: string, reviewId: number): Promise<{ review_id: number; status: string }> {
+  return requestJson(`${apiBase}/number-review/${reviewId}/dismiss`, { method: 'POST' })
 }
 
 export function listContactVersions(
@@ -245,6 +262,22 @@ export async function deleteContactVersion(
   await requestJson(`${apiBase}/${role}-numbers/${contactId}/versions/${leadId}`, { method: 'DELETE' })
 }
 
+export async function deleteOlderContactVersions(
+  apiBase: string,
+  role: 'recruiter' | 'employer',
+  contactId: number,
+): Promise<{ id: number; deleted_count: number; status: string }> {
+  return requestJson(`${apiBase}/${role}-numbers/${contactId}/versions`, { method: 'DELETE' })
+}
+
+export function getRecruiterNumber(apiBase: string, contactId: number): Promise<RecruiterNumberCard> {
+  return requestJson(`${apiBase}/recruiter-numbers/${contactId}`)
+}
+
+export function getEmployerNumber(apiBase: string, contactId: number): Promise<EmployerNumberCard> {
+  return requestJson(`${apiBase}/employer-numbers/${contactId}`)
+}
+
 export function updateRecruiterNumber(
   apiBase: string,
   contactId: number,
@@ -263,6 +296,35 @@ export function updateEmployerNumber(
 
 export function createManualContact(apiBase: string, payload: ManualContactPayload): Promise<ManualContactResult> {
   return requestJson(`${apiBase}/premium-numbers/contacts`, jsonInit('POST', payload))
+}
+
+export function listDeletedContacts(
+  apiBase: string,
+  params: Record<string, string>,
+): Promise<{ items: InventoryRow[]; next_cursor: number | null; has_next: boolean; total: number }> {
+  return requestJson(`${apiBase}/premium-numbers/deleted-contacts?${new URLSearchParams(params)}`)
+}
+
+export function restoreContact(apiBase: string, contactId: number): Promise<{ id: number; status: string }> {
+  return requestJson(`${apiBase}/premium-numbers/contacts/${contactId}/restore`, { method: 'POST' })
+}
+
+export function bulkRestoreContacts(
+  apiBase: string,
+  contactIds: number[],
+): Promise<{ results: Array<{ contact_id: number; status: string }> }> {
+  return requestJson(`${apiBase}/premium-numbers/contacts/bulk-restore`, jsonInit('POST', { contact_ids: contactIds }))
+}
+
+export function purgeContact(apiBase: string, contactId: number): Promise<{ id: number; status: string }> {
+  return requestJson(`${apiBase}/premium-numbers/contacts/${contactId}/purge`, { method: 'POST' })
+}
+
+export function bulkPurgeContacts(
+  apiBase: string,
+  contactIds: number[],
+): Promise<{ results: Array<{ contact_id: number; status: string }> }> {
+  return requestJson(`${apiBase}/premium-numbers/contacts/bulk-purge`, jsonInit('POST', { contact_ids: contactIds }))
 }
 
 export function updateOpportunity(

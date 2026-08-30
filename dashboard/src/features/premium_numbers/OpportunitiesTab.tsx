@@ -13,6 +13,7 @@ import {
   updateOpportunity,
 } from './api'
 import { createAppTSApplicationFromOpportunity } from '../application_tracking/api'
+import type { ToastTone } from './Toast'
 import type { OpportunityMatch, OpportunityStatus, RecruiterOpportunityCard, ResumeAssetOption } from './types'
 
 const PAGE_SIZE = 10
@@ -36,7 +37,7 @@ type OpportunitiesTabProps = {
   refreshToken: number
   highlightedId: number | null
   applicationsEnabled: boolean
-  onToast: (message: string) => void
+  onToast: (message: string, tone?: ToastTone) => void
   filterValues?: FilterValues
   sortValue?: string
 }
@@ -47,7 +48,6 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
   const [total,setTotal]=useState(0)
   const [loading, setLoading] = useState(false)
   const [busyId, setBusyId] = useState<number | null>(null)
-  const [error, setError] = useState('')
   const [edits, setEdits] = useState<Record<number, Partial<RecruiterOpportunityCard>>>({})
   const [trackingId, setTrackingId] = useState<number | null>(null)
   const [resumeOptions, setResumeOptions] = useState<ResumeAssetOption[]>([])
@@ -69,7 +69,6 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
     const requestId = requestIdRef.current + 1
     requestIdRef.current = requestId
     setLoading(true)
-    setError('')
     const request = sortByMatch && filterResumeId != null
       ? matchOpportunitiesForResume(apiBase, filterResumeId).then((matches) => {
           setMatchesByOpportunity(Object.fromEntries(matches.map((match) => [match.opportunity.id, match])) as Record<number, OpportunityMatch>)
@@ -86,7 +85,7 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
         setRows(items)
       })
       .catch((reason) => {
-        if (requestId === requestIdRef.current) setError((reason as Error).message)
+        if (requestId === requestIdRef.current) onToast((reason as Error).message, 'error')
       })
       .finally(() => {
         if (requestId === requestIdRef.current) setLoading(false)
@@ -107,7 +106,7 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
         setResumeOptions(enabled)
         setSelectedResumeId((current) => current ?? (enabled.find((resume) => resume.is_current) ?? enabled[0])?.id ?? null)
       })
-      .catch((reason) => setError((reason as Error).message))
+      .catch((reason) => onToast((reason as Error).message, 'error'))
   }, [apiBase, applicationsEnabled])
 
   useEffect(() => {
@@ -127,7 +126,6 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
 
   const patchRow = async (id: number, patch: Partial<RecruiterOpportunityCard>) => {
     setBusyId(id)
-    setError('')
     try {
       const updated = await updateOpportunity(apiBase, id, patch)
       setRows((current) => current.map((row) => row.id === id ? updated : row))
@@ -138,7 +136,7 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
       })
       onToast('Saved')
     } catch (reason) {
-      setError((reason as Error).message)
+      onToast((reason as Error).message, 'error')
     } finally {
       setBusyId(null)
     }
@@ -151,7 +149,7 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
       setRows((current) => current.map((row) => row.id === id ? updated : row))
       onToast('Cold call script generated')
     } catch (reason) {
-      setError((reason as Error).message)
+      onToast((reason as Error).message, 'error')
     } finally {
       setBusyId(null)
     }
@@ -164,7 +162,7 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
       setRows((current) => current.map((row) => row.id === id ? updated : row))
       onToast('AI metadata refreshed & saved')
     } catch (reason) {
-      setError((reason as Error).message)
+      onToast((reason as Error).message, 'error')
     } finally {
       setBusyId(null)
     }
@@ -178,7 +176,7 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
       setRows((current) => current.filter((row) => row.id !== id))
       onToast('Deleted')
     } catch (reason) {
-      setError((reason as Error).message)
+      onToast((reason as Error).message, 'error')
     } finally {
       setBusyId(null)
     }
@@ -195,7 +193,6 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
     const ids = [...selectedIds]
     if (!ids.length || !window.confirm(`Delete ${ids.length} selected opportunit${ids.length === 1 ? 'y' : 'ies'}? This cannot be undone.`)) return
     setBulkAction('delete')
-    setError('')
     try {
       const results = await Promise.allSettled(ids.map((id) => deleteOpportunity(apiBase, id)))
       const succeededIds = ids.filter((_, index) => results[index].status === 'fulfilled')
@@ -212,7 +209,6 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
     const ids = [...selectedIds]
     if (!ids.length) return
     setBulkAction('refresh')
-    setError('')
     try {
       const results = await Promise.allSettled(ids.map((id) => refreshOpportunityAiMetadata(apiBase, id)))
       const updatedById = new Map(results.flatMap((result, index) => result.status === 'fulfilled' ? [[ids[index], result.value] as const] : []))
@@ -229,13 +225,12 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
     setTrackingId(opportunityId)
     setTrackingDedupeKey(crypto.randomUUID())
     setBusyId(opportunityId)
-    setError('')
     try {
       const enabled = (await listResumeOptions(apiBase)).filter((resume) => resume.is_enabled)
       setResumeOptions(enabled)
       setSelectedResumeId((enabled.find((resume) => resume.is_current) ?? enabled[0])?.id ?? null)
     } catch (reason) {
-      setError((reason as Error).message)
+      onToast((reason as Error).message, 'error')
       setTrackingId(null)
     } finally {
       setBusyId(null)
@@ -245,7 +240,6 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
   const trackApplication = async (item: RecruiterOpportunityCard) => {
     if (selectedResumeId == null) return
     setBusyId(item.id)
-    setError('')
     try {
       await createAppTSApplicationFromOpportunity(apiBase, {
         resume_asset_id: selectedResumeId,
@@ -255,7 +249,7 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
       setTrackingId(null)
       onToast('Application tracking started')
     } catch (reason) {
-      setError((reason as Error).message)
+      onToast((reason as Error).message, 'error')
     } finally {
       setBusyId(null)
     }
@@ -273,7 +267,6 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
         ]}
       />
       {loading ? <p className="subtle">Loading recruiter opportunities...</p> : null}
-      {error ? <p className="errorBanner">Recruiter opportunities error: {error}</p> : null}
       {!loading && rows.length === 0 ? <p className="inventoryEmpty">No recruiter opportunities match these filters.</p> : null}
       <div className="opportunityGrid">
         {visible.map((item) => (
@@ -368,7 +361,7 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
               <button type="button" onClick={() => refreshAiMetadata(item.id)} disabled={busyId === item.id}>{busyId === item.id ? 'Working...' : 'Refresh AI Metadata'}</button>
               {applicationsEnabled ? <button type="button" onClick={() => openResumePicker(item.id)} disabled={busyId === item.id}>Track Application</button> : null}
               <button type="button" className="dangerButton" onClick={() => remove(item.id)} disabled={busyId === item.id}>{busyId === item.id ? 'Working...' : 'Delete'}</button>
-              {item.cold_call_script ? <button type="button" onClick={() => navigator.clipboard.writeText(item.cold_call_script || '').then(() => onToast('Copied')).catch(() => setError('Failed to copy cold call script'))}>Copy Script</button> : null}
+              {item.cold_call_script ? <button type="button" onClick={() => navigator.clipboard.writeText(item.cold_call_script || '').then(() => onToast('Copied')).catch(() => onToast('Failed to copy cold call script', 'error'))}>Copy Script</button> : null}
             </div>
             {trackingId === item.id ? (
               <div className="resumeLockPicker">

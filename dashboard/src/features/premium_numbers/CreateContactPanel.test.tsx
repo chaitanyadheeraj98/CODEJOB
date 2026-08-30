@@ -24,7 +24,7 @@ describe('CreateContactPanel', () => {
     while (cleanups.length) cleanups.pop()?.()
   })
 
-  function mount(onCreated = vi.fn(), onClose = vi.fn()) {
+  function mount(onCreated = vi.fn(), onClose = vi.fn(), onError = vi.fn()) {
     const container = document.createElement('div')
     document.body.appendChild(container)
     const root: Root = createRoot(container)
@@ -34,22 +34,22 @@ describe('CreateContactPanel', () => {
       vi.unstubAllGlobals()
     })
     act(() => {
-      root.render(<CreateContactPanel apiBase="http://localhost:8000" onClose={onClose} onCreated={onCreated} />)
+      root.render(<CreateContactPanel apiBase="http://localhost:8000" onClose={onClose} onCreated={onCreated} onError={onError} />)
     })
-    return { container, onCreated, onClose }
+    return { container, onCreated, onClose, onError }
   }
 
-  it('blocks submit and shows an error when both phone and email are missing', async () => {
+  it('blocks submit and reports an error when both phone and email are missing', async () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
-    const { container } = mount()
+    const { container, onError } = mount()
 
     act(() => setValue(container.querySelector('input')!, 'Jamie Recruiter'))
     await act(async () => {
       container.querySelector('form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
     })
 
-    expect(container.textContent).toContain('Provide a phone number, an email address, or both.')
+    expect(onError).toHaveBeenCalledWith('Provide a phone number, an email address, or both.')
     expect(fetchMock).not.toHaveBeenCalled()
   })
 

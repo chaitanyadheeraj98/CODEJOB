@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.ai.deepseek_client import deepseek_json_completion
 from app.config import settings
 from app.models import PremiumNumberExtractionAudit
-from app.premium_numbers.phone_normalization import format_phone
+from app.premium_numbers.phone_normalization import EXTENSION_RE, format_phone
 from app.premium_numbers.prompting import build_premium_numbers_prompts
 from app.semantic.embeddings_service import _sbert_embedding
 
@@ -103,6 +103,7 @@ class ExtractedContactGroup:
     relevance_reason: str
     source_fragment: str
     role: str = "unknown"
+    phone_extension: str = ""
     extraction_source: str = "ai"
     linkedin_url: str = ""
     source_section: str = "unknown"
@@ -125,6 +126,11 @@ def _normalize_phone(raw: str) -> str:
 def _display_phone(raw: str) -> str:
     _normalized, display, _ext = format_phone(raw)
     return display or re.sub(r"\s+", " ", raw.strip())
+
+
+def _phone_extension(raw: str) -> str:
+    _normalized, _display, extension = format_phone(raw)
+    return extension
 
 
 def _normalize_confidence(raw: str) -> str:
@@ -194,6 +200,7 @@ def _llm_extract(
         raw_phone = str(item.get("phone_number", ""))
         display = _display_phone(raw_phone)
         normalized = _normalize_phone(display)
+        extension = _phone_extension(raw_phone)
         contact_email = str(item.get("email", "")).strip().lower()
         if not normalized:
             record_extraction_audit(
@@ -223,6 +230,7 @@ def _llm_extract(
                 else "unknown",
                 phone_number_display=display,
                 phone_number_normalized=normalized,
+                phone_extension=extension,
                 owner_name=str(item.get("name", item.get("owner_name", "Unknown"))).strip() or "Unknown",
                 contact_email=contact_email,
                 company=str(item.get("company", "Unknown")).strip() or "Unknown",
@@ -584,6 +592,12 @@ def _fallback_extract(
     for match in PHONE_RE.finditer(body or ""):
         raw_phone = match.group(0)
         normalized, display_phone, _ext = format_phone(raw_phone)
+        # PHONE_RE's character class excludes letters, so "Ext: 2162" trailing a phone
+        # match is never part of match.group(0) - look just past the match for it.
+        trailing_ext_match = EXTENSION_RE.search(body[match.end():match.end() + 20])
+        extension = trailing_ext_match.group(1) if trailing_ext_match else ""
+        if extension:
+            display_phone = f"{display_phone} ext {extension}"
         if not normalized:
             record_extraction_audit(
                 db,
@@ -669,6 +683,7 @@ def _fallback_extract(
                 role="unknown",
                 phone_number_display=display_phone,
                 phone_number_normalized=normalized,
+                phone_extension=extension,
                 owner_name="Unknown",
                 contact_email="",
                 company="Unknown",

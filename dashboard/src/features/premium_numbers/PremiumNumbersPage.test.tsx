@@ -160,7 +160,7 @@ describe('PremiumNumbersPage', () => {
     expect(container.textContent).toContain('Rescored')
 
     const tabs = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="tab"]')).map((button) => button.textContent)
-    expect(tabs).toEqual(['Number Inventory', 'Recruiter Opportunities'])
+    expect(tabs).toEqual(['Number Inventory', 'Recruiter Opportunities', 'Recycle Bin'])
   })
 
   it('highlights a promoted premium_number_lead hit via its detail.contact_id', async () => {
@@ -210,5 +210,244 @@ describe('PremiumNumbersPage', () => {
 
     const highlighted = container.querySelector('tr.emailSearchHighlight')
     expect(highlighted?.textContent).toContain('Global Talent Ltd')
+  })
+
+  it('recovers the open detail panel by id when a reload pushes its row off the loaded page', async () => {
+    const inventoryRow = { key: `contact:${recruiter.id}`, kind: 'contact', id: recruiter.id, number: recruiter.display_phone_number, owner: recruiter.recruiter_name, company: recruiter.company, categories: ['Recruiter'], status: 'Active', score: recruiter.recruiter_relevance_score, sourceType: 'nvoids', lastCheckedAt: recruiter.updated_at, recruiter }
+    const versions = [
+      { id: 2000, role: 'recruiter', owner_name: recruiter.recruiter_name, company: recruiter.company, designation: 'Recruiter', contact_email: recruiter.recruiter_email, confidence: 'high', extraction_source: 'ai', recruiter_email_id: null, external_opportunity_id: null, source_url: null, linkedin_url: '', created_at: '2026-08-18T13:00:00Z' },
+      { id: 2001, role: 'recruiter', owner_name: recruiter.recruiter_name, company: recruiter.company, designation: 'Recruiter', contact_email: 'legacy@example.com', confidence: 'low', extraction_source: 'legacy_snapshot', recruiter_email_id: null, external_opportunity_id: null, source_url: null, linkedin_url: '', created_at: '2026-08-19T05:00:00Z' },
+    ]
+    const freshRecruiter: RecruiterNumberCard = { ...recruiter, active_lead_id: 2001, recruiter_email: 'legacy@example.com' }
+    let inventoryCalls = 0
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/number-review/pending-count')) return jsonResponse({ count: 0 })
+      if (url.includes('/premium-numbers/inventory?')) {
+        inventoryCalls += 1
+        // After the version switch, the row's updated_at moves it off this (still-page-1)
+        // response - simulating it sorting onto a different page under sort=newest.
+        const items = inventoryCalls === 1 ? [inventoryRow] : []
+        return jsonResponse({ items, total: inventoryCalls === 1 ? 1 : 0, next_cursor: null, has_next: false })
+      }
+      if (url.includes('/recruiter-numbers/2/versions')) return jsonResponse(versions)
+      if (url.includes('/recruiter-numbers/2/select-version/2001') && init?.method === 'POST') return jsonResponse({ id: 2, active_lead_id: 2001, status: 'selected' })
+      if (url.endsWith('/recruiter-numbers/2')) return jsonResponse(freshRecruiter)
+      if (url.includes('/number-review?')) return jsonResponse({ items: [], next_cursor: null, has_next: false })
+      if (url.includes('/recruiter-numbers?')) return jsonResponse({ items: [], next_cursor: null, has_next: false })
+      if (url.includes('/employer-numbers?')) return jsonResponse({ items: [], next_cursor: null, has_next: false })
+      if (url.includes('/reputation')) return jsonResponse({ history_label: 'limited_history', outreach_count: 0, replies_count: 0, median_first_reply_business_days: null, submissions_count: 0, interviews_after_submission_count: 0, offers_count: 0, last_active_at: null })
+      if (url.includes('/extraction-audit')) return jsonResponse({ items: [] })
+      return jsonResponse({ detail: 'not found' }, 404)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+      vi.unstubAllGlobals()
+    })
+
+    await act(async () => {
+      root.render(
+        <PremiumNumbersPage
+          apiBase="http://localhost:8000"
+          mailDate={null}
+          emailSearchTarget={null}
+          refreshToken={0}
+          applicationsEnabled={false}
+          onPendingCountChange={vi.fn()}
+        />,
+      )
+    })
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 300)) })
+
+    const contactRow = Array.from(container.querySelectorAll('tbody tr')).find((row) => row.textContent?.includes(recruiter.display_phone_number))
+    await act(async () => { contactRow?.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 50)) })
+
+    expect(container.querySelector('[role="dialog"]')?.textContent).toContain('talent@example.com')
+
+    const select = document.querySelector<HTMLSelectElement>('[role="dialog"] select')
+    expect(select).not.toBeNull()
+    await act(async () => {
+      select!.value = '2001'
+      select!.dispatchEvent(new Event('change', { bubbles: true }))
+      await new Promise((resolve) => window.setTimeout(resolve, 300))
+    })
+
+    expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith('/recruiter-numbers/2/select-version/2001') && init?.method === 'POST')).toBe(true)
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/recruiter-numbers/2'))).toBe(true)
+    expect(container.querySelector('[role="dialog"]')?.textContent).toContain('legacy@example.com')
+  })
+
+  it('shows an inventory load failure as a dismissable error toast, not a persistent page banner', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/number-review/pending-count')) return jsonResponse({ count: 0 })
+      if (url.includes('/premium-numbers/inventory?')) return new Response('Internal Server Error', { status: 500 })
+      return jsonResponse({ detail: 'not found' }, 404)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+      vi.unstubAllGlobals()
+    })
+
+    await act(async () => {
+      root.render(
+        <PremiumNumbersPage
+          apiBase="http://localhost:8000"
+          mailDate={null}
+          emailSearchTarget={null}
+          refreshToken={0}
+          applicationsEnabled={false}
+          onPendingCountChange={vi.fn()}
+        />,
+      )
+    })
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 300)) })
+
+    expect(container.querySelector('.errorBanner')).toBeNull()
+    const toast = container.querySelector('.actionToast')
+    expect(toast).not.toBeNull()
+    expect(toast?.className).toContain('actionToast--error')
+    expect(toast?.textContent).toContain('Failed to load premium number inventory')
+  })
+
+  it('lists deleted contacts in the Recycle Bin tab and restores one', async () => {
+    const deletedRow = {
+      key: 'contact:9', kind: 'contact', id: 9, number: '(214) 555-0909', owner: 'Deleted Recruiter', company: 'Old Agency',
+      categories: ['Recruiter'], status: 'Active', score: 70, sourceType: 'gmail', lastCheckedAt: '2026-08-20T10:00:00Z',
+      recruiter: { ...recruiter, id: 9, recruiter_name: 'Deleted Recruiter', company: 'Old Agency' },
+    }
+    let deleted = true
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/number-review/pending-count')) return jsonResponse({ count: 0 })
+      if (url.includes('/premium-numbers/inventory?')) return jsonResponse({ items: [], total: 0, next_cursor: null, has_next: false })
+      if (url.includes('/premium-numbers/deleted-contacts?')) return jsonResponse({ items: deleted ? [deletedRow] : [], total: deleted ? 1 : 0, next_cursor: null, has_next: false })
+      if (url.endsWith('/premium-numbers/contacts/9/restore') && init?.method === 'POST') { deleted = false; return jsonResponse({ id: 9, status: 'restored' }) }
+      return jsonResponse({ detail: 'not found' }, 404)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+      vi.unstubAllGlobals()
+    })
+
+    await act(async () => {
+      root.render(
+        <PremiumNumbersPage
+          apiBase="http://localhost:8000"
+          mailDate={null}
+          emailSearchTarget={null}
+          refreshToken={0}
+          applicationsEnabled={false}
+          onPendingCountChange={vi.fn()}
+        />,
+      )
+    })
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 300)) })
+
+    const tabs = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
+    expect(tabs.map((tab) => tab.textContent)).toEqual(['Number Inventory', 'Recruiter Opportunities', 'Recycle Bin'])
+    const recycleBinTab = tabs.find((tab) => tab.textContent === 'Recycle Bin')
+    await act(async () => { recycleBinTab?.click() })
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 300)) })
+
+    expect(container.textContent).toContain('Deleted Recruiter')
+    expect(container.textContent).toContain('Old Agency')
+
+    const restoreButton = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'Restore')
+    expect(restoreButton).toBeDefined()
+    await act(async () => {
+      restoreButton?.click()
+      await new Promise((resolve) => window.setTimeout(resolve, 300))
+    })
+
+    expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith('/premium-numbers/contacts/9/restore') && init?.method === 'POST')).toBe(true)
+    expect(container.querySelector('.actionToast')?.textContent).toContain('Restored')
+    expect(container.textContent).toContain('Recycle Bin is empty.')
+  })
+
+  it('opens a deleted contact\'s details on click and permanently deletes it from the detail panel', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const deletedRow = {
+      key: 'contact:9', kind: 'contact', id: 9, number: '(214) 555-0909', owner: 'Deleted Recruiter', company: 'Old Agency',
+      categories: ['Recruiter'], status: 'Active', score: 70, sourceType: 'gmail', lastCheckedAt: '2026-08-20T10:00:00Z',
+      recruiter: { ...recruiter, id: 9, recruiter_name: 'Deleted Recruiter', company: 'Old Agency' },
+    }
+    let deleted = true
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/number-review/pending-count')) return jsonResponse({ count: 0 })
+      if (url.includes('/premium-numbers/inventory?')) return jsonResponse({ items: [], total: 0, next_cursor: null, has_next: false })
+      if (url.includes('/premium-numbers/deleted-contacts?')) return jsonResponse({ items: deleted ? [deletedRow] : [], total: deleted ? 1 : 0, next_cursor: null, has_next: false })
+      if (url.endsWith('/premium-numbers/contacts/9/purge') && init?.method === 'POST') { deleted = false; return jsonResponse({ id: 9, status: 'purged' }) }
+      return jsonResponse({ detail: 'not found' }, 404)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+      vi.unstubAllGlobals()
+    })
+
+    await act(async () => {
+      root.render(
+        <PremiumNumbersPage
+          apiBase="http://localhost:8000"
+          mailDate={null}
+          emailSearchTarget={null}
+          refreshToken={0}
+          applicationsEnabled={false}
+          onPendingCountChange={vi.fn()}
+        />,
+      )
+    })
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 300)) })
+
+    const recycleBinTab = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find((tab) => tab.textContent === 'Recycle Bin')
+    await act(async () => { recycleBinTab?.click() })
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 300)) })
+
+    const row = Array.from(container.querySelectorAll('tbody tr')).find((tr) => tr.textContent?.includes('Deleted Recruiter'))
+    await act(async () => { row?.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+
+    const dialog = container.querySelector('[role="dialog"]')
+    expect(dialog).not.toBeNull()
+    expect(dialog?.textContent).toContain('Deleted Recruiter')
+    expect(dialog?.textContent).toContain('Old Agency')
+
+    const deleteForeverButton = Array.from(dialog?.querySelectorAll('button') ?? []).find((button) => button.textContent === 'Delete Forever')
+    expect(deleteForeverButton).toBeDefined()
+    await act(async () => {
+      deleteForeverButton?.click()
+      await new Promise((resolve) => window.setTimeout(resolve, 300))
+    })
+
+    expect(window.confirm).toHaveBeenCalled()
+    expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith('/premium-numbers/contacts/9/purge') && init?.method === 'POST')).toBe(true)
+    expect(container.querySelector('.actionToast')?.textContent).toContain('Deleted forever')
+    expect(container.querySelector('[role="dialog"]')).toBeNull()
+    expect(container.textContent).toContain('Recycle Bin is empty.')
   })
 })

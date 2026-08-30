@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { EmailSearchHit } from '../../emailSearch'
-import { pendingReviewCount } from './api'
+import { getEmployerNumber, getRecruiterNumber, pendingReviewCount } from './api'
 import CreateContactPanel, { STATUS_MESSAGES } from './CreateContactPanel'
 import DetailPanel from './DetailPanel'
 import InventoryTable from './InventoryTable'
 import OpportunitiesTab from './OpportunitiesTab'
+import RecycleBinTab from './RecycleBinTab'
 import { ToastHost, useToast } from './Toast'
 import type { InventoryAction, InventoryRow, ReviewEdits } from './types'
 import { useInventory } from './useInventory'
@@ -19,6 +20,8 @@ const ACTION_TOAST_LABELS: Record<InventoryAction, string> = {
   delete: 'Deleted',
 }
 
+type PremiumNumbersTab = 'inventory' | 'opportunities' | 'recycle_bin'
+
 type PremiumNumbersPageProps = {
   apiBase: string
   mailDate: string | null
@@ -26,8 +29,8 @@ type PremiumNumbersPageProps = {
   refreshToken: number
   applicationsEnabled: boolean
   onPendingCountChange: (count: number) => void
-  activeTab?: 'inventory' | 'opportunities'
-  onTabChange?: (tab: 'inventory' | 'opportunities') => void
+  activeTab?: PremiumNumbersTab
+  onTabChange?: (tab: PremiumNumbersTab) => void
   filterValues?: FilterValues
   sortValue?: string
 }
@@ -61,10 +64,11 @@ export default function PremiumNumbersPage({
 }: PremiumNumbersPageProps) {
   const targetOpportunityId = opportunityTargetId(emailSearchTarget)
   const targetInventoryKey = inventoryTargetKey(emailSearchTarget)
-  const [tab, setLocalTab] = useState<'inventory' | 'opportunities'>(targetOpportunityId == null ? 'inventory' : 'opportunities')
+  const [tab, setLocalTab] = useState<PremiumNumbersTab>(targetOpportunityId == null ? 'inventory' : 'opportunities')
   const activeTab = controlledTab ?? tab
-  const setTab = (next: 'inventory' | 'opportunities') => { setLocalTab(next); onTabChange?.(next) }
+  const setTab = (next: PremiumNumbersTab) => { setLocalTab(next); onTabChange?.(next) }
   const [detailRow, setDetailRow] = useState<InventoryRow | null>(null)
+  const recoveredForRowsRef = useRef<InventoryRow[] | null>(null)
   const [creatingContact, setCreatingContact] = useState(false)
   const returnFocusRef = useRef<HTMLElement | null>(null)
   const toast = useToast()
@@ -74,10 +78,33 @@ export default function PremiumNumbersPage({
   const setInventoryPage = inventory.setPage
 
   useEffect(() => {
+    if (inventory.error) toast.show(inventory.error, 'error')
+  }, [inventory.error, toast.show])
+
+  useEffect(() => {
     if (!detailRow) return
     const fresh = inventoryRows.find((candidate) => candidate.key === detailRow.key)
-    if (fresh && fresh !== detailRow) setDetailRow(fresh)
-  }, [inventoryRows, detailRow])
+    if (fresh) {
+      if (fresh !== detailRow) setDetailRow(fresh)
+      return
+    }
+    // An action taken from the open panel (e.g. select-version) can bump the row's
+    // sort key and push it off whatever page is currently loaded, so it won't show up
+    // in inventoryRows even though it still exists - fall back to fetching it directly
+    // rather than leaving the panel stuck on pre-action data. One attempt per reload.
+    if (detailRow.kind !== 'contact' || recoveredForRowsRef.current === inventoryRows) return
+    recoveredForRowsRef.current = inventoryRows
+    const key = detailRow.key
+    if (detailRow.recruiter) {
+      getRecruiterNumber(apiBase, detailRow.id)
+        .then((recruiter) => setDetailRow((current) => (current && current.key === key ? { ...current, recruiter } : current)))
+        .catch(() => undefined)
+    } else if (detailRow.employer) {
+      getEmployerNumber(apiBase, detailRow.id)
+        .then((employer) => setDetailRow((current) => (current && current.key === key ? { ...current, employer } : current)))
+        .catch(() => undefined)
+    }
+  }, [apiBase, inventoryRows, detailRow])
 
   const refreshCount = useCallback(() => {
     pendingReviewCount(apiBase)
@@ -146,6 +173,7 @@ export default function PremiumNumbersPage({
         <div className="premiumTabs" role="tablist" aria-label="Premium number views">
           <button type="button" role="tab" aria-selected={activeTab === 'inventory'} className={activeTab === 'inventory' ? 'active' : ''} onClick={() => setTab('inventory')}>Number Inventory</button>
           <button type="button" role="tab" aria-selected={activeTab === 'opportunities'} className={activeTab === 'opportunities' ? 'active' : ''} onClick={() => setTab('opportunities')}>Recruiter Opportunities</button>
+          <button type="button" role="tab" aria-selected={activeTab === 'recycle_bin'} className={activeTab === 'recycle_bin' ? 'active' : ''} onClick={() => setTab('recycle_bin')}>Recycle Bin</button>
         </div>
       </header>
 
@@ -168,7 +196,6 @@ export default function PremiumNumbersPage({
 
           <p className="inventoryNote">Rescoring re-checks every selected number in its original source. Bulk actions ignore unsaved detail-panel edits.</p>
           {inventory.loading ? <p className="subtle">Loading premium numbers...</p> : null}
-          {inventory.error ? <p className="errorBanner">Premium numbers error: {inventory.error}</p> : null}
           <InventoryTable
             rows={inventory.visibleRows}
             allRowsCount={inventory.total}
@@ -186,13 +213,17 @@ export default function PremiumNumbersPage({
             onToggleFavorite={(row) => { inventory.toggleFavorite(row).catch(() => undefined) }}
           />
         </div>
-      ) : (
+      ) : activeTab === 'opportunities' ? (
         <div role="tabpanel">
           <OpportunitiesTab apiBase={apiBase} mailDate={mailDate} refreshToken={refreshToken} highlightedId={targetOpportunityId} applicationsEnabled={applicationsEnabled} onToast={toast.show} filterValues={filterValues} sortValue={sortValue} />
         </div>
+      ) : (
+        <div role="tabpanel">
+          <RecycleBinTab apiBase={apiBase} refreshToken={refreshToken} onToast={toast.show} filterValues={filterValues} sortValue={sortValue} />
+        </div>
       )}
 
-      <ToastHost message={toast.message} onDismiss={toast.clear} />
+      <ToastHost message={toast.message} tone={toast.tone} onDismiss={toast.clear} />
 
       {detailRow ? (
         <DetailPanel
@@ -219,6 +250,7 @@ export default function PremiumNumbersPage({
             refreshCount()
             inventory.reload().catch(() => undefined)
           }}
+          onError={(message) => toast.show(message, 'error')}
         />
       ) : null}
     </section>

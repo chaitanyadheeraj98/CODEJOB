@@ -5,6 +5,7 @@ import { sentItemsFilterFields as sFields, sentItemsSortOptions as sSort, sentIt
 import { inboxFilterFields as iFields, inboxSortOptions as iSort, inboxDefaultFilterValues as iDefaults, inboxFiltersToParams as iParams } from './inboxFilters'
 import { inventoryDefaultFilterValues, inventoryFilterFields, inventoryFiltersToParams, inventorySortOptions } from './features/premium_numbers/inventoryFilters'
 import { opportunityDefaultFilterValues, opportunityFilterFields, opportunityFiltersToParams, opportunitySortOptions } from './features/premium_numbers/opportunityFilters'
+import { recycleBinDefaultFilterValues, recycleBinFilterFields, recycleBinFiltersToParams, recycleBinSortOptions } from './features/premium_numbers/recycleBinFilters'
 import { submissionDefaultFilterValues, submissionFilterFields, submissionFiltersToParams, submissionSortOptions } from './features/resume_tracking/submissionFilters'
 import type { ResumeAssetOption } from './features/premium_numbers/types'
 
@@ -55,6 +56,7 @@ export const filterSortRegistry: Partial<Record<string, FilterSortRegistryEntry>
     },
     'page',
   ),
+  'premium_numbers:recycle_bin': config('premium_recycle_bin', recycleBinFilterFields, recycleBinSortOptions, recycleBinDefaultFilterValues, recycleBinFiltersToParams, 'page'),
   'resume_tracking:resumes': config('resume_assets', submissionFilterFields, submissionSortOptions, submissionDefaultFilterValues, submissionFiltersToParams, 'page'),
   'resume_tracking:submissions': config('applications', submissionFilterFields, submissionSortOptions, submissionDefaultFilterValues, submissionFiltersToParams, 'page'),
   'application_tracking:bookmarked': config('appts_bookmarked', nFields, nSort, nDefaults, nParams, 'page'),

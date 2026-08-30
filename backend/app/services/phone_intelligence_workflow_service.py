@@ -10,10 +10,12 @@ from sqlalchemy.orm import Session
 from app.external_feeds.models import ExternalOpportunity
 from app.models import (
     NumberReviewQueue,
+    PremiumContactPhone,
     PremiumNumberContact,
     PremiumNumberLead,
     RecruiterEmail,
     RecruiterOpportunity,
+    utc_now,
 )
 from app.parsing.document_extraction import extract_gmail_reply_body
 from app.parsing.jd_requirements import extract_work_authorizations
@@ -422,6 +424,9 @@ class PhoneIntelligenceWorkflowService:
     ) -> PhoneIntelligenceWorkflowResult:
         try:
             leads = self._extract_leads(db, context)
+            block_contacts = (
+                self._resolve_block_contacts(db, context.owner_id, leads) if include_intelligence else {}
+            )
             stored_count = 0
             review_created = 0
             review_existing = 0
@@ -439,10 +444,11 @@ class PhoneIntelligenceWorkflowService:
                 if not include_intelligence:
                     continue
 
-                point = self._idempotency_point(db, context, lead)
+                point = self._idempotency_point(db, context, lead, block_contacts)
                 promotion_role = self._promotion_role(lead, point.contact)
                 review_role = promotion_role or (lead.role if lead.role in {"recruiter", "employer"} else None)
                 review_reason: str | None = None
+                conflict_target_contact_id: int | None = None
                 if lead.phone_number_normalized.startswith("+"):
                     review_reason = "international_number_needs_verification"
                 elif lead.evidence_text and not lead.colocation_verified:
@@ -450,6 +456,7 @@ class PhoneIntelligenceWorkflowService:
                 elif point.contact is not None and promotion_role:
                     if point.contact.recruiter_verification_level in {"verified", "trusted"}:
                         review_reason = "identity_conflict"
+                        conflict_target_contact_id = point.contact.id
                         lead = replace(
                             lead,
                             relevance_reason=f"{lead.relevance_reason},verified_contact_locked".strip(","),
@@ -462,6 +469,7 @@ class PhoneIntelligenceWorkflowService:
                                 if match.outcome == "conflicting"
                                 else "insufficient_evidence"
                             )
+                            conflict_target_contact_id = point.contact.id
                             lead = replace(
                                 lead,
                                 relevance_reason=f"{lead.relevance_reason},{match.reason}".strip(","),
@@ -476,6 +484,7 @@ class PhoneIntelligenceWorkflowService:
                         role=review_role,
                         reason_code=review_reason,
                         source_review=point.existing_review,
+                        target_contact_id=conflict_target_contact_id,
                     )
                     review_created += int(created)
                     review_existing += int(not created)
@@ -495,6 +504,7 @@ class PhoneIntelligenceWorkflowService:
                     if not created:
                         self._snapshot_legacy_contact_if_needed(db, contact, promotion_role)
                         contact.seen_count += 1
+                        self._ensure_secondary_phone_recorded(db, contact, lead)
                     if version:
                         self._link_lead_to_contact(db, contact, version, promotion_role)
                     else:
@@ -558,6 +568,21 @@ class PhoneIntelligenceWorkflowService:
                     continue
 
                 if point.existing_review:
+                    continue
+
+                # _idempotency_point only looks at *pending* reviews - a phone/email pair
+                # whose earlier review already resolved (classified_recruiter/employer,
+                # dismissed) has no pending row to match, but a "new_number" row for that
+                # exact (phone, source_email_id) still violates
+                # ux_number_review_queue_owner_phone_email on insert. Skip instead of
+                # crashing when today's re-extraction just re-confirms already-settled history.
+                if context.recruiter_email_row_id is not None and db.query(
+                    NumberReviewQueue.id
+                ).filter(
+                    NumberReviewQueue.owner_id == context.owner_id,
+                    NumberReviewQueue.normalized_phone_number == lead.phone_number_normalized,
+                    NumberReviewQueue.source_email_id == context.recruiter_email_row_id,
+                ).first():
                     continue
 
                 self._create_review(
@@ -650,14 +675,52 @@ class PhoneIntelligenceWorkflowService:
         # Identity priority: phone (exact, cheap) first, then email — a lead can lack a phone
         # but extraction.py guarantees it always carries at least one of the two.
         if lead.phone_number_normalized:
-            contact = (
-                db.query(PremiumNumberContact)
+            # A "secondary" match only counts when it's a genuinely different number on
+            # file for the contact - the original multi-identifier migration duplicated
+            # every contact's own PRIMARY phone into this table too (blank extension, since
+            # extension tracking didn't exist yet), so without excluding that self-copy, a
+            # contact whose primary extension now differs from the lead's would still match
+            # here and silently bypass the extension check just below.
+            secondary = (
+                db.query(PremiumContactPhone.premium_contact_id)
+                .join(PremiumNumberContact, PremiumNumberContact.id == PremiumContactPhone.premium_contact_id)
                 .filter(
-                    PremiumNumberContact.owner_id == owner_id,
-                    PremiumNumberContact.normalized_phone_number == lead.phone_number_normalized,
+                    PremiumContactPhone.owner_id == owner_id,
+                    PremiumContactPhone.normalized_phone_number == lead.phone_number_normalized,
+                    PremiumNumberContact.normalized_phone_number != lead.phone_number_normalized,
                 )
-                .first()
             )
+            if lead.phone_extension:
+                secondary = secondary.filter(
+                    or_(
+                        PremiumContactPhone.phone_extension == "",
+                        PremiumContactPhone.phone_extension == lead.phone_extension,
+                    )
+                )
+            query = db.query(PremiumNumberContact).filter(
+                PremiumNumberContact.owner_id == owner_id,
+                or_(
+                    PremiumNumberContact.normalized_phone_number == lead.phone_number_normalized,
+                    PremiumNumberContact.id.in_(secondary),
+                ),
+            )
+            if lead.phone_extension:
+                # Two people can share one switchboard number under different extensions
+                # (confirmed live: SysMind's 609-897-9670 ext 2162 vs ext 2197) - a blank
+                # extension on the existing contact is unknown, not proof of a match, so it
+                # still matches; an explicit *different* extension on both sides means these
+                # are different people and should resolve to different contacts. A person's
+                # OWN other number, recorded as a genuinely different secondary phone, always
+                # matches by id above regardless of extension - this guard only narrows the
+                # primary-phone branch.
+                query = query.filter(
+                    or_(
+                        PremiumNumberContact.phone_extension == "",
+                        PremiumNumberContact.phone_extension == lead.phone_extension,
+                        PremiumNumberContact.id.in_(secondary),
+                    )
+                )
+            contact = query.first()
             if contact is not None:
                 return contact
         if lead.contact_email:
@@ -674,6 +737,80 @@ class PhoneIntelligenceWorkflowService:
             )
         return None
 
+    @staticmethod
+    def _resolve_block_contacts(
+        db: Session, owner_id: str, leads: list[ExtractedContactGroup]
+    ) -> dict[str, PremiumNumberContact]:
+        # A signature block can list several numbers for one person (a cell AND a desk
+        # line). Resolving contact-per-lead independently means the number that happens to
+        # be processed first decides everything: if IT collides with someone else's contact
+        # and gets diverted to review, the sibling number in the same block never finds a
+        # match (nothing got promoted to write the shared email onto), so it silently
+        # spawns an orphaned duplicate contact for a person the block already identifies.
+        # Try every phone in a multi-number block up front and pin the whole block to
+        # whichever contact any of them finds, before per-lead resolution runs.
+        resolved: dict[str, PremiumNumberContact] = {}
+        by_block: dict[str, list[ExtractedContactGroup]] = {}
+        for lead in leads:
+            if lead.block_id:
+                by_block.setdefault(lead.block_id, []).append(lead)
+        for block_id, members in by_block.items():
+            if len(members) < 2:
+                continue
+            for member in members:
+                contact = PhoneIntelligenceWorkflowService._find_contact_for_lead(db, owner_id, member)
+                if contact is not None:
+                    resolved[block_id] = contact
+                    break
+        return resolved
+
+    @staticmethod
+    def _ensure_secondary_phone_recorded(
+        db: Session, contact: PremiumNumberContact, lead: ExtractedContactGroup
+    ) -> None:
+        # A contact's own second (or third) number - discovered on this lead but not the
+        # one that identifies the contact record - is preserved here so a later email
+        # mentioning ONLY that number still finds this contact via _find_contact_for_lead's
+        # secondary-phone check, instead of relying on the fragile email fallback every time.
+        if not lead.phone_number_normalized or lead.phone_number_normalized == contact.normalized_phone_number:
+            return
+        # Deliberately not reusing contact_identity_service._add_phone here: it swallows a
+        # unique-constraint conflict with a bare `except: return`, which silently drops a
+        # link a viewer believes succeeded. Checking first instead of catching after the
+        # fact covers all three cases correctly: already recorded on this contact (skip,
+        # done); already claimed as a secondary phone on a *different* contact (skip - a
+        # real ambiguity, not something to paper over by guessing); or already the PRIMARY
+        # phone of a different, independently-existing contact (skip too - recording it here
+        # would double-claim a number two separate contact rows already disagree about,
+        # which historical pre-fix data can still contain).
+        exists = db.query(PremiumContactPhone.id).filter(
+            PremiumContactPhone.owner_id == contact.owner_id,
+            PremiumContactPhone.normalized_phone_number == lead.phone_number_normalized,
+            PremiumContactPhone.phone_extension == lead.phone_extension,
+        ).first()
+        if exists:
+            return
+        claimed_elsewhere = db.query(PremiumNumberContact.id).filter(
+            PremiumNumberContact.owner_id == contact.owner_id,
+            PremiumNumberContact.id != contact.id,
+            PremiumNumberContact.normalized_phone_number == lead.phone_number_normalized,
+        ).first()
+        if claimed_elsewhere:
+            return
+        db.add(
+            PremiumContactPhone(
+                owner_id=contact.owner_id,
+                premium_contact_id=contact.id,
+                normalized_phone_number=lead.phone_number_normalized,
+                phone_extension=lead.phone_extension,
+                is_primary=False,
+                is_verified=False,
+                source="ingestion",
+                created_at=utc_now(),
+            )
+        )
+        db.flush()
+
     def _upsert_premium_lead(
         self,
         db: Session,
@@ -688,6 +825,7 @@ class PhoneIntelligenceWorkflowService:
         )
         candidate_values = (
             lead.phone_number_display,
+            lead.phone_extension,
             lead.extraction_source,
             lead.contact_email,
             lead.owner_name,
@@ -721,6 +859,7 @@ class PhoneIntelligenceWorkflowService:
             )
             if latest and candidate_values == (
                 latest.phone_number_display,
+                latest.phone_extension,
                 latest.extraction_source,
                 latest.contact_email,
                 latest.owner_name,
@@ -769,6 +908,7 @@ class PhoneIntelligenceWorkflowService:
             db.add(row)
 
         row.role = lead.role
+        row.phone_extension = lead.phone_extension
         row.extraction_source = lead.extraction_source
         row.contact_email = lead.contact_email
         row.owner_name = lead.owner_name
@@ -799,8 +939,11 @@ class PhoneIntelligenceWorkflowService:
         db: Session,
         context: PhoneWorkflowSourceContext,
         lead: ExtractedContactGroup,
+        block_contacts: dict[str, PremiumNumberContact] | None = None,
     ) -> _IdempotencyPoint:
-        contact = self._find_contact_for_lead(db, context.owner_id, lead)
+        contact = (block_contacts or {}).get(lead.block_id) or self._find_contact_for_lead(
+            db, context.owner_id, lead
+        )
         review_query = db.query(NumberReviewQueue).filter(
             NumberReviewQueue.owner_id == context.owner_id,
             NumberReviewQueue.normalized_phone_number == lead.phone_number_normalized,
@@ -888,6 +1031,7 @@ class PhoneIntelligenceWorkflowService:
         *,
         role: str | None,
         reason_code: str,
+        target_contact_id: int | None = None,
     ) -> NumberReviewQueue:
         source_type = "nvoids" if context.source == "nvoids" else "gmail"
         source_row_id = (
@@ -925,6 +1069,7 @@ class PhoneIntelligenceWorkflowService:
             source_email_id=context.recruiter_email_row_id,
             source_external_opportunity_id=context.external_opportunity_row_id,
             source_lead_id=version.id if version else None,
+            target_contact_id=target_contact_id,
             normalized_phone_number=lead.phone_number_normalized,
             display_phone_number=lead.phone_number_display,
             owner_name=lead.owner_name,
@@ -959,6 +1104,7 @@ class PhoneIntelligenceWorkflowService:
         role: str | None,
         reason_code: str,
         source_review: NumberReviewQueue | None = None,
+        target_contact_id: int | None = None,
     ) -> bool:
         conflict_query = db.query(NumberReviewQueue).filter(
             NumberReviewQueue.owner_id == context.owner_id,
@@ -984,6 +1130,7 @@ class PhoneIntelligenceWorkflowService:
                 version,
                 role=role,
                 reason_code=reason_code,
+                target_contact_id=target_contact_id,
             )
             return True
 
@@ -992,6 +1139,7 @@ class PhoneIntelligenceWorkflowService:
             and review.source_external_opportunity_id == context.external_opportunity_row_id
         )
         self._refresh_review(review, context, lead, version)
+        review.target_contact_id = target_contact_id
         review.source_email_id = context.recruiter_email_row_id
         review.source_external_opportunity_id = context.external_opportunity_row_id
         if not same_source:
@@ -1017,6 +1165,7 @@ class PhoneIntelligenceWorkflowService:
             # otherwise collide on the second phone-less contact for this owner.
             normalized_phone_number=lead.phone_number_normalized or None,
             display_phone_number=lead.phone_number_display,
+            phone_extension=lead.phone_extension,
             phone_is_valid=bool(lead.phone_number_normalized),
             first_detected_email_id=context.recruiter_email_row_id,
             source_email_id=context.recruiter_email_row_id,
@@ -1089,6 +1238,7 @@ class PhoneIntelligenceWorkflowService:
             contact_id=contact.id,
             phone_number_normalized=contact.normalized_phone_number or "",
             phone_number_display=contact.display_phone_number,
+            phone_extension=contact.phone_extension,
             role=role,
             extraction_source="legacy_snapshot",
             contact_email=contact.recruiter_email if role == "recruiter" else contact.employer_email,

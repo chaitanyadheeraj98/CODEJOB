@@ -13,6 +13,7 @@ from app.models import (
     NumberReviewQueue,
     OpportunityLifecycleEvent,
     OpportunityLineage,
+    PremiumContactPhone,
     PremiumNumberContact,
     PremiumNumberLead,
     RecruiterEmail,
@@ -41,12 +42,15 @@ def _lead(
     reason: str = "insufficient_signals",
     phone_display: str = "(214) 555-1212",
     phone_normalized: str = "12145551212",
+    phone_extension: str = "",
+    block_id: str = "",
     evidence_text: str = "",
     colocation_verified: bool = False,
 ) -> ExtractedContactGroup:
     return ExtractedContactGroup(
         phone_number_display=phone_display,
         phone_number_normalized=phone_normalized,
+        phone_extension=phone_extension,
         owner_name=owner_name,
         contact_email=contact_email,
         company=company,
@@ -60,6 +64,7 @@ def _lead(
         source_fragment="Call this contact",
         role=role,
         extraction_source="ai",
+        block_id=block_id,
         evidence_text=evidence_text,
         colocation_verified=colocation_verified,
     )
@@ -176,8 +181,251 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
             self.assertEqual(versions, [])
             review = db.query(NumberReviewQueue).one()
             self.assertEqual(review.reason_code, "identity_conflict")
+            self.assertEqual(review.target_contact_id, contact.id)
             self.assertEqual(contact.recruiter_name, "Legacy Name")
             self.assertEqual(db.query(RecruiterOpportunity).count(), 0)
+
+    def test_rescoring_email_after_its_new_number_review_already_resolved_does_not_crash(self) -> None:
+        low_signal = _lead(
+            role="unknown",
+            owner_name="Ashutosh Rath",
+            contact_email="ashutoshr@sysmind.com",
+            company="SysMind LLC",
+            relevance_score=60,
+            relevant=False,
+            reason="external_domain,purpose_negative",
+            phone_display="(640) 261-1081",
+            phone_normalized="16402611081",
+        )
+        with Session(self.engine) as db:
+            email = self._email(db, "resolved-new-number")
+            with patch(
+                "app.services.phone_intelligence_workflow_service.extract_phone_leads",
+                return_value=[low_signal],
+            ):
+                PhoneIntelligenceWorkflowService().capture_premium_numbers(db, email)
+
+            review = db.query(NumberReviewQueue).one()
+            self.assertEqual(review.reason_code, "new_number")
+            # Simulate the review getting resolved through some other route (e.g. Mark as
+            # Recruiter) after the fact - _idempotency_point only checks *pending* reviews,
+            # so a later rescore of the same email/phone no longer finds it there.
+            review.state = "classified_recruiter"
+            db.commit()
+
+            with patch(
+                "app.services.phone_intelligence_workflow_service.extract_phone_leads",
+                return_value=[low_signal],
+            ):
+                PhoneIntelligenceWorkflowService().capture_premium_numbers(db, email)
+
+            self.assertEqual(db.query(NumberReviewQueue).count(), 1)
+
+    def test_shared_switchboard_different_extensions_creates_separate_contacts(self) -> None:
+        with Session(self.engine) as db:
+            saurabh = _lead(
+                role="recruiter",
+                owner_name="Saurabh Chaudhary",
+                contact_email="saurabhc@sysmind.com",
+                company="SysMind",
+                relevance_score=95,
+                relevant=True,
+                reason="external_domain",
+                phone_display="(609) 897-9670 ext 2197",
+                phone_normalized="16098979670",
+                phone_extension="2197",
+            )
+            with patch(
+                "app.services.phone_intelligence_workflow_service.extract_phone_leads",
+                return_value=[saurabh],
+            ):
+                PhoneIntelligenceWorkflowService().capture_premium_numbers(db, self._email(db, "sysmind-1"))
+
+            priyanka = _lead(
+                role="recruiter",
+                owner_name="Priyanka Sinha",
+                contact_email="priyankas@sysmind.com",
+                company="SysMind LLC",
+                relevance_score=95,
+                relevant=True,
+                reason="external_domain",
+                phone_display="(609) 897-9670 ext 2162",
+                phone_normalized="16098979670",
+                phone_extension="2162",
+            )
+            with patch(
+                "app.services.phone_intelligence_workflow_service.extract_phone_leads",
+                return_value=[priyanka],
+            ):
+                PhoneIntelligenceWorkflowService().capture_premium_numbers(db, self._email(db, "sysmind-2"))
+
+            contacts = db.query(PremiumNumberContact).filter(
+                PremiumNumberContact.normalized_phone_number == "16098979670"
+            ).order_by(PremiumNumberContact.id).all()
+            self.assertEqual(len(contacts), 2)
+            self.assertEqual({c.recruiter_name for c in contacts}, {"Saurabh Chaudhary", "Priyanka Sinha"})
+            self.assertEqual({c.phone_extension for c in contacts}, {"2197", "2162"})
+            self.assertEqual(db.query(NumberReviewQueue).filter(NumberReviewQueue.reason_code == "identity_conflict").count(), 0)
+
+    def test_legacy_self_duplicate_secondary_phone_does_not_bypass_extension_check(self) -> None:
+        # The original multi-identifier migration copied every contact's own primary phone
+        # into premium_contact_phones too, with a blank extension (extension tracking didn't
+        # exist yet). That legacy row must not be treated as "a genuinely different secondary
+        # number, extension doesn't matter" - live proof: contact 49 (Saurabh, ext 2197) had
+        # exactly this leftover row and it kept swallowing Priyanka's ext-2162 lead into an
+        # identity_conflict against him instead of her own already-split contact.
+        with Session(self.engine) as db:
+            saurabh = PremiumNumberContact(
+                owner_id="default-owner",
+                normalized_phone_number="16098979670",
+                display_phone_number="(609) 897-9670 ext 2197",
+                phone_extension="2197",
+                is_recruiter=True,
+                recruiter_name="Saurabh Chaudhary",
+                company="SYSMIND, LLC",
+                recruiter_email="saurabhc@sysmind.com",
+            )
+            db.add(saurabh)
+            db.commit()
+            db.add(
+                PremiumContactPhone(
+                    owner_id="default-owner",
+                    premium_contact_id=saurabh.id,
+                    normalized_phone_number="16098979670",
+                    phone_extension="",
+                    is_primary=True,
+                    is_verified=True,
+                    source="migration",
+                )
+            )
+            db.commit()
+
+            priyanka = _lead(
+                role="recruiter",
+                owner_name="Priyanka Sinha",
+                contact_email="priyankas@sysmind.com",
+                company="SysMind LLC",
+                relevance_score=95,
+                relevant=True,
+                reason="external_domain",
+                phone_display="(609) 897-9670 ext 2162",
+                phone_normalized="16098979670",
+                phone_extension="2162",
+            )
+            with patch(
+                "app.services.phone_intelligence_workflow_service.extract_phone_leads",
+                return_value=[priyanka],
+            ):
+                PhoneIntelligenceWorkflowService().capture_premium_numbers(db, self._email(db, "sysmind-legacy-dup"))
+
+            self.assertEqual(db.query(NumberReviewQueue).filter(NumberReviewQueue.reason_code == "identity_conflict").count(), 0)
+            priyanka_contact = db.query(PremiumNumberContact).filter(
+                PremiumNumberContact.recruiter_email == "priyankas@sysmind.com"
+            ).one()
+            self.assertEqual(priyanka_contact.phone_extension, "2162")
+            self.assertNotEqual(priyanka_contact.id, saurabh.id)
+
+    def test_two_numbers_in_one_signature_block_resolve_to_one_contact(self) -> None:
+        cell = _lead(
+            role="recruiter",
+            owner_name="Priyanka Sinha",
+            contact_email="priyankas@sysmind.com",
+            company="SysMind LLC",
+            relevance_score=95,
+            relevant=True,
+            reason="external_domain",
+            phone_display="(609) 897-9670 ext 2162",
+            phone_normalized="16098979670",
+            phone_extension="2162",
+            block_id="sig-1",
+        )
+        direct = _lead(
+            role="recruiter",
+            owner_name="Priyanka Sinha",
+            contact_email="priyankas@sysmind.com",
+            company="SysMind LLC",
+            relevance_score=95,
+            relevant=True,
+            reason="external_domain",
+            phone_display="(640) 261-1080",
+            phone_normalized="16402611080",
+            block_id="sig-1",
+        )
+        with Session(self.engine) as db:
+            with patch(
+                "app.services.phone_intelligence_workflow_service.extract_phone_leads",
+                return_value=[cell, direct],
+            ):
+                PhoneIntelligenceWorkflowService().capture_premium_numbers(db, self._email(db, "priyanka-both-numbers"))
+
+            contacts = db.query(PremiumNumberContact).filter(
+                PremiumNumberContact.recruiter_email == "priyankas@sysmind.com"
+            ).all()
+            self.assertEqual(len(contacts), 1)
+            contact = contacts[0]
+            self.assertEqual(contact.normalized_phone_number, "16098979670")
+            secondary = db.query(PremiumContactPhone).filter(
+                PremiumContactPhone.premium_contact_id == contact.id
+            ).all()
+            self.assertEqual([row.normalized_phone_number for row in secondary], ["16402611080"])
+
+    def test_second_number_in_signature_block_does_not_orphan_when_first_number_conflicts(self) -> None:
+        with Session(self.engine) as db:
+            existing = PremiumNumberContact(
+                owner_id="default-owner",
+                normalized_phone_number="16098979670",
+                display_phone_number="(609) 897-9670",
+                is_recruiter=True,
+                recruiter_name="Saurabh Chaudhary",
+                company="SYSMIND, LLC",
+                recruiter_email="saurabhc@sysmind.com",
+                recruiter_verification_level="verified",
+            )
+            db.add(existing)
+            db.commit()
+
+            cell = _lead(
+                role="recruiter",
+                owner_name="Priyanka Sinha",
+                contact_email="priyankas@sysmind.com",
+                company="SysMind LLC",
+                relevance_score=95,
+                relevant=True,
+                reason="external_domain",
+                phone_display="(609) 897-9670",
+                phone_normalized="16098979670",
+                block_id="sig-2",
+            )
+            direct = _lead(
+                role="recruiter",
+                owner_name="Priyanka Sinha",
+                contact_email="priyankas@sysmind.com",
+                company="SysMind LLC",
+                relevance_score=95,
+                relevant=True,
+                reason="external_domain",
+                phone_display="(640) 261-1080",
+                phone_normalized="16402611080",
+                block_id="sig-2",
+            )
+            with patch(
+                "app.services.phone_intelligence_workflow_service.extract_phone_leads",
+                return_value=[cell, direct],
+            ):
+                PhoneIntelligenceWorkflowService().capture_premium_numbers(db, self._email(db, "priyanka-conflict-both-numbers"))
+
+            # Both numbers belong to the same signature block that collided with Saurabh's
+            # verified contact - neither should silently promote into its own orphaned
+            # contact just because ITS OWN phone alone didn't hit the conflict.
+            self.assertEqual(
+                db.query(PremiumNumberContact).filter(
+                    PremiumNumberContact.recruiter_email == "priyankas@sysmind.com"
+                ).count(),
+                0,
+            )
+            reviews = db.query(NumberReviewQueue).filter(NumberReviewQueue.reason_code == "identity_conflict").all()
+            self.assertEqual({r.normalized_phone_number for r in reviews}, {"16098979670", "16402611080"})
+            self.assertTrue(all(r.target_contact_id == existing.id for r in reviews))
 
     def test_legacy_snapshot_created_on_first_new_version(self) -> None:
         """temp122.md `## 7. Workstream D` cutover behavior: the first new-model
@@ -261,7 +509,9 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
             self.assertTrue(contact.is_recruiter)
             self.assertFalse(contact.is_employer)
             self.assertIsNone(contact.active_employer_lead_id)
-            self.assertEqual(db.query(NumberReviewQueue).one().reason_code, "insufficient_evidence")
+            review = db.query(NumberReviewQueue).one()
+            self.assertEqual(review.reason_code, "insufficient_evidence")
+            self.assertEqual(review.target_contact_id, contact.id)
 
     def test_nvoids_uncertain_lead_lands_in_needs_review_with_row2_email(self) -> None:
         with Session(self.engine) as db:
@@ -1496,6 +1746,7 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
             review = db.query(NumberReviewQueue).one()
             self.assertEqual(review.reason_code, "identity_conflict")
             self.assertEqual(review.occurrence_count, 2)
+            self.assertEqual(review.target_contact_id, contact.id)
             db.refresh(contact)
             self.assertEqual(contact.recruiter_name, "Existing Name")
 

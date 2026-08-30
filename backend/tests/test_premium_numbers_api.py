@@ -17,6 +17,8 @@ from app.models import (
     NumberReviewQueue,
     OpportunityLifecycleEvent,
     OpportunityLineage,
+    PremiumContactEmail,
+    PremiumContactPhone,
     PremiumNumberContact,
     PremiumNumberExtractionAudit,
     PremiumNumberLead,
@@ -1510,6 +1512,166 @@ class PremiumNumbersApiTests(unittest.TestCase):
         with Session(self.engine) as db:
             self.assertIsNotNone(db.get(PremiumNumberLead, only_id))
 
+    def test_delete_older_versions_keeps_active_and_deletes_the_rest(self) -> None:
+        with Session(self.engine) as db:
+            contact = PremiumNumberContact(
+                owner_id=main.settings.owner_id,
+                normalized_phone_number="12145550104",
+                display_phone_number="(214) 555-0104",
+                is_recruiter=True,
+                recruiter_name="Fresh Name",
+            )
+            db.add(contact)
+            db.flush()
+            fresh = PremiumNumberLead(
+                owner_id=main.settings.owner_id, contact_id=contact.id,
+                phone_number_normalized=contact.normalized_phone_number, phone_number_display=contact.display_phone_number,
+                role="recruiter", owner_name="Fresh Name", company="Fresh Co",
+            )
+            older_one = PremiumNumberLead(
+                owner_id=main.settings.owner_id, contact_id=contact.id,
+                phone_number_normalized=contact.normalized_phone_number, phone_number_display=contact.display_phone_number,
+                role="recruiter", owner_name="Older Name", company="Older Co",
+            )
+            older_two = PremiumNumberLead(
+                owner_id=main.settings.owner_id, contact_id=contact.id,
+                phone_number_normalized=contact.normalized_phone_number, phone_number_display=contact.display_phone_number,
+                role="recruiter", owner_name="Oldest Name", company="Oldest Co",
+            )
+            db.add_all([fresh, older_one, older_two])
+            db.flush()
+            contact.active_recruiter_lead_id = fresh.id
+            db.commit()
+            contact_id, fresh_id, older_one_id, older_two_id = contact.id, fresh.id, older_one.id, older_two.id
+
+        pruned = self.client.delete(f"/recruiter-numbers/{contact_id}/versions")
+        self.assertEqual(pruned.status_code, 200, pruned.text)
+        self.assertEqual(pruned.json()["deleted_count"], 2)
+        with Session(self.engine) as db:
+            contact = db.get(PremiumNumberContact, contact_id)
+            self.assertEqual(contact.active_recruiter_lead_id, fresh_id)
+            self.assertIsNotNone(db.get(PremiumNumberLead, fresh_id))
+            self.assertIsNone(db.get(PremiumNumberLead, older_one_id))
+            self.assertIsNone(db.get(PremiumNumberLead, older_two_id))
+
+        no_op = self.client.delete(f"/recruiter-numbers/{contact_id}/versions")
+        self.assertEqual(no_op.status_code, 200, no_op.text)
+        self.assertEqual(no_op.json()["deleted_count"], 0)
+
+    def test_delete_older_versions_protects_both_active_leads_on_a_dual_role_contact(self) -> None:
+        with Session(self.engine) as db:
+            contact = PremiumNumberContact(
+                owner_id=main.settings.owner_id,
+                normalized_phone_number="12145550105",
+                display_phone_number="(214) 555-0105",
+                is_recruiter=True,
+                is_employer=True,
+                recruiter_name="Dual Recruiter",
+                owner_name="Dual Employer",
+            )
+            db.add(contact)
+            db.flush()
+            recruiter_lead = PremiumNumberLead(
+                owner_id=main.settings.owner_id, contact_id=contact.id,
+                phone_number_normalized=contact.normalized_phone_number, phone_number_display=contact.display_phone_number,
+                role="recruiter", owner_name="Dual Recruiter", company="Recruiter Co",
+            )
+            employer_lead = PremiumNumberLead(
+                owner_id=main.settings.owner_id, contact_id=contact.id,
+                phone_number_normalized=contact.normalized_phone_number, phone_number_display=contact.display_phone_number,
+                role="employer", owner_name="Dual Employer", company="Employer Co",
+            )
+            stale_lead = PremiumNumberLead(
+                owner_id=main.settings.owner_id, contact_id=contact.id,
+                phone_number_normalized=contact.normalized_phone_number, phone_number_display=contact.display_phone_number,
+                role="recruiter", owner_name="Stale Name", company="Stale Co",
+            )
+            db.add_all([recruiter_lead, employer_lead, stale_lead])
+            db.flush()
+            contact.active_recruiter_lead_id = recruiter_lead.id
+            contact.active_employer_lead_id = employer_lead.id
+            db.commit()
+            contact_id, recruiter_lead_id, employer_lead_id, stale_lead_id = contact.id, recruiter_lead.id, employer_lead.id, stale_lead.id
+
+        pruned = self.client.delete(f"/employer-numbers/{contact_id}/versions")
+        self.assertEqual(pruned.status_code, 200, pruned.text)
+        self.assertEqual(pruned.json()["deleted_count"], 1)
+        with Session(self.engine) as db:
+            self.assertIsNotNone(db.get(PremiumNumberLead, recruiter_lead_id))
+            self.assertIsNotNone(db.get(PremiumNumberLead, employer_lead_id))
+            self.assertIsNone(db.get(PremiumNumberLead, stale_lead_id))
+
+    def test_source_lead_id_fk_is_set_null_on_delete_not_blocking(self) -> None:
+        (foreign_key,) = NumberReviewQueue.__table__.c.source_lead_id.foreign_keys
+        self.assertEqual(foreign_key.ondelete, "SET NULL")
+
+    def test_deleting_a_version_referenced_by_a_review_nulls_the_pointer_instead_of_failing(self) -> None:
+        with Session(self.engine) as db:
+            contact = PremiumNumberContact(
+                owner_id=main.settings.owner_id,
+                normalized_phone_number="12145550106",
+                display_phone_number="(214) 555-0106",
+                is_employer=True,
+                owner_name="Active Name",
+            )
+            db.add(contact)
+            db.flush()
+            active = PremiumNumberLead(
+                owner_id=main.settings.owner_id, contact_id=contact.id,
+                phone_number_normalized=contact.normalized_phone_number, phone_number_display=contact.display_phone_number,
+                role="employer", owner_name="Active Name", company="Active Co",
+            )
+            referenced = PremiumNumberLead(
+                owner_id=main.settings.owner_id, contact_id=contact.id,
+                phone_number_normalized=contact.normalized_phone_number, phone_number_display=contact.display_phone_number,
+                role="employer", owner_name="Older Name", company="Older Co",
+            )
+            db.add_all([active, referenced])
+            db.flush()
+            contact.active_employer_lead_id = active.id
+            review = NumberReviewQueue(
+                owner_id=main.settings.owner_id,
+                source_lead_id=referenced.id,
+                normalized_phone_number=contact.normalized_phone_number,
+                display_phone_number=contact.display_phone_number,
+                owner_name="Older Name",
+                company="Older Co",
+                designation="Unknown",
+                confidence="low",
+                purpose="Unknown",
+                evidence_snippet="",
+                email_subject="",
+                email_sender="",
+                gmail_open_url="",
+                state="classified_employer",
+            )
+            db.add(review)
+            db.commit()
+            contact_id, referenced_id, review_id = contact.id, referenced.id, review.id
+
+        is_sqlite = self.engine.dialect.name == "sqlite"
+
+        def set_fk_pragma(value: str) -> None:
+            with self.engine.connect() as connection:
+                connection.exec_driver_sql(f"PRAGMA foreign_keys={value}")
+                connection.commit()
+
+        if is_sqlite:
+            set_fk_pragma("ON")
+        try:
+            pruned = self.client.delete(f"/employer-numbers/{contact_id}/versions")
+            self.assertEqual(pruned.status_code, 200, pruned.text)
+            self.assertEqual(pruned.json()["deleted_count"], 1)
+            with Session(self.engine) as db:
+                self.assertIsNone(db.get(PremiumNumberLead, referenced_id))
+                review = db.get(NumberReviewQueue, review_id)
+                self.assertIsNotNone(review)
+                self.assertIsNone(review.source_lead_id)
+                self.assertEqual(review.company, "Older Co")
+        finally:
+            if is_sqlite:
+                set_fk_pragma("OFF")
+
     def test_patch_recruiter_number_updates_manual_fields(self) -> None:
         with Session(self.engine) as db:
             contact = RecruiterNumber(
@@ -2170,6 +2332,204 @@ class PremiumNumbersApiTests(unittest.TestCase):
                 1,
             )
 
+    def test_deleted_contacts_list_restore_and_bulk_restore(self) -> None:
+        now = datetime.now(UTC)
+        with Session(self.engine) as db:
+            active = RecruiterNumber(
+                owner_id=main.settings.owner_id,
+                normalized_phone_number="12145550505",
+                display_phone_number="+1 (214) 555-0505",
+                recruiter_name="Active Recruiter",
+                company="Agency",
+                designation="Recruiter",
+                recruiter_email="active@agency.example",
+                created_at=now,
+                updated_at=now,
+            )
+            deleted_one = RecruiterNumber(
+                owner_id=main.settings.owner_id,
+                normalized_phone_number="12145550606",
+                display_phone_number="+1 (214) 555-0606",
+                recruiter_name="Deleted Recruiter One",
+                company="Agency",
+                designation="Recruiter",
+                recruiter_email="deleted1@agency.example",
+                created_at=now,
+                updated_at=now,
+                deleted_at=now,
+            )
+            deleted_two = RecruiterNumber(
+                owner_id=main.settings.owner_id,
+                normalized_phone_number="12145550707",
+                display_phone_number="+1 (214) 555-0707",
+                recruiter_name="Deleted Recruiter Two",
+                company="Agency",
+                designation="Recruiter",
+                recruiter_email="deleted2@agency.example",
+                created_at=now,
+                updated_at=now,
+                deleted_at=now,
+            )
+            foreign_deleted = RecruiterNumber(
+                owner_id="another-owner",
+                normalized_phone_number="12145550808",
+                display_phone_number="+1 (214) 555-0808",
+                recruiter_name="Foreign Deleted",
+                company="Agency",
+                designation="Recruiter",
+                recruiter_email="foreign@agency.example",
+                created_at=now,
+                updated_at=now,
+                deleted_at=now,
+            )
+            db.add_all([active, deleted_one, deleted_two, foreign_deleted])
+            db.commit()
+            active_id, deleted_one_id, deleted_two_id = active.id, deleted_one.id, deleted_two.id
+
+        listing = self.client.get("/premium-numbers/deleted-contacts")
+        self.assertEqual(listing.status_code, 200, listing.text)
+        payload = listing.json()
+        self.assertEqual(payload["total"], 2)
+        returned_ids = {item["id"] for item in payload["items"]}
+        self.assertEqual(returned_ids, {deleted_one_id, deleted_two_id})
+        self.assertNotIn(active_id, returned_ids)
+
+        restored = self.client.post(f"/premium-numbers/contacts/{deleted_one_id}/restore")
+        self.assertEqual(restored.status_code, 200, restored.text)
+        self.assertEqual(restored.json()["status"], "restored")
+        with Session(self.engine) as db:
+            self.assertIsNone(db.get(PremiumNumberContact, deleted_one_id).deleted_at)
+
+        already_restored = self.client.post(f"/premium-numbers/contacts/{deleted_one_id}/restore")
+        self.assertEqual(already_restored.status_code, 404)
+
+        bulk = self.client.post(
+            "/premium-numbers/contacts/bulk-restore",
+            json={"contact_ids": [deleted_two_id, deleted_one_id, 999999]},
+        )
+        self.assertEqual(bulk.status_code, 200, bulk.text)
+        self.assertEqual(
+            {item["contact_id"]: item["status"] for item in bulk.json()["results"]},
+            {deleted_two_id: "restored", deleted_one_id: "not_found", 999999: "not_found"},
+        )
+        with Session(self.engine) as db:
+            self.assertIsNone(db.get(PremiumNumberContact, deleted_two_id).deleted_at)
+
+        final_listing = self.client.get("/premium-numbers/deleted-contacts")
+        self.assertEqual(final_listing.json()["total"], 0)
+
+    def test_purge_permanently_removes_a_deleted_contact_and_its_owned_children(self) -> None:
+        now = datetime.now(UTC)
+        with Session(self.engine) as db:
+            active = RecruiterNumber(
+                owner_id=main.settings.owner_id,
+                normalized_phone_number="12145550909",
+                display_phone_number="+1 (214) 555-0909",
+                recruiter_name="Active Recruiter",
+                company="Agency",
+                designation="Recruiter",
+                recruiter_email="active2@agency.example",
+                created_at=now,
+                updated_at=now,
+            )
+            db.add(active)
+            db.flush()
+            not_deleted_id = active.id
+
+            purgeable = RecruiterNumber(
+                owner_id=main.settings.owner_id,
+                normalized_phone_number="12145551010",
+                display_phone_number="+1 (214) 555-1010",
+                recruiter_name="Purgeable Recruiter",
+                company="Agency",
+                designation="Recruiter",
+                recruiter_email="purgeable@agency.example",
+                created_at=now,
+                updated_at=now,
+                deleted_at=now,
+            )
+            db.add(purgeable)
+            db.flush()
+            purgeable_id = purgeable.id
+            db.add(
+                PremiumNumberLead(
+                    owner_id=main.settings.owner_id,
+                    contact_id=purgeable_id,
+                    phone_number_normalized="12145551010",
+                    phone_number_display="+1 (214) 555-1010",
+                    role="recruiter",
+                    contact_email="purgeable@agency.example",
+                    owner_name="Purgeable Recruiter",
+                    company="Agency",
+                )
+            )
+            db.add(
+                PremiumContactEmail(
+                    owner_id=main.settings.owner_id,
+                    premium_contact_id=purgeable_id,
+                    normalized_email="purgeable@agency.example",
+                    domain="agency.example",
+                    is_primary=True,
+                    created_at=now,
+                )
+            )
+            db.add(
+                PremiumContactPhone(
+                    owner_id=main.settings.owner_id,
+                    premium_contact_id=purgeable_id,
+                    normalized_phone_number="12145551010",
+                    is_primary=True,
+                    is_verified=True,
+                    created_at=now,
+                )
+            )
+            db.add(
+                RecruiterOpportunity(
+                    owner_id=main.settings.owner_id,
+                    recruiter_number_id=purgeable_id,
+                    source_email_id=None,
+                    gmail_message_id="purge-opportunity",
+                    source_type="gmail",
+                    email_subject="Role",
+                    email_sender="purgeable@agency.example",
+                    gmail_open_url="",
+                    job_title="Engineer",
+                    end_client="Client",
+                    location="Remote",
+                    work_mode="Remote",
+                    visa_restrictions="",
+                    extracted_skills="Python",
+                    evidence="",
+                    status="New",
+                    notes="",
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            db.commit()
+
+        blocked = self.client.post(f"/premium-numbers/contacts/{not_deleted_id}/purge")
+        self.assertEqual(blocked.status_code, 404)
+
+        purged = self.client.post(f"/premium-numbers/contacts/{purgeable_id}/purge")
+        self.assertEqual(purged.status_code, 200, purged.text)
+        self.assertEqual(purged.json()["status"], "purged")
+
+        with Session(self.engine) as db:
+            self.assertIsNone(db.get(PremiumNumberContact, purgeable_id))
+            self.assertEqual(db.query(PremiumNumberLead).filter(PremiumNumberLead.contact_id == purgeable_id).count(), 0)
+            self.assertEqual(db.query(PremiumContactEmail).filter(PremiumContactEmail.premium_contact_id == purgeable_id).count(), 0)
+            self.assertEqual(db.query(PremiumContactPhone).filter(PremiumContactPhone.premium_contact_id == purgeable_id).count(), 0)
+            # Not FK-enforced, and read elsewhere as optional (recruiter=None) - left in place
+            # rather than cascaded, since the opportunity itself still has historical value.
+            self.assertEqual(
+                db.query(RecruiterOpportunity).filter(RecruiterOpportunity.recruiter_number_id == purgeable_id).count(),
+                1,
+            )
+
+        second_attempt = self.client.post(f"/premium-numbers/contacts/{purgeable_id}/purge")
+        self.assertEqual(second_attempt.status_code, 404)
+
     def test_bulk_role_change_and_pending_count(self) -> None:
         now = datetime.now(UTC)
         with Session(self.engine) as db:
@@ -2220,6 +2580,41 @@ class PremiumNumbersApiTests(unittest.TestCase):
             changed = db.get(PremiumNumberContact, contact_id)
             self.assertTrue(changed.is_recruiter)
             self.assertTrue(changed.is_employer)
+
+    def test_unmark_role_removes_it_but_blocks_removing_the_only_role(self) -> None:
+        now = datetime.now(UTC)
+        with Session(self.engine) as db:
+            contact = EmployerNumber(
+                owner_id=main.settings.owner_id,
+                normalized_phone_number="12145550909",
+                display_phone_number="+1 (214) 555-0909",
+                owner_name="Hiring Desk",
+                company="Employer",
+                source_type="gmail",
+                source_id=45,
+                created_at=now,
+                updated_at=now,
+            )
+            db.add(contact)
+            db.commit()
+            contact_id = contact.id
+
+        only_role = self.client.post(f"/employer-numbers/{contact_id}/unmark")
+        self.assertEqual(only_role.status_code, 422)
+
+        mark = self.client.post("/employer-numbers/bulk-mark-recruiter", json={"contact_ids": [contact_id]})
+        self.assertEqual(mark.status_code, 200, mark.text)
+
+        unmark = self.client.post(f"/recruiter-numbers/{contact_id}/unmark")
+        self.assertEqual(unmark.status_code, 200, unmark.text)
+        self.assertEqual(unmark.json()["status"], "unmarked_recruiter")
+        with Session(self.engine) as db:
+            changed = db.get(PremiumNumberContact, contact_id)
+            self.assertFalse(changed.is_recruiter)
+            self.assertTrue(changed.is_employer)
+
+        not_recruiter_anymore = self.client.post(f"/recruiter-numbers/{contact_id}/unmark")
+        self.assertEqual(not_recruiter_anymore.status_code, 404)
 
     def test_bulk_contact_rescore_uses_stored_gmail_source_and_bumps_last_checked(self) -> None:
         now = datetime.now(UTC)

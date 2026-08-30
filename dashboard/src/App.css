@@ -3038,6 +3038,10 @@ button.emailSearchResult:focus-visible {
   animation: action-toast-in 160ms ease-out;
 }
 
+.actionToast--error {
+  background: var(--danger);
+}
+
 @keyframes action-toast-in {
   from {
     opacity: 0;
@@ -3369,6 +3373,12 @@ button.emailSearchResult:focus-visible {
 .inventoryMenuCell {
   width: 40px;
   position: relative;
+}
+
+.recycleBinRowActions {
+  display: flex;
+  gap: 8px;
+  white-space: nowrap;
 }
 
 .inventoryMenu summary {

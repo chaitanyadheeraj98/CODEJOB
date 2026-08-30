@@ -4958,6 +4958,136 @@ def list_premium_number_inventory(
     return PremiumNumberInventoryListResponse(items=items,next_cursor=cursor+limit if len(rows)>limit else None,has_next=len(rows)>limit,total=total)
 
 
+@app.get("/premium-numbers/deleted-contacts", response_model=PremiumNumberInventoryListResponse)
+def list_deleted_premium_contacts(
+    cursor: int = Query(0, ge=0), limit: int = Query(25, ge=1, le=100), q: str | None = Query(default=None, max_length=255),
+    sort: str = Query("newest"),
+    date_filter: str | None = Query(default=None), date_from: date | None = Query(default=None), date_to: date | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> PremiumNumberInventoryListResponse:
+    if sort not in {"newest", "oldest"}:
+        raise HTTPException(status_code=422, detail="Invalid sort. Must be one of: newest, oldest")
+    owner = settings.owner_id
+    query = db.query(PremiumNumberContact).filter(
+        PremiumNumberContact.owner_id == owner,
+        PremiumNumberContact.deleted_at.is_not(None),
+    )
+    if date_filter:
+        start, end = _date_range_utc_window(date_filter, date_from, date_to)
+        query = query.filter(PremiumNumberContact.deleted_at >= start, PremiumNumberContact.deleted_at < end)
+    if q and q.strip():
+        like = f"%{q.strip()}%"
+        digits_only = re.sub(r"\D", "", q)
+        phone_filters = [PremiumNumberContact.display_phone_number.ilike(like)]
+        if digits_only:
+            phone_filters.append(PremiumNumberContact.normalized_phone_number.ilike(f"%{digits_only}%"))
+        query = query.filter(
+            or_(
+                *phone_filters,
+                PremiumNumberContact.recruiter_name.ilike(like),
+                PremiumNumberContact.owner_name.ilike(like),
+                PremiumNumberContact.company.ilike(like),
+            )
+        )
+    total = query.count()
+    order = PremiumNumberContact.deleted_at.asc() if sort == "oldest" else PremiumNumberContact.deleted_at.desc()
+    rows = query.order_by(order, PremiumNumberContact.id.desc()).offset(cursor).limit(limit + 1).all()
+    visible = rows[:limit]
+    employer_domains = employer_domains_for_owner(db, owner) if any(row.is_recruiter for row in visible) else set()
+    items = [
+        PremiumNumberInventoryItemResponse(
+            key=f"contact:{row.id}",
+            kind="contact",
+            id=row.id,
+            number=row.display_phone_number,
+            owner=(row.recruiter_name if row.is_recruiter else row.owner_name) or "Unknown",
+            company=row.company or "Unknown",
+            categories=_contact_categories(row),
+            status="Unscored" if row.normalized_phone_number is None else _contact_status(row),
+            score=_contact_source_fields(db, row, "recruiter" if row.is_recruiter else "employer")[5],
+            sourceType=row.source_type if row.source_type in {"gmail", "nvoids"} else None,
+            lastCheckedAt=row.deleted_at,
+            recruiter=_recruiter_number_response(db, row, employer_domains) if row.is_recruiter else None,
+            employer=_employer_number_response(db, row) if row.is_employer else None,
+        )
+        for row in visible
+    ]
+    return PremiumNumberInventoryListResponse(items=items, next_cursor=cursor + limit if len(rows) > limit else None, has_next=len(rows) > limit, total=total)
+
+
+@app.post("/premium-numbers/contacts/{contact_id}/restore", response_model=dict[str, int | str])
+def restore_premium_contact(contact_id: int, db: Session = Depends(get_db)) -> dict[str, int | str]:
+    contact = db.query(PremiumNumberContact).filter(
+        PremiumNumberContact.owner_id == settings.owner_id,
+        PremiumNumberContact.id == contact_id,
+        PremiumNumberContact.deleted_at.is_not(None),
+    ).first()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Deleted contact not found")
+    contact.deleted_at = None
+    db.commit()
+    return {"id": contact_id, "status": "restored"}
+
+
+def _restore_contact(db: Session, contact_id: int) -> str:
+    contact = db.query(PremiumNumberContact).filter(
+        PremiumNumberContact.owner_id == settings.owner_id,
+        PremiumNumberContact.id == contact_id,
+        PremiumNumberContact.deleted_at.is_not(None),
+    ).first()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Deleted contact not found")
+    contact.deleted_at = None
+    db.commit()
+    return "restored"
+
+
+@app.post("/premium-numbers/contacts/bulk-restore", response_model=BulkContactActionResponse)
+def bulk_restore_premium_contacts(
+    payload: BulkContactActionRequest,
+    db: Session = Depends(get_db),
+) -> BulkContactActionResponse:
+    return _bulk_contact_response(db, payload.contact_ids, _restore_contact)
+
+
+def _purge_contact(db: Session, contact_id: int) -> str:
+    # Only ever called on a contact that's already soft-deleted (Recycle Bin only) - this
+    # is the one irreversible step, so it requires that prior confirmation to have happened.
+    contact = db.query(PremiumNumberContact).filter(
+        PremiumNumberContact.owner_id == settings.owner_id,
+        PremiumNumberContact.id == contact_id,
+        PremiumNumberContact.deleted_at.is_not(None),
+    ).first()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Deleted contact not found")
+    # premium_number_leads/premium_contact_emails/premium_contact_phones have real FK
+    # constraints on this contact and must go first. recruiter_opportunities,
+    # number_review_queue, and contact_identity_actions reference the id without a DB-level
+    # FK (already handled as optional everywhere they're read, e.g.
+    # _recruiter_opportunity_response's `recruiter: PremiumNumberContact | None`), so those
+    # rows are left in place - they still carry their own historical value.
+    db.query(PremiumNumberLead).filter(PremiumNumberLead.contact_id == contact_id).delete(synchronize_session=False)
+    db.query(PremiumContactEmail).filter(PremiumContactEmail.premium_contact_id == contact_id).delete(synchronize_session=False)
+    db.query(PremiumContactPhone).filter(PremiumContactPhone.premium_contact_id == contact_id).delete(synchronize_session=False)
+    db.delete(contact)
+    db.commit()
+    return "purged"
+
+
+@app.post("/premium-numbers/contacts/{contact_id}/purge", response_model=dict[str, int | str])
+def purge_premium_contact(contact_id: int, db: Session = Depends(get_db)) -> dict[str, int | str]:
+    status = _purge_contact(db, contact_id)
+    return {"id": contact_id, "status": status}
+
+
+@app.post("/premium-numbers/contacts/bulk-purge", response_model=BulkContactActionResponse)
+def bulk_purge_premium_contacts(
+    payload: BulkContactActionRequest,
+    db: Session = Depends(get_db),
+) -> BulkContactActionResponse:
+    return _bulk_contact_response(db, payload.contact_ids, _purge_contact)
+
+
 @app.post("/premium-numbers/contacts")
 def create_premium_contact(
     payload: ManualPremiumContactRequest,
@@ -5906,6 +6036,46 @@ def patch_employer_number(
     return _employer_number_response(db, contact)
 
 
+@app.get("/recruiter-numbers/{recruiter_number_id}", response_model=RecruiterNumberResponse)
+def get_recruiter_number(
+    recruiter_number_id: int,
+    db: Session = Depends(get_db),
+) -> RecruiterNumberResponse:
+    contact = (
+        db.query(PremiumNumberContact)
+        .filter(
+            PremiumNumberContact.owner_id == settings.owner_id,
+            PremiumNumberContact.id == recruiter_number_id,
+            PremiumNumberContact.is_recruiter.is_(True),
+            PremiumNumberContact.deleted_at.is_(None),
+        )
+        .first()
+    )
+    if not contact:
+        raise HTTPException(status_code=404, detail="Recruiter number not found")
+    return _recruiter_number_response(db, contact)
+
+
+@app.get("/employer-numbers/{employer_number_id}", response_model=EmployerNumberResponse)
+def get_employer_number(
+    employer_number_id: int,
+    db: Session = Depends(get_db),
+) -> EmployerNumberResponse:
+    contact = (
+        db.query(PremiumNumberContact)
+        .filter(
+            PremiumNumberContact.owner_id == settings.owner_id,
+            PremiumNumberContact.id == employer_number_id,
+            PremiumNumberContact.is_employer.is_(True),
+            PremiumNumberContact.deleted_at.is_(None),
+        )
+        .first()
+    )
+    if not contact:
+        raise HTTPException(status_code=404, detail="Employer number not found")
+    return _employer_number_response(db, contact)
+
+
 @app.get("/recruiter-numbers/{contact_id}/versions", response_model=list[PremiumNumberResponse])
 def list_recruiter_number_versions(
     contact_id: int,
@@ -5992,6 +6162,32 @@ def _add_recruiter_role(db: Session, contact: PremiumNumberContact) -> None:
             apply_contact_version(db, contact, lead, "recruiter", overwrite=True)
     contact.phone_is_valid = bool(canonicalize_phone(contact.normalized_phone_number) or canonicalize_phone(contact.display_phone_number))
     contact.updated_at = datetime.now(UTC)
+
+
+def _remove_contact_role(db: Session, contact_id: int, role: str) -> str:
+    contact = _contact_for_bulk_action(db, contact_id, role)
+    other_role_present = contact.is_employer if role == "recruiter" else contact.is_recruiter
+    if not other_role_present:
+        raise HTTPException(status_code=422, detail="Cannot remove a contact's only role")
+    if role == "recruiter":
+        contact.is_recruiter = False
+    else:
+        contact.is_employer = False
+    contact.updated_at = datetime.now(UTC)
+    db.commit()
+    return f"unmarked_{role}"
+
+
+@app.post("/recruiter-numbers/{contact_id}/unmark", response_model=dict[str, int | str])
+def unmark_recruiter_number(contact_id: int, db: Session = Depends(get_db)) -> dict[str, int | str]:
+    status = _remove_contact_role(db, contact_id, "recruiter")
+    return {"id": contact_id, "status": status}
+
+
+@app.post("/employer-numbers/{contact_id}/unmark", response_model=dict[str, int | str])
+def unmark_employer_number(contact_id: int, db: Session = Depends(get_db)) -> dict[str, int | str]:
+    status = _remove_contact_role(db, contact_id, "employer")
+    return {"id": contact_id, "status": status}
 
 
 @app.post("/recruiter-numbers/{contact_id}/select-version/{lead_id}", response_model=dict[str, int | str])
@@ -6179,6 +6375,32 @@ def delete_employer_number_version(
 ) -> dict[str, int | str]:
     _delete_contact_version(db, contact_id, lead_id, "employer")
     return {"id": contact_id, "deleted_lead_id": lead_id, "status": "version_deleted"}
+
+
+def _delete_older_contact_versions(db: Session, contact_id: int, role: str) -> int:
+    contact = _contact_for_bulk_action(db, contact_id, role)
+    keep_ids = {contact.active_recruiter_lead_id, contact.active_employer_lead_id} - {None}
+    query = db.query(PremiumNumberLead).filter(
+        PremiumNumberLead.owner_id == settings.owner_id,
+        PremiumNumberLead.contact_id == contact_id,
+    )
+    if keep_ids:
+        query = query.filter(PremiumNumberLead.id.notin_(keep_ids))
+    count = query.delete(synchronize_session=False)
+    db.commit()
+    return count
+
+
+@app.delete("/recruiter-numbers/{contact_id}/versions", response_model=dict[str, int | str])
+def delete_older_recruiter_number_versions(contact_id: int, db: Session = Depends(get_db)) -> dict[str, int | str]:
+    count = _delete_older_contact_versions(db, contact_id, "recruiter")
+    return {"id": contact_id, "deleted_count": count, "status": "versions_pruned"}
+
+
+@app.delete("/employer-numbers/{contact_id}/versions", response_model=dict[str, int | str])
+def delete_older_employer_number_versions(contact_id: int, db: Session = Depends(get_db)) -> dict[str, int | str]:
+    count = _delete_older_contact_versions(db, contact_id, "employer")
+    return {"id": contact_id, "deleted_count": count, "status": "versions_pruned"}
 
 
 def _contact_for_bulk_action(db: Session, contact_id: int, role: str) -> PremiumNumberContact:

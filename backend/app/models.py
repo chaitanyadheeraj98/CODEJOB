@@ -569,6 +569,7 @@ class PremiumNumberLead(Base):
     )
     phone_number_normalized: Mapped[str] = mapped_column(String(40), index=True)
     phone_number_display: Mapped[str] = mapped_column(String(80))
+    phone_extension: Mapped[str] = mapped_column(String(10), default="")
     role: Mapped[str] = mapped_column(String(20), default="recruiter")
     extraction_source: Mapped[str] = mapped_column(String(50), default="ai")
     contact_email: Mapped[str] = mapped_column(String(255), default="")
@@ -653,6 +654,7 @@ class PremiumNumberContact(Base):
         UniqueConstraint(
             "owner_id",
             "normalized_phone_number",
+            "phone_extension",
             name="ux_premium_number_contacts_owner_phone",
         ),
     )
@@ -661,6 +663,7 @@ class PremiumNumberContact(Base):
     owner_id: Mapped[str] = mapped_column(String(100), index=True)
     normalized_phone_number: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     display_phone_number: Mapped[str] = mapped_column(String(80))
+    phone_extension: Mapped[str] = mapped_column(String(10), default="")
     phone_is_valid: Mapped[bool] = mapped_column(Boolean, default=True)
     is_recruiter: Mapped[bool] = mapped_column(Boolean, default=False)
     is_employer: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -722,12 +725,13 @@ class PremiumContactEmail(Base):
 
 class PremiumContactPhone(Base):
     __tablename__ = "premium_contact_phones"
-    __table_args__ = (UniqueConstraint("owner_id", "normalized_phone_number", name="ux_premium_contact_phones_owner_phone"),)
+    __table_args__ = (UniqueConstraint("owner_id", "normalized_phone_number", "phone_extension", name="ux_premium_contact_phones_owner_phone"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     owner_id: Mapped[str] = mapped_column(String(100), index=True)
     premium_contact_id: Mapped[int] = mapped_column(Integer, ForeignKey("premium_number_contacts.id"), index=True)
     normalized_phone_number: Mapped[str] = mapped_column(String(40), index=True)
+    phone_extension: Mapped[str] = mapped_column(String(10), default="")
     is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
     is_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     source: Mapped[str] = mapped_column(String(50), default="unknown")
@@ -1254,7 +1258,7 @@ class NumberReviewQueue(Base):
     )
     source_lead_id: Mapped[int | None] = mapped_column(
         Integer,
-        ForeignKey("premium_number_leads.id", name="fk_number_review_queue_source_lead"),
+        ForeignKey("premium_number_leads.id", name="fk_number_review_queue_source_lead", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
