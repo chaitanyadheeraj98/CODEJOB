@@ -314,6 +314,62 @@ describe('PremiumNumbersPage', () => {
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/premium-numbers/contacts/merge-preview?contact_id_a=993&contact_id_b=806'))).toBe(true)
   })
 
+  it('opens the merge modal when marking recomputes a split identity', async () => {
+    const splitReview = { ...review, reason_code: 'new_number', target_contact_id: null, secondary_contact_id: null }
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/number-review/pending-count')) return jsonResponse({ count: 1 })
+      if (url.includes('/premium-numbers/inventory?')) return jsonResponse({ items: [
+        { key: `review:${splitReview.id}`, kind: 'review', id: splitReview.id, number: splitReview.display_phone_number, owner: splitReview.owner_name, company: splitReview.company, categories: ['Recruiter'], status: 'Pending', score: splitReview.recruiter_relevance_score, sourceType: 'gmail', lastCheckedAt: splitReview.updated_at, review: splitReview },
+      ], total: 1, next_cursor: null, has_next: false })
+      if (url.endsWith('/number-review/bulk-mark-recruiter') && init?.method === 'POST') {
+        return new Response(JSON.stringify({ detail: {
+          message: 'Resolve the identity conflict on this card before marking it.',
+          target_contact_id: 562,
+          secondary_contact_id: 588,
+        } }), { status: 409, headers: { 'Content-Type': 'application/json' } })
+      }
+      if (url.includes('/premium-numbers/contacts/merge-preview')) return jsonResponse({
+        contact_a: { id: 562, recruiter_name: 'Phone Owner', owner_name: 'Unknown', company: 'Acme', recruiter_email: '', employer_email: '', normalized_phone_number: '15550192834', display_phone_number: '+1 (555) 019-2834', is_recruiter: true, is_employer: false, lead_count: 1, latest_evidence_at: null, leads: [] },
+        contact_b: { id: 588, recruiter_name: 'Email Owner', owner_name: 'Unknown', company: 'Beta', recruiter_email: 'sender@example.com', employer_email: '', normalized_phone_number: '15550190000', display_phone_number: '+1 (555) 019-0000', is_recruiter: true, is_employer: false, lead_count: 1, latest_evidence_at: null, leads: [] },
+      })
+      return jsonResponse({ detail: 'not found' }, 404)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+      vi.unstubAllGlobals()
+    })
+
+    await act(async () => {
+      root.render(
+        <PremiumNumbersPage
+          apiBase="http://localhost:8000"
+          mailDate={null}
+          emailSearchTarget={null}
+          refreshToken={0}
+          applicationsEnabled={false}
+          onPendingCountChange={vi.fn()}
+        />,
+      )
+    })
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 300)) })
+    const mark = Array.from(container.querySelectorAll<HTMLButtonElement>('tbody .inventoryMenuPopover button')).find((button) => button.textContent === 'Mark as Recruiter')
+    expect(mark?.disabled).toBe(false)
+    await act(async () => {
+      mark?.click()
+      await new Promise((resolve) => window.setTimeout(resolve, 300))
+    })
+
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/number-review/bulk-mark-recruiter'))).toBe(true)
+    expect(container.querySelector('[aria-label="Merge contacts"]')).not.toBeNull()
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/premium-numbers/contacts/merge-preview?contact_id_a=562&contact_id_b=588'))).toBe(true)
+  })
+
   it('highlights a promoted premium_number_lead hit via its detail.contact_id', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)

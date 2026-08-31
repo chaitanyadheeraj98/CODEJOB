@@ -18,6 +18,7 @@ import {
   matchOpportunitiesForResume,
   requestApplicationRtr,
   runContactBulkAction,
+  runReviewAction,
   runReminderSweepNow,
   sendApplicationMessage,
   submitApplicationToClient,
@@ -154,6 +155,23 @@ describe('premium number API URLs', () => {
     await expect(runContactBulkAction('http://localhost:8000', 'employer', 'rescore', [823])).rejects.toMatchObject({
       name: 'ContactPhoneConflictError',
       conflictingContactId: 806,
+    })
+  })
+
+  it('surfaces an identity conflict with both contacts and the backend message', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      detail: {
+        message: 'Resolve the identity conflict on this card before marking it.',
+        target_contact_id: 562,
+        secondary_contact_id: 588,
+      },
+    }), { status: 409, headers: { 'Content-Type': 'application/json' } })))
+
+    await expect(runReviewAction('http://localhost:8000', 900, 'mark-recruiter', {})).rejects.toMatchObject({
+      name: 'IdentityConflictError',
+      message: 'Resolve the identity conflict on this card before marking it.',
+      targetContactId: 562,
+      secondaryContactId: 588,
     })
   })
 

@@ -415,6 +415,38 @@ class ContactIdentityServiceTests(unittest.TestCase):
             self.assertEqual(refreshed.recruiter_name, "Jane Doe")
             self.assertEqual(refreshed.company, "Acme Corp")
 
+    def test_reconcile_same_contact_fills_the_role_specific_name(self) -> None:
+        for role, name_column, other_column in (
+            ("employer", "owner_name", "recruiter_name"),
+            ("recruiter", "recruiter_name", "owner_name"),
+        ):
+            with self.subTest(role=role), Session(self.engine) as db:
+                contact = contact_identity_service.reconcile(
+                    db,
+                    owner_id=f"{OWNER_ID}-{role}",
+                    normalized_phone=PHONE_A,
+                    normalized_email=f"{role}@example.com",
+                    role=role,
+                ).contact
+                db.commit()
+                assert contact is not None
+                setattr(contact, name_column, "Unknown")
+                setattr(contact, other_column, "Leave Alone")
+                db.commit()
+
+                contact_identity_service.reconcile(
+                    db,
+                    owner_id=f"{OWNER_ID}-{role}",
+                    normalized_phone=PHONE_A,
+                    normalized_email=f"{role}@example.com",
+                    name=f"{role.title()} Name",
+                    role=role,
+                )
+                db.commit()
+
+                self.assertEqual(getattr(contact, name_column), f"{role.title()} Name")
+                self.assertEqual(getattr(contact, other_column), "Leave Alone")
+
     # -- multi-identifier support ----------------------------------------------
 
     def test_multi_identifier_two_emails_sharing_one_phone_reconcile_to_one_contact(self) -> None:

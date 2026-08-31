@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -21,12 +22,15 @@ from app.models import (
 from app.parsing.document_extraction import extract_gmail_reply_body
 from app.parsing.jd_requirements import extract_work_authorizations
 from app.phase0 import email_domain
-from app.premium_numbers.contact_identity_service import _latest_phone_evidence_at
+from app.premium_numbers import contact_identity_service
 from app.premium_numbers.domain_guard import employer_domains_for_owner, is_derivable_company_domain
 from app.premium_numbers.extraction import EMAIL_RE, ExtractedContactGroup, extract_phone_leads
 from app.premium_numbers.identity_matching import classify_identity_match
 from app.premium_numbers.phone_normalization import canonicalize_phone
 from app.services import opportunity_lineage_service
+
+
+logger = logging.getLogger(__name__)
 
 
 EMAIL_LOCAL_PART_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9._-]*$")
@@ -269,6 +273,7 @@ class _IdempotencyPoint:
     contact: PremiumNumberContact | None
     existing_review: NumberReviewQueue | None
     existing_opportunity: RecruiterOpportunity | None
+    resolution: contact_identity_service.IdentityResolution | None = None
 
 
 def apply_contact_version(
@@ -286,10 +291,16 @@ def apply_contact_version(
             contact.active_recruiter_lead_id = lead.id
         contact.recruiter_name = lead.owner_name or "Unknown" if overwrite else _fill_if_blank(contact.recruiter_name, lead.owner_name)
         contact.designation = lead.designation or "Unknown" if overwrite else _fill_if_blank(contact.designation, lead.designation)
-        contact.recruiter_email = lead.contact_email or "" if overwrite else _fill_if_blank(contact.recruiter_email, lead.contact_email)
-        contact.recruiter_email_domain = email_domain(contact.recruiter_email)
+        email = lead.contact_email or "" if overwrite else _fill_if_blank(contact.recruiter_email, lead.contact_email)
+        contact_identity_service.set_headline_email(contact, email, role)
+        if email and not contact_identity_service.attach_email(db, contact, email, role, lead.recruiter_email_id, primary=True):
+            logger.warning("Could not attach recruiter email %s to contact %s", email, contact.id)
         if overwrite and not _is_blank_or_unknown(lead.company):
+            previous_company = contact.company
+            capture_sister_company(contact, lead.company)
             contact.company = lead.company
+            if _same_company(contact.secondary_company, lead.company):
+                contact.secondary_company = previous_company
         elif _is_blank_or_unknown(contact.company):
             contact.company = _fill_if_blank(contact.company, lead.company)
         if _is_blank_or_unknown(contact.company):
@@ -301,10 +312,16 @@ def apply_contact_version(
         if set_active:
             contact.active_employer_lead_id = lead.id
         contact.owner_name = lead.owner_name or "Unknown" if overwrite else _fill_if_blank(contact.owner_name, lead.owner_name)
-        contact.employer_email = lead.contact_email or "" if overwrite else _fill_if_blank(contact.employer_email, lead.contact_email)
-        contact.employer_email_domain = email_domain(contact.employer_email)
+        email = lead.contact_email or "" if overwrite else _fill_if_blank(contact.employer_email, lead.contact_email)
+        contact_identity_service.set_headline_email(contact, email, role)
+        if email and not contact_identity_service.attach_email(db, contact, email, role, lead.recruiter_email_id, primary=True):
+            logger.warning("Could not attach employer email %s to contact %s", email, contact.id)
         if overwrite and not _is_blank_or_unknown(lead.company):
+            previous_company = contact.company
+            capture_sister_company(contact, lead.company)
             contact.company = lead.company
+            if _same_company(contact.secondary_company, lead.company):
+                contact.secondary_company = previous_company
         elif _is_blank_or_unknown(contact.company):
             contact.company = _fill_if_blank(contact.company, lead.company)
         if _is_blank_or_unknown(contact.company):
@@ -482,10 +499,15 @@ class PhoneIntelligenceWorkflowService:
                 review_role = promotion_role or (lead.role if lead.role in {"recruiter", "employer"} else None)
                 review_reason: str | None = None
                 conflict_target_contact_id: int | None = None
+                conflict_secondary_contact_id: int | None = None
                 if lead.phone_number_normalized.startswith("+"):
                     review_reason = "international_number_needs_verification"
                 elif lead.evidence_text and not lead.colocation_verified:
                     review_reason = "source_attribution_failure"
+                elif point.resolution is not None and point.resolution.outcome == "split":
+                    review_reason = "phone_email_cross_conflict"
+                    conflict_target_contact_id = point.resolution.phone_owner.id
+                    conflict_secondary_contact_id = point.resolution.email_owner.id
                 elif point.contact is not None and promotion_role:
                     if point.contact.recruiter_verification_level in {"verified", "trusted"}:
                         review_reason = "identity_conflict"
@@ -518,6 +540,7 @@ class PhoneIntelligenceWorkflowService:
                         reason_code=review_reason,
                         source_review=point.existing_review,
                         target_contact_id=conflict_target_contact_id,
+                        secondary_contact_id=conflict_secondary_contact_id,
                     )
                     review_created += int(created)
                     review_existing += int(not created)
@@ -714,95 +737,13 @@ class PhoneIntelligenceWorkflowService:
     def _find_contact_for_lead(
         db: Session, owner_id: str, lead: ExtractedContactGroup
     ) -> PremiumNumberContact | None:
-        # Identity priority: phone (exact, cheap) first, then email — a lead can lack a phone
-        # but extraction.py guarantees it always carries at least one of the two.
-        if lead.phone_number_normalized:
-            # A "secondary" match only counts when it's a genuinely different number on
-            # file for the contact - the original multi-identifier migration duplicated
-            # every contact's own PRIMARY phone into this table too (blank extension, since
-            # extension tracking didn't exist yet), so without excluding that self-copy, a
-            # contact whose primary extension now differs from the lead's would still match
-            # here and silently bypass the extension check just below.
-            secondary = (
-                db.query(PremiumContactPhone.premium_contact_id)
-                .join(PremiumNumberContact, PremiumNumberContact.id == PremiumContactPhone.premium_contact_id)
-                .filter(
-                    PremiumContactPhone.owner_id == owner_id,
-                    PremiumContactPhone.normalized_phone_number == lead.phone_number_normalized,
-                    PremiumNumberContact.normalized_phone_number != lead.phone_number_normalized,
-                )
-            )
-            if lead.phone_extension:
-                secondary = secondary.filter(
-                    or_(
-                        PremiumContactPhone.phone_extension == "",
-                        PremiumContactPhone.phone_extension == lead.phone_extension,
-                    )
-                )
-            query = db.query(PremiumNumberContact).filter(
-                PremiumNumberContact.owner_id == owner_id,
-                PremiumNumberContact.deleted_at.is_(None),
-                or_(
-                    PremiumNumberContact.normalized_phone_number == lead.phone_number_normalized,
-                    PremiumNumberContact.id.in_(secondary),
-                ),
-            )
-            if lead.phone_extension:
-                # Two people can share one switchboard number under different extensions
-                # (confirmed live: SysMind's 609-897-9670 ext 2162 vs ext 2197) - a blank
-                # extension on the existing contact is unknown, not proof of a match, so it
-                # still matches; an explicit *different* extension on both sides means these
-                # are different people and should resolve to different contacts. A person's
-                # OWN other number, recorded as a genuinely different secondary phone, always
-                # matches by id above regardless of extension - this guard only narrows the
-                # primary-phone branch.
-                query = query.filter(
-                    or_(
-                        PremiumNumberContact.phone_extension == "",
-                        PremiumNumberContact.phone_extension == lead.phone_extension,
-                        PremiumNumberContact.id.in_(secondary),
-                    )
-                )
-            contact = query.first()
-            if contact is not None:
-                # A blank extension on the lead only proves "same base number", not
-                # "same person" - _find_contact_for_lead's leniency rule (blank extension
-                # always matches, since unknown isn't proof of difference) means `contact`
-                # here may just be whichever of several people on a shared switchboard
-                # happened to sort first. If the lead also carries an email that already
-                # belongs to a DIFFERENT contact on file, that's a stronger, unambiguous
-                # signal than an arbitrary pick among strangers who share a phone number.
-                if not lead.phone_extension and lead.contact_email:
-                    email_match = (
-                        db.query(PremiumNumberContact)
-                        .filter(
-                            PremiumNumberContact.owner_id == owner_id,
-                            PremiumNumberContact.deleted_at.is_(None),
-                            PremiumNumberContact.id != contact.id,
-                            or_(
-                                PremiumNumberContact.recruiter_email == lead.contact_email,
-                                PremiumNumberContact.employer_email == lead.contact_email,
-                            ),
-                        )
-                        .first()
-                    )
-                    if email_match is not None:
-                        return email_match
-                return contact
-        if lead.contact_email:
-            return (
-                db.query(PremiumNumberContact)
-                .filter(
-                    PremiumNumberContact.owner_id == owner_id,
-                    PremiumNumberContact.deleted_at.is_(None),
-                    or_(
-                        PremiumNumberContact.recruiter_email == lead.contact_email,
-                        PremiumNumberContact.employer_email == lead.contact_email,
-                    ),
-                )
-                .first()
-            )
-        return None
+        return contact_identity_service.resolve_identity(
+            db,
+            owner_id=owner_id,
+            phone=lead.phone_number_normalized,
+            extension=lead.phone_extension,
+            email=lead.contact_email,
+        ).contact
 
     @staticmethod
     def _resolve_block_contacts(
@@ -867,6 +808,7 @@ class PhoneIntelligenceWorkflowService:
             PremiumNumberContact.owner_id == contact.owner_id,
             PremiumNumberContact.id != contact.id,
             PremiumNumberContact.normalized_phone_number == lead.phone_number_normalized,
+            PremiumNumberContact.deleted_at.is_(None),
         ).first()
         if claimed_elsewhere:
             return
@@ -900,7 +842,7 @@ class PhoneIntelligenceWorkflowService:
             # recent real-world evidence; a tie or no comparable evidence keeps the existing
             # number rather than guessing (same rule contact_identity_service.dismiss uses
             # for a shared-switchboard conflict).
-            existing_evidence_at = _latest_phone_evidence_at(db, contact.id, contact.normalized_phone_number)
+            existing_evidence_at = contact_identity_service._latest_phone_evidence_at(db, contact.id, contact.normalized_phone_number)
             new_evidence_at = context.received_at
             if existing_evidence_at is None or new_evidence_at is None or new_evidence_at <= existing_evidence_at:
                 return
@@ -1131,9 +1073,14 @@ class PhoneIntelligenceWorkflowService:
         lead: ExtractedContactGroup,
         block_contacts: dict[str, PremiumNumberContact] | None = None,
     ) -> _IdempotencyPoint:
-        contact = (block_contacts or {}).get(lead.block_id) or self._find_contact_for_lead(
-            db, context.owner_id, lead
+        resolution = contact_identity_service.resolve_identity(
+            db,
+            owner_id=context.owner_id,
+            phone=lead.phone_number_normalized,
+            extension=lead.phone_extension,
+            email=lead.contact_email,
         )
+        contact = (block_contacts or {}).get(lead.block_id) or resolution.contact
         review_query = db.query(NumberReviewQueue).filter(
             NumberReviewQueue.owner_id == context.owner_id,
             NumberReviewQueue.normalized_phone_number == lead.phone_number_normalized,
@@ -1163,7 +1110,7 @@ class PhoneIntelligenceWorkflowService:
                 )
                 .first()
             )
-        return _IdempotencyPoint(contact, existing_review, existing_opportunity)
+        return _IdempotencyPoint(contact, existing_review, existing_opportunity, resolution)
 
     @staticmethod
     def _promotion_role(
@@ -1222,6 +1169,7 @@ class PhoneIntelligenceWorkflowService:
         role: str | None,
         reason_code: str,
         target_contact_id: int | None = None,
+        secondary_contact_id: int | None = None,
     ) -> NumberReviewQueue:
         source_type = "nvoids" if context.source == "nvoids" else "gmail"
         source_row_id = (
@@ -1260,6 +1208,7 @@ class PhoneIntelligenceWorkflowService:
             source_external_opportunity_id=context.external_opportunity_row_id,
             source_lead_id=version.id if version else None,
             target_contact_id=target_contact_id,
+            secondary_contact_id=secondary_contact_id,
             normalized_phone_number=lead.phone_number_normalized,
             display_phone_number=lead.phone_number_display,
             owner_name=lead.owner_name,
@@ -1295,6 +1244,7 @@ class PhoneIntelligenceWorkflowService:
         reason_code: str,
         source_review: NumberReviewQueue | None = None,
         target_contact_id: int | None = None,
+        secondary_contact_id: int | None = None,
     ) -> bool:
         conflict_query = db.query(NumberReviewQueue).filter(
             NumberReviewQueue.owner_id == context.owner_id,
@@ -1335,6 +1285,7 @@ class PhoneIntelligenceWorkflowService:
                 role=role,
                 reason_code=reason_code,
                 target_contact_id=target_contact_id,
+                secondary_contact_id=secondary_contact_id,
             )
             return True
 
@@ -1344,6 +1295,7 @@ class PhoneIntelligenceWorkflowService:
         )
         self._refresh_review(review, context, lead, version)
         review.target_contact_id = target_contact_id
+        review.secondary_contact_id = secondary_contact_id
         review.source_email_id = context.recruiter_email_row_id
         review.source_external_opportunity_id = context.external_opportunity_row_id
         if not same_source:
@@ -1392,13 +1344,14 @@ class PhoneIntelligenceWorkflowService:
             contact.is_recruiter = True
             contact.recruiter_name = _fill_if_blank(contact.recruiter_name, lead.owner_name)
             contact.designation = _fill_if_blank(contact.designation, lead.designation)
-            contact.recruiter_email = _fill_if_blank(contact.recruiter_email, lead.contact_email)
-            contact.recruiter_email_domain = email_domain(contact.recruiter_email)
+            email = _fill_if_blank(contact.recruiter_email, lead.contact_email)
         else:
             contact.is_employer = True
             contact.owner_name = _fill_if_blank(contact.owner_name, lead.owner_name)
-            contact.employer_email = _fill_if_blank(contact.employer_email, lead.contact_email)
-            contact.employer_email_domain = email_domain(contact.employer_email)
+            email = _fill_if_blank(contact.employer_email, lead.contact_email)
+        contact_identity_service.set_headline_email(contact, email, role)
+        if email and not contact_identity_service.attach_email(db, contact, email, role, None, primary=True):
+            logger.warning("Could not attach %s email %s to contact %s", role, email, contact.id)
         contact.company = _fill_if_blank(contact.company, lead.company)
         if _is_blank_or_unknown(contact.company):
             fallback = company_fallback_for_unknown(db, contact.owner_id, lead.contact_email)

@@ -1100,6 +1100,7 @@ class EmployerNumberResponse(BaseModel):
     employer_email: str = ""
     employer_email_domain: str = ""
     is_favorite: bool = False
+    emails: list[dict[str, object]] = Field(default_factory=list)
     source_email_id: int | None
     source_type: str | None = None
     source_id: int | None = None
@@ -1672,10 +1673,13 @@ class ContactMergePreviewSide(BaseModel):
     recruiter_name: str
     owner_name: str
     company: str
+    secondary_company: str = ""
     recruiter_email: str
     employer_email: str
     normalized_phone_number: str | None
     display_phone_number: str
+    phones: list[dict] = Field(default_factory=list)
+    emails: list[dict] = Field(default_factory=list)
     is_recruiter: bool
     is_employer: bool
     lead_count: int
@@ -1733,6 +1737,7 @@ class RecruiterNumberPatchRequest(BaseModel):
     recruiter_email: str | None = None
     phone_number: str | None = None
     phones: list[str] | None = None
+    emails: list[str] | None = None
     linkedin_url: str | None = None
     recruiter_verification_level: Literal["unverified", "verified", "trusted"] | None = None
     do_not_work_again: bool | None = None
@@ -1748,6 +1753,7 @@ class EmployerNumberPatchRequest(BaseModel):
     secondary_company: str | None = None
     employer_email: str | None = None
     phones: list[str] | None = None
+    emails: list[str] | None = None
     linkedin_url: str | None = None
     recruiter_verification_level: Literal["unverified", "verified", "trusted"] | None = None
     do_not_work_again: bool | None = None

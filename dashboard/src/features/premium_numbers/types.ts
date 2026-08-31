@@ -114,6 +114,7 @@ export type EmployerNumberCard = ContactCardBase & {
   employer_email: string
   employer_email_domain?: string
   is_favorite?: boolean
+  emails?: Array<{ email: string; domain: string; is_primary: boolean }>
   source_email_id: number | null
   phones?: PhoneEntry[]
   linkedin_url: string
@@ -156,10 +157,13 @@ export type ContactMergePreviewSide = {
   recruiter_name: string
   owner_name: string
   company: string
+  secondary_company: string
   recruiter_email: string
   employer_email: string
   normalized_phone_number: string | null
   display_phone_number: string
+  phones: PhoneEntry[]
+  emails: Array<{ email: string; domain: string; is_primary: boolean }>
   is_recruiter: boolean
   is_employer: boolean
   lead_count: number

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { EmailSearchHit } from '../../emailSearch'
-import { backfillDuplicateContacts, ContactPhoneConflictError, getEmployerNumber, getRecruiterNumber, pendingReviewCount } from './api'
+import { backfillDuplicateContacts, ContactPhoneConflictError, getEmployerNumber, getRecruiterNumber, IdentityConflictError, pendingReviewCount } from './api'
 import CreateContactPanel, { STATUS_MESSAGES } from './CreateContactPanel'
 import DetailPanel from './DetailPanel'
 import InventoryTable from './InventoryTable'
@@ -157,6 +157,11 @@ export default function PremiumNumbersPage({
       if (reason instanceof ContactPhoneConflictError && row.kind === 'contact' && reason.conflictingContactId != null) {
         setDetailRow(null)
         setMergePair({ a: row.id, b: reason.conflictingContactId })
+        return
+      }
+      if (reason instanceof IdentityConflictError && reason.targetContactId != null && reason.secondaryContactId != null) {
+        setDetailRow(null)
+        setMergePair({ a: reason.targetContactId, b: reason.secondaryContactId })
         return
       }
       throw reason

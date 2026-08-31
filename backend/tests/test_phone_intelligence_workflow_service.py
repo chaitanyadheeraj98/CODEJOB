@@ -14,6 +14,7 @@ from app.models import (
     NumberReviewQueue,
     OpportunityLifecycleEvent,
     OpportunityLineage,
+    PremiumContactEmail,
     PremiumContactPhone,
     PremiumNumberContact,
     PremiumNumberLead,
@@ -280,7 +281,7 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
                 db.query(NumberReviewQueue).filter(NumberReviewQueue.reason_code == "identity_conflict").count(), 1
             )
 
-    def test_find_contact_for_lead_prefers_email_match_over_arbitrary_switchboard_pick(self) -> None:
+    def test_find_contact_for_lead_returns_none_for_switchboard_phone_email_split(self) -> None:
         with Session(self.engine) as db:
             db.add(PremiumNumberContact(
                 owner_id="default-owner", is_recruiter=True,
@@ -296,7 +297,6 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
             )
             db.add(tushar)
             db.commit()
-            tushar_id = tushar.id
 
             # Blank extension - the same lead that would otherwise arbitrarily match
             # whichever switchboard contact sorts first, but this one's email already
@@ -310,9 +310,9 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
                 phone_normalized="17323568008",
                 phone_extension="",
             )
-            found = PhoneIntelligenceWorkflowService._find_contact_for_lead(db, "default-owner", lead)
-            assert found is not None
-            self.assertEqual(found.id, tushar_id)
+            self.assertIsNone(
+                PhoneIntelligenceWorkflowService._find_contact_for_lead(db, "default-owner", lead)
+            )
 
     def test_find_contact_for_lead_ignores_a_soft_deleted_contact_on_phone_and_email(self) -> None:
         with Session(self.engine) as db:
@@ -337,6 +337,77 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
             )
             self.assertIsNone(PhoneIntelligenceWorkflowService._find_contact_for_lead(db, "default-owner", by_phone))
             self.assertIsNone(PhoneIntelligenceWorkflowService._find_contact_for_lead(db, "default-owner", by_email))
+
+    def test_find_contact_for_lead_uses_child_email_but_not_role_addresses(self) -> None:
+        with Session(self.engine) as db:
+            contact = PremiumNumberContact(
+                owner_id="default-owner", display_phone_number="", is_recruiter=True,
+                recruiter_name="Jane", company="Acme",
+            )
+            role_contact = PremiumNumberContact(
+                owner_id="default-owner", display_phone_number="", is_recruiter=True,
+                recruiter_name="Hiring Desk", company="Acme",
+            )
+            db.add_all([contact, role_contact])
+            db.flush()
+            db.add_all([
+                PremiumContactEmail(
+                    owner_id="default-owner", premium_contact_id=contact.id,
+                    normalized_email="jane@acme.example", domain="acme.example", role="recruiter",
+                ),
+                PremiumContactEmail(
+                    owner_id="default-owner", premium_contact_id=role_contact.id,
+                    normalized_email="hr@acme.example", domain="acme.example", role="recruiter",
+                ),
+            ])
+            db.commit()
+
+            child_only = _lead(contact_email="jane@acme.example", phone_display="", phone_normalized="")
+            role_address = _lead(contact_email="hr@acme.example", phone_display="", phone_normalized="")
+            self.assertEqual(
+                PhoneIntelligenceWorkflowService._find_contact_for_lead(db, "default-owner", child_only).id,
+                contact.id,
+            )
+            self.assertIsNone(
+                PhoneIntelligenceWorkflowService._find_contact_for_lead(db, "default-owner", role_address)
+            )
+
+    def test_pipeline_emits_three_way_review_for_split_identity_without_creating_contact(self) -> None:
+        with Session(self.engine) as db:
+            phone_owner = PremiumNumberContact(
+                owner_id="default-owner", normalized_phone_number="12145551212",
+                display_phone_number="(214) 555-1212", is_recruiter=True,
+                recruiter_name="Phone Owner", company="Acme",
+            )
+            email_owner = PremiumNumberContact(
+                owner_id="default-owner", normalized_phone_number="12145550000",
+                display_phone_number="(214) 555-0000", is_recruiter=True,
+                recruiter_name="Email Owner", company="Beta",
+            )
+            db.add_all([phone_owner, email_owner])
+            db.flush()
+            db.add(PremiumContactEmail(
+                owner_id="default-owner", premium_contact_id=email_owner.id,
+                normalized_email="email.owner@example.com", domain="example.com", role="recruiter",
+            ))
+            db.commit()
+            original_count = db.query(PremiumNumberContact).count()
+            lead = _lead(
+                role="recruiter", owner_name="Incoming", contact_email="email.owner@example.com",
+                company="Gamma", relevance_score=95, relevant=True, reason="external_domain",
+            )
+
+            with patch(
+                "app.services.phone_intelligence_workflow_service.extract_phone_leads",
+                return_value=[lead],
+            ):
+                PhoneIntelligenceWorkflowService().capture_premium_numbers(db, self._email(db, "split-identity"))
+
+            review = db.query(NumberReviewQueue).one()
+            self.assertEqual(review.reason_code, "phone_email_cross_conflict")
+            self.assertEqual(review.target_contact_id, phone_owner.id)
+            self.assertEqual(review.secondary_contact_id, email_owner.id)
+            self.assertEqual(db.query(PremiumNumberContact).count(), original_count)
 
     def test_shared_switchboard_different_extensions_creates_separate_contacts(self) -> None:
         with Session(self.engine) as db:
@@ -1913,6 +1984,25 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
 
             self.assertEqual(contact.recruiter_email, "shubham.rajak@evizot.com")
             self.assertEqual(contact.recruiter_email_domain, "evizot.com")
+
+    def test_apply_contact_version_preserves_overwritten_company_as_secondary(self) -> None:
+        with Session(self.engine) as db:
+            contact = PremiumNumberContact(
+                owner_id="default-owner", display_phone_number="", is_recruiter=True, recruiter_name="Jane",
+                company="Old Company", recruiter_email="jane@old.example",
+            )
+            version = PremiumNumberLead(
+                owner_id="default-owner", role="recruiter", owner_name="Jane",
+                company="New Company", contact_email="jane@new.example",
+                phone_number_normalized="", phone_number_display="",
+            )
+            db.add_all([contact, version])
+            db.commit()
+
+            apply_contact_version(db, contact, version, "recruiter", overwrite=True)
+
+            self.assertEqual(contact.company, "New Company")
+            self.assertEqual(contact.secondary_company, "Old Company")
 
     def test_apply_contact_version_recomputes_employer_email_domain_fill_only(self) -> None:
         with Session(self.engine) as db:

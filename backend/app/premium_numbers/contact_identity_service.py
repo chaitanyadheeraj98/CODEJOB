@@ -35,6 +35,16 @@ def normalize_email(value: str | None) -> str:
     return (value or "").strip().lower()
 
 
+ROLE_ADDRESS_LOCAL_PARTS = frozenset({
+    "hr", "careers", "career", "jobs", "job", "info", "contact", "recruiting",
+    "recruitment", "talent", "hiring", "admin", "support", "sales", "noreply", "no-reply",
+})
+
+
+def is_role_address(email: str) -> bool:
+    return email.rpartition("@")[0].split("+")[0].strip().lower() in ROLE_ADDRESS_LOCAL_PARTS
+
+
 def headline_email_columns(role: str) -> tuple[str, str]:
     """The (value, domain) attribute names this role's headline email lives in."""
     return ("recruiter_email", "recruiter_email_domain") if role == "recruiter" else ("employer_email", "employer_email_domain")
@@ -193,7 +203,7 @@ def resolve_identity(
     version with subtly different rules."""
     return IdentityResolution(
         phone_owner=find_phone_owner(db, owner_id, phone.strip(), extension),
-        email_owner=find_email_owner(db, owner_id, normalize_email(email), role),
+        email_owner=None if is_role_address(email) else find_email_owner(db, owner_id, normalize_email(email), role),
     )
 
 
@@ -390,7 +400,8 @@ def reconcile(db: Session, *, owner_id: str, normalized_phone: str = "", normali
             return ReconcileResult(_confirmable(by_email, match, human_confirmed), "pending_link_approval", review.id)
         return ReconcileResult(by_email, "confirmed")
     assert by_phone is not None
-    for field, value in (("recruiter_name", name), ("company", company)):
+    name_column = "recruiter_name" if role == "recruiter" else "owner_name"
+    for field, value in ((name_column, name), ("company", company)):
         if value and getattr(by_phone, field) in ("", "Unknown"):
             setattr(by_phone, field, value)
     return ReconcileResult(by_phone, "confirmed")

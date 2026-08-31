@@ -52,13 +52,25 @@ export class ContactPhoneConflictError extends Error {
   }
 }
 
+export class IdentityConflictError extends Error {
+  targetContactId: number | null
+  secondaryContactId: number | null
+
+  constructor(message: string, targetContactId: number | null, secondaryContactId: number | null) {
+    super(message)
+    this.name = 'IdentityConflictError'
+    this.targetContactId = targetContactId
+    this.secondaryContactId = secondaryContactId
+  }
+}
+
 export async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init)
   if (!response.ok) {
     const detail = await response.text().catch(() => '')
     if (response.status === 409 && detail) {
       try {
-        const payload = JSON.parse(detail) as { detail?: { message?: string; duplicates?: ApplicationDuplicateSummary[]; conflicting_contact_id?: number | null } }
+        const payload = JSON.parse(detail) as { detail?: { message?: string; duplicates?: ApplicationDuplicateSummary[]; conflicting_contact_id?: number | null; target_contact_id?: number | null; secondary_contact_id?: number | null } }
         if (Array.isArray(payload.detail?.duplicates)) {
           throw new ApplicationDuplicateConflictError(
             payload.detail?.message || 'Possible duplicate submission',
@@ -71,8 +83,15 @@ export async function requestJson<T>(url: string, init?: RequestInit): Promise<T
             payload.detail.conflicting_contact_id ?? null,
           )
         }
+        if (payload.detail && typeof payload.detail === 'object' && ('target_contact_id' in payload.detail || 'secondary_contact_id' in payload.detail)) {
+          throw new IdentityConflictError(
+            payload.detail.message || 'Resolve the identity conflict before marking this contact',
+            payload.detail.target_contact_id ?? null,
+            payload.detail.secondary_contact_id ?? null,
+          )
+        }
       } catch (reason) {
-        if (reason instanceof ApplicationDuplicateConflictError || reason instanceof ContactPhoneConflictError) throw reason
+        if (reason instanceof ApplicationDuplicateConflictError || reason instanceof ContactPhoneConflictError || reason instanceof IdentityConflictError) throw reason
       }
     }
     // Most backend errors are a plain FastAPI HTTPException(detail="message") - unwrap
@@ -263,7 +282,7 @@ export function approveContactMerge(apiBase: string, reviewId: number, canonical
   return requestJson(`${apiBase}/number-review/${reviewId}/approve-merge`, jsonInit('POST', canonicalContactId != null ? { canonical_contact_id: canonicalContactId } : {}))
 }
 
-export function dismissReviewSuggestion(apiBase: string, reviewId: number): Promise<{ review_id: number; contact_id: number; status: string }> {
+export function dismissReviewSuggestion(apiBase: string, reviewId: number): Promise<{ review_id: number; contact_id: number; status: string; follow_up_review_id?: number }> {
   return requestJson(`${apiBase}/number-review/${reviewId}/dismiss`, { method: 'POST' })
 }
 
@@ -324,7 +343,7 @@ export function getEmployerNumber(apiBase: string, contactId: number): Promise<E
 export function updateRecruiterNumber(
   apiBase: string,
   contactId: number,
-  patch: Partial<Pick<RecruiterNumberCard, 'recruiter_name' | 'company' | 'secondary_company' | 'designation' | 'recruiter_email' | 'linkedin_url' | 'recruiter_verification_level' | 'do_not_work_again' | 'do_not_work_again_reason' | 'is_favorite'>> & { phone_number?: string; phones?: string[] },
+  patch: Partial<Pick<RecruiterNumberCard, 'recruiter_name' | 'company' | 'secondary_company' | 'designation' | 'recruiter_email' | 'linkedin_url' | 'recruiter_verification_level' | 'do_not_work_again' | 'do_not_work_again_reason' | 'is_favorite'>> & { phone_number?: string; phones?: string[]; emails?: string[] },
 ): Promise<RecruiterNumberCard> {
   return requestJson(`${apiBase}/recruiter-numbers/${contactId}`, jsonInit('PATCH', patch))
 }
@@ -332,7 +351,7 @@ export function updateRecruiterNumber(
 export function updateEmployerNumber(
   apiBase: string,
   contactId: number,
-  patch: Partial<Pick<EmployerNumberCard, 'owner_name' | 'company' | 'secondary_company' | 'designation' | 'employer_email' | 'linkedin_url' | 'recruiter_verification_level' | 'do_not_work_again' | 'do_not_work_again_reason' | 'is_favorite'>> & { phones?: string[] },
+  patch: Partial<Pick<EmployerNumberCard, 'owner_name' | 'company' | 'secondary_company' | 'designation' | 'employer_email' | 'linkedin_url' | 'recruiter_verification_level' | 'do_not_work_again' | 'do_not_work_again_reason' | 'is_favorite'>> & { phones?: string[]; emails?: string[] },
 ): Promise<EmployerNumberCard> {
   return requestJson(`${apiBase}/employer-numbers/${contactId}`, jsonInit('PATCH', patch))
 }

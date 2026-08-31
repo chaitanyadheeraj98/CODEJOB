@@ -23,8 +23,8 @@ import {
 import { CategoryChip, StatusBadge } from './StatusBadge'
 import type { ContactFieldChange, EmployerNumberCard, ExtractionAuditEntry, InventoryAction, InventoryRow, PhoneEntry, PremiumNumberVersion, RecruiterNumberCard, RecruiterReputation, ReviewEdits } from './types'
 
-type RecruiterEdits = Partial<Pick<RecruiterNumberCard, 'recruiter_name' | 'company' | 'secondary_company' | 'designation' | 'recruiter_email' | 'linkedin_url' | 'recruiter_verification_level' | 'do_not_work_again' | 'do_not_work_again_reason'>> & { phone_number?: string; phones?: string[] }
-type EmployerEdits = Partial<Pick<EmployerNumberCard, 'owner_name' | 'company' | 'secondary_company' | 'designation' | 'employer_email' | 'linkedin_url' | 'recruiter_verification_level' | 'do_not_work_again' | 'do_not_work_again_reason'>> & { phones?: string[] }
+type RecruiterEdits = Partial<Pick<RecruiterNumberCard, 'recruiter_name' | 'company' | 'secondary_company' | 'designation' | 'recruiter_email' | 'linkedin_url' | 'recruiter_verification_level' | 'do_not_work_again' | 'do_not_work_again_reason'>> & { phone_number?: string; phones?: string[]; emails?: string[] }
+type EmployerEdits = Partial<Pick<EmployerNumberCard, 'owner_name' | 'company' | 'secondary_company' | 'designation' | 'employer_email' | 'linkedin_url' | 'recruiter_verification_level' | 'do_not_work_again' | 'do_not_work_again_reason'>> & { phones?: string[]; emails?: string[] }
 
 type ConflictContact = { recruiter?: RecruiterNumberCard; employer?: EmployerNumberCard }
 
@@ -116,17 +116,35 @@ function externalUrl(value: string): string {
 function PhoneNumbersList({
   phones,
   fallback,
+  includeLabeled = false,
 }: {
   phones?: PhoneEntry[]
   fallback: string
+  includeLabeled?: boolean
 }) {
-  const numbers = (phones ?? []).filter((entry) => !entry.label)
+  const numbers = (phones ?? []).filter((entry) => includeLabeled || !entry.label)
   if (numbers.length === 0) return <>{fallback || '--'}</>
   return (
     <div className="phoneNumbersList">
       {numbers.map((entry) => (
         <div key={`${entry.phone}-${entry.extension}`} className="phoneNumbersListRow">
           <span>{entry.display}</span>
+          {entry.is_primary ? <span className="categoryChip">Primary</span> : null}
+          {entry.label ? <span className="categoryChip">{entry.label}</span> : null}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function EmailsList({ emails, fallback }: { emails?: Array<{ email: string; is_primary: boolean }>; fallback: string }) {
+  const values = emails?.length ? emails : fallback ? [{ email: fallback, is_primary: true }] : []
+  if (values.length === 0) return <>--</>
+  return (
+    <div className="emailAddressesList">
+      {values.map((entry) => (
+        <div key={entry.email} className="emailAddressesListRow">
+          <a href={`mailto:${entry.email}`}>{entry.email}</a>
           {entry.is_primary ? <span className="categoryChip">Primary</span> : null}
         </div>
       ))}
@@ -169,6 +187,26 @@ function PhoneListEditor({ phones, onChange }: { phones: string[]; onChange: (ne
   )
 }
 
+function EmailListEditor({ emails, onChange }: { emails: string[]; onChange: (next: string[]) => void }) {
+  return (
+    <div className="emailListEditor">
+      {emails.map((value, index) => (
+        <div key={index} className="emailListEditorRow">
+          <input
+            type="email"
+            placeholder="name@example.com"
+            value={value}
+            onChange={(event) => onChange(emails.map((entry, i) => (i === index ? event.target.value : entry)))}
+          />
+          <span className="categoryChip">{index === 0 ? 'Primary' : 'Secondary'}</span>
+          <button type="button" className="iconBtn" aria-label="Remove email" onClick={() => onChange(emails.filter((_, i) => i !== index))}>&times;</button>
+        </div>
+      ))}
+      <button type="button" onClick={() => onChange([...emails, ''])}>+ Add email</button>
+    </div>
+  )
+}
+
 function conflictContactLabel(contact: ConflictContact | null): string {
   if (!contact) return 'existing contact'
   const name = contact.recruiter?.recruiter_name ?? contact.employer?.owner_name
@@ -176,20 +214,20 @@ function conflictContactLabel(contact: ConflictContact | null): string {
   return name ? `${name}${company ? ` · ${company}` : ''}` : 'existing contact'
 }
 
-function ConflictContactPreview({ contact, loading }: { contact: ConflictContact | null; loading: boolean }) {
+function ConflictContactPreview({ contact, loading, matchedOn }: { contact: ConflictContact | null; loading: boolean; matchedOn?: 'phone' | 'email' }) {
   if (loading) return <p className="subtle">Loading matched contact...</p>
   const details = contact?.recruiter ?? contact?.employer
   if (!details) return <p className="subtle">Contact details unavailable.</p>
   const name = contact?.recruiter?.recruiter_name ?? contact?.employer?.owner_name
-  const email = contact?.recruiter?.recruiter_email ?? contact?.employer?.employer_email
   return (
     <dl className="detailList">
       <div><dt>Name</dt><dd>{name || '--'}</dd></div>
       <div><dt>Role</dt><dd>{contact?.recruiter ? 'Recruiter' : 'Employer'}</dd></div>
       <div><dt>Company</dt><dd>{details.company || '--'}</dd></div>
+      {details.secondary_company ? <div><dt>Sister company</dt><dd>{details.secondary_company}</dd></div> : null}
       <div><dt>Designation</dt><dd>{details.designation || '--'}</dd></div>
-      <div><dt>Phone</dt><dd>{details.display_phone_number || '--'}</dd></div>
-      <div><dt>Email</dt><dd>{email ? <a href={`mailto:${email}`}>{email}</a> : '--'}</dd></div>
+      <div><dt>Phone numbers</dt><dd><PhoneNumbersList phones={details.phones} fallback={details.display_phone_number} includeLabeled />{matchedOn === 'phone' ? <span className="categoryChip">Matched</span> : null}</dd></div>
+      <div><dt>Email addresses</dt><dd><EmailsList emails={details.emails} fallback={contact?.recruiter?.recruiter_email ?? contact?.employer?.employer_email ?? ''} />{matchedOn === 'email' ? <span className="categoryChip">Matched</span> : null}</dd></div>
       <div><dt>LinkedIn</dt><dd>{details.linkedin_url ? <a href={externalUrl(details.linkedin_url)} target="_blank" rel="noreferrer">{details.linkedin_url}</a> : '--'}</dd></div>
       <div><dt>Verification</dt><dd>{details.recruiter_verification_level}</dd></div>
       <div><dt>Last updated</dt><dd>{details.updated_at ? new Date(details.updated_at).toLocaleString() : '--'}</dd></div>
@@ -404,8 +442,12 @@ export default function DetailPanel({
       : kind === 'merge-secondary' ? approveContactMerge(apiBase, reviewId, secondaryContactId ?? undefined)
       : dismissReviewSuggestion(apiBase, reviewId)
     request
-      .then(() => {
-        onToast(kind === 'dismiss' ? 'Kept as a separate contact' : kind === 'link' ? 'Linked to existing contact' : 'Merged')
+      .then((result) => {
+        onToast(kind === 'dismiss'
+          ? ('follow_up_review_id' in result && result.follow_up_review_id
+              ? 'Kept separate \u2014 a new review was created to resolve who owns this number.'
+              : 'Kept as a separate contact')
+          : kind === 'link' ? 'Linked to existing contact' : 'Merged')
         onClose()
         return onReload()
       })
@@ -429,6 +471,7 @@ export default function DetailPanel({
   const review = row.review
   const recruiter = row.recruiter
   const employer = row.employer
+  const conflictUnresolved = !!review?.target_contact_id && review.reason_code !== 'contact_enriched'
 
   const activeVersion = versions.find((version) => version.id === primaryContact?.active_lead_id) ?? null
   const profileOutOfSync = Boolean(
@@ -589,12 +632,12 @@ export default function DetailPanel({
                   <h4>Resolve identity conflict</h4>
                   <div className="mergePreviewCard">
                     <p><strong>Existing contact</strong></p>
-                    <ConflictContactPreview contact={conflictTarget} loading={conflictLoading} />
+                    <ConflictContactPreview contact={conflictTarget} loading={conflictLoading} matchedOn="phone" />
                   </div>
                   {review.secondary_contact_id ? (
                     <div className="mergePreviewCard">
                       <p><strong>Second matched contact</strong></p>
-                      <ConflictContactPreview contact={conflictSecondary} loading={conflictLoading} />
+                      <ConflictContactPreview contact={conflictSecondary} loading={conflictLoading} matchedOn="email" />
                     </div>
                   ) : null}
                   <div className="detailEditActions">
@@ -663,8 +706,8 @@ export default function DetailPanel({
                         company: recruiter.company,
                         secondary_company: recruiter.secondary_company ?? '',
                         designation: recruiter.designation,
-                        recruiter_email: recruiter.recruiter_email,
                         phones: recruiter.phones?.length ? recruiter.phones.map((entry) => entry.display) : (recruiter.display_phone_number ? [recruiter.display_phone_number] : []),
+                        emails: recruiter.emails?.length ? recruiter.emails.map((entry) => entry.email) : (recruiter.recruiter_email ? [recruiter.recruiter_email] : []),
                         linkedin_url: recruiter.linkedin_url,
                         recruiter_verification_level: recruiter.recruiter_verification_level,
                         do_not_work_again: recruiter.do_not_work_again,
@@ -685,8 +728,8 @@ export default function DetailPanel({
                   <label>Company<input value={recruiterEdits.company ?? ''} onChange={(event) => setRecruiterEdits((value) => ({ ...value, company: event.target.value }))} /></label>
                   <label>Sister company<input value={recruiterEdits.secondary_company ?? ''} onChange={(event) => setRecruiterEdits((value) => ({ ...value, secondary_company: event.target.value }))} placeholder="Optional" /></label>
                   <label className="detailFormGridFullRow">Phone numbers<PhoneListEditor phones={recruiterEdits.phones ?? []} onChange={(next) => setRecruiterEdits((value) => ({ ...value, phones: next }))} /></label>
+                  <label className="detailFormGridFullRow">Email addresses<EmailListEditor emails={recruiterEdits.emails ?? []} onChange={(next) => setRecruiterEdits((value) => ({ ...value, emails: next }))} /></label>
                   <label>Designation<input value={recruiterEdits.designation ?? ''} onChange={(event) => setRecruiterEdits((value) => ({ ...value, designation: event.target.value }))} /></label>
-                  <label>Email<input type="email" value={recruiterEdits.recruiter_email ?? ''} onChange={(event) => setRecruiterEdits((value) => ({ ...value, recruiter_email: event.target.value }))} /></label>
                   <label>LinkedIn URL<input value={recruiterEdits.linkedin_url ?? ''} onChange={(event) => setRecruiterEdits((value) => ({ ...value, linkedin_url: event.target.value }))} /></label>
                   <label>
                     Verification
@@ -720,7 +763,7 @@ export default function DetailPanel({
                   <div><dt>Designation</dt><dd>{recruiter.designation}</dd></div>
                   <div><dt>Phone numbers</dt><dd><PhoneNumbersList phones={recruiter.phones} fallback={recruiter.display_phone_number} /></dd></div>
                   {recruiter.phones?.some((entry) => entry.label) ? <div><dt>Other numbers</dt><dd><OtherNumbersList phones={recruiter.phones} /></dd></div> : null}
-                  <div><dt>Email</dt><dd>{recruiter.recruiter_email ? <a href={`mailto:${recruiter.recruiter_email}`}>{recruiter.recruiter_email}</a> : '--'}</dd></div>
+                  <div><dt>Email addresses</dt><dd><EmailsList emails={recruiter.emails} fallback={recruiter.recruiter_email} /></dd></div>
                   <div><dt>LinkedIn</dt><dd>{recruiter.linkedin_url ? <a href={externalUrl(recruiter.linkedin_url)} target="_blank" rel="noreferrer">{recruiter.linkedin_url}</a> : '--'}</dd></div>
                   <div><dt>Verification</dt><dd>{recruiter.recruiter_verification_level}</dd></div>
                   <div><dt>Do not work again</dt><dd>{recruiter.do_not_work_again ? recruiter.do_not_work_again_reason || 'Yes' : 'No'}</dd></div>
@@ -795,8 +838,8 @@ export default function DetailPanel({
                         company: employer.company,
                         secondary_company: employer.secondary_company ?? '',
                         designation: employer.designation,
-                        employer_email: employer.employer_email,
                         phones: employer.phones?.length ? employer.phones.map((entry) => entry.display) : (employer.display_phone_number ? [employer.display_phone_number] : []),
+                        emails: employer.emails?.length ? employer.emails.map((entry) => entry.email) : (employer.employer_email ? [employer.employer_email] : []),
                         linkedin_url: employer.linkedin_url,
                         recruiter_verification_level: employer.recruiter_verification_level,
                         do_not_work_again: employer.do_not_work_again,
@@ -817,8 +860,8 @@ export default function DetailPanel({
                   <label>Company<input value={employerEdits.company ?? ''} onChange={(event) => setEmployerEdits((value) => ({ ...value, company: event.target.value }))} /></label>
                   <label>Sister company<input value={employerEdits.secondary_company ?? ''} onChange={(event) => setEmployerEdits((value) => ({ ...value, secondary_company: event.target.value }))} placeholder="Optional" /></label>
                   <label className="detailFormGridFullRow">Phone numbers<PhoneListEditor phones={employerEdits.phones ?? []} onChange={(next) => setEmployerEdits((value) => ({ ...value, phones: next }))} /></label>
+                  <label className="detailFormGridFullRow">Email addresses<EmailListEditor emails={employerEdits.emails ?? []} onChange={(next) => setEmployerEdits((value) => ({ ...value, emails: next }))} /></label>
                   <label>Designation<input value={employerEdits.designation ?? ''} onChange={(event) => setEmployerEdits((value) => ({ ...value, designation: event.target.value }))} /></label>
-                  <label>Email<input type="email" value={employerEdits.employer_email ?? ''} onChange={(event) => setEmployerEdits((value) => ({ ...value, employer_email: event.target.value }))} /></label>
                   <label>LinkedIn URL<input value={employerEdits.linkedin_url ?? ''} onChange={(event) => setEmployerEdits((value) => ({ ...value, linkedin_url: event.target.value }))} /></label>
                   <label>
                     Verification
@@ -852,7 +895,7 @@ export default function DetailPanel({
                   <div><dt>Designation</dt><dd>{employer.designation}</dd></div>
                   <div><dt>Phone numbers</dt><dd><PhoneNumbersList phones={employer.phones} fallback={employer.display_phone_number} /></dd></div>
                   {employer.phones?.some((entry) => entry.label) ? <div><dt>Other numbers</dt><dd><OtherNumbersList phones={employer.phones} /></dd></div> : null}
-                  <div><dt>Email</dt><dd>{employer.employer_email ? <a href={`mailto:${employer.employer_email}`}>{employer.employer_email}</a> : '--'}</dd></div>
+                  <div><dt>Email addresses</dt><dd><EmailsList emails={employer.emails} fallback={employer.employer_email} /></dd></div>
                   <div><dt>LinkedIn</dt><dd>{employer.linkedin_url ? <a href={externalUrl(employer.linkedin_url)} target="_blank" rel="noreferrer">{employer.linkedin_url}</a> : '--'}</dd></div>
                   <div><dt>Verification</dt><dd>{employer.recruiter_verification_level}</dd></div>
                   <div><dt>Do not work again</dt><dd>{employer.do_not_work_again ? employer.do_not_work_again_reason || 'Yes' : 'No'}</dd></div>
@@ -988,8 +1031,9 @@ export default function DetailPanel({
         </div>
 
         <footer className="detailPanelActions">
-          <button type="button" onClick={() => act('mark-recruiter', reviewEdits)} disabled={busy}>{pendingAction === 'mark-recruiter' ? 'Working...' : 'Mark as Recruiter'}</button>
-          <button type="button" onClick={() => act('mark-employer', reviewEdits)} disabled={busy}>{pendingAction === 'mark-employer' ? 'Working...' : 'Mark as Employer'}</button>
+          {conflictUnresolved ? <p className="subtle">Resolve the identity conflict above before marking this contact.</p> : null}
+          <button type="button" onClick={() => act('mark-recruiter', reviewEdits)} disabled={busy || conflictUnresolved}>{pendingAction === 'mark-recruiter' ? 'Working...' : 'Mark as Recruiter'}</button>
+          <button type="button" onClick={() => act('mark-employer', reviewEdits)} disabled={busy || conflictUnresolved}>{pendingAction === 'mark-employer' ? 'Working...' : 'Mark as Employer'}</button>
           {row.kind === 'contact' ? (
             <button type="button" onClick={runRescore} disabled={busy || rescoring}>{rescoring ? 'Working...' : 'Rescore'}</button>
           ) : (

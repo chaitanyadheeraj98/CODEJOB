@@ -12,6 +12,8 @@ const REASON_LABELS: Record<string, string> = {
   suggested_email_match: 'Suggested Email Match',
   suggested_phone_match: 'Suggested Phone Match',
   phone_email_cross_conflict: 'Identity Conflict',
+  contact_enriched: 'Contact Enriched',
+  phone_owner_conflict: 'Phone Owner Conflict',
 }
 
 function reviewReasonLabel(reasonCode: string): string {

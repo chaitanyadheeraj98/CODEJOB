@@ -26,6 +26,7 @@ const rows: InventoryRow[] = [
       source_email_id: 10,
       source_external_opportunity_id: null,
       source_lead_id: 20,
+      target_contact_id: 3,
       normalized_phone_number: '15550192834',
       display_phone_number: '+1 (555) 019-2834',
       owner_name: 'TechFlow Inc.',
@@ -109,6 +110,12 @@ describe('InventoryTable', () => {
     expect(container.textContent).toContain('Employer')
     expect(container.textContent).toContain('Identity Conflict')
     expect(container.textContent).toContain('Showing 1 to 10 of 12 loaded entries')
+
+    const conflictMenuButtons = Array.from(container.querySelectorAll<HTMLButtonElement>('tbody tr:first-child .inventoryMenuPopover button'))
+    expect(conflictMenuButtons.find((button) => button.textContent === 'Mark as Recruiter')?.disabled).toBe(true)
+    expect(conflictMenuButtons.find((button) => button.textContent === 'Mark as Employer')?.disabled).toBe(true)
+    const normalMenuButtons = Array.from(container.querySelectorAll<HTMLButtonElement>('tbody tr:nth-child(2) .inventoryMenuPopover button'))
+    expect(normalMenuButtons.find((button) => button.textContent === 'Mark as Recruiter')?.disabled).toBe(false)
 
     const contactCheckbox = container.querySelector<HTMLInputElement>('input[aria-label="Select +44 20 7946 0958"]')
     act(() => contactCheckbox?.click())

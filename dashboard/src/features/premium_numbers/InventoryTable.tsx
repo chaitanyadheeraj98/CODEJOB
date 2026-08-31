@@ -56,6 +56,10 @@ function rowIsFavorite(row: InventoryRow): boolean {
   return Boolean(row.recruiter?.is_favorite ?? row.employer?.is_favorite ?? false)
 }
 
+function rowConflictUnresolved(row: InventoryRow): boolean {
+  return !!row.review?.target_contact_id && row.review.reason_code !== 'contact_enriched'
+}
+
 export default function InventoryTable({
   rows,
   allRowsCount,
@@ -162,11 +166,11 @@ export default function InventoryTable({
                   <details className="inventoryMenu">
                     <summary aria-label={`Actions for ${rowNumberDisplay(row)}`}>⋮</summary>
                     <div className="inventoryMenuPopover">
-                      <button type="button" onClick={(event) => onOpen(row, event.currentTarget)}>View details</button>
-                      <button type="button" onClick={() => onAction(row, 'mark-recruiter')}>Mark as Recruiter</button>
-                      <button type="button" onClick={() => onAction(row, 'mark-employer')}>Mark as Employer</button>
-                      <button type="button" onClick={() => onAction(row, 'rescore')}>Rescore</button>
-                      <button type="button" className="dangerText" onClick={() => onAction(row, 'delete')}>Delete</button>
+                      <button type="button" onClick={(event) => onOpen(row, event.currentTarget)} disabled={busy}>View details</button>
+                      <button type="button" onClick={() => onAction(row, 'mark-recruiter')} disabled={busy || rowConflictUnresolved(row)}>Mark as Recruiter</button>
+                      <button type="button" onClick={() => onAction(row, 'mark-employer')} disabled={busy || rowConflictUnresolved(row)}>Mark as Employer</button>
+                      <button type="button" onClick={() => onAction(row, 'rescore')} disabled={busy}>Rescore</button>
+                      <button type="button" className="dangerText" onClick={() => onAction(row, 'delete')} disabled={busy}>Delete</button>
                     </div>
                   </details>
                 </td>

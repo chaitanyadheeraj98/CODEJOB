@@ -3710,63 +3710,74 @@ button.emailSearchResult:focus-visible {
 .detailFormGrid select:focus-visible,
 .detailSection > label input:focus-visible,
 .detailSection > label select:focus-visible,
-.phoneListEditorRow input:focus-visible {
+.phoneListEditorRow input:focus-visible,
+.emailListEditorRow input:focus-visible {
   outline: none;
   border-color: var(--primary);
   box-shadow: 0 0 0 3px rgb(15 75 207 / 15%);
 }
 
-.detailList .phoneNumbersList {
+.detailList .phoneNumbersList,
+.detailList .emailAddressesList {
   display: grid;
   grid-template-columns: 1fr;
   gap: 4px;
 }
 
-.phoneNumbersList .phoneNumbersListRow {
+.phoneNumbersList .phoneNumbersListRow,
+.emailAddressesList .emailAddressesListRow {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
 }
 
-.phoneNumbersList .phoneNumbersListRow span {
+.phoneNumbersList .phoneNumbersListRow span,
+.emailAddressesList .emailAddressesListRow a {
   white-space: nowrap;
 }
 
-.phoneListEditor {
+.phoneListEditor,
+.emailListEditor {
   display: grid;
   gap: 8px;
 }
 
-.phoneListEditorRow {
+.phoneListEditorRow,
+.emailListEditorRow {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 10px;
 }
 
-.phoneListEditorRow input {
+.phoneListEditorRow input,
+.emailListEditorRow input {
   min-width: 0;
 }
 
-.phoneListEditorRow .categoryChip {
+.phoneListEditorRow .categoryChip,
+.emailListEditorRow .categoryChip {
   flex-shrink: 0;
 }
 
-.phoneListEditorRow .iconBtn {
+.phoneListEditorRow .iconBtn,
+.emailListEditorRow .iconBtn {
   width: 32px;
   height: 32px;
   border: 1px solid var(--line);
   color: var(--muted);
 }
 
-.phoneListEditorRow .iconBtn:hover {
+.phoneListEditorRow .iconBtn:hover,
+.emailListEditorRow .iconBtn:hover {
   border-color: #e5a3aa;
   background: #fff7f8;
   color: var(--danger);
 }
 
-.phoneListEditor > button {
+.phoneListEditor > button,
+.emailListEditor > button {
   justify-self: start;
   height: 34px !important;
   padding: 0 12px !important;
@@ -3806,6 +3817,11 @@ button.emailSearchResult:focus-visible {
   padding: 12px 20px;
   border-top: 1px solid var(--line);
   background: var(--surface);
+}
+
+.detailPanelActions > .subtle {
+  flex-basis: 100%;
+  margin: 0;
 }
 
 .opportunityGrid {

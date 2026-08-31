@@ -5463,6 +5463,20 @@ def _contact_for_review(
     candidate_email = (values.get("contact_email") or "").strip()
     if not canonical_phone and not candidate_email:
         raise HTTPException(status_code=422, detail="Review card has no phone number or email to identify a contact")
+    resolution = contact_identity_service.resolve_identity(
+        db,
+        owner_id=settings.owner_id,
+        phone=canonical_phone,
+        extension=extension,
+        email=candidate_email,
+        role=card.role or "recruiter",
+    )
+    if resolution.outcome == "split":
+        raise HTTPException(status_code=409, detail={
+            "message": "Resolve the identity conflict on this card before marking it.",
+            "target_contact_id": resolution.phone_owner.id if resolution.phone_owner else None,
+            "secondary_contact_id": resolution.email_owner.id if resolution.email_owner else None,
+        })
     result = contact_identity_service.reconcile(
         db,
         owner_id=settings.owner_id,
@@ -5475,7 +5489,11 @@ def _contact_for_review(
         human_confirmed=True,
     )
     if result.contact is None:
-        raise HTTPException(status_code=409, detail="Contact identity requires approval")
+        raise HTTPException(status_code=409, detail={
+            "message": "Resolve the identity conflict on this card before marking it.",
+            "target_contact_id": resolution.phone_owner.id if resolution.phone_owner else None,
+            "secondary_contact_id": resolution.email_owner.id if resolution.email_owner else None,
+        })
     result.contact.deleted_at = None
     if extension and not result.contact.phone_extension:
         result.contact.phone_extension = extension
@@ -5607,6 +5625,7 @@ def _mark_number_as_recruiter(
         edited=_review_fields_edited(card, submit),
     )
     version.contact_id = contact.id
+    capture_sister_company(contact, values["company"])
     apply_contact_version(db, contact, version, "recruiter", overwrite=True)
     contact.first_detected_email_id = contact.first_detected_email_id or card.source_email_id
     if submit and submit.linkedin_url is not None:
@@ -5635,6 +5654,7 @@ def _mark_number_as_employer(
         edited=_review_fields_edited(card, submit),
     )
     version.contact_id = contact.id
+    capture_sister_company(contact, values["company"])
     apply_contact_version(db, contact, version, "employer", overwrite=True)
     contact.source_email_id = contact.source_email_id or card.source_email_id
     if submit and submit.linkedin_url is not None:
@@ -5840,15 +5860,20 @@ def _contact_merge_preview_side(db: Session, contact_id: int) -> ContactMergePre
                 candidate = email.gmail_received_at
         if latest_evidence_at is None or candidate > latest_evidence_at:
             latest_evidence_at = candidate
+    phones = db.query(PremiumContactPhone).filter(PremiumContactPhone.premium_contact_id == contact.id).order_by(PremiumContactPhone.is_primary.desc(), PremiumContactPhone.id.asc()).all()
+    emails = db.query(PremiumContactEmail).filter(PremiumContactEmail.premium_contact_id == contact.id).order_by(PremiumContactEmail.is_primary.desc(), PremiumContactEmail.id.asc()).all()
     return ContactMergePreviewSide(
         id=contact.id,
         recruiter_name=contact.recruiter_name,
         owner_name=contact.owner_name,
         company=contact.company,
+        secondary_company=contact.secondary_company,
         recruiter_email=contact.recruiter_email,
         employer_email=contact.employer_email,
         normalized_phone_number=contact.normalized_phone_number,
         display_phone_number=contact.display_phone_number,
+        phones=_phone_entries(contact, phones),
+        emails=[{"email": row.normalized_email, "domain": row.domain, "is_primary": row.is_primary} for row in emails],
         is_recruiter=contact.is_recruiter,
         is_employer=contact.is_employer,
         lead_count=len(leads),
@@ -5905,40 +5930,43 @@ def backfill_duplicate_contacts(db: Session = Depends(get_db)) -> DuplicateConta
     owner = settings.owner_id
     groups_merged = 0
     contacts_merged = 0
-    for is_recruiter, email_column in ((True, PremiumNumberContact.recruiter_email), (False, PremiumNumberContact.employer_email)):
-        # A dual-role contact merged away as a recruiter-side loser above is only marked
-        # deleted on the in-memory object at this point (autoflush is off) - without
-        # flushing first, the employer-side query below would still see it as live and
-        # merge it a second time.
+    emails = [
+        row[0]
+        for row in db.query(PremiumContactEmail.normalized_email)
+        .filter(PremiumContactEmail.owner_id == owner)
+        .distinct()
+        .all()
+    ]
+    for email in emails:
         db.flush()
-        role_flag = PremiumNumberContact.is_recruiter if is_recruiter else PremiumNumberContact.is_employer
-        rows = (
+        child_ids = db.query(PremiumContactEmail.premium_contact_id).filter(
+            PremiumContactEmail.owner_id == owner,
+            PremiumContactEmail.normalized_email == email,
+        )
+        members = (
             db.query(PremiumNumberContact)
             .filter(
                 PremiumNumberContact.owner_id == owner,
                 PremiumNumberContact.deleted_at.is_(None),
-                role_flag.is_(True),
-                email_column.isnot(None),
-                email_column != "",
+                or_(
+                    PremiumNumberContact.id.in_(child_ids),
+                    PremiumNumberContact.recruiter_email == email,
+                    PremiumNumberContact.employer_email == email,
+                ),
             )
-            .order_by(email_column, PremiumNumberContact.created_at.asc(), PremiumNumberContact.id.asc())
+            .order_by(PremiumNumberContact.created_at.asc(), PremiumNumberContact.id.asc())
             .all()
         )
-        groups: dict[str, list[PremiumNumberContact]] = {}
-        for row in rows:
-            email = (getattr(row, email_column.key) or "").strip().lower()
-            groups.setdefault(email, []).append(row)
-        for members in groups.values():
-            if len(members) < 2:
-                continue
-            canonical, losers = members[0], members[1:]
-            for loser in losers:
-                canonical = contact_identity_service.merge_contacts(
-                    db, owner_id=owner, canonical_contact_id=canonical.id, loser_contact_id=loser.id,
-                    source="duplicate_backfill",
-                )
-                contacts_merged += 1
-            groups_merged += 1
+        if len(members) < 2:
+            continue
+        canonical, losers = members[0], members[1:]
+        for loser in losers:
+            canonical = contact_identity_service.merge_contacts(
+                db, owner_id=owner, canonical_contact_id=canonical.id, loser_contact_id=loser.id,
+                source="duplicate_backfill",
+            )
+            contacts_merged += 1
+        groups_merged += 1
     db.commit()
     return DuplicateContactBackfillResponse(groups_merged=groups_merged, contacts_merged=contacts_merged)
 
@@ -6180,6 +6208,7 @@ def _employer_number_response(db: Session, contact: PremiumNumberContact) -> Emp
         db, contact, "employer"
     )
     flagged = _contact_is_flagged(contact, "employer")
+    emails = db.query(PremiumContactEmail).filter(PremiumContactEmail.premium_contact_id == contact.id).order_by(PremiumContactEmail.is_primary.desc(), PremiumContactEmail.id.asc()).all()
     phones = db.query(PremiumContactPhone).filter(PremiumContactPhone.premium_contact_id == contact.id).order_by(PremiumContactPhone.is_primary.desc(), PremiumContactPhone.id.asc()).all()
     return EmployerNumberResponse(
         id=contact.id,
@@ -6192,6 +6221,7 @@ def _employer_number_response(db: Session, contact: PremiumNumberContact) -> Emp
         employer_email=contact.employer_email,
         employer_email_domain=contact.employer_email_domain,
         is_favorite=contact.is_favorite,
+        emails=[{"email": row.normalized_email, "domain": row.domain, "is_primary": row.is_primary} for row in emails],
         source_email_id=contact.source_email_id,
         source_type=source_type,
         source_id=source_id,
@@ -6317,6 +6347,34 @@ def _apply_phone_list(db: Session, contact: PremiumNumberContact, raw_phones: li
         ))
 
 
+def _apply_email_list(db: Session, contact: PremiumNumberContact, raw_emails: list[str], role: str) -> None:
+    emails: list[str] = []
+    for raw in raw_emails:
+        email = raw.strip().lower()
+        if not email:
+            continue
+        if "@" not in email or parseaddr(email)[1] != email:
+            raise HTTPException(status_code=422, detail=f"'{raw}' is not a valid email address")
+        if email not in emails:
+            emails.append(email)
+    for email in emails:
+        owner = contact_identity_service.find_email_owner(db, contact.owner_id, email)
+        if owner is not None and owner.id != contact.id:
+            raise HTTPException(status_code=409, detail={
+                "message": f"{email} is already linked to a different contact",
+                "conflicting_contact_id": owner.id,
+            })
+    db.query(PremiumContactEmail).filter(
+        PremiumContactEmail.premium_contact_id == contact.id,
+        PremiumContactEmail.role == role,
+    ).delete(synchronize_session=False)
+    if not emails:
+        contact_identity_service.set_headline_email(contact, "", role)
+        return
+    for index, email in enumerate(emails):
+        contact_identity_service.attach_email(db, contact, email, role, None, primary=index == 0)
+
+
 @app.patch("/recruiter-numbers/{recruiter_number_id}", response_model=RecruiterNumberResponse)
 def patch_recruiter_number(
     recruiter_number_id: int,
@@ -6344,8 +6402,7 @@ def patch_recruiter_number(
     if payload.designation is not None:
         contact.designation = payload.designation.strip() or "Unknown"
     if payload.recruiter_email is not None:
-        contact.recruiter_email = payload.recruiter_email.strip().lower()
-        contact.recruiter_email_domain = contact.recruiter_email.rpartition("@")[2]
+        _apply_email_list(db, contact, [payload.recruiter_email], "recruiter")
     if payload.phone_number is not None:
         raw_phone = payload.phone_number.strip()
         if raw_phone:
@@ -6363,6 +6420,8 @@ def patch_recruiter_number(
             contact.phone_is_valid = False
     if payload.phones is not None:
         _apply_phone_list(db, contact, payload.phones)
+    if payload.emails is not None:
+        _apply_email_list(db, contact, payload.emails, "recruiter")
     if payload.is_favorite is not None:
         contact.is_favorite = payload.is_favorite
     if payload.linkedin_url is not None:
@@ -6410,10 +6469,11 @@ def patch_employer_number(
     if payload.secondary_company is not None:
         contact.secondary_company = payload.secondary_company.strip()
     if payload.employer_email is not None:
-        contact.employer_email = payload.employer_email.strip()
-        contact.employer_email_domain = contact.employer_email.rpartition("@")[2]
+        _apply_email_list(db, contact, [payload.employer_email], "employer")
     if payload.phones is not None:
         _apply_phone_list(db, contact, payload.phones)
+    if payload.emails is not None:
+        _apply_email_list(db, contact, payload.emails, "employer")
     if payload.is_favorite is not None:
         contact.is_favorite = payload.is_favorite
     if payload.linkedin_url is not None:

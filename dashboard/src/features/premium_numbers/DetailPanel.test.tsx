@@ -304,6 +304,74 @@ describe('DetailPanel', () => {
     })
   })
 
+  it('edits and saves a contact\'s full email list', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const multiEmailRecruiter: RecruiterNumberCard = {
+      ...recruiter,
+      emails: [
+        { email: 'ravish.k@usgrpinc.com', domain: 'usgrpinc.com', is_primary: true },
+        { email: 'ravish@usgrpinc.com', domain: 'usgrpinc.com', is_primary: false },
+      ],
+    }
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/versions')) return jsonResponse(versions)
+      if (url.endsWith('/recruiter-numbers/613') && init?.method === 'PATCH') {
+        return jsonResponse({ ...multiEmailRecruiter, ...JSON.parse(String(init.body)) })
+      }
+      return jsonResponse({ detail: 'not found' }, 404)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+      vi.unstubAllGlobals()
+    })
+
+    await act(async () => {
+      root.render(
+        <DetailPanel
+          apiBase="http://localhost:8000"
+          row={{ ...row, recruiter: multiEmailRecruiter }}
+          busy={false}
+          returnFocusRef={{ current: null }}
+          onClose={vi.fn()}
+          onAction={vi.fn().mockResolvedValue(undefined)}
+          onReload={vi.fn().mockResolvedValue(undefined)}
+          onError={vi.fn()}
+          onToast={vi.fn()}
+          onPhoneConflict={vi.fn()}
+        />,
+      )
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const edit = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'Edit')
+    await act(async () => { edit?.click() })
+    const emailInputs = () => Array.from(container.querySelectorAll<HTMLInputElement>('.emailListEditorRow input'))
+    expect(emailInputs().map((input) => input.value)).toEqual(['ravish.k@usgrpinc.com', 'ravish@usgrpinc.com'])
+    const addEmail = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === '+ Add email')
+    await act(async () => { addEmail?.click() })
+    const inputSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
+    await act(async () => {
+      inputSetter.call(emailInputs()[2], 'rk@usgrpinc.com')
+      emailInputs()[2].dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    const save = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'Save')
+    await act(async () => {
+      save?.click()
+      await Promise.resolve()
+    })
+
+    const patchCall = fetchMock.mock.calls.find(([url, init]) => String(url).endsWith('/recruiter-numbers/613') && init?.method === 'PATCH')
+    expect(JSON.parse(String(patchCall?.[1]?.body))).toMatchObject({
+      emails: ['ravish.k@usgrpinc.com', 'ravish@usgrpinc.com', 'rk@usgrpinc.com'],
+    })
+  })
+
   it('shows seen count and source extraction decisions', async () => {
     const gmailRecruiter = { ...recruiter, source_type: 'gmail' as const, source_id: 42 }
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
@@ -412,8 +480,30 @@ describe('DetailPanel', () => {
       lastCheckedAt: review.updated_at,
       review,
     }
-    const target = { ...recruiter, id: 562, recruiter_name: 'Vankayalapati Saicharan', company: 'Eversoft IT', recruiter_email: 'vankayalapati.saicharan@eversoftit.com' }
-    const secondary = { ...recruiter, id: 588, recruiter_name: 'Harshitha Voddepally', company: 'Horizons of Tech', recruiter_email: '' }
+    const target = {
+      ...recruiter,
+      id: 562,
+      recruiter_name: 'Vankayalapati Saicharan',
+      company: 'Eversoft IT',
+      secondary_company: 'Eversoft Staffing',
+      recruiter_email: 'vankayalapati.saicharan@eversoftit.com',
+      phones: [
+        { phone: '19802650643', extension: '', display: '(980) 265-0643', is_primary: true, is_verified: true, label: '' },
+        { phone: '19802650000', extension: '42', display: '(980) 265-0000 ext 42', is_primary: false, is_verified: false, label: 'fax' },
+      ],
+      emails: [
+        { email: 'vankayalapati.saicharan@eversoftit.com', domain: 'eversoftit.com', is_primary: true },
+        { email: 'saicharan@eversoftit.com', domain: 'eversoftit.com', is_primary: false },
+      ],
+    }
+    const secondary = {
+      ...recruiter,
+      id: 588,
+      recruiter_name: 'Harshitha Voddepally',
+      company: 'Horizons of Tech',
+      recruiter_email: '',
+      emails: [{ email: 'harshitha@horizonsoftech.net', domain: 'horizonsoftech.net', is_primary: true }],
+    }
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url.endsWith('/recruiter-numbers/562')) return jsonResponse(target)
@@ -459,6 +549,13 @@ describe('DetailPanel', () => {
     expect(container.textContent).toContain('Resolve identity conflict')
     expect(container.textContent).toContain('Vankayalapati Saicharan')
     expect(container.textContent).toContain('Harshitha Voddepally')
+    expect(container.textContent).toContain('Eversoft Staffing')
+    expect(container.textContent).toContain('(980) 265-0000 ext 42')
+    expect(container.textContent).toContain('fax')
+    expect(container.textContent).toContain('saicharan@eversoftit.com')
+    expect(container.textContent).toContain('harshitha@horizonsoftech.net')
+    expect(container.textContent).toContain('Resolve the identity conflict above before marking this contact.')
+    expect(Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent === 'Mark as Recruiter')?.disabled).toBe(true)
 
     const mergeIntoSecondary = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.startsWith('Merge into "Harshitha Voddepally'))
     expect(mergeIntoSecondary).toBeDefined()
@@ -568,6 +665,7 @@ describe('DetailPanel', () => {
     expect(container.textContent).toContain('(856) 456-1805 ext 1025')
     expect(container.textContent).toContain('(856) 372-4625')
     expect(container.textContent).not.toContain('Resolve identity conflict')
+    expect(Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent === 'Mark as Recruiter')?.disabled).toBe(false)
 
     const acknowledgeButton = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'Acknowledge')
     expect(acknowledgeButton).toBeDefined()
@@ -670,6 +768,7 @@ describe('DetailPanel', () => {
 
     expect(container.textContent).toContain('Contact details')
     expect(container.querySelector('.detailFormGrid')).toBeNull()
+    expect(Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent === 'Mark as Recruiter')?.disabled).toBe(false)
 
     const edit = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'Edit')
     await act(async () => { edit?.click() })
