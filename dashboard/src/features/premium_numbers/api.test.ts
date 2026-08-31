@@ -17,6 +17,7 @@ import {
   listApplicationSuggestions,
   matchOpportunitiesForResume,
   requestApplicationRtr,
+  runContactBulkAction,
   runReminderSweepNow,
   sendApplicationMessage,
   submitApplicationToClient,
@@ -132,6 +133,27 @@ describe('premium number API URLs', () => {
     await expect(submitApplicationToClient('http://localhost:8000', 3)).rejects.toMatchObject({
       name: 'ApplicationDuplicateConflictError',
       duplicates: [{ id: 9 }],
+    })
+  })
+
+  it('unwraps a plain HTTPException(detail=\"message\") body instead of throwing the raw JSON', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      detail: '(770) 824-0630 is already linked to a different contact',
+    }), { status: 409, headers: { 'Content-Type': 'application/json' } })))
+
+    await expect(runContactBulkAction('http://localhost:8000', 'employer', 'rescore', [823])).rejects.toThrow(
+      '(770) 824-0630 is already linked to a different contact',
+    )
+  })
+
+  it('surfaces a phone conflict with the conflicting contact id for a direct merge action', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      detail: { message: '(770) 824-0630 is already linked to a different contact', conflicting_contact_id: 806 },
+    }), { status: 409, headers: { 'Content-Type': 'application/json' } })))
+
+    await expect(runContactBulkAction('http://localhost:8000', 'employer', 'rescore', [823])).rejects.toMatchObject({
+      name: 'ContactPhoneConflictError',
+      conflictingContactId: 806,
     })
   })
 

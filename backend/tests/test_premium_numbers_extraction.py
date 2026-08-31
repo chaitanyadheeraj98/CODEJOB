@@ -288,6 +288,40 @@ class PremiumNumbersExtractionTests(unittest.TestCase):
         # budget on reasoning and returns empty content instead of the JSON answer.
         self.assertEqual(mock_completion.call_args.kwargs["thinking"], "disabled")
 
+    def test_ai_extract_parses_line_type_field(self) -> None:
+        payload = {
+            "contacts": [
+                {"role": "employer", "phone_number": "+1 214 555 1212", "name": "Ada", "line_type": "fax"},
+                {"role": "employer", "phone_number": "+1 214 555 1213", "name": "Ada", "line_type": "OTHER"},
+                {"role": "employer", "phone_number": "+1 214 555 1214", "name": "Ada", "line_type": "bogus"},
+                {"role": "employer", "phone_number": "+1 214 555 1215", "name": "Ada"},
+            ]
+        }
+        with patch("app.premium_numbers.extraction.deepseek_json_completion", return_value=payload):
+            leads = extraction._llm_extract("body", set())
+        self.assertEqual([lead.line_type for lead in leads], ["fax", "other", "phone", "phone"])
+
+    def test_finalize_extraction_sorts_fax_leads_after_phone_leads_in_the_same_block(self) -> None:
+        # A fax and a real phone number sharing a block/timestamp must not be a coin flip
+        # for which one the downstream primary-swap logic sees first.
+        payload = {
+            "contacts": [
+                {
+                    "role": "employer", "phone_number": "+1 248 688 9655", "name": "Mohan Edara",
+                    "company": "Horizon Softech Inc", "block_id": "signature-1", "line_type": "fax",
+                },
+                {
+                    "role": "employer", "phone_number": "+1 248 722 2694", "name": "Mohan Edara",
+                    "company": "Horizon Softech Inc", "block_id": "signature-1", "line_type": "phone",
+                },
+            ]
+        }
+        with patch("app.premium_numbers.extraction.deepseek_json_completion", return_value=payload):
+            leads = extraction.extract_phone_leads("Mohan Edara <mohan@horizonsoftech.net>", "Subject", "body")
+        self.assertEqual([lead.line_type for lead in leads], ["phone", "fax"])
+        self.assertEqual(leads[0].phone_number_normalized, "12487222694")
+        self.assertEqual(leads[1].phone_number_normalized, "12486889655")
+
     def test_ai_parse_failure_falls_back_to_regex_only(self) -> None:
         with patch("app.premium_numbers.extraction._llm_extract", side_effect=ValueError("bad json")):
             leads = extraction.extract_phone_leads(
@@ -516,6 +550,74 @@ class PremiumNumbersExtractionTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertTrue(extraction._is_noise_context(text, text, raw_phone))
 
+    def test_own_company_website_link_next_to_phone_is_not_noise(self) -> None:
+        # Regression test: a recruiter's own "www.company.com" sitting right below their
+        # phone in their own signature - extremely common - must not be treated the same
+        # as a mailing-list footer link just because both contain "www.".
+        text = "Ph : (770) 824-0630\nEmail: kprashanth@horizonsoftech.net\nwww.horizonsoftech.net"
+        self.assertFalse(extraction._is_noise_context(text, text, "(770) 824-0630"))
+
+    def test_link_paired_with_unsubscribe_is_still_noise(self) -> None:
+        text = "www.example.com - to unsubscribe call 214-555-1212"
+        self.assertTrue(extraction._is_noise_context(text, text, "214-555-1212"))
+
+    def test_ai_missed_phone_is_backfilled_from_regex_when_colocated_with_own_email(self) -> None:
+        # Regression test: the AI correctly identified this recruiter by email/name but
+        # returned no phone at all, even though their real number sits in their own
+        # signature a few lines later - a case the old "AI ran, trust it exclusively"
+        # rule shipped as a permanently blank phone.
+        body = (
+            "Skills required: Java, Spring Boot.\n\n"
+            "Jimmy Singh Jimmy.Singh@cyberThink.com\n\n"
+            "Thanks & Regards\n"
+            "Prashanth Kinnera\n"
+            "Bench Sales Recruiter\n"
+            "Ph : (770) 824-0630\n"
+            "Email: Kprashanth@horizonsoftech.net\n"
+            "www.horizonsoftech.net"
+        )
+        blank_phone_lead = extraction.ExtractedContactGroup(
+            phone_number_display="", phone_number_normalized="", owner_name="Prashanth Kinnera",
+            contact_email="kprashanth@horizonsoftech.net", company="Horizons of Tech",
+            designation="Bench Sales Recruiter", purpose="Recruiter contact", confidence="medium",
+            contact_type="recruiter_direct", recruiter_relevance_score=80, is_recruiter_relevant=True,
+            relevance_reason="external_domain", source_fragment="Sender: Prashanth Kinnera <kprashanth@horizonsoftech.net>",
+            role="recruiter",
+        )
+        original_llm = extraction._llm_extract
+        try:
+            extraction._llm_extract = lambda *a, **k: [blank_phone_lead]
+            leads = extraction.extract_phone_leads(
+                "Prashanth Kinnera <kprashanth@horizonsoftech.net>", "Full Stack Developer", body,
+                {"horizonsoftech.net"},
+            )
+        finally:
+            extraction._llm_extract = original_llm
+        self.assertEqual(len(leads), 1)
+        self.assertEqual(leads[0].phone_number_normalized, "17708240630")
+        self.assertTrue(leads[0].colocation_verified)
+
+    def test_ai_missed_phone_is_not_backfilled_without_an_own_email_to_anchor_it(self) -> None:
+        body = "Ph : (770) 824-0630\nwww.horizonsoftech.net"
+        blank_phone_lead = extraction.ExtractedContactGroup(
+            phone_number_display="", phone_number_normalized="", owner_name="Prashanth Kinnera",
+            contact_email="", company="Horizons of Tech", designation="Bench Sales Recruiter",
+            purpose="Recruiter contact", confidence="medium", contact_type="recruiter_direct",
+            recruiter_relevance_score=80, is_recruiter_relevant=True, relevance_reason="external_domain",
+            source_fragment="Sender: Prashanth Kinnera <kprashanth@horizonsoftech.net>", role="recruiter",
+        )
+        original_llm = extraction._llm_extract
+        try:
+            extraction._llm_extract = lambda *a, **k: [blank_phone_lead]
+            leads = extraction.extract_phone_leads(
+                "Prashanth Kinnera <kprashanth@horizonsoftech.net>", "Full Stack Developer", body,
+                {"horizonsoftech.net"},
+            )
+        finally:
+            extraction._llm_extract = original_llm
+        self.assertEqual(len(leads), 1)
+        self.assertEqual(leads[0].phone_number_normalized, "")
+
     def test_rejection_and_acceptance_paths_write_audit_rows(self) -> None:
         engine = sa.create_engine("sqlite://")
         PremiumNumberExtractionAudit.__table__.create(engine)
@@ -624,6 +726,25 @@ class PremiumNumbersExtractionTests(unittest.TestCase):
         self.assertFalse(verified)
         self.assertIsNotNone(offset)
 
+    def test_colocation_rejects_phone_evidence_that_names_a_different_contacts_email(self) -> None:
+        # Regression test: "share your resume to X or call Y" - phone Y sits right next
+        # to X's email, not the recruiter's own. Both mentions can be a similar character
+        # distance apart in a short email, so distance alone can't tell them apart - the
+        # evidence naming someone else's email is what gives it away.
+        evidence = "please share your updated resume at nk@worknovasllc.com or reach out +1 (512) 352 9739"
+        verified, offset = extraction._verify_colocation(
+            evidence, "+1 (512) 352 9739", evidence, email_raw="kprashanth@horizonsoftech.net",
+        )
+        self.assertFalse(verified)
+        self.assertIsNone(offset)
+
+    def test_colocation_accepts_phone_evidence_that_names_its_own_email(self) -> None:
+        evidence = "please share your updated resume at nk@worknovasllc.com or reach out +1 (512) 352 9739"
+        verified, offset = extraction._verify_colocation(
+            evidence, "+1 (512) 352 9739", evidence, email_raw="nk@worknovasllc.com",
+        )
+        self.assertTrue(verified)
+
     def test_ai_extract_keeps_email_only_contact_without_phone(self) -> None:
         payload = {
             "contacts": [
@@ -691,6 +812,52 @@ class PremiumNumbersExtractionTests(unittest.TestCase):
         grouped = extraction._group_candidates_by_block([blank, identified])
         self.assertEqual({lead.owner_name for lead in grouped}, {"Harshitha"})
         self.assertEqual({lead.contact_email for lead in grouped}, {"harshitha@example.com"})
+
+    def test_block_grouping_does_not_overwrite_a_leads_own_different_email(self) -> None:
+        # Regression test: "share resume to nk@worknovasllc.com or call 512-352-9739"
+        # sitting right above Prashanth Kinnera's signature got tagged with the same
+        # block_id by the AI. Grouping used to blindly repaint every lead in the block
+        # with the highest-scoring identity, so NK's own phone number ended up labeled
+        # as belonging to Prashanth - a completely different person - once Rescore
+        # applied it. A lead that already names its own distinct email must be left alone.
+        other_person = extraction.ExtractedContactGroup(
+            phone_number_display="(512) 352-9739",
+            phone_number_normalized="15123529739",
+            owner_name="Unknown",
+            contact_email="nk@worknovasllc.com",
+            company="Unknown",
+            designation="Unknown",
+            purpose="Resume submission contact",
+            confidence="medium",
+            contact_type="unknown",
+            recruiter_relevance_score=0,
+            is_recruiter_relevant=False,
+            relevance_reason="",
+            source_fragment="share resume to nk@worknovasllc.com or call",
+            block_id="sig-1",
+        )
+        signer = extraction.ExtractedContactGroup(
+            phone_number_display="(770) 824-0630",
+            phone_number_normalized="17708240630",
+            owner_name="Prashanth Kinnera",
+            contact_email="kprashanth@horizonsoftech.net",
+            company="Horizon Soft Tech",
+            designation="Bench Sales Recruiter",
+            purpose="Signature",
+            confidence="high",
+            contact_type="unknown",
+            recruiter_relevance_score=0,
+            is_recruiter_relevant=False,
+            relevance_reason="",
+            source_fragment="Prashanth Kinnera signature",
+            block_id="sig-1",
+        )
+        grouped = extraction._group_candidates_by_block([other_person, signer])
+        by_phone = {lead.phone_number_normalized: lead for lead in grouped}
+        self.assertEqual(by_phone["15123529739"].owner_name, "Unknown")
+        self.assertEqual(by_phone["15123529739"].contact_email, "nk@worknovasllc.com")
+        self.assertEqual(by_phone["17708240630"].owner_name, "Prashanth Kinnera")
+        self.assertEqual(by_phone["17708240630"].contact_email, "kprashanth@horizonsoftech.net")
 
 
 if __name__ == "__main__":

@@ -10,6 +10,8 @@ import type {
   ApplicationStatus,
   ApplicationSuggestion,
   AttachmentAssetOption,
+  ContactMergePreviewResponse,
+  ContactRescoreResponse,
   EmployerNumberCard,
   ExtractionAuditEntry,
   InventoryRow,
@@ -40,24 +42,49 @@ export class ApplicationDuplicateConflictError extends Error {
   }
 }
 
+export class ContactPhoneConflictError extends Error {
+  conflictingContactId: number | null
+
+  constructor(message: string, conflictingContactId: number | null) {
+    super(message)
+    this.name = 'ContactPhoneConflictError'
+    this.conflictingContactId = conflictingContactId
+  }
+}
+
 export async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init)
   if (!response.ok) {
     const detail = await response.text().catch(() => '')
     if (response.status === 409 && detail) {
       try {
-        const payload = JSON.parse(detail) as { detail?: { message?: string; duplicates?: ApplicationDuplicateSummary[] } }
+        const payload = JSON.parse(detail) as { detail?: { message?: string; duplicates?: ApplicationDuplicateSummary[]; conflicting_contact_id?: number | null } }
         if (Array.isArray(payload.detail?.duplicates)) {
           throw new ApplicationDuplicateConflictError(
             payload.detail?.message || 'Possible duplicate submission',
             payload.detail.duplicates,
           )
         }
+        if (payload.detail && typeof payload.detail === 'object' && 'conflicting_contact_id' in payload.detail) {
+          throw new ContactPhoneConflictError(
+            payload.detail.message || 'Already linked to a different contact',
+            payload.detail.conflicting_contact_id ?? null,
+          )
+        }
       } catch (reason) {
-        if (reason instanceof ApplicationDuplicateConflictError) throw reason
+        if (reason instanceof ApplicationDuplicateConflictError || reason instanceof ContactPhoneConflictError) throw reason
       }
     }
-    throw new Error(detail || `Request failed (${response.status})`)
+    // Most backend errors are a plain FastAPI HTTPException(detail="message") - unwrap
+    // that JSON shape so callers (and the toast) show the message, not the raw body.
+    let message = detail
+    try {
+      const parsed = JSON.parse(detail) as { detail?: unknown }
+      if (typeof parsed.detail === 'string' && parsed.detail) message = parsed.detail
+    } catch {
+      // raw response wasn't JSON - fall through to showing it as-is
+    }
+    throw new Error(message || `Request failed (${response.status})`)
   }
   return await response.json() as T
 }
@@ -215,6 +242,10 @@ export function unmarkContactRole(apiBase: string, role: 'recruiter' | 'employer
   return requestJson(`${apiBase}/${role}-numbers/${contactId}/unmark`, { method: 'POST' })
 }
 
+export function rescoreContactWithDiff(apiBase: string, role: 'recruiter' | 'employer', contactId: number): Promise<ContactRescoreResponse> {
+  return requestJson(`${apiBase}/${role}-numbers/${contactId}/rescore`, { method: 'POST' })
+}
+
 export async function runReviewAction(
   apiBase: string,
   reviewId: number,
@@ -232,8 +263,20 @@ export function approveContactMerge(apiBase: string, reviewId: number, canonical
   return requestJson(`${apiBase}/number-review/${reviewId}/approve-merge`, jsonInit('POST', canonicalContactId != null ? { canonical_contact_id: canonicalContactId } : {}))
 }
 
-export function dismissReviewSuggestion(apiBase: string, reviewId: number): Promise<{ review_id: number; status: string }> {
+export function dismissReviewSuggestion(apiBase: string, reviewId: number): Promise<{ review_id: number; contact_id: number; status: string }> {
   return requestJson(`${apiBase}/number-review/${reviewId}/dismiss`, { method: 'POST' })
+}
+
+export function acknowledgeContactEnrichment(apiBase: string, reviewId: number): Promise<{ review_id: number; status: string }> {
+  return requestJson(`${apiBase}/number-review/${reviewId}/acknowledge`, { method: 'POST' })
+}
+
+export function patchNumberReview(
+  apiBase: string,
+  reviewId: number,
+  edits: Pick<ReviewEdits, 'owner_name' | 'company' | 'designation' | 'contact_email' | 'display_phone_number' | 'linkedin_url'>,
+): Promise<NumberReviewCard> {
+  return requestJson(`${apiBase}/number-review/${reviewId}`, jsonInit('PATCH', edits))
 }
 
 export function listContactVersions(
@@ -281,7 +324,7 @@ export function getEmployerNumber(apiBase: string, contactId: number): Promise<E
 export function updateRecruiterNumber(
   apiBase: string,
   contactId: number,
-  patch: Partial<Pick<RecruiterNumberCard, 'recruiter_name' | 'company' | 'designation' | 'recruiter_email' | 'linkedin_url' | 'recruiter_verification_level' | 'do_not_work_again' | 'do_not_work_again_reason' | 'is_favorite'>>,
+  patch: Partial<Pick<RecruiterNumberCard, 'recruiter_name' | 'company' | 'secondary_company' | 'designation' | 'recruiter_email' | 'linkedin_url' | 'recruiter_verification_level' | 'do_not_work_again' | 'do_not_work_again_reason' | 'is_favorite'>> & { phone_number?: string; phones?: string[] },
 ): Promise<RecruiterNumberCard> {
   return requestJson(`${apiBase}/recruiter-numbers/${contactId}`, jsonInit('PATCH', patch))
 }
@@ -289,13 +332,26 @@ export function updateRecruiterNumber(
 export function updateEmployerNumber(
   apiBase: string,
   contactId: number,
-  patch: Partial<Pick<EmployerNumberCard, 'owner_name' | 'company' | 'employer_email' | 'is_favorite'>>,
+  patch: Partial<Pick<EmployerNumberCard, 'owner_name' | 'company' | 'secondary_company' | 'designation' | 'employer_email' | 'linkedin_url' | 'recruiter_verification_level' | 'do_not_work_again' | 'do_not_work_again_reason' | 'is_favorite'>> & { phones?: string[] },
 ): Promise<EmployerNumberCard> {
   return requestJson(`${apiBase}/employer-numbers/${contactId}`, jsonInit('PATCH', patch))
 }
 
 export function createManualContact(apiBase: string, payload: ManualContactPayload): Promise<ManualContactResult> {
   return requestJson(`${apiBase}/premium-numbers/contacts`, jsonInit('POST', payload))
+}
+
+export function getContactMergePreview(apiBase: string, contactIdA: number, contactIdB: number): Promise<ContactMergePreviewResponse> {
+  const params = new URLSearchParams({ contact_id_a: String(contactIdA), contact_id_b: String(contactIdB) })
+  return requestJson(`${apiBase}/premium-numbers/contacts/merge-preview?${params}`)
+}
+
+export function mergeContacts(apiBase: string, canonicalContactId: number, loserContactId: number): Promise<{ canonical_contact_id: number; loser_contact_id: number; status: string }> {
+  return requestJson(`${apiBase}/premium-numbers/contacts/merge`, jsonInit('POST', { canonical_contact_id: canonicalContactId, loser_contact_id: loserContactId }))
+}
+
+export function backfillDuplicateContacts(apiBase: string): Promise<{ groups_merged: number; contacts_merged: number }> {
+  return requestJson(`${apiBase}/premium-numbers/contacts/backfill-duplicates`, { method: 'POST' })
 }
 
 export function listDeletedContacts(

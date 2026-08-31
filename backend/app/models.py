@@ -675,6 +675,7 @@ class PremiumNumberContact(Base):
     employer_email: Mapped[str] = mapped_column(String(255), default="")
     employer_email_domain: Mapped[str] = mapped_column(String(255), default="", index=True)
     company: Mapped[str] = mapped_column(String(255), default="Unknown")
+    secondary_company: Mapped[str] = mapped_column(String(255), default="")
     first_detected_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     active_recruiter_lead_id: Mapped[int | None] = mapped_column(
@@ -719,6 +720,9 @@ class PremiumContactEmail(Base):
     normalized_email: Mapped[str] = mapped_column(String(255), index=True)
     domain: Mapped[str] = mapped_column(String(255), default="", index=True)
     is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Which headline column this address feeds. A dual-role contact has two of them, so
+    # without this the write-through sync in contact_identity_service is ambiguous.
+    role: Mapped[str] = mapped_column(String(20), default="recruiter")
     source_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
 
@@ -735,6 +739,7 @@ class PremiumContactPhone(Base):
     is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
     is_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     source: Mapped[str] = mapped_column(String(50), default="unknown")
+    label: Mapped[str] = mapped_column(String(20), default="")
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
 
 
@@ -1275,6 +1280,7 @@ class NumberReviewQueue(Base):
     email_subject: Mapped[str] = mapped_column(String(500), default="")
     email_sender: Mapped[str] = mapped_column(String(255), default="")
     contact_email: Mapped[str] = mapped_column(String(255), default="")
+    linkedin_url: Mapped[str] = mapped_column(String(500), default="")
     contact_type: Mapped[str] = mapped_column(String(40), default="unknown")
     recruiter_relevance_score: Mapped[int] = mapped_column(Integer, default=0)
     relevance_reason: Mapped[str] = mapped_column(String(255), default="")
@@ -1284,6 +1290,7 @@ class NumberReviewQueue(Base):
     state: Mapped[str] = mapped_column(String(40), default="pending")
     role: Mapped[str | None] = mapped_column(String(20), nullable=True)
     reason_code: Mapped[str] = mapped_column(String(40), default="new_number")
+    field_changes_json: Mapped[str] = mapped_column(Text, default="")
     occurrence_count: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
@@ -1296,7 +1303,9 @@ class ContactIdentityAction(Base):
     action_type: Mapped[str] = mapped_column(String(30), index=True)
     primary_contact_id: Mapped[int] = mapped_column(Integer, index=True)
     secondary_contact_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    value: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Holds JSON payloads (soft-delete identifier snapshots, migration reports), not just
+    # a single identifier - 500 chars is not enough.
+    value: Mapped[str | None] = mapped_column(Text, nullable=True)
     source: Mapped[str] = mapped_column(String(40))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, index=True)
 

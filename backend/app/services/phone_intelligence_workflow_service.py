@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -20,6 +21,7 @@ from app.models import (
 from app.parsing.document_extraction import extract_gmail_reply_body
 from app.parsing.jd_requirements import extract_work_authorizations
 from app.phase0 import email_domain
+from app.premium_numbers.contact_identity_service import _latest_phone_evidence_at
 from app.premium_numbers.domain_guard import employer_domains_for_owner, is_derivable_company_domain
 from app.premium_numbers.extraction import EMAIL_RE, ExtractedContactGroup, extract_phone_leads
 from app.premium_numbers.identity_matching import classify_identity_match
@@ -59,6 +61,37 @@ def _is_blank_or_unknown(value: str | None) -> bool:
 
 def _fill_if_blank(current: str | None, candidate: str | None) -> str:
     return (candidate or "").strip() if _is_blank_or_unknown(current) and not _is_blank_or_unknown(candidate) else (current or "")
+
+
+def _phone_field_change(old: str, new: str, *, label: str = "Phone") -> dict[str, str]:
+    return {"field": "display_phone_number", "label": label, "old": old, "new": new}
+
+
+def _same_company(a: str, b: str) -> bool:
+    return (a or "").strip().lower() == (b or "").strip().lower()
+
+
+def _company_field_change(old: str, new: str) -> dict[str, str]:
+    return {"field": "secondary_company", "label": "Sister company", "old": old, "new": new}
+
+
+def capture_sister_company(contact: PremiumNumberContact, new_company: str | None) -> str | None:
+    """Same phone, a genuinely different company than the one already on file - not a
+    typo to overwrite and not noise to drop, but a sign this person operates under a
+    second (sister) company. Records it as the contact's secondary company instead,
+    leaving the primary company untouched. Returns the old secondary_company value if
+    this changed something (for callers that want to show the before/after), else None.
+    """
+    new_company = (new_company or "").strip()
+    if _is_blank_or_unknown(new_company) or _is_blank_or_unknown(contact.company):
+        return None
+    if _same_company(contact.company, new_company):
+        return None
+    if not _is_blank_or_unknown(contact.secondary_company) and _same_company(contact.secondary_company, new_company):
+        return None
+    old_secondary = contact.secondary_company
+    contact.secondary_company = new_company
+    return old_secondary
 
 
 @dataclass(frozen=True)
@@ -504,11 +537,18 @@ class PhoneIntelligenceWorkflowService:
                     if not created:
                         self._snapshot_legacy_contact_if_needed(db, contact, promotion_role)
                         contact.seen_count += 1
-                        self._ensure_secondary_phone_recorded(db, contact, lead)
+                        self._ensure_secondary_phone_recorded(db, context, contact, lead, version, promotion_role)
+                        self._ensure_company_recorded(db, context, contact, lead, version, promotion_role)
                     if version:
                         self._link_lead_to_contact(db, contact, version, promotion_role)
                     else:
                         self._apply_unversioned_contact_fields(db, contact, lead, promotion_role)
+                    # The session runs with autoflush=False - without this, a contact's
+                    # email set just now (e.g. on its first lead) stays invisible to
+                    # _find_contact_for_lead's email lookup for every later lead in this
+                    # same batch, so a signature block with 2+ numbers for one person
+                    # spawns a sibling contact per number instead of merging into one.
+                    db.flush()
 
                     if promotion_role == "recruiter":
                         recruiter_matches += 1
@@ -620,7 +660,9 @@ class PhoneIntelligenceWorkflowService:
         leads = extract_phone_leads(
             context.sender,
             context.subject,
-            extract_gmail_reply_body(context.body),
+            # A recruiter's own phone almost always lives in their trailing signature -
+            # keep it. Only quoted thread history/footers get stripped here.
+            extract_gmail_reply_body(context.body, strip_signature=False),
             employer_domains=employer_domains_for_owner(db, context.owner_id),
             db=db,
             owner_id=context.owner_id,
@@ -699,6 +741,7 @@ class PhoneIntelligenceWorkflowService:
                 )
             query = db.query(PremiumNumberContact).filter(
                 PremiumNumberContact.owner_id == owner_id,
+                PremiumNumberContact.deleted_at.is_(None),
                 or_(
                     PremiumNumberContact.normalized_phone_number == lead.phone_number_normalized,
                     PremiumNumberContact.id.in_(secondary),
@@ -722,12 +765,36 @@ class PhoneIntelligenceWorkflowService:
                 )
             contact = query.first()
             if contact is not None:
+                # A blank extension on the lead only proves "same base number", not
+                # "same person" - _find_contact_for_lead's leniency rule (blank extension
+                # always matches, since unknown isn't proof of difference) means `contact`
+                # here may just be whichever of several people on a shared switchboard
+                # happened to sort first. If the lead also carries an email that already
+                # belongs to a DIFFERENT contact on file, that's a stronger, unambiguous
+                # signal than an arbitrary pick among strangers who share a phone number.
+                if not lead.phone_extension and lead.contact_email:
+                    email_match = (
+                        db.query(PremiumNumberContact)
+                        .filter(
+                            PremiumNumberContact.owner_id == owner_id,
+                            PremiumNumberContact.deleted_at.is_(None),
+                            PremiumNumberContact.id != contact.id,
+                            or_(
+                                PremiumNumberContact.recruiter_email == lead.contact_email,
+                                PremiumNumberContact.employer_email == lead.contact_email,
+                            ),
+                        )
+                        .first()
+                    )
+                    if email_match is not None:
+                        return email_match
                 return contact
         if lead.contact_email:
             return (
                 db.query(PremiumNumberContact)
                 .filter(
                     PremiumNumberContact.owner_id == owner_id,
+                    PremiumNumberContact.deleted_at.is_(None),
                     or_(
                         PremiumNumberContact.recruiter_email == lead.contact_email,
                         PremiumNumberContact.employer_email == lead.contact_email,
@@ -764,9 +831,14 @@ class PhoneIntelligenceWorkflowService:
                     break
         return resolved
 
-    @staticmethod
     def _ensure_secondary_phone_recorded(
-        db: Session, contact: PremiumNumberContact, lead: ExtractedContactGroup
+        self,
+        db: Session,
+        context: PhoneWorkflowSourceContext,
+        contact: PremiumNumberContact,
+        lead: ExtractedContactGroup,
+        version: PremiumNumberLead | None,
+        role: str,
     ) -> None:
         # A contact's own second (or third) number - discovered on this lead but not the
         # one that identifies the contact record - is preserved here so a later email
@@ -774,10 +846,11 @@ class PhoneIntelligenceWorkflowService:
         # secondary-phone check, instead of relying on the fragile email fallback every time.
         if not lead.phone_number_normalized or lead.phone_number_normalized == contact.normalized_phone_number:
             return
-        # Deliberately not reusing contact_identity_service._add_phone here: it swallows a
-        # unique-constraint conflict with a bare `except: return`, which silently drops a
-        # link a viewer believes succeeded. Checking first instead of catching after the
-        # fact covers all three cases correctly: already recorded on this contact (skip,
+        # Deliberately not reusing contact_identity_service.add_phone here: it only tells
+        # apart "already on this contact" vs "claimed by a different contact", which would
+        # conflate the two different-contact cases below that need distinct handling.
+        # Checking first instead covers all three cases correctly: already recorded on this
+        # contact (skip,
         # done); already claimed as a secondary phone on a *different* contact (skip - a
         # real ambiguity, not something to paper over by guessing); or already the PRIMARY
         # phone of a different, independently-existing contact (skip too - recording it here
@@ -797,6 +870,60 @@ class PhoneIntelligenceWorkflowService:
         ).first()
         if claimed_elsewhere:
             return
+        if lead.line_type != "phone":
+            # A fax (or other non-callable) line never competes for the primary/direct-line
+            # slot below - it almost never carries an extension either, so without this it
+            # would look just like a real direct line to the comparison and could win the
+            # primary slot on nothing but processing order.
+            db.add(
+                PremiumContactPhone(
+                    owner_id=contact.owner_id,
+                    premium_contact_id=contact.id,
+                    normalized_phone_number=lead.phone_number_normalized,
+                    phone_extension=lead.phone_extension,
+                    is_primary=False,
+                    is_verified=False,
+                    source="ingestion",
+                    label=lead.line_type,
+                    created_at=utc_now(),
+                )
+            )
+            db.flush()
+            self._flag_contact_enriched(
+                db, context, contact, lead, version, role,
+                [_phone_field_change("", lead.phone_number_display, label=f"{lead.line_type.capitalize()} number")],
+            )
+            return
+        if not lead.phone_extension and not contact.phone_extension and contact.normalized_phone_number:
+            # Same kind of number (both direct/no-extension) but a different value - the
+            # recruiter's direct line may have changed. Trust whichever extraction has more
+            # recent real-world evidence; a tie or no comparable evidence keeps the existing
+            # number rather than guessing (same rule contact_identity_service.dismiss uses
+            # for a shared-switchboard conflict).
+            existing_evidence_at = _latest_phone_evidence_at(db, contact.id, contact.normalized_phone_number)
+            new_evidence_at = context.received_at
+            if existing_evidence_at is None or new_evidence_at is None or new_evidence_at <= existing_evidence_at:
+                return
+            old_display = contact.display_phone_number
+            self._swap_primary_phone(db, contact, lead)
+            self._flag_contact_enriched(
+                db, context, contact, lead, version, role,
+                [_phone_field_change(old_display, contact.display_phone_number)],
+            )
+            return
+        # A number with no extension is a direct/desk line; one with an extension is a
+        # company switchboard line. The direct line is the more useful number to show, so
+        # it takes over as the contact's primary/display number instead of just being
+        # appended as another secondary - the number it displaces moves to
+        # PremiumContactPhone in its place.
+        if not lead.phone_extension and contact.phone_extension and contact.normalized_phone_number:
+            old_display = contact.display_phone_number
+            self._swap_primary_phone(db, contact, lead)
+            self._flag_contact_enriched(
+                db, context, contact, lead, version, role,
+                [_phone_field_change(old_display, contact.display_phone_number)],
+            )
+            return
         db.add(
             PremiumContactPhone(
                 owner_id=contact.owner_id,
@@ -810,6 +937,69 @@ class PhoneIntelligenceWorkflowService:
             )
         )
         db.flush()
+        self._flag_contact_enriched(
+            db, context, contact, lead, version, role,
+            [_phone_field_change("", lead.phone_number_display, label="Additional phone")],
+        )
+
+    def _ensure_company_recorded(
+        self,
+        db: Session,
+        context: PhoneWorkflowSourceContext,
+        contact: PremiumNumberContact,
+        lead: ExtractedContactGroup,
+        version: PremiumNumberLead | None,
+        role: str,
+    ) -> None:
+        # apply_contact_version below only ever fills a *blank* company for this call
+        # path, so capturing a second, different company here first is what stops it
+        # from being silently lost when the contact already has a primary company.
+        old_secondary = capture_sister_company(contact, lead.company)
+        if old_secondary is None:
+            return
+        self._flag_contact_enriched(
+            db, context, contact, lead, version, role,
+            [_company_field_change(old_secondary, contact.secondary_company)],
+        )
+
+    @staticmethod
+    def _swap_primary_phone(db: Session, contact: PremiumNumberContact, lead: ExtractedContactGroup) -> None:
+        if contact.normalized_phone_number:
+            db.add(
+                PremiumContactPhone(
+                    owner_id=contact.owner_id,
+                    premium_contact_id=contact.id,
+                    normalized_phone_number=contact.normalized_phone_number,
+                    phone_extension=contact.phone_extension,
+                    is_primary=False,
+                    is_verified=False,
+                    source="ingestion",
+                    created_at=utc_now(),
+                )
+            )
+        contact.normalized_phone_number = lead.phone_number_normalized
+        contact.display_phone_number = lead.phone_number_display
+        contact.phone_extension = lead.phone_extension
+        db.flush()
+
+    def _flag_contact_enriched(
+        self,
+        db: Session,
+        context: PhoneWorkflowSourceContext,
+        contact: PremiumNumberContact,
+        lead: ExtractedContactGroup,
+        version: PremiumNumberLead | None,
+        role: str,
+        changes: list[dict[str, str]],
+    ) -> None:
+        # The change is already committed on the contact by the time this runs (same
+        # "commit, then let the human verify" model as the manual Rescore button) - a
+        # background sync has no one to ask "should I do this?" before acting, but the
+        # person it affects still needs to see AI-found data before trusting it.
+        review = self._create_review(
+            db, context, lead, version, role=role, reason_code="contact_enriched", target_contact_id=contact.id,
+        )
+        review.field_changes_json = json.dumps(changes)
 
     def _upsert_premium_lead(
         self,
@@ -1123,6 +1313,20 @@ class PhoneIntelligenceWorkflowService:
             review.role = role
             review.reason_code = reason_code
         if review is None:
+            # ux_number_review_queue_owner_phone_email is keyed on (owner, phone,
+            # source_email_id) regardless of state - a resolved/dismissed review from an
+            # earlier pass already occupies this slot. Re-confirming already-settled
+            # history shouldn't crash, and shouldn't resurrect a decision the reviewer
+            # already made (dismiss() may have since split this person into their own
+            # contact - see contact_identity_service.dismiss).
+            if context.recruiter_email_row_id is not None and db.query(
+                NumberReviewQueue.id
+            ).filter(
+                NumberReviewQueue.owner_id == context.owner_id,
+                NumberReviewQueue.normalized_phone_number == lead.phone_number_normalized,
+                NumberReviewQueue.source_email_id == context.recruiter_email_row_id,
+            ).first():
+                return False
             self._create_review(
                 db,
                 context,

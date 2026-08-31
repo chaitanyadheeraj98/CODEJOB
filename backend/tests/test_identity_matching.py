@@ -61,6 +61,33 @@ def test_two_agreeing_fields_confirm() -> None:
     assert result.outcome == "confirmed"
 
 
+def test_matching_extension_plus_one_field_confirms() -> None:
+    result = classify_identity_match(
+        _contact(phone_extension="368", recruiter_email="other@example.com"),
+        _candidate(phone_extension="368"),
+        "recruiter",
+    )
+    assert result.outcome == "confirmed"
+
+
+def test_different_extensions_conflict_even_when_name_and_company_agree() -> None:
+    result = classify_identity_match(
+        _contact(phone_extension="334"),
+        _candidate(phone_extension="368"),
+        "recruiter",
+    )
+    assert result.outcome == "conflicting"
+
+
+def test_blank_incoming_extension_does_not_force_a_conflict_on_its_own() -> None:
+    result = classify_identity_match(
+        _contact(recruiter_name="Ada Lovelace", recruiter_email="", company="Unknown", phone_extension="368"),
+        _candidate(owner_name="Unknown", contact_email="", company="Unknown", phone_extension=""),
+        "recruiter",
+    )
+    assert result.outcome == "insufficient"
+
+
 def test_conflict_and_insufficient_are_distinct() -> None:
     conflict = classify_identity_match(
         _contact(),

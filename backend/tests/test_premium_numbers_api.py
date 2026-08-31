@@ -1,6 +1,7 @@
+import json
 import os
 import unittest
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -259,6 +260,170 @@ class PremiumNumbersApiTests(unittest.TestCase):
             ).one()
             self.assertIsNone(contact.normalized_phone_number)
             self.assertTrue(contact.is_recruiter)
+
+    def test_mark_number_as_recruiter_formats_edited_phone_and_captures_extension(self) -> None:
+        with Session(self.engine) as db:
+            db.add(
+                NumberReviewQueue(
+                    owner_id=main.settings.owner_id,
+                    source_email_id=None,
+                    normalized_phone_number="",
+                    display_phone_number="",
+                    owner_name="Priya Sharma",
+                    company="Acme Staffing",
+                    designation="Recruiter",
+                    confidence="medium",
+                    purpose="Recruiter contact",
+                    evidence_snippet="",
+                    email_subject="",
+                    email_sender="",
+                    contact_email="priya@acmestaffing.example",
+                    gmail_open_url="",
+                    state="pending",
+                )
+            )
+            db.commit()
+            review_id = db.query(NumberReviewQueue.id).filter(NumberReviewQueue.owner_id == main.settings.owner_id).scalar()
+
+        mark_res = self.client.post(
+            f"/number-review/{review_id}/mark-recruiter",
+            json={"display_phone_number": "6098979670 ext 2162"},
+        )
+        self.assertEqual(mark_res.status_code, 200, mark_res.text)
+
+        with Session(self.engine) as db:
+            contact = db.query(PremiumNumberContact).filter(
+                PremiumNumberContact.recruiter_email == "priya@acmestaffing.example"
+            ).one()
+            self.assertEqual(contact.normalized_phone_number, "16098979670")
+            self.assertEqual(contact.phone_extension, "2162")
+            lead = db.query(PremiumNumberLead).filter(PremiumNumberLead.owner_id == main.settings.owner_id).one()
+            self.assertEqual(lead.phone_number_normalized, "16098979670")
+            self.assertEqual(lead.phone_number_display, "(609) 897-9670 ext 2162")
+            self.assertEqual(lead.phone_extension, "2162")
+
+    def test_mark_number_as_recruiter_rejects_an_unparseable_edited_phone(self) -> None:
+        with Session(self.engine) as db:
+            db.add(
+                NumberReviewQueue(
+                    owner_id=main.settings.owner_id,
+                    source_email_id=None,
+                    normalized_phone_number="",
+                    display_phone_number="",
+                    owner_name="Priya Sharma",
+                    company="Acme Staffing",
+                    designation="Recruiter",
+                    confidence="medium",
+                    purpose="Recruiter contact",
+                    evidence_snippet="",
+                    email_subject="",
+                    email_sender="",
+                    contact_email="priya2@acmestaffing.example",
+                    gmail_open_url="",
+                    state="pending",
+                )
+            )
+            db.commit()
+            review_id = db.query(NumberReviewQueue.id).filter(NumberReviewQueue.owner_id == main.settings.owner_id).scalar()
+
+        mark_res = self.client.post(
+            f"/number-review/{review_id}/mark-recruiter",
+            json={"display_phone_number": "not a phone number"},
+        )
+        self.assertEqual(mark_res.status_code, 422)
+
+    def test_patch_number_review_updates_fields_and_formats_phone(self) -> None:
+        with Session(self.engine) as db:
+            db.add(
+                NumberReviewQueue(
+                    owner_id=main.settings.owner_id,
+                    source_email_id=None,
+                    normalized_phone_number="",
+                    display_phone_number="",
+                    owner_name="Unknown",
+                    company="Unknown",
+                    designation="Unknown",
+                    confidence="low",
+                    purpose="",
+                    evidence_snippet="",
+                    email_subject="",
+                    email_sender="",
+                    contact_email="",
+                    gmail_open_url="",
+                    state="pending",
+                )
+            )
+            db.commit()
+            review_id = db.query(NumberReviewQueue.id).filter(NumberReviewQueue.owner_id == main.settings.owner_id).scalar()
+
+        response = self.client.patch(
+            f"/number-review/{review_id}",
+            json={
+                "owner_name": "Gunika Sharma",
+                "company": "Empower Professionals",
+                "designation": "Recruiter",
+                "contact_email": "gunika@empowerprofessionals.com",
+                "display_phone_number": "732-356-8008 ext 355",
+                "linkedin_url": "linkedin.com/in/gunika-sharma",
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(payload["owner_name"], "Gunika Sharma")
+        self.assertEqual(payload["normalized_phone_number"], "17323568008")
+        self.assertEqual(payload["display_phone_number"], "(732) 356-8008 ext 355")
+        self.assertEqual(payload["linkedin_url"], "https://linkedin.com/in/gunika-sharma")
+        with Session(self.engine) as db:
+            review = db.get(NumberReviewQueue, review_id)
+            self.assertEqual(review.company, "Empower Professionals")
+            self.assertEqual(review.contact_email, "gunika@empowerprofessionals.com")
+            self.assertEqual(review.linkedin_url, "https://linkedin.com/in/gunika-sharma")
+
+    def test_patch_number_review_rejects_an_unparseable_phone(self) -> None:
+        with Session(self.engine) as db:
+            db.add(NumberReviewQueue(
+                owner_id=main.settings.owner_id, source_email_id=None, normalized_phone_number="",
+                display_phone_number="", owner_name="Unknown", company="Unknown", designation="Unknown",
+                confidence="low", purpose="", evidence_snippet="", email_subject="", email_sender="",
+                contact_email="", gmail_open_url="", state="pending",
+            ))
+            db.commit()
+            review_id = db.query(NumberReviewQueue.id).filter(NumberReviewQueue.owner_id == main.settings.owner_id).scalar()
+
+        response = self.client.patch(f"/number-review/{review_id}", json={"display_phone_number": "banana"})
+        self.assertEqual(response.status_code, 422)
+
+    def test_patch_number_review_rejects_an_invalid_email(self) -> None:
+        with Session(self.engine) as db:
+            db.add(NumberReviewQueue(
+                owner_id=main.settings.owner_id, source_email_id=None, normalized_phone_number="",
+                display_phone_number="", owner_name="Unknown", company="Unknown", designation="Unknown",
+                confidence="low", purpose="", evidence_snippet="", email_subject="", email_sender="",
+                contact_email="", gmail_open_url="", state="pending",
+            ))
+            db.commit()
+            review_id = db.query(NumberReviewQueue.id).filter(NumberReviewQueue.owner_id == main.settings.owner_id).scalar()
+
+        response = self.client.patch(f"/number-review/{review_id}", json={"contact_email": "not-an-email"})
+        self.assertEqual(response.status_code, 422)
+
+    def test_patch_number_review_404_when_missing(self) -> None:
+        response = self.client.patch("/number-review/999999", json={"owner_name": "Someone"})
+        self.assertEqual(response.status_code, 404)
+
+    def test_patch_number_review_409_when_already_resolved(self) -> None:
+        with Session(self.engine) as db:
+            db.add(NumberReviewQueue(
+                owner_id=main.settings.owner_id, source_email_id=None, normalized_phone_number="",
+                display_phone_number="", owner_name="Unknown", company="Unknown", designation="Unknown",
+                confidence="low", purpose="", evidence_snippet="", email_subject="", email_sender="",
+                contact_email="", gmail_open_url="", state="classified_recruiter",
+            ))
+            db.commit()
+            review_id = db.query(NumberReviewQueue.id).filter(NumberReviewQueue.owner_id == main.settings.owner_id).scalar()
+
+        response = self.client.patch(f"/number-review/{review_id}", json={"owner_name": "Someone"})
+        self.assertEqual(response.status_code, 409)
 
     def test_recruiter_opportunity_includes_recruiter_phone_fields(self) -> None:
         now = datetime.now(UTC)
@@ -1707,6 +1872,210 @@ class PremiumNumbersApiTests(unittest.TestCase):
             self.assertEqual(contact.recruiter_name, "Priya Sharma")
             self.assertEqual(contact.company, "Acme Staffing")
 
+    def test_patch_recruiter_number_sets_phone_when_previously_blank(self) -> None:
+        with Session(self.engine) as db:
+            contact = RecruiterNumber(
+                owner_id=main.settings.owner_id,
+                normalized_phone_number=None,
+                display_phone_number="",
+                recruiter_name="Gunika Sharma",
+                company="Empower Professionals",
+                designation="Recruiter",
+                recruiter_email="gunika@empowerprofessionals.com",
+            )
+            db.add(contact)
+            db.commit()
+            contact_id = contact.id
+
+        response = self.client.patch(
+            f"/recruiter-numbers/{contact_id}",
+            json={"phone_number": "732-356-8008 ext 355"},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(payload["normalized_phone_number"], "17323568008")
+        self.assertEqual(payload["display_phone_number"], "(732) 356-8008 ext 355")
+        with Session(self.engine) as db:
+            contact = db.get(PremiumNumberContact, contact_id)
+            self.assertEqual(contact.normalized_phone_number, "17323568008")
+            self.assertEqual(contact.phone_extension, "355")
+            self.assertTrue(contact.phone_is_valid)
+
+    def test_patch_recruiter_number_rejects_an_unparseable_phone(self) -> None:
+        with Session(self.engine) as db:
+            contact = RecruiterNumber(
+                owner_id=main.settings.owner_id,
+                normalized_phone_number=None,
+                display_phone_number="",
+                recruiter_name="Gunika Sharma",
+                company="Empower Professionals",
+                designation="Recruiter",
+                recruiter_email="gunika@empowerprofessionals.com",
+            )
+            db.add(contact)
+            db.commit()
+            contact_id = contact.id
+
+        response = self.client.patch(
+            f"/recruiter-numbers/{contact_id}",
+            json={"phone_number": "not a phone number"},
+        )
+        self.assertEqual(response.status_code, 422)
+
+    def test_patch_recruiter_number_conflicting_phone_returns_409_not_500(self) -> None:
+        with Session(self.engine) as db:
+            db.add(RecruiterNumber(
+                owner_id=main.settings.owner_id,
+                normalized_phone_number="17323568008",
+                display_phone_number="(732) 356-8008",
+                phone_extension="",
+                recruiter_name="Vaibhav Karhiwale",
+                company="Empower Professionals",
+                designation="Recruiter",
+            ))
+            contact = RecruiterNumber(
+                owner_id=main.settings.owner_id,
+                normalized_phone_number=None,
+                display_phone_number="",
+                recruiter_name="Gunika Sharma",
+                company="Empower Professionals",
+                designation="Recruiter",
+            )
+            db.add(contact)
+            db.commit()
+            contact_id = contact.id
+
+        response = self.client.patch(
+            f"/recruiter-numbers/{contact_id}",
+            json={"phone_number": "732-356-8008"},
+        )
+        self.assertEqual(response.status_code, 409)
+        with Session(self.engine) as db:
+            contact = db.get(PremiumNumberContact, contact_id)
+            self.assertIsNone(contact.normalized_phone_number)
+
+    def test_patch_recruiter_number_phones_list_replaces_primary_and_secondaries(self) -> None:
+        with Session(self.engine) as db:
+            contact = RecruiterNumber(
+                owner_id=main.settings.owner_id, normalized_phone_number="18564561805", phone_extension="1025",
+                display_phone_number="(856) 456-1805 ext 1025", recruiter_name="Sunitha Sanu", company="Momentousa",
+                recruiter_email="sunitha@example.com",
+            )
+            db.add(contact)
+            db.commit()
+            contact_id = contact.id
+
+        response = self.client.patch(
+            f"/recruiter-numbers/{contact_id}",
+            json={"phones": ["(856) 372-4625", "(856) 456-1805 ext 1025", ""]},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        primaries = [p for p in payload["phones"] if p["is_primary"]]
+        self.assertEqual(len(primaries), 1)
+        self.assertEqual(primaries[0]["display"], "(856) 372-4625")
+        secondary = next(p for p in payload["phones"] if not p["is_primary"])
+        self.assertEqual(secondary["display"], "(856) 456-1805 ext 1025")
+
+        with Session(self.engine) as db:
+            refreshed = db.get(PremiumNumberContact, contact_id)
+            self.assertEqual(refreshed.normalized_phone_number, "18563724625")
+            self.assertEqual(refreshed.phone_extension, "")
+            secondaries = db.query(PremiumContactPhone).filter(PremiumContactPhone.premium_contact_id == contact_id).all()
+            self.assertEqual([(row.normalized_phone_number, row.phone_extension) for row in secondaries], [("18564561805", "1025")])
+
+    def test_patch_recruiter_number_phones_list_save_does_not_wipe_out_a_labeled_fax_row(self) -> None:
+        with Session(self.engine) as db:
+            contact = RecruiterNumber(
+                owner_id=main.settings.owner_id, normalized_phone_number="12487222694",
+                display_phone_number="(248) 722-2694", recruiter_name="Mohan Edara", company="Horizon Softech Inc",
+            )
+            db.add(contact)
+            db.flush()
+            db.add(PremiumContactPhone(
+                owner_id=main.settings.owner_id, premium_contact_id=contact.id,
+                normalized_phone_number="12486889655", label="fax", source="ingestion",
+            ))
+            db.commit()
+            contact_id = contact.id
+
+        response = self.client.patch(
+            f"/recruiter-numbers/{contact_id}",
+            json={"phones": ["(248) 722-2694", "(248) 555-0100"]},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual({p["display"] for p in payload["phones"]}, {"(248) 722-2694", "(248) 555-0100", "(248) 688-9655"})
+        other = next(p for p in payload["phones"] if p["label"])
+        self.assertEqual(other["label"], "fax")
+
+        with Session(self.engine) as db:
+            fax_row = db.query(PremiumContactPhone).filter(
+                PremiumContactPhone.premium_contact_id == contact_id, PremiumContactPhone.label == "fax",
+            ).one()
+            self.assertEqual(fax_row.normalized_phone_number, "12486889655")
+
+    def test_patch_recruiter_number_phones_list_rejects_a_number_claimed_by_another_contact(self) -> None:
+        with Session(self.engine) as db:
+            db.add(RecruiterNumber(
+                owner_id=main.settings.owner_id, normalized_phone_number="17323568008",
+                display_phone_number="(732) 356-8008", recruiter_name="Vaibhav Karhiwale", company="Empower Professionals",
+            ))
+            contact = RecruiterNumber(
+                owner_id=main.settings.owner_id, normalized_phone_number="14155550101",
+                display_phone_number="(415) 555-0101", recruiter_name="Gunika Sharma", company="Empower Professionals",
+            )
+            db.add(contact)
+            db.commit()
+            contact_id = contact.id
+
+        response = self.client.patch(
+            f"/recruiter-numbers/{contact_id}",
+            json={"phones": ["(415) 555-0101", "732-356-8008"]},
+        )
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertIn("conflicting_contact_id", response.json()["detail"])
+        with Session(self.engine) as db:
+            contact = db.get(PremiumNumberContact, contact_id)
+            self.assertEqual(contact.normalized_phone_number, "14155550101")
+
+    def test_patch_recruiter_number_phones_empty_list_clears_the_phone(self) -> None:
+        with Session(self.engine) as db:
+            contact = RecruiterNumber(
+                owner_id=main.settings.owner_id, normalized_phone_number="14155550101",
+                display_phone_number="(415) 555-0101", recruiter_name="Gunika Sharma", company="Empower Professionals",
+            )
+            db.add(contact)
+            db.commit()
+            contact_id = contact.id
+
+        response = self.client.patch(f"/recruiter-numbers/{contact_id}", json={"phones": [""]})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["phones"], [])
+        with Session(self.engine) as db:
+            contact = db.get(PremiumNumberContact, contact_id)
+            self.assertIsNone(contact.normalized_phone_number)
+            self.assertEqual(contact.display_phone_number, "")
+
+    def test_patch_employer_number_phones_list_works_the_same_as_recruiter(self) -> None:
+        with Session(self.engine) as db:
+            contact = EmployerNumber(
+                owner_id=main.settings.owner_id, normalized_phone_number="18564561805", phone_extension="1025",
+                display_phone_number="(856) 456-1805 ext 1025", owner_name="Sunitha Sanu", company="Momentousa",
+            )
+            db.add(contact)
+            db.commit()
+            contact_id = contact.id
+
+        response = self.client.patch(
+            f"/employer-numbers/{contact_id}",
+            json={"phones": ["(856) 372-4625", "(856) 456-1805 ext 1025"]},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        primaries = [p for p in response.json()["phones"] if p["is_primary"]]
+        self.assertEqual(len(primaries), 1)
+        self.assertEqual(primaries[0]["display"], "(856) 372-4625")
+
     def test_patch_employer_number_updates_manual_fields(self) -> None:
         with Session(self.engine) as db:
             contact = EmployerNumber(
@@ -2258,6 +2627,223 @@ class PremiumNumbersApiTests(unittest.TestCase):
         self.assertFalse(items["internal@horizonsoftech.net"]["flagged"])
         self.assertEqual(items["internal@horizonsoftech.net"]["designation"], "Unknown")
 
+    def test_merge_preview_compares_both_contacts_names_phones_and_lead_counts(self) -> None:
+        now = datetime.now(UTC)
+        with Session(self.engine) as db:
+            canonical = EmployerNumber(
+                owner_id=main.settings.owner_id, normalized_phone_number="17708240630",
+                display_phone_number="(770) 824-0630", owner_name="Prashanth Kinnera", company="Horizons of Tech",
+                employer_email="kprashanth@horizonsoftech.net",
+            )
+            loser = EmployerNumber(
+                owner_id=main.settings.owner_id, normalized_phone_number="19727561212",
+                display_phone_number="(972) 756-1212", owner_name="Prashanth Kinnera", company="Horizons of Tech",
+                employer_email="kprashanth@horizonsoftech.net",
+            )
+            db.add_all([canonical, loser])
+            db.flush()
+            db.add(PremiumNumberLead(
+                owner_id=main.settings.owner_id, contact_id=loser.id, phone_number_normalized="19727561212",
+                phone_number_display="(972) 756-1212", role="employer", owner_name="Prashanth Kinnera",
+                created_at=now,
+            ))
+            db.commit()
+            canonical_id, loser_id = canonical.id, loser.id
+
+        response = self.client.get(f"/premium-numbers/contacts/merge-preview?contact_id_a={canonical_id}&contact_id_b={loser_id}")
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(payload["contact_a"]["id"], canonical_id)
+        self.assertEqual(payload["contact_a"]["display_phone_number"], "(770) 824-0630")
+        self.assertEqual(payload["contact_b"]["id"], loser_id)
+        self.assertEqual(payload["contact_b"]["display_phone_number"], "(972) 756-1212")
+        self.assertEqual(payload["contact_b"]["lead_count"], 1)
+        self.assertEqual(len(payload["contact_b"]["leads"]), 1)
+
+    def test_merge_preview_404_when_a_contact_is_missing(self) -> None:
+        response = self.client.get("/premium-numbers/contacts/merge-preview?contact_id_a=999999&contact_id_b=999998")
+        self.assertEqual(response.status_code, 404, response.text)
+
+    def test_merge_endpoint_reassigns_leads_and_soft_deletes_the_loser(self) -> None:
+        with Session(self.engine) as db:
+            canonical = EmployerNumber(
+                owner_id=main.settings.owner_id, normalized_phone_number="17708240630",
+                display_phone_number="(770) 824-0630", owner_name="Prashanth Kinnera", company="Horizons of Tech",
+            )
+            loser = EmployerNumber(
+                owner_id=main.settings.owner_id, normalized_phone_number="19727561212",
+                display_phone_number="(972) 756-1212", owner_name="Prashanth Kinnera", company="Horizons of Tech",
+            )
+            db.add_all([canonical, loser])
+            db.flush()
+            db.add(PremiumNumberLead(
+                owner_id=main.settings.owner_id, contact_id=loser.id, phone_number_normalized="19727561212",
+                phone_number_display="(972) 756-1212", role="employer", owner_name="Prashanth Kinnera",
+            ))
+            db.commit()
+            canonical_id, loser_id = canonical.id, loser.id
+
+        response = self.client.post(
+            "/premium-numbers/contacts/merge",
+            json={"canonical_contact_id": canonical_id, "loser_contact_id": loser_id},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json(), {"canonical_contact_id": canonical_id, "loser_contact_id": loser_id, "status": "merged"})
+        with Session(self.engine) as db:
+            refreshed_loser = db.get(PremiumNumberContact, loser_id)
+            self.assertIsNotNone(refreshed_loser.deleted_at)
+            leads = db.query(PremiumNumberLead).filter(PremiumNumberLead.contact_id == canonical_id).all()
+            self.assertEqual(len(leads), 1)
+
+    def test_approve_link_with_a_different_company_keeps_it_as_a_sister_company(self) -> None:
+        # Different email AND different company for the same phone trips the identity-
+        # conflict review flow instead of auto-applying (see classify_identity_match) - once
+        # a human confirms it's the same person, the disagreeing company must not be lost.
+        with Session(self.engine) as db:
+            contact = RecruiterNumber(
+                owner_id=main.settings.owner_id, normalized_phone_number="12482476165",
+                display_phone_number="(248) 247-6165", recruiter_name="Harshitha Voddepally",
+                company="Horizon Softech Inc", recruiter_email="harshitha@horizonsoftech.net",
+            )
+            db.add(contact)
+            db.flush()
+            review = NumberReviewQueue(
+                owner_id=main.settings.owner_id,
+                target_contact_id=contact.id,
+                normalized_phone_number="12482476165",
+                display_phone_number="(248) 247-6165",
+                owner_name="Sheshwika Kukkala",
+                company="Horizon Staffing Sister LLC",
+                contact_email="sheshwika@horizonsoftech.net",
+                designation="Unknown",
+                confidence="high",
+                purpose="Unknown",
+                evidence_snippet="",
+                email_subject="",
+                email_sender="",
+                gmail_open_url="",
+                state="pending",
+                reason_code="identity_conflict",
+            )
+            db.add(review)
+            db.commit()
+            contact_id, review_id = contact.id, review.id
+
+        response = self.client.post(f"/number-review/{review_id}/approve-link")
+        self.assertEqual(response.status_code, 200, response.text)
+
+        with Session(self.engine) as db:
+            refreshed = db.get(PremiumNumberContact, contact_id)
+            self.assertEqual(refreshed.company, "Horizon Softech Inc")
+            self.assertEqual(refreshed.secondary_company, "Horizon Staffing Sister LLC")
+
+    def test_merge_prefers_the_no_extension_number_as_primary_and_keeps_only_one_primary(self) -> None:
+        with Session(self.engine) as db:
+            canonical = RecruiterNumber(
+                owner_id=main.settings.owner_id, normalized_phone_number="18564561805", phone_extension="1025",
+                display_phone_number="(856) 456-1805 ext 1025", recruiter_name="Sunitha Sanu", company="Momentousa",
+                recruiter_email="sunitha@example.com",
+            )
+            loser = RecruiterNumber(
+                owner_id=main.settings.owner_id, normalized_phone_number="18563724625",
+                display_phone_number="(856) 372-4625", recruiter_name="Sunitha Sanu", company="Momentousa",
+                recruiter_email="sunitha@example.com",
+            )
+            db.add_all([canonical, loser])
+            db.commit()
+            canonical_id, loser_id = canonical.id, loser.id
+
+        response = self.client.post(
+            "/premium-numbers/contacts/merge",
+            json={"canonical_contact_id": canonical_id, "loser_contact_id": loser_id},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+
+        with Session(self.engine) as db:
+            refreshed = db.get(PremiumNumberContact, canonical_id)
+            self.assertEqual(refreshed.normalized_phone_number, "18563724625")
+            self.assertEqual(refreshed.phone_extension, "")
+
+        detail = self.client.get(f"/recruiter-numbers/{canonical_id}")
+        self.assertEqual(detail.status_code, 200, detail.text)
+        phones = detail.json()["phones"]
+        primaries = [p for p in phones if p["is_primary"]]
+        self.assertEqual(len(primaries), 1)
+        self.assertEqual(primaries[0]["display"], "(856) 372-4625")
+        secondary = next(p for p in phones if not p["is_primary"])
+        self.assertEqual(secondary["extension"], "1025")
+        self.assertEqual(secondary["display"], "(856) 456-1805 ext 1025")
+
+    def test_merge_endpoint_rejects_merging_a_contact_with_itself(self) -> None:
+        with Session(self.engine) as db:
+            contact = EmployerNumber(
+                owner_id=main.settings.owner_id, normalized_phone_number="17708240630",
+                display_phone_number="(770) 824-0630", owner_name="Solo", company="Solo Co",
+            )
+            db.add(contact)
+            db.commit()
+            contact_id = contact.id
+
+        response = self.client.post(
+            "/premium-numbers/contacts/merge",
+            json={"canonical_contact_id": contact_id, "loser_contact_id": contact_id},
+        )
+        self.assertEqual(response.status_code, 422, response.text)
+
+    def test_backfill_duplicates_merges_every_same_email_group_immediately(self) -> None:
+        now = datetime.now(UTC)
+        with Session(self.engine) as db:
+            recruiter_oldest = RecruiterNumber(
+                owner_id=main.settings.owner_id, normalized_phone_number="18563724625",
+                display_phone_number="(856) 372-4625", recruiter_name="Sunitha Sanu", company="Momentousa",
+                recruiter_email="sunitha@example.com", created_at=now - timedelta(days=2),
+            )
+            recruiter_newer = RecruiterNumber(
+                owner_id=main.settings.owner_id, normalized_phone_number="18564561805", phone_extension="1025",
+                display_phone_number="(856) 456-1805 ext 1025", recruiter_name="Sunitha Sanu", company="Momentousa",
+                recruiter_email="sunitha@example.com", created_at=now,
+            )
+            recruiter_solo = RecruiterNumber(
+                owner_id=main.settings.owner_id, normalized_phone_number="14155550101",
+                display_phone_number="(415) 555-0101", recruiter_name="Nobody Else", company="Solo Co",
+                recruiter_email="solo@example.com", created_at=now,
+            )
+            employer_oldest = EmployerNumber(
+                owner_id=main.settings.owner_id, normalized_phone_number="17708240630",
+                display_phone_number="(770) 824-0630", owner_name="Prashanth Kinnera", company="Horizons of Tech",
+                employer_email="prashanth@horizonsoftech.example", created_at=now - timedelta(days=1),
+            )
+            employer_newer = EmployerNumber(
+                owner_id=main.settings.owner_id, normalized_phone_number="19727561212",
+                display_phone_number="(972) 756-1212", owner_name="Prashanth Kinnera", company="Horizons of Tech",
+                employer_email="prashanth@horizonsoftech.example", created_at=now,
+            )
+            db.add_all([recruiter_oldest, recruiter_newer, recruiter_solo, employer_oldest, employer_newer])
+            db.commit()
+            recruiter_oldest_id, recruiter_newer_id = recruiter_oldest.id, recruiter_newer.id
+            recruiter_solo_id = recruiter_solo.id
+            employer_oldest_id, employer_newer_id = employer_oldest.id, employer_newer.id
+
+        response = self.client.post("/premium-numbers/contacts/backfill-duplicates")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json(), {"groups_merged": 2, "contacts_merged": 2})
+
+        with Session(self.engine) as db:
+            self.assertIsNone(db.get(PremiumNumberContact, recruiter_oldest_id).deleted_at)
+            self.assertIsNotNone(db.get(PremiumNumberContact, recruiter_newer_id).deleted_at)
+            self.assertIsNone(db.get(PremiumNumberContact, recruiter_solo_id).deleted_at)
+            self.assertIsNone(db.get(PremiumNumberContact, employer_oldest_id).deleted_at)
+            self.assertIsNotNone(db.get(PremiumNumberContact, employer_newer_id).deleted_at)
+            merged_phones = {
+                p.normalized_phone_number
+                for p in db.query(PremiumContactPhone).filter(PremiumContactPhone.premium_contact_id == recruiter_oldest_id).all()
+            }
+            self.assertIn("18564561805", merged_phones)
+
+        # Running it again finds nothing left to merge.
+        rerun = self.client.post("/premium-numbers/contacts/backfill-duplicates")
+        self.assertEqual(rerun.json(), {"groups_merged": 0, "contacts_merged": 0})
+
     def test_bulk_contact_soft_delete_is_owner_scoped_and_preserves_opportunities(self) -> None:
         now = datetime.now(UTC)
         with Session(self.engine) as db:
@@ -2331,6 +2917,146 @@ class PremiumNumbersApiTests(unittest.TestCase):
                 ).count(),
                 1,
             )
+
+    def test_recruiter_and_employer_responses_list_every_phone_with_a_formatted_display(self) -> None:
+        now = datetime.now(UTC)
+        with Session(self.engine) as db:
+            recruiter_contact = RecruiterNumber(
+                owner_id=main.settings.owner_id,
+                normalized_phone_number="18563724625",
+                display_phone_number="(856) 372-4625",
+                recruiter_name="Sunitha Sanu",
+                company="Momentousa",
+                designation="Recruiter",
+                recruiter_email="sunitha@example.com",
+                created_at=now,
+                updated_at=now,
+            )
+            employer_contact = EmployerNumber(
+                owner_id=main.settings.owner_id,
+                normalized_phone_number="14155550101",
+                display_phone_number="(415) 555-0101",
+                owner_name="Sunitha Sanu",
+                company="Momentousa",
+                employer_email="sunitha@momentousa.example",
+                created_at=now,
+                updated_at=now,
+            )
+            db.add_all([recruiter_contact, employer_contact])
+            db.flush()
+            db.add_all([
+                PremiumContactPhone(
+                    owner_id=main.settings.owner_id, premium_contact_id=recruiter_contact.id,
+                    normalized_phone_number="18564561805", phone_extension="1025", is_primary=False, is_verified=False,
+                ),
+                PremiumContactPhone(
+                    owner_id=main.settings.owner_id, premium_contact_id=employer_contact.id,
+                    normalized_phone_number="18564561806", phone_extension="1026", is_primary=False, is_verified=False,
+                ),
+            ])
+            db.commit()
+            recruiter_id, employer_id = recruiter_contact.id, employer_contact.id
+
+        recruiter_response = self.client.get(f"/recruiter-numbers/{recruiter_id}")
+        self.assertEqual(recruiter_response.status_code, 200, recruiter_response.text)
+        secondary = next(p for p in recruiter_response.json()["phones"] if not p["is_primary"])
+        self.assertEqual(secondary["extension"], "1025")
+        self.assertEqual(secondary["display"], "(856) 456-1805 ext 1025")
+
+        employer_response = self.client.get(f"/employer-numbers/{employer_id}")
+        self.assertEqual(employer_response.status_code, 200, employer_response.text)
+        secondary = next(p for p in employer_response.json()["phones"] if not p["is_primary"])
+        self.assertEqual(secondary["extension"], "1026")
+        self.assertEqual(secondary["display"], "(856) 456-1806 ext 1026")
+
+    def test_acknowledge_contact_enrichment_marks_the_review_resolved_without_touching_the_contact(self) -> None:
+        now = datetime.now(UTC)
+        with Session(self.engine) as db:
+            contact = RecruiterNumber(
+                owner_id=main.settings.owner_id,
+                normalized_phone_number="18563724625",
+                display_phone_number="(856) 372-4625",
+                recruiter_name="Sunitha Sanu",
+                company="Momentousa",
+                designation="Recruiter",
+                recruiter_email="sunitha@example.com",
+                created_at=now,
+                updated_at=now,
+            )
+            db.add(contact)
+            db.flush()
+            review = NumberReviewQueue(
+                owner_id=main.settings.owner_id,
+                source_email_id=None,
+                target_contact_id=contact.id,
+                normalized_phone_number="18563724625",
+                display_phone_number="(856) 372-4625",
+                owner_name="Sunitha Sanu",
+                company="Momentousa",
+                contact_email="sunitha@example.com",
+                role="recruiter",
+                reason_code="contact_enriched",
+                field_changes_json=json.dumps([{
+                    "field": "display_phone_number", "label": "Phone",
+                    "old": "(856) 456-1805 ext 1025", "new": "(856) 372-4625",
+                }]),
+                state="pending",
+            )
+            db.add(review)
+            db.commit()
+            contact_id, review_id = contact.id, review.id
+
+        response = self.client.post(f"/number-review/{review_id}/acknowledge")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json(), {"review_id": review_id, "status": "acknowledged"})
+        with Session(self.engine) as db:
+            self.assertEqual(db.get(NumberReviewQueue, review_id).state, "acknowledged")
+            self.assertEqual(db.get(PremiumNumberContact, contact_id).normalized_phone_number, "18563724625")
+
+        listing = self.client.get("/number-review")
+        self.assertEqual([row["id"] for row in listing.json()["items"]], [])
+
+    def test_bulk_delete_dismisses_pending_reviews_that_targeted_the_deleted_contact(self) -> None:
+        now = datetime.now(UTC)
+        with Session(self.engine) as db:
+            contact = RecruiterNumber(
+                owner_id=main.settings.owner_id,
+                normalized_phone_number="12482476165",
+                display_phone_number="(248) 247-6165",
+                recruiter_name="Vikas Rao",
+                company="DVG Tech Solutions",
+                designation="Recruiter",
+                recruiter_email="vikas@dvgtech.example",
+                source_type="gmail",
+                source_id=1,
+                created_at=now,
+                updated_at=now,
+            )
+            db.add(contact)
+            db.flush()
+            review = NumberReviewQueue(
+                owner_id=main.settings.owner_id,
+                source_email_id=None,
+                target_contact_id=contact.id,
+                normalized_phone_number="12482476165",
+                display_phone_number="(248) 247-6165",
+                owner_name="Sheshwika Kukkala",
+                company="Horizon Softech Inc",
+                designation="Bench Sales Recruiter",
+                contact_email="sheshwika@horizonsoftech.net",
+                contact_type="recruiter",
+                role="recruiter",
+                reason_code="identity_conflict",
+                state="pending",
+            )
+            db.add(review)
+            db.commit()
+            contact_id, review_id = contact.id, review.id
+
+        response = self.client.post("/recruiter-numbers/bulk-delete", json={"contact_ids": [contact_id]})
+        self.assertEqual(response.status_code, 200, response.text)
+        with Session(self.engine) as db:
+            self.assertEqual(db.get(NumberReviewQueue, review_id).state, "dismissed")
 
     def test_deleted_contacts_list_restore_and_bulk_restore(self) -> None:
         now = datetime.now(UTC)
@@ -2418,6 +3144,49 @@ class PremiumNumbersApiTests(unittest.TestCase):
         final_listing = self.client.get("/premium-numbers/deleted-contacts")
         self.assertEqual(final_listing.json()["total"], 0)
 
+    def test_deleted_contacts_list_filters_by_has_source_link(self) -> None:
+        now = datetime.now(UTC)
+        with Session(self.engine) as db:
+            with_link = RecruiterNumber(
+                owner_id=main.settings.owner_id,
+                normalized_phone_number="12145550909",
+                display_phone_number="+1 (214) 555-0909",
+                recruiter_name="Has Link",
+                company="Agency",
+                designation="Recruiter",
+                recruiter_email="haslink@agency.example",
+                source_link_url="https://mail.google.com/mail/u/0/#all/msg-1",
+                created_at=now,
+                updated_at=now,
+                deleted_at=now,
+            )
+            without_link = RecruiterNumber(
+                owner_id=main.settings.owner_id,
+                normalized_phone_number="12145551010",
+                display_phone_number="+1 (214) 555-1010",
+                recruiter_name="No Link",
+                company="Agency",
+                designation="Recruiter",
+                recruiter_email="nolink@agency.example",
+                created_at=now,
+                updated_at=now,
+                deleted_at=now,
+            )
+            db.add_all([with_link, without_link])
+            db.commit()
+            with_link_id, without_link_id = with_link.id, without_link.id
+
+        has_link = self.client.get("/premium-numbers/deleted-contacts", params={"has_source_link": "true"})
+        self.assertEqual(has_link.status_code, 200, has_link.text)
+        self.assertEqual({item["id"] for item in has_link.json()["items"]}, {with_link_id})
+
+        no_link = self.client.get("/premium-numbers/deleted-contacts", params={"has_source_link": "false"})
+        self.assertEqual(no_link.status_code, 200, no_link.text)
+        self.assertEqual({item["id"] for item in no_link.json()["items"]}, {without_link_id})
+
+        unfiltered = self.client.get("/premium-numbers/deleted-contacts")
+        self.assertEqual({item["id"] for item in unfiltered.json()["items"]}, {with_link_id, without_link_id})
+
     def test_purge_permanently_removes_a_deleted_contact_and_its_owned_children(self) -> None:
         now = datetime.now(UTC)
         with Session(self.engine) as db:
@@ -2451,18 +3220,21 @@ class PremiumNumbersApiTests(unittest.TestCase):
             db.add(purgeable)
             db.flush()
             purgeable_id = purgeable.id
-            db.add(
-                PremiumNumberLead(
-                    owner_id=main.settings.owner_id,
-                    contact_id=purgeable_id,
-                    phone_number_normalized="12145551010",
-                    phone_number_display="+1 (214) 555-1010",
-                    role="recruiter",
-                    contact_email="purgeable@agency.example",
-                    owner_name="Purgeable Recruiter",
-                    company="Agency",
-                )
+            lead = PremiumNumberLead(
+                owner_id=main.settings.owner_id,
+                contact_id=purgeable_id,
+                phone_number_normalized="12145551010",
+                phone_number_display="+1 (214) 555-1010",
+                role="recruiter",
+                contact_email="purgeable@agency.example",
+                owner_name="Purgeable Recruiter",
+                company="Agency",
             )
+            db.add(lead)
+            db.flush()
+            # Points at the lead row we're about to delete - purge must clear this pointer
+            # first or the delete violates fk_premium_number_contacts_active_recruiter_lead.
+            purgeable.active_recruiter_lead_id = lead.id
             db.add(
                 PremiumContactEmail(
                     owner_id=main.settings.owner_id,
@@ -2706,6 +3478,223 @@ class PremiumNumbersApiTests(unittest.TestCase):
             self.assertGreater(refreshed.updated_at, old)
             self.assertEqual(refreshed.source_type, "gmail")
             self.assertEqual(refreshed.source_id, email_id)
+
+    def _rescore_fixture(self, *, contact_phone: str, lead_phone: str) -> tuple[int, int]:
+        now = datetime.now(UTC)
+        with Session(self.engine) as db:
+            email = RecruiterEmail(
+                owner_id=main.settings.owner_id, sender="rescore@example.com", subject="Role",
+                body="Call the number below", role="Developer", location="Remote", salary_text="",
+                skills_text="Python", score=80, decision="Qualified", state="needs_review",
+                source="gmail", gmail_received_at=now,
+            )
+            db.add(email)
+            db.flush()
+            contact = RecruiterNumber(
+                owner_id=main.settings.owner_id, normalized_phone_number=contact_phone,
+                display_phone_number=contact_phone, recruiter_name="Stale Number Recruiter", company="Agency",
+                designation="Recruiter", recruiter_email="rescore@example.com", first_detected_email_id=email.id,
+                source_type="gmail", source_id=email.id,
+            )
+            db.add(contact)
+            db.flush()
+            lead = PremiumNumberLead(
+                owner_id=main.settings.owner_id, recruiter_email_id=email.id, contact_id=contact.id,
+                phone_number_normalized=lead_phone, phone_number_display=lead_phone, role="recruiter",
+                extraction_source="ai", contact_email=contact.recruiter_email, owner_name=contact.recruiter_name,
+                company=contact.company, designation=contact.designation, purpose="Recruiter contact",
+                confidence="high", contact_type="recruiter_direct", recruiter_relevance_score=88,
+                is_recruiter_relevant=True, relevance_reason="relevant", source_fragment="call me",
+            )
+            db.add(lead)
+            db.flush()
+            contact.active_recruiter_lead_id = lead.id
+            db.commit()
+            return contact.id, email.id
+
+    def test_bulk_contact_rescore_corrects_a_stale_phone_number(self) -> None:
+        contact_id, email_id = self._rescore_fixture(contact_phone="19727561212", lead_phone="12487071767")
+
+        runtime = Mock()
+        runtime.capture_premium_numbers.side_effect = lambda _db, source: SimpleNamespace(stored_count=0)
+        with patch.object(main, "_get_candidate_runtime_service", return_value=runtime):
+            response = self.client.post("/recruiter-numbers/bulk-rescore", json={"contact_ids": [contact_id]})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["results"], [{"contact_id": contact_id, "status": "rescored"}])
+        with Session(self.engine) as db:
+            refreshed = db.get(PremiumNumberContact, contact_id)
+            self.assertEqual(refreshed.normalized_phone_number, "12487071767")
+
+    def test_bulk_contact_rescore_fills_in_a_newly_found_extension(self) -> None:
+        # Regression test: the phone-update branch only fires when the base normalized
+        # number changes, so a same-number-different-extension correction from the
+        # re-extraction used to be silently dropped instead of applied.
+        now = datetime.now(UTC)
+        with Session(self.engine) as db:
+            email = RecruiterEmail(
+                owner_id=main.settings.owner_id, sender="rescore@example.com", subject="Role",
+                body="Desk: 856-456-1805 Ext 1025", role="Developer", location="Remote", salary_text="",
+                skills_text="Python", score=80, decision="Qualified", state="needs_review",
+                source="gmail", gmail_received_at=now,
+            )
+            db.add(email)
+            db.flush()
+            contact = RecruiterNumber(
+                owner_id=main.settings.owner_id, normalized_phone_number="18564561805",
+                display_phone_number="(856) 456-1805", recruiter_name="Sunitha Sanu", company="Momentousa",
+                designation="Recruiter", recruiter_email="sunithasanu7476@gmail.com", first_detected_email_id=email.id,
+                source_type="gmail", source_id=email.id,
+            )
+            db.add(contact)
+            db.flush()
+            lead = PremiumNumberLead(
+                owner_id=main.settings.owner_id, recruiter_email_id=email.id, contact_id=contact.id,
+                phone_number_normalized="18564561805", phone_number_display="(856) 456-1805 ext 1025",
+                phone_extension="1025", role="recruiter",
+                extraction_source="ai", contact_email=contact.recruiter_email, owner_name=contact.recruiter_name,
+                company=contact.company, designation=contact.designation, purpose="Recruiter contact",
+                confidence="high", contact_type="recruiter_direct", recruiter_relevance_score=88,
+                is_recruiter_relevant=True, relevance_reason="relevant", source_fragment="Desk: 856-456-1805 Ext 1025",
+            )
+            db.add(lead)
+            db.flush()
+            contact.active_recruiter_lead_id = lead.id
+            db.commit()
+            contact_id = contact.id
+
+        runtime = Mock()
+        runtime.capture_premium_numbers.side_effect = lambda _db, source: SimpleNamespace(stored_count=0)
+        with patch.object(main, "_get_candidate_runtime_service", return_value=runtime):
+            response = self.client.post("/recruiter-numbers/bulk-rescore", json={"contact_ids": [contact_id]})
+        self.assertEqual(response.status_code, 200, response.text)
+        with Session(self.engine) as db:
+            refreshed = db.get(PremiumNumberContact, contact_id)
+            self.assertEqual(refreshed.normalized_phone_number, "18564561805")
+            self.assertEqual(refreshed.phone_extension, "1025")
+            self.assertEqual(refreshed.display_phone_number, "(856) 456-1805 ext 1025")
+
+    def test_single_contact_rescore_returns_a_diff_of_what_the_ai_changed(self) -> None:
+        now = datetime.now(UTC)
+        with Session(self.engine) as db:
+            email = RecruiterEmail(
+                owner_id=main.settings.owner_id, sender="rescore@example.com", subject="Role",
+                body="Call the number below", role="Developer", location="Remote", salary_text="",
+                skills_text="Python", score=80, decision="Qualified", state="needs_review",
+                source="gmail", gmail_received_at=now,
+            )
+            db.add(email)
+            db.flush()
+            contact = RecruiterNumber(
+                owner_id=main.settings.owner_id, normalized_phone_number="12145550909",
+                display_phone_number="(214) 555-0909", recruiter_name="Diff Recruiter", company="Unknown",
+                designation="Unknown", recruiter_email="diff@example.com", first_detected_email_id=email.id,
+                source_type="gmail", source_id=email.id,
+            )
+            db.add(contact)
+            db.flush()
+            lead = PremiumNumberLead(
+                owner_id=main.settings.owner_id, recruiter_email_id=email.id, contact_id=contact.id,
+                phone_number_normalized="12145550909", phone_number_display="(214) 555-0909", role="recruiter",
+                extraction_source="ai", contact_email=contact.recruiter_email, owner_name=contact.recruiter_name,
+                company="Newly Found Agency", designation="Technical Recruiter", purpose="Recruiter contact",
+                confidence="high", contact_type="recruiter_direct", recruiter_relevance_score=88,
+                is_recruiter_relevant=True, relevance_reason="relevant", source_fragment="call me",
+            )
+            db.add(lead)
+            db.flush()
+            contact.active_recruiter_lead_id = lead.id
+            db.commit()
+            contact_id = contact.id
+
+        runtime = Mock()
+        runtime.capture_premium_numbers.side_effect = lambda _db, source: SimpleNamespace(stored_count=0)
+        with patch.object(main, "_get_candidate_runtime_service", return_value=runtime):
+            response = self.client.post(f"/recruiter-numbers/{contact_id}/rescore")
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(payload["status"], "rescored")
+        changes = {change["field"]: change for change in payload["changes"]}
+        self.assertEqual(changes["company"], {"field": "company", "label": "Company", "old": "Unknown", "new": "Newly Found Agency"})
+        self.assertEqual(changes["designation"], {"field": "designation", "label": "Designation", "old": "Unknown", "new": "Technical Recruiter"})
+        # Name and phone were already set and the lead didn't correct them - no noise in the diff.
+        self.assertNotIn("recruiter_name", changes)
+        self.assertNotIn("display_phone_number", changes)
+
+    def test_single_contact_rescore_reports_no_changes_when_nothing_moves(self) -> None:
+        contact_id, _email_id = self._rescore_fixture(contact_phone="12145550909", lead_phone="12145550909")
+        runtime = Mock()
+        runtime.capture_premium_numbers.side_effect = lambda _db, source: SimpleNamespace(stored_count=0)
+        with patch.object(main, "_get_candidate_runtime_service", return_value=runtime):
+            response = self.client.post(f"/recruiter-numbers/{contact_id}/rescore")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["changes"], [])
+
+    def test_bulk_contact_rescore_reports_a_conflict_instead_of_stealing_another_contacts_phone(self) -> None:
+        contact_id, email_id = self._rescore_fixture(contact_phone="19727561212", lead_phone="12487071767")
+        with Session(self.engine) as db:
+            db.add(RecruiterNumber(
+                owner_id=main.settings.owner_id, normalized_phone_number="12487071767",
+                display_phone_number="(248) 707-1767", recruiter_name="Someone Else", company="Other Co",
+                designation="Recruiter", recruiter_email="other@example.com",
+            ))
+            db.commit()
+
+        runtime = Mock()
+        runtime.capture_premium_numbers.side_effect = lambda _db, source: SimpleNamespace(stored_count=0)
+        with patch.object(main, "_get_candidate_runtime_service", return_value=runtime):
+            response = self.client.post("/recruiter-numbers/bulk-rescore", json={"contact_ids": [contact_id]})
+        self.assertEqual(response.status_code, 409, response.text)
+        with Session(self.engine) as db:
+            refreshed = db.get(PremiumNumberContact, contact_id)
+            self.assertEqual(refreshed.normalized_phone_number, "19727561212")
+
+    def test_bulk_contact_rescore_does_not_relabel_the_contact_as_a_different_person(self) -> None:
+        # Regression test: apply_contact_version(overwrite=True) used to let Rescore
+        # silently relabel a contact with whoever the freshly re-extracted "active" lead
+        # named - even a completely different person mentioned in the same source email
+        # (e.g. "share resume to nk@worknovasllc.com or call X" sitting next to Prashanth
+        # Kinnera's own signature). The contact's own already-set email must survive a
+        # rescore; only genuinely blank/Unknown fields may be filled in.
+        now = datetime.now(UTC)
+        with Session(self.engine) as db:
+            email = RecruiterEmail(
+                owner_id=main.settings.owner_id, sender="rescore@example.com", subject="Role",
+                body="Call the number below", role="Developer", location="Remote", salary_text="",
+                skills_text="Python", score=80, decision="Qualified", state="needs_review",
+                source="gmail", gmail_received_at=now,
+            )
+            db.add(email)
+            db.flush()
+            contact = RecruiterNumber(
+                owner_id=main.settings.owner_id, normalized_phone_number="15123529739",
+                display_phone_number="(512) 352-9739", recruiter_name="Unknown", company="Unknown",
+                designation="Unknown", recruiter_email="nk@worknovasllc.com", first_detected_email_id=email.id,
+                source_type="gmail", source_id=email.id,
+            )
+            db.add(contact)
+            db.flush()
+            lead = PremiumNumberLead(
+                owner_id=main.settings.owner_id, recruiter_email_id=email.id, contact_id=contact.id,
+                phone_number_normalized="15123529739", phone_number_display="(512) 352-9739", role="recruiter",
+                extraction_source="ai", contact_email="kprashanth@horizonsoftech.net", owner_name="Prashanth Kinnera",
+                company="Horizon Soft Tech", designation="Bench Sales Recruiter", purpose="Recruiter contact",
+                confidence="high", contact_type="recruiter_direct", recruiter_relevance_score=88,
+                is_recruiter_relevant=True, relevance_reason="relevant", source_fragment="share resume",
+            )
+            db.add(lead)
+            db.flush()
+            contact.active_recruiter_lead_id = lead.id
+            db.commit()
+            contact_id = contact.id
+
+        runtime = Mock()
+        runtime.capture_premium_numbers.side_effect = lambda _db, source: SimpleNamespace(stored_count=0)
+        with patch.object(main, "_get_candidate_runtime_service", return_value=runtime):
+            response = self.client.post("/recruiter-numbers/bulk-rescore", json={"contact_ids": [contact_id]})
+        self.assertEqual(response.status_code, 200, response.text)
+        with Session(self.engine) as db:
+            refreshed = db.get(PremiumNumberContact, contact_id)
+            self.assertEqual(refreshed.recruiter_email, "nk@worknovasllc.com")
 
     def test_partial_digit_search_covers_all_number_lists(self) -> None:
         with Session(self.engine) as db:

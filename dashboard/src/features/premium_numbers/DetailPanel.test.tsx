@@ -138,6 +138,7 @@ describe('DetailPanel', () => {
           onReload={vi.fn().mockResolvedValue(undefined)}
           onError={vi.fn()}
           onToast={vi.fn()}
+          onPhoneConflict={vi.fn()}
         />,
       )
     })
@@ -194,6 +195,7 @@ describe('DetailPanel', () => {
           onReload={vi.fn().mockResolvedValue(undefined)}
           onError={vi.fn()}
           onToast={vi.fn()}
+          onPhoneConflict={vi.fn()}
         />,
       )
     })
@@ -225,6 +227,80 @@ describe('DetailPanel', () => {
       recruiter_verification_level: 'trusted',
       do_not_work_again: true,
       do_not_work_again_reason: 'Duplicate submissions',
+    })
+  })
+
+  it('edits a contact\'s full phone list - primary and secondary - and saves it', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const multiPhoneRecruiter: RecruiterNumberCard = {
+      ...recruiter,
+      display_phone_number: '(856) 456-1805 ext 1025',
+      phones: [
+        { phone: '18564561805', extension: '1025', display: '(856) 456-1805 ext 1025', is_primary: true, is_verified: false, label: '' },
+        { phone: '18563724625', extension: '', display: '(856) 372-4625', is_primary: false, is_verified: false, label: '' },
+      ],
+    }
+    const multiPhoneRow: InventoryRow = { ...row, recruiter: multiPhoneRecruiter }
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/versions')) return jsonResponse(versions)
+      if (url.endsWith('/recruiter-numbers/613') && init?.method === 'PATCH') {
+        return jsonResponse({ ...multiPhoneRecruiter, ...JSON.parse(String(init.body)) })
+      }
+      return jsonResponse({ detail: 'not found' }, 404)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+      vi.unstubAllGlobals()
+    })
+    await act(async () => {
+      root.render(
+        <DetailPanel
+          apiBase="http://localhost:8000"
+          row={multiPhoneRow}
+          busy={false}
+          returnFocusRef={{ current: null }}
+          onClose={vi.fn()}
+          onAction={vi.fn().mockResolvedValue(undefined)}
+          onReload={vi.fn().mockResolvedValue(undefined)}
+          onError={vi.fn()}
+          onToast={vi.fn()}
+          onPhoneConflict={vi.fn()}
+        />,
+      )
+    })
+    await act(async () => { await Promise.resolve() })
+    const edit = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'Edit')
+    await act(async () => { edit?.click() })
+
+    const phoneInputs = () => Array.from(container.querySelectorAll<HTMLInputElement>('.phoneListEditorRow input'))
+    expect(phoneInputs().map((input) => input.value)).toEqual(['(856) 456-1805 ext 1025', '(856) 372-4625'])
+
+    const addPhone = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === '+ Add phone')
+    await act(async () => { addPhone?.click() })
+    expect(phoneInputs()).toHaveLength(3)
+
+    const inputSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
+    await act(async () => {
+      inputSetter.call(phoneInputs()[2], '(212) 555-0199')
+      phoneInputs()[2].dispatchEvent(new Event('input', { bubbles: true }))
+    })
+
+    const save = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'Save')
+    await act(async () => {
+      save?.click()
+      await Promise.resolve()
+    })
+
+    const patchCall = fetchMock.mock.calls.find(([url, init]) => String(url).endsWith('/recruiter-numbers/613') && init?.method === 'PATCH')
+    expect(JSON.parse(String(patchCall?.[1]?.body))).toMatchObject({
+      phones: ['(856) 456-1805 ext 1025', '(856) 372-4625', '(212) 555-0199'],
     })
   })
 
@@ -279,6 +355,7 @@ describe('DetailPanel', () => {
           onReload={vi.fn().mockResolvedValue(undefined)}
           onError={vi.fn()}
           onToast={vi.fn()}
+          onPhoneConflict={vi.fn()}
         />,
       )
       await Promise.resolve()
@@ -372,6 +449,7 @@ describe('DetailPanel', () => {
           onReload={onReload}
           onError={vi.fn()}
           onToast={vi.fn()}
+          onPhoneConflict={vi.fn()}
         />,
       )
       await Promise.resolve()
@@ -393,5 +471,302 @@ describe('DetailPanel', () => {
     expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith('/number-review/900/approve-merge') && init?.method === 'POST')).toBe(true)
     expect(onClose).toHaveBeenCalled()
     expect(onReload).toHaveBeenCalled()
+  })
+
+  it('shows the diff for an automatic contact enrichment and acknowledges it', async () => {
+    const review: NumberReviewCard = {
+      id: 950,
+      source_email_id: null,
+      source_external_opportunity_id: 40,
+      source_lead_id: null,
+      target_contact_id: 580,
+      secondary_contact_id: null,
+      normalized_phone_number: '18563724625',
+      display_phone_number: '(856) 372-4625',
+      owner_name: 'Sunitha Sanu',
+      company: 'Momentousa',
+      designation: 'Unknown',
+      confidence: 'high',
+      purpose: 'Direct contact',
+      evidence_snippet: 'Call: 856-372-4625',
+      email_subject: '',
+      email_sender: '',
+      contact_email: 'sunitha@example.com',
+      contact_type: 'recruiter_direct',
+      recruiter_relevance_score: 95,
+      relevance_reason: 'external_domain',
+      extraction_source: 'ai',
+      scored_with: 'current',
+      gmail_open_url: 'https://nvoids.test/post-40',
+      state: 'pending',
+      role: 'recruiter',
+      reason_code: 'contact_enriched',
+      field_changes_json: JSON.stringify([{
+        field: 'display_phone_number', label: 'Phone',
+        old: '(856) 456-1805 ext 1025', new: '(856) 372-4625',
+      }]),
+      occurrence_count: 1,
+      created_at: '2026-08-30T10:00:00Z',
+      updated_at: '2026-08-30T10:00:00Z',
+    }
+    const reviewRow: InventoryRow = {
+      key: 'review:950',
+      kind: 'review',
+      id: 950,
+      number: review.display_phone_number,
+      owner: review.owner_name,
+      company: review.company,
+      categories: ['Recruiter'],
+      status: 'Pending',
+      score: review.recruiter_relevance_score,
+      sourceType: 'nvoids',
+      lastCheckedAt: review.updated_at,
+      review,
+    }
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/recruiter-numbers/580')) return jsonResponse({ ...recruiter, id: 580, recruiter_name: 'Sunitha Sanu' })
+      if (url.endsWith('/number-review/950/acknowledge') && init?.method === 'POST') {
+        return jsonResponse({ review_id: 950, status: 'acknowledged' })
+      }
+      return jsonResponse({ detail: 'not found' }, 404)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    const onClose = vi.fn()
+    const onReload = vi.fn().mockResolvedValue(undefined)
+    const onToast = vi.fn()
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+      vi.unstubAllGlobals()
+    })
+
+    await act(async () => {
+      root.render(
+        <DetailPanel
+          apiBase="http://localhost:8000"
+          row={reviewRow}
+          busy={false}
+          returnFocusRef={{ current: null }}
+          onClose={onClose}
+          onAction={vi.fn().mockResolvedValue(undefined)}
+          onReload={onReload}
+          onError={vi.fn()}
+          onToast={onToast}
+          onPhoneConflict={vi.fn()}
+        />,
+      )
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).toContain("Here's what the AI merged in")
+    expect(container.textContent).toContain('(856) 456-1805 ext 1025')
+    expect(container.textContent).toContain('(856) 372-4625')
+    expect(container.textContent).not.toContain('Resolve identity conflict')
+
+    const acknowledgeButton = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'Acknowledge')
+    expect(acknowledgeButton).toBeDefined()
+    await act(async () => {
+      acknowledgeButton?.click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith('/number-review/950/acknowledge') && init?.method === 'POST')).toBe(true)
+    expect(onToast).toHaveBeenCalledWith('Acknowledged')
+    expect(onClose).toHaveBeenCalled()
+    expect(onReload).toHaveBeenCalled()
+  })
+
+  it('edits and saves a pending review\'s contact details without classifying its role', async () => {
+    const review: NumberReviewCard = {
+      id: 700,
+      source_email_id: 1200,
+      source_external_opportunity_id: null,
+      source_lead_id: null,
+      target_contact_id: null,
+      secondary_contact_id: null,
+      normalized_phone_number: '',
+      display_phone_number: '',
+      owner_name: 'Gunika Sharma',
+      company: 'Empower Professionals',
+      designation: 'Recruiter',
+      confidence: 'medium',
+      purpose: 'Recruiter contact',
+      evidence_snippet: '',
+      email_subject: '',
+      email_sender: '',
+      contact_email: 'gunika@empowerprofessionals.com',
+      contact_type: 'recruiter_direct',
+      recruiter_relevance_score: 75,
+      relevance_reason: '',
+      extraction_source: 'ai',
+      scored_with: 'current',
+      gmail_open_url: '',
+      state: 'pending',
+      role: 'recruiter',
+      reason_code: 'new_number',
+      occurrence_count: 1,
+      created_at: '2026-08-30T10:00:00Z',
+      updated_at: '2026-08-30T10:00:00Z',
+    }
+    const reviewRow: InventoryRow = {
+      key: 'review:700',
+      kind: 'review',
+      id: 700,
+      number: '(XXX) XXX-XXXX',
+      owner: review.owner_name,
+      company: review.company,
+      categories: ['Recruiter'],
+      status: 'Pending',
+      score: review.recruiter_relevance_score,
+      sourceType: 'gmail',
+      lastCheckedAt: review.updated_at,
+      review,
+    }
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/number-review/700') && init?.method === 'PATCH') {
+        expect(JSON.parse(String(init.body))).toMatchObject({ display_phone_number: '7323568008 ext 355' })
+        return jsonResponse({ ...review, normalized_phone_number: '17323568008', display_phone_number: '(732) 356-8008 ext 355' })
+      }
+      return jsonResponse({ detail: 'not found' }, 404)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    const onToast = vi.fn()
+    const onReload = vi.fn().mockResolvedValue(undefined)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+      vi.unstubAllGlobals()
+    })
+
+    await act(async () => {
+      root.render(
+        <DetailPanel
+          apiBase="http://localhost:8000"
+          row={reviewRow}
+          busy={false}
+          returnFocusRef={{ current: null }}
+          onClose={vi.fn()}
+          onAction={vi.fn().mockResolvedValue(undefined)}
+          onReload={onReload}
+          onError={vi.fn()}
+          onToast={onToast}
+          onPhoneConflict={vi.fn()}
+        />,
+      )
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).toContain('Contact details')
+    expect(container.querySelector('.detailFormGrid')).toBeNull()
+
+    const edit = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'Edit')
+    await act(async () => { edit?.click() })
+
+    const phoneInput = Array.from(container.querySelectorAll('label')).find((item) => item.textContent?.startsWith('Phone'))?.querySelector<HTMLInputElement>('input')
+    const inputSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
+    await act(async () => {
+      inputSetter.call(phoneInput, '7323568008 ext 355')
+      phoneInput?.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+
+    const save = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'Save')
+    await act(async () => {
+      save?.click()
+      await Promise.resolve()
+    })
+
+    expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith('/number-review/700') && init?.method === 'PATCH')).toBe(true)
+    expect(onToast).toHaveBeenCalledWith('Saved')
+    expect(onReload).toHaveBeenCalled()
+    expect(container.querySelector('.detailFormGrid')).toBeNull()
+  })
+
+  it('shows what Rescore changed and reverts it on Undo', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/versions')) return jsonResponse(versions)
+      if (url.endsWith('/recruiter-numbers/613/reputation')) return jsonResponse({
+        recruiter_contact_id: 613, history_label: 'limited_history', outreach_count: 0, replies_count: 0,
+        median_first_reply_business_days: null, submissions_count: 0, interviews_after_submission_count: 0,
+        offers_count: 0, last_active_at: null,
+      })
+      if (url.endsWith('/recruiter-numbers/613/rescore') && init?.method === 'POST') {
+        return jsonResponse({
+          id: 613,
+          status: 'rescored',
+          changes: [{ field: 'company', label: 'Company', old: 'United Software Group Inc', new: 'Renamed Group Inc' }],
+        })
+      }
+      if (url.endsWith('/recruiter-numbers/613') && init?.method === 'PATCH') {
+        expect(JSON.parse(String(init.body))).toEqual({ company: 'United Software Group Inc' })
+        return jsonResponse({ ...recruiter })
+      }
+      return jsonResponse({ detail: 'not found' }, 404)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    const onToast = vi.fn()
+    const onReload = vi.fn().mockResolvedValue(undefined)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+      vi.unstubAllGlobals()
+    })
+
+    await act(async () => {
+      root.render(
+        <DetailPanel
+          apiBase="http://localhost:8000"
+          row={row}
+          busy={false}
+          returnFocusRef={{ current: null }}
+          onClose={vi.fn()}
+          onAction={vi.fn().mockResolvedValue(undefined)}
+          onReload={onReload}
+          onError={vi.fn()}
+          onToast={onToast}
+          onPhoneConflict={vi.fn()}
+        />,
+      )
+    })
+    await act(async () => { await Promise.resolve() })
+
+    const rescoreButton = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'Rescore')
+    await act(async () => {
+      rescoreButton?.click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(document.querySelector('[aria-label="Rescore results"]')).not.toBeNull()
+    expect(document.body.textContent).toContain('United Software Group Inc')
+    expect(document.body.textContent).toContain('Renamed Group Inc')
+
+    const undoButton = Array.from(document.querySelectorAll('button')).find((button) => button.textContent === 'Undo')
+    await act(async () => {
+      undoButton?.click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith('/recruiter-numbers/613') && init?.method === 'PATCH')).toBe(true)
+    expect(onToast).toHaveBeenCalledWith('Rescore undone')
+    expect(onReload).toHaveBeenCalled()
+    expect(document.querySelector('[aria-label="Rescore results"]')).toBeNull()
   })
 })

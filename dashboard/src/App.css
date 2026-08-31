@@ -1156,6 +1156,7 @@ button.emailSearchResult:focus-visible {
 
 .rowBtns button,
 .card button,
+.detailPanel button:not(.iconBtn),
 .rowBtns .linkButton {
   height: 42px;
   border-radius: 7px;
@@ -1163,6 +1164,8 @@ button.emailSearchResult:focus-visible {
   background: var(--surface);
   padding: 0 14px;
   color: #1c2535;
+  font: inherit;
+  cursor: pointer;
 }
 
 .rowBtns .linkButton {
@@ -1172,6 +1175,27 @@ button.emailSearchResult:focus-visible {
   text-decoration: none;
 }
 
+.rowBtns button:hover:not(:disabled),
+.card button:hover:not(:disabled),
+.detailPanel button:hover:not(:disabled):not(.iconBtn) {
+  border-color: var(--line-strong);
+  background: var(--surface-soft);
+}
+
+.rowBtns button:disabled,
+.card button:disabled,
+.detailPanel button:disabled:not(.iconBtn) {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.rowBtns button:focus-visible,
+.card button:focus-visible,
+.detailPanel button:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
 .rowBtns button[type='submit'],
 .rowBtns .primary,
 .topBarAction,
@@ -1179,6 +1203,19 @@ button.emailSearchResult:focus-visible {
   border-color: var(--primary);
   background: var(--primary);
   color: #fff;
+}
+
+/* !important: matches .dangerButton's own pattern - needed to outrank the more
+   specific ".detailPanel button:not(.iconBtn)" base rule above. */
+.primaryButton {
+  border-color: var(--primary) !important;
+  background: var(--primary) !important;
+  color: #fff !important;
+}
+
+.primaryButton:hover:not(:disabled) {
+  background: var(--primary-strong) !important;
+  border-color: var(--primary-strong) !important;
 }
 
 .resumeDatabaseCard,
@@ -3025,10 +3062,16 @@ button.emailSearchResult:focus-visible {
 
 .actionToast {
   position: fixed;
+  /* Top-right, well clear of the bottom-right chat launcher - a fixed bottom-corner
+     position kept landing behind or too close to that widget no matter the offset. */
+  top: 24px;
   right: 24px;
-  bottom: 24px;
-  z-index: 40;
-  padding: 10px 16px;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(420px, calc(100vw - 48px));
+  padding: 10px 12px 10px 16px;
   border-radius: 8px;
   background: var(--ink);
   color: #fff;
@@ -3042,10 +3085,29 @@ button.emailSearchResult:focus-visible {
   background: var(--danger);
 }
 
+.actionToastClose {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 15%);
+  color: inherit;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.actionToastClose:hover {
+  background: rgb(255 255 255 / 28%);
+}
+
 @keyframes action-toast-in {
   from {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translateY(-8px);
   }
   to {
     opacity: 1;
@@ -3176,10 +3238,14 @@ button.emailSearchResult:focus-visible {
 }
 
 .selectionActions button,
-.detailPanelActions button,
 .opportunityCard .rowBtns button {
   min-height: 34px;
   padding: 7px 12px;
+}
+
+.detailPanel .detailPanelActions button {
+  height: 36px;
+  padding: 0 12px;
 }
 
 .dangerButton {
@@ -3587,9 +3653,9 @@ button.emailSearchResult:focus-visible {
   gap: 8px;
 }
 
-.detailSectionHeader button {
-  min-height: 30px;
-  padding: 4px 12px;
+.detailPanel .detailSectionHeader button {
+  height: 36px;
+  padding: 0 12px;
 }
 
 .detailEditActions {
@@ -3603,6 +3669,10 @@ button.emailSearchResult:focus-visible {
   gap: 10px;
 }
 
+.detailFormGridFullRow {
+  grid-column: 1 / -1;
+}
+
 .detailFormGrid label,
 .detailSection > label,
 .opportunityCard > label {
@@ -3611,6 +3681,98 @@ button.emailSearchResult:focus-visible {
   color: var(--muted);
   font-size: 12px;
   font-weight: 600;
+}
+
+.detailFormGrid input,
+.detailFormGrid select,
+.detailSection > label input,
+.detailSection > label select,
+.opportunityCard > label input,
+.opportunityCard > label select,
+.opportunityCard > header select,
+.phoneListEditorRow input {
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 400;
+}
+
+.detailFormGrid input::placeholder,
+.phoneListEditorRow input::placeholder {
+  color: #8b93a7;
+}
+
+.detailFormGrid input:focus-visible,
+.detailFormGrid select:focus-visible,
+.detailSection > label input:focus-visible,
+.detailSection > label select:focus-visible,
+.phoneListEditorRow input:focus-visible {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgb(15 75 207 / 15%);
+}
+
+.detailList .phoneNumbersList {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 4px;
+}
+
+.phoneNumbersList .phoneNumbersListRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.phoneNumbersList .phoneNumbersListRow span {
+  white-space: nowrap;
+}
+
+.phoneListEditor {
+  display: grid;
+  gap: 8px;
+}
+
+.phoneListEditorRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.phoneListEditorRow input {
+  min-width: 0;
+}
+
+.phoneListEditorRow .categoryChip {
+  flex-shrink: 0;
+}
+
+.phoneListEditorRow .iconBtn {
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.phoneListEditorRow .iconBtn:hover {
+  border-color: #e5a3aa;
+  background: #fff7f8;
+  color: var(--danger);
+}
+
+.phoneListEditor > button {
+  justify-self: start;
+  height: 34px !important;
+  padding: 0 12px !important;
+  font-size: 13px;
+  color: var(--primary) !important;
+  border-style: dashed !important;
 }
 
 .detailList {
@@ -3868,6 +4030,32 @@ button.emailSearchResult:focus-visible {
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 14px;
+}
+
+.mergePreviewGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.mergePreviewCard {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.mergePreviewCard--selected {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 1px var(--primary);
+}
+
+@media (max-width: 640px) {
+  .mergePreviewGrid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .applicationSuggestions {

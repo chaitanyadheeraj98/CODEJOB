@@ -92,7 +92,7 @@ export default function CreateContactPanel({ apiBase, onClose, onCreated, onErro
             </div>
           </section>
           <div className="detailEditActions">
-            <button type="submit" disabled={saving}>{saving ? 'Saving...' : 'Create Contact'}</button>
+            <button type="submit" className="primaryButton" disabled={saving}>{saving ? 'Saving...' : 'Create Contact'}</button>
             <button type="button" onClick={onClose} disabled={saving}>Cancel</button>
           </div>
         </form>

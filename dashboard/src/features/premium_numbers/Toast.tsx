@@ -23,11 +23,18 @@ type ToastHostProps = {
 
 export function ToastHost({ message, tone = 'success', onDismiss }: ToastHostProps) {
   useEffect(() => {
-    if (!message) return
+    // Errors need to be read and acknowledged, not blinked past - only success
+    // messages auto-dismiss; errors wait for the close button.
+    if (!message || tone === 'error') return
     const timer = window.setTimeout(onDismiss, TOAST_DURATION_MS)
     return () => window.clearTimeout(timer)
-  }, [message, onDismiss])
+  }, [message, tone, onDismiss])
 
   if (!message) return null
-  return <div className={`actionToast actionToast--${tone}`} role={tone === 'error' ? 'alert' : 'status'}>{message}</div>
+  return (
+    <div className={`actionToast actionToast--${tone}`} role={tone === 'error' ? 'alert' : 'status'}>
+      <span>{message}</span>
+      <button type="button" className="actionToastClose" aria-label="Dismiss" onClick={onDismiss}>×</button>
+    </div>
+  )
 }

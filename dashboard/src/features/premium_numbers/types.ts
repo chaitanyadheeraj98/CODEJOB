@@ -31,9 +31,11 @@ export type NumberReviewCard = {
   state: string
   role: 'recruiter' | 'employer' | null
   reason_code: string
+  field_changes_json?: string
   occurrence_count: number
   created_at: string
   updated_at: string
+  evidence_at?: string | null
   linkedin_url?: string
 }
 
@@ -70,6 +72,7 @@ type ContactCardBase = {
   normalized_phone_number: string | null
   display_phone_number: string
   company: string
+  secondary_company?: string
   source_type: 'gmail' | 'nvoids' | null
   source_id: number | null
   source_link_url: string | null
@@ -85,6 +88,8 @@ type ContactCardBase = {
   updated_at: string
 }
 
+export type PhoneEntry = { phone: string; extension: string; display: string; is_primary: boolean; is_verified: boolean; label: string }
+
 export type RecruiterNumberCard = ContactCardBase & {
   recruiter_name: string
   designation: string
@@ -93,7 +98,7 @@ export type RecruiterNumberCard = ContactCardBase & {
   employer_email_domain?: string
   is_favorite?: boolean
   emails?: Array<{ email: string; domain: string; is_primary: boolean }>
-  phones?: Array<{ phone: string; is_primary: boolean; is_verified: boolean }>
+  phones?: PhoneEntry[]
   first_detected_email_id: number | null
   linkedin_url: string
   recruiter_verification_level: 'unverified' | 'verified' | 'trusted'
@@ -105,10 +110,16 @@ export type RecruiterNumberCard = ContactCardBase & {
 
 export type EmployerNumberCard = ContactCardBase & {
   owner_name: string
+  designation: string
   employer_email: string
   employer_email_domain?: string
   is_favorite?: boolean
   source_email_id: number | null
+  phones?: PhoneEntry[]
+  linkedin_url: string
+  recruiter_verification_level: 'unverified' | 'verified' | 'trusted'
+  do_not_work_again: boolean
+  do_not_work_again_reason: string
 }
 
 export type ManualContactPayload = {
@@ -127,6 +138,51 @@ export type ManualContactResult = {
   review_id: number | null
   phone_display: string
   role: 'recruiter' | 'employer'
+}
+
+export type ContactMergePreviewLead = {
+  id: number
+  role: string
+  company: string
+  owner_name: string
+  contact_email: string
+  phone_number_display: string
+  extraction_source: string
+  created_at: string
+}
+
+export type ContactMergePreviewSide = {
+  id: number
+  recruiter_name: string
+  owner_name: string
+  company: string
+  recruiter_email: string
+  employer_email: string
+  normalized_phone_number: string | null
+  display_phone_number: string
+  is_recruiter: boolean
+  is_employer: boolean
+  lead_count: number
+  latest_evidence_at: string | null
+  leads: ContactMergePreviewLead[]
+}
+
+export type ContactMergePreviewResponse = {
+  contact_a: ContactMergePreviewSide
+  contact_b: ContactMergePreviewSide
+}
+
+export type ContactFieldChange = {
+  field: string
+  label: string
+  old: string
+  new: string
+}
+
+export type ContactRescoreResponse = {
+  id: number
+  status: string
+  changes: ContactFieldChange[]
 }
 
 export type OpportunityStatus = 'New' | 'Called' | 'Applied' | 'Follow Up' | 'Closed' | 'Not Interested'

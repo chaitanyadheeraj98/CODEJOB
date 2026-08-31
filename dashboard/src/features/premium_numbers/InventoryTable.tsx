@@ -76,8 +76,13 @@ export default function InventoryTable({
   const start = allRowsCount === 0 ? 0 : (page - 1) * pageSize + 1
   const end = Math.min(page * pageSize, allRowsCount)
   const pages = Array.from({ length: totalPages }, (_, index) => index + 1)
+  const multiSelectMode = selected.size > 0
 
   const stop = (event: MouseEvent) => event.stopPropagation()
+  const toggleCell = (event: MouseEvent, key: string) => {
+    event.stopPropagation()
+    if (!busy) onToggle(key)
+  }
 
   return (
     <div className="inventoryTableCard">
@@ -111,16 +116,16 @@ export default function InventoryTable({
               <tr
                 key={row.key}
                 className={`${selected.has(row.key) ? 'inventoryRow--selected' : ''} ${highlightedKey === row.key ? 'emailSearchHighlight' : ''}`}
-                onClick={(event) => onOpen(row, event.currentTarget)}
+                onClick={(event) => (multiSelectMode ? toggleCell(event, row.key) : onOpen(row, event.currentTarget))}
                 data-email-search-section="premium_numbers"
                 data-email-search-related-id={row.id}
               >
-                <td className="inventoryCheckboxCell" onClick={stop}>
+                <td className="inventoryCheckboxCell" onClick={(event) => toggleCell(event, row.key)}>
                   <input
                     type="checkbox"
                     aria-label={`Select ${rowNumberDisplay(row)}`}
                     checked={selected.has(row.key)}
-                    onChange={() => onToggle(row.key)}
+                    onChange={() => {}}
                     disabled={busy}
                   />
                 </td>

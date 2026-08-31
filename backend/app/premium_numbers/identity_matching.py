@@ -27,13 +27,17 @@ def classify_identity_match(
         "name": _normalized(existing.recruiter_name if role == "recruiter" else existing.owner_name),
         "email": _normalized(existing.recruiter_email if role == "recruiter" else existing.employer_email),
         "company": _normalized(existing.company),
+        "extension": _normalized(existing.phone_extension),
     }
     incoming = {
         "name": _normalized(candidate.owner_name),
         "email": _normalized(candidate.contact_email),
         "company": _normalized(candidate.company),
+        "extension": _normalized(candidate.phone_extension),
     }
 
+    if current["extension"] and incoming["extension"] and current["extension"] != incoming["extension"]:
+        return MatchResult("conflicting", "extension_mismatch")
     if current["email"] and current["email"] == incoming["email"]:
         return MatchResult("confirmed", "email_match")
     if (

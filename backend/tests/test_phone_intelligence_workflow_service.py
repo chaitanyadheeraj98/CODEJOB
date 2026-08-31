@@ -1,4 +1,5 @@
 import inspect
+import json
 import unittest
 from datetime import UTC, datetime
 from unittest.mock import patch
@@ -46,6 +47,7 @@ def _lead(
     block_id: str = "",
     evidence_text: str = "",
     colocation_verified: bool = False,
+    line_type: str = "phone",
 ) -> ExtractedContactGroup:
     return ExtractedContactGroup(
         phone_number_display=phone_display,
@@ -67,6 +69,7 @@ def _lead(
         block_id=block_id,
         evidence_text=evidence_text,
         colocation_verified=colocation_verified,
+        line_type=line_type,
     )
 
 
@@ -221,6 +224,120 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
 
             self.assertEqual(db.query(NumberReviewQueue).count(), 1)
 
+    def test_rescoring_email_after_its_identity_conflict_review_was_dismissed_does_not_crash(self) -> None:
+        existing = _lead(
+            role="recruiter",
+            owner_name="Yashasvi Hasija",
+            contact_email="yashasvi@empowerprofessionals.com",
+            company="Empower Professionals",
+            relevance_score=90,
+            relevant=True,
+            reason="external_domain",
+            phone_display="(732) 356-8008 ext 368",
+            phone_normalized="17323568008",
+            phone_extension="368",
+        )
+        conflicting = _lead(
+            role="recruiter",
+            owner_name="Tushar Bhardwaj",
+            contact_email="tushar@empowerprofessionals.com",
+            company="Empower Professionals Inc",
+            relevance_score=85,
+            relevant=True,
+            reason="external_domain",
+            phone_display="(732) 356-8008",
+            phone_normalized="17323568008",
+            phone_extension="",
+        )
+        with Session(self.engine) as db:
+            with patch(
+                "app.services.phone_intelligence_workflow_service.extract_phone_leads",
+                return_value=[existing],
+            ):
+                PhoneIntelligenceWorkflowService().capture_premium_numbers(db, self._email(db, "empower-existing"))
+
+            email = self._email(db, "empower-conflict")
+            with patch(
+                "app.services.phone_intelligence_workflow_service.extract_phone_leads",
+                return_value=[conflicting],
+            ):
+                PhoneIntelligenceWorkflowService().capture_premium_numbers(db, email)
+
+            review = db.query(NumberReviewQueue).filter(NumberReviewQueue.reason_code == "identity_conflict").one()
+            # Simulate a human dismissing the conflict (contact_identity_service.dismiss) -
+            # _upsert_open_conflict_review only looks for a *pending* row before deciding
+            # to insert, so a later rescore of the same email/phone no longer finds it there.
+            review.state = "dismissed"
+            db.commit()
+
+            with patch(
+                "app.services.phone_intelligence_workflow_service.extract_phone_leads",
+                return_value=[conflicting],
+            ):
+                PhoneIntelligenceWorkflowService().capture_premium_numbers(db, email)
+
+            self.assertEqual(
+                db.query(NumberReviewQueue).filter(NumberReviewQueue.reason_code == "identity_conflict").count(), 1
+            )
+
+    def test_find_contact_for_lead_prefers_email_match_over_arbitrary_switchboard_pick(self) -> None:
+        with Session(self.engine) as db:
+            db.add(PremiumNumberContact(
+                owner_id="default-owner", is_recruiter=True,
+                normalized_phone_number="17323568008", display_phone_number="(732) 356-8008 ext 368",
+                phone_extension="368", recruiter_name="Yashasvi Hasija", company="Empower Professionals",
+                recruiter_email="yashasvi@empowerprofessionals.com",
+            ))
+            tushar = PremiumNumberContact(
+                owner_id="default-owner", is_recruiter=True,
+                normalized_phone_number=None, display_phone_number="",
+                recruiter_name="Tushar Bhardwaj", company="Empower Professionals Inc",
+                recruiter_email="tushar@empowerprofessionals.com",
+            )
+            db.add(tushar)
+            db.commit()
+            tushar_id = tushar.id
+
+            # Blank extension - the same lead that would otherwise arbitrarily match
+            # whichever switchboard contact sorts first, but this one's email already
+            # belongs to a specific, different contact on file.
+            lead = _lead(
+                role="recruiter",
+                owner_name="Tushar Bhardwaj",
+                contact_email="tushar@empowerprofessionals.com",
+                company="Empower Professionals Inc",
+                phone_display="(732) 356-8008",
+                phone_normalized="17323568008",
+                phone_extension="",
+            )
+            found = PhoneIntelligenceWorkflowService._find_contact_for_lead(db, "default-owner", lead)
+            assert found is not None
+            self.assertEqual(found.id, tushar_id)
+
+    def test_find_contact_for_lead_ignores_a_soft_deleted_contact_on_phone_and_email(self) -> None:
+        with Session(self.engine) as db:
+            db.add(PremiumNumberContact(
+                owner_id="default-owner", is_recruiter=True,
+                normalized_phone_number="12482476165", display_phone_number="(248) 247-6165",
+                recruiter_name="Vikas Rao", company="DVG Tech Solutions",
+                recruiter_email="vikas@dvgtech.example",
+                deleted_at=datetime.now(UTC),
+            ))
+            db.commit()
+
+            by_phone = _lead(
+                role="recruiter", owner_name="Sheshwika Kukkala",
+                contact_email="sheshwika@horizonsoftech.net", company="Horizon Softech Inc",
+                phone_display="(248) 247-6165", phone_normalized="12482476165",
+            )
+            by_email = _lead(
+                role="recruiter", owner_name="Vikas Rao",
+                contact_email="vikas@dvgtech.example", company="DVG Tech Solutions",
+                phone_display="", phone_normalized="",
+            )
+            self.assertIsNone(PhoneIntelligenceWorkflowService._find_contact_for_lead(db, "default-owner", by_phone))
+            self.assertIsNone(PhoneIntelligenceWorkflowService._find_contact_for_lead(db, "default-owner", by_email))
+
     def test_shared_switchboard_different_extensions_creates_separate_contacts(self) -> None:
         with Session(self.engine) as db:
             saurabh = _lead(
@@ -363,11 +480,304 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
             ).all()
             self.assertEqual(len(contacts), 1)
             contact = contacts[0]
-            self.assertEqual(contact.normalized_phone_number, "16098979670")
+            # The no-extension number is the direct/desk line and takes over as primary,
+            # even though the extension (switchboard) number was seen first.
+            self.assertEqual(contact.normalized_phone_number, "16402611080")
+            self.assertEqual(contact.phone_extension, "")
             secondary = db.query(PremiumContactPhone).filter(
                 PremiumContactPhone.premium_contact_id == contact.id
             ).all()
-            self.assertEqual([row.normalized_phone_number for row in secondary], ["16402611080"])
+            self.assertEqual([row.normalized_phone_number for row in secondary], ["16098979670"])
+
+    def test_fax_number_in_the_same_block_never_becomes_primary(self) -> None:
+        real_phone = _lead(
+            role="employer", owner_name="Mohan Edara", contact_email="mohan@horizonsoftech.net",
+            company="Horizon Softech Inc", reason="employer_domain",
+            phone_display="(248) 722-2694", phone_normalized="12487222694", block_id="signature-1",
+        )
+        fax = _lead(
+            role="employer", owner_name="Mohan Edara", contact_email="mohan@horizonsoftech.net",
+            company="Horizon Softech Inc", reason="employer_domain",
+            phone_display="(248) 688-9655", phone_normalized="12486889655", block_id="signature-1",
+            line_type="fax",
+        )
+        with Session(self.engine, autoflush=False) as db:
+            with patch(
+                "app.services.phone_intelligence_workflow_service.extract_phone_leads",
+                return_value=[real_phone, fax],
+            ):
+                PhoneIntelligenceWorkflowService().capture_premium_numbers(db, self._email(db, "mohan-fax-and-phone"))
+
+            contact = db.query(PremiumNumberContact).filter(
+                PremiumNumberContact.employer_email == "mohan@horizonsoftech.net"
+            ).one()
+            self.assertEqual(contact.normalized_phone_number, "12487222694")
+            fax_row = db.query(PremiumContactPhone).filter(
+                PremiumContactPhone.premium_contact_id == contact.id, PremiumContactPhone.label == "fax",
+            ).one()
+            self.assertEqual(fax_row.normalized_phone_number, "12486889655")
+            review = db.query(NumberReviewQueue).filter(NumberReviewQueue.reason_code == "contact_enriched").one()
+            changes = json.loads(review.field_changes_json)
+            self.assertEqual(changes, [{
+                "field": "display_phone_number", "label": "Fax number",
+                "old": "", "new": "(248) 688-9655",
+            }])
+
+    def test_two_numbers_same_email_different_blocks_merge_with_direct_line_as_primary(self) -> None:
+        # Reproduces a real production bug: app/db.py's actual session runs with
+        # autoflush=False, so without an explicit flush after the first lead sets the
+        # contact's email, the second lead's email lookup below queries stale DB state
+        # and never finds the contact it should merge into instead of duplicating.
+        # block_id differs on purpose - these are two numbers from different parts of
+        # the email, not one signature block (which _resolve_block_contacts already
+        # pre-links before this code path even runs).
+        company_line = _lead(
+            role="recruiter",
+            owner_name="Sunitha Sanu",
+            contact_email="sunitha@example.com",
+            company="Momentousa",
+            relevance_score=95,
+            relevant=True,
+            reason="external_domain",
+            phone_display="(856) 456-1805 ext 1025",
+            phone_normalized="18564561805",
+            phone_extension="1025",
+            block_id="para-1",
+        )
+        direct_line = _lead(
+            role="recruiter",
+            owner_name="Sunitha Sanu",
+            contact_email="sunitha@example.com",
+            company="Momentousa",
+            relevance_score=95,
+            relevant=True,
+            reason="external_domain",
+            phone_display="(856) 372-4625",
+            phone_normalized="18563724625",
+            block_id="para-2",
+        )
+        with Session(self.engine, autoflush=False) as db:
+            with patch(
+                "app.services.phone_intelligence_workflow_service.extract_phone_leads",
+                return_value=[company_line, direct_line],
+            ):
+                PhoneIntelligenceWorkflowService().capture_premium_numbers(db, self._email(db, "sunitha-two-numbers"))
+
+            contacts = db.query(PremiumNumberContact).filter(
+                PremiumNumberContact.recruiter_email == "sunitha@example.com"
+            ).all()
+            self.assertEqual(len(contacts), 1)
+            contact = contacts[0]
+            # The no-extension (direct/desk) line takes over as primary even though the
+            # extension (company) line was seen first.
+            self.assertEqual(contact.normalized_phone_number, "18563724625")
+            self.assertEqual(contact.phone_extension, "")
+            secondary = db.query(PremiumContactPhone).filter(
+                PremiumContactPhone.premium_contact_id == contact.id
+            ).all()
+            self.assertEqual(
+                [(row.normalized_phone_number, row.phone_extension) for row in secondary],
+                [("18564561805", "1025")],
+            )
+            # The user should see what the AI merged, not just have it silently applied -
+            # a "contact_enriched" review card is flagged with the old-vs-new diff.
+            review = db.query(NumberReviewQueue).filter(NumberReviewQueue.reason_code == "contact_enriched").one()
+            self.assertEqual(review.target_contact_id, contact.id)
+            changes = json.loads(review.field_changes_json)
+            self.assertEqual(changes, [{
+                "field": "display_phone_number", "label": "Phone",
+                "old": "(856) 456-1805 ext 1025", "new": "(856) 372-4625",
+            }])
+
+    def test_extension_number_arriving_after_the_direct_line_does_not_demote_the_primary(self) -> None:
+        direct_line = _lead(
+            role="recruiter",
+            owner_name="Sunitha Sanu",
+            contact_email="sunitha@example.com",
+            company="Momentousa",
+            relevance_score=95,
+            relevant=True,
+            reason="external_domain",
+            phone_display="(856) 372-4625",
+            phone_normalized="18563724625",
+            block_id="para-1",
+        )
+        company_line = _lead(
+            role="recruiter",
+            owner_name="Sunitha Sanu",
+            contact_email="sunitha@example.com",
+            company="Momentousa",
+            relevance_score=95,
+            relevant=True,
+            reason="external_domain",
+            phone_display="(856) 456-1805 ext 1025",
+            phone_normalized="18564561805",
+            phone_extension="1025",
+            block_id="para-2",
+        )
+        with Session(self.engine, autoflush=False) as db:
+            with patch(
+                "app.services.phone_intelligence_workflow_service.extract_phone_leads",
+                return_value=[direct_line, company_line],
+            ):
+                PhoneIntelligenceWorkflowService().capture_premium_numbers(db, self._email(db, "sunitha-reverse-order"))
+
+            contact = db.query(PremiumNumberContact).filter(
+                PremiumNumberContact.recruiter_email == "sunitha@example.com"
+            ).one()
+            self.assertEqual(contact.normalized_phone_number, "18563724625")
+            self.assertEqual(contact.phone_extension, "")
+            secondary = db.query(PremiumContactPhone).filter(
+                PremiumContactPhone.premium_contact_id == contact.id
+            ).all()
+            self.assertEqual(
+                [(row.normalized_phone_number, row.phone_extension) for row in secondary],
+                [("18564561805", "1025")],
+            )
+
+    def test_same_phone_and_email_different_company_is_recorded_as_a_sister_company_not_overwritten(self) -> None:
+        # Same email confirms identity outright (classify_identity_match's fast path), so
+        # this is fully automatic - the second company seen for that phone must not
+        # silently replace or drop the first.
+        first_email_lead = _lead(
+            role="recruiter", owner_name="Vikas Rao", contact_email="vikas@dvgts.com",
+            company="DVG Tech Solutions LLC", relevance_score=90, relevant=True, reason="external_domain",
+            phone_display="(609) 888-6198", phone_normalized="16098886198",
+        )
+        second_email_lead = _lead(
+            role="recruiter", owner_name="Vikas Rao", contact_email="vikas@dvgts.com",
+            company="DVG Staffing Sister LLC", relevance_score=90, relevant=True, reason="external_domain",
+            phone_display="(609) 888-6198", phone_normalized="16098886198",
+        )
+        with Session(self.engine, autoflush=False) as db:
+            with patch(
+                "app.services.phone_intelligence_workflow_service.extract_phone_leads",
+                return_value=[first_email_lead],
+            ):
+                PhoneIntelligenceWorkflowService().capture_premium_numbers(db, self._email(db, "vikas-first-company"))
+            with patch(
+                "app.services.phone_intelligence_workflow_service.extract_phone_leads",
+                return_value=[second_email_lead],
+            ):
+                PhoneIntelligenceWorkflowService().capture_premium_numbers(db, self._email(db, "vikas-sister-company"))
+
+            contact = db.query(PremiumNumberContact).filter(
+                PremiumNumberContact.normalized_phone_number == "16098886198"
+            ).one()
+            self.assertEqual(contact.company, "DVG Tech Solutions LLC")
+            self.assertEqual(contact.secondary_company, "DVG Staffing Sister LLC")
+            review = db.query(NumberReviewQueue).filter(
+                NumberReviewQueue.reason_code == "contact_enriched", NumberReviewQueue.target_contact_id == contact.id,
+            ).one()
+            changes = json.loads(review.field_changes_json)
+            self.assertEqual(changes, [{
+                "field": "secondary_company", "label": "Sister company",
+                "old": "", "new": "DVG Staffing Sister LLC",
+            }])
+
+            # A third email reusing the exact same sister company must not re-flag it.
+            third_email_lead = _lead(
+                role="recruiter", owner_name="Vikas Rao", contact_email="vikas@dvgts.com",
+                company="DVG Staffing Sister LLC", relevance_score=90, relevant=True, reason="external_domain",
+                phone_display="(609) 888-6198", phone_normalized="16098886198",
+            )
+            with patch(
+                "app.services.phone_intelligence_workflow_service.extract_phone_leads",
+                return_value=[third_email_lead],
+            ):
+                PhoneIntelligenceWorkflowService().capture_premium_numbers(db, self._email(db, "vikas-sister-company-again"))
+            self.assertEqual(
+                db.query(NumberReviewQueue).filter(NumberReviewQueue.reason_code == "contact_enriched").count(), 1,
+            )
+
+    def test_evidence_recency_decides_a_direct_line_conflict(self) -> None:
+        with Session(self.engine, autoflush=False) as db:
+            older_email = self._email(db, "sunitha-first-direct")
+            older_email.gmail_received_at = datetime(2026, 1, 1, tzinfo=UTC)
+            db.commit()
+            first_lead = _lead(
+                role="recruiter", owner_name="Sunitha Sanu", contact_email="sunitha@example.com",
+                company="Momentousa", relevance_score=95, relevant=True, reason="external_domain",
+                phone_display="(856) 111-1111", phone_normalized="18561111111",
+            )
+            with patch("app.services.phone_intelligence_workflow_service.extract_phone_leads", return_value=[first_lead]):
+                PhoneIntelligenceWorkflowService().capture_premium_numbers(db, older_email)
+            contact = db.query(PremiumNumberContact).filter(
+                PremiumNumberContact.recruiter_email == "sunitha@example.com"
+            ).one()
+            self.assertEqual(contact.normalized_phone_number, "18561111111")
+
+            # Older evidence must not overwrite a direct line the contact already has.
+            stale_email = self._email(db, "sunitha-stale-direct")
+            stale_email.gmail_received_at = datetime(2025, 12, 1, tzinfo=UTC)
+            db.commit()
+            stale_lead = _lead(
+                role="recruiter", owner_name="Sunitha Sanu", contact_email="sunitha@example.com",
+                company="Momentousa", relevance_score=95, relevant=True, reason="external_domain",
+                phone_display="(856) 222-2222", phone_normalized="18562222222",
+            )
+            with patch("app.services.phone_intelligence_workflow_service.extract_phone_leads", return_value=[stale_lead]):
+                PhoneIntelligenceWorkflowService().capture_premium_numbers(db, stale_email)
+            db.refresh(contact)
+            self.assertEqual(contact.normalized_phone_number, "18561111111")
+            self.assertEqual(
+                db.query(NumberReviewQueue).filter(NumberReviewQueue.reason_code == "contact_enriched").count(), 0,
+            )
+
+            # Newer evidence correctly wins and gets flagged for one verification review.
+            newer_email = self._email(db, "sunitha-newer-direct")
+            newer_email.gmail_received_at = datetime(2026, 2, 1, tzinfo=UTC)
+            db.commit()
+            newer_lead = _lead(
+                role="recruiter", owner_name="Sunitha Sanu", contact_email="sunitha@example.com",
+                company="Momentousa", relevance_score=95, relevant=True, reason="external_domain",
+                phone_display="(856) 333-3333", phone_normalized="18563333333",
+            )
+            with patch("app.services.phone_intelligence_workflow_service.extract_phone_leads", return_value=[newer_lead]):
+                PhoneIntelligenceWorkflowService().capture_premium_numbers(db, newer_email)
+            db.refresh(contact)
+            self.assertEqual(contact.normalized_phone_number, "18563333333")
+            review = db.query(NumberReviewQueue).filter(NumberReviewQueue.reason_code == "contact_enriched").one()
+            self.assertEqual(review.target_contact_id, contact.id)
+
+    def test_nvoids_lead_merges_into_an_existing_gmail_contact_by_email(self) -> None:
+        with Session(self.engine, autoflush=False) as db:
+            email = self._email(db, "sunitha-gmail-direct")
+            direct_lead = _lead(
+                role="recruiter", owner_name="Sunitha Sanu", contact_email="sunitha@example.com",
+                company="Momentousa", relevance_score=95, relevant=True, reason="external_domain",
+                phone_display="(856) 372-4625", phone_normalized="18563724625",
+            )
+            with patch("app.services.phone_intelligence_workflow_service.extract_phone_leads", return_value=[direct_lead]):
+                PhoneIntelligenceWorkflowService().capture_premium_numbers(db, email)
+            contact = db.query(PremiumNumberContact).filter(
+                PremiumNumberContact.recruiter_email == "sunitha@example.com"
+            ).one()
+            self.assertEqual(contact.normalized_phone_number, "18563724625")
+
+            item = self._external(db)
+            item.recruiter_email = "sunitha@example.com"
+            db.commit()
+            company_lead = _lead(
+                role="recruiter", owner_name="Sunitha Sanu", contact_email="sunitha@example.com",
+                company="Momentousa", relevance_score=95, relevant=True, reason="external_domain",
+                phone_display="(856) 456-1805 ext 1025", phone_normalized="18564561805", phone_extension="1025",
+            )
+            with patch("app.services.phone_intelligence_workflow_service.extract_phone_leads", return_value=[company_lead]):
+                PhoneIntelligenceWorkflowService().capture_premium_numbers_for_nvoids(db, item, item.raw_body)
+
+            self.assertEqual(
+                db.query(PremiumNumberContact).filter(PremiumNumberContact.recruiter_email == "sunitha@example.com").count(), 1,
+            )
+            db.refresh(contact)
+            # The direct (no-extension) line stays primary; the Nvoids company line is
+            # recorded as a secondary number on the same contact.
+            self.assertEqual(contact.normalized_phone_number, "18563724625")
+            secondary = db.query(PremiumContactPhone).filter(PremiumContactPhone.premium_contact_id == contact.id).all()
+            self.assertEqual([row.normalized_phone_number for row in secondary], ["18564561805"])
+            review = db.query(NumberReviewQueue).filter(NumberReviewQueue.reason_code == "contact_enriched").one()
+            self.assertEqual(review.source_external_opportunity_id, item.id)
+            self.assertIsNone(review.source_email_id)
 
     def test_second_number_in_signature_block_does_not_orphan_when_first_number_conflicts(self) -> None:
         with Session(self.engine) as db:

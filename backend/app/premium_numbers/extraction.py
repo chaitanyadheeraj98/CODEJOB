@@ -47,10 +47,12 @@ NOISE_CONTEXT_TERMS = (
     "view this discussion",
     "utm_",
     "msgid",
-    "http://",
-    "https://",
-    "www.",
 )
+# A bare link (company site, LinkedIn profile, mailto:) is a normal thing to see in
+# someone's own signature right next to their real phone - it's only noise when paired
+# with an actual mailing-list/tracking-footer marker, not on its own.
+LINK_MARKER_TERMS = ("mailto:", "http://", "https://", "www.")
+LINK_FOOTER_MARKER_TERMS = ("unsubscribe", "googlegroups")
 NUMERIC_LABEL_NOISE_TERMS = (
     "duration:",
     "experience:",
@@ -112,6 +114,7 @@ class ExtractedContactGroup:
     evidence_offset_start: int | None = None
     evidence_offset_end: int | None = None
     colocation_verified: bool = False
+    line_type: str = "phone"
 
 
 # Backward-compatible import name for existing callers outside the shared workflow.
@@ -222,6 +225,9 @@ def _llm_extract(
         source_section = str(item.get("source_section", "unknown")).strip().lower()
         if source_section not in {"body", "signature", "unknown"}:
             source_section = "unknown"
+        line_type = str(item.get("line_type", "phone")).strip().lower()
+        if line_type not in {"phone", "fax", "other"}:
+            line_type = "phone"
         evidence_text = str(item.get("evidence_text", "")).strip()
         leads.append(
             ExtractedContactGroup(
@@ -247,6 +253,7 @@ def _llm_extract(
                 source_section=source_section,
                 block_id=str(item.get("block_id", "")).strip()[:64],
                 evidence_text=evidence_text,
+                line_type=line_type,
             )
         )
     return leads
@@ -354,6 +361,17 @@ def _verify_colocation(
     if not evidence_parts or not (phone_normalized or anchor_email):
         return False, None
 
+    if phone_normalized and anchor_email:
+        # The evidence snippet the AI cited to justify this phone can itself belong to a
+        # DIFFERENT contact mentioned in the same email ("share your resume to X or call
+        # Y" - phone Y sits right next to X's email, not this lead's own). Character
+        # distance alone can't tell them apart when both mentions sit a few lines apart;
+        # if the snippet names someone else's email, the phone almost certainly belongs
+        # to them instead.
+        mentioned_emails = {match.group(0).lower() for match in EMAIL_RE.finditer(evidence_text or "")}
+        if mentioned_emails and anchor_email not in mentioned_emails:
+            return False, None
+
     collapsed: list[str] = []
     offsets: list[int] = []
     for index, char in enumerate(email_content or ""):
@@ -401,18 +419,25 @@ def _group_candidates_by_block(leads: list[ExtractedContactGroup]) -> list[Extra
         block_id: max(items, key=_lead_quality_score)
         for block_id, items in grouped.items()
     }
-    return [
-        replace(
+    result: list[ExtractedContactGroup] = []
+    for lead in leads:
+        winner = identities.get(lead.block_id) if lead.block_id else None
+        # The AI sometimes tags two different people's mentions with the same block_id
+        # (e.g. "share resume to X or call Y" sitting right above someone else's
+        # signature). A lead that already names its OWN different email is that other
+        # person, not the block's winner - grouping would otherwise silently repaint
+        # this lead's phone number with a stranger's identity.
+        if winner is None or (lead.contact_email and lead.contact_email != winner.contact_email):
+            result.append(lead)
+            continue
+        result.append(replace(
             lead,
-            owner_name=identities[lead.block_id].owner_name,
-            contact_email=identities[lead.block_id].contact_email,
-            company=identities[lead.block_id].company,
-            designation=identities[lead.block_id].designation,
-        )
-        if lead.block_id in identities
-        else lead
-        for lead in leads
-    ]
+            owner_name=winner.owner_name,
+            contact_email=winner.contact_email,
+            company=winner.company,
+            designation=winner.designation,
+        ))
+    return result
 
 
 def _lead_quality_score(lead: ExtractedContactGroup) -> int:
@@ -524,10 +549,9 @@ def _is_noise_context(raw_fragment: str, normalized_fragment: str, raw_phone: st
     )
     if any(term in proximity for term in NUMERIC_LABEL_NOISE_TERMS):
         return True
-    if "mailto:" in raw_text and ("unsubscribe" in raw_text or "googlegroups" in raw_text):
-        return True
-    if "mailto:" in norm_text and ("unsubscribe" in norm_text or "googlegroups" in norm_text):
-        return True
+    for text in (raw_text, norm_text):
+        if any(link in text for link in LINK_MARKER_TERMS) and any(footer in text for footer in LINK_FOOTER_MARKER_TERMS):
+            return True
     if URL_NOISE_TOKEN_RE.search(raw_phone or ""):
         return True
     return False
@@ -656,6 +680,7 @@ def _fallback_extract(
             )
             continue
         fragment_l = fragment.lower()
+        line_type = "fax" if re.search(r"\bfax\b", fragment_l) else "phone"
 
         designation_match = DESIGNATION_RE.search(fragment)
         designation = designation_match.group(0).title() if designation_match else "Unknown"
@@ -701,6 +726,7 @@ def _fallback_extract(
                 evidence_offset_start=match.start(),
                 evidence_offset_end=match.end(),
                 colocation_verified=True,
+                line_type=line_type,
             )
         )
     return leads
@@ -766,7 +792,39 @@ def _finalize_extraction(
             stage=stage,
             reason=reason,
         )
-    return deduped
+    # A fax (or other non-phone) line and someone's real phone number can arrive from the
+    # same signature block with identical evidence timestamps - the downstream primary/
+    # secondary swap only breaks a tie in favor of whichever lead it sees first, so without
+    # this a fax number has 50/50 odds of winning the primary slot. Sorting phone-type leads
+    # first (stable, so relative order within each group is untouched) makes sure a real
+    # phone number always gets first claim.
+    return sorted(deduped, key=lambda lead: lead.line_type != "phone")
+
+
+def _backfill_missed_phone(
+    lead: ExtractedContactGroup,
+    fallback_candidates: list[ExtractedContactGroup],
+    email_content: str,
+) -> ExtractedContactGroup:
+    if lead.phone_number_normalized or not lead.contact_email:
+        return lead
+    match = next(
+        (
+            candidate for candidate in fallback_candidates
+            if _verify_colocation(candidate.evidence_text, candidate.phone_number_display, email_content, email_raw=lead.contact_email)[0]
+        ),
+        None,
+    )
+    if match is None:
+        return lead
+    return replace(
+        lead,
+        phone_number_display=match.phone_number_display,
+        phone_number_normalized=match.phone_number_normalized,
+        phone_extension=match.phone_extension,
+        evidence_text=match.evidence_text,
+        source_fragment=lead.source_fragment or match.evidence_text,
+    )
 
 
 def extract_phone_leads(
@@ -806,9 +864,21 @@ def extract_phone_leads(
     if ai_leads:
         # AI ran and found at least one contact - trust it exclusively. Regex is a fallback
         # for when AI is disabled/unavailable/fails/finds nothing, not a second opinion to
-        # merge in alongside a successful AI result.
+        # merge in alongside a successful AI result - except to backfill a phone the AI
+        # missed entirely on a contact it DID correctly identify by email, where the same
+        # colocation check that guards every other phone can still vouch for it.
+        grouped_ai_leads = _group_candidates_by_block(ai_leads)
+        if any(not lead.phone_number_normalized and lead.contact_email for lead in grouped_ai_leads):
+            fallback_candidates = _fallback_extract(
+                sender, body, normalized_domains, db=db, owner_id=owner_id,
+                source_email_id=source_email_id, source_external_opportunity_id=source_external_opportunity_id,
+            )
+            grouped_ai_leads = [
+                _backfill_missed_phone(lead, fallback_candidates, email_content)
+                for lead in grouped_ai_leads
+            ]
         enriched_ai_leads: list[ExtractedContactGroup] = []
-        for lead in _group_candidates_by_block(ai_leads):
+        for lead in grouped_ai_leads:
             evidence_text = lead.evidence_text or lead.source_fragment
             colocation_verified, evidence_start = _verify_colocation(
                 evidence_text,

@@ -70,6 +70,7 @@ export default function RecycleBinTab({ apiBase, refreshToken, onToast, filterVa
   }, [apiBase, filterValues, page, refreshToken, sortValue])
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  const pages = Array.from({ length: totalPages }, (_, index) => index + 1)
   const allVisibleSelected = rows.length > 0 && rows.every((row) => selected.has(row.id))
 
   const restoreOne = (row: InventoryRow) => {
@@ -211,6 +212,17 @@ export default function RecycleBinTab({ apiBase, refreshToken, onToast, filterVa
           <span>Showing {rows.length === 0 ? 0 : (page - 1) * PAGE_SIZE + 1} to {Math.min(page * PAGE_SIZE, total)} of {total} deleted contacts</span>
           <nav className="pagination" aria-label="Recycle bin pages">
             <button type="button" onClick={() => setPage((current) => current - 1)} disabled={page <= 1}>‹</button>
+            {pages.slice(Math.max(0, page - 3), Math.min(totalPages, page + 2)).map((pageNumber) => (
+              <button
+                type="button"
+                key={pageNumber}
+                className={pageNumber === page ? 'active' : ''}
+                aria-current={pageNumber === page ? 'page' : undefined}
+                onClick={() => setPage(pageNumber)}
+              >
+                {pageNumber}
+              </button>
+            ))}
             <button type="button" onClick={() => setPage((current) => current + 1)} disabled={page >= totalPages}>›</button>
           </nav>
         </footer>

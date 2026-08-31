@@ -27,6 +27,7 @@ For EACH phone number found, identify:
 10. Source section: body, signature, or unknown
 11. Block ID shared by every phone and identity field in the same signature block
 12. Verbatim evidence text containing the phone number
+13. Line type: "phone" (a number someone can be called on - direct/desk/cell/switchboard), "fax", or "other" (explicitly labeled as something other than a callable line, e.g. "Toll Free:", "Main:", "Support:")
 
 Rules:
 - Carefully distinguish between main submission contacts, recruiter signatures, and office numbers.
@@ -40,6 +41,8 @@ Rules:
 - Support international phone number formats.
 - Known employer domains are employer contacts, not recruiter contacts.
 - If the phone number has an extension (e.g. "Ext: 2162", "x2162", "extension 2162"), include it verbatim in "phone_number" (e.g. "+1 (609) 897-9670 ext 2162") - never drop it. Different people at the same company often share one switchboard number with different extensions, and the extension is what tells them apart.
+- If a LinkedIn profile is mentioned for this person (a linkedin.com/in/... URL, whether plain text or the target of a hyperlink like "linkedin.com/in/jane-doe-recruiter"), copy it verbatim into "linkedin_url". Include the domain even if the email only shows the path (e.g. "linkedin.com/in/jane-doe"). Leave "linkedin_url" as "" only when no LinkedIn profile is mentioned for this person - never invent one.
+- A number explicitly labeled "Fax:" or "Facsimile:" is a fax line, not a phone line - still extract it (as its own contact entry, same block_id as the rest of that person's signature), but set "line_type" to "fax". Set "line_type" to "other" for a number labeled as something else that isn't a way to reach the person directly (e.g. "Toll Free:", "Main:", "Support:"). Every other number - unlabeled, or labeled "Ph:", "Tel:", "Phone:", "Cell:", "Direct:", "Office:" - is "line_type": "phone". When unsure, default to "phone".
 
 Known employer domains: {', '.join(sorted(employer_domains or set())) or 'none'}
 
@@ -58,7 +61,8 @@ Expected JSON format:
       "confidence": "High",
       "source_section": "signature",
       "block_id": "signature-1",
-      "evidence_text": "RAM | ram@example.com | +1 512 271 9173"
+      "evidence_text": "RAM | ram@example.com | +1 512 271 9173",
+      "line_type": "phone"
     }},
     {{
       "role": "recruiter",
@@ -67,12 +71,28 @@ Expected JSON format:
       "email": "priya@example.com",
       "company": "TekWings",
       "designation": "Sr. Technical Recruiter",
-      "linkedin_url": "",
+      "linkedin_url": "linkedin.com/in/priya-recruiter",
       "purpose": "Recruiter direct number",
       "confidence": "High",
       "source_section": "signature",
       "block_id": "signature-2",
-      "evidence_text": "Priya | priya@example.com | Cell: +1 (609) 897-9670 Ext: 2162"
+      "evidence_text": "Priya | priya@example.com | Cell: +1 (609) 897-9670 Ext: 2162",
+      "line_type": "phone"
+    }},
+    {{
+      "role": "employer",
+      "phone_number": "+1 248-688-9655",
+      "name": "Mohan Edara",
+      "email": "mohan@horizonsoftech.net",
+      "company": "Horizon Softech Inc",
+      "designation": "Unknown",
+      "linkedin_url": "",
+      "purpose": "Company fax line",
+      "confidence": "High",
+      "source_section": "signature",
+      "block_id": "signature-3",
+      "evidence_text": "Mohan Edara | Horizon Softech Inc | Ph: 248-722-2694 | Fax: 248-688-9655",
+      "line_type": "fax"
     }}
   ]
 }}

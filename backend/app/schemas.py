@@ -1010,6 +1010,7 @@ class UnknownNumberReviewCardResponse(BaseModel):
     email_subject: str
     email_sender: str
     contact_email: str = ""
+    linkedin_url: str = ""
     contact_type: str = "unknown"
     recruiter_relevance_score: int = 0
     relevance_reason: str = ""
@@ -1019,9 +1020,11 @@ class UnknownNumberReviewCardResponse(BaseModel):
     state: str
     role: str | None = None
     reason_code: str = "new_number"
+    field_changes_json: str = ""
     occurrence_count: int = 1
     created_at: datetime
     updated_at: datetime
+    evidence_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 
@@ -1056,6 +1059,7 @@ class RecruiterNumberResponse(BaseModel):
     display_phone_number: str
     recruiter_name: str
     company: str
+    secondary_company: str = ""
     designation: str
     recruiter_email: str
     recruiter_email_domain: str = ""
@@ -1090,7 +1094,9 @@ class EmployerNumberResponse(BaseModel):
     normalized_phone_number: str | None
     display_phone_number: str
     owner_name: str
+    designation: str = "Unknown"
     company: str
+    secondary_company: str = ""
     employer_email: str = ""
     employer_email_domain: str = ""
     is_favorite: bool = False
@@ -1101,6 +1107,11 @@ class EmployerNumberResponse(BaseModel):
     active_lead_id: int | None = None
     version_count: int = 0
     seen_count: int = 1
+    phones: list[dict[str, object]] = Field(default_factory=list)
+    linkedin_url: str = ""
+    recruiter_verification_level: str = "unverified"
+    do_not_work_again: bool = False
+    do_not_work_again_reason: str = ""
     is_recruiter: bool = False
     is_employer: bool = True
     recruiter_relevance_score: int | None = None
@@ -1632,6 +1643,67 @@ class BulkContactActionResponse(BaseModel):
     results: list[BulkContactActionResultItem]
 
 
+class ContactFieldChange(BaseModel):
+    field: str
+    label: str
+    old: str
+    new: str
+
+
+class ContactRescoreResponse(BaseModel):
+    id: int
+    status: str
+    changes: list[ContactFieldChange] = []
+
+
+class ContactMergePreviewLead(BaseModel):
+    id: int
+    role: str
+    company: str
+    owner_name: str
+    contact_email: str
+    phone_number_display: str
+    extraction_source: str
+    created_at: datetime
+
+
+class ContactMergePreviewSide(BaseModel):
+    id: int
+    recruiter_name: str
+    owner_name: str
+    company: str
+    recruiter_email: str
+    employer_email: str
+    normalized_phone_number: str | None
+    display_phone_number: str
+    is_recruiter: bool
+    is_employer: bool
+    lead_count: int
+    latest_evidence_at: datetime | None
+    leads: list[ContactMergePreviewLead]
+
+
+class ContactMergePreviewResponse(BaseModel):
+    contact_a: ContactMergePreviewSide
+    contact_b: ContactMergePreviewSide
+
+
+class ContactMergeRequest(BaseModel):
+    canonical_contact_id: int
+    loser_contact_id: int
+
+
+class ContactMergeResponse(BaseModel):
+    canonical_contact_id: int
+    loser_contact_id: int
+    status: str
+
+
+class DuplicateContactBackfillResponse(BaseModel):
+    groups_merged: int
+    contacts_merged: int
+
+
 class RecentRunSkippedItemRetryRequest(BaseModel):
     skipped_item_ids: list[int]
 
@@ -1656,8 +1728,11 @@ class ContactMergeApprovalRequest(BaseModel):
 class RecruiterNumberPatchRequest(BaseModel):
     recruiter_name: str | None = None
     company: str | None = None
+    secondary_company: str | None = None
     designation: str | None = None
     recruiter_email: str | None = None
+    phone_number: str | None = None
+    phones: list[str] | None = None
     linkedin_url: str | None = None
     recruiter_verification_level: Literal["unverified", "verified", "trusted"] | None = None
     do_not_work_again: bool | None = None
@@ -1667,9 +1742,16 @@ class RecruiterNumberPatchRequest(BaseModel):
 
 class EmployerNumberPatchRequest(BaseModel):
     owner_name: str | None = None
+    designation: str | None = None
     is_favorite: bool | None = None
     company: str | None = None
+    secondary_company: str | None = None
     employer_email: str | None = None
+    phones: list[str] | None = None
+    linkedin_url: str | None = None
+    recruiter_verification_level: Literal["unverified", "verified", "trusted"] | None = None
+    do_not_work_again: bool | None = None
+    do_not_work_again_reason: str | None = None
 
 
 class RecruiterOpportunityDeleteResponse(BaseModel):

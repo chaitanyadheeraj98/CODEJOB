@@ -1,5 +1,6 @@
 import os
 import unittest
+from datetime import UTC, datetime
 
 os.environ["DEBUG"] = "false"
 
@@ -15,6 +16,7 @@ from app.models import (
     PremiumContactEmail,
     PremiumContactPhone,
     PremiumNumberContact,
+    PremiumNumberLead,
     RecruiterEmail,
 )
 from app.premium_numbers import contact_identity_service
@@ -113,14 +115,53 @@ class ContactIdentityServiceTests(unittest.TestCase):
             db.commit()
 
             self.assertEqual(result.status, "pending_merge_approval")
-            assert result.contact is not None
-            self.assertEqual(result.contact.id, contact_a.id)
+            # Deliberately unresolved: which of the two claimants is right is the whole
+            # question the card asks, so the caller must not be handed one of them to
+            # overwrite. Both are named on the review below instead.
+            self.assertIsNone(result.contact)
             review = db.get(NumberReviewQueue, result.review_id)
             assert review is not None
             self.assertEqual(review.reason_code, "phone_email_cross_conflict")
             self.assertEqual(review.target_contact_id, contact_a.id)
             self.assertEqual(review.secondary_contact_id, contact_b.id)
             self.assertEqual(review.state, "pending")
+
+    def test_reconcile_phone_email_cross_conflict_reuses_existing_review_slot_instead_of_crashing(self) -> None:
+        with Session(self.engine) as db:
+            contact_a = contact_identity_service.reconcile(
+                db, owner_id=OWNER_ID, normalized_phone=PHONE_A, normalized_email="a@example.com", name="Jane A", company="Acme"
+            ).contact
+            contact_identity_service.reconcile(
+                db, owner_id=OWNER_ID, normalized_phone=PHONE_B, normalized_email="b@example.com", name="Jane B", company="Beta"
+            )
+            db.commit()
+            assert contact_a is not None
+
+            # A review already occupies (owner, PHONE_A, source_email_id=777) - e.g. this
+            # exact email was reviewed once before under a different reason, then its phone
+            # got corrected to PHONE_A by a manual edit.
+            db.add(NumberReviewQueue(
+                owner_id=OWNER_ID, source_email_id=777, normalized_phone_number=PHONE_A,
+                display_phone_number=PHONE_A, owner_name="Someone", company="Unknown",
+                designation="Unknown", confidence="low", purpose="", evidence_snippet="",
+                email_subject="", email_sender="", contact_email="", reason_code="new_number",
+                state="pending",
+            ))
+            db.commit()
+
+            result = contact_identity_service.reconcile(
+                db, owner_id=OWNER_ID, normalized_phone=PHONE_A, normalized_email="b@example.com",
+                source_email_id=777,
+            )
+            db.commit()
+
+            self.assertEqual(result.status, "pending_merge_approval")
+            review = db.get(NumberReviewQueue, result.review_id)
+            assert review is not None
+            self.assertEqual(review.source_email_id, 777)
+            self.assertEqual(
+                db.query(NumberReviewQueue).filter(NumberReviewQueue.source_email_id == 777).count(), 1,
+            )
 
     # -- case (c): phone found, email new -------------------------------------
 
@@ -214,9 +255,11 @@ class ContactIdentityServiceTests(unittest.TestCase):
             db.commit()
 
             self.assertEqual(result.status, "pending_link_approval")
-            # Conflicting matches still hand back the contact when human_confirmed=True.
-            assert result.contact is not None
-            self.assertEqual(result.contact.id, contact_id)
+            # human_confirmed means "a person typed this in", NOT "a person adjudicated
+            # this clash" - so a CONFLICTING match is withheld and the caller has to raise.
+            # Handing it back is what let "Mark as Recruiter" overwrite a contact the
+            # classifier had just rejected.
+            self.assertIsNone(result.contact)
             review = db.get(NumberReviewQueue, result.review_id)
             assert review is not None
             self.assertEqual(review.reason_code, "identity_conflict")
@@ -428,6 +471,38 @@ class ContactIdentityServiceTests(unittest.TestCase):
             }
             self.assertEqual(phones, {PHONE_A, PHONE_B})
 
+    def test_an_address_reused_across_roles_queues_a_review_instead_of_forking_the_owner(self) -> None:
+        """An address has exactly ONE owner - premium_contact_emails enforces it. This
+        used to silently create a second contact carrying the address as a bare headline
+        with no child row, which is precisely the headline-vs-child divergence that put 14
+        contradictory rows into production. Now the ambiguity goes to a human instead."""
+        with Session(self.engine) as db:
+            employer_contact = contact_identity_service.reconcile(
+                db, owner_id=OWNER_ID, normalized_phone=PHONE_A, normalized_email="shared@example.com",
+                name="Pat Employer", company="Acme Corp", role="employer",
+            ).contact
+            db.commit()
+            assert employer_contact is not None
+            # The employer side owns it on BOTH stores, in agreement.
+            self.assertEqual(employer_contact.employer_email, "shared@example.com")
+            self.assertEqual(employer_contact.recruiter_email, "")
+
+            result = contact_identity_service.reconcile(
+                db, owner_id=OWNER_ID, normalized_phone=PHONE_B, normalized_email="shared@example.com",
+                name="Pat Recruiter", company="Staffing Co", role="recruiter",
+            )
+            db.commit()
+
+            self.assertEqual(result.status, "pending_link_approval")
+            review = db.get(NumberReviewQueue, result.review_id)
+            assert review is not None
+            self.assertEqual(review.target_contact_id, employer_contact.id)
+            self.assertEqual(review.role, "recruiter")
+            # No forked second owner, and the one child row still points at one contact.
+            self.assertEqual(db.query(PremiumNumberContact).filter(PremiumNumberContact.owner_id == OWNER_ID).count(), 1)
+            rows = db.query(PremiumContactEmail).filter(PremiumContactEmail.normalized_email == "shared@example.com").all()
+            self.assertEqual([row.premium_contact_id for row in rows], [employer_contact.id])
+
     def test_multi_identifier_conflicting_name_company_does_not_merge(self) -> None:
         with Session(self.engine) as db:
             contact = contact_identity_service.reconcile(
@@ -587,6 +662,51 @@ class ContactIdentityServiceTests(unittest.TestCase):
             assert refreshed_review is not None
             self.assertEqual(refreshed_review.state, "resolved")
 
+    def test_approve_link_email_already_on_a_different_contact_raises_instead_of_silently_resolving(self) -> None:
+        # Regression test: two different contacts can each mention the same email (e.g. a
+        # mismatched extraction). Linking that email onto the review's target must fail
+        # loudly - not silently no-op while the review still gets marked resolved, which
+        # made the reviewed person's identity vanish from every "pending" list with no
+        # visible trace of what happened.
+        with Session(self.engine) as db:
+            other_contact = contact_identity_service.reconcile(
+                db, owner_id=OWNER_ID, normalized_phone=PHONE_B, normalized_email="shared@example.com",
+                name="Lokesh", company="Info Way Solutions",
+            ).contact
+            db.commit()
+            assert other_contact is not None
+
+            target = contact_identity_service.reconcile(
+                db, owner_id=OWNER_ID, normalized_phone=PHONE_A, name="Madhavi Masannagari", company="Horizons of Tech",
+            ).contact
+            db.commit()
+            assert target is not None
+            target_id = target.id
+
+            review = NumberReviewQueue(
+                owner_id=OWNER_ID, target_contact_id=target_id, normalized_phone_number="",
+                display_phone_number="", owner_name="Madhavi Masannagari", company="Horizons of Tech",
+                contact_email="shared@example.com", role="employer", reason_code="identity_conflict", state="pending",
+            )
+            db.add(review)
+            db.commit()
+
+            with self.assertRaises(ValueError):
+                contact_identity_service.approve_link(db, review)
+            db.rollback()
+
+            refreshed_target = db.get(PremiumNumberContact, target_id)
+            assert refreshed_target is not None
+            self.assertEqual(refreshed_target.recruiter_email, "")
+            refreshed_review = db.get(NumberReviewQueue, review.id)
+            assert refreshed_review is not None
+            self.assertEqual(refreshed_review.state, "pending")
+            self.assertIsNone(
+                db.query(ContactIdentityAction)
+                .filter(ContactIdentityAction.action_type == "link_email", ContactIdentityAction.primary_contact_id == target_id)
+                .first()
+            )
+
     # -- approve_merge / dismiss --------------------------------------------
 
     def test_approve_merge_moves_children_reassigns_and_soft_deletes_loser(self) -> None:
@@ -669,6 +789,146 @@ class ContactIdentityServiceTests(unittest.TestCase):
             self.assertEqual(merge_action.primary_contact_id, canonical_id)
             self.assertEqual(merge_action.secondary_contact_id, loser_id)
 
+    def test_merge_contacts_reassigns_leads_and_stray_reviews_without_a_review_row(self) -> None:
+        # Regression test: the "Merge Contacts" UI action merges two contacts a human
+        # picked directly, with no auto-detected conflict review pointing at them - and
+        # unlike the older approve_merge path, the loser's own lead history and any other
+        # review that happens to reference it must not be left dangling on a deleted contact.
+        with Session(self.engine) as db:
+            canonical = PremiumNumberContact(
+                owner_id=OWNER_ID, normalized_phone_number=PHONE_A, display_phone_number="(415) 555-1111",
+                is_employer=True, owner_name="Prashanth Kinnera", company="Horizons of Tech",
+                employer_email="kprashanth@horizonsoftech.net",
+            )
+            loser = PremiumNumberContact(
+                owner_id=OWNER_ID, normalized_phone_number=PHONE_B, display_phone_number="(415) 555-2222",
+                is_employer=True, owner_name="Prashanth Kinnera", company="Horizons of Tech",
+                employer_email="kprashanth@horizonsoftech.net",
+            )
+            db.add_all([canonical, loser])
+            db.flush()
+            canonical_id, loser_id = canonical.id, loser.id
+            lead = PremiumNumberLead(
+                owner_id=OWNER_ID, contact_id=loser_id, phone_number_normalized=PHONE_B,
+                phone_number_display="(415) 555-2222", role="employer", owner_name="Prashanth Kinnera",
+            )
+            stray_review = NumberReviewQueue(
+                owner_id=OWNER_ID, target_contact_id=loser_id, normalized_phone_number=PHONE_D,
+                display_phone_number="(415) 555-4444", owner_name="Someone Else", company="Unrelated Co",
+                designation="Unknown", role="recruiter", reason_code="insufficient_evidence", state="pending",
+            )
+            db.add_all([lead, stray_review])
+            db.commit()
+
+            result = contact_identity_service.merge_contacts(
+                db, owner_id=OWNER_ID, canonical_contact_id=canonical_id, loser_contact_id=loser_id,
+            )
+            db.commit()
+
+            self.assertEqual(result.id, canonical_id)
+            refreshed_loser = db.get(PremiumNumberContact, loser_id)
+            assert refreshed_loser is not None
+            self.assertIsNotNone(refreshed_loser.deleted_at)
+
+            refreshed_lead = db.get(PremiumNumberLead, lead.id)
+            assert refreshed_lead is not None
+            self.assertEqual(refreshed_lead.contact_id, canonical_id)
+
+            refreshed_review = db.get(NumberReviewQueue, stray_review.id)
+            assert refreshed_review is not None
+            self.assertEqual(refreshed_review.target_contact_id, canonical_id)
+
+            merge_action = db.query(ContactIdentityAction).filter(ContactIdentityAction.action_type == "merge").first()
+            assert merge_action is not None
+            self.assertEqual(merge_action.primary_contact_id, canonical_id)
+            self.assertEqual(merge_action.secondary_contact_id, loser_id)
+            self.assertEqual(merge_action.source, "manual_merge")
+
+    def test_merge_contacts_backfills_the_canonicals_blank_phone_from_the_loser(self) -> None:
+        # Regression test: merging used to only reassign child records, leaving a
+        # canonical with no verified phone of its own permanently blank even after
+        # absorbing a loser that had one.
+        with Session(self.engine) as db:
+            canonical = PremiumNumberContact(
+                owner_id=OWNER_ID, normalized_phone_number=None, display_phone_number="",
+                is_recruiter=True, recruiter_name="Prashanth Kinnera", company="Horizon Soft Tech",
+                recruiter_email="kprashanth@horizonsoftech.net",
+            )
+            loser = PremiumNumberContact(
+                owner_id=OWNER_ID, normalized_phone_number=PHONE_B, display_phone_number="(415) 555-2222",
+                is_recruiter=True, recruiter_name="Unknown", company="Horizon Soft Tech",
+            )
+            db.add_all([canonical, loser])
+            db.flush()
+            canonical_id, loser_id = canonical.id, loser.id
+            db.add(PremiumContactPhone(owner_id=OWNER_ID, premium_contact_id=loser_id, normalized_phone_number=PHONE_B, is_primary=True))
+            db.commit()
+
+            result = contact_identity_service.merge_contacts(
+                db, owner_id=OWNER_ID, canonical_contact_id=canonical_id, loser_contact_id=loser_id,
+            )
+            db.commit()
+
+            self.assertEqual(result.normalized_phone_number, PHONE_B)
+            self.assertEqual(result.display_phone_number, "(415) 555-2222")
+
+    def test_release_contact_claims_frees_the_phone_slot_and_active_lead_pointers(self) -> None:
+        # Regression test: a soft-deleted contact used to keep occupying its phone number
+        # at the DB level (the unique constraint isn't scoped by deleted_at) and kept
+        # dangling active_recruiter_lead_id/active_employer_lead_id pointers - the first
+        # crashed a later contact trying to claim the same number, the second crashed
+        # deleting a lead once its contact_id had been reassigned elsewhere.
+        with Session(self.engine) as db:
+            lead = PremiumNumberLead(
+                owner_id=OWNER_ID, contact_id=None, phone_number_normalized=PHONE_A,
+                phone_number_display="(415) 555-1111", role="recruiter", owner_name="Someone",
+            )
+            db.add(lead)
+            db.flush()
+            dead = PremiumNumberContact(
+                owner_id=OWNER_ID, normalized_phone_number=PHONE_A, display_phone_number="(415) 555-1111",
+                is_recruiter=True, recruiter_name="Someone", company="Some Co",
+                active_recruiter_lead_id=lead.id,
+            )
+            db.add(dead)
+            db.flush()
+            db.add(PremiumContactPhone(owner_id=OWNER_ID, premium_contact_id=dead.id, normalized_phone_number=PHONE_A, is_primary=True))
+            db.commit()
+            dead_id = dead.id
+
+            contact_identity_service.release_contact_claims(db, dead)
+            db.commit()
+
+            refreshed = db.get(PremiumNumberContact, dead_id)
+            assert refreshed is not None
+            self.assertIsNone(refreshed.normalized_phone_number)
+            self.assertIsNone(refreshed.active_recruiter_lead_id)
+            self.assertEqual(db.query(PremiumContactPhone).filter(PremiumContactPhone.premium_contact_id == dead_id).count(), 0)
+
+            # The number is now genuinely free for a brand-new contact to claim.
+            revived = contact_identity_service.reconcile(
+                db, owner_id=OWNER_ID, normalized_phone=PHONE_A, normalized_email="new@example.com", name="New Person",
+            ).contact
+            db.commit()
+            assert revived is not None
+            self.assertNotEqual(revived.id, dead_id)
+            self.assertEqual(revived.normalized_phone_number, PHONE_A)
+
+    def test_merge_contacts_rejects_merging_a_contact_with_itself(self) -> None:
+        with Session(self.engine) as db:
+            contact = PremiumNumberContact(
+                owner_id=OWNER_ID, normalized_phone_number=PHONE_A, display_phone_number="(415) 555-1111",
+                is_employer=True, owner_name="Solo Contact", company="Solo Co",
+            )
+            db.add(contact)
+            db.commit()
+            contact_id = contact.id
+
+            with self.assertRaises(ValueError):
+                contact_identity_service.merge_contacts(
+                    db, owner_id=OWNER_ID, canonical_contact_id=contact_id, loser_contact_id=contact_id,
+                )
+
     def test_dismiss_sets_state(self) -> None:
         with Session(self.engine) as db:
             contact_a = contact_identity_service.reconcile(
@@ -687,12 +947,363 @@ class ContactIdentityServiceTests(unittest.TestCase):
             review = db.get(NumberReviewQueue, result.review_id)
             assert review is not None
 
-            contact_identity_service.dismiss(review)
+            contact_identity_service.dismiss(db, review)
             db.commit()
 
             refreshed = db.get(NumberReviewQueue, review.id)
             assert refreshed is not None
             self.assertEqual(refreshed.state, "dismissed")
+
+    def test_dismiss_creates_a_standalone_contact_from_the_reviews_own_data(self) -> None:
+        with Session(self.engine) as db:
+            review = NumberReviewQueue(
+                owner_id=OWNER_ID,
+                normalized_phone_number=PHONE_A,
+                display_phone_number="(415) 555-1111",
+                owner_name="Tushar Bhardwaj",
+                company="Empower Professionals Inc",
+                designation="Technical Recruiter",
+                contact_email="tushar@empowerprofessionals.com",
+                role="recruiter",
+                reason_code="identity_conflict",
+                target_contact_id=999,
+                state="pending",
+            )
+            db.add(review)
+            db.commit()
+
+            created = contact_identity_service.dismiss(db, review).contact
+            db.commit()
+
+            self.assertEqual(review.state, "dismissed")
+            standalone = db.get(PremiumNumberContact, created.id)
+            assert standalone is not None
+            self.assertEqual(standalone.normalized_phone_number, PHONE_A)
+            self.assertEqual(standalone.recruiter_name, "Tushar Bhardwaj")
+            self.assertEqual(standalone.company, "Empower Professionals Inc")
+            self.assertEqual(standalone.recruiter_email, "tushar@empowerprofessionals.com")
+            self.assertTrue(standalone.is_recruiter)
+
+    def test_dismiss_keeps_the_person_when_the_phone_extension_pair_is_already_taken(self) -> None:
+        with Session(self.engine) as db:
+            contact_identity_service.reconcile(
+                db, owner_id=OWNER_ID, normalized_phone=PHONE_A, normalized_email="a@example.com"
+            )
+            db.commit()
+
+            result = contact_identity_service.reconcile(
+                db, owner_id=OWNER_ID, normalized_phone=PHONE_A, normalized_email="b@example.com"
+            )
+            db.commit()
+            review = db.get(NumberReviewQueue, result.review_id)
+            assert review is not None
+
+            created = contact_identity_service.dismiss(db, review).contact
+            db.commit()
+
+            self.assertEqual(created.normalized_phone_number, None)
+            self.assertEqual(created.recruiter_email, "b@example.com")
+
+    def test_dismiss_reassigns_the_number_when_the_new_persons_evidence_is_more_recent(self) -> None:
+        with Session(self.engine) as db:
+            target = PremiumNumberContact(
+                owner_id=OWNER_ID, normalized_phone_number=PHONE_A, display_phone_number="(415) 555-1111",
+                is_recruiter=True, recruiter_name="Old Recruiter", owner_name="Old Recruiter", company="Old Co",
+                recruiter_email="old@example.com",
+            )
+            db.add(target)
+            db.flush()
+            old_email = RecruiterEmail(
+                owner_id=OWNER_ID, sender="old@example.com", subject="Role", body="Body", role="Developer",
+                location="Remote", salary_text="", skills_text="", score=0, decision="auto_rejected",
+                gmail_received_at=datetime(2026, 5, 18, tzinfo=UTC),
+            )
+            db.add(old_email)
+            db.flush()
+            db.add(PremiumNumberLead(
+                owner_id=OWNER_ID, recruiter_email_id=old_email.id, contact_id=target.id,
+                phone_number_normalized=PHONE_A, phone_number_display="(415) 555-1111", owner_name="Old Recruiter",
+            ))
+            new_email = RecruiterEmail(
+                owner_id=OWNER_ID, sender="new@example.com", subject="Role", body="Body", role="Developer",
+                location="Remote", salary_text="", skills_text="", score=0, decision="auto_rejected",
+                gmail_received_at=datetime(2026, 8, 27, tzinfo=UTC),
+            )
+            db.add(new_email)
+            db.flush()
+            review = NumberReviewQueue(
+                owner_id=OWNER_ID, source_email_id=new_email.id, target_contact_id=target.id,
+                normalized_phone_number=PHONE_A, display_phone_number="(415) 555-1111",
+                owner_name="New Recruiter", company="New Co", contact_email="new@example.com",
+                role="recruiter", reason_code="identity_conflict", state="pending",
+            )
+            db.add(review)
+            db.commit()
+
+            created = contact_identity_service.dismiss(db, review).contact
+            db.commit()
+
+            self.assertEqual(created.normalized_phone_number, PHONE_A)
+            refreshed_target = db.get(PremiumNumberContact, target.id)
+            assert refreshed_target is not None
+            self.assertIsNone(refreshed_target.normalized_phone_number)
+            self.assertEqual(
+                db.query(PremiumContactPhone).filter(
+                    PremiumContactPhone.premium_contact_id == target.id,
+                    PremiumContactPhone.normalized_phone_number == PHONE_A,
+                ).count(),
+                0,
+            )
+            action = db.query(ContactIdentityAction).filter(ContactIdentityAction.action_type == "reassign_phone").first()
+            assert action is not None
+            self.assertEqual(action.primary_contact_id, created.id)
+            self.assertEqual(action.secondary_contact_id, target.id)
+
+    def test_dismiss_keeps_the_number_with_the_target_when_its_evidence_is_more_recent(self) -> None:
+        with Session(self.engine) as db:
+            target = PremiumNumberContact(
+                owner_id=OWNER_ID, normalized_phone_number=PHONE_A, display_phone_number="(415) 555-1111",
+                is_recruiter=True, recruiter_name="Current Recruiter", owner_name="Current Recruiter",
+                company="Current Co", recruiter_email="current@example.com",
+            )
+            db.add(target)
+            db.flush()
+            new_email = RecruiterEmail(
+                owner_id=OWNER_ID, sender="current@example.com", subject="Role", body="Body", role="Developer",
+                location="Remote", salary_text="", skills_text="", score=0, decision="auto_rejected",
+                gmail_received_at=datetime(2026, 8, 27, tzinfo=UTC),
+            )
+            db.add(new_email)
+            db.flush()
+            db.add(PremiumNumberLead(
+                owner_id=OWNER_ID, recruiter_email_id=new_email.id, contact_id=target.id,
+                phone_number_normalized=PHONE_A, phone_number_display="(415) 555-1111", owner_name="Current Recruiter",
+            ))
+            old_email = RecruiterEmail(
+                owner_id=OWNER_ID, sender="stale@example.com", subject="Role", body="Body", role="Developer",
+                location="Remote", salary_text="", skills_text="", score=0, decision="auto_rejected",
+                gmail_received_at=datetime(2026, 5, 18, tzinfo=UTC),
+            )
+            db.add(old_email)
+            db.flush()
+            review = NumberReviewQueue(
+                owner_id=OWNER_ID, source_email_id=old_email.id, target_contact_id=target.id,
+                normalized_phone_number=PHONE_A, display_phone_number="(415) 555-1111",
+                owner_name="Stale Recruiter", company="Stale Co", contact_email="stale@example.com",
+                role="recruiter", reason_code="identity_conflict", state="pending",
+            )
+            db.add(review)
+            db.commit()
+
+            created = contact_identity_service.dismiss(db, review).contact
+            db.commit()
+
+            self.assertIsNone(created.normalized_phone_number)
+            refreshed_target = db.get(PremiumNumberContact, target.id)
+            assert refreshed_target is not None
+            self.assertEqual(refreshed_target.normalized_phone_number, PHONE_A)
+
+    # -- the two stores are kept in sync -------------------------------------
+
+    def _contact(self, db: Session, **kwargs) -> PremiumNumberContact:
+        contact = PremiumNumberContact(owner_id=OWNER_ID, display_phone_number="", **kwargs)
+        db.add(contact)
+        db.flush()
+        return contact
+
+    def test_attaching_an_email_clears_the_stale_headline_on_its_previous_holder(self) -> None:
+        """The headline columns have no unique constraint, so two contacts could each
+        advertise the same address and every lookup would pick whichever it happened to
+        check. 14 contacts were in this state in production."""
+        with Session(self.engine) as db:
+            squatter = self._contact(db, recruiter_name="Leo", company="Nascent", is_recruiter=True,
+                                     recruiter_email="harshitha@example.com", recruiter_email_domain="example.com")
+            real_owner = self._contact(db, recruiter_name="Harshitha", company="Horizons", is_recruiter=True)
+            db.commit()
+
+            self.assertTrue(contact_identity_service.attach_email(
+                db, real_owner, "harshitha@example.com", "recruiter", None, primary=True))
+            db.commit()
+
+            self.assertEqual(real_owner.recruiter_email, "harshitha@example.com")
+            self.assertEqual(db.get(PremiumNumberContact, squatter.id).recruiter_email, "")
+            self.assertEqual(db.get(PremiumNumberContact, squatter.id).recruiter_email_domain, "")
+
+    def test_attach_email_writes_the_role_correct_headline_column(self) -> None:
+        """It used to write recruiter_email unconditionally, so an employer-role link
+        landed on the wrong column and the employer lookup could never find it."""
+        with Session(self.engine) as db:
+            contact = self._contact(db, owner_name="Pat", company="Acme", is_employer=True)
+            db.commit()
+
+            contact_identity_service.attach_email(db, contact, "pat@acme.com", "employer", None, primary=True)
+            db.commit()
+
+            self.assertEqual(contact.employer_email, "pat@acme.com")
+            self.assertEqual(contact.employer_email_domain, "acme.com")
+            self.assertEqual(contact.recruiter_email, "")
+            row = db.query(PremiumContactEmail).filter(PremiumContactEmail.normalized_email == "pat@acme.com").one()
+            self.assertEqual(row.role, "employer")
+
+    def test_add_phone_refuses_a_secondary_that_is_another_contacts_primary(self) -> None:
+        """The child-table unique constraint only sees other child rows, so on its own it
+        cannot stop a number being one contact's primary and another's secondary."""
+        with Session(self.engine) as db:
+            owner = self._contact(db, recruiter_name="First", is_recruiter=True, normalized_phone_number=PHONE_A)
+            other = self._contact(db, recruiter_name="Second", is_recruiter=True, normalized_phone_number=PHONE_B)
+            db.commit()
+
+            self.assertFalse(contact_identity_service.add_phone(db, other, PHONE_A, primary=False))
+            db.commit()
+
+            self.assertEqual(other.normalized_phone_number, PHONE_B)
+            self.assertEqual(db.query(PremiumContactPhone).filter(
+                PremiumContactPhone.premium_contact_id == other.id,
+                PremiumContactPhone.normalized_phone_number == PHONE_A).count(), 0)
+            self.assertEqual(
+                contact_identity_service.phone_claim_owner(db, OWNER_ID, PHONE_A, exclude_contact_id=other.id),
+                owner.id,
+            )
+
+    def test_resolve_identity_reports_a_split_instead_of_picking_one_side(self) -> None:
+        """The live case from the investigation: the phone belonged to one contact and the
+        email to a completely different one, and the pipeline silently returned only the
+        email's owner - so the reviewer never saw the real phone owner at all."""
+        with Session(self.engine) as db:
+            phone_owner = self._contact(db, recruiter_name="Unknown", company="Horizons", is_recruiter=True,
+                                        normalized_phone_number=PHONE_A)
+            email_owner = self._contact(db, recruiter_name="Leo", company="Nascent", is_recruiter=True)
+            db.add(PremiumContactEmail(owner_id=OWNER_ID, premium_contact_id=email_owner.id,
+                                       normalized_email="harshitha@example.com", domain="example.com",
+                                       role="recruiter", created_at=datetime.now(UTC)))
+            db.commit()
+
+            resolution = contact_identity_service.resolve_identity(
+                db, owner_id=OWNER_ID, phone=PHONE_A, email="harshitha@example.com", role="recruiter")
+
+            self.assertEqual(resolution.outcome, "split")
+            self.assertEqual(resolution.phone_owner.id, phone_owner.id)
+            self.assertEqual(resolution.email_owner.id, email_owner.id)
+            # Neither side wins by default - that is the reviewer's call.
+            self.assertIsNone(resolution.contact)
+
+    def test_find_email_owner_sees_a_child_row_with_no_matching_headline(self) -> None:
+        """The ingestion matcher only ever read the headline columns, so an address held
+        solely in premium_contact_emails looked unknown and spawned a duplicate contact."""
+        with Session(self.engine) as db:
+            contact = self._contact(db, recruiter_name="Priya", company="TechSys", is_recruiter=True,
+                                    recruiter_email="priya@techsys.com")
+            db.add(PremiumContactEmail(owner_id=OWNER_ID, premium_contact_id=contact.id,
+                                       normalized_email="priya.k@techsys.com", domain="techsys.com",
+                                       role="recruiter", created_at=datetime.now(UTC)))
+            db.commit()
+
+            found = contact_identity_service.find_email_owner(db, OWNER_ID, "priya.k@techsys.com", "recruiter")
+            self.assertIsNotNone(found)
+            self.assertEqual(found.id, contact.id)
+
+    def test_dismiss_surfaces_a_conflict_rather_than_minting_a_phoneless_orphan(self) -> None:
+        """Splitting someone off a card whose number a THIRD contact already owns used to
+        fall back to a contact with no phone at all - unfindable, and the original dispute
+        left unresolved. Now both claimants go onto a review card."""
+        with Session(self.engine) as db:
+            third_party = self._contact(db, recruiter_name="Existing Owner", company="Other Co",
+                                        is_recruiter=True, normalized_phone_number=PHONE_A)
+            target = self._contact(db, recruiter_name="Card Target", company="Target Co", is_recruiter=True)
+            db.commit()
+
+            review = NumberReviewQueue(
+                owner_id=OWNER_ID, target_contact_id=target.id, normalized_phone_number=PHONE_A,
+                display_phone_number="(415) 555-1111", owner_name="Split Person", company="Split Co",
+                contact_email="split@example.com", role="recruiter", reason_code="identity_conflict",
+                state="pending",
+            )
+            db.add(review)
+            db.commit()
+
+            result = contact_identity_service.dismiss(db, review)
+            db.commit()
+
+            self.assertEqual(review.state, "dismissed")
+            # The person is kept - just without a number they cannot legitimately hold.
+            self.assertEqual(result.contact.recruiter_name, "Split Person")
+            self.assertIsNone(result.contact.normalized_phone_number)
+            # ...and the real dispute is now visible, naming BOTH claimants, which routes
+            # it to the three-way merge UI that already exists.
+            self.assertIsNotNone(result.follow_up_review_id)
+            follow_up = db.get(NumberReviewQueue, result.follow_up_review_id)
+            self.assertEqual(follow_up.reason_code, "phone_owner_conflict")
+            self.assertEqual(follow_up.target_contact_id, third_party.id)
+            self.assertEqual(follow_up.secondary_contact_id, result.contact.id)
+            self.assertEqual(follow_up.state, "pending")
+            # The third party keeps the number it legitimately held.
+            self.assertEqual(db.get(PremiumNumberContact, third_party.id).normalized_phone_number, PHONE_A)
+
+    def test_snapshot_and_restore_round_trip_every_identifier(self) -> None:
+        """release_contact_claims HAS to destroy these rows - neither unique constraint is
+        scoped by deleted_at - so the snapshot is the only thing making a restore whole."""
+        with Session(self.engine) as db:
+            contact = self._contact(db, recruiter_name="Dana", company="Umbrella", is_recruiter=True,
+                                    normalized_phone_number=PHONE_A)
+            db.add_all([
+                PremiumContactPhone(owner_id=OWNER_ID, premium_contact_id=contact.id,
+                                    normalized_phone_number=PHONE_A, phone_extension="", is_primary=True,
+                                    created_at=datetime.now(UTC)),
+                PremiumContactPhone(owner_id=OWNER_ID, premium_contact_id=contact.id,
+                                    normalized_phone_number=PHONE_B, phone_extension="", is_primary=False,
+                                    created_at=datetime.now(UTC)),
+                PremiumContactEmail(owner_id=OWNER_ID, premium_contact_id=contact.id,
+                                    normalized_email="dana@umbrella.com", domain="umbrella.com",
+                                    role="recruiter", is_primary=True, created_at=datetime.now(UTC)),
+            ])
+            db.commit()
+
+            contact_identity_service.snapshot_contact_claims(db, contact)
+            contact_identity_service.release_contact_claims(db, contact)
+            contact.deleted_at = datetime.now(UTC)
+            db.commit()
+            self.assertIsNone(contact.normalized_phone_number)
+            self.assertEqual(db.query(PremiumContactEmail).count(), 0)
+
+            contact.deleted_at = None
+            db.flush()
+            skipped = contact_identity_service.restore_contact_claims(db, contact)
+            db.commit()
+
+            self.assertEqual(skipped, [])
+            self.assertEqual(contact.normalized_phone_number, PHONE_A)
+            self.assertEqual(contact.recruiter_email, "dana@umbrella.com")
+            self.assertEqual(
+                {row.normalized_phone_number for row in db.query(PremiumContactPhone).all()}, {PHONE_A, PHONE_B})
+
+    def test_restore_reports_identifiers_another_contact_took_meanwhile(self) -> None:
+        with Session(self.engine) as db:
+            contact = self._contact(db, recruiter_name="Dana", company="Umbrella", is_recruiter=True,
+                                    normalized_phone_number=PHONE_A)
+            db.add(PremiumContactEmail(owner_id=OWNER_ID, premium_contact_id=contact.id,
+                                       normalized_email="dana@umbrella.com", domain="umbrella.com",
+                                       role="recruiter", is_primary=True, created_at=datetime.now(UTC)))
+            db.commit()
+            contact_identity_service.snapshot_contact_claims(db, contact)
+            contact_identity_service.release_contact_claims(db, contact)
+            contact.deleted_at = datetime.now(UTC)
+            db.commit()
+
+            # Somebody else legitimately claims both while it sits in the Recycle Bin.
+            squatter = self._contact(db, recruiter_name="Newcomer", is_recruiter=True,
+                                     normalized_phone_number=PHONE_A)
+            contact_identity_service.attach_email(db, squatter, "dana@umbrella.com", "recruiter", None, primary=True)
+            db.commit()
+
+            contact.deleted_at = None
+            db.flush()
+            skipped = contact_identity_service.restore_contact_claims(db, contact)
+            db.commit()
+
+            self.assertEqual(sorted(skipped), sorted(["dana@umbrella.com", PHONE_A]))
+            # Restored, but honestly incomplete - and the squatter keeps what it took.
+            self.assertIsNone(contact.normalized_phone_number)
+            self.assertEqual(db.get(PremiumNumberContact, squatter.id).recruiter_email, "dana@umbrella.com")
 
 
 if __name__ == "__main__":

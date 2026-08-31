@@ -80,8 +80,13 @@ const recruiter: RecruiterNumberCard = {
 const employer: EmployerNumberCard = {
   ...contactBase,
   owner_name: 'Hiring Desk',
+  designation: 'Unknown',
   employer_email: '',
   source_email_id: null,
+  linkedin_url: '',
+  recruiter_verification_level: 'unverified',
+  do_not_work_again: false,
+  do_not_work_again_reason: '',
 }
 
 describe('PremiumNumbersPage', () => {
@@ -161,6 +166,152 @@ describe('PremiumNumbersPage', () => {
 
     const tabs = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="tab"]')).map((button) => button.textContent)
     expect(tabs).toEqual(['Number Inventory', 'Recruiter Opportunities', 'Recycle Bin'])
+  })
+
+  it('previews and merges two selected duplicate contacts', async () => {
+    const duplicateEmployer: EmployerNumberCard = { ...employer, id: 806, owner_name: 'Prashanth Kinnera', company: 'Horizons of Tech', display_phone_number: '(770) 824-0630' }
+    const staleEmployer: EmployerNumberCard = { ...employer, id: 823, owner_name: 'Prashanth Kinnera', company: 'Horizons of Tech', display_phone_number: '(972) 756-1212' }
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/number-review/pending-count')) return jsonResponse({ count: 0 })
+      if (url.includes('/premium-numbers/inventory?')) return jsonResponse({ items: [
+        { key: `contact:${duplicateEmployer.id}`, kind: 'contact', id: duplicateEmployer.id, number: duplicateEmployer.display_phone_number, owner: duplicateEmployer.owner_name, company: duplicateEmployer.company, categories: ['Employer'], status: 'Active', score: null, sourceType: 'gmail', lastCheckedAt: duplicateEmployer.updated_at, employer: duplicateEmployer },
+        { key: `contact:${staleEmployer.id}`, kind: 'contact', id: staleEmployer.id, number: staleEmployer.display_phone_number, owner: staleEmployer.owner_name, company: staleEmployer.company, categories: ['Employer'], status: 'Active', score: null, sourceType: 'gmail', lastCheckedAt: staleEmployer.updated_at, employer: staleEmployer },
+      ], total: 2, next_cursor: null, has_next: false })
+      if (url.includes('/number-review?')) return jsonResponse({ items: [], next_cursor: null, has_next: false })
+      if (url.includes('/recruiter-numbers?')) return jsonResponse({ items: [], next_cursor: null, has_next: false })
+      if (url.includes('/employer-numbers?')) return jsonResponse({ items: url.includes('flagged=true') ? [] : [duplicateEmployer, staleEmployer], next_cursor: null, has_next: false })
+      if (url.includes('/applications/dashboard-summary')) return jsonResponse({ due_today: 0, waiting_on_recruiter: 0, interviews: 0, closed_recent: 0 })
+      if (url.includes('/applications?')) return jsonResponse({ items: [], next_cursor: null, has_next: false })
+      if (url.includes('/premium-numbers/contacts/merge-preview')) return jsonResponse({
+        contact_a: { id: 806, recruiter_name: 'Unknown', owner_name: 'Prashanth Kinnera', company: 'Horizons of Tech', recruiter_email: '', employer_email: 'kprashanth@horizonsoftech.net', normalized_phone_number: '17708240630', display_phone_number: '(770) 824-0630', is_recruiter: false, is_employer: true, lead_count: 1, latest_evidence_at: '2026-08-28T14:00:00Z', leads: [] },
+        contact_b: { id: 823, recruiter_name: 'Prashanth Kinnera', owner_name: 'Prashanth Kinnera', company: 'Horizons of Tech', recruiter_email: 'kprashanth@horizonsoftech.net', employer_email: 'kprashanth@horizonsoftech.net', normalized_phone_number: '19727561212', display_phone_number: '(972) 756-1212', is_recruiter: false, is_employer: true, lead_count: 0, latest_evidence_at: null, leads: [] },
+      })
+      if (url.includes('/premium-numbers/contacts/merge') && init?.method === 'POST') return jsonResponse({ canonical_contact_id: 806, loser_contact_id: 823, status: 'merged' })
+      return jsonResponse({ detail: 'not found' }, 404)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+      vi.unstubAllGlobals()
+    })
+
+    await act(async () => {
+      root.render(
+        <PremiumNumbersPage
+          apiBase="http://localhost:8000"
+          mailDate={null}
+          emailSearchTarget={null}
+          refreshToken={0}
+          applicationsEnabled
+          onPendingCountChange={vi.fn()}
+        />,
+      )
+    })
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 300)) })
+
+    const mergeButton = () => Array.from(container.querySelectorAll<HTMLButtonElement>('.selectionActions button')).find((button) => button.textContent?.includes('Merge'))
+    await act(async () => {
+      container.querySelector<HTMLInputElement>('input[aria-label="Select (770) 824-0630"]')?.click()
+    })
+    expect(mergeButton()?.disabled).toBe(true)
+
+    await act(async () => {
+      container.querySelector<HTMLInputElement>('input[aria-label="Select (972) 756-1212"]')?.click()
+    })
+    expect(mergeButton()?.disabled).toBe(false)
+
+    await act(async () => { mergeButton()?.click() })
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 50)) })
+
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/premium-numbers/contacts/merge-preview?contact_id_a=806&contact_id_b=823'))).toBe(true)
+    expect(container.textContent).toContain('Merge Duplicate Contacts')
+
+    const keepButtons = Array.from(container.querySelectorAll<HTMLButtonElement>('.mergePreviewCard button')).filter((button) => button.textContent === 'Keep this one')
+    expect(keepButtons).toHaveLength(2)
+    await act(async () => { keepButtons[0]?.click() })
+
+    const confirmButton = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.startsWith('Confirm'))
+    await act(async () => {
+      confirmButton?.click()
+      await new Promise((resolve) => window.setTimeout(resolve, 50))
+    })
+
+    const mergeCall = fetchMock.mock.calls.find(([url, mergeInit]) => String(url).endsWith('/premium-numbers/contacts/merge') && mergeInit?.method === 'POST')
+    expect(mergeCall).toBeDefined()
+    expect(JSON.parse(String(mergeCall?.[1]?.body))).toEqual({ canonical_contact_id: 806, loser_contact_id: 823 })
+    expect(container.textContent).toContain('Contacts merged')
+    expect(container.querySelector('[aria-label="Merge contacts"]')).toBeNull()
+  })
+
+  it('opens the merge modal directly from a phone-conflict rescore instead of just reporting it', async () => {
+    const staleEmployer: EmployerNumberCard = { ...employer, id: 993, owner_name: 'Prashanth Kinnera', company: 'Horizon Soft Tech', display_phone_number: '(512) 352-9739' }
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/number-review/pending-count')) return jsonResponse({ count: 0 })
+      if (url.includes('/premium-numbers/inventory?')) return jsonResponse({ items: [
+        { key: `contact:${staleEmployer.id}`, kind: 'contact', id: staleEmployer.id, number: staleEmployer.display_phone_number, owner: staleEmployer.owner_name, company: staleEmployer.company, categories: ['Employer'], status: 'Active', score: null, sourceType: 'gmail', lastCheckedAt: staleEmployer.updated_at, employer: staleEmployer },
+      ], total: 1, next_cursor: null, has_next: false })
+      if (url.includes('/number-review?')) return jsonResponse({ items: [], next_cursor: null, has_next: false })
+      if (url.includes('/recruiter-numbers?')) return jsonResponse({ items: [], next_cursor: null, has_next: false })
+      if (url.includes('/employer-numbers?')) return jsonResponse({ items: url.includes('flagged=true') ? [] : [staleEmployer], next_cursor: null, has_next: false })
+      if (url.includes('/applications/dashboard-summary')) return jsonResponse({ due_today: 0, waiting_on_recruiter: 0, interviews: 0, closed_recent: 0 })
+      if (url.includes('/applications?')) return jsonResponse({ items: [], next_cursor: null, has_next: false })
+      if (url.includes('/versions')) return jsonResponse([])
+      if (/\/employer-numbers\/\d+\/rescore$/.test(url) && init?.method === 'POST') {
+        return new Response(JSON.stringify({ detail: { message: '(770) 824-0630 is already linked to a different contact', conflicting_contact_id: 806 } }), { status: 409, headers: { 'Content-Type': 'application/json' } })
+      }
+      if (url.includes('/premium-numbers/contacts/merge-preview')) return jsonResponse({
+        contact_a: { id: 993, recruiter_name: 'Unknown', owner_name: 'Prashanth Kinnera', company: 'Horizon Soft Tech', recruiter_email: '', employer_email: 'kprashanth@horizonsoftech.net', normalized_phone_number: '15123529739', display_phone_number: '(512) 352-9739', is_recruiter: false, is_employer: true, lead_count: 1, latest_evidence_at: null, leads: [] },
+        contact_b: { id: 806, recruiter_name: 'Unknown', owner_name: 'Prashanth Kinnera', company: 'Horizons of Tech', recruiter_email: '', employer_email: 'kprashanth@horizonsoftech.net', normalized_phone_number: '17708240630', display_phone_number: '(770) 824-0630', is_recruiter: false, is_employer: true, lead_count: 1, latest_evidence_at: null, leads: [] },
+      })
+      return jsonResponse({ detail: 'not found' }, 404)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+      vi.unstubAllGlobals()
+    })
+
+    await act(async () => {
+      root.render(
+        <PremiumNumbersPage
+          apiBase="http://localhost:8000"
+          mailDate={null}
+          emailSearchTarget={null}
+          refreshToken={0}
+          applicationsEnabled
+          onPendingCountChange={vi.fn()}
+        />,
+      )
+    })
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 300)) })
+
+    const contactRow = Array.from(container.querySelectorAll('tbody tr')).find((row) => row.textContent?.includes('(512) 352-9739'))
+    await act(async () => { contactRow?.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull()
+
+    const rescoreButton = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')).find((button) => button.textContent === 'Rescore')
+    await act(async () => {
+      rescoreButton?.click()
+      await new Promise((resolve) => window.setTimeout(resolve, 100))
+    })
+
+    // The modal opens right away with an actionable next step - a brief toast explaining
+    // why can still show alongside it, that's just context, not a competing dead end.
+    expect(container.querySelector('[aria-label="Merge contacts"]')).not.toBeNull()
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 100)) })
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/premium-numbers/contacts/merge-preview?contact_id_a=993&contact_id_b=806'))).toBe(true)
   })
 
   it('highlights a promoted premium_number_lead hit via its detail.contact_id', async () => {
@@ -321,6 +472,53 @@ describe('PremiumNumbersPage', () => {
     expect(toast).not.toBeNull()
     expect(toast?.className).toContain('actionToast--error')
     expect(toast?.textContent).toContain('Failed to load premium number inventory')
+  })
+
+  it('merges duplicate contacts from the Number Inventory toolbar', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/number-review/pending-count')) return jsonResponse({ count: 0 })
+      if (url.includes('/premium-numbers/inventory?')) return jsonResponse({ items: [], total: 0, next_cursor: null, has_next: false })
+      if (url.endsWith('/premium-numbers/contacts/backfill-duplicates') && init?.method === 'POST') {
+        return jsonResponse({ groups_merged: 23, contacts_merged: 26 })
+      }
+      return jsonResponse({ detail: 'not found' }, 404)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+      vi.unstubAllGlobals()
+    })
+
+    await act(async () => {
+      root.render(
+        <PremiumNumbersPage
+          apiBase="http://localhost:8000"
+          mailDate={null}
+          emailSearchTarget={null}
+          refreshToken={0}
+          applicationsEnabled={false}
+          onPendingCountChange={vi.fn()}
+        />,
+      )
+    })
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 300)) })
+
+    const mergeButton = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'Merge Duplicate Contacts')
+    expect(mergeButton).toBeDefined()
+    await act(async () => {
+      mergeButton?.click()
+      await new Promise((resolve) => window.setTimeout(resolve, 300))
+    })
+
+    expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith('/premium-numbers/contacts/backfill-duplicates') && init?.method === 'POST')).toBe(true)
+    expect(container.querySelector('.actionToast')?.textContent).toContain('Merged 26 duplicate contacts into 23 contacts')
   })
 
   it('lists deleted contacts in the Recycle Bin tab and restores one', async () => {

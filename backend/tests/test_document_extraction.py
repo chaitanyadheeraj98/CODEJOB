@@ -24,6 +24,7 @@ from app.parsing.document_extraction import (
     clean_html_text,
     elements_to_markdown,
     extract_document_text,
+    extract_gmail_reply_body,
     prepare_gmail_parse_body,
     strip_gmail_boilerplate,
 )
@@ -262,6 +263,35 @@ class DocumentExtractionTests(unittest.TestCase):
         self.assertNotIn("Google Groups", cleaned)
         self.assertNotIn("\n>", cleaned)
         self.assertNotIn("wrote:", cleaned)
+
+    def test_extract_gmail_reply_body_strips_signature_by_default(self) -> None:
+        body = (
+            "Job requirements here.\n\n"
+            "Thanks & Regards\n"
+            "Prashanth Kinnera\n"
+            "Bench Sales Recruiter\n"
+            "Ph : (770) 824-0630\n"
+            "Email: kprashanth@horizonsoftech.net\n"
+            "www.horizonsoftech.net"
+        )
+        cleaned = extract_gmail_reply_body(body)
+        self.assertNotIn("824-0630", cleaned)
+
+    def test_extract_gmail_reply_body_keeps_signature_when_disabled(self) -> None:
+        # Regression test: a recruiter's real phone number almost always lives in their
+        # trailing signature - the phone extractor needs it kept, unlike other callers
+        # (inbox preview, job-detail parsing) that want it stripped as noise.
+        body = (
+            "Job requirements here.\n\n"
+            "Thanks & Regards\n"
+            "Prashanth Kinnera\n"
+            "Bench Sales Recruiter\n"
+            "Ph : (770) 824-0630\n"
+            "Email: kprashanth@horizonsoftech.net\n"
+            "www.horizonsoftech.net"
+        )
+        cleaned = extract_gmail_reply_body(body, strip_signature=False)
+        self.assertIn("824-0630", cleaned)
 
     def test_prepare_gmail_parse_body_composes_html_cleaning_and_dequoting(self) -> None:
         html = (

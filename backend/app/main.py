@@ -16,7 +16,7 @@ from zoneinfo import ZoneInfo
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
-from sqlalchemy import and_, func, or_
+from sqlalchemy import and_, func, not_, or_
 import sqlalchemy as sa
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
@@ -167,7 +167,7 @@ from app.premium_numbers.domain_guard import (
     is_hidden_invalid_employer_number,
     is_hidden_nvoids_placeholder_recruiter,
 )
-from app.premium_numbers.phone_normalization import best_display_phone, canonicalize_phone
+from app.premium_numbers.phone_normalization import best_display_phone, canonicalize_phone, format_phone
 from app.premium_numbers import contact_identity_service
 from app.query_bucket import sanitize_saved_queries
 from app.runtime_state import runtime_state
@@ -199,6 +199,7 @@ from app.services.auto_runner_service import AutoRunnerService
 from app.services.candidate_runtime_service import CandidateRuntimeDeps, CandidateRuntimeService, resolve_resume_display_name
 from app.services.phone_intelligence_workflow_service import (
     apply_contact_version,
+    capture_sister_company,
     derive_company_from_email_domain,
     derive_name_from_contact_email,
     job_metadata_ai_extraction_from_parsed,
@@ -272,6 +273,14 @@ from app.schemas import (
     BulkContactActionRequest,
     BulkContactActionResponse,
     BulkContactActionResultItem,
+    ContactFieldChange,
+    ContactRescoreResponse,
+    ContactMergePreviewLead,
+    ContactMergePreviewResponse,
+    ContactMergePreviewSide,
+    ContactMergeRequest,
+    ContactMergeResponse,
+    DuplicateContactBackfillResponse,
     BulkApproveJobIntentSignalsResponse,
     BulkApproveSkillsResponse,
     BulkApproveEntitiesResponse,
@@ -4950,7 +4959,7 @@ def list_premium_number_inventory(
     order={"oldest":(unified.c.last_checked_at.asc(),unified.c.kind.asc(),unified.c.id.asc()),"highest_score":(sa.nullslast(unified.c.score.desc()),unified.c.kind.asc(),unified.c.id.asc()),"lowest_score":(sa.nullslast(unified.c.score.asc()),unified.c.kind.asc(),unified.c.id.asc())}.get(sort,(unified.c.last_checked_at.desc(),unified.c.kind.asc(),unified.c.id.asc()))
     rows=db.execute(query.order_by(*order).offset(cursor).limit(limit+1)).all(); visible=rows[:limit]
     review_ids=[row.id for row in visible if row.kind=="review"]; contact_ids=[row.id for row in visible if row.kind=="contact"]
-    review_by_id={row.id:UnknownNumberReviewCardResponse.model_validate(row) for row in db.query(NumberReviewQueue).filter(NumberReviewQueue.owner_id==owner,NumberReviewQueue.id.in_(review_ids)).all()} if review_ids else {}
+    review_by_id={row.id:_review_card_response(db,row) for row in db.query(NumberReviewQueue).filter(NumberReviewQueue.owner_id==owner,NumberReviewQueue.id.in_(review_ids)).all()} if review_ids else {}
     contacts=db.query(PremiumNumberContact).filter(PremiumNumberContact.owner_id==owner,PremiumNumberContact.id.in_(contact_ids)).all() if contact_ids else []
     employer_domains=employer_domains_for_owner(db,owner) if any(row.is_recruiter for row in contacts) else set()
     recruiter_by_id={row.id:_recruiter_number_response(db,row,employer_domains) for row in contacts if row.is_recruiter}; employer_by_id={row.id:_employer_number_response(db,row) for row in contacts if row.is_employer}
@@ -4963,6 +4972,7 @@ def list_deleted_premium_contacts(
     cursor: int = Query(0, ge=0), limit: int = Query(25, ge=1, le=100), q: str | None = Query(default=None, max_length=255),
     sort: str = Query("newest"),
     date_filter: str | None = Query(default=None), date_from: date | None = Query(default=None), date_to: date | None = Query(default=None),
+    has_source_link: bool | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> PremiumNumberInventoryListResponse:
     if sort not in {"newest", "oldest"}:
@@ -4975,6 +4985,9 @@ def list_deleted_premium_contacts(
     if date_filter:
         start, end = _date_range_utc_window(date_filter, date_from, date_to)
         query = query.filter(PremiumNumberContact.deleted_at >= start, PremiumNumberContact.deleted_at < end)
+    if has_source_link is not None:
+        has_link = and_(PremiumNumberContact.source_link_url.is_not(None), PremiumNumberContact.source_link_url != "")
+        query = query.filter(has_link if has_source_link else not_(has_link))
     if q and q.strip():
         like = f"%{q.strip()}%"
         digits_only = re.sub(r"\D", "", q)
@@ -5015,8 +5028,9 @@ def list_deleted_premium_contacts(
     return PremiumNumberInventoryListResponse(items=items, next_cursor=cursor + limit if len(rows) > limit else None, has_next=len(rows) > limit, total=total)
 
 
-@app.post("/premium-numbers/contacts/{contact_id}/restore", response_model=dict[str, int | str])
-def restore_premium_contact(contact_id: int, db: Session = Depends(get_db)) -> dict[str, int | str]:
+def _restore_contact_claims(db: Session, contact_id: int) -> list[str]:
+    """Undelete and put back every identifier the soft delete had to give up. Returns the
+    ones another contact has claimed since, which cannot be handed back."""
     contact = db.query(PremiumNumberContact).filter(
         PremiumNumberContact.owner_id == settings.owner_id,
         PremiumNumberContact.id == contact_id,
@@ -5024,21 +5038,28 @@ def restore_premium_contact(contact_id: int, db: Session = Depends(get_db)) -> d
     ).first()
     if not contact:
         raise HTTPException(status_code=404, detail="Deleted contact not found")
+    # Cleared first: restore_contact_claims re-attaches through the same guards everyone
+    # else uses, and those ignore rows that are still flagged deleted.
     contact.deleted_at = None
+    db.flush()
+    skipped = contact_identity_service.restore_contact_claims(db, contact)
     db.commit()
-    return {"id": contact_id, "status": "restored"}
+    return skipped
+
+
+@app.post("/premium-numbers/contacts/{contact_id}/restore", response_model=dict[str, int | str])
+def restore_premium_contact(contact_id: int, db: Session = Depends(get_db)) -> dict[str, int | str]:
+    skipped = _restore_contact_claims(db, contact_id)
+    response: dict[str, int | str] = {"id": contact_id, "status": "restored"}
+    if skipped:
+        # Surfaced rather than swallowed: the contact is back but not whole, and the only
+        # person who can decide what to do about it is looking at the Recycle Bin.
+        response["unclaimed"] = ", ".join(skipped)
+    return response
 
 
 def _restore_contact(db: Session, contact_id: int) -> str:
-    contact = db.query(PremiumNumberContact).filter(
-        PremiumNumberContact.owner_id == settings.owner_id,
-        PremiumNumberContact.id == contact_id,
-        PremiumNumberContact.deleted_at.is_not(None),
-    ).first()
-    if not contact:
-        raise HTTPException(status_code=404, detail="Deleted contact not found")
-    contact.deleted_at = None
-    db.commit()
+    _restore_contact_claims(db, contact_id)
     return "restored"
 
 
@@ -5066,6 +5087,8 @@ def _purge_contact(db: Session, contact_id: int) -> str:
     # FK (already handled as optional everywhere they're read, e.g.
     # _recruiter_opportunity_response's `recruiter: PremiumNumberContact | None`), so those
     # rows are left in place - they still carry their own historical value.
+    contact.active_recruiter_lead_id = None
+    contact.active_employer_lead_id = None
     db.query(PremiumNumberLead).filter(PremiumNumberLead.contact_id == contact_id).delete(synchronize_session=False)
     db.query(PremiumContactEmail).filter(PremiumContactEmail.premium_contact_id == contact_id).delete(synchronize_session=False)
     db.query(PremiumContactPhone).filter(PremiumContactPhone.premium_contact_id == contact_id).delete(synchronize_session=False)
@@ -5108,7 +5131,22 @@ def create_premium_contact(
         name=payload.name, company=payload.company, role=payload.role, human_confirmed=True,
     )
     if result.contact is None:
-        raise HTTPException(status_code=409, detail="Contact identity requires approval")
+        if result.review_id is None:
+            raise HTTPException(status_code=409, detail="Contact identity requires approval")
+        # The phone and the email point at different people on file, so there is no one
+        # contact to write this to. Report the queued review instead of erroring - and
+        # above all do NOT fall back to whichever side matched first and stamp this
+        # person's name, company and email onto it, which is how a headline email ended
+        # up advertising an address a different contact owns.
+        db.commit()
+        return {
+            "id": None,
+            "created": False,
+            "status": result.status,
+            "review_id": result.review_id,
+            "phone_display": "",
+            "role": payload.role,
+        }
     contact = result.contact
     created = result.status == "created"
 
@@ -5122,7 +5160,15 @@ def create_premium_contact(
     contact.designation = payload.title.strip() or "Unknown"
     contact.company = payload.company.strip() or "Unknown"
     if email:
-        contact.recruiter_email = email
+        # Routed through attach_email rather than assigned: a bare headline write skips
+        # the child table entirely, so it neither claims the address nor notices that
+        # somebody else already owns it - and it always wrote recruiter_email even for an
+        # employer. reconcile() has already linked it in the paths where it can.
+        contact_identity_service.attach_email(
+            db, contact, email, payload.role, None, primary=not bool(
+                getattr(contact, contact_identity_service.headline_email_columns(payload.role)[0])
+            ),
+        )
     contact.source_type = "manual"
     contact.deleted_at = None
     db.commit()
@@ -5256,7 +5302,7 @@ def list_number_review_queue(
     visible = items[:limit]
     next_cursor = cursor + limit if has_next else None
     return UnknownNumberReviewCardListResponse(
-        items=[UnknownNumberReviewCardResponse.model_validate(row) for row in visible],
+        items=[_review_card_response(db, row) for row in visible],
         next_cursor=next_cursor,
         has_next=has_next,
     )
@@ -5287,11 +5333,29 @@ def _review_card(db: Session, review_id: int) -> NumberReviewQueue:
     return card
 
 
+def _review_card_response(db: Session, row: NumberReviewQueue) -> UnknownNumberReviewCardResponse:
+    response = UnknownNumberReviewCardResponse.model_validate(row)
+    response.evidence_at = contact_identity_service._evidence_at(
+        db, row.source_email_id, row.created_at, row.source_external_opportunity_id
+    )
+    return response
+
+
 def _normalize_linkedin_url(value: str | None) -> str:
     normalized = (value or "").strip()
     if normalized and not normalized.lower().startswith(("http://", "https://")):
         return f"https://{normalized}"
     return normalized
+
+
+def _parsed_review_phone(raw: str | None) -> tuple[str, str, str]:
+    text = (raw or "").strip()
+    if not text:
+        return "", "", ""
+    canonical, display, extension = format_phone(text)
+    if not canonical:
+        raise HTTPException(status_code=422, detail="Enter a valid US phone number")
+    return canonical, display, extension
 
 
 def _effective_review_values(
@@ -5337,12 +5401,14 @@ def _review_version(
         if existing:
             return existing
 
+    canonical_phone, display_phone, extension = _parsed_review_phone(values["display_phone_number"])
     version = PremiumNumberLead(
         owner_id=settings.owner_id,
         recruiter_email_id=card.source_email_id,
         external_opportunity_id=card.source_external_opportunity_id,
-        phone_number_normalized=canonicalize_phone(values["display_phone_number"]),
-        phone_number_display=values["display_phone_number"],
+        phone_number_normalized=canonical_phone,
+        phone_number_display=display_phone,
+        phone_extension=extension,
         role=role,
         extraction_source="manual_review",
         contact_email=(values["contact_email"] or "").strip().lower(),
@@ -5393,7 +5459,7 @@ def _contact_for_review(
     card: NumberReviewQueue,
     values: dict[str, str],
 ) -> PremiumNumberContact:
-    canonical_phone = canonicalize_phone(values["display_phone_number"])
+    canonical_phone, _display, extension = _parsed_review_phone(values["display_phone_number"])
     candidate_email = (values.get("contact_email") or "").strip()
     if not canonical_phone and not candidate_email:
         raise HTTPException(status_code=422, detail="Review card has no phone number or email to identify a contact")
@@ -5411,6 +5477,8 @@ def _contact_for_review(
     if result.contact is None:
         raise HTTPException(status_code=409, detail="Contact identity requires approval")
     result.contact.deleted_at = None
+    if extension and not result.contact.phone_extension:
+        result.contact.phone_extension = extension
     return result.contact
 
 
@@ -5725,6 +5793,11 @@ def approve_contact_link(review_id: int, db: Session = Depends(get_db)) -> dict[
         contact = contact_identity_service.approve_link(db, card)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    # The reviewer just confirmed this is the same person under a phone/email that
+    # disagreed with the contact on file - if the company disagreed too, that's not
+    # something to silently drop now that identity is confirmed; keep it as a sister
+    # company instead of losing it.
+    capture_sister_company(contact, card.company)
     db.commit()
     return {"review_id": review_id, "contact_id": contact.id, "status": "resolved"}
 
@@ -5740,12 +5813,166 @@ def approve_contact_merge(review_id: int, payload: ContactMergeApprovalRequest |
     return {"review_id": review_id, "contact_id": contact.id, "status": "resolved"}
 
 
+def _contact_merge_preview_side(db: Session, contact_id: int) -> ContactMergePreviewSide:
+    contact = (
+        db.query(PremiumNumberContact)
+        .filter(
+            PremiumNumberContact.owner_id == settings.owner_id,
+            PremiumNumberContact.id == contact_id,
+            PremiumNumberContact.deleted_at.is_(None),
+        )
+        .first()
+    )
+    if not contact:
+        raise HTTPException(status_code=404, detail=f"Contact {contact_id} not found")
+    leads = (
+        db.query(PremiumNumberLead)
+        .filter(PremiumNumberLead.owner_id == settings.owner_id, PremiumNumberLead.contact_id == contact_id)
+        .order_by(PremiumNumberLead.created_at.desc())
+        .all()
+    )
+    latest_evidence_at = None
+    for lead in leads:
+        candidate = lead.created_at
+        if lead.recruiter_email_id:
+            email = db.get(RecruiterEmail, lead.recruiter_email_id)
+            if email and email.gmail_received_at:
+                candidate = email.gmail_received_at
+        if latest_evidence_at is None or candidate > latest_evidence_at:
+            latest_evidence_at = candidate
+    return ContactMergePreviewSide(
+        id=contact.id,
+        recruiter_name=contact.recruiter_name,
+        owner_name=contact.owner_name,
+        company=contact.company,
+        recruiter_email=contact.recruiter_email,
+        employer_email=contact.employer_email,
+        normalized_phone_number=contact.normalized_phone_number,
+        display_phone_number=contact.display_phone_number,
+        is_recruiter=contact.is_recruiter,
+        is_employer=contact.is_employer,
+        lead_count=len(leads),
+        latest_evidence_at=latest_evidence_at,
+        leads=[
+            ContactMergePreviewLead(
+                id=lead.id,
+                role=lead.role,
+                company=lead.company,
+                owner_name=lead.owner_name,
+                contact_email=lead.contact_email,
+                phone_number_display=lead.phone_number_display,
+                extraction_source=lead.extraction_source,
+                created_at=lead.created_at,
+            )
+            for lead in leads[:10]
+        ],
+    )
+
+
+@app.get("/premium-numbers/contacts/merge-preview", response_model=ContactMergePreviewResponse)
+def get_contact_merge_preview(
+    contact_id_a: int, contact_id_b: int, db: Session = Depends(get_db)
+) -> ContactMergePreviewResponse:
+    return ContactMergePreviewResponse(
+        contact_a=_contact_merge_preview_side(db, contact_id_a),
+        contact_b=_contact_merge_preview_side(db, contact_id_b),
+    )
+
+
+@app.post("/premium-numbers/contacts/merge", response_model=ContactMergeResponse)
+def merge_premium_contacts(payload: ContactMergeRequest, db: Session = Depends(get_db)) -> ContactMergeResponse:
+    try:
+        canonical = contact_identity_service.merge_contacts(
+            db,
+            owner_id=settings.owner_id,
+            canonical_contact_id=payload.canonical_contact_id,
+            loser_contact_id=payload.loser_contact_id,
+            source="manual_merge_ui",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    db.commit()
+    return ContactMergeResponse(canonical_contact_id=canonical.id, loser_contact_id=payload.loser_contact_id, status="merged")
+
+
+@app.post("/premium-numbers/contacts/backfill-duplicates", response_model=DuplicateContactBackfillResponse)
+def backfill_duplicate_contacts(db: Session = Depends(get_db)) -> DuplicateContactBackfillResponse:
+    # One-time cleanup for contacts that were already split across rows before the
+    # extraction pipeline started merging same-email leads on its own (see
+    # phone_intelligence_workflow_service's contact_enriched flow) - explicitly
+    # human-triggered, so unlike that background flow this merges immediately instead of
+    # queuing a review for each group.
+    owner = settings.owner_id
+    groups_merged = 0
+    contacts_merged = 0
+    for is_recruiter, email_column in ((True, PremiumNumberContact.recruiter_email), (False, PremiumNumberContact.employer_email)):
+        # A dual-role contact merged away as a recruiter-side loser above is only marked
+        # deleted on the in-memory object at this point (autoflush is off) - without
+        # flushing first, the employer-side query below would still see it as live and
+        # merge it a second time.
+        db.flush()
+        role_flag = PremiumNumberContact.is_recruiter if is_recruiter else PremiumNumberContact.is_employer
+        rows = (
+            db.query(PremiumNumberContact)
+            .filter(
+                PremiumNumberContact.owner_id == owner,
+                PremiumNumberContact.deleted_at.is_(None),
+                role_flag.is_(True),
+                email_column.isnot(None),
+                email_column != "",
+            )
+            .order_by(email_column, PremiumNumberContact.created_at.asc(), PremiumNumberContact.id.asc())
+            .all()
+        )
+        groups: dict[str, list[PremiumNumberContact]] = {}
+        for row in rows:
+            email = (getattr(row, email_column.key) or "").strip().lower()
+            groups.setdefault(email, []).append(row)
+        for members in groups.values():
+            if len(members) < 2:
+                continue
+            canonical, losers = members[0], members[1:]
+            for loser in losers:
+                canonical = contact_identity_service.merge_contacts(
+                    db, owner_id=owner, canonical_contact_id=canonical.id, loser_contact_id=loser.id,
+                    source="duplicate_backfill",
+                )
+                contacts_merged += 1
+            groups_merged += 1
+    db.commit()
+    return DuplicateContactBackfillResponse(groups_merged=groups_merged, contacts_merged=contacts_merged)
+
+
 @app.post("/number-review/{review_id}/dismiss", response_model=dict[str, int | str])
 def dismiss_contact_suggestion(review_id: int, db: Session = Depends(get_db)) -> dict[str, int | str]:
     card = _review_card(db, review_id)
-    contact_identity_service.dismiss(card)
+    # dismiss() SPLITS a new contact off the card, so replaying it on an already-settled
+    # card mints a duplicate person per click. Every other review endpoint guards on this.
+    if card.state != "pending":
+        return {"review_id": card.id, "contact_id": card.target_contact_id or 0, "status": card.state}
+    result = contact_identity_service.dismiss(db, card)
     db.commit()
-    return {"review_id": review_id, "status": "dismissed"}
+    response: dict[str, int | str] = {
+        "review_id": review_id, "contact_id": result.contact.id, "status": "dismissed",
+    }
+    if result.follow_up_review_id is not None:
+        response["follow_up_review_id"] = result.follow_up_review_id
+    return response
+
+
+@app.post("/number-review/{review_id}/acknowledge", response_model=dict[str, int | str])
+def acknowledge_contact_enrichment(review_id: int, db: Session = Depends(get_db)) -> dict[str, int | str]:
+    # A "contact_enriched" review's change is already committed on the contact by the time
+    # this fires - unlike /dismiss, there is nothing to create or undo here, just a record
+    # that a human looked at what the AI merged.
+    card = _review_card(db, review_id)
+    # Guarded like every other review endpoint: without this, a pending identity_conflict
+    # can be acknowledged straight to "settled" without the conflict ever being resolved.
+    if card.state != "pending":
+        return {"review_id": card.id, "status": card.state}
+    card.state = "acknowledged"
+    db.commit()
+    return {"review_id": review_id, "status": "acknowledged"}
 
 
 @app.delete("/number-review/{review_id}", response_model=dict[str, int | str])
@@ -5754,6 +5981,74 @@ def delete_number_review_card(
     db: Session = Depends(get_db),
 ) -> dict[str, int | str]:
     return _delete_number_review_card(db, review_id)
+
+
+@app.patch("/number-review/{review_id}", response_model=UnknownNumberReviewCardResponse)
+def patch_number_review(
+    review_id: int,
+    payload: NumberReviewSubmitRequest,
+    db: Session = Depends(get_db),
+) -> UnknownNumberReviewCardResponse:
+    card = _review_card(db, review_id)
+    if card.state != "pending":
+        raise HTTPException(status_code=409, detail="Only a pending review can be edited")
+    if payload.owner_name is not None:
+        card.owner_name = payload.owner_name.strip() or "Unknown"
+    if payload.company is not None:
+        card.company = payload.company.strip() or "Unknown"
+    if payload.designation is not None:
+        card.designation = payload.designation.strip() or "Unknown"
+    if payload.contact_email is not None:
+        email = payload.contact_email.strip().lower()
+        if email and ("@" not in email or parseaddr(email)[1].lower() != email):
+            raise HTTPException(status_code=422, detail="Enter a valid email address")
+        card.contact_email = email
+    if payload.linkedin_url is not None:
+        card.linkedin_url = _normalize_linkedin_url(payload.linkedin_url)
+    if payload.display_phone_number is not None:
+        canonical, display, _extension = _parsed_review_phone(payload.display_phone_number)
+        card.normalized_phone_number = canonical
+        card.display_phone_number = display
+    card.updated_at = datetime.now(UTC)
+    db.commit()
+    db.refresh(card)
+    return _review_card_response(db, card)
+
+
+def _phone_display(phone: str, extension: str) -> str:
+    display = best_display_phone(phone, fallback=phone)
+    return f"{display} ext {extension}" if extension else display
+
+
+def _phone_entries(contact: PremiumNumberContact, rows: list[PremiumContactPhone]) -> list[dict[str, object]]:
+    # is_primary is never trusted from the stored row - historical merges and identity
+    # links have left it out of sync with the contact's own actual primary more than once.
+    # The contact's own fields are the only reliable source of truth for which number is
+    # primary, so the primary entry is always synthesized from them, and any row that
+    # happens to duplicate it (by value) is skipped rather than shown twice.
+    entries: list[dict[str, object]] = []
+    primary_key = (contact.normalized_phone_number, contact.phone_extension or "")
+    if contact.normalized_phone_number:
+        entries.append({
+            "phone": contact.normalized_phone_number,
+            "extension": contact.phone_extension or "",
+            "display": contact.display_phone_number or _phone_display(contact.normalized_phone_number, contact.phone_extension or ""),
+            "is_primary": True,
+            "is_verified": False,
+            "label": "",
+        })
+    for row in rows:
+        if (row.normalized_phone_number, row.phone_extension or "") == primary_key:
+            continue
+        entries.append({
+            "phone": row.normalized_phone_number,
+            "extension": row.phone_extension,
+            "display": _phone_display(row.normalized_phone_number, row.phone_extension),
+            "is_primary": False,
+            "is_verified": row.is_verified,
+            "label": row.label,
+        })
+    return entries
 
 
 def _contact_source_fields(
@@ -5849,13 +6144,14 @@ def _recruiter_number_response(
         display_phone_number=contact.display_phone_number,
         recruiter_name=contact.recruiter_name,
         company=contact.company,
+        secondary_company=contact.secondary_company,
         designation=contact.designation,
         recruiter_email=contact.recruiter_email,
         recruiter_email_domain=contact.recruiter_email_domain,
         employer_email_domain=contact.employer_email_domain,
         is_favorite=contact.is_favorite,
         emails=[{"email": row.normalized_email, "domain": row.domain, "is_primary": row.is_primary} for row in emails],
-        phones=[{"phone": row.normalized_phone_number, "is_primary": row.is_primary, "is_verified": row.is_verified} for row in phones],
+        phones=_phone_entries(contact, phones),
         first_detected_email_id=contact.first_detected_email_id,
         source_type=source_type,
         source_id=source_id,
@@ -5884,12 +6180,15 @@ def _employer_number_response(db: Session, contact: PremiumNumberContact) -> Emp
         db, contact, "employer"
     )
     flagged = _contact_is_flagged(contact, "employer")
+    phones = db.query(PremiumContactPhone).filter(PremiumContactPhone.premium_contact_id == contact.id).order_by(PremiumContactPhone.is_primary.desc(), PremiumContactPhone.id.asc()).all()
     return EmployerNumberResponse(
         id=contact.id,
         normalized_phone_number=contact.normalized_phone_number,
         display_phone_number=contact.display_phone_number,
         owner_name=contact.owner_name,
+        designation=contact.designation,
         company=contact.company,
+        secondary_company=contact.secondary_company,
         employer_email=contact.employer_email,
         employer_email_domain=contact.employer_email_domain,
         is_favorite=contact.is_favorite,
@@ -5900,6 +6199,11 @@ def _employer_number_response(db: Session, contact: PremiumNumberContact) -> Emp
         active_lead_id=active_id,
         version_count=version_count,
         seen_count=contact.seen_count,
+        phones=_phone_entries(contact, phones),
+        linkedin_url=contact.linkedin_url,
+        recruiter_verification_level=contact.recruiter_verification_level,
+        do_not_work_again=contact.do_not_work_again,
+        do_not_work_again_reason=contact.do_not_work_again_reason,
         is_recruiter=contact.is_recruiter,
         is_employer=contact.is_employer,
         recruiter_relevance_score=score,
@@ -5960,6 +6264,59 @@ def list_recruiter_numbers(
     return RecruiterNumberListResponse(items=visible, next_cursor=next_cursor, has_next=has_next)
 
 
+def _apply_phone_list(db: Session, contact: PremiumNumberContact, raw_phones: list[str]) -> None:
+    """Replaces a contact's entire phone set (primary + secondaries) from a full-editor
+    save. The first entry becomes primary; the rest are recorded as secondaries. This is a
+    full replace, not an incremental diff - simpler to reason about than tracking which row
+    changed, and the editor always submits the complete list it's showing.
+    """
+    parsed: list[tuple[str, str, str]] = []
+    for raw in raw_phones:
+        raw = raw.strip()
+        if not raw:
+            continue
+        canonical, display, extension = format_phone(raw)
+        if not canonical:
+            raise HTTPException(status_code=422, detail=f"'{raw}' is not a valid US phone number")
+        key = (canonical, extension)
+        if any((c, e) == key for c, _d, e in parsed):
+            continue
+        parsed.append((canonical, display, extension))
+    for canonical, _display, extension in parsed:
+        # Shared with contact_identity_service.add_phone so the editor and the ingestion
+        # path cannot disagree about whether a number is already taken.
+        conflicting_id = contact_identity_service.phone_claim_owner(
+            db, contact.owner_id, canonical, extension, exclude_contact_id=contact.id
+        )
+        if conflicting_id is not None:
+            raise HTTPException(
+                status_code=409,
+                detail={"message": f"{_display} is already linked to a different contact", "conflicting_contact_id": conflicting_id},
+            )
+    if parsed:
+        primary_canonical, primary_display, primary_extension = parsed[0]
+        contact.normalized_phone_number = primary_canonical
+        contact.display_phone_number = primary_display
+        contact.phone_extension = primary_extension
+        contact.phone_is_valid = True
+    else:
+        contact.normalized_phone_number = None
+        contact.display_phone_number = ""
+        contact.phone_extension = ""
+        contact.phone_is_valid = False
+    # Scoped to unlabeled rows only - a fax/other row recorded by extraction isn't part of
+    # this editor's list at all, and a blanket delete here would silently wipe it out on
+    # every save of the regular phone numbers.
+    db.query(PremiumContactPhone).filter(
+        PremiumContactPhone.premium_contact_id == contact.id, PremiumContactPhone.label == "",
+    ).delete(synchronize_session=False)
+    for canonical, _display, extension in parsed[1:]:
+        db.add(PremiumContactPhone(
+            owner_id=contact.owner_id, premium_contact_id=contact.id, normalized_phone_number=canonical,
+            phone_extension=extension, is_primary=False, is_verified=False, source="manual_edit", created_at=utc_now(),
+        ))
+
+
 @app.patch("/recruiter-numbers/{recruiter_number_id}", response_model=RecruiterNumberResponse)
 def patch_recruiter_number(
     recruiter_number_id: int,
@@ -5982,11 +6339,30 @@ def patch_recruiter_number(
         contact.recruiter_name = payload.recruiter_name.strip() or "Unknown"
     if payload.company is not None:
         contact.company = payload.company.strip() or "Unknown"
+    if payload.secondary_company is not None:
+        contact.secondary_company = payload.secondary_company.strip()
     if payload.designation is not None:
         contact.designation = payload.designation.strip() or "Unknown"
     if payload.recruiter_email is not None:
         contact.recruiter_email = payload.recruiter_email.strip().lower()
         contact.recruiter_email_domain = contact.recruiter_email.rpartition("@")[2]
+    if payload.phone_number is not None:
+        raw_phone = payload.phone_number.strip()
+        if raw_phone:
+            canonical, display, extension = format_phone(raw_phone)
+            if not canonical:
+                raise HTTPException(status_code=422, detail="Enter a valid US phone number")
+            contact.normalized_phone_number = canonical
+            contact.display_phone_number = display
+            contact.phone_extension = extension
+            contact.phone_is_valid = True
+        else:
+            contact.normalized_phone_number = None
+            contact.display_phone_number = ""
+            contact.phone_extension = ""
+            contact.phone_is_valid = False
+    if payload.phones is not None:
+        _apply_phone_list(db, contact, payload.phones)
     if payload.is_favorite is not None:
         contact.is_favorite = payload.is_favorite
     if payload.linkedin_url is not None:
@@ -5998,7 +6374,11 @@ def patch_recruiter_number(
     if payload.do_not_work_again_reason is not None:
         contact.do_not_work_again_reason = payload.do_not_work_again_reason
     contact.updated_at = datetime.now(UTC)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Another contact already uses this exact phone number and extension") from None
     db.refresh(contact)
     return _recruiter_number_response(db, contact)
 
@@ -6023,15 +6403,33 @@ def patch_employer_number(
         raise HTTPException(status_code=404, detail="Employer number not found")
     if payload.owner_name is not None:
         contact.owner_name = payload.owner_name.strip() or "Unknown"
+    if payload.designation is not None:
+        contact.designation = payload.designation.strip() or "Unknown"
     if payload.company is not None:
         contact.company = payload.company.strip() or "Unknown"
+    if payload.secondary_company is not None:
+        contact.secondary_company = payload.secondary_company.strip()
     if payload.employer_email is not None:
         contact.employer_email = payload.employer_email.strip()
         contact.employer_email_domain = contact.employer_email.rpartition("@")[2]
+    if payload.phones is not None:
+        _apply_phone_list(db, contact, payload.phones)
     if payload.is_favorite is not None:
         contact.is_favorite = payload.is_favorite
+    if payload.linkedin_url is not None:
+        contact.linkedin_url = _normalize_linkedin_url(payload.linkedin_url)
+    if payload.recruiter_verification_level is not None:
+        contact.recruiter_verification_level = payload.recruiter_verification_level
+    if payload.do_not_work_again is not None:
+        contact.do_not_work_again = payload.do_not_work_again
+    if payload.do_not_work_again_reason is not None:
+        contact.do_not_work_again_reason = payload.do_not_work_again_reason
     contact.updated_at = datetime.now(UTC)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Another contact already uses this exact phone number and extension") from None
     db.refresh(contact)
     return _employer_number_response(db, contact)
 
@@ -6439,7 +6837,23 @@ def _bulk_contact_response(
 
 def _soft_delete_contact(db: Session, contact_id: int, role: str) -> str:
     contact = _contact_for_bulk_action(db, contact_id, role)
+    # Snapshot BEFORE releasing: release_contact_claims hard-deletes every phone and email
+    # row, so without this a restore from the Recycle Bin brings the contact back with no
+    # identifiers at all.
+    contact_identity_service.snapshot_contact_claims(db, contact)
+    contact_identity_service.release_contact_claims(db, contact)
     contact.deleted_at = datetime.now(UTC)
+    # A pending review targeting this contact has nothing left to resolve against
+    # once it's gone - leaving it "pending" strands it in Needs Review forever,
+    # showing an unlabeled "existing contact" with no way to see who it was.
+    db.query(NumberReviewQueue).filter(
+        NumberReviewQueue.owner_id == settings.owner_id,
+        NumberReviewQueue.state == "pending",
+        or_(
+            NumberReviewQueue.target_contact_id == contact_id,
+            NumberReviewQueue.secondary_contact_id == contact_id,
+        ),
+    ).update({"state": "dismissed"}, synchronize_session=False)
     db.commit()
     return "deleted"
 
@@ -6489,10 +6903,79 @@ def _rescore_contact(db: Session, contact_id: int, role: str) -> str:
     )
     active = db.get(PremiumNumberLead, active_id) if active_id else None
     if active:
-        apply_contact_version(db, refreshed, active, role, overwrite=True)
+        # overwrite=False: Rescore's job is to fill in what's missing and correct the
+        # phone (below), not to relabel the contact as a different person if this same
+        # source email also mentions someone else - name/email/company only fill blanks.
+        apply_contact_version(db, refreshed, active, role, overwrite=False)
+        if active.phone_number_normalized and active.phone_number_normalized != refreshed.normalized_phone_number:
+            # apply_contact_version deliberately never touches the phone - it's the
+            # contact's identity anchor, so correcting it has to go through the same
+            # conflict check as any other phone link, not a blind overwrite.
+            if not contact_identity_service.add_phone(db, refreshed, active.phone_number_normalized, primary=True):
+                conflict_contact = contact_identity_service.find_phone_owner(db, refreshed.owner_id, active.phone_number_normalized)
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": f"{active.phone_number_display or active.phone_number_normalized} is already linked to a different contact",
+                        "conflicting_contact_id": conflict_contact.id if conflict_contact else None,
+                    },
+                )
+        elif active.phone_extension and active.phone_extension != refreshed.phone_extension:
+            # Same base number, so add_phone above never runs - but the re-extracted
+            # extension is still a correction worth keeping, not silently dropping.
+            refreshed.phone_extension = active.phone_extension
+            refreshed.display_phone_number = f"{best_display_phone(refreshed.normalized_phone_number or '', fallback=refreshed.display_phone_number)} ext {active.phone_extension}"
     refreshed.updated_at = datetime.now(UTC)
     db.commit()
     return "rescored"
+
+
+_RESCORE_TRACKED_FIELDS: dict[str, list[tuple[str, str]]] = {
+    "recruiter": [
+        ("recruiter_name", "Name"),
+        ("company", "Company"),
+        ("designation", "Designation"),
+        ("recruiter_email", "Email"),
+        ("linkedin_url", "LinkedIn"),
+        ("display_phone_number", "Phone"),
+    ],
+    "employer": [
+        ("owner_name", "Name"),
+        ("company", "Company"),
+        ("designation", "Designation"),
+        ("employer_email", "Email"),
+        ("linkedin_url", "LinkedIn"),
+        ("display_phone_number", "Phone"),
+    ],
+}
+
+
+def _rescore_contact_with_diff(db: Session, contact_id: int, role: str) -> ContactRescoreResponse:
+    # Rescore's re-extraction is a real AI/pipeline run, not a read-only query, so it can't
+    # be previewed without committing - it self-commits deep inside capture_premium_numbers.
+    # Show the user what changed instead: snapshot before, run the real rescore, diff after.
+    tracked = _RESCORE_TRACKED_FIELDS[role]
+    before = _contact_for_bulk_action(db, contact_id, role)
+    snapshot = {field: getattr(before, field) or "" for field, _label in tracked}
+    status = _rescore_contact(db, contact_id, role)
+    changes: list[ContactFieldChange] = []
+    if status == "rescored":
+        after = _contact_for_bulk_action(db, contact_id, role)
+        for field, label in tracked:
+            new_value = getattr(after, field) or ""
+            if snapshot[field] != new_value:
+                changes.append(ContactFieldChange(field=field, label=label, old=snapshot[field], new=new_value))
+    return ContactRescoreResponse(id=contact_id, status=status, changes=changes)
+
+
+@app.post("/recruiter-numbers/{contact_id}/rescore", response_model=ContactRescoreResponse)
+def rescore_recruiter_number(contact_id: int, db: Session = Depends(get_db)) -> ContactRescoreResponse:
+    return _rescore_contact_with_diff(db, contact_id, "recruiter")
+
+
+@app.post("/employer-numbers/{contact_id}/rescore", response_model=ContactRescoreResponse)
+def rescore_employer_number(contact_id: int, db: Session = Depends(get_db)) -> ContactRescoreResponse:
+    return _rescore_contact_with_diff(db, contact_id, "employer")
 
 
 @app.post("/recruiter-numbers/bulk-delete", response_model=BulkContactActionResponse)
