@@ -1894,7 +1894,7 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
             opportunity = db.query(RecruiterOpportunity).filter(
                 RecruiterOpportunity.recruiter_number_id == contact.id
             ).one_or_none()
-            self.assertIsNotNone(opportunity)
+            self.assertIsNone(opportunity)
 
     def test_two_phone_less_recruiters_from_same_email_do_not_collide(self) -> None:
         with Session(self.engine) as db:

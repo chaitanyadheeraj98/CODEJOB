@@ -1214,6 +1214,7 @@ class RecruiterOpportunityListResponse(BaseModel):
     items: list[RecruiterOpportunityResponse]
     next_cursor: int | None
     has_next: bool
+    total: int
 
 
 class RecruiterOpportunityPatchRequest(BaseModel):

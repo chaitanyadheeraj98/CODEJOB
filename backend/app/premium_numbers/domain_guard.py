@@ -47,7 +47,9 @@ def is_hidden_nvoids_placeholder_recruiter(row: PremiumNumberContact | None) -> 
         return False
     normalized = str(row.normalized_phone_number or "").strip().lower()
     display = str(row.display_phone_number or "").strip().lower()
-    return normalized.startswith("nvoids-") and display == "unknown" and row.first_detected_email_id is None
+    if normalized.startswith("nvoids-") and display == "unknown" and row.first_detected_email_id is None:
+        return True
+    return not normalized
 
 
 def is_hidden_invalid_employer_number(row: PremiumNumberContact | None) -> bool:

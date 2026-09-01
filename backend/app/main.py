@@ -4259,7 +4259,7 @@ def _recruiter_opportunity_response(
         recruiter_name=(recruiter.recruiter_name if recruiter else ""),
         recruiter_email=(recruiter.recruiter_email if recruiter else ""),
         recruiter_phone_display=(recruiter.display_phone_number if recruiter else ""),
-        recruiter_phone_normalized=(recruiter.normalized_phone_number if recruiter else ""),
+        recruiter_phone_normalized=(recruiter.normalized_phone_number or "" if recruiter else ""),
         recruiter_company=(recruiter.company if recruiter else ""),
         linkedin_url=(recruiter.linkedin_url if recruiter else ""),
         status=row.status,
@@ -7133,6 +7133,21 @@ def list_recruiter_opportunities(
         needle=f"%{q.strip()}%"; query=query.filter(or_(RecruiterOpportunity.email_subject.ilike(needle),RecruiterOpportunity.email_sender.ilike(needle),RecruiterOpportunity.job_title.ilike(needle),RecruiterOpportunity.end_client.ilike(needle),RecruiterOpportunity.location.ilike(needle),RecruiterOpportunity.extracted_skills.ilike(needle),PremiumNumberContact.recruiter_name.ilike(needle),PremiumNumberContact.recruiter_email.ilike(needle),PremiumNumberContact.display_phone_number.ilike(needle)))
     for value,column in ((job_title,RecruiterOpportunity.job_title),(end_client,RecruiterOpportunity.end_client),(location,RecruiterOpportunity.location)):
         if value and value.strip(): query=query.filter(column.ilike(f"%{value.strip()}%"))
+    # Mirrors is_hidden_nvoids_placeholder_recruiter - kept in the query (not just the
+    # items list below) so `total` and the paginated rows agree; otherwise a page can
+    # come back with fewer items than `limit` (or empty) while `total`/`has_next` still
+    # count the hidden placeholder rows.
+    query = query.filter(not_(or_(
+        and_(
+            PremiumNumberContact.normalized_phone_number.ilike("nvoids-%"),
+            func.lower(PremiumNumberContact.display_phone_number) == "unknown",
+            PremiumNumberContact.first_detected_email_id.is_(None),
+        ),
+        and_(
+            RecruiterOpportunity.recruiter_number_id.is_not(None),
+            or_(PremiumNumberContact.normalized_phone_number.is_(None), PremiumNumberContact.normalized_phone_number == ""),
+        ),
+    )))
     total=query.count()
     order=(RecruiterOpportunity.received_at.asc(),RecruiterOpportunity.id.asc()) if sort=="oldest" else (RecruiterOpportunity.received_at.desc(),RecruiterOpportunity.id.desc())
     rows=query.order_by(*order).offset(cursor).limit(limit+1).all(); has_next=len(rows)>limit; rows=rows[:limit]

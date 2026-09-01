@@ -575,7 +575,12 @@ class PhoneIntelligenceWorkflowService:
 
                     if promotion_role == "recruiter":
                         recruiter_matches += 1
-                        if point.existing_opportunity:
+                        # Contact identity is still worth capturing from an email-only lead, but a
+                        # card with no phone gives the user nothing to build rapport on - skip it
+                        # until a phone shows up (on this lead or already on the contact).
+                        if not (lead.phone_number_normalized or contact.normalized_phone_number):
+                            pass
+                        elif point.existing_opportunity:
                             opportunity_existing += 1
                         else:
                             opportunity = self._create_opportunity(
