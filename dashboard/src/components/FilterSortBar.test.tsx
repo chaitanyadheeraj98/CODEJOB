@@ -17,13 +17,14 @@ const sortOptions: SortOption[] = [{ value: 'newest', label: 'Newest' }, { value
 
 const fiveFields: FilterFieldConfig[] = [
   { key: 'q', label: 'Search', type: 'text' },
+  { key: 'role', label: 'Job title', type: 'combobox', bucket: 'needs_review' },
   { key: 'source', label: 'Source', type: 'select', options: [{ value: 'all', label: 'All' }, { value: 'gmail', label: 'Gmail' }] },
   { key: 'status', label: 'Status', type: 'multiselect', options: [{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }] },
   { key: 'flag', label: 'Flag', type: 'boolean' },
   { key: 'score', label: 'Score', type: 'range', min: 0, max: 100 },
 ]
 
-const defaultValues: FilterValues = { q: '', source: 'all', status: [], flag: null, score: { min: null, max: null } }
+const defaultValues: FilterValues = { q: '', role: '', source: 'all', status: [], flag: null, score: { min: null, max: null } }
 
 describe('FilterSortBar', () => {
   let root: Root | null = null
@@ -171,7 +172,7 @@ describe('FilterSortBar', () => {
     const details = container.querySelector<HTMLDetailsElement>('.filterSortMoreToggle')
     expect(details).not.toBeNull()
     expect(details?.open).toBe(false)
-    expect(details?.querySelector('summary')?.textContent).toBe('More filters (1)')
+    expect(details?.querySelector('summary')?.textContent).toBe('More filters (2)')
     expect(container.textContent).toContain('Extra')
 
     act(() => { details!.open = true; details!.dispatchEvent(new Event('toggle', { bubbles: true })) })
@@ -188,6 +189,14 @@ describe('FilterSortBar', () => {
         <FilterSortBar fields={fiveFields} values={{ ...defaultValues, source: 'gmail' }} onFieldChange={vi.fn()} onClear={vi.fn()} sortOptions={sortOptions} sortValue="newest" onSortChange={vi.fn()} />,
       )
     })
+    expect(container.querySelector('.filterSortBar--active')).not.toBeNull()
+  })
+
+  it('renders combobox fields as inputs and marks their values active', () => {
+    renderBar({ values: { ...defaultValues, role: 'Java' } })
+    if (!container) throw new Error('not rendered')
+    expect(container.querySelector<HTMLInputElement>('input[role="combobox"]')?.value).toBe('Java')
+    expect(container.querySelector('.filterMultiselectPopover [role="combobox"]')).toBeNull()
     expect(container.querySelector('.filterSortBar--active')).not.toBeNull()
   })
 

@@ -52,14 +52,14 @@ describe('premium number API URLs', () => {
       cursor: 0,
       q: 'java',
       mailDate: '2026-06-03',
-      status: 'New',
+      status: ['New', 'Called'],
       sourceType: 'nvoids',
     })
     expect(url).toContain('/recruiter-opportunities?')
     expect(url).toContain('cursor=0')
     expect(url).toContain('q=java')
     expect(url).toContain('mail_date=2026-06-03')
-    expect(url).toContain('status=New')
+    expect(url).toContain('status=New%2CCalled')
     expect(url).toContain('source_type=nvoids')
   })
 

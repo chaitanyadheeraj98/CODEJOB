@@ -1,8 +1,8 @@
-import { ApplicationDuplicateConflictError, requestJson } from '../premium_numbers/api'
+import { ApplicationDuplicateConflictError, RoleManifestForkRequiredError, requestJson } from '../premium_numbers/api'
 import type { ApplicationCard, ApplicationEventCard, ApplicationInterview, ApplicationStatus } from '../premium_numbers/types'
 import type { Candidate, SentItemDetails } from '../../App'
 
-export { ApplicationDuplicateConflictError }
+export { ApplicationDuplicateConflictError, RoleManifestForkRequiredError }
 
 const json = (method: string, body?: unknown): RequestInit => ({ method, headers: body === undefined ? undefined : { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
 export type BookmarkedRequirement = Candidate
@@ -31,14 +31,14 @@ export const addApplicationInterview = (apiBase: string, id: number, payload: Pi
 export const updateApplicationInterview = (apiBase: string, applicationId: number, interviewId: number, patch: Partial<Pick<ApplicationInterview, 'scheduled_at' | 'format' | 'interviewer_names' | 'feedback' | 'result' | 'follow_up_task_note'>>) => requestJson<ApplicationCard>(`${apiBase}/appts/applications/${applicationId}/interviews/${interviewId}`, json('PATCH', patch))
 export const deleteApplicationInterview = (apiBase: string, applicationId: number, interviewId: number) => requestJson<ApplicationCard>(`${apiBase}/appts/applications/${applicationId}/interviews/${interviewId}`, { method: 'DELETE' })
 export const submitApplicationToClient = (apiBase: string, id: number, override = false) => requestJson<ApplicationCard>(`${apiBase}/appts/applications/${id}/submit-to-client`, json('POST', { override_duplicate_warning: override }))
-export const createAppTSApplicationFromOpportunity = (apiBase: string, payload: { resume_asset_id: number; recruiter_opportunity_id: number; dedupe_key: string }) => requestJson<ApplicationCard>(`${apiBase}/appts/applications`, json('POST', payload))
+export const createAppTSApplicationFromOpportunity = (apiBase: string, payload: { resume_asset_id?: number; recruiter_opportunity_id: number; dedupe_key: string }) => requestJson<ApplicationCard>(`${apiBase}/appts/applications`, json('POST', payload))
 export const promoteSubmissionToAppts = (apiBase: string, id: number) => requestJson<ApplicationCard>(`${apiBase}/appts/applications/from-submission/${id}`, { method: 'POST' })
 
 // Bookmarked Requirements card actions — same /candidates/* endpoints the Needs Review card uses.
 export const approveSendCandidate = (apiBase: string, id: number, editedReply: string) =>
   requestJson<Candidate>(`${apiBase}/candidates/${id}/approve-send`, json('POST', { edited_reply: editedReply, confirm_same_source_additional_send: false }))
-export const regenerateCandidateDraft = (apiBase: string, id: number) =>
-  requestJson<Candidate>(`${apiBase}/candidates/${id}/regenerate`, json('POST', { preserve_manual_routing: true, preserve_review_visibility: true }))
+export const regenerateCandidateDraft = (apiBase: string, id: number, allowRoleManifestFork = false) =>
+  requestJson<Candidate>(`${apiBase}/candidates/${id}/regenerate`, json('POST', { preserve_manual_routing: true, preserve_review_visibility: true, allow_role_manifest_fork: allowRoleManifestFork }))
 export const retryRoleDetectionForCandidate = (apiBase: string, id: number) =>
   requestJson<void>(`${apiBase}/candidates/${id}/retry-role-detection`, { method: 'POST' })
 export const rejectCandidate = (apiBase: string, id: number) =>

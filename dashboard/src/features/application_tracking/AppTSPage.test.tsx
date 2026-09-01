@@ -54,7 +54,7 @@ describe('AppTSPage filter/sort wiring', () => {
     expect(url.searchParams.get('sendability')).toBe('sendable')
   })
 
-  it('leaves the Tracked and Applied request shape unchanged', async () => {
+  it('sends the Tracked and Applied snapshot filters', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
       if (url.includes('/appts/applications')) return jsonResponse({ items: [], total: 0, next_cursor: null, has_next: false })
@@ -73,7 +73,7 @@ describe('AppTSPage filter/sort wiring', () => {
           apiBase="http://localhost:8000"
           refreshToken={0}
           activeTab="tracked"
-          filterValues={{ q: 'nancy', has_premium_contact: true }}
+          filterValues={{ q: 'nancy', company: 'Acme', recruiter: 'Priya', end_client: 'Bank X', role: 'Java', has_premium_contact: true, tracked: false }}
           sortValue="next_action"
         />,
       )
@@ -85,9 +85,12 @@ describe('AppTSPage filter/sort wiring', () => {
     const url = new URL(String(call?.[0]))
     expect(url.searchParams.get('sort')).toBe('next_action')
     expect(url.searchParams.get('q')).toBe('nancy')
-    // has_premium_contact is a boolean filter value; the tracked-tab request path is
-    // intentionally left untouched by this fix, so this pre-existing gap must persist.
-    expect(url.searchParams.get('has_premium_contact')).toBeNull()
+    expect(url.searchParams.get('company')).toBe('Acme')
+    expect(url.searchParams.get('recruiter')).toBe('Priya')
+    expect(url.searchParams.get('end_client')).toBe('Bank X')
+    expect(url.searchParams.get('role')).toBe('Java')
+    expect(url.searchParams.get('has_premium_contact')).toBe('true')
+    expect(url.searchParams.get('tracked')).toBe('false')
   })
 
   function makeApplication(overrides: Record<string, unknown> = {}) {

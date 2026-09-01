@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.external_feeds.models import ExternalOpportunity
 from app.models import (
     AppTSApplication,
+    Application,
     ContactIdentityAction,
     NumberReviewQueue,
     PremiumContactEmail,
@@ -17,6 +18,7 @@ from app.models import (
     PremiumNumberContact,
     PremiumNumberLead,
     RecruiterEmail,
+    RecruiterOpportunity,
     utc_now,
 )
 from app.premium_numbers.extraction import ExtractedContactGroup
@@ -544,6 +546,9 @@ def _merge_contact_records(
     db.query(NumberReviewQueue).filter(NumberReviewQueue.owner_id == owner_id, NumberReviewQueue.secondary_contact_id == loser.id).update({NumberReviewQueue.secondary_contact_id: canonical.id}, synchronize_session=False)
     for model in (RecruiterEmail, AppTSApplication):
         db.query(model).filter(model.owner_id == owner_id, model.resolved_recruiter_contact_id == loser.id).update({model.resolved_recruiter_contact_id: canonical.id}, synchronize_session=False)
+    for model in (Application, AppTSApplication):
+        db.query(model).filter(model.owner_id == owner_id, model.recruiter_contact_id == loser.id).update({model.recruiter_contact_id: canonical.id}, synchronize_session=False)
+    db.query(RecruiterOpportunity).filter(RecruiterOpportunity.owner_id == owner_id, RecruiterOpportunity.recruiter_number_id == loser.id).update({RecruiterOpportunity.recruiter_number_id: canonical.id}, synchronize_session=False)
     loser_phone = loser.normalized_phone_number
     loser_extension = loser.phone_extension or ""
     # Release the loser's own claim on its phone (and its active-lead pointers) before

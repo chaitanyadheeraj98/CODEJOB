@@ -15,19 +15,29 @@ branch_labels = None
 depends_on = None
 
 
+NEW_COLUMNS = (
+    ("ats_score", lambda: sa.Column("ats_score", sa.Float(), nullable=True)),
+    ("ats_score_source", lambda: sa.Column("ats_score_source", sa.String(length=80), nullable=True)),
+    ("ats_summary", lambda: sa.Column("ats_summary", sa.Text(), nullable=True)),
+    ("ats_breakdown_json", lambda: sa.Column("ats_breakdown_json", sa.Text(), nullable=True)),
+)
+
+
 def upgrade() -> None:
-    if "recruiter_emails" not in sa.inspect(op.get_bind()).get_table_names():
+    bind = op.get_bind()
+    if "recruiter_emails" not in sa.inspect(bind).get_table_names():
         return
-    op.add_column("recruiter_emails", sa.Column("ats_score", sa.Float(), nullable=True))
-    op.add_column("recruiter_emails", sa.Column("ats_score_source", sa.String(length=80), nullable=True))
-    op.add_column("recruiter_emails", sa.Column("ats_summary", sa.Text(), nullable=True))
-    op.add_column("recruiter_emails", sa.Column("ats_breakdown_json", sa.Text(), nullable=True))
+    columns = {column["name"] for column in sa.inspect(bind).get_columns("recruiter_emails")}
+    for name, column in NEW_COLUMNS:
+        if name not in columns:
+            op.add_column("recruiter_emails", column())
 
 
 def downgrade() -> None:
-    if "recruiter_emails" not in sa.inspect(op.get_bind()).get_table_names():
+    bind = op.get_bind()
+    if "recruiter_emails" not in sa.inspect(bind).get_table_names():
         return
-    op.drop_column("recruiter_emails", "ats_breakdown_json")
-    op.drop_column("recruiter_emails", "ats_summary")
-    op.drop_column("recruiter_emails", "ats_score_source")
-    op.drop_column("recruiter_emails", "ats_score")
+    columns = {column["name"] for column in sa.inspect(bind).get_columns("recruiter_emails")}
+    for name, _ in reversed(NEW_COLUMNS):
+        if name in columns:
+            op.drop_column("recruiter_emails", name)

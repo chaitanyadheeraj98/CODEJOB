@@ -60,6 +60,7 @@ class CandidateDateFilteringTests(unittest.TestCase):
         sent_at: datetime | None = None,
         source: str = "gmail",
         created_at: datetime | None = None,
+        role: str = "Python Developer",
     ) -> None:
         timestamp = created_at or sent_at or gmail_received_at or datetime(2026, 5, 12, 12, 0, tzinfo=UTC)
         with Session(self.engine) as db:
@@ -69,7 +70,7 @@ class CandidateDateFilteringTests(unittest.TestCase):
                     sender="recruiter@example.com",
                     subject=subject,
                     body="Body",
-                    role="Python Developer",
+                    role=role,
                     location="Remote",
                     salary_text="",
                     skills_text="Python",
@@ -103,6 +104,73 @@ class CandidateDateFilteringTests(unittest.TestCase):
         response = self.client.get("/candidates", params={"state": state, "mail_date": mail_date, "limit": 100})
         self.assertEqual(response.status_code, 200, response.text)
         return [item["subject"] for item in response.json()["items"]]
+
+    def test_text_search_widens_past_the_implicit_mail_date_scope(self) -> None:
+        """Typing a role must reach every matching row, not just the selected day.
+
+        Regression: the /filter-options picker offers values from the whole bucket,
+        so a suggestion drawn from an older email returned zero rows while mail_date
+        still pinned the list to one day.
+        """
+        old = datetime(2026, 5, 1, 12, 0, tzinfo=UTC)
+        today = datetime(2026, 5, 12, 12, 0, tzinfo=UTC)
+        self.add_email("old-java", "needs_review", gmail_received_at=old, role="Java Developer")
+        self.add_email("today-java", "needs_review", gmail_received_at=today, role="Java Developer")
+        self.add_email("today-python", "needs_review", gmail_received_at=today, role="Python Developer")
+
+        browsing = self.client.get(
+            "/candidates",
+            params={"state": "needs_review", "mail_date": "2026-05-12", "limit": 100},
+        )
+        self.assertEqual(
+            {item["subject"] for item in browsing.json()["items"]},
+            {"today-java", "today-python"},
+            "without a text search the day scope still applies",
+        )
+
+        searching = self.client.get(
+            "/candidates",
+            params={"state": "needs_review", "mail_date": "2026-05-12", "role": "java", "limit": 100},
+        )
+        self.assertEqual(
+            {item["subject"] for item in searching.json()["items"]},
+            {"old-java", "today-java"},
+            "a text search spans every date",
+        )
+
+    def test_explicit_date_filter_outranks_a_text_search(self) -> None:
+        """Only the implicit mail_date gives way; a chosen range is deliberate."""
+        old = datetime(2026, 5, 1, 12, 0, tzinfo=UTC)
+        today = datetime(2026, 5, 12, 12, 0, tzinfo=UTC)
+        self.add_email("old-java", "needs_review", gmail_received_at=old, role="Java Developer")
+        self.add_email("today-java", "needs_review", gmail_received_at=today, role="Java Developer")
+
+        response = self.client.get(
+            "/candidates",
+            params={
+                "state": "needs_review",
+                "mail_date": "2026-05-12",
+                "role": "java",
+                "date_filter": "custom",
+                "date_from": "2026-05-12",
+                "date_to": "2026-05-12",
+                "limit": 100,
+            },
+        )
+        self.assertEqual({item["subject"] for item in response.json()["items"]}, {"today-java"})
+
+    def test_structural_filters_do_not_widen_the_day_scope(self) -> None:
+        """A toggle refines what is on screen; it is not a search."""
+        old = datetime(2026, 5, 1, 12, 0, tzinfo=UTC)
+        today = datetime(2026, 5, 12, 12, 0, tzinfo=UTC)
+        self.add_email("old-gmail", "needs_review", gmail_received_at=old)
+        self.add_email("today-gmail", "needs_review", gmail_received_at=today)
+
+        response = self.client.get(
+            "/candidates",
+            params={"state": "needs_review", "mail_date": "2026-05-12", "source": "gmail", "limit": 100},
+        )
+        self.assertEqual({item["subject"] for item in response.json()["items"]}, {"today-gmail"})
 
     def test_sent_state_uses_sent_at_field(self) -> None:
         self.assertEqual(_mail_date_filter_field(["approved_sent"]), "sent_at")

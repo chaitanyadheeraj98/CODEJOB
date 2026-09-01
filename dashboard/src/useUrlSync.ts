@@ -5,7 +5,7 @@ export function parseFilterValuesFromParams(fields: FilterFieldConfig[], default
   const values = { ...defaults }
   for (const field of fields) {
     const value = params.get(field.key)
-    if (field.type === 'text' && value != null) values[field.key] = value
+    if ((field.type === 'text' || field.type === 'combobox') && value != null) values[field.key] = value
     else if (field.type === 'select' && value != null && field.options.some((option) => option.value === value)) values[field.key] = value
     else if (field.type === 'multiselect' && value != null) { const valid = new Set(field.options.map((option) => option.value)); values[field.key] = value.split(',').filter((item) => valid.has(item)) }
     else if (field.type === 'boolean' && (value === 'true' || value === 'false')) values[field.key] = value === 'true'

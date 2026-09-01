@@ -32,6 +32,7 @@ const opportunity: RecruiterOpportunityCard = {
   work_mode: 'Hybrid',
   visa_restrictions: '',
   resume_file_name: '',
+  resume_asset_id: null,
   implementation_partner: '',
   prime_vendor: '',
   domain: 'Finance',
@@ -101,10 +102,18 @@ describe('OpportunitiesTab application entry point', () => {
           highlightedId={null}
           applicationsEnabled
           onToast={onToast}
+          filterValues={{ status: ['New', 'Called'], employment_type: 'Contract', work_mode: 'Remote', job_confidence: 'high', extension_likely: 'yes' }}
         />,
       )
     })
     await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 300)) })
+
+    const listUrl = String(fetchMock.mock.calls.find(([url]) => String(url).includes('/recruiter-opportunities?'))?.[0])
+    expect(listUrl).toContain('status=New%2CCalled')
+    expect(listUrl).toContain('employment_type=Contract')
+    expect(listUrl).toContain('work_mode=Remote')
+    expect(listUrl).toContain('job_confidence=high')
+    expect(listUrl).toContain('extension_likely=yes')
 
     const track = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'Track Application')
     await act(async () => {
@@ -131,6 +140,37 @@ describe('OpportunitiesTab application entry point', () => {
     expect(firstPayload.dedupe_key).toEqual(expect.any(String))
     expect(firstPayload.dedupe_key).toBe(secondPayload.dedupe_key)
     expect(onToast).toHaveBeenCalledWith('Application tracking started')
+  })
+
+  it('tracks in one click when the opportunity already records its resume', async () => {
+    const linkedOpportunity = { ...opportunity, resume_asset_id: 7, resume_file_name: 'java-backend.pdf' }
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.includes('/recruiter-opportunities?')) return jsonResponse({ items: [linkedOpportunity], next_cursor: null, has_next: false })
+      if (url.endsWith('/settings/resumes')) return jsonResponse([{ id: 7, file_name: 'java-backend.pdf', version: 2, is_enabled: true, is_current: true }])
+      if (url.endsWith('/applications') && init?.method === 'POST') return jsonResponse({ id: 41 }, 201)
+      return jsonResponse({ detail: 'not found' }, 404)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+      vi.unstubAllGlobals()
+    })
+    await act(async () => {
+      root.render(<OpportunitiesTab apiBase="http://localhost:8000" mailDate={null} refreshToken={0} highlightedId={null} applicationsEnabled onToast={vi.fn()} />)
+    })
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 300)) })
+    const track = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'Track Application')
+    await act(async () => { track?.click(); await new Promise((resolve) => window.setTimeout(resolve, 50)) })
+    const createCall = fetchMock.mock.calls.find(([url, init]) => String(url).endsWith('/applications') && init?.method === 'POST')
+    const payload = JSON.parse(String(createCall?.[1]?.body)) as Record<string, unknown>
+    expect(payload.resume_asset_id).toBeUndefined()
+    expect(payload.recruiter_opportunity_id).toBe(9)
+    expect(container.textContent).not.toContain('Confirm & Track')
   })
 
   it('edits job-quality and risk fields in the existing opportunity card', async () => {

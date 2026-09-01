@@ -84,12 +84,15 @@ from app.models import (
     AppTSApplicationSkillGapSnapshot,
     AttachmentAsset,
     BulkActionIdempotencyKey,
+    CandidateRecord,
     CanonicalEntityTaxonomyEntry,
     CustomSkillTaxonomyEntry,
     DraftEditFeedback,
     GmailRequirementGroup,
     JobIntentTaxonomyEntry,
     NumberReviewQueue,
+    OpportunityLifecycleEvent,
+    OpportunityLineage,
     PremiumNumberContact,
     PremiumContactEmail,
     PremiumContactPhone,
@@ -191,8 +194,10 @@ from app.services import (
     appts_service,
     resume_tracking_service,
     email_lookup_service,
+    filter_options_service,
     opportunity_lineage_service,
     policy_service,
+    recruiter_identity_service,
     role_similarity_service,
 )
 from app.services.auto_runner_service import AutoRunnerService
@@ -360,12 +365,14 @@ from app.schemas import (
     SettingsBootstrapResponse,
     SettingsRequest,
     SettingsResponse,
+    VisibleFiltersRequest,
     UnknownNumberReviewCardListResponse,
     UnknownNumberReviewCardResponse,
     ProductivityEventCreateRequest,
     ProductivityEventResponse,
     ProductivityBarPoint,
     ProductivityTrendResponse,
+    RecordDetailResponse,
     RecentRunItemListResponse,
     RecentRunItemResponse,
     RecentRunListResponse,
@@ -377,6 +384,7 @@ from app.schemas import (
     TaxonomyMetricsResponse,
     ExternalFeedSyncResponse,
     ExternalScrapeRunResponse,
+    FilterOptionsResponse,
     GmailRequirementGroupBulkCreateRequest,
     GmailRequirementGroupCreateRequest,
     GmailRequirementGroupResponse,
@@ -576,6 +584,7 @@ def _record_productivity_event(
     event_type: str,
     event_source: str,
     entity_id: int | None = None,
+    entity_type: str = "",
     metadata: Mapping[str, object] | None = None,
     occurred_at: datetime | None = None,
 ) -> ProductivityEvent:
@@ -586,6 +595,7 @@ def _record_productivity_event(
         event_type=event_type,
         event_source=event_source,
         entity_id=entity_id,
+        entity_type=entity_type,
         metadata=metadata,
         occurred_at=occurred_at,
     )
@@ -769,6 +779,22 @@ def _json_string_list(value: str | None) -> list[str]:
     return items
 
 
+def _json_string_list_map(value: str | None) -> dict[str, list[str]]:
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return {
+        str(key): [str(item) for item in items if isinstance(item, str)]
+        for key, items in parsed.items()
+        if isinstance(items, list)
+    }
+
+
 def _record_string_list(record: Mapping[str, object] | None, key: str) -> list[str]:
     if not record:
         return []
@@ -925,28 +951,14 @@ def _resolve_recruiter_contact_for_email(
     *,
     create_missing: bool = True,
 ) -> tuple[str | None, PremiumNumberContact | None]:
-    sender_name, sender_email = _parse_sender_contact(email.sender)
-    external = _load_external_opportunity_for_sent_details(db, email) if email.source == "nvoids" else None
-    employer_domains = employer_domains_for_owner(db, email.owner_id)
-
-    def matched(address: str | None, *, employer: bool) -> str | None:
-        cleaned = _clean_optional_text(address)
-        return cleaned if cleaned and (email_domain(cleaned) in employer_domains) == employer else None
-
-    recruiter_email = (
-        _clean_optional_text(external.recruiter_email if external else None)
-        or matched(email.recipient_email, employer=False)
-        or matched(sender_email, employer=False)
-    )
-    normalized = recruiter_email.strip().lower() if recruiter_email else None
+    normalized, sender_name = recruiter_identity_service.stamp_recruiter_email_identity(db, email)
     contact = _load_recruiter_number_for_sent_details(db, email, normalized)
     if contact is None and normalized and create_missing:
-        name_from_sender = sender_name if normalized == (sender_email or "").strip().lower() else None
         result = contact_identity_service.reconcile(
             db,
             owner_id=email.owner_id,
             normalized_email=normalized,
-            name=name_from_sender or "",
+            name=sender_name or "",
             company=(email.company or "").strip() or "Unknown",
             role="recruiter",
             source_email_id=email.id,
@@ -955,7 +967,6 @@ def _resolve_recruiter_contact_for_email(
         contact = result.contact
     if create_missing:
         email.resolved_recruiter_contact_id = contact.id if contact else None
-        email.resolved_recruiter_email = normalized
     return normalized, contact
 
 
@@ -2377,6 +2388,7 @@ def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
         ),
         candidate_work_authorizations=_json_string_list(s.candidate_work_authorizations_json),
         preferred_employment_types=_json_string_list(s.preferred_employment_types_json),
+        visible_filters=_json_string_list_map(s.visible_filters_json),
         preferred_minimum_rate=s.preferred_minimum_rate,
         candidate_total_experience_years=s.candidate_total_experience_years,
         candidate_us_experience_years=s.candidate_us_experience_years,
@@ -2818,6 +2830,8 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
         s.candidate_work_authorizations_json = json.dumps(payload.candidate_work_authorizations or [], separators=(",", ":"))
     if "preferred_employment_types" in provided_fields:
         s.preferred_employment_types_json = json.dumps(payload.preferred_employment_types, separators=(",", ":"))
+    if "visible_filters" in provided_fields:
+        s.visible_filters_json = json.dumps(payload.visible_filters, separators=(",", ":"))
     if "preferred_minimum_rate" in provided_fields:
         s.preferred_minimum_rate = payload.preferred_minimum_rate
     if "candidate_total_experience_years" in provided_fields:
@@ -2846,6 +2860,18 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
         payload.policy if payload.policy is not None else policy_service.read_policy_from_settings(s.policy_json)
     )
     s.policy_json = json.dumps(normalized_policy, separators=(",", ":"))
+    db.commit()
+    db.refresh(s)
+    return _settings_response_from_model(s)
+
+
+@app.put("/settings/visible-filters", response_model=SettingsResponse)
+def update_visible_filters(
+    payload: VisibleFiltersRequest,
+    db: Session = Depends(get_db),
+) -> SettingsResponse:
+    s = _get_settings(db)
+    s.visible_filters_json = json.dumps(payload.visible_filters, separators=(",", ":"))
     db.commit()
     db.refresh(s)
     return _settings_response_from_model(s)
@@ -3094,15 +3120,16 @@ def delete_resume(resume_id: int, db: Session = Depends(get_db)) -> dict[str, ob
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found")
 
-    active_application = (
-        db.query(Application.id)
+    active_application = any(
+        db.query(model.id)
         .filter(
-            Application.owner_id == settings.owner_id,
-            Application.resume_asset_id == resume_id,
-            Application.deleted_at.is_(None),
-            Application.status.not_in(APPLICATION_CLOSED_STATUS_VALUES),
+            model.owner_id == settings.owner_id,
+            model.resume_asset_id == resume_id,
+            model.deleted_at.is_(None),
+            model.status.not_in(APPLICATION_CLOSED_STATUS_VALUES),
         )
         .first()
+        for model in (Application, AppTSApplication)
     )
     if active_application:
         raise HTTPException(
@@ -3733,6 +3760,7 @@ def create_view_event(payload: ProductivityEventCreateRequest, db: Session = Dep
             event_type=payload.event_type,
             event_source=event_source,
             entity_id=payload.entity_id,
+            entity_type=payload.entity_type,
             metadata=payload.metadata,
         )
     except OperationalError as exc:
@@ -3746,6 +3774,7 @@ def create_view_event(payload: ProductivityEventCreateRequest, db: Session = Dep
             event_type=payload.event_type,
             event_source=event_source,
             entity_id=payload.entity_id,
+            entity_type=payload.entity_type,
             weight=EVENT_WEIGHTS.get(payload.event_type, 0.0),
             metadata=payload.metadata,
             occurred_at=now,
@@ -4359,6 +4388,13 @@ def _require_resume_tracking_enabled(db: Session) -> UserSettings:
     return user_settings
 
 
+def _require_applications_enabled(db: Session) -> UserSettings:
+    user_settings = _get_settings(db)
+    if not user_settings.feature_applications_enabled:
+        raise HTTPException(status_code=403, detail="Application tracking is disabled")
+    return user_settings
+
+
 def _skill_gap_response(row: ApplicationSkillGapSnapshot) -> ApplicationSkillGapResponse:
     return ApplicationSkillGapResponse(
         source=row.source,
@@ -4473,7 +4509,11 @@ def _application_response(
     return ApplicationResponse.model_validate(row).model_copy(
         update={
             "resume_skills_snapshot": resume_skills_snapshot if isinstance(resume_skills_snapshot, list) else [],
-            "record_id": source_email.record_id if source_email else (opportunity.record_id if opportunity else None),
+            "record_id": opportunity_lineage_service.record_id_for_application(
+                db,
+                owner_id=settings.owner_id,
+                application=row,
+            ),
             "current_recruiter_name": recruiter.recruiter_name if recruiter else "",
             "current_recruiter_company": recruiter.company if recruiter else "",
             "current_recruiter_phone_display": recruiter.display_phone_number if recruiter else "",
@@ -4669,9 +4709,47 @@ def ingest_email(payload: IngestEmailRequest, db: Session = Depends(get_db)) -> 
             event_type="needs_review_marked",
             event_source="state",
             entity_id=email.id,
+            entity_type="RecruiterEmail",
             metadata={"source": "manual_ingest"},
         )
     return email
+
+
+@app.get("/filter-options", response_model=FilterOptionsResponse)
+def list_filter_options(
+    bucket: str = Query(..., max_length=60),
+    field: str = Query(..., max_length=60),
+    q: str | None = Query(default=None, max_length=filter_options_service.MAX_QUERY_CHARS),
+    limit: int = Query(filter_options_service.DEFAULT_LIMIT, ge=1, le=filter_options_service.MAX_LIMIT),
+    db: Session = Depends(get_db),
+) -> FilterOptionsResponse:
+    if field not in filter_options_service.FILTER_OPTION_COLUMNS.get(bucket, {}):
+        raise HTTPException(status_code=404, detail="Unknown filter option field")
+    return FilterOptionsResponse(
+        bucket=bucket,
+        field=field,
+        values=filter_options_service.distinct_values(
+            db,
+            settings.owner_id,
+            bucket,
+            field,
+            q=q,
+            limit=limit,
+        ),
+    )
+
+
+def _text_search_active(*values: str | None) -> bool:
+    """True when the caller typed a free-text/picker filter.
+
+    Only text filters widen the date scope. Structural toggles (source,
+    sendability, has_resume, score ranges) refine whatever is on screen and
+    leave the day's scope alone; a text search is a request to find something
+    wherever it lives. Keep this list in step with the `text`/`combobox` fields
+    in dashboard/src/filterSortRegistry.ts - the frontend decides whether to
+    show "searching all dates" from the same set.
+    """
+    return any(value and value.strip() for value in values)
 
 
 @app.get("/candidates", response_model=CandidateListResponse)
@@ -4690,6 +4768,7 @@ def list_candidates(
     min_ats_score: float | None = Query(default=None, ge=0, le=100),
     max_ats_score: float | None = Query(default=None, ge=0, le=100),
     role: str | None = Query(default=None, max_length=200),
+    interview_type: str | None = Query(default=None, max_length=255),
     subject: str | None = Query(default=None, max_length=500),
     location: str | None = Query(default=None, max_length=200),
     sender: str | None = Query(default=None, max_length=255),
@@ -4708,6 +4787,15 @@ def list_candidates(
     query = db.query(RecruiterEmail).filter(RecruiterEmail.owner_id == settings.owner_id)
     if states:
         query = query.filter(or_(*[RecruiterEmail.state == s for s in states]))
+
+    # A text search is "find this wherever it is", so it overrides the implicit
+    # one-day `mail_date` scope: typing java must reach every matching role, not
+    # only today's. An explicit `date_filter` from the filter bar is a deliberate
+    # choice and still wins. This also keeps /filter-options honest - the picker
+    # offers values from the whole bucket, so the list has to search the whole
+    # bucket or a suggestion can come back with zero rows.
+    if _text_search_active(role, subject, location, sender, company, reason, interview_type):
+        mail_date = None
 
     if date_filter:
         start, end = _date_range_utc_window(date_filter, date_from, date_to)
@@ -4751,7 +4839,7 @@ def list_candidates(
         query = query.filter(RecruiterEmail.ats_score >= min_ats_score)
     if max_ats_score is not None:
         query = query.filter(RecruiterEmail.ats_score <= max_ats_score)
-    for value, column in ((role, RecruiterEmail.role), (subject, RecruiterEmail.subject), (location, RecruiterEmail.location), (sender, RecruiterEmail.sender)):
+    for value, column in ((role, RecruiterEmail.role), (interview_type, RecruiterEmail.interview_type), (subject, RecruiterEmail.subject), (location, RecruiterEmail.location), (sender, RecruiterEmail.sender)):
         if value and value.strip():
             query = query.filter(column.ilike(f"%{value.strip()}%"))
     if routing_status:
@@ -4926,11 +5014,11 @@ def list_premium_number_inventory(
     if sort not in {"newest", "oldest", "highest_score", "lowest_score"}: raise HTTPException(status_code=422, detail="Invalid sort. Must be one of: newest, oldest, highest_score, lowest_score")
     if min_score is not None and max_score is not None and min_score > max_score: raise HTTPException(status_code=422, detail="min_score must be <= max_score")
     owner = settings.owner_id
-    review = sa.select(NumberReviewQueue.id.label("id"), sa.literal("review").label("kind"), NumberReviewQueue.display_phone_number.label("number"), NumberReviewQueue.owner_name.label("owner"), NumberReviewQueue.company.label("company"), (NumberReviewQueue.role == "recruiter").label("is_recruiter"), (NumberReviewQueue.role == "employer").label("is_employer"), sa.literal("Pending").label("status"), NumberReviewQueue.recruiter_relevance_score.label("score"), sa.case((NumberReviewQueue.source_external_opportunity_id.is_not(None), "nvoids"), else_="gmail").label("source_type"), NumberReviewQueue.updated_at.label("last_checked_at")).where(NumberReviewQueue.owner_id == owner, NumberReviewQueue.state == "pending")
+    review = sa.select(NumberReviewQueue.id.label("id"), sa.literal("review").label("kind"), NumberReviewQueue.display_phone_number.label("number"), NumberReviewQueue.normalized_phone_number.label("normalized_number"), NumberReviewQueue.owner_name.label("owner"), NumberReviewQueue.company.label("company"), (NumberReviewQueue.role == "recruiter").label("is_recruiter"), (NumberReviewQueue.role == "employer").label("is_employer"), sa.literal("Pending").label("status"), NumberReviewQueue.recruiter_relevance_score.label("score"), sa.case((NumberReviewQueue.source_external_opportunity_id.is_not(None), "nvoids"), else_="gmail").label("source_type"), NumberReviewQueue.updated_at.label("last_checked_at")).where(NumberReviewQueue.owner_id == owner, NumberReviewQueue.state == "pending")
     active_score = sa.func.coalesce(sa.select(PremiumNumberLead.recruiter_relevance_score).where(PremiumNumberLead.id == PremiumNumberContact.active_recruiter_lead_id).scalar_subquery(), sa.select(PremiumNumberLead.recruiter_relevance_score).where(PremiumNumberLead.id == PremiumNumberContact.active_employer_lead_id).scalar_subquery())
     flagged = _contact_is_flagged_expr()
     contact_status = sa.case((PremiumNumberContact.normalized_phone_number.is_(None), "Unscored"), (flagged, "Flagged"), else_="Active")
-    contact = sa.select(PremiumNumberContact.id.label("id"), sa.literal("contact").label("kind"), PremiumNumberContact.display_phone_number.label("number"), sa.func.coalesce(sa.case((PremiumNumberContact.is_recruiter, PremiumNumberContact.recruiter_name)), sa.case((PremiumNumberContact.is_employer, PremiumNumberContact.owner_name))).label("owner"), PremiumNumberContact.company.label("company"), PremiumNumberContact.is_recruiter.label("is_recruiter"), PremiumNumberContact.is_employer.label("is_employer"), contact_status.label("status"), active_score.label("score"), PremiumNumberContact.source_type.label("source_type"), PremiumNumberContact.updated_at.label("last_checked_at")).where(PremiumNumberContact.owner_id == owner, PremiumNumberContact.deleted_at.is_(None))
+    contact = sa.select(PremiumNumberContact.id.label("id"), sa.literal("contact").label("kind"), PremiumNumberContact.display_phone_number.label("number"), PremiumNumberContact.normalized_phone_number.label("normalized_number"), sa.func.coalesce(sa.case((PremiumNumberContact.is_recruiter, PremiumNumberContact.recruiter_name)), sa.case((PremiumNumberContact.is_employer, PremiumNumberContact.owner_name))).label("owner"), PremiumNumberContact.company.label("company"), PremiumNumberContact.is_recruiter.label("is_recruiter"), PremiumNumberContact.is_employer.label("is_employer"), contact_status.label("status"), active_score.label("score"), PremiumNumberContact.source_type.label("source_type"), PremiumNumberContact.updated_at.label("last_checked_at")).where(PremiumNumberContact.owner_id == owner, PremiumNumberContact.deleted_at.is_(None))
     if domain and domain.strip(): contact = contact.where(or_(PremiumNumberContact.recruiter_email_domain.ilike(f"%{domain.strip()}%"), PremiumNumberContact.employer_email_domain.ilike(f"%{domain.strip()}%"), PremiumNumberContact.id.in_(db.query(PremiumContactEmail.premium_contact_id).filter(PremiumContactEmail.domain.ilike(f"%{domain.strip()}%")))))
     if favorite == "favorites_only": contact = contact.where(PremiumNumberContact.is_favorite.is_(True)); review = review.where(sa.false())
     elif favorite == "non_favorites_only": contact = contact.where(PremiumNumberContact.is_favorite.is_(False)); review = review.where(sa.false())
@@ -4941,7 +5029,12 @@ def list_premium_number_inventory(
     unified = sa.union_all(review, contact).subquery()
     query = sa.select(unified)
     if q and q.strip():
-        like=f"%{q.strip()}%"; alternate_ids = db.query(PremiumContactEmail.premium_contact_id).filter(PremiumContactEmail.normalized_email.ilike(like)).union(db.query(PremiumContactPhone.premium_contact_id).filter(PremiumContactPhone.normalized_phone_number.ilike(like))); query=query.where(sa.or_(unified.c.number.ilike(like),unified.c.owner.ilike(like),unified.c.company.ilike(like), sa.and_(unified.c.kind == "contact", unified.c.id.in_(alternate_ids))))
+        like=f"%{q.strip()}%"; digits_only=re.sub(r"\D","",q)
+        alternate_phone_ilike = PremiumContactPhone.normalized_phone_number.ilike(f"%{digits_only}%") if digits_only else PremiumContactPhone.normalized_phone_number.ilike(like)
+        alternate_ids = db.query(PremiumContactEmail.premium_contact_id).filter(PremiumContactEmail.normalized_email.ilike(like)).union(db.query(PremiumContactPhone.premium_contact_id).filter(alternate_phone_ilike))
+        clauses=[unified.c.number.ilike(like),unified.c.owner.ilike(like),unified.c.company.ilike(like), sa.and_(unified.c.kind == "contact", unified.c.id.in_(alternate_ids))]
+        if digits_only: clauses.append(unified.c.normalized_number.ilike(f"%{digits_only}%"))
+        query=query.where(sa.or_(*clauses))
     if status:
         values=[value.strip().capitalize() for value in status.split(",") if value.strip()]
         if values: query=query.where(unified.c.status.in_(values))
@@ -5181,6 +5274,7 @@ def create_premium_contact(
         event_type="premium_contact_created",
         event_source="chat_assistant",
         entity_id=contact.id,
+        entity_type="PremiumNumberContact",
         metadata={"role": payload.role, "created": created},
     )
     return {
@@ -5564,6 +5658,7 @@ def _ensure_review_opportunity(
         work_mode=external.work_mode if external else "",
         visa_restrictions=external.visa_hints if external else "",
         resume_file_name=(email.resume_file_name if email else "") or "",
+        resume_asset_id=email.resume_asset_id if email else None,
         implementation_partner=(email.implementation_partner if email else "") or "",
         prime_vendor="",
         domain=(email.domain if email else "") or "",
@@ -7112,15 +7207,26 @@ def list_recruiter_opportunities(
     job_title: str | None = Query(default=None, max_length=255),
     end_client: str | None = Query(default=None, max_length=255),
     location: str | None = Query(default=None, max_length=255),
+    employment_type: str | None = Query(default=None, max_length=40),
+    work_mode: str | None = Query(default=None, max_length=80),
+    job_confidence: str | None = Query(default=None, max_length=20),
+    extension_likely: str | None = Query(default=None, max_length=20),
     sort: str = Query("newest"),
     db: Session = Depends(get_db),
 ) -> RecruiterOpportunityListResponse:
     if sort not in {"newest", "oldest"}: raise HTTPException(status_code=422, detail="Invalid sort. Must be one of: newest, oldest")
     query = db.query(RecruiterOpportunity).outerjoin(PremiumNumberContact, PremiumNumberContact.id == RecruiterOpportunity.recruiter_number_id).filter(RecruiterOpportunity.owner_id == settings.owner_id)
-    if status and status in OPPORTUNITY_STATUS_VALUES:
-        query = query.filter(RecruiterOpportunity.status == status)
+    if status:
+        status_values = [value.strip() for value in status.split(",") if value.strip() in OPPORTUNITY_STATUS_VALUES]
+        if status_values:
+            query = query.filter(RecruiterOpportunity.status.in_(status_values))
     if source_type in {"gmail", "nvoids"}:
         query = query.filter(RecruiterOpportunity.source_type == source_type)
+    # Same rule as list_candidates: a text search spans every date, an explicit
+    # date_filter still wins. See _text_search_active.
+    if _text_search_active(q, job_title, end_client, location, employment_type, work_mode, job_confidence, extension_likely):
+        mail_date = None
+
     if date_filter:
         start, end = _date_range_utc_window(date_filter, date_from, date_to)
         query = query.filter(RecruiterOpportunity.received_at >= start, RecruiterOpportunity.received_at < end)
@@ -7130,8 +7236,19 @@ def list_recruiter_opportunities(
         query = query.filter(RecruiterOpportunity.received_at.is_not(None))
         query = query.filter(RecruiterOpportunity.received_at >= start, RecruiterOpportunity.received_at < end)
     if q and q.strip():
-        needle=f"%{q.strip()}%"; query=query.filter(or_(RecruiterOpportunity.email_subject.ilike(needle),RecruiterOpportunity.email_sender.ilike(needle),RecruiterOpportunity.job_title.ilike(needle),RecruiterOpportunity.end_client.ilike(needle),RecruiterOpportunity.location.ilike(needle),RecruiterOpportunity.extracted_skills.ilike(needle),PremiumNumberContact.recruiter_name.ilike(needle),PremiumNumberContact.recruiter_email.ilike(needle),PremiumNumberContact.display_phone_number.ilike(needle)))
-    for value,column in ((job_title,RecruiterOpportunity.job_title),(end_client,RecruiterOpportunity.end_client),(location,RecruiterOpportunity.location)):
+        needle=f"%{q.strip()}%"; digits_only=re.sub(r"\D","",q)
+        clauses=[RecruiterOpportunity.email_subject.ilike(needle),RecruiterOpportunity.email_sender.ilike(needle),RecruiterOpportunity.job_title.ilike(needle),RecruiterOpportunity.end_client.ilike(needle),RecruiterOpportunity.location.ilike(needle),RecruiterOpportunity.extracted_skills.ilike(needle),PremiumNumberContact.recruiter_name.ilike(needle),PremiumNumberContact.recruiter_email.ilike(needle),PremiumNumberContact.display_phone_number.ilike(needle)]
+        if digits_only: clauses.append(PremiumNumberContact.normalized_phone_number.ilike(f"%{digits_only}%"))
+        query=query.filter(or_(*clauses))
+    for value,column in (
+        (job_title,RecruiterOpportunity.job_title),
+        (end_client,RecruiterOpportunity.end_client),
+        (location,RecruiterOpportunity.location),
+        (employment_type,RecruiterOpportunity.employment_type),
+        (work_mode,RecruiterOpportunity.work_mode),
+        (job_confidence,RecruiterOpportunity.job_confidence),
+        (extension_likely,RecruiterOpportunity.extension_likely),
+    ):
         if value and value.strip(): query=query.filter(column.ilike(f"%{value.strip()}%"))
     # Mirrors is_hidden_nvoids_placeholder_recruiter - kept in the query (not just the
     # items list below) so `total` and the paginated rows agree; otherwise a page can
@@ -7316,6 +7433,179 @@ def retry_recent_run_skipped_items(
     if not message_ids:
         raise HTTPException(status_code=400, detail="Selected items have no Gmail message id to retry")
     return _enqueue_retry_selected_skipped_items(db, message_ids)
+
+
+@app.get("/records/{record_id}", response_model=RecordDetailResponse)
+def get_record_detail(record_id: str, db: Session = Depends(get_db)) -> RecordDetailResponse:
+    record = opportunity_lineage_service.get_record(
+        db,
+        owner_id=settings.owner_id,
+        record_id=record_id,
+    )
+    if record is None:
+        raise HTTPException(status_code=404, detail="Record not found")
+
+    emails = (
+        db.query(RecruiterEmail)
+        .filter(RecruiterEmail.owner_id == settings.owner_id, RecruiterEmail.record_id == record.id)
+        .order_by(RecruiterEmail.created_at.asc(), RecruiterEmail.id.asc())
+        .all()
+    )
+    external = (
+        db.query(ExternalOpportunity)
+        .filter(ExternalOpportunity.owner_id == settings.owner_id, ExternalOpportunity.record_id == record.id)
+        .order_by(ExternalOpportunity.created_at.asc(), ExternalOpportunity.id.asc())
+        .first()
+    )
+    source_email = emails[0] if emails else None
+    if record.origin_type == "nvoids" and external is not None:
+        source = {
+            "type": "nvoids",
+            "external_opportunity_id": external.id,
+            "state": external.bridge_status,
+            "subject": external.role,
+            "sender": external.recruiter_email or external.recruiter_name,
+        }
+    else:
+        source = {
+            "type": "gmail",
+            "recruiter_email_id": source_email.id if source_email else None,
+            "state": source_email.state if source_email else None,
+            "subject": source_email.subject if source_email else "",
+            "sender": source_email.sender if source_email else "",
+        }
+
+    lineage = (
+        db.query(OpportunityLineage)
+        .filter(
+            OpportunityLineage.owner_id == settings.owner_id,
+            OpportunityLineage.id == record.internal_lineage_id,
+        )
+        .first()
+        if record.internal_lineage_id
+        else None
+    )
+    event_query = db.query(OpportunityLifecycleEvent).filter(
+        OpportunityLifecycleEvent.owner_id == settings.owner_id,
+        OpportunityLifecycleEvent.lineage_id == lineage.id,
+    ) if lineage else None
+    events = (
+        event_query.order_by(
+            OpportunityLifecycleEvent.occurred_at.desc(),
+            OpportunityLifecycleEvent.id.desc(),
+        ).limit(50).all()
+        if event_query is not None
+        else []
+    )
+    event_count = event_query.count() if event_query is not None else 0
+
+    opportunity = (
+        db.query(RecruiterOpportunity)
+        .filter(
+            RecruiterOpportunity.owner_id == settings.owner_id,
+            RecruiterOpportunity.record_id == record.id,
+        )
+        .order_by(RecruiterOpportunity.created_at.asc(), RecruiterOpportunity.id.asc())
+        .first()
+    )
+    recruiter = (
+        db.query(PremiumNumberContact)
+        .filter(
+            PremiumNumberContact.owner_id == settings.owner_id,
+            PremiumNumberContact.id == opportunity.recruiter_number_id,
+            PremiumNumberContact.deleted_at.is_(None),
+        )
+        .first()
+        if opportunity is not None
+        else None
+    )
+    user_settings = _get_settings(db)
+    applications_enabled = bool(user_settings.feature_applications_enabled)
+    resume_tracking_enabled = bool(user_settings.feature_resume_tracking_enabled)
+    appts_rows = (
+        opportunity_lineage_service.applications_for_record(
+            db,
+            owner_id=settings.owner_id,
+            record_id=record.id,
+            model=AppTSApplication,
+        )
+        if applications_enabled
+        else []
+    )
+    legacy_rows = (
+        [
+            row
+            for row in opportunity_lineage_service.applications_for_record(
+                db,
+                owner_id=settings.owner_id,
+                record_id=record.id,
+                model=Application,
+            )
+            if row.promoted_to_appts_application_id is None
+        ]
+        if resume_tracking_enabled
+        else []
+    )
+    return RecordDetailResponse(
+        record_id=record.id,
+        origin_type=record.origin_type,
+        created_at=record.created_at,
+        source=source,
+        lineage=(
+            {
+                "lineage_id": lineage.id,
+                "current_status": lineage.current_status,
+                "closed_at": lineage.closed_at,
+                "event_count": event_count,
+            }
+            if lineage
+            else None
+        ),
+        recruiter_opportunity=(
+            _recruiter_opportunity_response(opportunity, recruiter, record.id)
+            if opportunity
+            else None
+        ),
+        applications_enabled=applications_enabled,
+        resume_tracking_enabled=resume_tracking_enabled,
+        applications=[
+            _application_response(db, row, include_events=True, models=appts_service.APPTS_MODELS)
+            for row in appts_rows
+        ],
+        legacy_applications=[
+            _application_response(db, row, include_events=True)
+            for row in legacy_rows
+        ],
+        emails=[
+            {
+                "recruiter_email_id": email.id,
+                "recipient_email": email.recipient_email,
+                "cc_email": email.cc_email,
+                "sent_status": email.sent_status,
+                "sent_at": email.sent_at,
+            }
+            for email in emails
+        ],
+        outcomes=opportunity_lineage_service.record_outcomes(
+            db,
+            owner_id=settings.owner_id,
+            record_id=record.id,
+        ),
+        lifecycle_events=[
+            {
+                "id": event.id,
+                "event_type": event.event_type,
+                "occurred_at": event.occurred_at,
+                "actor": event.actor,
+                "process_name": event.process_name,
+                "related_record_type": event.related_record_type,
+                "related_record_id": event.related_record_id,
+                "note": event.note,
+                "metadata": _json_object(event.metadata_json),
+            }
+            for event in events
+        ],
+    )
 
 
 @app.patch("/recruiter-opportunities/{opportunity_id}", response_model=RecruiterOpportunityResponse)
@@ -7661,10 +7951,12 @@ def list_appts_bookmarked_requirements(
     min_ats_score: float | None = Query(default=None, ge=0, le=100),
     max_ats_score: float | None = Query(default=None, ge=0, le=100),
     role: str | None = Query(default=None, max_length=200),
+    interview_type: str | None = Query(default=None, max_length=255),
     location: str | None = Query(default=None, max_length=200),
     sender: str | None = Query(default=None, max_length=255),
     db: Session = Depends(get_db),
 ) -> CandidateListResponse:
+    _require_applications_enabled(db)
     valid_sorts = {"newest", "oldest", "highest_score", "lowest_score"}
     if sort not in valid_sorts:
         raise HTTPException(status_code=422, detail=f"Invalid sort. Must be one of: {', '.join(sorted(valid_sorts))}")
@@ -7693,7 +7985,7 @@ def list_appts_bookmarked_requirements(
         query = query.filter(RecruiterEmail.ats_score >= min_ats_score)
     if max_ats_score is not None:
         query = query.filter(RecruiterEmail.ats_score <= max_ats_score)
-    for value, column in ((role, RecruiterEmail.role), (location, RecruiterEmail.location), (sender, RecruiterEmail.sender)):
+    for value, column in ((role, RecruiterEmail.role), (interview_type, RecruiterEmail.interview_type), (location, RecruiterEmail.location), (sender, RecruiterEmail.sender)):
         if value and value.strip():
             query = query.filter(column.ilike(f"%{value.strip()}%"))
 
@@ -7714,6 +8006,7 @@ def list_appts_bookmarked_requirements(
 
 @app.post("/appts/applications/manual", response_model=ApplicationResponse, status_code=201)
 def create_appts_manual(payload: ManualApplicationCreateRequest, response: Response, db: Session = Depends(get_db)) -> ApplicationResponse:
+    _require_applications_enabled(db)
     try:
         row, created = appts_service.create_tracked_application_manual(db, owner_id=settings.owner_id, **payload.model_dump())
     except application_service.ApplicationReferenceNotFoundError as exc:
@@ -7728,6 +8021,7 @@ def create_appts_manual(payload: ManualApplicationCreateRequest, response: Respo
 
 @app.post("/appts/applications", response_model=ApplicationResponse, status_code=201)
 def create_appts_from_opportunity(payload: ApplicationCreateRequest, response: Response, db: Session = Depends(get_db)) -> ApplicationResponse:
+    _require_applications_enabled(db)
     try:
         row, created = appts_service.create_tracked_application_from_opportunity(db, owner_id=settings.owner_id, **payload.model_dump())
     except application_service.ApplicationReferenceNotFoundError as exc:
@@ -7740,6 +8034,7 @@ def create_appts_from_opportunity(payload: ApplicationCreateRequest, response: R
 
 @app.post("/appts/applications/from-submission/{legacy_application_id}", response_model=ApplicationResponse, status_code=201)
 def promote_submission_to_appts(legacy_application_id: int, response: Response, db: Session = Depends(get_db)) -> ApplicationResponse:
+    _require_applications_enabled(db)
     row, created = appts_service.promote_legacy_application(db, _get_application(db, legacy_application_id), owner_id=settings.owner_id)
     db.commit(); db.refresh(row)
     if created: appts_service.enqueue_embedding_generation(row.id)
@@ -7751,8 +8046,13 @@ def promote_submission_to_appts(legacy_application_id: int, response: Response, 
 def list_appts_applications(
     cursor: int = Query(0, ge=0), limit: int = Query(25, ge=1, le=100), status: str | None = Query(default=None),
     q: str | None = Query(default=None), sort: str = Query("newest"), date_filter: str | None = Query(default=None),
-    date_from: date | None = Query(default=None), date_to: date | None = Query(default=None), db: Session = Depends(get_db),
+    date_from: date | None = Query(default=None), date_to: date | None = Query(default=None),
+    company: str | None = Query(default=None, max_length=255), recruiter: str | None = Query(default=None, max_length=255),
+    end_client: str | None = Query(default=None, max_length=255), role: str | None = Query(default=None, max_length=255),
+    has_premium_contact: bool | None = Query(default=None), tracked: bool | None = Query(default=None),
+    db: Session = Depends(get_db),
 ) -> ApplicationListResponse:
+    _require_applications_enabled(db)
     if sort not in {"newest", "oldest", "next_action"}: raise HTTPException(status_code=422, detail="Invalid sort")
     query = db.query(AppTSApplication).filter(AppTSApplication.owner_id == settings.owner_id, AppTSApplication.deleted_at.is_(None))
     if status:
@@ -7760,6 +8060,14 @@ def list_appts_applications(
         query = query.filter(AppTSApplication.status == status)
     if q and q.strip():
         like = f"%{q.strip()}%"; query = query.filter(or_(AppTSApplication.recruiter_name_snapshot.ilike(like), AppTSApplication.recruiter_company_snapshot.ilike(like), AppTSApplication.job_title_snapshot.ilike(like), AppTSApplication.end_client_snapshot.ilike(like), AppTSApplication.manual_recruiter_email.ilike(like)))
+    if company and company.strip():
+        like = f"%{company.strip()}%"; query = query.filter(or_(AppTSApplication.recruiter_company_snapshot.ilike(like), AppTSApplication.end_client_snapshot.ilike(like)))
+    if recruiter and recruiter.strip():
+        like = f"%{recruiter.strip()}%"; query = query.filter(or_(AppTSApplication.recruiter_name_snapshot.ilike(like), AppTSApplication.manual_recruiter_email.ilike(like)))
+    if end_client and end_client.strip(): query = query.filter(AppTSApplication.end_client_snapshot.ilike(f"%{end_client.strip()}%"))
+    if role and role.strip(): query = query.filter(AppTSApplication.job_title_snapshot.ilike(f"%{role.strip()}%"))
+    if has_premium_contact is not None: query = query.filter(AppTSApplication.recruiter_contact_id.is_not(None) if has_premium_contact else AppTSApplication.recruiter_contact_id.is_(None))
+    if tracked is not None: query = query.filter(AppTSApplication.recruiter_opportunity_id.is_not(None) if tracked else AppTSApplication.recruiter_opportunity_id.is_(None))
     if date_filter:
         start, end = _date_range_utc_window(date_filter, date_from, date_to); query = query.filter(AppTSApplication.created_at >= start, AppTSApplication.created_at < end)
     total = query.count()
@@ -7770,11 +8078,13 @@ def list_appts_applications(
 
 @app.get("/appts/applications/{application_id}", response_model=ApplicationResponse)
 def get_appts_application(application_id: int, db: Session = Depends(get_db)) -> ApplicationResponse:
+    _require_applications_enabled(db)
     return _application_response(db, _get_appts_application(db, application_id), include_events=True, models=appts_service.APPTS_MODELS)
 
 
 @app.get("/appts/applications/{application_id}/sent-details", response_model=SentItemDetailsResponse)
 def get_appts_application_sent_details(application_id: int, db: Session = Depends(get_db)) -> SentItemDetailsResponse:
+    _require_applications_enabled(db)
     row = _get_appts_application(db, application_id)
     if not row.source_recruiter_email_id:
         raise HTTPException(status_code=404, detail="This application has no linked sourcing details")
@@ -7784,6 +8094,7 @@ def get_appts_application_sent_details(application_id: int, db: Session = Depend
 
 @app.patch("/appts/applications/{application_id}", response_model=ApplicationResponse)
 def patch_appts_application(application_id: int, payload: ApplicationPatchRequest, db: Session = Depends(get_db)) -> ApplicationResponse:
+    _require_applications_enabled(db)
     row = _get_appts_application(db, application_id)
     if payload.status: application_service.update_status(db, row, new_status=payload.status, closed_reason_code=payload.closed_reason_code, models=appts_service.APPTS_MODELS)
     if payload.next_action_type is not None or payload.next_action_at is not None: application_service.set_next_action(db, row, next_action_type=payload.next_action_type, next_action_at=payload.next_action_at, models=appts_service.APPTS_MODELS)
@@ -7794,18 +8105,21 @@ def patch_appts_application(application_id: int, payload: ApplicationPatchReques
 
 @app.post("/appts/applications/{application_id}/events", response_model=ApplicationEventResponse, status_code=201)
 def create_appts_event(application_id: int, payload: ApplicationEventCreateRequest, db: Session = Depends(get_db)) -> ApplicationEventResponse:
+    _require_applications_enabled(db)
     event = application_service.append_event(db, _get_appts_application(db, application_id), event_type=payload.event_type, note=payload.note, linked_recruiter_email_id=payload.linked_recruiter_email_id, models=appts_service.APPTS_MODELS)
     db.commit(); db.refresh(event); return ApplicationEventResponse.model_validate(event)
 
 
 @app.post("/appts/applications/{application_id}/rtr", response_model=ApplicationResponse, status_code=201)
 def create_appts_rtr(application_id: int, payload: ApplicationRTRRequest, db: Session = Depends(get_db)) -> ApplicationResponse:
+    _require_applications_enabled(db)
     row = _get_appts_application(db, application_id); application_service.request_rtr(db, row, **payload.model_dump(), models=appts_service.APPTS_MODELS); db.commit(); db.refresh(row)
     return _application_response(db, row, include_events=True, models=appts_service.APPTS_MODELS)
 
 
 @app.patch("/appts/applications/{application_id}/rtr/{rtr_id}", response_model=ApplicationResponse)
 def update_appts_rtr(application_id: int, rtr_id: int, payload: ApplicationRTRUpdateRequest, db: Session = Depends(get_db)) -> ApplicationResponse:
+    _require_applications_enabled(db)
     row = _get_appts_application(db, application_id)
     rtr = db.query(appts_service.APPTS_MODELS.rtr_cls).filter_by(owner_id=settings.owner_id, application_id=row.id, id=rtr_id).first()
     if rtr is None:
@@ -7825,6 +8139,7 @@ def update_appts_rtr(application_id: int, rtr_id: int, payload: ApplicationRTRUp
 
 @app.post("/appts/applications/{application_id}/submit-to-client", response_model=ApplicationResponse)
 def submit_appts_to_client(application_id: int, payload: ApplicationSubmitToClientRequest, db: Session = Depends(get_db)) -> ApplicationResponse:
+    _require_applications_enabled(db)
     row = _get_appts_application(db, application_id)
     try: application_service.submit_to_client(db, row, override_duplicate_warning=payload.override_duplicate_warning, models=appts_service.APPTS_MODELS)
     except application_service.ApplicationDuplicateWarning as exc:
@@ -7834,12 +8149,14 @@ def submit_appts_to_client(application_id: int, payload: ApplicationSubmitToClie
 
 @app.post("/appts/applications/{application_id}/interviews", response_model=ApplicationResponse, status_code=201)
 def create_appts_interview(application_id: int, payload: ApplicationInterviewCreateRequest, db: Session = Depends(get_db)) -> ApplicationResponse:
+    _require_applications_enabled(db)
     row = _get_appts_application(db, application_id); application_service.add_interview(db, row, **payload.model_dump(), models=appts_service.APPTS_MODELS); db.commit(); db.refresh(row)
     return _application_response(db, row, include_events=True, models=appts_service.APPTS_MODELS)
 
 
 @app.patch("/appts/applications/{application_id}/interviews/{interview_id}", response_model=ApplicationResponse)
 def patch_appts_interview(application_id: int, interview_id: int, payload: ApplicationInterviewPatchRequest, db: Session = Depends(get_db)) -> ApplicationResponse:
+    _require_applications_enabled(db)
     row = _get_appts_application(db, application_id)
     interview = db.query(appts_service.APPTS_MODELS.interview_cls).filter_by(owner_id=settings.owner_id, application_id=row.id, id=interview_id).first()
     if interview is None:
@@ -7851,6 +8168,7 @@ def patch_appts_interview(application_id: int, interview_id: int, payload: Appli
 
 @app.delete("/appts/applications/{application_id}/interviews/{interview_id}", response_model=ApplicationResponse)
 def delete_appts_interview(application_id: int, interview_id: int, db: Session = Depends(get_db)) -> ApplicationResponse:
+    _require_applications_enabled(db)
     row = _get_appts_application(db, application_id)
     interview = db.query(appts_service.APPTS_MODELS.interview_cls).filter_by(owner_id=settings.owner_id, application_id=row.id, id=interview_id).first()
     if interview is None:
@@ -7919,6 +8237,7 @@ def list_applications(
     opportunity_domain: str | None = Query(default=None, max_length=255),
     implementation_partner: str | None = Query(default=None, max_length=255),
     end_client: str | None = Query(default=None, max_length=255),
+    role: str | None = Query(default=None, max_length=255),
     has_premium_contact: bool | None = Query(default=None),
     tracked: bool | None = Query(default=None),
     sort: str = Query("newest"),
@@ -7963,6 +8282,7 @@ def list_applications(
     if opportunity_domain and opportunity_domain.strip(): query=query.filter(RecruiterOpportunity.domain.ilike(f"%{opportunity_domain.strip()}%"))
     if implementation_partner and implementation_partner.strip(): query=query.filter(RecruiterOpportunity.implementation_partner.ilike(f"%{implementation_partner.strip()}%"))
     if end_client and end_client.strip(): query=query.filter(RecruiterOpportunity.end_client.ilike(f"%{end_client.strip()}%"))
+    if role and role.strip(): query=query.filter(Application.resume_primary_role_snapshot.ilike(f"%{role.strip()}%"))
     if has_premium_contact is not None: query=query.filter(Application.recruiter_contact_id.is_not(None) if has_premium_contact else Application.recruiter_contact_id.is_(None))
     if tracked is not None: query=query.filter(Application.recruiter_opportunity_id.is_not(None) if tracked else Application.recruiter_opportunity_id.is_(None))
     if date_filter:
@@ -8170,7 +8490,12 @@ def run_resume_tracking_sweep_now(db: Session = Depends(get_db)) -> ApplicationS
 def resume_performance_summary_route(sort: str = Query("recent"), db: Session = Depends(get_db)) -> ResumePerformanceSummaryResponse:
     _require_resume_tracking_enabled(db)
     if sort not in {"recent", "acceptance_desc", "acceptance_asc", "submissions_desc"}: raise HTTPException(status_code=422, detail="Invalid sort")
-    items = resume_tracking_service.resume_performance_summary(db, owner_id=settings.owner_id, sort=sort)
+    items = resume_tracking_service.resume_performance_summary(
+        db,
+        owner_id=settings.owner_id,
+        sort=sort,
+        combined=True,
+    )
     return ResumePerformanceSummaryResponse(
         items=[
             ResumePerformanceSummaryItem(
@@ -8197,7 +8522,7 @@ def resume_funnel_route(
     if resume is None:
         raise HTTPException(status_code=404, detail="Resume not found")
     return ResumeFunnelMetricsResponse(
-        **resume_tracking_service.resume_funnel_metrics(
+        **resume_tracking_service.combined_resume_funnel_metrics(
             db,
             owner_id=settings.owner_id,
             resume_asset_id=resume_asset_id,
@@ -8601,6 +8926,9 @@ def get_sent_item_details(email_id: int, db: Session = Depends(get_db)) -> SentI
 def get_inbox_conversations(
     recruiter: str | None = Query(default=None, max_length=255),
     subject: str | None = Query(default=None, max_length=500),
+    role: str | None = Query(default=None, max_length=255),
+    location: str | None = Query(default=None, max_length=255),
+    interview_type: str | None = Query(default=None, max_length=255),
     status: str | None = Query(default=None),
     unread_only: bool | None = Query(default=None),
     sort: str = Query("newest"),
@@ -8610,13 +8938,16 @@ def get_inbox_conversations(
     db: Session = Depends(get_db),
 ) -> list[ConversationSummaryResponse]:
     start, end = _date_range_utc_window(date_filter, date_from, date_to) if date_filter else (None, None)
-    return _get_orchestration_service().list_inbox_conversations(db, recruiter=recruiter, subject=subject, status=status, unread_only=unread_only, sort=sort, date_from=start, date_to=end)
+    return _get_orchestration_service().list_inbox_conversations(db, recruiter=recruiter, subject=subject, role=role, location=location, interview_type=interview_type, status=status, unread_only=unread_only, sort=sort, date_from=start, date_to=end)
 
 
 @app.post("/inbox/conversations/refresh", response_model=list[ConversationSummaryResponse])
 def refresh_inbox_conversations(
     recruiter: str | None = Query(default=None, max_length=255),
     subject: str | None = Query(default=None, max_length=500),
+    role: str | None = Query(default=None, max_length=255),
+    location: str | None = Query(default=None, max_length=255),
+    interview_type: str | None = Query(default=None, max_length=255),
     status: str | None = Query(default=None),
     unread_only: bool | None = Query(default=None),
     sort: str = Query("newest"),
@@ -8626,7 +8957,7 @@ def refresh_inbox_conversations(
     db: Session = Depends(get_db),
 ) -> list[ConversationSummaryResponse]:
     start, end = _date_range_utc_window(date_filter, date_from, date_to) if date_filter else (None, None)
-    return _get_orchestration_service().refresh_inbox_replies(db, recruiter=recruiter, subject=subject, status=status, unread_only=unread_only, sort=sort, date_from=start, date_to=end)
+    return _get_orchestration_service().refresh_inbox_replies(db, recruiter=recruiter, subject=subject, role=role, location=location, interview_type=interview_type, status=status, unread_only=unread_only, sort=sort, date_from=start, date_to=end)
 
 
 @app.get("/inbox/conversations/{conversation_id}", response_model=ConversationDetailResponse)
@@ -8686,6 +9017,7 @@ def send_chat_reply(
         event_type="chat_reply_sent",
         event_source="chat_assistant",
         entity_id=email.id,
+        entity_type="RecruiterEmail",
         metadata={"gmail_message_id": message_id},
     )
     return {"sent": True, "message_id": message_id, "email_id": email.id}
@@ -8720,6 +9052,7 @@ def toggle_candidate_tracking(email_id: int, db: Session = Depends(get_db)) -> E
     if email.state == "needs_review":
         _get_orchestration_service().set_tracking(email_id, not email.marked_for_tracking, db)
     elif email.state == "approved_sent":
+        _require_applications_enabled(db)
         result = appts_service.create_tracked_application_from_email(db, email, owner_id=settings.owner_id)
         db.commit()
         if result and result[1]:
@@ -8747,6 +9080,25 @@ def _regenerate_single_candidate(email_id: int, payload: RegenerateCandidateRequ
     requested = _get_candidate_for_review(db, email_id)
     user_settings = _get_settings(db)
     if user_settings.feature_role_manifest_enabled and not requested.is_multi_role_child:
+        if not payload.allow_role_manifest_fork:
+            manifest_body = prepare_gmail_parse_body(requested.body) if requested.source == "gmail" else requested.body
+            manifest_result = RoleManifestService(max_rung=4).detect(manifest_body)
+            expansion = RequirementExpansionService().expand(
+                db,
+                requested,
+                manifest_result,
+                materialize=False,
+            )
+            if expansion.manifest_status == "multiple":
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "role_manifest_fork_required",
+                        "requirement_count": expansion.requirement_count,
+                    },
+                )
+            _retry_role_detection(requested.id, db, max_rung=4, manifest_result=manifest_result)
+            return _get_candidate_for_review(db, requested.id)
         retry_role_detection(requested.id, db)
         return _get_candidate_for_review(db, requested.id)
     return _get_orchestration_service().regenerate_candidate(email_id, payload, db)
@@ -8757,14 +9109,20 @@ def retry_role_detection(email_id: int, db: Session = Depends(get_db)) -> RoleDe
     return _retry_role_detection(email_id, db, max_rung=4)
 
 
-def _retry_role_detection(email_id: int, db: Session, *, max_rung: int) -> RoleDetectionRetryResponse:
+def _retry_role_detection(
+    email_id: int,
+    db: Session,
+    *,
+    max_rung: int,
+    manifest_result=None,
+) -> RoleDetectionRetryResponse:
     requested = _get_candidate_for_review(db, email_id)
     source = requested
     if requested.source_parent_email_id:
         source = _get_candidate_for_review(db, requested.source_parent_email_id)
     user_settings = _get_settings(db)
     manifest_body = prepare_gmail_parse_body(source.body) if source.source == "gmail" else source.body
-    manifest_result = RoleManifestService(max_rung=max_rung).detect(manifest_body)
+    manifest_result = manifest_result or RoleManifestService(max_rung=max_rung).detect(manifest_body)
     expansion = RequirementExpansionService().expand(
         db,
         source,
@@ -8807,32 +9165,14 @@ def dismiss_failed_candidate(email_id: int, db: Session = Depends(get_db)) -> di
 
 @app.post("/candidates/reject-bulk", response_model=BulkCandidateActionResponse)
 def reject_bulk(payload: BulkRejectRequest, db: Session = Depends(get_db)) -> BulkCandidateActionResponse:
-    rows = (
-        db.query(RecruiterEmail)
-        .filter(RecruiterEmail.owner_id == settings.owner_id)
-        .filter(RecruiterEmail.id.in_(payload.ids))
-        .all()
+    return _run_bulk(
+        payload.ids,
+        lambda candidate_id: _get_orchestration_service().reject_candidate(
+            candidate_id,
+            RejectRequest(reason=payload.reason),
+            db,
+        ),
     )
-    rows_by_id = {row.id: row for row in rows}
-    succeeded_ids: list[int] = []
-    failed: list[dict[str, object]] = []
-    for candidate_id in dict.fromkeys(payload.ids):
-        row = rows_by_id.get(candidate_id)
-        if row is None:
-            failed.append({"id": candidate_id, "error": "Not found"})
-            continue
-        if row.state != "needs_review":
-            failed.append({"id": candidate_id, "error": f"Not in needs_review (state={row.state})"})
-            continue
-        row.state = "rejected"
-        row.decision = "Reject"
-        row.decision_reason = payload.reason or "Bulk rejected by user"
-        row.approval_status = "rejected"
-        row.sent_status = "not_sent"
-        row.marked_for_tracking = False
-        succeeded_ids.append(candidate_id)
-    db.commit()
-    return BulkCandidateActionResponse(succeeded_ids=succeeded_ids, failed=failed)
 
 
 @app.post("/candidates/approve-bulk", response_model=BulkCandidateActionResponse)
@@ -8865,6 +9205,7 @@ def approve_bulk_candidates(payload: BulkApproveRequest, db: Session = Depends(g
                 event_type="approved_sent",
                 event_source="bulk_action",
                 entity_id=candidate_id,
+                entity_type="RecruiterEmail",
                 metadata={},
             )
             succeeded_ids.append(candidate_id)

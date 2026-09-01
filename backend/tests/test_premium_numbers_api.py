@@ -1013,6 +1013,7 @@ class PremiumNumbersApiTests(unittest.TestCase):
                         gmail_open_url="",
                         received_at=datetime.now(UTC),
                         job_title="Java Engineer",
+                        end_client="Bank Alpha",
                         client="Visible Co",
                         location="Texas",
                         work_mode="Remote",
@@ -1021,6 +1022,9 @@ class PremiumNumbersApiTests(unittest.TestCase):
                         evidence="gmail",
                         status="New",
                         notes="",
+                        employment_type="Contract",
+                        extension_likely="yes",
+                        job_confidence="high",
                     ),
                     RecruiterOpportunity(
                         owner_id=main.settings.owner_id,
@@ -1035,14 +1039,18 @@ class PremiumNumbersApiTests(unittest.TestCase):
                         gmail_open_url="",
                         received_at=datetime.now(UTC),
                         job_title="Python Engineer",
+                        end_client="Bank Beta",
                         client="Visible Co",
                         location="Texas",
-                        work_mode="Remote",
+                        work_mode="Onsite",
                         visa_restrictions="",
                         extracted_skills="Python",
                         evidence="nvoids",
                         status="Called",
                         notes="",
+                        employment_type="Full Time",
+                        extension_likely="no",
+                        job_confidence="low",
                     ),
                 ]
             )
@@ -1055,6 +1063,23 @@ class PremiumNumbersApiTests(unittest.TestCase):
         self.assertEqual(payload["items"][0]["job_title"], "Java Engineer")
         self.assertFalse(payload["has_next"])
         self.assertIsNone(payload["next_cursor"])
+
+        for params in (
+            {"employment_type": "Contract"},
+            {"work_mode": "Remote"},
+            {"job_confidence": "high"},
+            {"extension_likely": "yes"},
+        ):
+            filtered = self.client.get("/recruiter-opportunities", params=params)
+            self.assertEqual(filtered.status_code, 200, filtered.text)
+            self.assertEqual([item["job_title"] for item in filtered.json()["items"]], ["Java Engineer"])
+
+        both_statuses = self.client.get("/recruiter-opportunities", params={"status": "New,Called"})
+        self.assertEqual(both_statuses.status_code, 200, both_statuses.text)
+        self.assertEqual({item["status"] for item in both_statuses.json()["items"]}, {"New", "Called"})
+        unknown_status = self.client.get("/recruiter-opportunities", params={"status": "Bogus"})
+        self.assertEqual(unknown_status.status_code, 200, unknown_status.text)
+        self.assertEqual(unknown_status.json()["total"], 2)
 
     def test_delete_recruiter_opportunity_returns_404_for_missing_id(self) -> None:
         response = self.client.delete("/recruiter-opportunities/999999")
@@ -3945,6 +3970,75 @@ class PremiumNumbersApiTests(unittest.TestCase):
                 response = self.client.get(path, params={"q": query})
                 self.assertEqual(response.status_code, 200, response.text)
                 self.assertEqual(len(response.json()["items"]), 1, (query, path))
+
+    def test_full_digit_phone_search_ignores_display_formatting(self) -> None:
+        # Regression test: /premium-numbers/inventory and /recruiter-opportunities used to
+        # match `q` only against display_phone_number (e.g. "(770) 824-0630"), so a plain
+        # digit-only query for the full number never matched - the punctuation broke up the
+        # digit run. Both endpoints now also match a digit-stripped `q` against
+        # normalized_phone_number.
+        with Session(self.engine) as db:
+            contact = PremiumNumberContact(
+                owner_id=main.settings.owner_id,
+                normalized_phone_number="17708240630",
+                display_phone_number="(770) 824-0630",
+                is_recruiter=True,
+                recruiter_name="Prashanth Kinnera",
+                owner_name="Prashanth Kinnera",
+                company="RPA Technology Inc",
+                designation="Recruiter",
+                recruiter_email="kprashanth@rpatechnologyinc.com",
+                recruiter_verification_level="verified",
+            )
+            db.add(contact)
+            db.commit()
+            db.refresh(contact)
+            contact_id = contact.id
+
+            db.add(RecruiterOpportunity(
+                owner_id=main.settings.owner_id,
+                recruiter_number_id=contact_id,
+                gmail_message_id="phone-search-1",
+                source_type="gmail",
+                email_subject="Java Developer opening",
+                email_sender="kprashanth@rpatechnologyinc.com",
+                job_title="Java Developer",
+                end_client="Acme",
+                location="Remote",
+                status="New",
+            ))
+            db.add(NumberReviewQueue(
+                owner_id=main.settings.owner_id,
+                source_email_id=10,
+                normalized_phone_number="14085551212",
+                display_phone_number="(408) 555-1212",
+                state="pending",
+            ))
+            db.commit()
+
+        for query in ("7708240630", "17708240630"):
+            response = self.client.get("/premium-numbers/inventory", params={"q": query})
+            self.assertEqual(response.status_code, 200, response.text)
+            items = response.json()["items"]
+            self.assertEqual(len(items), 1, (query, items))
+            self.assertEqual(items[0]["owner"], "Prashanth Kinnera")
+
+            response = self.client.get("/recruiter-opportunities", params={"q": query})
+            self.assertEqual(response.status_code, 200, response.text)
+            opportunity_items = response.json()["items"]
+            self.assertEqual(len(opportunity_items), 1, (query, opportunity_items))
+            self.assertEqual(opportunity_items[0]["job_title"], "Java Developer")
+
+        # The review-queue branch of the unified inventory list must normalize the same way.
+        response = self.client.get("/premium-numbers/inventory", params={"q": "4085551212"})
+        self.assertEqual(response.status_code, 200, response.text)
+        review_items = response.json()["items"]
+        self.assertEqual(len(review_items), 1, review_items)
+        self.assertEqual(review_items[0]["kind"], "review")
+
+        # Sanity: the previously-working partial substring search must still work.
+        response = self.client.get("/premium-numbers/inventory", params={"q": "770"})
+        self.assertEqual(len(response.json()["items"]), 1)
 
     def test_extraction_audit_is_owner_scoped_and_filterable(self) -> None:
         with Session(self.engine) as db:

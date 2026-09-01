@@ -4217,6 +4217,19 @@ button.emailSearchResult:focus-visible {
 .filterSortMoreToggle > summary:hover, .filterSortMoreToggle > summary:focus-visible { color: var(--primary-strong); }
 .filterSortMoreFields { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); }
 .filterSortStatus { display: flex; align-items: center; gap: 8px; align-self: center; color: var(--muted); font-size: 12px; font-weight: 600; }
+.filterSortScopeNote {
+  align-self: center;
+  padding: 3px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: normal;
+  text-transform: none;
+  white-space: nowrap;
+}
 .filterSortSpinner { flex: none; width: 16px; height: 16px; border: 2px solid var(--line); border-top-color: var(--primary); border-radius: 50%; }
 @media (prefers-reduced-motion: no-preference) { .filterSortSpinner { animation: inbox-spin 700ms linear infinite; } }
 .filterRangeInputs { display: flex; align-items: center; gap: 6px; }
@@ -4297,6 +4310,220 @@ button.emailSearchResult:focus-visible {
   margin: 0;
   accent-color: var(--primary);
 }
+.filterComboboxField { position: relative; }
+.filterComboboxShell { position: relative; }
+.filterComboboxPanel {
+  position: absolute;
+  z-index: 50;
+  top: calc(100% + 6px);
+  left: 0;
+  display: grid;
+  gap: 2px;
+  min-width: 240px;
+  width: 100%;
+  max-height: 260px;
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+  box-shadow: 0 16px 32px rgb(15 23 42 / 16%);
+}
+.filterComboboxOption {
+  display: block;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: normal;
+  text-transform: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.filterComboboxOption:hover,
+.filterComboboxOption.is-active { background: var(--surface-soft); }
+.filterComboboxOption.is-active { box-shadow: inset 2px 0 0 var(--primary); }
+.filterComboboxNote { margin: 0; padding: 8px; color: var(--muted); font-size: 12px; font-weight: 600; }
+.filterComboboxField input:focus-visible {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgb(37 99 235 / 12%);
+}
+@media (max-width: 640px) { .filterSortBar .filterComboboxField { width: 100%; } }
+/* Filter visibility -------------------------------------------------------
+   `.runQueueGrid > .card > :not(h2)` makes every direct child its own flex +
+   scroll region, so this card keeps exactly one child (.filterVisibilityBody)
+   and does its own layout inside it. Adding a second direct child re-splits
+   the 30rem card and clips every row. */
+.filterVisibilityBody { position: relative; }
+.filterVisibilityIntro {
+  margin: 0 0 12px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.filterVisibilityList { display: grid; gap: 2px; }
+
+.filterVisibilityGroup {
+  min-width: 0;
+  border-radius: 9px;
+  transition: background-color 160ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.filterVisibilityGroup[open] { background: var(--surface-soft); }
+
+.filterVisibilityGroup > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 0 10px 0 12px;
+  border-radius: 9px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  list-style: none;
+  transition: background-color 160ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.filterVisibilityGroup > summary::-webkit-details-marker { display: none; }
+.filterVisibilityGroup > summary:hover { background: var(--surface-soft); }
+.filterVisibilityGroup[open] > summary:hover { background: #eef2f9; }
+.filterVisibilityGroup > summary:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgb(15 75 207 / 18%);
+}
+
+/* Disclosure caret, same border-triangle idiom as .filterMultiselectPopover. */
+.filterVisibilityGroup > summary::after {
+  content: "";
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin-left: 2px;
+  border-right: 1.5px solid var(--muted);
+  border-bottom: 1.5px solid var(--muted);
+  transform: translateY(-2px) rotate(45deg);
+  transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.filterVisibilityGroup[open] > summary::after { transform: translateY(1px) rotate(225deg); }
+
+/* The leaf is what you scan for, so it never truncates; the family prefix does. */
+.filterVisibilityName { display: flex; align-items: baseline; gap: 5px; min-width: 0; overflow: hidden; flex: 1 1 auto; }
+/* Scope gives way first; the leaf is what you scan for, so it truncates last. */
+.filterVisibilityLeaf { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.filterVisibilityScope {
+  /* Shrinks ~100x faster than the leaf: the repeated family prefix gives way,
+     the distinguishing leaf keeps its characters. */
+  flex: 0 100 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.filterVisibilityScope::after { content: " ·"; }
+
+.filterVisibilityCount {
+  flex: none;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  transition: color 160ms ease;
+}
+.filterVisibilityCount.is-reduced { color: var(--primary); font-weight: 700; }
+
+.filterVisibilityPanel { padding: 0 12px 12px; }
+@media (prefers-reduced-motion: no-preference) {
+  .filterVisibilityGroup[open] > .filterVisibilityPanel {
+    animation: filterVisibilityReveal 220ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+}
+@keyframes filterVisibilityReveal {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+
+.filterVisibilityActions { display: flex; align-items: center; gap: 10px; margin: 0 0 8px; }
+.filterVisibilityActions button {
+  padding: 2px 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--primary);
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: color 140ms ease;
+}
+.filterVisibilityActions button:hover { color: var(--primary-strong); }
+.filterVisibilityActions button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgb(15 75 207 / 18%);
+}
+.filterVisibilityActionsDivider { width: 1px; height: 11px; background: var(--line); }
+
+.filterVisibilityFields { display: grid; gap: 1px; }
+.filterVisibilityField {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+  min-height: 30px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 140ms ease;
+}
+.filterVisibilityField:hover { background: var(--surface); }
+.filterVisibilityField.is-locked { cursor: default; }
+.filterVisibilityField input[type="checkbox"] {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  min-height: 0;
+  margin: 0;
+  accent-color: var(--primary);
+}
+.filterVisibilityField input[type="checkbox"]:disabled { opacity: .55; }
+.filterVisibilityFieldName { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.filterVisibilityLock {
+  margin-left: auto;
+  flex: none;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: .01em;
+}
+
+/* Stays put while you scroll the list, so save state is never hunted for. */
+.filterVisibilityStatus {
+  position: sticky;
+  bottom: 0;
+  min-height: 20px;
+  margin: 6px 0 0;
+  padding-top: 6px;
+  background: linear-gradient(to bottom, rgb(255 255 255 / 0%), var(--surface) 45%);
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+.filterVisibilityStatus.is-visible { opacity: 1; }
 @media (max-width: 640px) { .filterSortBar { flex-direction: column; align-items: stretch; } .filterSortBar > label, .filterSortBar .filterRangeField, .filterSortBar .filterMultiselectField { width: 100%; } .filterSortMoreFields { flex-direction: column; } }
 .emailItemCheckbox { float: left; margin-right: 10px; width: 16px; height: 16px; }
 

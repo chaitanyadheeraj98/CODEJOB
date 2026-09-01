@@ -11,6 +11,7 @@ from sqlalchemy.pool import StaticPool
 from app.db import Base
 from app.models import (
     AppTSApplication,
+    Application,
     ContactIdentityAction,
     NumberReviewQueue,
     PremiumContactEmail,
@@ -18,6 +19,7 @@ from app.models import (
     PremiumNumberContact,
     PremiumNumberLead,
     RecruiterEmail,
+    RecruiterOpportunity,
 )
 from app.premium_numbers import contact_identity_service
 
@@ -769,9 +771,24 @@ class ContactIdentityServiceTests(unittest.TestCase):
                 resume_sha256_snapshot="sha",
                 resolved_recruiter_email="b@example.com",
                 resolved_recruiter_contact_id=loser_id,
+                recruiter_contact_id=loser_id,
                 dedupe_key="dk-2",
             )
-            db.add_all([recruiter_email, appts_application])
+            legacy_application = Application(
+                owner_id=OWNER_ID,
+                resume_asset_id=1,
+                resume_version_snapshot=1,
+                resume_file_name_snapshot="resume.pdf",
+                resume_sha256_snapshot="sha",
+                recruiter_contact_id=loser_id,
+                dedupe_key="legacy-dk-2",
+            )
+            opportunity = RecruiterOpportunity(
+                owner_id=OWNER_ID,
+                recruiter_number_id=loser_id,
+                gmail_message_id="merge-opportunity",
+            )
+            db.add_all([recruiter_email, appts_application, legacy_application, opportunity])
             db.commit()
 
             result = contact_identity_service.reconcile(
@@ -807,6 +824,9 @@ class ContactIdentityServiceTests(unittest.TestCase):
             refreshed_app = db.get(AppTSApplication, appts_application.id)
             assert refreshed_app is not None
             self.assertEqual(refreshed_app.resolved_recruiter_contact_id, canonical_id)
+            self.assertEqual(refreshed_app.recruiter_contact_id, canonical_id)
+            self.assertEqual(db.get(Application, legacy_application.id).recruiter_contact_id, canonical_id)
+            self.assertEqual(db.get(RecruiterOpportunity, opportunity.id).recruiter_number_id, canonical_id)
 
             refreshed_review = db.get(NumberReviewQueue, review.id)
             assert refreshed_review is not None

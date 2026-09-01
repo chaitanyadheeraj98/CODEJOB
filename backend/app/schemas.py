@@ -89,6 +89,7 @@ class ResolveRecipientsRequest(BaseModel):
 class RegenerateCandidateRequest(BaseModel):
     preserve_manual_routing: bool = True
     preserve_review_visibility: bool = True
+    allow_role_manifest_fork: bool = False
 
 
 class RoleDetectionRetryResponse(BaseModel):
@@ -108,6 +109,25 @@ class RoutingEvidenceResponse(BaseModel):
 RoutingItemDict = dict[str, object]
 RoutingListInput = list[RoutingItemDict] | list[RoutingEvidenceResponse]
 PolicyDict = dict[str, Any]
+
+
+def _validate_visible_filters(value: dict[str, list[str]]) -> dict[str, list[str]]:
+    if len(value) > 40:
+        raise ValueError("visible_filters may contain at most 40 dashboard keys")
+    normalized: dict[str, list[str]] = {}
+    for dashboard_key, field_keys in value.items():
+        if len(dashboard_key) > 80:
+            raise ValueError("visible_filters keys may contain at most 80 characters")
+        if len(field_keys) > 60:
+            raise ValueError("visible_filters dashboards may contain at most 60 fields")
+        unique: list[str] = []
+        for field_key in field_keys:
+            if len(field_key) > 80:
+                raise ValueError("visible_filters field keys may contain at most 80 characters")
+            if field_key not in unique:
+                unique.append(field_key)
+        normalized[dashboard_key] = unique
+    return normalized
 
 
 class SettingsRequest(BaseModel):
@@ -156,6 +176,7 @@ class SettingsRequest(BaseModel):
     feature_resume_tracking_sweep_interval_minutes: int = 240
     candidate_work_authorizations: list[str] | None = Field(default_factory=list)
     preferred_employment_types: list[Literal["C2C", "W2", "1099", "FT"]] = Field(default_factory=list)
+    visible_filters: dict[str, list[str]] = Field(default_factory=dict)
     preferred_minimum_rate: float | None = Field(default=None, ge=0)
     candidate_total_experience_years: float | None = Field(default=None, ge=0)
     candidate_us_experience_years: float | None = Field(default=None, ge=0)
@@ -249,6 +270,20 @@ class SettingsRequest(BaseModel):
                 normalized.append(email)
         return normalized
 
+    @field_validator("visible_filters")
+    @classmethod
+    def validate_visible_filters(cls, value: dict[str, list[str]]) -> dict[str, list[str]]:
+        return _validate_visible_filters(value)
+
+
+class VisibleFiltersRequest(BaseModel):
+    visible_filters: dict[str, list[str]] = Field(default_factory=dict)
+
+    @field_validator("visible_filters")
+    @classmethod
+    def validate_visible_filters(cls, value: dict[str, list[str]]) -> dict[str, list[str]]:
+        return _validate_visible_filters(value)
+
 
 class SettingsResponse(SettingsRequest):
     policy_profile_options: list[str] | None = None
@@ -258,6 +293,12 @@ class SettingsResponse(SettingsRequest):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class FilterOptionsResponse(BaseModel):
+    bucket: str
+    field: str
+    values: list[str] = Field(default_factory=list)
 
 
 class ResumeResponse(BaseModel):
@@ -1180,6 +1221,7 @@ class RecruiterOpportunityResponse(BaseModel):
     work_mode: str
     visa_restrictions: str
     resume_file_name: str = ""
+    resume_asset_id: int | None = None
     implementation_partner: str = ""
     prime_vendor: str = ""
     domain: str = ""
@@ -1242,13 +1284,14 @@ class RecruiterOpportunityPatchRequest(BaseModel):
 
 
 class ApplicationCreateRequest(BaseModel):
-    resume_asset_id: int = Field(gt=0)
+    resume_asset_id: int | None = Field(default=None, gt=0)
     recruiter_opportunity_id: int = Field(gt=0)
     dedupe_key: str = Field(min_length=1, max_length=64)
 
 
 class ManualApplicationCreateRequest(BaseModel):
     resume_asset_id: int = Field(gt=0)
+    recruiter_opportunity_id: int | None = Field(default=None, gt=0)
     dedupe_key: str = Field(min_length=1, max_length=64)
     manual_recruiter_name: str = Field(min_length=1, max_length=255)
     manual_recruiter_company: str = Field(min_length=1, max_length=255)
@@ -1467,6 +1510,7 @@ class ApplicationResponse(BaseModel):
     submission_method: str
     rejection_detail_tags: list[RejectionDetailTagResponse] = Field(default_factory=list)
     dedupe_key: str | None
+    promoted_to_appts_application_id: int | None = None
     is_manual_entry: bool = False
     milestones_reached: dict[str, datetime] = Field(default_factory=dict)
     manual_recruiter_name: str = ""
@@ -1512,6 +1556,71 @@ class ApplicationListResponse(BaseModel):
     next_cursor: int | None
     has_next: bool
     total: int
+
+
+class RecordSourceResponse(BaseModel):
+    type: str
+    recruiter_email_id: int | None = None
+    external_opportunity_id: int | None = None
+    state: str | None = None
+    subject: str = ""
+    sender: str = ""
+
+
+class RecordLineageResponse(BaseModel):
+    lineage_id: str
+    current_status: str
+    closed_at: datetime | None = None
+    event_count: int
+
+
+class RecordEmailResponse(BaseModel):
+    recruiter_email_id: int
+    recipient_email: str | None = None
+    cc_email: str | None = None
+    sent_status: str
+    sent_at: datetime | None = None
+
+
+class RecordOutcomesResponse(BaseModel):
+    sent: bool
+    sent_count: int
+    opened: bool
+    open_count: int
+    replied: bool
+    inbound_reply_count: int
+    first_reply_at: datetime | None = None
+    days_to_first_reply: float | None = None
+    interviewed: bool
+    current_status: str | None = None
+
+
+class RecordLifecycleEventResponse(BaseModel):
+    id: int
+    event_type: str
+    occurred_at: datetime
+    actor: str
+    process_name: str
+    related_record_type: str
+    related_record_id: int | None = None
+    note: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class RecordDetailResponse(BaseModel):
+    record_id: str
+    origin_type: str
+    created_at: datetime
+    source: RecordSourceResponse
+    lineage: RecordLineageResponse | None = None
+    recruiter_opportunity: RecruiterOpportunityResponse | None = None
+    applications_enabled: bool
+    resume_tracking_enabled: bool
+    applications: list[ApplicationResponse] = Field(default_factory=list)
+    legacy_applications: list[ApplicationResponse] = Field(default_factory=list)
+    emails: list[RecordEmailResponse] = Field(default_factory=list)
+    outcomes: RecordOutcomesResponse
+    lifecycle_events: list[RecordLifecycleEventResponse] = Field(default_factory=list)
 
 
 class ApplicationDashboardSummaryResponse(BaseModel):
@@ -1979,6 +2088,7 @@ class ProductivityEventCreateRequest(BaseModel):
     event_type: str
     event_source: str = "ui"
     entity_id: int | None = None
+    entity_type: str = ""
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -1988,6 +2098,7 @@ class ProductivityEventResponse(BaseModel):
     event_type: str
     event_source: str
     entity_id: int | None
+    entity_type: str
     weight: float
     metadata: dict[str, Any] = Field(default_factory=dict)
     occurred_at: datetime

@@ -16,10 +16,10 @@ from sqlalchemy.pool import StaticPool
 from app import main
 from app.db import Base
 from app.external_feeds.models import ExternalFeedSource, ExternalOpportunity
-from app.models import RecruiterEmail, ResumeAsset, UserSettings
+from app.models import CandidateRecord, OpportunityLifecycleEvent, OpportunityLineage, RecruiterEmail, ResumeAsset, UserSettings
 from app.routing import RoutingDecision
 from app.services import orchestration_service as orchestration_module
-from app.services.role_manifest_service import RoleManifest, RoleManifestResult
+from app.services.role_manifest_service import MaterializedRequirement, RoleManifest, RoleManifestResult
 
 
 class CandidateRegenerateTests(unittest.TestCase):
@@ -229,7 +229,7 @@ class CandidateRegenerateTests(unittest.TestCase):
                     "salary_text": "$80/hr",
                     "skills_text": "Java, Spring Boot",
                 },
-                {"parser_version": "regen-v1", "skills_audit": {"unknown": ["Kong"]}},
+                {"parser_version": "regen-v1", "skills_audit": {"unknown": ["ProprietaryNebulaGateway"]}},
             )
             main._select_best_resume_match = lambda **kwargs: SimpleNamespace(
                 resume=selected_resume,
@@ -309,7 +309,10 @@ class CandidateRegenerateTests(unittest.TestCase):
                 self.assertEqual(refreshed.state, "needs_review")
                 self.assertEqual(refreshed.resume_file_name, "resume-current.pdf")
                 self.assertEqual(refreshed.ats_score, 88.0)
-                self.assertEqual(json.loads(refreshed.skills_json or "{}")["unknown"], ["Kong"])
+                self.assertEqual(
+                    json.loads(refreshed.skills_json or "{}")["unknown"],
+                    ["ProprietaryNebulaGateway"],
+                )
         finally:
             main.parse_email_with_details = original_parse_with_details
             main._select_best_resume_match = original_select_best_resume_match
@@ -454,6 +457,74 @@ class CandidateRegenerateTests(unittest.TestCase):
         self.assertNotIn("display:none", detected_bodies[0].lower())
         self.assertIn("Java Engineer", detected_bodies[0])
         extract_children.assert_called_once()
+
+    def test_regenerate_requires_confirmation_before_multi_role_fork(self) -> None:
+        with Session(self.engine) as db:
+            user_settings = db.query(UserSettings).one()
+            user_settings.feature_role_manifest_enabled = True
+            email = self._add_email(db, source="gmail", body="1. Java Engineer\n2. Data Engineer")
+            record = CandidateRecord(id="fork-parent-record", owner_id=main.settings.owner_id, origin_type="gmail")
+            lineage = OpportunityLineage(
+                id="fork-parent-lineage",
+                owner_id=main.settings.owner_id,
+                origin_type="gmail",
+            )
+            db.add_all([record, lineage])
+            db.flush()
+            record.internal_lineage_id = lineage.id
+            email.record_id = record.id
+            db.commit()
+            email_id = email.id
+
+        requirements = (
+            MaterializedRequirement(1, "Java Engineer", "", 1, 1, "Java Engineer", "java"),
+            MaterializedRequirement(2, "Data Engineer", "", 2, 2, "Data Engineer", "data"),
+        )
+        manifest_result = RoleManifestResult(
+            status="multiple",
+            manifest=RoleManifest(
+                classification="multiple",
+                role_count=2,
+                confidence=0.95,
+                roles=[],
+            ),
+            requirements=requirements,
+        )
+        with (
+            patch.object(main, "RoleManifestService") as manifest_service_type,
+            patch.object(main.settings, "role_manifest_child_creation_enabled", True),
+            patch.object(main, "extract_and_score_children"),
+            patch.object(main, "_enqueue_embedding_generation"),
+        ):
+            manifest_service_type.return_value.detect.return_value = manifest_result
+            blocked = self.client.post(
+                f"/candidates/{email_id}/regenerate",
+                json={"preserve_manual_routing": True, "preserve_review_visibility": True},
+            )
+            confirmed = self.client.post(
+                f"/candidates/{email_id}/regenerate",
+                json={
+                    "preserve_manual_routing": True,
+                    "preserve_review_visibility": True,
+                    "allow_role_manifest_fork": True,
+                },
+            )
+
+        self.assertEqual(blocked.status_code, 409, blocked.text)
+        self.assertEqual(blocked.json()["detail"], {"code": "role_manifest_fork_required", "requirement_count": 2})
+        self.assertEqual(confirmed.status_code, 200, confirmed.text)
+        with Session(self.engine) as db:
+            children = db.query(RecruiterEmail).filter_by(source_parent_email_id=email_id).all()
+            events = db.query(OpportunityLifecycleEvent).filter_by(
+                lineage_id="fork-parent-lineage",
+                event_type="forked_into_requirement",
+            ).all()
+            self.assertEqual(len(children), 2)
+            self.assertEqual(len(events), 2)
+            self.assertEqual(
+                {json.loads(event.metadata_json)["child_record_id"] for event in events},
+                {child.record_id for child in children},
+            )
 
     def test_regenerate_preserves_manual_routing_when_confirmed(self) -> None:
         original_parse_with_details = main.parse_email_with_details

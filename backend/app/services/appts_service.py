@@ -78,6 +78,22 @@ def _resolved_identity(db: Session, owner_id: str, email: str) -> tuple[int | No
     return (contact.id if contact else None), normalized
 
 
+def _source_email_id_for_record(db: Session, *, owner_id: str, record_id: str | None) -> int | None:
+    if not record_id:
+        return None
+    row = (
+        db.query(RecruiterEmail.id)
+        .filter(RecruiterEmail.owner_id == owner_id, RecruiterEmail.record_id == record_id)
+        .order_by(
+            RecruiterEmail.sent_at.is_(None),
+            RecruiterEmail.sent_at.desc(),
+            RecruiterEmail.id.desc(),
+        )
+        .first()
+    )
+    return row[0] if row else None
+
+
 def _insert(db: Session, application: AppTSApplication) -> tuple[AppTSApplication, bool]:
     try:
         with db.begin_nested():
@@ -124,6 +140,8 @@ def create_tracked_application_manual(
     resume_submitted_at: datetime | None = None,
     location_snapshot: str = "",
     source_recruiter_email_id: int | None = None,
+    recruiter_opportunity_id: int | None = None,
+    recruiter_contact_id: int | None = None,
 ) -> tuple[AppTSApplication, bool]:
     resume = db.query(ResumeAsset).filter(ResumeAsset.owner_id == owner_id, ResumeAsset.id == resume_asset_id).first()
     if resume is None:
@@ -134,11 +152,49 @@ def create_tracked_application_manual(
     required = (manual_recruiter_name, manual_recruiter_company, manual_job_title, manual_end_client)
     if any(not value.strip() for value in required):
         raise application_service.ApplicationValidationError("Recruiter, company, job title, and end client must not be blank")
+    opportunity = None
+    if recruiter_opportunity_id is not None:
+        opportunity = (
+            db.query(RecruiterOpportunity)
+            .filter(
+                RecruiterOpportunity.owner_id == owner_id,
+                RecruiterOpportunity.id == recruiter_opportunity_id,
+            )
+            .first()
+        )
+        if opportunity is None:
+            raise application_service.ApplicationReferenceNotFoundError("Opportunity not found")
+        recruiter_contact_id = recruiter_contact_id or opportunity.recruiter_number_id
+    if recruiter_contact_id is not None:
+        contact_exists = (
+            db.query(PremiumNumberContact.id)
+            .filter(
+                PremiumNumberContact.owner_id == owner_id,
+                PremiumNumberContact.id == recruiter_contact_id,
+                PremiumNumberContact.deleted_at.is_(None),
+            )
+            .first()
+        )
+        if contact_exists is None:
+            raise application_service.ApplicationReferenceNotFoundError("Recruiter contact not found")
+    if source_recruiter_email_id is not None:
+        email_exists = (
+            db.query(RecruiterEmail.id)
+            .filter(
+                RecruiterEmail.owner_id == owner_id,
+                RecruiterEmail.id == source_recruiter_email_id,
+            )
+            .first()
+        )
+        if email_exists is None:
+            raise application_service.ApplicationReferenceNotFoundError("Recruiter email not found")
     submitted_at = resume_submitted_at or utc_now()
     contact_id, resolved_email = _resolved_identity(db, owner_id, manual_recruiter_email)
+    resolved_contact_id = contact_id or recruiter_contact_id
     row = AppTSApplication(
         owner_id=owner_id, resume_asset_id=resume.id, resume_version_snapshot=resume.version,
         resume_file_name_snapshot=resume.file_name, resume_sha256_snapshot=resume.sha256,
+        recruiter_opportunity_id=recruiter_opportunity_id, recruiter_contact_id=recruiter_contact_id,
         recruiter_name_snapshot=manual_recruiter_name.strip(), recruiter_company_snapshot=manual_recruiter_company.strip(),
         job_title_snapshot=manual_job_title.strip(), end_client_snapshot=manual_end_client.strip(), location_snapshot=location_snapshot.strip(),
         manual_recruiter_name=manual_recruiter_name.strip(), manual_recruiter_company=manual_recruiter_company.strip(),
@@ -148,7 +204,7 @@ def create_tracked_application_manual(
         status="resume_shared", status_changed_at=submitted_at, resume_shared_at=submitted_at,
         resume_submission_status="submitted", resume_submitted_at=submitted_at, submission_method=submission_method.strip(),
         dedupe_key=dedupe_key, resume_skills_snapshot_json=json.dumps(resume_tracking_service.snapshot_resume_skills(resume), separators=(",", ":")),
-        resume_primary_role_snapshot=(resume.primary_role or "").strip(), resolved_recruiter_contact_id=contact_id,
+        resume_primary_role_snapshot=(resume.primary_role or "").strip(), resolved_recruiter_contact_id=resolved_contact_id,
         resolved_recruiter_email=resolved_email, source_recruiter_email_id=source_recruiter_email_id,
         created_at=utc_now(), updated_at=utc_now(),
     )
@@ -182,7 +238,7 @@ def create_tracked_application_from_opportunity(
     db: Session,
     *,
     owner_id: str,
-    resume_asset_id: int,
+    resume_asset_id: int | None = None,
     recruiter_opportunity_id: int,
     dedupe_key: str,
 ) -> tuple[AppTSApplication, bool]:
@@ -192,12 +248,23 @@ def create_tracked_application_from_opportunity(
     recruiter = db.query(PremiumNumberContact).filter(PremiumNumberContact.owner_id == owner_id, PremiumNumberContact.id == opportunity.recruiter_number_id, PremiumNumberContact.deleted_at.is_(None)).first()
     if recruiter is None:
         raise application_service.ApplicationReferenceNotFoundError("Recruiter contact not found")
+    effective_resume_id = resume_asset_id or opportunity.resume_asset_id
+    if effective_resume_id is None:
+        raise application_service.ApplicationReferenceNotFoundError("No resume recorded for this opportunity; choose one")
+    source_email_id = opportunity.source_email_id or _source_email_id_for_record(
+        db,
+        owner_id=owner_id,
+        record_id=opportunity.record_id,
+    )
     return create_tracked_application_manual(
-        db, owner_id=owner_id, resume_asset_id=resume_asset_id, dedupe_key=dedupe_key,
+        db, owner_id=owner_id, resume_asset_id=effective_resume_id, dedupe_key=dedupe_key,
         manual_recruiter_name=recruiter.recruiter_name or "Unknown", manual_recruiter_company=recruiter.company or "Unknown",
         manual_recruiter_email=recruiter.recruiter_email or "", manual_job_title=opportunity.job_title or "Not specified",
         manual_end_client=opportunity.end_client or recruiter.company or "Unknown", location_snapshot=opportunity.location or "",
         manual_source_note=f"Tracked from recruiter opportunity {opportunity.id}",
+        recruiter_opportunity_id=opportunity.id,
+        recruiter_contact_id=recruiter.id,
+        source_recruiter_email_id=source_email_id,
     )
 
 
@@ -207,7 +274,18 @@ def promote_legacy_application(
     *,
     owner_id: str,
 ) -> tuple[AppTSApplication, bool]:
-    return create_tracked_application_manual(
+    if legacy_application.promoted_to_appts_application_id:
+        existing = (
+            db.query(AppTSApplication)
+            .filter(
+                AppTSApplication.owner_id == owner_id,
+                AppTSApplication.id == legacy_application.promoted_to_appts_application_id,
+            )
+            .first()
+        )
+        if existing is not None:
+            return existing, False
+    row, created = create_tracked_application_manual(
         db, owner_id=owner_id, resume_asset_id=legacy_application.resume_asset_id,
         dedupe_key=f"appts_promoted:{legacy_application.id}",
         manual_recruiter_name=legacy_application.manual_recruiter_name or legacy_application.recruiter_name_snapshot or "Unknown",
@@ -221,4 +299,8 @@ def promote_legacy_application(
         manual_source_note=legacy_application.manual_source_note,
         submission_method=legacy_application.submission_method,
         resume_submitted_at=legacy_application.resume_submitted_at,
+        recruiter_opportunity_id=legacy_application.recruiter_opportunity_id,
+        recruiter_contact_id=legacy_application.recruiter_contact_id,
     )
+    legacy_application.promoted_to_appts_application_id = row.id
+    return row, created

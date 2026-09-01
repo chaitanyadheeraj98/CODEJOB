@@ -47,7 +47,7 @@ from app.models import (
     ResumeAsset,
     UserSettings,
 )
-from app.services import application_service, opportunity_lineage_service
+from app.services import application_service, appts_service, opportunity_lineage_service
 
 
 def RecruiterNumber(**values):
@@ -1047,6 +1047,62 @@ class MCPServerToolTests(unittest.TestCase):
                 for row in application_events
             )
         )
+
+    def test_record_details_joins_both_families_email_links_outcomes_and_resume_metrics(self) -> None:
+        with self.SessionLocal() as db:
+            legacy, _ = application_service.create_application(
+                db,
+                owner_id=settings.owner_id,
+                resume_asset_id=self.resume_id,
+                recruiter_opportunity_id=self.opportunity_id,
+                dedupe_key="mcp-promoted-once",
+            )
+            promoted, _ = appts_service.promote_legacy_application(
+                db,
+                legacy,
+                owner_id=settings.owner_id,
+            )
+            email_only, _ = appts_service.create_tracked_application_manual(
+                db,
+                owner_id=settings.owner_id,
+                resume_asset_id=self.resume_id,
+                dedupe_key="mcp-email-only",
+                manual_recruiter_name="Email Recruiter",
+                manual_recruiter_company="Email Staffing",
+                manual_job_title="Python Engineer",
+                manual_end_client="Acme Client",
+                source_recruiter_email_id=self.owned_id,
+            )
+            application_service.request_rtr(
+                db,
+                promoted,
+                role_scope="Python Engineer",
+                end_client_scope="Acme Client",
+                models=appts_service.APPTS_MODELS,
+            )
+            application_service.add_interview(
+                db,
+                promoted,
+                round_type="interview_1",
+                sync_application_status=False,
+                models=appts_service.APPTS_MODELS,
+            )
+            promoted_id = promoted.id
+            email_only_id = email_only.id
+            db.commit()
+
+        result = get_record_details(self.record_id)
+        self.assertEqual(
+            {(row["family"], row["id"]) for row in result["applications"]},
+            {("AppTSApplication", promoted_id), ("AppTSApplication", email_only_id)},
+        )
+        promoted_payload = next(row for row in result["applications"] if row["id"] == promoted_id)
+        self.assertEqual(len(promoted_payload["rtr_history"]), 1)
+        self.assertEqual(len(promoted_payload["interviews"]), 1)
+        self.assertEqual(promoted_payload["resume"]["performance"]["total_submissions"], 2)
+        self.assertIn("owner-wide", promoted_payload["resume"]["performance_scope"])
+        self.assertEqual(result["outcomes"]["inbound_reply_count"], 1)
+        self.assertTrue(result["outcomes"]["interviewed"])
 
     def test_record_details_retains_history_after_opportunity_deletion(self) -> None:
         with self.SessionLocal() as db:

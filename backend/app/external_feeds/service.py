@@ -43,7 +43,7 @@ from app.recent_runs import (
 )
 from app.routing import CcSelectionRequest, RoutingDecision, RoutingPolicyService
 from app.semantic.embeddings_service import generate_embedding
-from app.services import opportunity_lineage_service, policy_service
+from app.services import opportunity_lineage_service, policy_service, recruiter_identity_service
 from app.services.candidate_runtime_service import CandidateRuntimeDeps, CandidateRuntimeService
 from app.services.candidate_screening_service import CandidateScreeningService, apply_screening_decision
 from app.services.scoring_runtime_service import ScoringRuntimeDeps, ScoringRuntimeService
@@ -73,6 +73,7 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class EnqueueResult:
     enqueued: bool
+    failed: bool = False
     reason_code: str | None = None
     reason_detail: str | None = None
     candidate_email_id: int | None = None
@@ -504,6 +505,8 @@ class ExternalFeedService:
                     if enqueue_result.enqueued:
                         enqueue_successes += 1
                     else:
+                        if enqueue_result.failed:
+                            failed_count += 1
                         skipped_item_count += 1
                         record_skipped_item(
                             db,
@@ -965,6 +968,25 @@ class ExternalFeedService:
                 reason_detail="Skipped because this Nvoids listing already exists as a candidate.",
                 candidate_email_id=existing.id,
             )
+
+        def persist_email(email: RecruiterEmail) -> RecruiterEmail:
+            email.record_id = item.record_id
+            if email.record_id is None:
+                logger.warning(
+                    "nvoids_enqueue_missing_record_id external_post_id=%r item_id=%s",
+                    item.external_post_id,
+                    item.id,
+                )
+                email.record_id = opportunity_lineage_service.create_candidate_record(
+                    db,
+                    owner_id=owner_id,
+                    origin_type="nvoids",
+                ).id
+            recruiter_identity_service.stamp_recruiter_email_identity(db, email)
+            db.add(email)
+            db.flush()
+            return email
+
         settings = (
             db.query(UserSettings).filter(UserSettings.owner_id == owner_id).first()
             or UserSettings(owner_id=owner_id)
@@ -981,15 +1003,47 @@ class ExternalFeedService:
         cc_email = routing_decision.cc_email
         if routing_decision.should_mark_failed and recipient_mapping_mode == "block":
             logger.info(
-                "nvoids_enqueue_skip reason=%s external_post_id=%r recruiter_to=%r",
+                "nvoids_enqueue_failed_mapping reason=%s external_post_id=%r recruiter_to=%r",
                 routing_decision.recommended_skip_reason,
                 item.external_post_id,
                 recruiter_to,
             )
+            email = RecruiterEmail(
+                owner_id=owner_id,
+                sender=recruiter_to or extract_email_address(item.recruiter_email or "") or item.recruiter_name or "Nvoids Recruiter",
+                subject=item.role or "Nvoids Opportunity",
+                body=item.raw_body or item.role or "",
+                role=item.role or "",
+                location=item.location or "",
+                salary_text=item.rate or "",
+                skills_text=item.skills_text or "",
+                decision="Reject",
+                state="failed",
+                decision_reason=routing_decision.reason,
+                last_error="Could not resolve recruiter To and employer CC",
+                skip_reason=routing_decision.recommended_skip_reason,
+                approval_status="pending",
+                sent_status="not_sent",
+                source="nvoids",
+                external_message_id=external_message_id,
+                external_thread_id=item.source_url or external_message_id,
+                gmail_received_at=item.posted_at or datetime.now(UTC),
+                recipient_email=recruiter_to or None,
+                cc_email=cc_email,
+                routing_status=routing_decision.status,
+                routing_confidence=routing_decision.confidence,
+                routing_reason=routing_decision.reason,
+                routing_evidence=json.dumps([asdict(entry) for entry in routing_decision.evidence], separators=(",", ":")),
+                routing_candidates=json.dumps([asdict(entry) for entry in routing_decision.candidates], separators=(",", ":")),
+                routing_confirmed=False,
+            )
+            persist_email(email)
             return EnqueueResult(
                 enqueued=False,
+                failed=True,
                 reason_code=routing_decision.recommended_skip_reason,
                 reason_detail=routing_decision.reason,
+                candidate_email_id=email.id,
             )
         body = item.raw_body or item.role or ""
         subject = item.role or "Nvoids Opportunity"
@@ -1064,19 +1118,7 @@ class ExternalFeedService:
                 parser_details_json=json.dumps(parser_details, separators=(",", ":")),
             )
             apply_screening_decision(email, screening)
-            email.record_id = item.record_id
-            if email.record_id is None:
-                logger.warning(
-                    "nvoids_enqueue_missing_record_id external_post_id=%r item_id=%s",
-                    item.external_post_id,
-                    item.id,
-                )
-                candidate_record = opportunity_lineage_service.create_candidate_record(
-                    db, owner_id=owner_id, origin_type="nvoids"
-                )
-                email.record_id = candidate_record.id
-            db.add(email)
-            db.flush()
+            persist_email(email)
             return EnqueueResult(enqueued=True, candidate_email_id=email.id)
         resume_selection = self.scoring_runtime.select_best_resume_match(
             subject=subject,
@@ -1257,19 +1299,7 @@ class ExternalFeedService:
             email.resume_file_name,
             email.draft_source,
         )
-        email.record_id = item.record_id
-        if email.record_id is None:
-            logger.warning(
-                "nvoids_enqueue_missing_record_id external_post_id=%r item_id=%s",
-                item.external_post_id,
-                item.id,
-            )
-            candidate_record = opportunity_lineage_service.create_candidate_record(
-                db, owner_id=owner_id, origin_type="nvoids"
-            )
-            email.record_id = candidate_record.id
-        db.add(email)
-        db.flush()
+        persist_email(email)
         return EnqueueResult(enqueued=True, candidate_email_id=email.id)
 
     def compute_nvoids_ai_parse(

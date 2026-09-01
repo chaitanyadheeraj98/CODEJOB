@@ -2396,7 +2396,7 @@ Job ID: ENG-2"""
         finally:
             main.external_feed_service.scoring_runtime.compute_blended_ai_score = original_compute
 
-    def test_sync_skips_missing_cc_when_routing_toggle_is_on(self) -> None:
+    def test_sync_records_missing_cc_in_failed_mapping_when_routing_toggle_is_on(self) -> None:
         with self.SessionLocal() as db:
             settings = db.query(UserSettings).filter(UserSettings.owner_id == main.settings.owner_id).first()
             assert settings is not None
@@ -2407,6 +2407,7 @@ Job ID: ENG-2"""
 
         sync = self.client.post("/external-feeds/nvoids/sync")
         self.assertEqual(sync.status_code, 200, sync.text)
+        self.assertEqual(sync.json()["failed_count"], 2)
 
         with self.SessionLocal() as db:
             rows = (
@@ -2414,7 +2415,16 @@ Job ID: ENG-2"""
                 .filter(RecruiterEmail.owner_id == main.settings.owner_id, RecruiterEmail.source == "nvoids")
                 .all()
             )
-            self.assertEqual(rows, [])
+            self.assertEqual(len(rows), 2)
+            self.assertTrue(all(row.state == "failed" for row in rows))
+            self.assertEqual({row.skip_reason for row in rows}, {"missing_default_employer_cc"})
+            self.assertTrue(all(row.record_id for row in rows))
+            self.assertEqual(
+                {row.resolved_recruiter_email for row in rows},
+                {"recruiter_1@example.com", "recruiter_2@example.com"},
+            )
+            skipped = db.query(RecentRunSkippedItem).filter_by(run_source="nvoids_sync").all()
+            self.assertEqual({item.candidate_email_id for item in skipped}, {row.id for row in rows})
 
     def test_sync_allows_missing_cc_when_routing_toggle_is_off(self) -> None:
         with self.SessionLocal() as db:
@@ -2905,26 +2915,6 @@ Job ID: ENG-2"""
                 self.assertEqual(ext_rows[0].external_post_id, "nvoids:2")
         finally:
             external_feed_service_module.parse_external_post = original_parse_external_post
-
-    def test_sync_skips_queue_creation_when_no_cc_configured(self) -> None:
-        with self.SessionLocal() as db:
-            settings = db.query(UserSettings).filter(UserSettings.owner_id == main.settings.owner_id).first()
-            assert settings is not None
-            settings.preferred_employer_cc_email = ""
-            settings.preferred_employer_cc_emails = ""
-            settings.default_employer_cc_emails = ""
-            db.commit()
-
-        sync = self.client.post("/external-feeds/nvoids/sync")
-        self.assertEqual(sync.status_code, 200, sync.text)
-
-        with self.SessionLocal() as db:
-            rows = (
-                db.query(RecruiterEmail)
-                .filter(RecruiterEmail.owner_id == main.settings.owner_id, RecruiterEmail.source == "nvoids")
-                .all()
-            )
-            self.assertEqual(rows, [])
 
     def test_recruiter_numbers_hides_nvoids_placeholder_rows_but_keeps_real_rows(self) -> None:
         self._seed_nvoids_placeholder_recruiter()

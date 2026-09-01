@@ -211,6 +211,7 @@ export type RecruiterOpportunityCard = {
   work_mode: string
   visa_restrictions: string
   resume_file_name: string
+  resume_asset_id: number | null
   implementation_partner: string
   prime_vendor: string
   domain: string

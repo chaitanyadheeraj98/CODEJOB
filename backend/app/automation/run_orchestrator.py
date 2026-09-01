@@ -18,7 +18,7 @@ from app.phase0 import jd_entity_fields_from_parsed
 from app.parsing.document_extraction import prepare_gmail_parse_body
 from app.recent_runs import SkippedItemRecord
 from app.routing import RoutingDecision
-from app.services import opportunity_lineage_service, policy_service
+from app.services import opportunity_lineage_service, policy_service, recruiter_identity_service
 from app.services.gmail_group_source_service import ConfiguredRequirementGroup, resolve_trusted_group_context
 from app.services.candidate_screening_service import CandidateScreeningService, apply_screening_decision
 from app.services.requirement_expansion_service import RequirementExpansionService
@@ -504,6 +504,7 @@ class RunOrchestrator:
                     event_type="failed_mapping_marked",
                     event_source="state",
                     entity_id=email.id,
+                    entity_type="RecruiterEmail",
                     metadata={"reason": email.skip_reason or "missing_to_or_cc"},
                 )
                 request.deps.apply_gmail_label(request.db, email, item)
@@ -606,6 +607,7 @@ class RunOrchestrator:
                 event_type="needs_review_marked",
                 event_source="state",
                 entity_id=email.id,
+                entity_type="RecruiterEmail",
                 metadata={"source": "automation_run"},
             )
             request.deps.apply_gmail_label(request.db, email, item)
@@ -703,6 +705,7 @@ class RunOrchestrator:
         branch_name: str,
         reapply_state: Callable[[RecruiterEmail], None],
     ) -> RecruiterEmail:
+        recruiter_identity_service.stamp_recruiter_email_identity(request.db, email)
         if not existing:
             request.db.add(email)
         try:
@@ -727,6 +730,7 @@ class RunOrchestrator:
                 external_message_id,
             )
             reapply_state(recovered)
+            recruiter_identity_service.stamp_recruiter_email_identity(request.db, recovered)
             request.db.commit()
             return recovered
 

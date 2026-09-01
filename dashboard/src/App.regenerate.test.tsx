@@ -162,6 +162,7 @@ describe('Needs Review regenerate flow', () => {
     let needsReviewItems = [initialCandidate]
     let resolveRegenerate: (() => void) | null = null
     const regenerateRequestBodies: string[] = []
+    vi.stubGlobal('confirm', vi.fn(() => true))
 
     vi.stubGlobal(
       'fetch',
@@ -180,6 +181,13 @@ describe('Needs Review regenerate flow', () => {
         }
         if (url.endsWith('/candidates/42/regenerate') && init?.method === 'POST') {
           regenerateRequestBodies.push(String(init.body ?? ''))
+          if (regenerateRequestBodies.length === 1) {
+            return Promise.resolve({
+              ok: false,
+              status: 409,
+              json: async () => ({ detail: { code: 'role_manifest_fork_required', requirement_count: 2 } }),
+            })
+          }
           return new Promise((resolve) => {
             resolveRegenerate = () => {
               needsReviewItems = [updatedCandidate]
@@ -248,9 +256,12 @@ describe('Needs Review regenerate flow', () => {
       await Promise.resolve()
     })
 
-    expect(regenerateRequestBodies).toHaveLength(1)
+    expect(regenerateRequestBodies).toHaveLength(2)
     expect(regenerateRequestBodies[0]).toContain('"preserve_manual_routing":true')
     expect(regenerateRequestBodies[0]).toContain('"preserve_review_visibility":true')
+    expect(regenerateRequestBodies[0]).toContain('"allow_role_manifest_fork":false')
+    expect(regenerateRequestBodies[1]).toContain('"allow_role_manifest_fork":true')
+    expect(globalThis.confirm).toHaveBeenCalledWith(expect.stringContaining('2 roles'))
     expect(container.textContent ?? '').toContain('Fresh AI draft')
     expect(container.textContent ?? '').toContain('ai_primary')
   })

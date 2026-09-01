@@ -32,6 +32,7 @@ type CandidateCardProps = {
   onDraftChange: (value: string) => void
   draftTextSize: string | null | undefined
   enabledAttachmentNames: string[]
+  activeResumeName?: string | null
   parserExpanded: boolean
   onToggleParserExpanded: () => void
   selection?: CandidateCardSelection
@@ -60,6 +61,7 @@ export default function CandidateCard({
   onDraftChange,
   draftTextSize,
   enabledAttachmentNames,
+  activeResumeName,
   parserExpanded,
   onToggleParserExpanded,
   selection,
@@ -88,6 +90,8 @@ export default function CandidateCard({
     item.ats_score != null || item.premium_status || item.premium_verification_level || item.following_badge,
   )
   const requiresResumeForApproval = item.source === 'gmail'
+  const sendsEmailOnApproval = true
+  const approvalResumeName = item.resume_file_name || activeResumeName || ''
   const structuralSendabilityBlock = [
     'source_parent',
     'superseded_multi_role',
@@ -171,7 +175,7 @@ export default function CandidateCard({
       <section className="detailSection">
         <h4>Routing &amp; Screening</h4>
         {renderRoutingPanel(item)}
-        <p><strong>Resume:</strong> {item.resume_file_name ?? '-'}</p>
+        <p><strong>Resume:</strong> {approvalResumeName ? `${approvalResumeName}${!item.resume_file_name ? ' (account default)' : ''}` : '-'}</p>
         <p><strong>Sendability:</strong> {item.sendability_status ?? 'legacy evaluation'}</p>
         {item.role_manifest_status === 'single_fallback' ? (
           <p className="subtle">Auto-resolved as one role because a confident split was unavailable.</p>
@@ -246,7 +250,7 @@ export default function CandidateCard({
           type="button"
           className="sendActionButton"
           onClick={() => {
-            if (requiresResumeForApproval && !window.confirm(`Send this application to ${item.recipient_email || 'the recruiter'} now? This emails them directly and cannot be undone.`)) return
+            if (sendsEmailOnApproval && !window.confirm(`Send this application to ${item.recipient_email || 'the recruiter'} now? This emails them directly and cannot be undone.`)) return
             onApprove(item)
           }}
           disabled={!canApprove || isSending}
@@ -254,19 +258,17 @@ export default function CandidateCard({
             !canApprove
               ? requiresResumeForApproval
                 ? 'Safe routing, To, CC, body, and resume are required before send'
-                : 'Safe routing, To, CC, and body are required before approval'
-              : requiresResumeForApproval
-                ? 'Approve and send'
-                : 'Approve candidate'
+                : 'Safe routing, To, CC, and body are required before send'
+              : 'Approve and send'
           }
         >
-          {isSending ? 'Sending...' : requiresResumeForApproval ? 'Approve & Send' : 'Approve'}
+          {isSending ? 'Sending...' : 'Approve & Send'}
         </button>
         <button
           type="button"
           onClick={() => onRegenerate(item.id)}
           disabled={isRegenerating || isSending || isRejecting || isMovingToFailedMapping}
-          title="Re-run parser, resume match, ATS and semantic scoring, routing, and draft generation with current settings"
+          title="Re-run analysis and draft generation; splitting a multi-role requirement requires confirmation"
         >
           {isRegenerating ? 'Regenerating...' : 'Regenerate'}
         </button>

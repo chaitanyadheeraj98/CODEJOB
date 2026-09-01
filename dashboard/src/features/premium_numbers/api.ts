@@ -52,6 +52,16 @@ export class ContactPhoneConflictError extends Error {
   }
 }
 
+export class RoleManifestForkRequiredError extends Error {
+  requirementCount: number
+
+  constructor(requirementCount: number) {
+    super(`Regeneration would split this candidate into ${requirementCount} requirements`)
+    this.name = 'RoleManifestForkRequiredError'
+    this.requirementCount = requirementCount
+  }
+}
+
 export class IdentityConflictError extends Error {
   targetContactId: number | null
   secondaryContactId: number | null
@@ -70,7 +80,10 @@ export async function requestJson<T>(url: string, init?: RequestInit): Promise<T
     const detail = await response.text().catch(() => '')
     if (response.status === 409 && detail) {
       try {
-        const payload = JSON.parse(detail) as { detail?: { message?: string; duplicates?: ApplicationDuplicateSummary[]; conflicting_contact_id?: number | null; target_contact_id?: number | null; secondary_contact_id?: number | null } }
+        const payload = JSON.parse(detail) as { detail?: { code?: string; requirement_count?: number; message?: string; duplicates?: ApplicationDuplicateSummary[]; conflicting_contact_id?: number | null; target_contact_id?: number | null; secondary_contact_id?: number | null } }
+        if (payload.detail?.code === 'role_manifest_fork_required') {
+          throw new RoleManifestForkRequiredError(Number(payload.detail.requirement_count ?? 0))
+        }
         if (Array.isArray(payload.detail?.duplicates)) {
           throw new ApplicationDuplicateConflictError(
             payload.detail?.message || 'Possible duplicate submission',
@@ -91,7 +104,7 @@ export async function requestJson<T>(url: string, init?: RequestInit): Promise<T
           )
         }
       } catch (reason) {
-        if (reason instanceof ApplicationDuplicateConflictError || reason instanceof ContactPhoneConflictError || reason instanceof IdentityConflictError) throw reason
+        if (reason instanceof ApplicationDuplicateConflictError || reason instanceof RoleManifestForkRequiredError || reason instanceof ContactPhoneConflictError || reason instanceof IdentityConflictError) throw reason
       }
     }
     // Most backend errors are a plain FastAPI HTTPException(detail="message") - unwrap
@@ -103,7 +116,9 @@ export async function requestJson<T>(url: string, init?: RequestInit): Promise<T
     } catch {
       // raw response wasn't JSON - fall through to showing it as-is
     }
-    throw new Error(message || `Request failed (${response.status})`)
+    const error = new Error(message || `Request failed (${response.status})`) as Error & { status: number }
+    error.status = response.status
+    throw error
   }
   return await response.json() as T
 }
@@ -177,7 +192,7 @@ export function listOpportunities(args: {
   return listAll((cursor) => buildOpportunityListUrl({ ...args, cursor }))
 }
 
-export function listOpportunityPage(args:{apiBase:string;cursor:number;limit:number;q:string;status:'all'|OpportunityStatus;sourceType:'all'|'gmail'|'nvoids';mailDate:string|null;sort:string;filters?:Record<string,string>}):Promise<{items:RecruiterOpportunityCard[];total:number}>{
+export function listOpportunityPage(args:{apiBase:string;cursor:number;limit:number;q:string;status:'all'|OpportunityStatus|OpportunityStatus[];sourceType:'all'|'gmail'|'nvoids';mailDate:string|null;sort:string;filters?:Record<string,string>}):Promise<{items:RecruiterOpportunityCard[];total:number}>{
   const url=buildOpportunityListUrl(args);const params=new URLSearchParams(url.split('?')[1]);params.set('limit',String(args.limit));params.set('sort',args.sort);for(const [key,value] of Object.entries(args.filters??{}))params.set(key,value);return requestJson(`${args.apiBase}/recruiter-opportunities?${params}`)
 }
 
@@ -185,12 +200,12 @@ export function buildOpportunityListUrl(args: {
   apiBase: string
   cursor: number
   q: string
-  status: 'all' | OpportunityStatus
+  status: 'all' | OpportunityStatus | OpportunityStatus[]
   sourceType: 'all' | 'gmail' | 'nvoids'
   mailDate: string | null
 }): string {
   const params = listParams(args.cursor, args.q)
-  if (args.status !== 'all') params.set('status', args.status)
+  if (args.status !== 'all' && (!Array.isArray(args.status) || args.status.length)) params.set('status', Array.isArray(args.status) ? args.status.join(',') : args.status)
   if (args.sourceType !== 'all') params.set('source_type', args.sourceType)
   if (args.mailDate) params.set('mail_date', args.mailDate)
   return `${args.apiBase}/recruiter-opportunities?${params}`

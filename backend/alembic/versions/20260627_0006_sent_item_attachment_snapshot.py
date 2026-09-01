@@ -15,13 +15,23 @@ branch_labels = None
 depends_on = None
 
 
+def _columns(bind, table: str) -> set[str]:
+    return {column["name"] for column in sa.inspect(bind).get_columns(table)}
+
+
 def upgrade() -> None:
-    if "recruiter_emails" not in sa.inspect(op.get_bind()).get_table_names():
+    bind = op.get_bind()
+    if "recruiter_emails" not in sa.inspect(bind).get_table_names():
+        return
+    if "sent_attachment_file_names_json" in _columns(bind, "recruiter_emails"):
         return
     op.add_column("recruiter_emails", sa.Column("sent_attachment_file_names_json", sa.Text(), nullable=True))
 
 
 def downgrade() -> None:
-    if "recruiter_emails" not in sa.inspect(op.get_bind()).get_table_names():
+    bind = op.get_bind()
+    if "recruiter_emails" not in sa.inspect(bind).get_table_names():
+        return
+    if "sent_attachment_file_names_json" not in _columns(bind, "recruiter_emails"):
         return
     op.drop_column("recruiter_emails", "sent_attachment_file_names_json")

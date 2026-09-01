@@ -16,8 +16,10 @@ import VerificationBadge from './features/premium_numbers/VerificationBadge'
 import { type CandidateState, useCandidateBuckets } from './candidateBuckets'
 import type { CandidateQueryOptions } from './candidateBuckets'
 import FilterSortBar, { type FilterValues } from './components/FilterSortBar'
+import FilterVisibilitySettings from './components/FilterVisibilitySettings'
 import SelectionActionBar from './components/SelectionActionBar'
 import { filterSortRegistry, resolveRegistryEntry } from './filterSortRegistry'
+import { hasActiveTextSearch, narrowValuesToVisible, visibleFieldsFor } from './filterVisibility'
 import { buildUrlSearch, parseFilterValuesFromParams } from './useUrlSync'
 import { addCcEmail, removeCcEmail } from './ccEmails'
 import { addEmployerDomain, removeEmployerDomain } from './employerDomains'
@@ -102,6 +104,8 @@ export function shouldTrackViewEvent(
   if (lastTrackedAt === undefined) return true
   return now - lastTrackedAt >= throttleMs
 }
+
+const isValidEmailAddress = (value: string): boolean => Boolean(value.trim()) && addCcEmail([], value).error === null
 
 function escapeHtml(text: string): string {
   return text
@@ -253,6 +257,7 @@ type SettingsPayload = {
   feature_resume_tracking_sweep_interval_minutes: number
   candidate_work_authorizations: string[]
   preferred_employment_types: Array<'C2C' | 'W2' | '1099' | 'FT'>
+  visible_filters: Record<string, string[]>
   preferred_minimum_rate: number | null
   candidate_total_experience_years: number | null
   candidate_us_experience_years: number | null
@@ -2743,6 +2748,9 @@ function CcEmailList({
   )
 }
 
+// Endpoints that apply the implicit one-day mail_date scope; only these widen on text search.
+const MAIL_DATE_SCOPED_BUCKETS = new Set(['needs_review', 'failed', 'approved_sent', 'recruiter_opportunities'])
+
 function App() {
   const INITIAL_BUCKET_LIMIT = 25
   const PAGE_BUCKET_LIMIT = 25
@@ -2862,6 +2870,7 @@ function App() {
     feature_resume_tracking_sweep_interval_minutes: 240,
     candidate_work_authorizations: [],
     preferred_employment_types: [],
+    visible_filters: {},
     preferred_minimum_rate: null,
     candidate_total_experience_years: null,
     candidate_us_experience_years: null,
@@ -2882,6 +2891,10 @@ function App() {
     settingsRef.current = value
     setSettingsState(value)
   }
+  const [filterVisibilityStatus, setFilterVisibilityStatus] = useState('')
+  const filterVisibilitySaveTimerRef = useRef<number | null>(null)
+  const filterVisibilityStatusTimerRef = useRef<number | null>(null)
+  const filterVisibilitySaveVersionRef = useRef(0)
   const [resumeFile, setResumeFile] = useState<File | null>(null)
   const [resumeSkillsInput, setResumeSkillsInput] = useState('')
   const [resumePrimaryRoleInput, setResumePrimaryRoleInput] = useState('')
@@ -3257,6 +3270,7 @@ function App() {
       feature_resume_tracking_sweep_interval_minutes: Math.max(30, Math.min(payload.feature_resume_tracking_sweep_interval_minutes || 240, 1440)),
       candidate_work_authorizations: payload.candidate_work_authorizations ?? [],
       preferred_employment_types: payload.preferred_employment_types ?? [],
+      visible_filters: payload.visible_filters ?? {},
       preferred_minimum_rate: payload.preferred_minimum_rate ?? null,
       candidate_total_experience_years: payload.candidate_total_experience_years ?? null,
       candidate_us_experience_years: payload.candidate_us_experience_years ?? null,
@@ -3284,6 +3298,54 @@ function App() {
       resume_display_name: payload.resume_display_name ?? '',
       policy: normalizeDynamicPolicy(payload.policy ?? defaultPolicy, payload),
     }
+  }
+
+  useEffect(() => () => {
+    if (filterVisibilitySaveTimerRef.current != null) window.clearTimeout(filterVisibilitySaveTimerRef.current)
+    if (filterVisibilityStatusTimerRef.current != null) window.clearTimeout(filterVisibilityStatusTimerRef.current)
+  }, [])
+
+  const updateVisibleFilters = (next: Record<string, string[]>) => {
+    const version = ++filterVisibilitySaveVersionRef.current
+    setSettings({ ...settingsRef.current, visible_filters: next })
+    setPageFilterValues((previous) => {
+      let updated = previous
+      for (const [registryKey, preference] of Object.entries(next)) {
+        const config = resolveRegistryEntry(filterSortRegistry[registryKey], { resumeAssets })
+        if (!config) continue
+        const current = previous[registryKey] ?? config.defaultFilterValues
+        const narrowed = narrowValuesToVisible(
+          visibleFieldsFor(config.fields, preference),
+          current,
+          config.defaultFilterValues,
+        )
+        if (narrowed !== current) {
+          if (updated === previous) updated = { ...previous }
+          updated[registryKey] = narrowed
+        }
+      }
+      return updated
+    })
+    if (filterVisibilitySaveTimerRef.current != null) window.clearTimeout(filterVisibilitySaveTimerRef.current)
+    if (filterVisibilityStatusTimerRef.current != null) window.clearTimeout(filterVisibilityStatusTimerRef.current)
+    setFilterVisibilityStatus('Saving\u2026')
+    filterVisibilitySaveTimerRef.current = window.setTimeout(async () => {
+      try {
+        const response = await fetch(`${apiBase}/settings/visible-filters`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ visible_filters: next }),
+        })
+        if (!response.ok) throw new Error('Failed to save filter visibility')
+        const saved = await response.json() as SettingsPayload
+        if (version !== filterVisibilitySaveVersionRef.current) return
+        setSettings({ ...settingsRef.current, visible_filters: saved.visible_filters ?? next })
+        setFilterVisibilityStatus('Saved')
+        filterVisibilityStatusTimerRef.current = window.setTimeout(() => setFilterVisibilityStatus(''), 2000)
+      } catch {
+        if (version === filterVisibilitySaveVersionRef.current) setFilterVisibilityStatus("Couldn't save")
+      }
+    }, 600)
   }
 
   const applySettingsBootstrapPayload = (payload: SettingsBootstrapPayload): SettingsPayload => {
@@ -3476,10 +3538,55 @@ function App() {
       : activePage === 'resume_tracking'
         ? `resume_tracking:${resumeTrackingTab}`
         : activePage
-  const activeFilterSortConfig = resolveRegistryEntry(filterSortRegistry[activeRegistryKey], { resumeAssets }) ?? null
-  const activeFilterValues = activeFilterSortConfig ? pageFilterValues[activeRegistryKey] ?? activeFilterSortConfig.defaultFilterValues : {}
+  const activeFilterSortConfig = useMemo(
+    () => resolveRegistryEntry(filterSortRegistry[activeRegistryKey], { resumeAssets }) ?? null,
+    [activeRegistryKey, resumeAssets],
+  )
+  const activeVisibleFields = useMemo(
+    () => activeFilterSortConfig
+      ? visibleFieldsFor(activeFilterSortConfig.fields, settings.visible_filters?.[activeRegistryKey])
+      : [],
+    [activeFilterSortConfig, activeRegistryKey, settings.visible_filters],
+  )
+  const rawFilterValues = activeFilterSortConfig ? pageFilterValues[activeRegistryKey] ?? activeFilterSortConfig.defaultFilterValues : {}
+  const activeFilterValues = useMemo(
+    () => activeFilterSortConfig
+      ? narrowValuesToVisible(activeVisibleFields, rawFilterValues, activeFilterSortConfig.defaultFilterValues)
+      : {},
+    [activeFilterSortConfig, activeVisibleFields, rawFilterValues],
+  )
+  useEffect(() => {
+    if (!activeFilterSortConfig || activeFilterValues === rawFilterValues) return
+    setPageFilterValues((current) => ({ ...current, [activeRegistryKey]: activeFilterValues }))
+  }, [activeFilterSortConfig, activeFilterValues, activeRegistryKey, rawFilterValues])
+  // The backend drops the implicit one-day `mail_date` scope when a text search is active
+  // (see _text_search_active in main.py), but only on the endpoints that accept mail_date.
+  // Surfacing it keeps the visible "Sep 1, 2026" chip from looking like a lie.
+  const dateScopeWidened = !!settings.mail_date
+    && !!activeFilterSortConfig
+    && MAIL_DATE_SCOPED_BUCKETS.has(activeFilterSortConfig.bucket)
+    && hasActiveTextSearch(activeVisibleFields, activeFilterValues)
   const activeSortValue = activeFilterSortConfig ? pageSortValues[activeRegistryKey] ?? activeFilterSortConfig.sortOptions[0]?.value ?? 'newest' : 'newest'
   const activeQueryOptions = useCallback((): CandidateQueryOptions | undefined => activeFilterSortConfig ? { sort: activeSortValue, filters: activeFilterSortConfig.toParams(activeFilterValues) } : undefined, [activeFilterSortConfig, activeFilterValues, activeSortValue])
+
+  // Registry key each candidate bucket is filtered/sorted under (mirrors bucketForPage in reverse).
+  const registryKeyForBucket: Record<CandidateState, string> = { needs_review: 'needs_review', failed: 'failed_mapping', approved_sent: 'sent_items' }
+  // Buckets refresh independently (each may have its own sort/filter selected), so a post-mutation
+  // refresh must look up each bucket's own registry entry rather than reusing activeQueryOptions()
+  // (which only reflects whichever page is currently active) - otherwise refreshing e.g. Failed
+  // Mapping after a Needs Review action would silently overwrite its sort with Needs Review's.
+  const queryOptionsForBucket = (bucket: CandidateState): CandidateQueryOptions | undefined => {
+    const key = registryKeyForBucket[bucket]
+    const config = resolveRegistryEntry(filterSortRegistry[key], { resumeAssets })
+    if (!config) return undefined
+    const filterValues = narrowValuesToVisible(
+      visibleFieldsFor(config.fields, settings.visible_filters?.[key]),
+      pageFilterValues[key] ?? config.defaultFilterValues,
+      config.defaultFilterValues,
+    )
+    const sortValue = pageSortValues[key] ?? config.sortOptions[0]?.value ?? 'newest'
+    return { sort: sortValue, filters: config.toParams(filterValues) }
+  }
 
   // Must run (and read window.location.search) before the URL-sync-write effect below, so it
   // captures the URL from actual browser navigation/popstate rather than a version the write
@@ -3848,7 +3955,9 @@ function App() {
       window.clearTimeout(refreshTimerRef.current)
     }
     refreshTimerRef.current = window.setTimeout(() => {
-      refreshVisibleCandidates(settings.mail_date ?? null, { activeOnly: true, includeLoaded: true }).catch(() => {
+      const activeBucket = bucketForPage(activePage) ?? 'needs_review'
+      const bucketsToRefresh = (['needs_review', 'failed', 'approved_sent'] as CandidateState[]).filter((bucket) => bucket === activeBucket || bucketMeta[bucket].loaded)
+      Promise.all(bucketsToRefresh.map((bucket) => refreshCandidates(settings.mail_date ?? null, bucket, { activeOnly: true, queryOptions: queryOptionsForBucket(bucket) }))).catch(() => {
         // Keep UI responsive if one refresh call fails; error surfaces on next action.
       })
       loadProductivityAnalytics(timeRange).catch(() => {
@@ -3903,7 +4012,7 @@ function App() {
 
   const runFailedMappingBulk = async (action: 'save' | 'delete') => {
     const ids = [...failedMappingSelected]
-    const fixes = Object.fromEntries(ids.filter((id) => routingFixes[id]?.to && routingFixes[id]?.cc).map((id) => [id, { to_email: routingFixes[id].to, cc_email: routingFixes[id].cc }]))
+    const fixes = Object.fromEntries(ids.filter((id) => isValidEmailAddress(routingFixes[id]?.to ?? '') && isValidEmailAddress(routingFixes[id]?.cc ?? '')).map((id) => [id, { to_email: routingFixes[id].to, cc_email: routingFixes[id].cc }]))
     const ready = Object.keys(fixes).length
     if (!ids.length || (action === 'save' && !ready)) return
     if (!window.confirm(action === 'save' ? `Save routing corrections and move ${ready} candidate${ready === 1 ? '' : 's'} to Review?${ready < ids.length ? ` ${ids.length - ready} selected rows have no correction entered and will be skipped.` : ''}` : `Delete ${ids.length} failed mapping card${ids.length === 1 ? '' : 's'} from the dashboard?`)) return
@@ -4725,19 +4834,30 @@ function App() {
     setRegeneratingId(candidateId)
     setError('')
     try {
-      const res = await fetch(`${apiBase}/candidates/${candidateId}/regenerate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          preserve_manual_routing: true,
-          preserve_review_visibility: true,
-        }),
-      })
-      if (!res.ok) {
-        const details = await res.json().catch(() => null)
-        throw new Error(details?.detail ?? 'Regenerate failed')
+      const requestRegeneration = async (allowRoleManifestFork: boolean): Promise<Candidate | null> => {
+        const res = await fetch(`${apiBase}/candidates/${candidateId}/regenerate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            preserve_manual_routing: true,
+            preserve_review_visibility: true,
+            allow_role_manifest_fork: allowRoleManifestFork,
+          }),
+        })
+        if (!res.ok) {
+          const details = await res.json().catch(() => null)
+          const fork = details?.detail
+          if (!allowRoleManifestFork && res.status === 409 && fork?.code === 'role_manifest_fork_required') {
+            const count = Number(fork.requirement_count ?? 0)
+            if (!window.confirm(`This requirement contains ${count} roles and regeneration will create ${count} separate candidate cards. Continue?`)) return null
+            return requestRegeneration(true)
+          }
+          throw new Error(typeof details?.detail === 'string' ? details.detail : 'Regenerate failed')
+        }
+        return await res.json() as Candidate
       }
-      const updated = (await res.json()) as Candidate
+      const updated = await requestRegeneration(false)
+      if (!updated) return
       setDraftEdits((prev) => ({ ...prev, [updated.id]: updated.draft_reply ?? '' }))
       schedulePostMutationRefresh()
     } catch (e) {
@@ -4766,7 +4886,7 @@ function App() {
 
   const saveRoutingAndRequeue = async (candidateId: number) => {
     const fix = routingFixes[candidateId]
-    if (!fix?.to || !fix?.cc) return
+    if (!fix || !isValidEmailAddress(fix.to) || !isValidEmailAddress(fix.cc)) return
     setFixingId(candidateId)
     setError('')
     try {
@@ -5090,7 +5210,8 @@ function App() {
         </button>
       </section>
       <FilterSortBar
-        fields={activeFilterSortConfig?.fields ?? []}
+        apiBase={apiBase}
+        fields={activeVisibleFields}
         values={activeFilterValues}
         onFieldChange={(key, value) => setPageFilterValues((prev) => ({ ...prev, [activeRegistryKey]: { ...(prev[activeRegistryKey] ?? activeFilterSortConfig?.defaultFilterValues ?? {}), [key]: value } }))}
         onClear={() => setPageFilterValues((prev) => ({ ...prev, [activeRegistryKey]: activeFilterSortConfig?.defaultFilterValues ?? {} }))}
@@ -5099,6 +5220,7 @@ function App() {
         onSortChange={(value) => setPageSortValues((prev) => ({ ...prev, [activeRegistryKey]: value }))}
         disabled={!activeFilterSortConfig}
         loading={activeFilterSortConfig?.bucket === 'inbox_conversations' ? inboxLoading : isCandidateRefreshing}
+        dateScopeWidened={dateScopeWidened}
       />
       {automationJob || nvoidsJob ? (
         <section className="jobProgressGrid" aria-label="Background job progress">
@@ -6586,6 +6708,12 @@ function App() {
                 embeddingSummary={embeddingSummary}
                 embedSkills={embedPendingSkills}
               />
+              <FilterVisibilitySettings
+                visibleFilters={settings.visible_filters}
+                onChange={updateVisibleFilters}
+                resumeAssets={resumeAssets}
+                savingLabel={filterVisibilityStatus}
+              />
               <EntityUpgradeSection
                 title="Upgrade Companies"
                 pendingEntities={pendingCompanies}
@@ -6685,6 +6813,7 @@ function App() {
                 onDraftChange={(value) => setDraftEdits((prev) => ({ ...prev, [item.id]: value }))}
                 draftTextSize={settings.draft_text_size}
                 enabledAttachmentNames={enabledAttachmentNames}
+                activeResumeName={activeResume?.file_name}
                 parserExpanded={Boolean(expandedParserDetailIds[item.id])}
                 onToggleParserExpanded={() => setExpandedParserDetailIds((prev) => ({ ...prev, [item.id]: !prev[item.id] }))}
                 selection={{
@@ -6726,7 +6855,7 @@ function App() {
             <section className="card pageSection">
           <h2>Failed Recipient Mapping (Teach the model)</h2>
           <label className="selectAllRow"><input type="checkbox" checked={failedQueue.length > 0 && failedQueue.every((item) => failedMappingSelected.has(item.id))} onChange={(event) => setFailedMappingSelected(event.target.checked ? new Set(failedQueue.map((item) => item.id)) : new Set())} /> Select all visible</label>
-          <SelectionActionBar selectedCount={failedMappingSelected.size} busyKey={failedMappingBulkAction} onClearSelection={() => setFailedMappingSelected(new Set())} actions={[{ key: 'save', label: 'Save Mapping & Move to Review', onClick: () => void runFailedMappingBulk('save'), disabled: ![...failedMappingSelected].some((id) => routingFixes[id]?.to && routingFixes[id]?.cc) }, { key: 'delete', label: 'Delete', onClick: () => void runFailedMappingBulk('delete'), variant: 'danger' }]} />
+          <SelectionActionBar selectedCount={failedMappingSelected.size} busyKey={failedMappingBulkAction} onClearSelection={() => setFailedMappingSelected(new Set())} actions={[{ key: 'save', label: 'Save Mapping & Move to Review', onClick: () => void runFailedMappingBulk('save'), disabled: ![...failedMappingSelected].some((id) => isValidEmailAddress(routingFixes[id]?.to ?? '') && isValidEmailAddress(routingFixes[id]?.cc ?? '')) }, { key: 'delete', label: 'Delete', onClick: () => void runFailedMappingBulk('delete'), variant: 'danger' }]} />
           {failedQueue.length === 0 ? <p className="subtle">No failed emails match these filters.</p> : null}
           {failedQueue.map((item) => {
             const fix = routingFixes[item.id] ?? { to: '', cc: '' }
@@ -6795,7 +6924,9 @@ function App() {
                   <label>
                     Correct To
                     <input
+                      type="email"
                       value={fix.to}
+                      aria-invalid={Boolean(fix.to) && !isValidEmailAddress(fix.to)}
                       onChange={(e) =>
                         setRoutingFixes((prev) => ({ ...prev, [item.id]: { ...fix, to: e.target.value } }))
                       }
@@ -6804,7 +6935,9 @@ function App() {
                   <label>
                     Correct CC
                     <input
+                      type="email"
                       value={fix.cc}
+                      aria-invalid={Boolean(fix.cc) && !isValidEmailAddress(fix.cc)}
                       onChange={(e) =>
                         setRoutingFixes((prev) => ({ ...prev, [item.id]: { ...fix, cc: e.target.value } }))
                       }
@@ -6817,7 +6950,7 @@ function App() {
                     type="button"
                     className="sendActionButton"
                     onClick={() => saveRoutingAndRequeue(item.id)}
-                    disabled={fixingId === item.id || deletingFailedId === item.id || !fix.to || !fix.cc}
+                    disabled={fixingId === item.id || deletingFailedId === item.id || !isValidEmailAddress(fix.to) || !isValidEmailAddress(fix.cc)}
                   >
                     {fixingId === item.id ? 'Saving...' : 'Save Mapping & Move to Review'}
                   </button>
@@ -7279,7 +7412,7 @@ function App() {
 
                 <div className="sentItemHeaderActions">
                   <span className="sourceBadge">{getSourceLabel(item.source)}</span>
-                  <button type="button" onClick={() => void toggleTracking(item.id).catch((reason) => setError((reason as Error).message))}>Track Application</button>
+                  {settings.feature_applications_enabled ? <button type="button" onClick={() => void toggleTracking(item.id).catch((reason) => setError((reason as Error).message))}>Track Application</button> : null}
                   <button type="button" onClick={() => void toggleSentDetails(item.id)}>
                     {isExpanded ? 'Hide Sourcing Audit Trail' : 'Sourcing Audit Trail'}
                   </button>

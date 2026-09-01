@@ -4,12 +4,20 @@ import json
 import logging
 import uuid
 
+from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.external_feeds.models import ExternalOpportunity
 from app.models import (
+    AppTSApplication,
+    AppTSApplicationInterview,
+    Application,
+    ApplicationInterview,
     CandidateRecord,
+    EmailConversation,
+    EmailOpenEvent,
+    EmailReplyMessage,
     OpportunityLifecycleEvent,
     OpportunityLineage,
     OpportunitySourceReference,
@@ -332,3 +340,174 @@ def record_id_for_opportunity(db: Session, *, owner_id: str, recruiter_opportuni
         RecruiterOpportunity.owner_id == owner_id, RecruiterOpportunity.id == recruiter_opportunity_id
     ).first()
     return row.record_id if row else None
+
+
+def record_id_for_application(db: Session, *, owner_id: str, application) -> str | None:
+    """Resolve through the source email first, then the recruiter opportunity."""
+    source_email_id = getattr(application, "source_recruiter_email_id", None)
+    if source_email_id is not None:
+        email = db.query(RecruiterEmail).filter(
+            RecruiterEmail.owner_id == owner_id,
+            RecruiterEmail.id == source_email_id,
+        ).first()
+        if email is not None and email.record_id:
+            return email.record_id
+    recruiter_opportunity_id = getattr(application, "recruiter_opportunity_id", None)
+    if recruiter_opportunity_id is None:
+        return None
+    return record_id_for_opportunity(
+        db,
+        owner_id=owner_id,
+        recruiter_opportunity_id=recruiter_opportunity_id,
+    )
+
+
+def application_link_ids_for_record(
+    db: Session,
+    *,
+    owner_id: str,
+    record_id: str,
+) -> tuple[list[int], list[int]]:
+    email_ids = [
+        row_id
+        for (row_id,) in db.query(RecruiterEmail.id).filter(
+            RecruiterEmail.owner_id == owner_id,
+            RecruiterEmail.record_id == record_id,
+        )
+    ]
+    opportunity_ids = [
+        row_id
+        for (row_id,) in db.query(RecruiterOpportunity.id).filter(
+            RecruiterOpportunity.owner_id == owner_id,
+            RecruiterOpportunity.record_id == record_id,
+        )
+    ]
+    return email_ids, opportunity_ids
+
+
+def applications_for_record(db: Session, *, owner_id: str, record_id: str, model) -> list:
+    email_ids, opportunity_ids = application_link_ids_for_record(
+        db,
+        owner_id=owner_id,
+        record_id=record_id,
+    )
+    links = []
+    if opportunity_ids:
+        links.append(model.recruiter_opportunity_id.in_(opportunity_ids))
+    if email_ids and hasattr(model, "source_recruiter_email_id"):
+        links.append(model.source_recruiter_email_id.in_(email_ids))
+    if not links:
+        return []
+    return (
+        db.query(model)
+        .filter(
+            model.owner_id == owner_id,
+            model.deleted_at.is_(None),
+            or_(*links),
+        )
+        .order_by(model.created_at.asc(), model.id.asc())
+        .all()
+    )
+
+
+def record_outcomes(db: Session, *, owner_id: str, record_id: str) -> dict[str, object]:
+    emails = (
+        db.query(RecruiterEmail)
+        .filter(RecruiterEmail.owner_id == owner_id, RecruiterEmail.record_id == record_id)
+        .all()
+    )
+    email_by_id = {row.id: row for row in emails}
+    email_ids = list(email_by_id)
+    open_count = (
+        db.query(EmailOpenEvent)
+        .filter(EmailOpenEvent.owner_id == owner_id, EmailOpenEvent.recruiter_email_id.in_(email_ids))
+        .count()
+        if email_ids
+        else 0
+    )
+    conversations = (
+        db.query(EmailConversation)
+        .filter(
+            EmailConversation.owner_id == owner_id,
+            EmailConversation.root_recruiter_email_id.in_(email_ids),
+        )
+        .all()
+        if email_ids
+        else []
+    )
+    conversation_by_id = {row.id: row for row in conversations}
+    inbound = (
+        db.query(EmailReplyMessage)
+        .filter(
+            EmailReplyMessage.owner_id == owner_id,
+            EmailReplyMessage.conversation_id.in_(list(conversation_by_id)),
+            EmailReplyMessage.direction == "inbound",
+        )
+        .order_by(EmailReplyMessage.received_at.asc(), EmailReplyMessage.id.asc())
+        .all()
+        if conversation_by_id
+        else []
+    )
+    first_reply = inbound[0] if inbound else None
+    days_to_first_reply = None
+    if first_reply is not None:
+        root_email = email_by_id.get(conversation_by_id[first_reply.conversation_id].root_recruiter_email_id)
+        if root_email is not None and root_email.sent_at is not None:
+            days_to_first_reply = max(
+                0.0,
+                (first_reply.received_at - root_email.sent_at).total_seconds() / 86400,
+            )
+
+    applications = applications_for_record(
+        db,
+        owner_id=owner_id,
+        record_id=record_id,
+        model=Application,
+    )
+    appts_applications = applications_for_record(
+        db,
+        owner_id=owner_id,
+        record_id=record_id,
+        model=AppTSApplication,
+    )
+    legacy_ids = [row.id for row in applications]
+    appts_ids = [row.id for row in appts_applications]
+    interviewed = bool(
+        (
+            legacy_ids
+            and db.query(ApplicationInterview.id).filter(
+                ApplicationInterview.owner_id == owner_id,
+                ApplicationInterview.application_id.in_(legacy_ids),
+                ApplicationInterview.deleted_at.is_(None),
+            ).first()
+        )
+        or (
+            appts_ids
+            and db.query(AppTSApplicationInterview.id).filter(
+                AppTSApplicationInterview.owner_id == owner_id,
+                AppTSApplicationInterview.application_id.in_(appts_ids),
+                AppTSApplicationInterview.deleted_at.is_(None),
+            ).first()
+        )
+    )
+    record = get_record(db, owner_id=owner_id, record_id=record_id)
+    lineage = db.get(OpportunityLineage, record.internal_lineage_id) if record and record.internal_lineage_id else None
+    source_state = emails[0].state if emails else None
+    if source_state is None:
+        external = db.query(ExternalOpportunity).filter(
+            ExternalOpportunity.owner_id == owner_id,
+            ExternalOpportunity.record_id == record_id,
+        ).first()
+        source_state = external.bridge_status if external else None
+    return {
+        "sent": any(row.sent_at is not None or row.sent_status == "sent" for row in emails),
+        "sent_count": sum(1 for row in emails if row.sent_at is not None or row.sent_status == "sent"),
+        "opened": open_count > 0 or any(row.open_count > 0 or row.opened_at is not None for row in emails),
+        "open_count": max(open_count, sum(int(row.open_count or 0) for row in emails)),
+        "replied": bool(inbound),
+        "inbound_reply_count": len(inbound),
+        "first_reply_at": first_reply.received_at if first_reply else None,
+        "days_to_first_reply": days_to_first_reply,
+        "interviewed": interviewed,
+        "current_status": lineage.current_status if lineage is not None else source_state,
+    }

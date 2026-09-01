@@ -58,7 +58,7 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
   const [bulkAction, setBulkAction] = useState<string | null>(null)
   const requestIdRef = useRef(0)
   const search = String(filterValues.q ?? '')
-  const status = (filterValues.status || 'all') as 'all' | OpportunityStatus
+  const statusValues = (Array.isArray(filterValues.status) ? filterValues.status : []) as OpportunityStatus[]
   const source = (filterValues.source_type || 'all') as 'all' | 'gmail' | 'nvoids'
   const filterResumeId = filterValues.resume_fit && filterValues.resume_fit !== 'all' ? Number(filterValues.resume_fit) : null
   const sortByMatch = sortValue === 'resume_fit' && filterResumeId != null
@@ -74,7 +74,7 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
           setMatchesByOpportunity(Object.fromEntries(matches.map((match) => [match.opportunity.id, match])) as Record<number, OpportunityMatch>)
           return matches.map((match) => match.opportunity)
         })
-      : listOpportunityPage({ apiBase, cursor:(page-1)*PAGE_SIZE,limit:PAGE_SIZE,q:search,status,sourceType:source,mailDate,sort:sortValue,filters:opportunityFiltersToParams(filterValues) }).then((payload) => {
+      : listOpportunityPage({ apiBase, cursor:(page-1)*PAGE_SIZE,limit:PAGE_SIZE,q:search,status:statusValues.length ? statusValues : 'all',sourceType:source,mailDate,sort:sortValue,filters:opportunityFiltersToParams(filterValues) }).then((payload) => {
           setMatchesByOpportunity({})
           setTotal(payload.total)
           return payload.items
@@ -96,7 +96,7 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
     const timer = window.setTimeout(() => { load().catch(() => undefined) }, 150)
     return () => window.clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [apiBase, filterValues, filterResumeId, mailDate, page, refreshToken, search, sortByMatch, sortValue, source, status])
+  }, [apiBase, filterValues, filterResumeId, mailDate, page, refreshToken, search, sortByMatch, sortValue, source, statusValues.join(',')])
 
   useEffect(() => {
     if (!applicationsEnabled) return
@@ -221,14 +221,15 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
     }
   }
 
-  const openResumePicker = async (opportunityId: number) => {
-    setTrackingId(opportunityId)
-    setTrackingDedupeKey(crypto.randomUUID())
-    setBusyId(opportunityId)
+  const openResumePicker = async (item: RecruiterOpportunityCard, reason?: string) => {
+    setTrackingId(item.id)
+    setTrackingDedupeKey((current) => current || crypto.randomUUID())
+    setBusyId(item.id)
+    if (reason) onToast(reason, 'error')
     try {
       const enabled = (await listResumeOptions(apiBase)).filter((resume) => resume.is_enabled)
       setResumeOptions(enabled)
-      setSelectedResumeId((enabled.find((resume) => resume.is_current) ?? enabled[0])?.id ?? null)
+      setSelectedResumeId((enabled.find((resume) => resume.file_name === item.resume_file_name) ?? enabled.find((resume) => resume.is_current) ?? enabled[0])?.id ?? null)
     } catch (reason) {
       onToast((reason as Error).message, 'error')
       setTrackingId(null)
@@ -237,18 +238,23 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
     }
   }
 
-  const trackApplication = async (item: RecruiterOpportunityCard) => {
-    if (selectedResumeId == null) return
+  const trackApplication = async (item: RecruiterOpportunityCard, resumeAssetId?: number) => {
+    const dedupeKey = trackingDedupeKey || crypto.randomUUID()
+    setTrackingDedupeKey(dedupeKey)
     setBusyId(item.id)
     try {
       await createAppTSApplicationFromOpportunity(apiBase, {
-        resume_asset_id: selectedResumeId,
+        ...(resumeAssetId == null ? {} : { resume_asset_id: resumeAssetId }),
         recruiter_opportunity_id: item.id,
-        dedupe_key: trackingDedupeKey,
+        dedupe_key: dedupeKey,
       })
       setTrackingId(null)
       onToast('Application tracking started')
     } catch (reason) {
+      if (item.resume_asset_id != null && (reason as Error & { status?: number }).status === 404) {
+        await openResumePicker(item, (reason as Error).message)
+        return
+      }
       onToast((reason as Error).message, 'error')
     } finally {
       setBusyId(null)
@@ -359,7 +365,7 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
               </button>
               <button type="button" onClick={() => generate(item.id)} disabled={busyId === item.id}>{busyId === item.id ? 'Working...' : 'Generate Cold Call Script'}</button>
               <button type="button" onClick={() => refreshAiMetadata(item.id)} disabled={busyId === item.id}>{busyId === item.id ? 'Working...' : 'Refresh AI Metadata'}</button>
-              {applicationsEnabled ? <button type="button" onClick={() => openResumePicker(item.id)} disabled={busyId === item.id}>Track Application</button> : null}
+              {applicationsEnabled ? <button type="button" onClick={() => item.resume_asset_id == null ? openResumePicker(item) : trackApplication(item)} disabled={busyId === item.id}>Track Application</button> : null}
               <button type="button" className="dangerButton" onClick={() => remove(item.id)} disabled={busyId === item.id}>{busyId === item.id ? 'Working...' : 'Delete'}</button>
               {item.cold_call_script ? <button type="button" onClick={() => navigator.clipboard.writeText(item.cold_call_script || '').then(() => onToast('Copied')).catch(() => onToast('Failed to copy cold call script', 'error'))}>Copy Script</button> : null}
             </div>
@@ -385,7 +391,7 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
                   </p>
                 )}
                 <div className="rowBtns">
-                  <button type="button" onClick={() => trackApplication(item)} disabled={busyId === item.id || selectedResumeId == null}>Confirm &amp; Track</button>
+                  <button type="button" onClick={() => selectedResumeId != null && trackApplication(item, selectedResumeId)} disabled={busyId === item.id || selectedResumeId == null}>Confirm &amp; Track</button>
                   <button type="button" onClick={() => setTrackingId(null)} disabled={busyId === item.id}>Cancel</button>
                 </div>
               </div>

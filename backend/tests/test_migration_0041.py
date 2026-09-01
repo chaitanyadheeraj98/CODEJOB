@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.db import Base
 from app.models import AppTSApplication, RecruiterEmail
+from tests.migration_support import drop_foreign_keys
 
 
 class AppTSSourceRecruiterEmailBackfillTests(unittest.TestCase):
@@ -48,6 +49,9 @@ class AppTSSourceRecruiterEmailBackfillTests(unittest.TestCase):
                 tracked_with_deleted_email_id = tracked_with_deleted_email.id
                 manual_entry_id = manual_entry.id
 
+            drop_foreign_keys(
+                engine, "appts_applications", "fk_appts_applications_source_recruiter_email"
+            )
             with engine.begin() as connection:
                 connection.exec_driver_sql("DROP INDEX IF EXISTS ix_appts_applications_source_recruiter_email_id")
                 connection.exec_driver_sql("ALTER TABLE appts_applications DROP COLUMN source_recruiter_email_id")

@@ -18,6 +18,7 @@ from app.models import (
     ApplicationOutreachMessage,
     ApplicationSkillGapSnapshot,
     ApplicationSuggestion,
+    PremiumNumberContact,
     RecruiterEmail,
     RecruiterOpportunity,
     ResumeAsset,
@@ -110,6 +111,8 @@ def create_manual_application(
     manual_source_note: str = '',
     submission_method: str = 'email',
     resume_submitted_at: datetime | None = None,
+    recruiter_opportunity_id: int | None = None,
+    recruiter_contact_id: int | None = None,
 ) -> tuple[Application, bool]:
     resume = (
         db.query(ResumeAsset)
@@ -136,6 +139,31 @@ def create_manual_application(
             'submission_method is required and must be at most 20 characters'
         )
 
+    opportunity = None
+    if recruiter_opportunity_id is not None:
+        opportunity = (
+            db.query(RecruiterOpportunity)
+            .filter(
+                RecruiterOpportunity.owner_id == owner_id,
+                RecruiterOpportunity.id == recruiter_opportunity_id,
+            )
+            .first()
+        )
+        if opportunity is None:
+            raise application_service.ApplicationReferenceNotFoundError('Opportunity not found')
+        recruiter_contact_id = recruiter_contact_id or opportunity.recruiter_number_id
+    if recruiter_contact_id is not None:
+        contact_exists = (
+            db.query(PremiumNumberContact.id)
+            .filter(
+                PremiumNumberContact.owner_id == owner_id,
+                PremiumNumberContact.id == recruiter_contact_id,
+            )
+            .first()
+        )
+        if contact_exists is None:
+            raise application_service.ApplicationReferenceNotFoundError('Recruiter contact not found')
+
     submitted_at = resume_submitted_at or utc_now()
     application = Application(
         owner_id=owner_id,
@@ -143,8 +171,8 @@ def create_manual_application(
         resume_version_snapshot=resume.version,
         resume_file_name_snapshot=resume.file_name,
         resume_sha256_snapshot=resume.sha256,
-        recruiter_opportunity_id=None,
-        recruiter_contact_id=None,
+        recruiter_opportunity_id=recruiter_opportunity_id,
+        recruiter_contact_id=recruiter_contact_id,
         recruiter_name_snapshot=manual_recruiter_name.strip(),
         recruiter_company_snapshot=manual_recruiter_company.strip(),
         job_title_snapshot=manual_job_title.strip(),
@@ -475,16 +503,21 @@ def resume_funnel_metrics(
     *,
     owner_id: str,
     resume_asset_id: int,
+    models: application_service.ApplicationModels = application_service.LEGACY_MODELS,
+    _raw: bool = False,
 ) -> dict[str, object]:
-    applications = (
-        db.query(Application)
+    application_cls = models.application_cls
+    query = (
+        db.query(application_cls)
         .filter(
-            Application.owner_id == owner_id,
-            Application.resume_asset_id == resume_asset_id,
-            Application.deleted_at.is_(None),
+            application_cls.owner_id == owner_id,
+            application_cls.resume_asset_id == resume_asset_id,
+            application_cls.deleted_at.is_(None),
         )
-        .all()
     )
+    if hasattr(application_cls, "promoted_to_appts_application_id"):
+        query = query.filter(application_cls.promoted_to_appts_application_id.is_(None))
+    applications = query.all()
     submitted = [row for row in applications if row.resume_submission_status != 'not_submitted']
     total = len(submitted)
     milestone_names = ('viewed', 'shortlisted', 'interview_scheduled', 'offered', 'hired')
@@ -498,10 +531,10 @@ def resume_funnel_metrics(
     skill_gap_by_application_id = {
         snapshot.application_id: snapshot
         for snapshot in (
-            db.query(ApplicationSkillGapSnapshot)
+            db.query(models.skill_gap_snapshot_cls)
             .filter(
-                ApplicationSkillGapSnapshot.owner_id == owner_id,
-                ApplicationSkillGapSnapshot.application_id.in_([row.id for row in submitted]),
+                models.skill_gap_snapshot_cls.owner_id == owner_id,
+                models.skill_gap_snapshot_cls.application_id.in_([row.id for row in submitted]),
             )
             .all()
             if submitted
@@ -551,7 +584,7 @@ def resume_funnel_metrics(
         )
     )
     rejected = sum(1 for row in submitted if row.resume_submission_status == 'rejected')
-    return {
+    result: dict[str, object] = {
         'resume_asset_id': resume_asset_id,
         'total_submissions': total,
         'not_submitted_count': len(applications) - total,
@@ -568,9 +601,102 @@ def resume_funnel_metrics(
         'top_rejection_reasons': _top(rejection_reasons),
         'top_missing_skills': _top(missing_skills),
     }
+    if _raw:
+        result.update({
+            "_milestone_counts": dict(counts),
+            "_accepted_count": accepted,
+            "_rejected_count": rejected,
+            "_elapsed": dict(elapsed),
+            "_rejection_reasons": dict(rejection_reasons),
+            "_missing_skills": dict(missing_skills),
+        })
+    return result
 
 
-def resume_performance_summary(db: Session, *, owner_id: str, sort: str = "recent") -> list[dict[str, object]]:
+def combined_resume_funnel_metrics(
+    db: Session,
+    *,
+    owner_id: str,
+    resume_asset_id: int,
+) -> dict[str, object]:
+    from app.services import appts_service
+
+    metrics = [
+        resume_funnel_metrics(
+            db,
+            owner_id=owner_id,
+            resume_asset_id=resume_asset_id,
+            models=models,
+            _raw=True,
+        )
+        for models in (application_service.LEGACY_MODELS, appts_service.APPTS_MODELS)
+    ]
+    total = sum(int(item["total_submissions"]) for item in metrics)
+    not_submitted = sum(int(item["not_submitted_count"]) for item in metrics)
+
+    def combined_rate(name: str) -> float:
+        milestone_name = {
+            "view_rate": "viewed",
+            "shortlist_rate": "shortlisted",
+            "interview_rate": "interview_scheduled",
+            "offer_rate": "offered",
+            "hire_rate": "hired",
+        }.get(name)
+        if milestone_name:
+            count = sum(int(item["_milestone_counts"].get(milestone_name, 0)) for item in metrics)
+        else:
+            raw_name = "_accepted_count" if name == "acceptance_rate" else "_rejected_count"
+            count = sum(int(item[raw_name]) for item in metrics)
+        return _rate(count, total)
+
+    def combined_top(name: str) -> list[dict[str, object]]:
+        counts: Counter[str] = Counter()
+        raw_name = "_rejection_reasons" if name == "top_rejection_reasons" else "_missing_skills"
+        for item in metrics:
+            counts.update(item[raw_name])
+        return _top(counts)
+
+    def combined_median(name: str) -> float | None:
+        elapsed_name = {
+            "median_days_to_shortlist": "shortlisted",
+            "median_days_to_interview": "interview_scheduled",
+            "median_days_to_offer": "offered",
+        }[name]
+        values = [float(value) for item in metrics for value in item["_elapsed"].get(elapsed_name, [])]
+        return median(values) if values else None
+
+    return {
+        "resume_asset_id": resume_asset_id,
+        "total_submissions": total,
+        "not_submitted_count": not_submitted,
+        **{
+            name: combined_rate(name)
+            for name in (
+                "view_rate",
+                "shortlist_rate",
+                "interview_rate",
+                "offer_rate",
+                "hire_rate",
+                "rejection_rate",
+                "acceptance_rate",
+            )
+        },
+        "median_days_to_shortlist": combined_median("median_days_to_shortlist"),
+        "median_days_to_interview": combined_median("median_days_to_interview"),
+        "median_days_to_offer": combined_median("median_days_to_offer"),
+        "top_rejection_reasons": combined_top("top_rejection_reasons"),
+        "top_missing_skills": combined_top("top_missing_skills"),
+    }
+
+
+def resume_performance_summary(
+    db: Session,
+    *,
+    owner_id: str,
+    sort: str = "recent",
+    models: application_service.ApplicationModels = application_service.LEGACY_MODELS,
+    combined: bool = False,
+) -> list[dict[str, object]]:
     resumes = (
         db.query(ResumeAsset)
         .filter(ResumeAsset.owner_id == owner_id)
@@ -580,10 +706,13 @@ def resume_performance_summary(db: Session, *, owner_id: str, sort: str = "recen
     items = [
         {
             'resume': resume,
-            'submission_count': (metrics := resume_funnel_metrics(
+            'submission_count': (metrics := (
+                combined_resume_funnel_metrics if combined else resume_funnel_metrics
+            )(
                 db,
                 owner_id=owner_id,
                 resume_asset_id=resume.id,
+                **({} if combined else {"models": models}),
             ))['total_submissions'],
             'acceptance_rate': metrics['acceptance_rate'],
         }

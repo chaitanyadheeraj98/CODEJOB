@@ -30,7 +30,7 @@ from app.job_intent_learning import approved_learning_signals_for_owner, record_
 from app.services import application_intelligence_service, appts_service, opportunity_lineage_service, policy_service
 from app.services.policy_service import EffectiveRunInputs
 from app.gmail_client import GmailMessageCandidate, MailAttachment
-from app.models import AttachmentAsset, DraftEditFeedback, EmailConversation, EmailReplyMessage, GmailRequirementGroup, RecipientRoutingFeedback, RecentRun, RecentRunSkippedItem, RecruiterEmail, ResumeAsset, SyncRun, UserSettings
+from app.models import AttachmentAsset, DraftEditFeedback, EmailConversation, EmailReplyMessage, GmailRequirementGroup, OpportunityLineage, RecipientRoutingFeedback, RecentRun, RecentRunSkippedItem, RecruiterEmail, ResumeAsset, SyncRun, UserSettings
 from app.parsing import build_skills_json_payload
 from app.parsing.document_extraction import prepare_gmail_parse_body
 from app.phase0 import DEFAULT_SIGNATURE_EMAIL, RoutingResult, jd_entity_fields_from_parsed, parse_email_with_details
@@ -1205,6 +1205,7 @@ class OrchestrationService:
                 event_type="recent_run_recorded",
                 event_source="run_once_retry" if items_override is not None else "run_once",
                 entity_id=response.email_id,
+                entity_type="RecruiterEmail" if response.email_id is not None else "",
                 metadata={
                     "status": response.status,
                     "matched_count": response.matched_count or 0,
@@ -1279,6 +1280,7 @@ class OrchestrationService:
                     event_type="auto_send_failed",
                     event_source="automation",
                     entity_id=email_id,
+                    entity_type="RecruiterEmail",
                     metadata={"detail": str(exc.detail)},
                 )
             except Exception:
@@ -1289,6 +1291,7 @@ class OrchestrationService:
                     event_type="auto_send_failed",
                     event_source="automation",
                     entity_id=email_id,
+                    entity_type="RecruiterEmail",
                     metadata={"detail": "unexpected_auto_send_error"},
                 )
         return auto_sent_count, auto_send_failed_count
@@ -1340,6 +1343,7 @@ class OrchestrationService:
                         event_type="needs_review_marked",
                         event_source="state",
                         entity_id=email.id,
+                        entity_type="RecruiterEmail",
                         metadata={"source": "retry_queue"},
                     )
                 except Exception:
@@ -1555,7 +1559,7 @@ class OrchestrationService:
             )
         db.commit()
         db.refresh(email)
-        self.deps.record_productivity_event(db, event_type="approved_sent", event_source="action", entity_id=email.id, metadata={"state": email.state, "sent_status": email.sent_status})
+        self.deps.record_productivity_event(db, event_type="approved_sent", event_source="action", entity_id=email.id, entity_type="RecruiterEmail", metadata={"state": email.state, "sent_status": email.sent_status})
 
         try:
             logger.info("Appending Google Sheets tracking row for approved email_id=%s", email.id)
@@ -1650,6 +1654,23 @@ class OrchestrationService:
         email.approval_status = "rejected"
         email.sent_status = "not_sent"
         email.marked_for_tracking = False
+        record = opportunity_lineage_service.get_record(
+            db,
+            owner_id=self.deps.owner_id,
+            record_id=email.record_id or "",
+        )
+        lineage = db.get(OpportunityLineage, record.internal_lineage_id) if record and record.internal_lineage_id else None
+        if lineage is not None:
+            opportunity_lineage_service.record_event(
+                db,
+                lineage_id=lineage.id,
+                event_type="rejected",
+                process_name="orchestration_service",
+                related_record_type="RecruiterEmail",
+                related_record_id=email.id,
+            )
+            lineage.current_status = "closed"
+            lineage.closed_at = datetime.now(UTC)
         db.commit()
         db.refresh(email)
         return email
@@ -1667,20 +1688,36 @@ class OrchestrationService:
         if email.state != "needs_review":
             raise HTTPException(status_code=400, detail="Only needs_review candidates can be moved to failed mapping")
 
+        prior_status = email.routing_status
         email.state = "failed"
         email.routing_confirmed = False
-        email.routing_status = "ambiguous"
-        email.routing_confidence = min(float(email.routing_confidence or 0.0), 0.5)
-        email.routing_reason = "Manually moved to failed mapping for recipient remap."
+        if prior_status not in {"safe", "confirmed"}:
+            email.routing_status = "ambiguous"
+            email.routing_confidence = min(float(email.routing_confidence or 0.0), 0.5)
+        email.routing_reason = f"Manually moved to failed mapping for recipient remap (prior routing: {prior_status})."
         email.last_error = "Recipient mapping flagged for manual remap"
         email.skip_reason = "manual_failed_mapping"
         email.decision_reason = "Moved to failed mapping by user"
         email.approval_status = "pending"
         email.sent_status = "not_sent"
         email.marked_for_tracking = False
+        record = opportunity_lineage_service.get_record(
+            db,
+            owner_id=self.deps.owner_id,
+            record_id=email.record_id or "",
+        )
+        if record and record.internal_lineage_id:
+            opportunity_lineage_service.record_event(
+                db,
+                lineage_id=record.internal_lineage_id,
+                event_type="failed_mapping",
+                process_name="orchestration_service",
+                related_record_type="RecruiterEmail",
+                related_record_id=email.id,
+            )
         db.commit()
         db.refresh(email)
-        self.deps.record_productivity_event(db, event_type="failed_mapping_marked", event_source="action", entity_id=email.id, metadata={"source": "manual_move_to_failed_mapping"})
+        self.deps.record_productivity_event(db, event_type="failed_mapping_marked", event_source="action", entity_id=email.id, entity_type="RecruiterEmail", metadata={"source": "manual_move_to_failed_mapping", "prior_routing_status": prior_status})
         return email
 
     def set_tracking(self, email_id: int, tracked: bool, db: Session) -> RecruiterEmail:
@@ -1979,6 +2016,7 @@ class OrchestrationService:
             event_type="needs_review_marked" if email.state == "needs_review" else "failed_mapping_marked",
             event_source="action",
             entity_id=email.id,
+            entity_type="RecruiterEmail",
             metadata={"source": "regenerate_candidate", "outcome": preparation.outcome},
         )
         return email
@@ -2004,6 +2042,7 @@ class OrchestrationService:
             event_type="failed_mapping_dismissed",
             event_source="action",
             entity_id=email.id,
+            entity_type="RecruiterEmail",
             metadata={"source": "failed_mapping_delete_button"},
         )
         return {"id": email.id, "deleted": True, "state": email.state}
@@ -2016,6 +2055,8 @@ class OrchestrationService:
         )
         if not email:
             raise HTTPException(status_code=404, detail="Candidate not found")
+        if email.state != "failed":
+            raise HTTPException(status_code=400, detail="Only failed candidates can have recipients resolved")
 
         to_email = payload.to_email.strip()
         cc_email = payload.cc_email.strip()
@@ -2145,5 +2186,5 @@ class OrchestrationService:
 
         db.commit()
         db.refresh(email)
-        self.deps.record_productivity_event(db, event_type="needs_review_marked", event_source="state", entity_id=email.id, metadata={"source": "resolve_recipients"})
+        self.deps.record_productivity_event(db, event_type="needs_review_marked", event_source="state", entity_id=email.id, entity_type="RecruiterEmail", metadata={"source": "resolve_recipients"})
         return email

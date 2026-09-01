@@ -17,13 +17,24 @@ branch_labels = None
 depends_on = None
 
 
+NEW_COLUMNS = ("content_markdown", "content_summary", "content_evidence_json")
+
+
 def upgrade() -> None:
-    op.add_column("resume_assets", sa.Column("content_markdown", sa.Text(), nullable=True))
-    op.add_column("resume_assets", sa.Column("content_summary", sa.Text(), nullable=True))
-    op.add_column("resume_assets", sa.Column("content_evidence_json", sa.Text(), nullable=True))
+    bind = op.get_bind()
+    if "resume_assets" not in sa.inspect(bind).get_table_names():
+        return
+    columns = {column["name"] for column in sa.inspect(bind).get_columns("resume_assets")}
+    for name in NEW_COLUMNS:
+        if name not in columns:
+            op.add_column("resume_assets", sa.Column(name, sa.Text(), nullable=True))
 
 
 def downgrade() -> None:
-    op.drop_column("resume_assets", "content_evidence_json")
-    op.drop_column("resume_assets", "content_summary")
-    op.drop_column("resume_assets", "content_markdown")
+    bind = op.get_bind()
+    if "resume_assets" not in sa.inspect(bind).get_table_names():
+        return
+    columns = {column["name"] for column in sa.inspect(bind).get_columns("resume_assets")}
+    for name in reversed(NEW_COLUMNS):
+        if name in columns:
+            op.drop_column("resume_assets", name)

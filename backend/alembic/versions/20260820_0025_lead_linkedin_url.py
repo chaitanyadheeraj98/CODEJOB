@@ -17,7 +17,16 @@ branch_labels = None
 depends_on = None
 
 
+def _columns(bind, table: str) -> set[str]:
+    return {column["name"] for column in sa.inspect(bind).get_columns(table)}
+
+
 def upgrade() -> None:
+    bind = op.get_bind()
+    if "premium_number_leads" not in sa.inspect(bind).get_table_names():
+        return
+    if "linkedin_url" in _columns(bind, "premium_number_leads"):
+        return
     op.add_column(
         "premium_number_leads",
         sa.Column("linkedin_url", sa.String(length=500), nullable=False, server_default=""),
@@ -25,4 +34,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    bind = op.get_bind()
+    if "premium_number_leads" not in sa.inspect(bind).get_table_names():
+        return
+    if "linkedin_url" not in _columns(bind, "premium_number_leads"):
+        return
     op.drop_column("premium_number_leads", "linkedin_url")

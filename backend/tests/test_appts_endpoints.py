@@ -66,6 +66,7 @@ class AppTSEndpointTestBase(unittest.TestCase):
                     qualification_threshold=0.6,
                     feature_ai_enabled=False,
                     feature_semantic_enabled=False,
+                    feature_applications_enabled=True,
                     fallback_draft_template="Hi",
                     signature_name="Tester",
                     signature_phone="+1",
@@ -281,6 +282,28 @@ class AppTSEndpointTestBase(unittest.TestCase):
 
 
 class TrackToggleTests(AppTSEndpointTestBase):
+    def test_appts_routes_and_approved_sent_tracking_are_gated(self) -> None:
+        with Session(self.engine) as db:
+            settings_row = db.query(UserSettings).filter_by(owner_id=main.settings.owner_id).one()
+            settings_row.feature_applications_enabled = False
+            email = self._add_email(db, state="approved_sent")
+            email_id = email.id
+            db.commit()
+        self.assertEqual(self.client.get("/appts/applications").status_code, 403)
+        self.assertEqual(self.client.get("/appts/bookmarked-requirements").status_code, 403)
+        self.assertEqual(self.client.post(f"/candidates/{email_id}/track").status_code, 403)
+
+    def test_needs_review_bookmark_toggle_still_works_when_applications_are_disabled(self) -> None:
+        with Session(self.engine) as db:
+            settings_row = db.query(UserSettings).filter_by(owner_id=main.settings.owner_id).one()
+            settings_row.feature_applications_enabled = False
+            email = self._add_email(db, state="needs_review")
+            email_id = email.id
+            db.commit()
+        response = self.client.post(f"/candidates/{email_id}/track")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(response.json()["marked_for_tracking"])
+
     def test_track_toggle_on_needs_review_flips_flag(self) -> None:
         with Session(self.engine) as db:
             email = self._add_email(db, state="needs_review", marked=False)
@@ -565,6 +588,50 @@ class ManualAppTSCreationTests(AppTSEndpointTestBase):
         response = self.client.post("/appts/applications/manual", json=payload)
         self.assertEqual(response.status_code, 422, response.text)
 
+    def test_list_filters_company_recruiter_end_client_and_role(self) -> None:
+        with Session(self.engine) as db:
+            first_resume = self._add_resume(db, file_name="first.pdf")
+            second_resume = self._add_resume(db, file_name="second.pdf")
+            first_resume_id, second_resume_id = first_resume.id, second_resume.id
+
+        first = self.client.post(
+            "/appts/applications/manual",
+            json=self._manual_payload(
+                first_resume_id,
+                dedupe_key="manual-filter-first",
+                manual_recruiter_name="Priya Shah",
+                manual_recruiter_company="Alpha Staffing",
+                manual_recruiter_email="priya@alpha.example",
+                manual_job_title="Senior Java Engineer",
+                manual_end_client="First Bank",
+            ),
+        )
+        second = self.client.post(
+            "/appts/applications/manual",
+            json=self._manual_payload(
+                second_resume_id,
+                dedupe_key="manual-filter-second",
+                manual_recruiter_name="Nancy Reed",
+                manual_recruiter_company="Beta Talent",
+                manual_recruiter_email="nancy@beta.example",
+                manual_job_title="Python Engineer",
+                manual_end_client="Second Health",
+            ),
+        )
+        self.assertEqual(first.status_code, 201, first.text)
+        self.assertEqual(second.status_code, 201, second.text)
+        first_id = first.json()["id"]
+
+        for params in (
+            {"company": "Alpha Staffing"},
+            {"recruiter": "priya@alpha.example"},
+            {"end_client": "First Bank"},
+            {"role": "Java Engineer"},
+        ):
+            response = self.client.get("/appts/applications", params=params)
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual([item["id"] for item in response.json()["items"]], [first_id])
+
     def test_create_manual_whitespace_only_field_returns_422_from_service_validation(self) -> None:
         with Session(self.engine) as db:
             resume = self._add_resume(db)
@@ -594,7 +661,6 @@ class PromoteFromSubmissionTests(AppTSEndpointTestBase):
             legacy = self._add_legacy_application(db, resume, dedupe_key="legacy-dedupe-1")
             legacy_id = legacy.id
             legacy_status_before = legacy.status
-            legacy_updated_at_before = legacy.updated_at
 
         response = self.client.post(f"/appts/applications/from-submission/{legacy_id}")
         self.assertEqual(response.status_code, 201, response.text)
@@ -607,8 +673,8 @@ class PromoteFromSubmissionTests(AppTSEndpointTestBase):
             legacy_after = db.get(Application, legacy_id)
             assert legacy_after is not None
             self.assertEqual(legacy_after.status, legacy_status_before)
-            self.assertEqual(legacy_after.updated_at, legacy_updated_at_before)
             self.assertIsNone(legacy_after.deleted_at)
+            self.assertEqual(legacy_after.promoted_to_appts_application_id, appts_id)
 
         response2 = self.client.post(f"/appts/applications/from-submission/{legacy_id}")
         self.assertEqual(response2.status_code, 200, response2.text)
@@ -623,6 +689,48 @@ class PromoteFromSubmissionTests(AppTSEndpointTestBase):
     def test_promote_missing_legacy_application_returns_404(self) -> None:
         response = self.client.post("/appts/applications/from-submission/999999")
         self.assertEqual(response.status_code, 404, response.text)
+
+
+class TrackFromOpportunityTests(AppTSEndpointTestBase):
+    def test_opportunity_resume_is_inherited_without_a_resume_id_in_the_request(self) -> None:
+        with Session(self.engine) as db:
+            resume = self._add_resume(db)
+            contact = self._add_contact(db, recruiter_email="jane@example.com")
+            email = self._add_email(
+                db,
+                state="approved_sent",
+                recipient_email="jane@example.com",
+                resume_asset_id=resume.id,
+            )
+            email.record_id = "11111111-1111-4111-8111-111111111111"
+            opportunity = RecruiterOpportunity(
+                owner_id=main.settings.owner_id,
+                recruiter_number_id=contact.id,
+                source_email_id=email.id,
+                gmail_message_id="tracked-opportunity",
+                job_title="Java Developer",
+                end_client="Bank X",
+                resume_file_name=resume.file_name,
+                resume_asset_id=resume.id,
+                record_id=email.record_id,
+            )
+            db.add(opportunity)
+            db.commit()
+            opportunity_id = opportunity.id
+            resume_id = resume.id
+            record_id = email.record_id
+            email_id = email.id
+
+        response = self.client.post(
+            "/appts/applications",
+            json={"recruiter_opportunity_id": opportunity_id, "dedupe_key": "one-click"},
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        body = response.json()
+        self.assertEqual(body["resume_asset_id"], resume_id)
+        self.assertEqual(body["record_id"], record_id)
+        self.assertEqual(body["source_recruiter_email_id"], email_id)
+        self.assertFalse(body["is_manual_entry"])
 
 
 # ---------------------------------------------------------------------------
@@ -1008,6 +1116,21 @@ class BookmarkedRequirementsFilterSortTests(AppTSEndpointTestBase):
             ids = {item["id"] for item in response.json()["items"]}
             self.assertIn(match_id, ids, params)
             self.assertNotIn(other_id, ids, params)
+
+    def test_interview_type_filters_candidates_and_bookmarked_requirements(self) -> None:
+        with Session(self.engine) as db:
+            match = self._add_email(db, state="needs_review", marked=True)
+            other = self._add_email(db, state="needs_review", marked=True)
+            self._set_fields(db, match, interview_type="Video interview")
+            self._set_fields(db, other, interview_type="Phone screen")
+            match_id, other_id = match.id, other.id
+
+        for path in ("/candidates", "/appts/bookmarked-requirements"):
+            response = self.client.get(path, params={"state": "needs_review", "interview_type": "video"})
+            self.assertEqual(response.status_code, 200, response.text)
+            ids = {item["id"] for item in response.json()["items"]}
+            self.assertIn(match_id, ids, path)
+            self.assertNotIn(other_id, ids, path)
 
     def test_sort_and_filter_combine(self) -> None:
         with Session(self.engine) as db:

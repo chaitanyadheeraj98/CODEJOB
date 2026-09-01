@@ -96,6 +96,11 @@ class RequirementExpansionService:
 
         child_ids: list[int] = []
         source_identity = (parent.external_message_id or f"source-{parent.id}").strip()
+        parent_record = opportunity_lineage_service.get_record(
+            db,
+            owner_id=parent.owner_id,
+            record_id=parent.record_id or "",
+        )
         for requirement in manifest_result.requirements:
             child = existing_children.get(requirement.requirement_key)
             if child is None:
@@ -142,6 +147,19 @@ class RequirementExpansionService:
                     origin_type="nvoids" if parent.source == "nvoids" else "gmail",
                 )
                 child.record_id = child_record.id
+                if parent_record and parent_record.internal_lineage_id:
+                    opportunity_lineage_service.record_event(
+                        db,
+                        lineage_id=parent_record.internal_lineage_id,
+                        event_type="forked_into_requirement",
+                        process_name="requirement_expansion_service",
+                        related_record_type="RecruiterEmail",
+                        related_record_id=child.id,
+                        metadata={
+                            "child_record_id": child_record.id,
+                            "child_email_id": child.id,
+                        },
+                    )
             elif child.state in TERMINAL_STATES:
                 child_ids.append(child.id)
                 continue

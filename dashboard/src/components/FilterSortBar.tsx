@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState, type ChangeEvent } from 'react'
 
+import ComboboxField from './ComboboxField'
+
 export type FilterFieldConfig =
   | { key: string; label: string; type: 'text'; placeholder?: string; helpText?: string }
+  | { key: string; label: string; type: 'combobox'; bucket: string; placeholder?: string; helpText?: string }
   | { key: string; label: string; type: 'select' | 'multiselect'; options: Array<{ value: string; label: string }>; helpText?: string }
   | { key: string; label: string; type: 'boolean'; helpText?: string }
   | { key: string; label: string; type: 'range'; min?: number; max?: number; step?: number; helpText?: string }
@@ -16,11 +19,13 @@ type Props = {
   fields: FilterFieldConfig[]; values: FilterValues
   onFieldChange: (key: string, value: FilterValue) => void; onClear: () => void
   sortOptions: SortOption[]; sortValue: string; onSortChange: (value: string) => void
-  disabled?: boolean; disabledMessage?: string; primaryFieldCount?: number; loading?: boolean
+  disabled?: boolean; disabledMessage?: string; primaryFieldCount?: number; loading?: boolean; apiBase?: string
+  /** Set when a text search made the backend ignore the one-day date scope. */
+  dateScopeWidened?: boolean
 }
 
 function active(field: FilterFieldConfig, value: FilterValue) {
-  if (field.type === 'text') return typeof value === 'string' && value.trim() !== ''
+  if (field.type === 'text' || field.type === 'combobox') return typeof value === 'string' && value.trim() !== ''
   if (field.type === 'select') return typeof value === 'string' && value !== '' && value !== 'all'
   if (field.type === 'multiselect') return Array.isArray(value) && value.length > 0
   if (field.type === 'boolean') return value === true || value === false
@@ -36,21 +41,23 @@ function allLabel(label: string) {
   return `All ${normalized}`
 }
 
-export default function FilterSortBar({ fields, values, onFieldChange, onClear, sortOptions, sortValue, onSortChange, disabled = false, disabledMessage = 'No filters available for this page.', primaryFieldCount = 5, loading = false }: Props) {
+export default function FilterSortBar({ fields, values, onFieldChange, onClear, sortOptions, sortValue, onSortChange, disabled = false, disabledMessage = 'No filters available for this page.', primaryFieldCount = 5, loading = false, dateScopeWidened = false, apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000' }: Props) {
   if (disabled) return <div className="inventoryToolbar filterSortBar filterSortBar--disabled" aria-disabled="true"><span>{disabledMessage}</span></div>
-  const render = (field: FilterFieldConfig) => <span key={field.key} className={field.helpText ? 'filterFieldWithHint' : undefined} title={field.helpText}><FilterField field={field} value={values[field.key]} onChange={onFieldChange} /></span>
+  const render = (field: FilterFieldConfig) => <span key={field.key} className={field.helpText ? 'filterFieldWithHint' : undefined} title={field.helpText}><FilterField field={field} value={values[field.key]} apiBase={apiBase} onChange={onFieldChange} /></span>
   const advanced = fields.slice(primaryFieldCount)
   return <div className={`inventoryToolbar filterSortBar ${fields.some((field) => active(field, values[field.key])) ? 'filterSortBar--active' : ''}`}>
     {fields.slice(0, primaryFieldCount).map(render)}
     {advanced.length ? <details className="filterSortMoreToggle"><summary>More filters ({advanced.length})</summary><div className="filterSortMoreFields">{advanced.map(render)}</div></details> : null}
     <label><span>Sort</span><select value={sortValue} onChange={(event) => onSortChange(event.target.value)}>{sortOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
     {loading ? <span className="filterSortStatus" role="status"><span className="filterSortSpinner" aria-hidden="true" />Updating…</span> : null}
+    {dateScopeWidened && !loading ? <span className="filterSortScopeNote" role="status">Searching all dates</span> : null}
     <button type="button" className="filterSortClearButton" onClick={onClear}>Clear filters</button>
   </div>
 }
 
-function FilterField({ field, value, onChange }: { field: FilterFieldConfig; value: FilterValue; onChange: (key: string, value: FilterValue) => void }) {
+function FilterField({ field, value, apiBase, onChange }: { field: FilterFieldConfig; value: FilterValue; apiBase: string; onChange: (key: string, value: FilterValue) => void }) {
   if (field.type === 'text') return <TextField field={field} value={value as string} onChange={onChange} />
+  if (field.type === 'combobox') return <ComboboxField field={field} value={value as string} apiBase={apiBase} onChange={onChange} />
   if (field.type === 'select') return <label><span>{field.label}</span><select value={(value as string) ?? 'all'} onChange={(event) => onChange(field.key, event.target.value)}>{field.options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
   if (field.type === 'boolean') {
     const current = value === true ? 'yes' : value === false ? 'no' : 'all'

@@ -4,7 +4,7 @@ import { failedMappingFilterFields as fFields, failedMappingSortOptions as fSort
 import { sentItemsFilterFields as sFields, sentItemsSortOptions as sSort, sentItemsDefaultFilterValues as sDefaults, sentItemsFiltersToParams as sParams } from './sentItemsFilters'
 import { inboxFilterFields as iFields, inboxSortOptions as iSort, inboxDefaultFilterValues as iDefaults, inboxFiltersToParams as iParams } from './inboxFilters'
 import { inventoryDefaultFilterValues, inventoryFilterFields, inventoryFiltersToParams, inventorySortOptions } from './features/premium_numbers/inventoryFilters'
-import { opportunityDefaultFilterValues, opportunityFilterFields, opportunityFiltersToParams, opportunitySortOptions } from './features/premium_numbers/opportunityFilters'
+import { OPPORTUNITY_STATUS_OPTIONS, opportunityDefaultFilterValues, opportunityFilterFields, opportunityFiltersToParams, opportunitySortOptions } from './features/premium_numbers/opportunityFilters'
 import { recycleBinDefaultFilterValues, recycleBinFilterFields, recycleBinFiltersToParams, recycleBinSortOptions } from './features/premium_numbers/recycleBinFilters'
 import { submissionDefaultFilterValues, submissionFilterFields, submissionFiltersToParams, submissionSortOptions } from './features/resume_tracking/submissionFilters'
 import type { ResumeAssetOption } from './features/premium_numbers/types'
@@ -30,7 +30,7 @@ export type FilterSortRegistryEntry = FilterSortPageConfig | ((context: Registry
 export const resolveRegistryEntry = (entry: FilterSortRegistryEntry | undefined, context: RegistryContext) => typeof entry === 'function' ? entry(context) : entry
 
 export const filterSortRegistry: Partial<Record<string, FilterSortRegistryEntry>> = {
-  needs_review: config('needs_review', nFields, nSort, nDefaults, nParams),
+  needs_review: config('needs_review', nFields('needs_review'), nSort, nDefaults, nParams),
   failed_mapping: config('failed', fFields, fSort, fDefaults, fParams),
   sent_items: config('approved_sent', sFields, sSort, sDefaults, sParams),
   inbox: config('inbox_conversations', iFields, iSort, iDefaults, iParams),
@@ -38,18 +38,20 @@ export const filterSortRegistry: Partial<Record<string, FilterSortRegistryEntry>
   'premium_numbers:opportunities': (context) => config(
     'recruiter_opportunities',
     [
-      ...opportunityFilterFields,
       { key: 'q', label: 'Search', type: 'text' },
-      { key: 'status', label: 'Status', type: 'text' },
+      ...opportunityFilterFields.slice(0, 3),
+      { key: 'status', label: 'Status', type: 'multiselect', options: OPPORTUNITY_STATUS_OPTIONS },
+      ...opportunityFilterFields.slice(3),
       { key: 'source_type', label: 'Source', type: 'select', options: [{ value: 'all', label: 'All' }, { value: 'gmail', label: 'Gmail' }, { value: 'nvoids', label: 'Nvoids' }] },
       { key: 'resume_fit', label: 'Resume fit', type: 'select', options: [{ value: 'all', label: 'All resumes' }, ...context.resumeAssets.map((resume) => ({ value: String(resume.id), label: resume.file_name }))] },
     ],
     [...opportunitySortOptions, { value: 'resume_fit', label: 'Best match for resume' }],
-    { ...opportunityDefaultFilterValues, q: '', status: '', source_type: 'all', resume_fit: 'all' },
+    { ...opportunityDefaultFilterValues, q: '', status: [], source_type: 'all', resume_fit: 'all' },
     (values) => {
       const params = opportunityFiltersToParams(values)
       if (String(values.q || '').trim()) params.q = String(values.q).trim()
-      if (values.status && values.status !== 'all') params.status = String(values.status)
+      const statuses = values.status as string[]
+      if (statuses?.length) params.status = statuses.join(',')
       if (values.source_type && values.source_type !== 'all') params.source_type = String(values.source_type)
       if (values.resume_fit && values.resume_fit !== 'all') params.resume_asset_id = String(values.resume_fit)
       return params
@@ -57,8 +59,8 @@ export const filterSortRegistry: Partial<Record<string, FilterSortRegistryEntry>
     'page',
   ),
   'premium_numbers:recycle_bin': config('premium_recycle_bin', recycleBinFilterFields, recycleBinSortOptions, recycleBinDefaultFilterValues, recycleBinFiltersToParams, 'page'),
-  'resume_tracking:resumes': config('resume_assets', submissionFilterFields, submissionSortOptions, submissionDefaultFilterValues, submissionFiltersToParams, 'page'),
-  'resume_tracking:submissions': config('applications', submissionFilterFields, submissionSortOptions, submissionDefaultFilterValues, submissionFiltersToParams, 'page'),
-  'application_tracking:bookmarked': config('appts_bookmarked', nFields, nSort, nDefaults, nParams, 'page'),
-  'application_tracking:tracked': config('appts_applications', submissionFilterFields, submissionSortOptions, submissionDefaultFilterValues, submissionFiltersToParams, 'page'),
+  'resume_tracking:resumes': config('resume_assets', submissionFilterFields('resume_assets'), submissionSortOptions, submissionDefaultFilterValues, submissionFiltersToParams, 'page'),
+  'resume_tracking:submissions': config('applications', submissionFilterFields('applications'), submissionSortOptions, submissionDefaultFilterValues, submissionFiltersToParams, 'page'),
+  'application_tracking:bookmarked': config('appts_bookmarked', nFields('appts_bookmarked'), nSort, nDefaults, nParams, 'page'),
+  'application_tracking:tracked': config('appts_applications', submissionFilterFields('appts_applications', false), submissionSortOptions, submissionDefaultFilterValues, submissionFiltersToParams, 'page'),
 }

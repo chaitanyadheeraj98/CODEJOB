@@ -7,8 +7,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from app.db import Base
-from app.models import ApplicationEvent, ApplicationSkillGapSnapshot, ResumeAsset
-from app.services import application_service, resume_tracking_service
+from app.models import ApplicationEvent, ApplicationSkillGapSnapshot, PremiumNumberContact, RecruiterOpportunity, ResumeAsset
+from app.services import application_service, appts_service, resume_tracking_service
 
 
 class ResumeTrackingServiceTests(unittest.TestCase):
@@ -80,6 +80,44 @@ class ResumeTrackingServiceTests(unittest.TestCase):
             self.assertEqual(db.query(ApplicationEvent).filter_by(application_id=application.id).count(), 2)
             self.assertEqual(db.query(ResumeAsset).count(), 1)
 
+    def test_manual_create_links_an_owned_opportunity_and_rejects_a_foreign_one(self) -> None:
+        with Session(self.engine) as db:
+            resume = self._resume(db)
+            contact = PremiumNumberContact(owner_id="owner", display_phone_number="", recruiter_name="Priya")
+            foreign_contact = PremiumNumberContact(owner_id="other", display_phone_number="", recruiter_name="Other")
+            db.add_all([contact, foreign_contact])
+            db.flush()
+            opportunity = RecruiterOpportunity(owner_id="owner", recruiter_number_id=contact.id, gmail_message_id="owned")
+            foreign = RecruiterOpportunity(owner_id="other", recruiter_number_id=foreign_contact.id, gmail_message_id="foreign")
+            db.add_all([opportunity, foreign])
+            db.flush()
+
+            application, _ = resume_tracking_service.create_manual_application(
+                db,
+                owner_id="owner",
+                resume_asset_id=resume.id,
+                recruiter_opportunity_id=opportunity.id,
+                dedupe_key="linked",
+                manual_recruiter_name="Priya",
+                manual_recruiter_company="ABC Staffing",
+                manual_job_title="Senior Java Developer",
+                manual_end_client="Bank X",
+            )
+            self.assertEqual(application.recruiter_opportunity_id, opportunity.id)
+            self.assertEqual(application.recruiter_contact_id, contact.id)
+            with self.assertRaises(application_service.ApplicationReferenceNotFoundError):
+                resume_tracking_service.create_manual_application(
+                    db,
+                    owner_id="owner",
+                    resume_asset_id=resume.id,
+                    recruiter_opportunity_id=foreign.id,
+                    dedupe_key="foreign",
+                    manual_recruiter_name="Priya",
+                    manual_recruiter_company="ABC Staffing",
+                    manual_job_title="Senior Java Developer",
+                    manual_end_client="Bank X",
+                )
+
     def test_status_ratchet_preserves_milestones_and_funnel_history(self) -> None:
         with Session(self.engine) as db:
             resume = self._resume(db)
@@ -115,6 +153,37 @@ class ResumeTrackingServiceTests(unittest.TestCase):
             self.assertEqual(metrics["acceptance_rate"], 1.0)
             self.assertEqual(metrics["interview_rate"], 1.0)
             self.assertEqual(metrics["top_missing_skills"][0], {"value": "AWS", "count": 1})
+
+    def test_combined_metrics_recompute_rates_and_count_promoted_rows_once(self) -> None:
+        submitted_at = datetime(2026, 8, 20, 15, 30, tzinfo=UTC)
+        with Session(self.engine) as db:
+            resume = self._resume(db)
+            legacy, _ = self._manual(db, resume, key="promoted-legacy", submitted_at=submitted_at)
+            promoted, _ = appts_service.promote_legacy_application(db, legacy, owner_id="owner")
+            promoted.milestones_reached_json = json.dumps({"shortlisted": submitted_at.isoformat()})
+            rejected, _ = appts_service.create_tracked_application_manual(
+                db,
+                owner_id="owner",
+                resume_asset_id=resume.id,
+                dedupe_key="current-rejected",
+                manual_recruiter_name="Priya",
+                manual_recruiter_company="ABC Staffing",
+                manual_job_title="Senior Java Developer",
+                manual_end_client="Bank X",
+                resume_submitted_at=submitted_at,
+            )
+            rejected.status = "rejected"
+            rejected.resume_submission_status = "rejected"
+            metrics = resume_tracking_service.combined_resume_funnel_metrics(
+                db,
+                owner_id="owner",
+                resume_asset_id=resume.id,
+            )
+
+            self.assertEqual(metrics["total_submissions"], 2)
+            self.assertEqual(metrics["acceptance_rate"], 0.5)
+            self.assertEqual(metrics["shortlist_rate"], 0.5)
+            self.assertEqual(metrics["rejection_rate"], 0.5)
 
     def test_skill_gap_is_frozen_until_explicit_recompute(self) -> None:
         with Session(self.engine) as db:

@@ -8,6 +8,7 @@ import { CategoryChip, StatusBadge } from '../premium_numbers/StatusBadge'
 import VerificationBadge from '../premium_numbers/VerificationBadge'
 import {
   ApplicationDuplicateConflictError,
+  RoleManifestForkRequiredError,
   addApplicationInterview,
   approveSendCandidate,
   createApplicationEvent,
@@ -111,7 +112,7 @@ export default function AppTSPage({ apiBase, refreshToken, activeTab = 'bookmark
         const bookmarkedParams = resolveRegistryEntry(filterSortRegistry['application_tracking:bookmarked'], { resumeAssets: [] })?.toParams(filterValues) ?? {}
         request = listBookmarkedRequirements(apiBase, bookmarkedParams, sortValue).then((items) => { setBookmarked(items) })
       } else {
-        const filters = Object.fromEntries(Object.entries(filterValues).filter(([, value]) => typeof value === 'string' && value && value !== 'all') as Array<[string, string]>)
+        const filters = resolveRegistryEntry(filterSortRegistry['application_tracking:tracked'], { resumeAssets: [] })?.toParams(filterValues) ?? {}
         request = listApplicationPage({ apiBase, cursor: (page - 1) * PAGE_SIZE, limit: PAGE_SIZE, q: '', status, filters, sort: sortValue }).then((result) => {
           setRows(result.items)
           setTotal(result.total)
@@ -261,7 +262,14 @@ export default function AppTSPage({ apiBase, refreshToken, activeTab = 'bookmark
     setBookmarkedRegeneratingId(id)
     setError('')
     try {
-      const updated = await regenerateCandidateDraft(apiBase, id)
+      let updated
+      try {
+        updated = await regenerateCandidateDraft(apiBase, id)
+      } catch (reason) {
+        if (!(reason instanceof RoleManifestForkRequiredError)) throw reason
+        if (!window.confirm(`This requirement contains ${reason.requirementCount} roles and regeneration will create ${reason.requirementCount} separate candidate cards. Continue?`)) return
+        updated = await regenerateCandidateDraft(apiBase, id, true)
+      }
       setBookmarkedDraftEdits((prev) => ({ ...prev, [id]: updated.draft_reply ?? '' }))
       setBookmarked((current) => current.map((row) => row.id === id ? updated : row))
     } catch (reason) {

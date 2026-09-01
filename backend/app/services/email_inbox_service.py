@@ -309,7 +309,7 @@ def _summary(db: Session, conversation: EmailConversation, root_email: Recruiter
     )
 
 
-def list_conversations(db: Session, owner_id: str, *, recruiter: str | None = None, subject: str | None = None, status: str | None = None, unread_only: bool | None = None, sort: str = "newest", date_from: datetime | None = None, date_to: datetime | None = None) -> list[ConversationSummaryResponse]:
+def list_conversations(db: Session, owner_id: str, *, recruiter: str | None = None, subject: str | None = None, status: str | None = None, unread_only: bool | None = None, role: str | None = None, location: str | None = None, interview_type: str | None = None, sort: str = "newest", date_from: datetime | None = None, date_to: datetime | None = None) -> list[ConversationSummaryResponse]:
     if sort not in {"newest", "oldest", "unread_first"}:
         raise HTTPException(status_code=422, detail="Invalid sort. Must be one of: newest, oldest, unread_first")
 
@@ -332,6 +332,8 @@ def list_conversations(db: Session, owner_id: str, *, recruiter: str | None = No
     )
     if recruiter and recruiter.strip(): query = query.filter(RecruiterEmail.sender.ilike(f"%{recruiter.strip()}%"))
     if subject and subject.strip(): query = query.filter(RecruiterEmail.subject.ilike(f"%{subject.strip()}%"))
+    for value, column in ((role, RecruiterEmail.role), (location, RecruiterEmail.location), (interview_type, RecruiterEmail.interview_type)):
+        if value and value.strip(): query = query.filter(column.ilike(f"%{value.strip()}%"))
     if status:
         values = [value.strip() for value in status.split(",") if value.strip()]
         if values: query = query.filter(EmailConversation.status.in_(values))

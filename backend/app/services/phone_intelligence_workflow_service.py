@@ -172,6 +172,7 @@ class PhoneWorkflowSourceContext:
     domain: str = ""
     skills_text: str = ""
     resume_file_name: str = ""
+    resume_asset_id: int | None = None
     location: str = ""
     job_title: str = ""
     work_mode: str = ""
@@ -205,6 +206,7 @@ def _context_from_recruiter_email(
         domain=ai.domain or email.domain or "",
         skills_text=email.skills_text or "",
         resume_file_name=email.resume_file_name or "",
+        resume_asset_id=email.resume_asset_id,
         location=ai.location or email.location or "",
         # email.role is itself AI-first (parse_email_with_details already ran during ingest) -
         # read it by default so a fresh capture doesn't fall back to _extract_job_metadata's
@@ -261,6 +263,7 @@ class OpportunitySnapshot:
     work_mode: str
     visa_restrictions: str
     resume_file_name: str
+    resume_asset_id: int | None
     implementation_partner: str
     prime_vendor: str
     domain: str
@@ -1494,6 +1497,7 @@ class PhoneIntelligenceWorkflowService:
             work_mode=context.work_mode or work_mode,
             visa_restrictions=context.visa_restrictions or visa_restrictions,
             resume_file_name=context.resume_file_name,
+            resume_asset_id=context.resume_asset_id,
             implementation_partner=context.implementation_partner,
             prime_vendor="",
             domain=context.domain,
@@ -1525,6 +1529,7 @@ class PhoneIntelligenceWorkflowService:
             work_mode=snapshot.work_mode,
             visa_restrictions=snapshot.visa_restrictions,
             resume_file_name=snapshot.resume_file_name,
+            resume_asset_id=snapshot.resume_asset_id,
             implementation_partner=snapshot.implementation_partner,
             prime_vendor=snapshot.prime_vendor,
             domain=snapshot.domain,

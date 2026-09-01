@@ -364,6 +364,7 @@ class AppTSServiceTests(unittest.TestCase):
             opportunity = RecruiterOpportunity(
                 owner_id=OWNER_ID,
                 recruiter_number_id=contact.id,
+                resume_asset_id=resume.id,
                 gmail_message_id="msg-3",
                 job_title="Java Developer",
                 end_client="Client Co",
@@ -373,7 +374,7 @@ class AppTSServiceTests(unittest.TestCase):
             db.commit()
 
             row, created = appts_service.create_tracked_application_from_opportunity(
-                db, owner_id=OWNER_ID, resume_asset_id=resume.id, recruiter_opportunity_id=opportunity.id, dedupe_key="dk-opp-4"
+                db, owner_id=OWNER_ID, recruiter_opportunity_id=opportunity.id, dedupe_key="dk-opp-4"
             )
             db.commit()
 
@@ -385,6 +386,60 @@ class AppTSServiceTests(unittest.TestCase):
             self.assertEqual(row.end_client_snapshot, "Client Co")
             self.assertEqual(row.location_snapshot, "Remote")
             self.assertEqual(row.dedupe_key, "dk-opp-4")
+            self.assertEqual(row.resume_asset_id, resume.id)
+            self.assertEqual(row.recruiter_opportunity_id, opportunity.id)
+            self.assertEqual(row.recruiter_contact_id, contact.id)
+            self.assertEqual(row.resolved_recruiter_contact_id, contact.id)
+
+    def test_from_opportunity_uses_record_email_fallback_and_requires_a_resume(self) -> None:
+        with Session(self.engine) as db:
+            resume = self._add_resume(db)
+            contact = PremiumNumberContact(owner_id=OWNER_ID, display_phone_number="", recruiter_name="Jane", company="Acme")
+            email = RecruiterEmail(owner_id=OWNER_ID, sender="jane@example.com", subject="Role", body="Body", record_id="record-1")
+            db.add_all([contact, email])
+            db.flush()
+            opportunity = RecruiterOpportunity(
+                owner_id=OWNER_ID,
+                recruiter_number_id=contact.id,
+                source_type="nvoids",
+                gmail_message_id="nvoids:1",
+                job_title="Java Developer",
+                end_client="Client Co",
+                record_id="record-1",
+                resume_asset_id=resume.id,
+            )
+            db.add(opportunity)
+            db.flush()
+
+            row, _ = appts_service.create_tracked_application_from_opportunity(
+                db, owner_id=OWNER_ID, recruiter_opportunity_id=opportunity.id, dedupe_key="dk-nvoids"
+            )
+            self.assertEqual(row.source_recruiter_email_id, email.id)
+
+            opportunity.resume_asset_id = None
+            with self.assertRaisesRegex(application_service.ApplicationReferenceNotFoundError, "No resume recorded"):
+                appts_service.create_tracked_application_from_opportunity(
+                    db, owner_id=OWNER_ID, recruiter_opportunity_id=opportunity.id, dedupe_key="dk-no-resume"
+                )
+
+    def test_manual_explicit_contact_is_preserved_without_an_email(self) -> None:
+        with Session(self.engine) as db:
+            resume = self._add_resume(db)
+            contact = PremiumNumberContact(owner_id=OWNER_ID, display_phone_number="", recruiter_name="Jane", company="Acme")
+            db.add(contact)
+            db.flush()
+            row, _ = appts_service.create_tracked_application_manual(
+                db,
+                owner_id=OWNER_ID,
+                resume_asset_id=resume.id,
+                recruiter_contact_id=contact.id,
+                dedupe_key="dk-contact",
+                manual_recruiter_name="Jane",
+                manual_recruiter_company="Acme",
+                manual_job_title="Java Developer",
+                manual_end_client="Client Co",
+            )
+            self.assertEqual(row.resolved_recruiter_contact_id, contact.id)
 
     # -- promote_legacy_application -----------------------------------------------
 
@@ -438,7 +493,13 @@ class AppTSServiceTests(unittest.TestCase):
             assert refreshed_legacy is not None
             self.assertEqual(refreshed_legacy.status, legacy_status_before)
             self.assertIsNone(refreshed_legacy.deleted_at)
+            self.assertEqual(refreshed_legacy.promoted_to_appts_application_id, row.id)
             self.assertEqual(db.query(Application).count(), 1)
+
+            replay, replay_created = appts_service.promote_legacy_application(db, refreshed_legacy, owner_id=OWNER_ID)
+            self.assertFalse(replay_created)
+            self.assertEqual(replay.id, row.id)
+            self.assertEqual(db.query(AppTSApplication).count(), 1)
 
     def test_promote_legacy_application_prefers_manual_fields_over_snapshot(self) -> None:
         with Session(self.engine) as db:

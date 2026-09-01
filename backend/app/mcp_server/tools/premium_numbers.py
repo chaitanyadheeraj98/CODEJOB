@@ -25,7 +25,12 @@ from app.models import (
     RecruiterEmail,
     RecruiterOpportunity,
 )
-from app.services import opportunity_lineage_service
+from app.services import (
+    application_service,
+    appts_service,
+    opportunity_lineage_service,
+    resume_tracking_service,
+)
 from app.premium_numbers.intelligence import OPPORTUNITY_STATUS_VALUES
 from app.premium_numbers.phone_normalization import best_display_phone, canonicalize_phone
 from app.premium_numbers.domain_guard import (
@@ -495,36 +500,42 @@ def _lineage_opportunity_payload(db, row: RecruiterOpportunity | None) -> dict[s
     }
 
 
-def _lineage_application_payload(db, row: Application) -> dict[str, object]:
+def _lineage_application_payload(
+    db,
+    row,
+    *,
+    models: application_service.ApplicationModels,
+) -> dict[str, object]:
     rtr_history = (
-        db.query(ApplicationRTR)
+        db.query(models.rtr_cls)
         .filter(
-            ApplicationRTR.owner_id == settings.owner_id,
-            ApplicationRTR.application_id == row.id,
+            models.rtr_cls.owner_id == settings.owner_id,
+            models.rtr_cls.application_id == row.id,
         )
-        .order_by(ApplicationRTR.requested_at.desc(), ApplicationRTR.id.desc())
+        .order_by(models.rtr_cls.requested_at.desc(), models.rtr_cls.id.desc())
         .all()
     )
     interviews = (
-        db.query(ApplicationInterview)
+        db.query(models.interview_cls)
         .filter(
-            ApplicationInterview.owner_id == settings.owner_id,
-            ApplicationInterview.application_id == row.id,
-            ApplicationInterview.deleted_at.is_(None),
+            models.interview_cls.owner_id == settings.owner_id,
+            models.interview_cls.application_id == row.id,
+            models.interview_cls.deleted_at.is_(None),
         )
-        .order_by(ApplicationInterview.created_at.asc(), ApplicationInterview.id.asc())
+        .order_by(models.interview_cls.created_at.asc(), models.interview_cls.id.asc())
         .all()
     )
     suggestions = (
-        db.query(ApplicationSuggestion)
+        db.query(models.suggestion_cls)
         .filter(
-            ApplicationSuggestion.owner_id == settings.owner_id,
-            ApplicationSuggestion.application_id == row.id,
+            models.suggestion_cls.owner_id == settings.owner_id,
+            models.suggestion_cls.application_id == row.id,
         )
-        .order_by(ApplicationSuggestion.created_at.desc(), ApplicationSuggestion.id.desc())
+        .order_by(models.suggestion_cls.created_at.desc(), models.suggestion_cls.id.desc())
         .all()
     )
     return {
+        "family": models.related_record_type,
         "id": row.id,
         "resume_asset_id": row.resume_asset_id,
         "resume_version_snapshot": row.resume_version_snapshot,
@@ -539,6 +550,17 @@ def _lineage_application_payload(db, row: Application) -> dict[str, object]:
         "closed_reason": row.closed_reason,
         "closed_reason_code": row.closed_reason_code,
         "created_at": row.created_at.isoformat(),
+        "resume": {
+            "resume_asset_id": row.resume_asset_id,
+            "resume_version_snapshot": row.resume_version_snapshot,
+            "resume_file_name_snapshot": row.resume_file_name_snapshot,
+            "performance_scope": "owner-wide across every submission using this resume",
+            "performance": resume_tracking_service.combined_resume_funnel_metrics(
+                db,
+                owner_id=settings.owner_id,
+                resume_asset_id=row.resume_asset_id,
+            ),
+        },
         "rtr_history": [
             {
                 "id": rtr.id,
@@ -582,6 +604,62 @@ def _lineage_application_payload(db, row: Application) -> dict[str, object]:
             for suggestion in suggestions
         ],
     }
+
+
+def _record_application_payloads(
+    db,
+    *,
+    record_id: str,
+    historical_opportunity_id: int | None = None,
+) -> list[dict[str, object]]:
+    legacy = [
+        row
+        for row in opportunity_lineage_service.applications_for_record(
+            db,
+            owner_id=settings.owner_id,
+            record_id=record_id,
+            model=Application,
+        )
+        if row.promoted_to_appts_application_id is None
+    ]
+    current = opportunity_lineage_service.applications_for_record(
+        db,
+        owner_id=settings.owner_id,
+        record_id=record_id,
+        model=appts_service.APPTS_MODELS.application_cls,
+    )
+    if historical_opportunity_id is not None:
+        legacy_ids = {row.id for row in legacy}
+        legacy.extend(
+            row
+            for row in db.query(Application).filter(
+                Application.owner_id == settings.owner_id,
+                Application.recruiter_opportunity_id == historical_opportunity_id,
+                Application.deleted_at.is_(None),
+                Application.promoted_to_appts_application_id.is_(None),
+            ).all()
+            if row.id not in legacy_ids
+        )
+        current_ids = {row.id for row in current}
+        current.extend(
+            row
+            for row in db.query(appts_service.APPTS_MODELS.application_cls).filter(
+                appts_service.APPTS_MODELS.application_cls.owner_id == settings.owner_id,
+                appts_service.APPTS_MODELS.application_cls.recruiter_opportunity_id == historical_opportunity_id,
+                appts_service.APPTS_MODELS.application_cls.deleted_at.is_(None),
+            ).all()
+            if row.id not in current_ids
+        )
+    return [
+        *[
+            _lineage_application_payload(db, row, models=application_service.LEGACY_MODELS)
+            for row in legacy
+        ],
+        *[
+            _lineage_application_payload(db, row, models=appts_service.APPTS_MODELS)
+            for row in current
+        ],
+    ]
 
 
 def _candidate_summary(db, record: CandidateRecord) -> dict[str, object]:
@@ -704,7 +782,13 @@ def _email_activity(db, *, owner_id: str, record_id: str) -> dict[str, object]:
     }
 
 
-def _lineage_detail_payload(db, lineage: OpportunityLineage, event_limit: int) -> dict[str, object]:
+def _lineage_detail_payload(
+    db,
+    lineage: OpportunityLineage,
+    event_limit: int,
+    *,
+    record_id: str,
+) -> dict[str, object]:
     references = (
         db.query(OpportunitySourceReference)
         .filter(
@@ -744,7 +828,6 @@ def _lineage_detail_payload(db, lineage: OpportunityLineage, event_limit: int) -
         .all()
     )
     opportunity = None
-    applications: list[Application] = []
     if tracked_opportunity_id is not None:
         opportunity = (
             db.query(RecruiterOpportunity)
@@ -753,16 +836,6 @@ def _lineage_detail_payload(db, lineage: OpportunityLineage, event_limit: int) -
                 RecruiterOpportunity.id == tracked_opportunity_id,
             )
             .first()
-        )
-        applications = (
-            db.query(Application)
-            .filter(
-                Application.owner_id == settings.owner_id,
-                Application.recruiter_opportunity_id == tracked_opportunity_id,
-                Application.deleted_at.is_(None),
-            )
-            .order_by(Application.created_at.asc(), Application.id.asc())
-            .all()
         )
     return {
         # was_promoted answers "did this lineage ever become a real RecruiterOpportunity" -
@@ -779,19 +852,25 @@ def _lineage_detail_payload(db, lineage: OpportunityLineage, event_limit: int) -
         "total_event_count": total_event_count,
         "events": [_lineage_event_payload(row) for row in events],
         "recruiter_opportunity": _lineage_opportunity_payload(db, opportunity),
-        "applications": [_lineage_application_payload(db, row) for row in applications],
+        "applications": _record_application_payloads(
+            db,
+            record_id=record_id,
+            historical_opportunity_id=tracked_opportunity_id,
+        ),
     }
 
 
 def get_record_details(record_id: str, event_limit: int = 50) -> dict[str, object]:
-    """Get one owner-scoped candidate Record: its origin, email activity, and - once it has
-    become a recruiter opportunity - the full recorded lifecycle.
+    """Get one owner-scoped candidate Record, both application-table families, shared
+    outcomes, email activity, and any recorded opportunity lifecycle.
 
     has_opportunity is False for a Record that hasn't been converted into a recruiter
     opportunity yet; say so plainly rather than guessing at recruiter/application details
     in that case. email_activity (who this candidate's resume was sent to, and reply
     threads) is populated either way. Lifecycle events are capped and returned
-    most-recent-first; every other section is complete.
+    most-recent-first; every other section is complete. Each application's resume
+    performance is owner-wide across every submission using that resume, not scoped to
+    this Record.
     """
     db = SessionLocal()
     try:
@@ -811,6 +890,12 @@ def get_record_details(record_id: str, event_limit: int = 50) -> dict[str, objec
             "created_at": record.created_at.isoformat(),
             "candidate": candidate,
             "email_activity": email_activity,
+            "applications": _record_application_payloads(db, record_id=record.id),
+            "outcomes": opportunity_lineage_service.record_outcomes(
+                db,
+                owner_id=settings.owner_id,
+                record_id=record.id,
+            ),
         }
         # A lineage can exist before promotion too (e.g. a pending review-queue card already
         # has one, unchanged from the shipped 20260825_0031 behavior), and one that WAS
@@ -820,10 +905,10 @@ def get_record_details(record_id: str, event_limit: int = 50) -> dict[str, objec
         # merely "a lineage exists" or "still has a live recruiter_opportunity_id today".
         if lineage is None:
             return {**base, "has_opportunity": False}
-        detail = _lineage_detail_payload(db, lineage, event_limit)
+        detail = _lineage_detail_payload(db, lineage, event_limit, record_id=record.id)
         was_promoted = detail.pop("was_promoted")
         if not was_promoted:
             return {**base, "has_opportunity": False}
-        return {**detail, **base, "has_opportunity": True}
+        return {**detail, **base, "applications": detail["applications"], "has_opportunity": True}
     finally:
         db.close()

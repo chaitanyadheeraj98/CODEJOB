@@ -14,7 +14,7 @@ from app.db import Base
 from app.gmail_client import _append_tracking_pixel
 from app.models import EmailConversation, EmailOpenEvent, EmailReplyMessage, RecruiterEmail, UserSettings
 from app.parsing.document_extraction import extract_gmail_reply_body
-from app.services.email_inbox_service import ensure_sent_conversation, generate_tracking_token, tracking_pixel_url
+from app.services.email_inbox_service import ensure_sent_conversation, generate_tracking_token, list_conversations, tracking_pixel_url
 
 
 class EmailTrackingInboxTests(unittest.TestCase):
@@ -447,6 +447,40 @@ class EmailTrackingInboxTests(unittest.TestCase):
         unread_false = self.client.get("/inbox/conversations?unread_only=false")
         self.assertEqual(unread_false.status_code, 200, unread_false.text)
         self.assertEqual([row["unread_reply_count"] for row in unread_false.json()], [0])
+
+    def test_inbox_text_facets_filter_list_and_refresh_endpoints(self) -> None:
+        with Session(self.engine) as db:
+            self._add_settings(db)
+            match = self._add_sent_email(
+                db, token="tok-match", external_message_id="msg-match", external_thread_id="thread-match"
+            )
+            match.role = "Java Developer"
+            match.location = "Austin, TX"
+            match.interview_type = "Video interview"
+            ensure_sent_conversation(db, owner_id=main.settings.owner_id, root_email=match, thread_id="thread-match")
+            other = self._add_sent_email(
+                db, token="tok-other", external_message_id="msg-other", external_thread_id="thread-other"
+            )
+            other.role = "Python Developer"
+            other.location = "Remote"
+            other.interview_type = "Phone screen"
+            ensure_sent_conversation(db, owner_id=main.settings.owner_id, root_email=other, thread_id="thread-other")
+            db.commit()
+            match_id = match.id
+
+        class InboxStub:
+            def list_inbox_conversations(self, db: Session, **filters: object):
+                return list_conversations(db, main.settings.owner_id, **filters)
+
+            def refresh_inbox_replies(self, db: Session, **filters: object):
+                return list_conversations(db, main.settings.owner_id, **filters)
+
+        main.orchestration_service = InboxStub()
+        for field, value in (("role", "java"), ("location", "austin"), ("interview_type", "video")):
+            for method, path in ((self.client.get, "/inbox/conversations"), (self.client.post, "/inbox/conversations/refresh")):
+                response = method(path, params={field: value})
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual([row["root_recruiter_email_id"] for row in response.json()], [match_id])
 
     def test_inbox_conversations_filter_by_last_message_date(self) -> None:
         with Session(self.engine) as db:

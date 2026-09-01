@@ -230,6 +230,7 @@ class UserSettings(Base):
     feature_resume_tracking_sweep_interval_minutes: Mapped[int] = mapped_column(Integer, default=240)
     candidate_work_authorizations_json: Mapped[str] = mapped_column(Text, default="[]")
     preferred_employment_types_json: Mapped[str] = mapped_column(Text, default="[]")
+    visible_filters_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
     preferred_minimum_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
     candidate_total_experience_years: Mapped[float | None] = mapped_column(Float, nullable=True)
     candidate_us_experience_years: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -344,7 +345,11 @@ class EmailConversation(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     owner_id: Mapped[str] = mapped_column(String(100), default="default-owner", index=True)
-    root_recruiter_email_id: Mapped[int] = mapped_column(Integer, index=True)
+    root_recruiter_email_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("recruiter_emails.id", name="fk_email_conversations_root_recruiter_email", ondelete="RESTRICT"),
+        index=True,
+    )
     external_thread_id: Mapped[str] = mapped_column(String(255), index=True)
     status: Mapped[str] = mapped_column(String(40), default="sent", index=True)
     last_message_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, index=True)
@@ -756,6 +761,7 @@ class RecruiterOpportunity(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    # Fossil name: this targets premium_number_contacts.id, not the removed RecruiterNumber model.
     recruiter_number_id: Mapped[int] = mapped_column(Integer, index=True)
     source_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     gmail_message_id: Mapped[str] = mapped_column(String(255), index=True)
@@ -774,6 +780,12 @@ class RecruiterOpportunity(Base):
     work_mode: Mapped[str] = mapped_column(String(80), default="")
     visa_restrictions: Mapped[str] = mapped_column(String(255), default="")
     resume_file_name: Mapped[str] = mapped_column(String(255), default="")
+    resume_asset_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("resume_assets.id", name="fk_recruiter_opportunities_resume_asset", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     implementation_partner: Mapped[str] = mapped_column(String(255), default="")
     prime_vendor: Mapped[str] = mapped_column(String(255), default="")
     domain: Mapped[str] = mapped_column(String(255), default="")
@@ -882,8 +894,18 @@ class Application(Base):
     resume_version_snapshot: Mapped[int] = mapped_column(Integer)
     resume_file_name_snapshot: Mapped[str] = mapped_column(String(255))
     resume_sha256_snapshot: Mapped[str] = mapped_column(String(64))
-    recruiter_opportunity_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
-    recruiter_contact_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    recruiter_opportunity_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("recruiter_opportunities.id", name="fk_applications_recruiter_opportunity", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    recruiter_contact_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("premium_number_contacts.id", name="fk_applications_recruiter_contact", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     recruiter_name_snapshot: Mapped[str] = mapped_column(String(255), default="")
     recruiter_company_snapshot: Mapped[str] = mapped_column(String(255), default="")
     job_title_snapshot: Mapped[str] = mapped_column(Text, default="")
@@ -902,6 +924,7 @@ class Application(Base):
     submission_method: Mapped[str] = mapped_column(String(20), default='email')
     rejection_detail_tags_json: Mapped[str] = mapped_column(Text, default='[]')
     dedupe_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    promoted_to_appts_application_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     resume_skills_snapshot_json: Mapped[str] = mapped_column(Text, default='[]')
     resume_primary_role_snapshot: Mapped[str] = mapped_column(String(255), default='')
     milestones_reached_json: Mapped[str] = mapped_column(Text, default='{}')
@@ -1060,8 +1083,18 @@ class AppTSApplication(Base):
     resume_version_snapshot: Mapped[int] = mapped_column(Integer)
     resume_file_name_snapshot: Mapped[str] = mapped_column(String(255))
     resume_sha256_snapshot: Mapped[str] = mapped_column(String(64))
-    recruiter_opportunity_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
-    recruiter_contact_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    recruiter_opportunity_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("recruiter_opportunities.id", name="fk_appts_applications_recruiter_opportunity", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    recruiter_contact_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("premium_number_contacts.id", name="fk_appts_applications_recruiter_contact", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     recruiter_name_snapshot: Mapped[str] = mapped_column(String(255), default="")
     recruiter_company_snapshot: Mapped[str] = mapped_column(String(255), default="")
     job_title_snapshot: Mapped[str] = mapped_column(Text, default="")
@@ -1099,7 +1132,12 @@ class AppTSApplication(Base):
     embedding_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
     resolved_recruiter_contact_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     resolved_recruiter_email: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
-    source_recruiter_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    source_recruiter_email_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("recruiter_emails.id", name="fk_appts_applications_source_recruiter_email", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     deleted_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
@@ -1318,6 +1356,7 @@ class ProductivityEvent(Base):
     event_type: Mapped[str] = mapped_column(String(80), index=True)
     event_source: Mapped[str] = mapped_column(String(40), default="system")
     entity_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    entity_type: Mapped[str] = mapped_column(String(40), default="", index=True)
     weight: Mapped[float] = mapped_column(Float, default=0.0)
     metadata_json: Mapped[str] = mapped_column(Text, default="{}")
     occurred_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, index=True)

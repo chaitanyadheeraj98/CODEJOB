@@ -14,6 +14,7 @@ from sqlalchemy.pool import StaticPool
 from app import main
 from app.db import Base
 from app.models import (
+    AppTSApplication,
     Application,
     ApplicationSuggestion,
     AttachmentAsset,
@@ -224,6 +225,36 @@ class ApplicationsApiTests(unittest.TestCase):
         self.assertEqual(preserved.json()["resume_file_name_snapshot"], "3001-resume.pdf")
         self.assertEqual(preserved.json()["job_title_snapshot"], "Java Developer 3001")
         self.assertEqual(preserved.json()["current_job_title"], "")
+
+    def test_active_appts_application_guards_resume_deletion(self) -> None:
+        with Session(self.engine) as db:
+            resume, _ = self._sources(
+                db,
+                owner_id=main.settings.owner_id,
+                suffix="3002",
+            )
+            application = AppTSApplication(
+                owner_id=main.settings.owner_id,
+                resume_asset_id=resume.id,
+                resume_version_snapshot=resume.version,
+                resume_file_name_snapshot=resume.file_name,
+                resume_sha256_snapshot=resume.sha256,
+                status="matched",
+            )
+            db.add(application)
+            db.commit()
+            resume_id = resume.id
+            application_id = application.id
+
+        blocked = self.client.delete(f"/settings/resumes/{resume_id}")
+        self.assertEqual(blocked.status_code, 409, blocked.text)
+
+        with Session(self.engine) as db:
+            application = db.get(AppTSApplication, application_id)
+            application.status = "hired"
+            db.commit()
+
+        self.assertEqual(self.client.delete(f"/settings/resumes/{resume_id}").status_code, 200)
 
     def test_rtr_and_interview_crud_with_proof_and_validation(self) -> None:
         with Session(self.engine) as db:
@@ -682,6 +713,8 @@ class ApplicationsApiTests(unittest.TestCase):
             params={"resume_submission_status": "submitted", "q": "priya.manual@example.com"},
         )
         self.assertEqual([row["id"] for row in filtered.json()["items"]], [application_id])
+        role_filtered = self.client.get("/applications", params={"role": "Java Developer"})
+        self.assertEqual([row["id"] for row in role_filtered.json()["items"]], [application_id])
         advanced = self.client.patch(
             f"/applications/{application_id}/resume-submission-status",
             json={"new_status": "shortlisted"},

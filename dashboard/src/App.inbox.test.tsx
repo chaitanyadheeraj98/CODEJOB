@@ -186,6 +186,7 @@ describe('Inbox dashboard', () => {
 
     const refreshButton = container.querySelector<HTMLButtonElement>('button[aria-label="Refresh conversations"]')
     expect(refreshButton?.title).toBe('Refresh')
+    expect(container.querySelectorAll('.filterSortBar input[role="combobox"]')).toHaveLength(4)
 
     const unreadRow = container.querySelector<HTMLButtonElement>('.conversationListItem.unread')
     expect(unreadRow?.querySelector('.unreadDot')).not.toBeNull()
