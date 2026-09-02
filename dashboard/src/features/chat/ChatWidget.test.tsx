@@ -3,8 +3,17 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import ChatProvider from './ChatProvider'
 import ChatWidget from './ChatWidget'
 import { consumeSseStream } from './api'
+
+// ChatWidget reads its session, status, model, and proposal state from
+// ChatProvider, so every mount needs one. The provider issues exactly the
+// requests the widget used to, which is why the fetch stubs below are
+// unchanged from before the hoist.
+const renderWithChat = (node: React.ReactNode) => (
+  <ChatProvider apiBase="http://localhost:8000">{node}</ChatProvider>
+)
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 // jsdom doesn't implement scrollIntoView; ChatWidget calls it when new messages arrive.
@@ -37,7 +46,7 @@ describe('ChatWidget', () => {
     document.body.appendChild(container)
     root = createRoot(container)
     await act(async () => {
-      root?.render(<ChatWidget apiBase="http://localhost:8000" />)
+      root?.render(renderWithChat(<ChatWidget />))
       await new Promise((resolve) => window.setTimeout(resolve, 0))
     })
     await act(async () => {
@@ -80,7 +89,7 @@ describe('ChatWidget', () => {
     document.body.appendChild(container)
     root = createRoot(container)
     await act(async () => {
-      root?.render(<ChatWidget apiBase="http://localhost:8000" />)
+      root?.render(renderWithChat(<ChatWidget />))
       for (let tick = 0; tick < 4; tick += 1) await new Promise((resolve) => window.setTimeout(resolve, 0))
     })
     await act(async () => {
@@ -191,7 +200,7 @@ describe('ChatWidget', () => {
     document.body.appendChild(container)
     root = createRoot(container)
     await act(async () => {
-      root?.render(<ChatWidget apiBase="http://localhost:8000" />)
+      root?.render(renderWithChat(<ChatWidget />))
       for (let tick = 0; tick < 4; tick += 1) await new Promise((resolve) => window.setTimeout(resolve, 0))
     })
     await act(async () => {
@@ -252,7 +261,7 @@ describe('ChatWidget', () => {
     document.body.appendChild(container)
     root = createRoot(container)
     await act(async () => {
-      root?.render(<ChatWidget apiBase="http://localhost:8000" />)
+      root?.render(renderWithChat(<ChatWidget />))
       for (let tick = 0; tick < 4; tick += 1) await new Promise((resolve) => window.setTimeout(resolve, 0))
     })
     await act(async () => {
@@ -306,7 +315,7 @@ describe('ChatWidget', () => {
     document.body.appendChild(container)
     root = createRoot(container)
     await act(async () => {
-      root?.render(<ChatWidget apiBase="http://localhost:8000" />)
+      root?.render(renderWithChat(<ChatWidget />))
       for (let tick = 0; tick < 4; tick += 1) await new Promise((resolve) => window.setTimeout(resolve, 0))
     })
     await act(async () => {
@@ -359,7 +368,7 @@ describe('ChatWidget', () => {
     document.body.appendChild(container)
     root = createRoot(container)
     await act(async () => {
-      root?.render(<ChatWidget apiBase="http://localhost:8000" />)
+      root?.render(renderWithChat(<ChatWidget />))
       for (let tick = 0; tick < 4; tick += 1) await new Promise((resolve) => window.setTimeout(resolve, 0))
     })
     await act(async () => {

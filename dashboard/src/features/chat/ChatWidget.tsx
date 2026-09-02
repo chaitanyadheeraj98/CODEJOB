@@ -1,61 +1,20 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 
-import { getChatStatus, runProposalAction } from './api'
+import { useChat } from './chatContext'
 import { renderMarkdownLite } from './markdown'
 import ProposalCard from './ProposalCard'
-import { proposalForMessage, proposalResultDetail } from './proposals'
-import type { ChatStatus } from './types'
-import { useChatSession } from './useChatSession'
+import { proposalForMessage } from './proposals'
 
 
-type ChatWidgetProps = {
-  apiBase: string
-}
-
-
-const MODEL_STORAGE_KEY = 'codejob.chat.model'
-
-export default function ChatWidget({ apiBase }: ChatWidgetProps) {
+// `open` and `draft` stay local: they are genuinely per-surface. Everything
+// else - session, messages, status, model, proposal results - comes from
+// ChatProvider so the workspace page and this widget never diverge.
+export default function ChatWidget() {
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState('')
-  const [status, setStatus] = useState<ChatStatus | null>(null)
-  const [statusError, setStatusError] = useState('')
-  const [selectedModel, setSelectedModel] = useState(() => {
-    try {
-      return window.localStorage.getItem(MODEL_STORAGE_KEY) || 'auto'
-    } catch {
-      return 'auto'
-    }
-  })
-  const [proposalResults, setProposalResults] = useState<Record<number, { approved: boolean; detail: string } | 'cancelled'>>({})
-  const [proposalBusyId, setProposalBusyId] = useState<number | null>(null)
   const messagesEndRef = useRef<HTMLDivElement | null>(null)
-  const ready = Boolean(status?.enabled && status.ollama_running)
-  const chat = useChatSession(apiBase, ready)
-
-  const refreshStatus = useCallback(async () => {
-    setStatusError('')
-    try {
-      setStatus(await getChatStatus(apiBase))
-    } catch (reason) {
-      setStatusError(reason instanceof Error ? reason.message : 'Chat status unavailable')
-    }
-  }, [apiBase])
-
-  useEffect(() => {
-    let active = true
-    getChatStatus(apiBase).then(
-      (nextStatus) => {
-        if (active) setStatus(nextStatus)
-      },
-      (reason: unknown) => {
-        if (active) setStatusError(reason instanceof Error ? reason.message : 'Chat status unavailable')
-      },
-    )
-    return () => {
-      active = false
-    }
-  }, [apiBase])
+  const chat = useChat()
+  const { ready, status, statusError, selectedModel } = chat
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ block: 'nearest' })
@@ -64,22 +23,6 @@ export default function ChatWidget({ apiBase }: ChatWidgetProps) {
   useEffect(() => {
     if (open) chat.markSeen()
   }, [open, chat.markSeen])
-
-  // A model saved from a previous session may no longer be configured -
-  // fall back to Auto rather than silently sending an unknown model name.
-  useEffect(() => {
-    if (!status || selectedModel === 'auto') return
-    if (!(status.available_models ?? []).includes(selectedModel)) setSelectedModel('auto')
-  }, [status, selectedModel])
-
-  const selectModel = (model: string) => {
-    setSelectedModel(model)
-    try {
-      window.localStorage.setItem(MODEL_STORAGE_KEY, model)
-    } catch {
-      // ignore - per-device convenience only
-    }
-  }
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
@@ -95,24 +38,6 @@ export default function ChatWidget({ apiBase }: ChatWidgetProps) {
     const next = window.prompt('Rename chat', currentSession?.title ?? '')
     if (next == null || !next.trim() || next.trim() === currentSession?.title) return
     await chat.renameCurrentSession(next.trim())
-  }
-
-  const approveProposal = async (messageId: number, proposal: NonNullable<ReturnType<typeof proposalForMessage>>) => {
-    setProposalBusyId(messageId)
-    try {
-      const result = await runProposalAction(apiBase, proposal.handler, proposal.fields)
-      setProposalResults((current) => ({
-        ...current,
-        [messageId]: { approved: true, detail: proposalResultDetail(result) },
-      }))
-    } catch (reason) {
-      setProposalResults((current) => ({
-        ...current,
-        [messageId]: { approved: false, detail: reason instanceof Error ? reason.message : 'Action failed' },
-      }))
-    } finally {
-      setProposalBusyId(null)
-    }
   }
 
   return (
@@ -136,7 +61,7 @@ export default function ChatWidget({ apiBase }: ChatWidgetProps) {
           {statusError ? (
             <div className="chatState">
               <p>{statusError}</p>
-              <button type="button" onClick={() => void refreshStatus()}>Retry</button>
+              <button type="button" onClick={() => void chat.refreshStatus()}>Retry</button>
             </div>
           ) : null}
           {status && !status.enabled ? (
@@ -149,7 +74,7 @@ export default function ChatWidget({ apiBase }: ChatWidgetProps) {
             <div className="chatState">
               <strong>Ollama is not connected</strong>
               <p>Start Ollama and make sure {status.model} is available.</p>
-              <button type="button" onClick={() => void refreshStatus()}>Check again</button>
+              <button type="button" onClick={() => void chat.refreshStatus()}>Check again</button>
             </div>
           ) : null}
 
@@ -194,7 +119,7 @@ export default function ChatWidget({ apiBase }: ChatWidgetProps) {
                     <select
                       aria-label="Chat model"
                       value={selectedModel}
-                      onChange={(event) => selectModel(event.target.value)}
+                      onChange={(event) => chat.selectModel(event.target.value)}
                       disabled={chat.busy}
                       title="Auto picks the primary model and falls back automatically if it's unavailable"
                     >
@@ -216,17 +141,16 @@ export default function ChatWidget({ apiBase }: ChatWidgetProps) {
                 {chat.messages.map((message) => {
                   const proposal = proposalForMessage(message)
                   if (proposal) {
-                    const result = proposalResults[message.id]
                     return (
                       <ProposalCard
                         key={message.id}
                         handler={proposal.handler}
                         fields={proposal.fields}
-                        result={result}
-                        busy={proposalBusyId === message.id}
-                        disabled={proposalBusyId != null}
-                        onApprove={() => void approveProposal(message.id, proposal)}
-                        onCancel={() => setProposalResults((current) => ({ ...current, [message.id]: 'cancelled' }))}
+                        result={chat.proposalResults[message.id]}
+                        busy={chat.proposalBusyId === message.id}
+                        disabled={chat.proposalBusyId != null}
+                        onApprove={() => void chat.approveProposal(message.id, proposal)}
+                        onCancel={() => chat.cancelProposal(message.id)}
                       />
                     )
                   }

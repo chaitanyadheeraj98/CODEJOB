@@ -171,3 +171,7 @@ export function useChatSession(apiBase: string, enabled: boolean) {
     sendMessage,
   }
 }
+
+// Named so ChatProvider can widen it without re-listing every member, and so a
+// new field here reaches the context automatically.
+export type ChatSessionApi = ReturnType<typeof useChatSession>

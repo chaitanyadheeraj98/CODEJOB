@@ -7,6 +7,7 @@ import TrustedGmailGroupsPanel, { type TrustedGmailGroup } from './features/gmai
 import { getDraftSourceLabel } from './features/ai/ui'
 import QueryBucket from './features/query_bucket/QueryBucket'
 import EmailSearch from './features/email_search/EmailSearch'
+import ChatProvider from './features/chat/ChatProvider'
 import ChatWidget from './features/chat/ChatWidget'
 import { getChatStatus } from './features/chat/api'
 import type { ChatStatus } from './features/chat/types'
@@ -5320,6 +5321,13 @@ function App() {
   )
 
   return (
+    // Mounted inside App rather than around it in main.tsx: App's own tests
+    // render <App /> directly, so a provider above it would leave every one of
+    // them without context. The trade-off is that App itself cannot call
+    // useChat() - the Assistant sidebar badge reads it from a small consumer
+    // rendered below this point instead. Children are left at their original
+    // indentation to keep this a two-line diff rather than a 2,200-line reflow.
+    <ChatProvider apiBase={apiBase}>
     <main className="gmailShell">
       <Sidebar
         running={running}
@@ -7541,8 +7549,9 @@ function App() {
           ) : null}
         </div>
       </section>
-      <ChatWidget apiBase={apiBase} />
+      <ChatWidget />
     </main>
+    </ChatProvider>
   )
 }
 
