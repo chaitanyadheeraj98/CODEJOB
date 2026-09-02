@@ -4840,6 +4840,76 @@ def _text_search_active(*values: str | None) -> bool:
     return any(value and value.strip() for value in values)
 
 
+# Score bounds behind the ATS strength badge on the cards. Mirrors getAtsStrengthLabel
+# in dashboard/src/App.tsx - keep the two in step, the filter promises the badge.
+ATS_STRENGTH_BOUNDS: dict[str, tuple[float | None, float | None]] = {
+    "strong": (80.0, None),
+    "moderate": (60.0, 80.0),
+    "weak": (None, 60.0),
+}
+
+# Filter param -> the EmailResponse field carrying that badge. These three are derived
+# after the query in _populate_badge_fields (premium-contact resolution plus the
+# cross-referenced following state), so they are filtered in Python, not in SQL.
+BADGE_FILTER_FIELDS = {
+    "contact_status": "premium_status",
+    "verification": "premium_verification_level",
+    "following": "following_badge",
+}
+
+
+def _csv_values(raw: str | None) -> list[str]:
+    return [value.strip().lower() for value in (raw or "").split(",") if value.strip()]
+
+
+def _ats_strength_clause(raw: str | None):
+    """OR of the score ranges for the requested tiers, or None when none was asked for.
+
+    `unknown` is the unscored row - the case the badge itself labels "Unknown".
+    """
+    clauses = []
+    for tier in _csv_values(raw):
+        if tier == "unknown":
+            clauses.append(RecruiterEmail.ats_score.is_(None))
+            continue
+        bounds = ATS_STRENGTH_BOUNDS.get(tier)
+        if bounds is None:
+            continue
+        low, high = bounds
+        clause = RecruiterEmail.ats_score.is_not(None)
+        if low is not None:
+            clause = clause & (RecruiterEmail.ats_score >= low)
+        if high is not None:
+            clause = clause & (RecruiterEmail.ats_score < high)
+        clauses.append(clause)
+    return or_(*clauses) if clauses else None
+
+
+def _badge_filter_selection(**raw_values: str | None) -> dict[str, set[str]]:
+    selection = {BADGE_FILTER_FIELDS[key]: set(_csv_values(value)) for key, value in raw_values.items()}
+    return {field: values for field, values in selection.items() if values}
+
+
+def _matches_badge_filters(values: Mapping[str, object], selection: dict[str, set[str]]) -> bool:
+    # A card carrying no badge in a filtered dimension is not a match: asking for
+    # "Active" asks for the cards showing that badge, not for every other card too.
+    return all(str(values.get(field) or "").lower() in wanted for field, wanted in selection.items())
+
+
+def _filter_rows_by_badges(
+    db: Session,
+    owner_id: str,
+    rows: list[RecruiterEmail],
+    selection: dict[str, set[str]],
+) -> list[RecruiterEmail]:
+    """Score already-ordered rows through the same badge pass the cards render from.
+
+    Costs a full read of the filtered bucket, so it only runs when a badge filter is set.
+    """
+    badge_fields = _populate_badge_fields(db, owner_id, rows)
+    return [row for row in rows if _matches_badge_filters(badge_fields.get(row.id, {}), selection)]
+
+
 @app.get("/candidates", response_model=CandidateListResponse)
 def list_candidates(
     state: str = Query("needs_review"),
@@ -4860,6 +4930,11 @@ def list_candidates(
     subject: str | None = Query(default=None, max_length=500),
     location: str | None = Query(default=None, max_length=200),
     sender: str | None = Query(default=None, max_length=255),
+    recipient: str | None = Query(default=None, max_length=255),
+    ats_strength: str | None = Query(default=None),
+    contact_status: str | None = Query(default=None),
+    verification: str | None = Query(default=None),
+    following: str | None = Query(default=None),
     routing_status: str | None = Query(default=None),
     reason: str | None = Query(default=None, max_length=500),
     opened: bool | None = Query(default=None),
@@ -4882,7 +4957,7 @@ def list_candidates(
     # choice and still wins. This also keeps /filter-options honest - the picker
     # offers values from the whole bucket, so the list has to search the whole
     # bucket or a suggestion can come back with zero rows.
-    if _text_search_active(role, subject, location, sender, company, reason, interview_type):
+    if _text_search_active(role, subject, location, sender, recipient, company, reason, interview_type):
         mail_date = None
 
     if date_filter:
@@ -4927,7 +5002,10 @@ def list_candidates(
         query = query.filter(RecruiterEmail.ats_score >= min_ats_score)
     if max_ats_score is not None:
         query = query.filter(RecruiterEmail.ats_score <= max_ats_score)
-    for value, column in ((role, RecruiterEmail.role), (interview_type, RecruiterEmail.interview_type), (subject, RecruiterEmail.subject), (location, RecruiterEmail.location), (sender, RecruiterEmail.sender)):
+    strength_clause = _ats_strength_clause(ats_strength)
+    if strength_clause is not None:
+        query = query.filter(strength_clause)
+    for value, column in ((role, RecruiterEmail.role), (interview_type, RecruiterEmail.interview_type), (subject, RecruiterEmail.subject), (location, RecruiterEmail.location), (sender, RecruiterEmail.sender), (recipient, RecruiterEmail.recipient_email)):
         if value and value.strip():
             query = query.filter(column.ilike(f"%{value.strip()}%"))
     if routing_status:
@@ -4962,12 +5040,18 @@ def list_candidates(
     else:
         query = query.order_by(RecruiterEmail.created_at.desc(), RecruiterEmail.id.desc())
 
-    items = query.offset(cursor).limit(limit + 1).all()
-    has_next = len(items) > limit
-    visible = items[:limit]
+    badge_selection = _badge_filter_selection(contact_status=contact_status, verification=verification, following=following)
+    if badge_selection:
+        matching = _filter_rows_by_badges(db, settings.owner_id, query.all(), badge_selection)
+        total = len(matching)
+        visible, next_cursor, has_next = _paginate_items(matching, cursor=cursor, limit=limit)
+    else:
+        items = query.offset(cursor).limit(limit + 1).all()
+        has_next = len(items) > limit
+        visible = items[:limit]
+        next_cursor = cursor + limit if has_next else None
     _hydrate_candidates_for_review(db, visible)
     badge_fields = _populate_badge_fields(db, settings.owner_id, visible)
-    next_cursor = cursor + limit if has_next else None
     attachment_file_names = _enabled_attachment_file_names(db)
     serialized_items: list[EmailResponse] = []
     for item in visible:
@@ -8042,6 +8126,11 @@ def list_appts_bookmarked_requirements(
     interview_type: str | None = Query(default=None, max_length=255),
     location: str | None = Query(default=None, max_length=200),
     sender: str | None = Query(default=None, max_length=255),
+    recipient: str | None = Query(default=None, max_length=255),
+    ats_strength: str | None = Query(default=None),
+    contact_status: str | None = Query(default=None),
+    verification: str | None = Query(default=None),
+    following: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> CandidateListResponse:
     _require_applications_enabled(db)
@@ -8073,7 +8162,10 @@ def list_appts_bookmarked_requirements(
         query = query.filter(RecruiterEmail.ats_score >= min_ats_score)
     if max_ats_score is not None:
         query = query.filter(RecruiterEmail.ats_score <= max_ats_score)
-    for value, column in ((role, RecruiterEmail.role), (interview_type, RecruiterEmail.interview_type), (location, RecruiterEmail.location), (sender, RecruiterEmail.sender)):
+    strength_clause = _ats_strength_clause(ats_strength)
+    if strength_clause is not None:
+        query = query.filter(strength_clause)
+    for value, column in ((role, RecruiterEmail.role), (interview_type, RecruiterEmail.interview_type), (location, RecruiterEmail.location), (sender, RecruiterEmail.sender), (recipient, RecruiterEmail.recipient_email)):
         if value and value.strip():
             query = query.filter(column.ilike(f"%{value.strip()}%"))
 
@@ -8086,10 +8178,18 @@ def list_appts_bookmarked_requirements(
         query = query.order_by(RecruiterEmail.created_at.asc(), RecruiterEmail.id.asc())
     else:
         query = query.order_by(RecruiterEmail.created_at.desc(), RecruiterEmail.id.desc())
-    rows = query.offset(cursor).limit(limit + 1).all()
-    visible = rows[:limit]
+    badge_selection = _badge_filter_selection(contact_status=contact_status, verification=verification, following=following)
+    if badge_selection:
+        matching = _filter_rows_by_badges(db, settings.owner_id, query.all(), badge_selection)
+        total = len(matching)
+        visible, next_cursor, has_next = _paginate_items(matching, cursor=cursor, limit=limit)
+    else:
+        rows = query.offset(cursor).limit(limit + 1).all()
+        visible = rows[:limit]
+        has_next = len(rows) > limit
+        next_cursor = cursor + limit if has_next else None
     items = [_serialize_candidate_for_review(db, row) for row in visible]
-    return CandidateListResponse(items=items, next_cursor=cursor + limit if len(rows) > limit else None, has_next=len(rows) > limit, total=total)
+    return CandidateListResponse(items=items, next_cursor=next_cursor, has_next=has_next, total=total)
 
 
 @app.post("/appts/applications/manual", response_model=ApplicationResponse, status_code=201)

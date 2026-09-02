@@ -53,8 +53,8 @@ describe('FilterVisibilitySettings', () => {
     // The visible count is terse so eleven rows stay scannable; the full phrasing
     // is the accessible name, which is what assistive tech announces.
     const count = group.querySelector('.filterVisibilityCount')!
-    expect(count.textContent).toBe('1/9')
-    expect(count.getAttribute('aria-label')).toBe('1 of 9 filters shown')
+    expect(count.textContent).toBe('1/14')
+    expect(count.getAttribute('aria-label')).toBe('1 of 14 filters shown')
     expect(count.classList.contains('is-reduced')).toBe(true)
 
     const hideAll = Array.from(group.querySelectorAll('button')).find((button) => button.textContent === 'Hide all')!

@@ -988,6 +988,132 @@ class BadgeResolutionTests(AppTSEndpointTestBase):
 
 
 # ---------------------------------------------------------------------------
+# 8b. To + badge filters
+# ---------------------------------------------------------------------------
+
+
+class BadgeAndRecipientFilterTests(AppTSEndpointTestBase):
+    """The card badges (and the To address they hang off) are filterable, on both the
+    Needs Review list and the Bookmarked Requirements tab."""
+
+    def _scored(self, db: Session, score: float | None, **kwargs) -> RecruiterEmail:
+        email = self._add_email(db, **kwargs)
+        email.ats_score = score
+        db.commit()
+        db.refresh(email)
+        return email
+
+    def test_recipient_filter_matches_the_to_address(self) -> None:
+        with Session(self.engine) as db:
+            wanted = self._add_email(db, recipient_email="mukesh.s@avanceservices.com")
+            other = self._add_email(db, recipient_email="someone@elsewhere.example")
+            wanted_id, other_id = wanted.id, other.id
+
+        response = self.client.get("/candidates", params={"recipient": "avanceservices"})
+        self.assertEqual(response.status_code, 200, response.text)
+        ids = [item["id"] for item in response.json()["items"]]
+        self.assertEqual(ids, [wanted_id])
+        self.assertNotIn(other_id, ids)
+
+    def test_ats_strength_filter_selects_the_badge_tiers(self) -> None:
+        with Session(self.engine) as db:
+            strong = self._scored(db, 85.0)
+            moderate = self._scored(db, 65.0)
+            weak = self._scored(db, 30.0)
+            unscored = self._scored(db, None)
+            strong_id, moderate_id, weak_id, unscored_id = strong.id, moderate.id, weak.id, unscored.id
+
+        response = self.client.get("/candidates", params={"ats_strength": "strong,unknown"})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual({item["id"] for item in response.json()["items"]}, {strong_id, unscored_id})
+
+        moderate_only = self.client.get("/candidates", params={"ats_strength": "moderate"})
+        self.assertEqual({item["id"] for item in moderate_only.json()["items"]}, {moderate_id})
+
+        weak_only = self.client.get("/candidates", params={"ats_strength": "weak"})
+        self.assertEqual({item["id"] for item in weak_only.json()["items"]}, {weak_id})
+
+    def test_contact_status_and_verification_filters_follow_the_badges(self) -> None:
+        with Session(self.engine) as db:
+            self._add_contact(
+                db,
+                recruiter_email="trusted@example.com",
+                phone="+15559990011",
+                verification_level="trusted",
+            )
+            matching = self._add_email(db, sender="Trusted Rec <trusted@example.com>")
+            unmatched = self._add_email(db, sender="Nobody <nobody@doesnotexist.example>")
+            matching_id, unmatched_id = matching.id, unmatched.id
+
+        trusted = self.client.get("/candidates", params={"verification": "trusted"})
+        self.assertEqual(trusted.status_code, 200, trusted.text)
+        body = trusted.json()
+        self.assertEqual([item["id"] for item in body["items"]], [matching_id])
+        self.assertEqual(body["total"], 1)
+        self.assertFalse(body["has_next"])
+
+        active = self.client.get("/candidates", params={"contact_status": "active"})
+        self.assertEqual([item["id"] for item in active.json()["items"]], [matching_id])
+
+        # A card with no contact badge is not swept in by filtering on one.
+        unverified = self.client.get("/candidates", params={"verification": "unverified"})
+        self.assertEqual(unverified.json()["items"], [])
+        self.assertNotIn(unmatched_id, [item["id"] for item in active.json()["items"]])
+
+    def test_bookmarked_requirements_accept_recipient_and_badge_filters(self) -> None:
+        with Session(self.engine) as db:
+            self._add_contact(
+                db,
+                recruiter_email="recruiter@agency.example",
+                phone="+15559990012",
+                verification_level="verified",
+            )
+            wanted = self._add_email(
+                db,
+                marked=True,
+                sender="Sender <sender@horizonsoftech.net>",
+                recipient_email="recruiter@agency.example",
+            )
+            other = self._add_email(
+                db,
+                marked=True,
+                sender="Nobody <nobody@doesnotexist.example>",
+                recipient_email="hr@other.example",
+            )
+            wanted_id, other_id = wanted.id, other.id
+
+        by_recipient = self.client.get(
+            "/appts/bookmarked-requirements", params={"recipient": "agency.example"}
+        )
+        self.assertEqual(by_recipient.status_code, 200, by_recipient.text)
+        self.assertEqual([item["id"] for item in by_recipient.json()["items"]], [wanted_id])
+
+        by_badge = self.client.get(
+            "/appts/bookmarked-requirements", params={"verification": "verified"}
+        )
+        self.assertEqual(by_badge.status_code, 200, by_badge.text)
+        body = by_badge.json()
+        self.assertEqual([item["id"] for item in body["items"]], [wanted_id])
+        self.assertEqual(body["total"], 1)
+        self.assertNotIn(other_id, [item["id"] for item in body["items"]])
+
+    def test_unfiltered_lists_are_unchanged(self) -> None:
+        with Session(self.engine) as db:
+            first = self._add_email(db)
+            second = self._add_email(db, marked=True)
+            ids = {first.id, second.id}
+
+        needs_review = self.client.get("/candidates")
+        self.assertEqual(needs_review.status_code, 200, needs_review.text)
+        self.assertEqual({item["id"] for item in needs_review.json()["items"]}, ids)
+        self.assertEqual(needs_review.json()["total"], 2)
+
+        bookmarked = self.client.get("/appts/bookmarked-requirements")
+        self.assertEqual(bookmarked.status_code, 200, bookmarked.text)
+        self.assertEqual(bookmarked.json()["total"], 1)
+
+
+# ---------------------------------------------------------------------------
 # 9. sent-details guard
 # ---------------------------------------------------------------------------
 
