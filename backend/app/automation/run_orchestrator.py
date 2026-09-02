@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 import logging
 from typing import Any, Callable, Mapping, cast
 
-from app.gates import EmailIntentDecision
+from app.gates import EmailIntentDecision, llm_decided
 from app.job_intent_learning import approved_learning_signals_for_owner, record_pending_job_intent_learning
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
@@ -194,7 +194,7 @@ class RunOrchestrator:
                 trusted_group_context=trusted_group_context,
                 approved_learning_signals=approved_learning_signals,
             )
-            if intent_decision.provider == "groq" and intent_decision.learned_signals:
+            if llm_decided(intent_decision.provider) and intent_decision.learned_signals:
                 record_pending_job_intent_learning(
                     request.db,
                     owner_id=request.owner_id,
@@ -399,6 +399,7 @@ class RunOrchestrator:
                     target.intent_negative_evidence_json = json.dumps(intent_decision.negative_evidence, separators=(",", ":"))
                     target.gate_action = intent_decision.action
                     target.gate_provider = intent_decision.provider
+                    target.gate_error = intent_decision.error
                     target.source_group_name = trusted_group_context.group_name
                     target.source_group_email = trusted_group_context.group_email
                     target.source_group_match_method = trusted_group_context.match_method
@@ -467,6 +468,7 @@ class RunOrchestrator:
                     target.intent_negative_evidence_json = json.dumps(intent_decision.negative_evidence, separators=(",", ":"))
                     target.gate_action = intent_decision.action
                     target.gate_provider = intent_decision.provider
+                    target.gate_error = intent_decision.error
                     target.source_group_name = trusted_group_context.group_name
                     target.source_group_email = trusted_group_context.group_email
                     target.source_group_match_method = trusted_group_context.match_method
@@ -556,6 +558,7 @@ class RunOrchestrator:
                 target.intent_negative_evidence_json = json.dumps(intent_decision.negative_evidence, separators=(",", ":"))
                 target.gate_action = intent_decision.action
                 target.gate_provider = intent_decision.provider
+                target.gate_error = intent_decision.error
                 target.source_group_name = trusted_group_context.group_name
                 target.source_group_email = trusted_group_context.group_email
                 target.source_group_match_method = trusted_group_context.match_method
@@ -787,6 +790,7 @@ class RunOrchestrator:
                 intent_negative_evidence=intent_decision.negative_evidence if intent_decision else None,
                 gate_action=intent_decision.action if intent_decision else None,
                 gate_provider=intent_decision.provider if intent_decision else None,
+                gate_error=intent_decision.error if intent_decision else None,
                 source_group_name=getattr(trusted_group_context, "group_name", None),
                 source_group_email=getattr(trusted_group_context, "group_email", None),
                 source_group_match_method=getattr(trusted_group_context, "match_method", None),

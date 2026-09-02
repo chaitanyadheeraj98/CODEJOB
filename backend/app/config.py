@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -34,6 +36,31 @@ class Settings(BaseSettings):
     groq_gate_body_char_limit: int = 6000
     groq_gate_max_retries: int = 2
     groq_gate_redact_contact_info: bool = True
+    # Which backend answers the job-intent gate. "taxonomy" disables the LLM entirely.
+    # This is the rollback lever: flipping to "groq" restores the pre-migration
+    # behaviour without a deploy, which matters because this gate decides what
+    # enters the queue at all.
+    intent_gate_provider: Literal["deepseek", "groq", "taxonomy"] = "deepseek"
+    intent_gate_model: str = ""            # "" -> deepseek_model_fast
+    # Reasoning-effort ladder, attempted in order; first success wins. Comma-separated
+    # so it is env-overridable, and its length is the hard attempt cap.
+    #
+    # Ships as a single no-thinking rung: escalation is INERT until the agreement
+    # harness shows it earns its cost. Candidate once measured: "disabled,high".
+    #
+    # This is the escalation axis that actually works. The role-manifest ladder escalates
+    # on `temperature`, which thinking mode silently ignores - reasoning effort is
+    # honoured, so it replaces a dead dimension rather than adding a new one.
+    intent_gate_effort_ladder: str = "disabled"
+    # Escalate when the model returns valid JSON but disagrees with the rules taxonomy.
+    # Hard failures always escalate; this covers the confident-but-ambiguous case, which
+    # is where the real misclassifications live. Off until measured.
+    intent_gate_escalate_on_disagreement: bool = False
+    # Skip the LLM when the rules taxonomy is at least this confident.
+    # 0.0 preserves today's always-call behaviour; raise only on measured agreement.
+    intent_gate_min_taxonomy_confidence: float = 0.0
+    intent_gate_timeout_seconds: float = 12.0   # total budget per email, not per attempt
+    role_manifest_final_rung: Literal["deepseek_pro", "groq", "off"] = "deepseek_pro"
     role_manifest_groq_model: str = "llama-3.1-8b-instant"
     role_manifest_extraction_passes_deterministic: int = 1
     role_manifest_extraction_passes_variance: int = 2

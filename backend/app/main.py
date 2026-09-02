@@ -2324,6 +2324,7 @@ def _recent_run_item_response(row: RecentRunSkippedItem) -> RecentRunItemRespons
         intent_negative_evidence=_json_string_list(row.intent_negative_evidence_json),
         gate_action=row.gate_action,
         gate_provider=row.gate_provider,
+        gate_error=row.gate_error,
         source_group_name=row.source_group_name,
         source_group_email=row.source_group_email,
         source_group_match_method=row.source_group_match_method,
@@ -3684,10 +3685,60 @@ def ai_status(db: Session = Depends(get_db)) -> AIStatusResponse:
             if runtime_state.groq_last_error
             else f"Groq fallback active due to a recent runtime failure (mode: {groq_request_mode})."
         )
+    elif settings.intent_gate_provider != "groq":
+        groq_detail = (
+            f"Groq is idle: the intent gate is running on {settings.intent_gate_provider}. "
+            "Groq stays configured as the one-setting rollback."
+        )
     elif groq_request_mode == "json_object":
         groq_detail = "Groq is configured in json_object compatibility mode for the current model."
     else:
         groq_detail = "Groq is configured in structured json_schema mode, but no Groq attempt has been recorded in this process yet."
+
+    intent_gate_provider = settings.intent_gate_provider
+    intent_gate_enabled_in_settings = groq_enabled_in_settings
+    if intent_gate_provider == "groq":
+        intent_gate_model = settings.groq_gate_model or "llama-3.1-8b-instant"
+        intent_gate_configured = groq_configured
+    elif intent_gate_provider == "deepseek":
+        intent_gate_model = (
+            settings.intent_gate_model or settings.deepseek_model_fast or "deepseek-v4-flash"
+        )
+        intent_gate_configured = bool(settings.deepseek_api_key) and bool(settings.deepseek_base_url)
+    else:
+        intent_gate_model = "rules_taxonomy"
+        # The taxonomy needs no credentials, so "configured" is unconditionally true.
+        intent_gate_configured = True
+
+    intent_gate_runtime_healthy: bool | None
+    if runtime_state.intent_gate_last_success_at and (
+        runtime_state.intent_gate_last_attempted_at is None
+        or runtime_state.intent_gate_last_success_at >= runtime_state.intent_gate_last_attempted_at
+    ) and not runtime_state.intent_gate_last_error:
+        intent_gate_runtime_healthy = True
+    elif runtime_state.intent_gate_last_error:
+        intent_gate_runtime_healthy = False
+    else:
+        intent_gate_runtime_healthy = None
+
+    if not intent_gate_enabled_in_settings:
+        intent_gate_detail = "The smart job-intent gate is turned off in settings; the rules taxonomy decides every email."
+    elif intent_gate_provider == "taxonomy":
+        intent_gate_detail = "The intent gate is pinned to the rules taxonomy; no model is called."
+    elif not intent_gate_configured:
+        intent_gate_detail = (
+            f"The intent gate is set to {intent_gate_provider}, but that provider's API key or base URL is missing."
+        )
+    elif intent_gate_runtime_healthy is True:
+        intent_gate_detail = f"Intent gate healthy on {intent_gate_provider} ({intent_gate_model})."
+    elif intent_gate_runtime_healthy is False:
+        intent_gate_detail = (
+            f"Intent gate fell back to the rules taxonomy: {runtime_state.intent_gate_last_error}."
+        )
+    else:
+        intent_gate_detail = (
+            f"Intent gate is configured for {intent_gate_provider}, but no attempt has been recorded in this process yet."
+        )
 
     return AIStatusResponse(
         configured=configured,
@@ -3717,6 +3768,19 @@ def ai_status(db: Session = Depends(get_db)) -> AIStatusResponse:
         groq_last_attempted_at=runtime_state.groq_last_attempted_at,
         groq_last_success_at=runtime_state.groq_last_success_at,
         groq_last_duration_ms=runtime_state.groq_last_duration_ms,
+        intent_gate_provider=intent_gate_provider,
+        intent_gate_model=intent_gate_model,
+        intent_gate_configured=intent_gate_configured,
+        intent_gate_enabled_in_settings=intent_gate_enabled_in_settings,
+        intent_gate_runtime_healthy=intent_gate_runtime_healthy,
+        intent_gate_last_error=runtime_state.intent_gate_last_error,
+        intent_gate_detail=intent_gate_detail,
+        intent_gate_effort_ladder=settings.intent_gate_effort_ladder,
+        intent_gate_last_rung=runtime_state.intent_gate_last_rung,
+        intent_gate_min_taxonomy_confidence=settings.intent_gate_min_taxonomy_confidence,
+        intent_gate_last_attempted_at=runtime_state.intent_gate_last_attempted_at,
+        intent_gate_last_success_at=runtime_state.intent_gate_last_success_at,
+        intent_gate_last_duration_ms=runtime_state.intent_gate_last_duration_ms,
         semantic_input_source=semantic_input_source,
         semantic_input_chars=semantic_input_chars,
         semantic_chunks=semantic_chunks,

@@ -640,6 +640,7 @@ class EmailResponse(BaseModel):
     intent_negative_evidence: list[str] = Field(default_factory=list, validation_alias=AliasChoices("intent_negative_evidence", "intent_negative_evidence_json"))
     gate_action: str | None = None
     gate_provider: str | None = None
+    gate_error: str | None = None
     source_group_name: str | None = None
     source_group_email: str | None = None
     source_group_match_method: str | None = None
@@ -820,6 +821,22 @@ class AIStatusResponse(BaseModel):
     groq_last_attempted_at: datetime | None = None
     groq_last_success_at: datetime | None = None
     groq_last_duration_ms: int | None = None
+    # Provider-neutral intent-gate status. Added alongside the groq_* fields rather
+    # than replacing them so the AI Access card can be relabelled without a
+    # breaking API change, and so Groq stays observable while it is the rollback.
+    intent_gate_provider: str = ""
+    intent_gate_model: str = ""
+    intent_gate_configured: bool = False
+    intent_gate_enabled_in_settings: bool = False
+    intent_gate_runtime_healthy: bool | None = None
+    intent_gate_last_error: str | None = None
+    intent_gate_detail: str = ""
+    intent_gate_effort_ladder: str = ""
+    intent_gate_last_rung: str = ""
+    intent_gate_min_taxonomy_confidence: float = 0.0
+    intent_gate_last_attempted_at: datetime | None = None
+    intent_gate_last_success_at: datetime | None = None
+    intent_gate_last_duration_ms: int | None = None
     semantic_input_source: str | None = None
     semantic_input_chars: int | None = None
     semantic_chunks: int | None = None
@@ -1950,6 +1967,7 @@ class RecentRunItemResponse(BaseModel):
     intent_negative_evidence: list[str] = Field(default_factory=list)
     gate_action: str | None = None
     gate_provider: str | None = None
+    gate_error: str | None = None
     source_group_name: str | None = None
     source_group_email: str | None = None
     source_group_match_method: str | None = None

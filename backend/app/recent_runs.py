@@ -65,6 +65,7 @@ class SkippedItemRecord:
     intent_negative_evidence: list[str] | None = None
     gate_action: str | None = None
     gate_provider: str | None = None
+    gate_error: str | None = None
     source_group_name: str | None = None
     source_group_email: str | None = None
     source_group_match_method: str | None = None
@@ -172,6 +173,7 @@ def record_skipped_item(db: Session, payload: SkippedItemRecord) -> RecentRunSki
         intent_negative_evidence_json=json.dumps(payload.intent_negative_evidence or [], separators=(",", ":")),
         gate_action=payload.gate_action,
         gate_provider=payload.gate_provider,
+        gate_error=payload.gate_error,
         source_group_name=payload.source_group_name,
         source_group_email=payload.source_group_email,
         source_group_match_method=payload.source_group_match_method,

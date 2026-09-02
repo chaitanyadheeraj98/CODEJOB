@@ -168,6 +168,56 @@ describe('Groq status UI', () => {
     expect(text).toContain('missing_groq_api_key')
   })
 
+  it('renders provider-neutral intent gate status alongside the Groq rows', async () => {
+    // The gate can run on a provider that is not Groq, so the card has to say which
+    // one answered. Reading DeepSeek's health off a row labelled "Groq Runtime" is
+    // exactly the misreport this pair of rows exists to prevent.
+    const { text } = await renderWithAiStatus({
+      configured: true,
+      connected: true,
+      running: false,
+      provider: 'deepseek',
+      model: 'deepseek-chat',
+      detail: 'ok',
+      groq_configured: true,
+      groq_enabled_in_settings: true,
+      groq_model: 'llama-3.1-8b-instant',
+      groq_base_url_present: true,
+      groq_request_mode: 'json_object',
+      groq_runtime_healthy: null,
+      groq_last_error: null,
+      groq_detail: 'Groq is idle: the intent gate is running on deepseek.',
+      groq_last_attempted_at: null,
+      groq_last_success_at: null,
+      groq_last_duration_ms: null,
+      intent_gate_provider: 'deepseek',
+      intent_gate_model: 'deepseek-v4-flash',
+      intent_gate_configured: true,
+      intent_gate_enabled_in_settings: true,
+      intent_gate_runtime_healthy: true,
+      intent_gate_last_error: null,
+      intent_gate_detail: 'Intent gate healthy on deepseek (deepseek-v4-flash).',
+      intent_gate_effort_ladder: 'disabled',
+      intent_gate_last_rung: 'disabled',
+      intent_gate_min_taxonomy_confidence: 0,
+      intent_gate_last_attempted_at: null,
+      intent_gate_last_success_at: null,
+      intent_gate_last_duration_ms: 1200,
+      last_error: null,
+      last_started_at: null,
+      last_finished_at: null,
+      last_duration_ms: null,
+      last_draft_source: null,
+    })
+
+    expect(text).toContain('Intent Gate Provider')
+    expect(text).toContain('deepseek-v4-flash')
+    expect(text).toContain('Intent Gate Runtime')
+    expect(text).toContain('Intent Gate Duration')
+    expect(text).toContain('1.2s')
+    expect(text).toContain('Groq is idle: the intent gate is running on deepseek.')
+  })
+
   it('applies the standardized run queue grid layout hook', async () => {
     const { container } = await renderWithAiStatus({
       configured: true,

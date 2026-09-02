@@ -2,6 +2,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from app.config import settings
 from app.gates.job_description_gate import classify_email_intent
 from app.job_intent_learning import JobIntentLearningSignal
 from app.services.gmail_group_source_service import TrustedGroupContext
@@ -12,6 +13,17 @@ from app.taxonomy.job_description_taxonomy import (
 
 
 class JobDescriptionGateTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # These assert gate behaviour, not vendor identity, but the provider label
+        # ends up on the row - so pin it rather than inheriting whatever .env holds.
+        for name, value in (
+            ("intent_gate_provider", "deepseek"),
+            ("intent_gate_min_taxonomy_confidence", 0.0),
+        ):
+            previous = getattr(settings, name)
+            setattr(settings, name, value)
+            self.addCleanup(setattr, settings, name, previous)
+
     def tearDown(self) -> None:
         clear_job_intent_signal_embedding_cache()
 
@@ -104,7 +116,7 @@ class JobDescriptionGateTests(unittest.TestCase):
         ),
     )
     @patch(
-        "app.gates.job_description_gate.groq_chat_json",
+        "app.gates.job_description_gate.intent_chat_json",
         return_value=(
             {
                 "intent_type": "recruiter_job_requirement",
@@ -118,9 +130,10 @@ class JobDescriptionGateTests(unittest.TestCase):
                 ],
             },
             None,
+            None,
         ),
     )
-    def test_groq_enabled_overrides_taxonomy_skip(self, _mock_groq, _mock_taxonomy) -> None:
+    def test_llm_gate_overrides_taxonomy_skip(self, _mock_provider, _mock_taxonomy) -> None:
         decision = classify_email_intent(
             sender="jobs@googlegroups.com",
             subject="Frontend Developer",
@@ -128,7 +141,7 @@ class JobDescriptionGateTests(unittest.TestCase):
             groq_enabled=True,
         )
 
-        self.assertEqual(decision.provider, "groq")
+        self.assertEqual(decision.provider, "deepseek")
         self.assertEqual(decision.intent_type, "recruiter_job_requirement")
         self.assertEqual(decision.action, "process_for_queue")
         self.assertEqual(decision.learned_signals[0].phrase, "share resume")
@@ -145,7 +158,7 @@ class JobDescriptionGateTests(unittest.TestCase):
         ),
     )
     @patch(
-        "app.gates.job_description_gate.groq_chat_json",
+        "app.gates.job_description_gate.intent_chat_json",
         return_value=(
             {
                 "intent_type": "recruiter_job_requirement",
@@ -159,11 +172,12 @@ class JobDescriptionGateTests(unittest.TestCase):
                 ],
             },
             None,
+            None,
         ),
     )
-    def test_groq_prompt_caps_confirmed_signals_and_drops_learning_on_agreement(
+    def test_prompt_caps_confirmed_signals_and_drops_learning_on_agreement(
         self,
-        mock_groq,
+        mock_provider,
         _mock_taxonomy,
     ) -> None:
         signals = [
@@ -190,7 +204,7 @@ class JobDescriptionGateTests(unittest.TestCase):
             approved_learning_signals=signals,
         )
 
-        prompt = mock_groq.call_args.kwargs["user_prompt"]
+        prompt = mock_provider.call_args.kwargs["user_prompt"]
         self.assertIn("POS_SIGNAL_19", prompt)
         self.assertNotIn("POS_SIGNAL_00", prompt)
         self.assertIn("NEG_SIGNAL_19", prompt)
@@ -257,8 +271,8 @@ class JobDescriptionGateTests(unittest.TestCase):
             negative_evidence=[],
         ),
     )
-    @patch("app.gates.job_description_gate.groq_chat_json", return_value=(None, "groq_timeout"))
-    def test_gate_falls_back_when_groq_fails(self, _mock_groq, _mock_taxonomy) -> None:
+    @patch("app.gates.job_description_gate.intent_chat_json", return_value=(None, "groq_timeout", None))
+    def test_gate_falls_back_when_the_provider_fails(self, _mock_provider, _mock_taxonomy) -> None:
         decision = classify_email_intent(
             sender="jobs@googlegroups.com",
             subject="Frontend Developer",
@@ -271,7 +285,7 @@ class JobDescriptionGateTests(unittest.TestCase):
             groq_enabled=True,
         )
 
-        self.assertEqual(decision.provider, "groq_fallback_taxonomy")
+        self.assertEqual(decision.provider, "deepseek_fallback_taxonomy")
         self.assertEqual(decision.intent_type, "unknown")
         self.assertEqual(decision.action, "needs_review")
         self.assertEqual(decision.error, "groq_timeout")

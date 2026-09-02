@@ -12,7 +12,11 @@ from instructor.core.exceptions import IncompleteOutputException, InstructorErro
 from instructor.core.hooks import HookName, Hooks
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from app.ai.deepseek_client import DeepSeekJSONResult, build_deepseek_instructor_client
+from app.ai.deepseek_client import (
+    DeepSeekJSONResult,
+    build_deepseek_instructor_client,
+    thinking_extra_body,
+)
 from app.ai.groq_client import groq_chat_json
 from app.config import settings
 
@@ -152,7 +156,17 @@ def _default_provider(
     *,
     model: str,
     temperature: float,
+    thinking: Literal["enabled", "disabled"] = "disabled",
 ) -> DeepSeekJSONResult:
+    """A manifest rung.
+
+    `thinking` is explicit rather than defaulted by the API on purpose. DeepSeek
+    enables thinking by default and thinking mode *ignores* `temperature` - so a
+    ladder whose rungs differ only in temperature would collapse into the same call
+    run twice at double the cost. Rungs 1-3 pass "disabled" so their temperature
+    distinction is real; the final rung passes "enabled" so it is a genuinely
+    different reasoning path rather than a fourth sample of the same one.
+    """
     client = build_deepseek_instructor_client(timeout_seconds=30.0)
     hooks = Hooks()
     attempt_count = 0
@@ -173,7 +187,7 @@ def _default_provider(
         max_retries=0,
         temperature=temperature,
         max_tokens=ROLE_MANIFEST_MAX_TOKENS,
-        extra_body={"thinking": {"type": "disabled"}},
+        extra_body=thinking_extra_body(thinking),
         hooks=hooks,
     )
     choice = response.choices[0] if response.choices else None
@@ -437,7 +451,31 @@ class RoleManifestService:
                     ),
                 )
             )
-        if settings.groq_api_key:
+        # The final rung is the ladder's independent second opinion, so which model
+        # provides it is a setting rather than a hardcoded vendor: "deepseek_pro"
+        # keeps the second opinion without a second vendor, "groq" is the rollback,
+        # "off" drops the rung entirely.
+        final_rung = settings.role_manifest_final_rung
+        if final_rung == "deepseek_pro" and settings.deepseek_model_pro:
+            independent_model = settings.deepseek_model_pro
+            numbered_rungs.append(
+                (
+                    4,
+                    _LadderRung(
+                        provider=lambda system, user: _default_provider(
+                            system,
+                            user,
+                            model=independent_model,
+                            temperature=0.0,
+                            thinking="enabled",
+                        ),
+                        label="deepseek_pro_independent",
+                        temperature=0.0,
+                        passes=variance_passes,
+                    ),
+                )
+            )
+        elif final_rung == "groq" and settings.groq_api_key:
             numbered_rungs.append(
                 (
                     4,

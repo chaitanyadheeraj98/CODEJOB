@@ -20,7 +20,7 @@ from app.automation.queue_preparation import (
     describe_score_threshold_block,
     prepare_candidate_for_queue,
 )
-from app.gates import EmailIntentDecision
+from app.gates import EmailIntentDecision, llm_decided
 from app.gates.sender_denylist import SENDER_DENYLIST
 from app.ai.resume_context_attribution import RESUME_CONTEXT_MISSING, RESUME_CONTEXT_RULES_ONLY
 from app.automation import RunOrchestrator, RunOrchestratorDependencies, RunOrchestratorRequest
@@ -556,6 +556,7 @@ class OrchestrationService:
                             sender=item["sender"],
                             gate_action="skip",
                             gate_provider="sender_denylist",
+                            gate_error=None,
                             source_group_name=trusted_group_context.group_name,
                             source_group_email=trusted_group_context.group_email,
                             source_group_match_method=trusted_group_context.match_method,
@@ -577,7 +578,7 @@ class OrchestrationService:
                     trusted_group_context=trusted_group_context,
                     approved_learning_signals=approved_learning_signals,
                 )
-                if intent_decision.provider == "groq" and intent_decision.learned_signals:
+                if llm_decided(intent_decision.provider) and intent_decision.learned_signals:
                     record_pending_job_intent_learning(
                         db,
                         owner_id=self.deps.owner_id,
@@ -610,6 +611,7 @@ class OrchestrationService:
                             intent_negative_evidence=intent_decision.negative_evidence,
                             gate_action=intent_decision.action,
                             gate_provider=intent_decision.provider,
+                            gate_error=intent_decision.error,
                             source_group_name=trusted_group_context.group_name,
                             source_group_email=trusted_group_context.group_email,
                             source_group_match_method=trusted_group_context.match_method,
@@ -844,6 +846,7 @@ class OrchestrationService:
                     intent_negative_evidence_json=json.dumps(intent_decision.negative_evidence, separators=(",", ":")),
                     gate_action=intent_decision.action,
                     gate_provider=intent_decision.provider,
+                    gate_error=intent_decision.error,
                     source_group_name=trusted_group_context.group_name,
                     source_group_email=trusted_group_context.group_email,
                     source_group_match_method=trusted_group_context.match_method,

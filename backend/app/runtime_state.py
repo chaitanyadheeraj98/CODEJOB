@@ -28,6 +28,17 @@ class AppRuntimeState:
     groq_last_duration_ms: int | None = None
     groq_last_provider_result: str | None = None
     groq_request_mode: str = ""
+    # Provider-neutral intent-gate telemetry. The groq_* fields above are kept and
+    # only written when Groq actually ran, so the AI Access card never labels another
+    # provider's health as Groq's.
+    intent_gate_provider: str = ""
+    intent_gate_last_error: str | None = None
+    intent_gate_last_attempted_at: datetime | None = None
+    intent_gate_last_success_at: datetime | None = None
+    intent_gate_last_duration_ms: int | None = None
+    intent_gate_last_provider_result: str | None = None
+    intent_gate_last_rung: str = ""
+    intent_gate_last_escalated: bool = False
     ollama_last_error: str | None = None
     ollama_last_attempted_at: datetime | None = None
     ollama_last_success_at: datetime | None = None

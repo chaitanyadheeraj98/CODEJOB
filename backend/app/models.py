@@ -77,6 +77,11 @@ class RecruiterEmail(Base):
     intent_negative_evidence_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     gate_action: Mapped[str | None] = mapped_column(String(40), nullable=True)
     gate_provider: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    # Why the gate fell back. Short slugs only (`deepseek_invalid_shape`,
+    # `groq_timeout`), no index - this is for diagnosis, not filtering. Without it
+    # the provider column can show *that* half the calls degraded to the taxonomy
+    # but never *why*, which is how a 12-day systematic failure went unnoticed.
+    gate_error: Mapped[str | None] = mapped_column(String(80), nullable=True)
     source_group_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     source_group_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     source_group_match_method: Mapped[str | None] = mapped_column(String(80), nullable=True)
@@ -529,6 +534,11 @@ class RecentRunSkippedItem(Base):
     intent_negative_evidence_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     gate_action: Mapped[str | None] = mapped_column(String(40), nullable=True)
     gate_provider: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    # Why the gate fell back. Short slugs only (`deepseek_invalid_shape`,
+    # `groq_timeout`), no index - this is for diagnosis, not filtering. Without it
+    # the provider column can show *that* half the calls degraded to the taxonomy
+    # but never *why*, which is how a 12-day systematic failure went unnoticed.
+    gate_error: Mapped[str | None] = mapped_column(String(80), nullable=True)
     source_group_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     source_group_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     source_group_match_method: Mapped[str | None] = mapped_column(String(80), nullable=True)

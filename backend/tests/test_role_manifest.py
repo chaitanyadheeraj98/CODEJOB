@@ -679,7 +679,14 @@ class RoleManifestServiceTests(unittest.TestCase):
         self.assertEqual(mock_groq.call_args.kwargs["max_tokens"], settings.role_manifest_max_tokens_groq)
 
     def test_full_ladder_exhaustion_returns_one_bounded_fallback(self) -> None:
+        """Four rungs, six calls, one bounded fallback - with the default final rung.
+
+        The final rung is DeepSeek Pro with thinking enabled rather than Groq, so the
+        whole ladder is one vendor. The call *budget* is unchanged; only who answers
+        the last rung is.
+        """
         settings.groq_api_key = "test-key"
+        settings.role_manifest_final_rung = "deepseek_pro"
         uncertain = {"classification": "uncertain", "role_count": 0, "confidence": 0.2, "roles": []}
         with (
             patch("app.services.role_manifest_service._default_provider", return_value=uncertain) as deepseek,
@@ -691,11 +698,87 @@ class RoleManifestServiceTests(unittest.TestCase):
         self.assertEqual(len(result.requirements), 1)
         self.assertEqual(result.requirements[0].source_text, DELOITTE_SOURCE)
         self.assertEqual(result.diagnostics.calls_spent, 6)
-        self.assertEqual(deepseek.call_count, 4)
-        self.assertEqual(groq.call_count, 2)
+        self.assertEqual(deepseek.call_count, 6)
+        groq.assert_not_called()
         self.assertEqual(
             result.diagnostics.rungs_tried,
-            "deepseek_fast_deterministic,deepseek_fast_variance,deepseek_pro_deterministic,groq_independent",
+            "deepseek_fast_deterministic,deepseek_fast_variance,deepseek_pro_deterministic,deepseek_pro_independent",
+        )
+
+    def test_role_manifest_final_rung_selection(self) -> None:
+        """All three values produce the expected ladder.
+
+        `groq` is the rollback and must keep working; `off` must drop the rung rather
+        than silently substituting one, or the ladder would quietly get shorter than
+        the setting says.
+        """
+        settings.groq_api_key = "test-key"
+        settings.deepseek_model_pro = "deepseek-v4-pro"
+        uncertain = {"classification": "uncertain", "role_count": 0, "confidence": 0.2, "roles": []}
+
+        for final_rung, expected_last, groq_expected in (
+            ("deepseek_pro", "deepseek_pro_independent", 0),
+            ("groq", "groq_independent", 2),
+            ("off", "deepseek_pro_deterministic", 0),
+        ):
+            with self.subTest(final_rung=final_rung):
+                settings.role_manifest_final_rung = final_rung
+                with (
+                    patch("app.services.role_manifest_service._default_provider", return_value=uncertain),
+                    patch("app.services.role_manifest_service._groq_provider", return_value=uncertain) as groq,
+                ):
+                    result = RoleManifestService().detect(DELOITTE_SOURCE)
+                self.assertTrue(
+                    result.diagnostics.rungs_tried.endswith(expected_last),
+                    result.diagnostics.rungs_tried,
+                )
+                self.assertEqual(groq.call_count, groq_expected)
+
+    def test_manifest_rungs_pass_thinking_explicitly(self) -> None:
+        """Guards the regression this ladder was quietly exposed to.
+
+        Thinking mode is on by default and ignores `temperature`. A ladder whose
+        rungs 1-2 differ only in temperature therefore collapses into the same call
+        run twice at double cost unless thinking is explicitly disabled - and the
+        final rung is only a genuinely independent opinion if thinking is explicitly
+        enabled there.
+        """
+        settings.groq_api_key = ""
+        settings.deepseek_model_pro = "deepseek-v4-pro"
+        settings.role_manifest_final_rung = "deepseek_pro"
+        uncertain = {"classification": "uncertain", "role_count": 0, "confidence": 0.2, "roles": []}
+        with patch(
+            "app.services.role_manifest_service._default_provider", return_value=uncertain
+        ) as provider:
+            RoleManifestService().detect(DELOITTE_SOURCE)
+
+        thinking_by_model = [
+            (call.kwargs["model"], call.kwargs.get("thinking", "disabled")) for call in provider.call_args_list
+        ]
+        self.assertTrue(thinking_by_model, "the ladder must have run")
+        # Rungs 1-3 deterministic/variance: thinking off, so temperature is honoured.
+        self.assertTrue(
+            all(thinking == "disabled" for _model, thinking in thinking_by_model[:4]),
+            thinking_by_model,
+        )
+        # Rung 4: a different reasoning path, not a fourth sample of the same one.
+        self.assertEqual(thinking_by_model[-1], ("deepseek-v4-pro", "enabled"))
+
+    def test_default_provider_passes_thinking_into_extra_body(self) -> None:
+        """The wiring itself, at the one place the API actually reads it."""
+        manifest = RoleManifest(classification="single", role_count=1, confidence=0.9, roles=[])
+        response = MagicMock()
+        response.choices = []
+        response.usage = None
+        client = MagicMock()
+        client.create_with_completion.return_value = (manifest, response)
+        with patch(
+            "app.services.role_manifest_service.build_deepseek_instructor_client", return_value=client
+        ):
+            _default_provider("system", "user", model="m", temperature=0.0, thinking="enabled")
+        self.assertEqual(
+            client.create_with_completion.call_args.kwargs["extra_body"],
+            {"thinking": {"type": "enabled"}},
         )
 
     def test_background_ladder_never_invokes_pro_or_groq_rungs(self) -> None:

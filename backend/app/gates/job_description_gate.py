@@ -7,7 +7,8 @@ import re
 from dataclasses import dataclass, field, replace
 from typing import Any, Sequence
 
-from app.ai.groq_client import groq_chat_json, groq_request_mode_for_model
+from app.ai.groq_client import groq_request_mode_for_model
+from app.ai.intent_provider import IntentUsage, intent_chat_json
 from app.config import settings
 from app.job_intent_learning import (
     JobIntentLearningSignal,
@@ -36,6 +37,17 @@ class EmailIntentDecision:
     provider: str
     error: str | None = None
     learned_signals: list[JobIntentLearningSignal] = field(default_factory=list)
+
+
+# Providers whose verdict came from a model rather than the rules taxonomy. Callers
+# gate learning-signal capture on this: a taxonomy fallback has no signals to learn
+# from, and hardcoding `== "groq"` is exactly what breaks the day a second provider
+# ships.
+LLM_DECIDED_PROVIDERS = frozenset({"groq", "deepseek"})
+
+
+def llm_decided(provider: str | None) -> bool:
+    return (provider or "") in LLM_DECIDED_PROVIDERS
 
 
 GROQ_SCHEMA: dict[str, object] = {
@@ -125,7 +137,7 @@ _SKIP_INTENT_TYPES = {
 }
 
 
-def _coerce_groq_payload(payload: dict[str, Any]) -> EmailIntentDecision | None:
+def _coerce_groq_payload(payload: dict[str, Any], *, provider: str = "groq") -> EmailIntentDecision | None:
     intent_type = str(payload.get("intent_type") or "").strip()
     action = str(payload.get("action") or "").strip()
     reason = str(payload.get("reason") or "").strip()
@@ -167,10 +179,74 @@ def _coerce_groq_payload(payload: dict[str, Any]) -> EmailIntentDecision | None:
         reason=reason,
         evidence=evidence,
         negative_evidence=negative_evidence,
-        provider="groq",
+        provider=provider,
         error=None,
         learned_signals=learned_signals,
     )
+
+
+# Hoisted to module scope on purpose. DeepSeek's prompt cache keys on the literal
+# prefix, and a cache hit is far cheaper than a miss on that segment. Interpolating
+# anything per-email here - a sender, a date, a taxonomy hint - silently destroys
+# that for every email, with nothing in the logs to show it. Per-email context
+# belongs in the user prompt below. `test_system_prompt_is_invariant_across_emails`
+# guards this.
+GATE_SYSTEM_PROMPT = (
+    "Classify Gmail messages for job-intent gating. "
+    "When the intent gate is enabled, you are the final intent authority. "
+    "Do not require exact recruiter, staffing, or hiring words. "
+    "Treat job-description structure, rate/location terms, visa/work authorization, "
+    "C2C/W2/vendor/client language, implementation partner language, and resume-submission requests as strong positive evidence. "
+    "Treat a trusted requirement group as positive source context, not as an automatic pass. "
+    "Treat unsubscribe text, Google Groups footers, and reply prefixes as weak evidence only unless the rest of the email is clearly non-job. "
+    "If a trusted group message is clearly a hotlist or candidate marketing, still classify it as candidate_marketing_or_hotlist. "
+    "If the message is candidate marketing or a hotlist, classify it as candidate_marketing_or_hotlist instead of newsletter. "
+    "If the body repeats the same set of candidate-profile fields (for example Full Legal Name, Current Location, Rate, "
+    "Work Authorization) for two or more different people, this is a consultant hotlist being marketed to recruiters, not a job "
+    "requirement being posted by one. Classify it as candidate_marketing_or_hotlist even when C2C/W2/visa/rate/resume-attached "
+    "language is present -- repeated multi-candidate profile blocks always outweigh that positive evidence. "
+    "Return 0-5 reusable learning_signals with concise phrases that would improve fallback classification later."
+)
+
+
+def _fallback_provider_label(provider: str) -> str:
+    """`taxonomy` is not "a provider that failed" - it is the configured answer."""
+    return "taxonomy" if provider == "taxonomy" else f"{provider}_fallback_taxonomy"
+
+
+def _record_gate_telemetry(
+    *,
+    provider: str,
+    result: str,
+    error: str | None,
+    duration_ms: int,
+    started_at: datetime,
+    usage: IntentUsage | None,
+) -> None:
+    """Provider-neutral runtime telemetry, plus the legacy Groq fields.
+
+    The `groq_last_*` fields are only touched when Groq actually ran. Writing
+    DeepSeek's health into a field the AI Access card labels "Groq Runtime" would
+    make the status surface lie, which is worse than showing "Unknown".
+    """
+    runtime_state.intent_gate_provider = provider
+    runtime_state.intent_gate_last_attempted_at = started_at
+    runtime_state.intent_gate_last_error = error
+    runtime_state.intent_gate_last_duration_ms = duration_ms
+    runtime_state.intent_gate_last_provider_result = result
+    runtime_state.intent_gate_last_rung = (usage.rung if usage else "") or ""
+    runtime_state.intent_gate_last_escalated = bool(usage.escalated) if usage else False
+    if error is None:
+        runtime_state.intent_gate_last_success_at = datetime.now(UTC)
+
+    if provider != "groq":
+        return
+    runtime_state.groq_last_attempted_at = started_at
+    runtime_state.groq_last_error = error
+    runtime_state.groq_last_duration_ms = duration_ms
+    runtime_state.groq_last_provider_result = result
+    if error is None:
+        runtime_state.groq_last_success_at = datetime.now(UTC)
 
 
 def classify_email_intent(
@@ -197,29 +273,31 @@ def classify_email_intent(
     if not groq_enabled:
         return _taxonomy_to_decision(taxonomy, provider="taxonomy")
 
+    # Skip the model when the rules are already certain. Guarded on `> 0.0` so the
+    # shipped default (0.0) never short-circuits: this is enabled only once the
+    # agreement harness produces a defensible threshold. The distinct provider label
+    # keeps skipped emails countable, rather than indistinguishable from "gate off".
+    min_taxonomy_confidence = float(settings.intent_gate_min_taxonomy_confidence or 0.0)
+    if min_taxonomy_confidence > 0.0 and taxonomy.confidence >= min_taxonomy_confidence:
+        return _taxonomy_to_decision(taxonomy, provider="taxonomy_confident")
+
+    provider = settings.intent_gate_provider
     started_at = datetime.now(UTC)
-    runtime_state.groq_last_attempted_at = started_at
-    request_mode = groq_request_mode_for_model(settings.groq_gate_model)
-    runtime_state.groq_request_mode = request_mode
+    if provider == "groq":
+        runtime_state.groq_request_mode = groq_request_mode_for_model(settings.groq_gate_model)
     positive_signals, negative_signals = prioritized_learning_signals(approved_learning_signals)
+    # Redaction and truncation happen HERE, above the provider seam, so every
+    # provider inherits them. Never move a provider call above this line.
     body_for_model = prepare_job_intent_model_text(body)
-    payload, error = groq_chat_json(
-        system_prompt=(
-            "Classify Gmail messages for job-intent gating. "
-            "When Groq is enabled, you are the final intent authority. "
-            "Do not require exact recruiter, staffing, or hiring words. "
-            "Treat job-description structure, rate/location terms, visa/work authorization, "
-            "C2C/W2/vendor/client language, implementation partner language, and resume-submission requests as strong positive evidence. "
-            "Treat a trusted requirement group as positive source context, not as an automatic pass. "
-            "Treat unsubscribe text, Google Groups footers, and reply prefixes as weak evidence only unless the rest of the email is clearly non-job. "
-            "If a trusted group message is clearly a hotlist or candidate marketing, still classify it as candidate_marketing_or_hotlist. "
-            "If the message is candidate marketing or a hotlist, classify it as candidate_marketing_or_hotlist instead of newsletter. "
-            "If the body repeats the same set of candidate-profile fields (for example Full Legal Name, Current Location, Rate, "
-            "Work Authorization) for two or more different people, this is a consultant hotlist being marketed to recruiters, not a job "
-            "requirement being posted by one. Classify it as candidate_marketing_or_hotlist even when C2C/W2/visa/rate/resume-attached "
-            "language is present -- repeated multi-candidate profile blocks always outweigh that positive evidence. "
-            "Return 0-5 reusable learning_signals with concise phrases that would improve fallback classification later."
-        ),
+
+    def agrees_with_taxonomy(candidate_payload: dict[str, Any]) -> bool:
+        candidate = _coerce_groq_payload(candidate_payload, provider=provider)
+        if candidate is None:
+            return False
+        return candidate.intent_type == taxonomy.intent_type and candidate.action == taxonomy.action
+
+    payload, error, usage = intent_chat_json(
+        system_prompt=GATE_SYSTEM_PROMPT,
         user_prompt=(
             f"Sender: {sender}\n"
             f"Subject: {subject}\n"
@@ -240,10 +318,10 @@ def classify_email_intent(
             f"Body:\n{body_for_model}\n"
         ),
         schema=GROQ_SCHEMA,
-        strict=bool(settings.groq_gate_strict_json),
+        agrees_with_taxonomy=agrees_with_taxonomy,
     )
     if payload is not None:
-        decision = _coerce_groq_payload(payload)
+        decision = _coerce_groq_payload(payload, provider=provider)
         if decision is not None:
             if (
                 decision.action == "skip"
@@ -258,31 +336,46 @@ def classify_email_intent(
             if not disagreed:
                 decision = replace(decision, learned_signals=[])
             duration_ms = int((datetime.now(UTC) - started_at).total_seconds() * 1000)
-            runtime_state.groq_last_success_at = datetime.now(UTC)
-            runtime_state.groq_last_error = None
-            runtime_state.groq_last_duration_ms = duration_ms
-            runtime_state.groq_last_provider_result = "groq"
+            _record_gate_telemetry(
+                provider=provider,
+                result=provider,
+                error=None,
+                duration_ms=duration_ms,
+                started_at=started_at,
+                usage=usage,
+            )
             logger.info(
-                "Groq gate success model=%s mode=%s duration_ms=%s fallback_intent=%s groq_intent=%s disagreed=%s",
-                settings.groq_gate_model or "llama-3.1-8b-instant",
-                request_mode,
+                "Intent gate success provider=%s model=%s rung=%s duration_ms=%s "
+                "cache_hit_tokens=%s cache_miss_tokens=%s fallback_intent=%s model_intent=%s disagreed=%s",
+                provider,
+                (usage.model if usage else "") or "unknown",
+                (usage.rung if usage else "") or "n/a",
                 duration_ms,
+                usage.prompt_cache_hit_tokens if usage else None,
+                usage.prompt_cache_miss_tokens if usage else None,
                 taxonomy.intent_type,
                 decision.intent_type,
                 disagreed,
             )
             return decision
-        error = "groq_invalid_shape"
+        error = f"{provider}_invalid_shape"
 
     duration_ms = int((datetime.now(UTC) - started_at).total_seconds() * 1000)
-    runtime_state.groq_last_error = error
-    runtime_state.groq_last_duration_ms = duration_ms
-    runtime_state.groq_last_provider_result = "groq_fallback_taxonomy"
+    fallback_provider = _fallback_provider_label(provider)
+    _record_gate_telemetry(
+        provider=provider,
+        result=fallback_provider,
+        error=error,
+        duration_ms=duration_ms,
+        started_at=started_at,
+        usage=usage,
+    )
     logger.warning(
-        "Groq gate failure error=%s model=%s mode=%s duration_ms=%s",
+        "Intent gate failure provider=%s error=%s rung=%s attempts=%s duration_ms=%s",
+        provider,
         error or "unknown",
-        settings.groq_gate_model or "llama-3.1-8b-instant",
-        request_mode,
+        (usage.rung if usage else "") or "n/a",
+        usage.attempts if usage else 0,
         duration_ms,
     )
-    return _taxonomy_to_decision(taxonomy, provider="groq_fallback_taxonomy", error=error)
+    return _taxonomy_to_decision(taxonomy, provider=fallback_provider, error=error)

@@ -196,6 +196,19 @@ type AiStatus = {
   groq_last_attempted_at?: string | null
   groq_last_success_at?: string | null
   groq_last_duration_ms?: number | null
+  intent_gate_provider?: string
+  intent_gate_model?: string
+  intent_gate_configured?: boolean
+  intent_gate_enabled_in_settings?: boolean
+  intent_gate_runtime_healthy?: boolean | null
+  intent_gate_last_error?: string | null
+  intent_gate_detail?: string
+  intent_gate_effort_ladder?: string
+  intent_gate_last_rung?: string
+  intent_gate_min_taxonomy_confidence?: number
+  intent_gate_last_attempted_at?: string | null
+  intent_gate_last_success_at?: string | null
+  intent_gate_last_duration_ms?: number | null
   last_error: string | null
   last_started_at: string | null
   last_finished_at: string | null
@@ -5015,6 +5028,9 @@ function App() {
   const groqLastDuration = aiStatus?.groq_last_duration_ms
     ? `${(aiStatus.groq_last_duration_ms / 1000).toFixed(1)}s`
     : null
+  const intentGateLastDuration = aiStatus?.intent_gate_last_duration_ms
+    ? `${(aiStatus.intent_gate_last_duration_ms / 1000).toFixed(1)}s`
+    : null
   const trendBars: ProductivityBarPoint[] = productivityTrend?.bars ?? []
   const latestScore = productivityTrend?.kpi_total_sent ?? trendBars.reduce((sum, bar) => sum + bar.sent_count, 0)
   const trendDelta = productivityTrend?.trend_delta_pct ?? 0
@@ -5540,6 +5556,16 @@ function App() {
                   {configRow('Provider', aiStatus?.provider ?? 'DeepSeek')}
                   {configRow('Model', aiStatus?.model ?? 'deepseek-v4-flash')}
                   {configRow('Connection', aiStatus?.connected ? 'Healthy' : 'Disconnected')}
+                  {configRow('Intent Gate', formatBool(!!aiStatus?.intent_gate_enabled_in_settings))}
+                  {configRow('Intent Gate Provider', aiStatus?.intent_gate_provider || 'Unknown')}
+                  {configRow('Intent Gate Model', aiStatus?.intent_gate_model || 'Unknown')}
+                  {configRow('Intent Gate Config', typeof aiStatus?.intent_gate_configured === 'boolean' ? (aiStatus.intent_gate_configured ? 'Configured' : 'Missing setup') : 'Unknown')}
+                  {configRow('Intent Gate Runtime', typeof aiStatus?.intent_gate_runtime_healthy === 'boolean' ? (aiStatus.intent_gate_runtime_healthy ? 'Healthy' : 'Fallback') : 'Unknown')}
+                  {aiStatus?.intent_gate_last_rung ? configRow('Intent Gate Rung', aiStatus.intent_gate_last_rung) : null}
+                  {aiStatus?.intent_gate_last_error ? configRow('Intent Gate Error', aiStatus.intent_gate_last_error) : null}
+                  {aiStatus?.intent_gate_detail ? configRow('Intent Gate Detail', aiStatus.intent_gate_detail) : null}
+                  {aiStatus?.intent_gate_last_success_at ? configRow('Intent Gate Last Success', aiStatus.intent_gate_last_success_at) : null}
+                  {intentGateLastDuration ? configRow('Intent Gate Duration', intentGateLastDuration) : null}
                   {configRow('Groq Enabled', formatBool(!!aiStatus?.groq_enabled_in_settings))}
                   {configRow('Groq Config', typeof aiStatus?.groq_configured === 'boolean' ? (aiStatus.groq_configured ? 'Configured' : 'Missing setup') : 'Unknown')}
                   {configRow('Groq Model', aiStatus?.groq_model ?? 'llama-3.1-8b-instant')}
@@ -5579,7 +5605,7 @@ function App() {
                   {configRow('Enable AI Extractor', formatBool(activeConfigurationSettings.feature_ai_extractor_enabled))}
                   {configRow('Enable Role Manifest Detection', formatBool(activeConfigurationSettings.feature_role_manifest_enabled))}
                   {configRow('Enable Semantic Matching', formatBool(activeConfigurationSettings.feature_semantic_enabled))}
-                  {configRow('Enable Groq Smart Job Parser', formatBool(activeConfigurationSettings.feature_groq_job_parser_enabled))}
+                  {configRow('Enable AI Job Intent Gate', formatBool(activeConfigurationSettings.feature_groq_job_parser_enabled))}
                 </div>
               </section>
 
@@ -5719,6 +5745,16 @@ function App() {
                   <div className="row"><span className="label">Provider</span><span>{aiStatus?.provider ?? 'DeepSeek'}</span></div>
                   <div className="row"><span className="label">Model</span><span className="tag">{aiStatus?.model ?? 'deepseek-v4-flash'}</span></div>
                   <div className="row"><span className="label">Connection</span><span className="dotOk">{aiStatus?.connected ? 'Healthy' : 'Disconnected'}</span></div>
+                  <div className="row"><span className="label">Intent Gate</span><span>{aiStatus?.intent_gate_enabled_in_settings ? 'On' : 'Off'}</span></div>
+                  <div className="row"><span className="label">Intent Gate Provider</span><span className="tag">{aiStatus?.intent_gate_provider || 'Unknown'}</span></div>
+                  <div className="row"><span className="label">Intent Gate Model</span><span className="tag">{aiStatus?.intent_gate_model || 'Unknown'}</span></div>
+                  <div className="row"><span className="label">Intent Gate Config</span><span>{typeof aiStatus?.intent_gate_configured === 'boolean' ? (aiStatus.intent_gate_configured ? 'Configured' : 'Missing setup') : 'Unknown'}</span></div>
+                  <div className="row"><span className="label">Intent Gate Runtime</span><span>{typeof aiStatus?.intent_gate_runtime_healthy === 'boolean' ? (aiStatus.intent_gate_runtime_healthy ? 'Healthy' : 'Fallback') : 'Unknown'}</span></div>
+                  {aiStatus?.intent_gate_last_rung ? <div className="row"><span className="label">Intent Gate Rung</span><span>{aiStatus.intent_gate_last_rung}</span></div> : null}
+                  {aiStatus?.intent_gate_last_error ? <div className="row"><span className="label">Intent Gate Error</span><span>{aiStatus.intent_gate_last_error}</span></div> : null}
+                  {aiStatus?.intent_gate_detail ? <div className="row"><span className="label">Intent Gate Detail</span><span>{aiStatus.intent_gate_detail}</span></div> : null}
+                  {aiStatus?.intent_gate_last_success_at ? <div className="row"><span className="label">Intent Gate Last Success</span><span>{aiStatus.intent_gate_last_success_at}</span></div> : null}
+                  {intentGateLastDuration ? <div className="row"><span className="label">Intent Gate Duration</span><span>{intentGateLastDuration}</span></div> : null}
                   <div className="row"><span className="label">Groq Enabled</span><span>{aiStatus?.groq_enabled_in_settings ? 'On' : 'Off'}</span></div>
                   <div className="row"><span className="label">Groq Config</span><span>{typeof aiStatus?.groq_configured === 'boolean' ? (aiStatus.groq_configured ? 'Configured' : 'Missing setup') : 'Unknown'}</span></div>
                   <div className="row"><span className="label">Groq Model</span><span className="tag">{aiStatus?.groq_model ?? 'llama-3.1-8b-instant'}</span></div>
@@ -5796,7 +5832,7 @@ function App() {
                     </span>
                   </label>
                   <label className="toggleRow">
-                    <span>Enable Groq Smart Job Parser</span>
+                    <span>Enable AI Job Intent Gate</span>
                     <span className="toggleSwitch">
                       <input
                         type="checkbox"
@@ -5806,6 +5842,7 @@ function App() {
                       <span className="toggleTrack" />
                     </span>
                   </label>
+                  <p className="subtle">Lets an AI model make the final call on whether an email is a genuine requirement, a hotlist, or noise. Off leaves that decision to the rules taxonomy alone. Which model answers is shown under AI Access.</p>
                 </div>
               </section>
 

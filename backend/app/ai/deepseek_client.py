@@ -33,6 +33,11 @@ class DeepSeekJSONResult:
     duration_ms: int
     response_hash: str
     repair_attempted: bool = False
+    # DeepSeek reports both halves of the prompt-cache split per response. Without
+    # them the cache-prefix claim is unfalsifiable: a prompt that silently became
+    # per-email would cost ~31x on that segment with nothing in the logs to show it.
+    prompt_cache_hit_tokens: int | None = None
+    prompt_cache_miss_tokens: int | None = None
 
 
 def _build_client(*, timeout_seconds: float | None = None) -> OpenAI:
@@ -41,6 +46,20 @@ def _build_client(*, timeout_seconds: float | None = None) -> OpenAI:
         base_url=settings.deepseek_base_url,
         timeout=timeout_seconds if timeout_seconds is not None else settings.deepseek_timeout_seconds,
     )
+
+
+def thinking_extra_body(thinking: Literal["enabled", "disabled"] | None) -> dict[str, Any]:
+    """`extra_body` for a DeepSeek call, or `{}` when the caller wants the API default.
+
+    Thinking mode is enabled by default and *ignores* `temperature`, so any ladder
+    that escalates on temperature is inert unless thinking is explicitly disabled.
+    Callers that care about determinism must pass this rather than relying on the
+    default - the instructor wrapper has no per-client seam for it, so it is applied
+    per request at the call site.
+    """
+    if thinking is None:
+        return {}
+    return {"thinking": {"type": thinking}}
 
 
 def build_deepseek_instructor_client(*, timeout_seconds: float | None = None):
@@ -125,8 +144,9 @@ def deepseek_json_completion_with_diagnostics(
         "max_tokens": max_tokens,
         "response_format": {"type": "json_object"},
     }
-    if thinking is not None:
-        request["extra_body"] = {"thinking": {"type": thinking}}
+    extra_body = thinking_extra_body(thinking)
+    if extra_body:
+        request["extra_body"] = extra_body
     response = client.chat.completions.create(**request)
     content = response.choices[0].message.content if response.choices else ""
     finish_reason = str(getattr(response.choices[0], "finish_reason", "") or "") if response.choices else ""
@@ -135,6 +155,8 @@ def deepseek_json_completion_with_diagnostics(
     model = str(getattr(response, "model", "") or model_name or settings.deepseek_model_fast or "deepseek-v4-flash")
     prompt_tokens = getattr(usage, "prompt_tokens", None)
     completion_tokens = getattr(usage, "completion_tokens", None)
+    prompt_cache_hit_tokens = getattr(usage, "prompt_cache_hit_tokens", None)
+    prompt_cache_miss_tokens = getattr(usage, "prompt_cache_miss_tokens", None)
     duration_ms = int((time.perf_counter() - started) * 1000)
     response_hash = hashlib.sha256(raw_content.encode("utf-8")).hexdigest()
     try:
@@ -162,4 +184,6 @@ def deepseek_json_completion_with_diagnostics(
         completion_tokens=completion_tokens,
         duration_ms=duration_ms,
         response_hash=response_hash,
+        prompt_cache_hit_tokens=prompt_cache_hit_tokens,
+        prompt_cache_miss_tokens=prompt_cache_miss_tokens,
     )
