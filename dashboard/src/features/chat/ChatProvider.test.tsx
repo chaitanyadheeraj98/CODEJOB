@@ -18,6 +18,7 @@ function Surface({ label }: { label: string }) {
     <section data-testid={label}>
       <p className="thread">{chat.messages.map((message) => message.content).join('|')}</p>
       <p className="model">{chat.selectedModel}</p>
+      <p className="unseen">{chat.unseenCount}</p>
       <button type="button" className="send" onClick={() => void chat.sendMessage('hello from ' + label, chat.selectedModel)}>send</button>
       <button type="button" className="pick" onClick={() => chat.selectModel('minimax-m3:cloud')}>pick</button>
     </section>
@@ -30,6 +31,7 @@ const readOn = (container: HTMLElement, label: string, selector: string) =>
 describe('ChatProvider', () => {
   let root: Root | null = null
   let container: HTMLDivElement | null = null
+  let storedRef: Array<Record<string, unknown>> = []
 
   afterEach(() => {
     if (root) act(() => root?.unmount())
@@ -37,15 +39,18 @@ describe('ChatProvider', () => {
     root = null
     container = null
     vi.restoreAllMocks()
+    vi.useRealTimers()
     window.localStorage.clear()
+    storedRef = []
   })
 
-  const stubChatApi = (messages: Array<Record<string, unknown>> = []) => {
+  const stubChatApi = (messages: Array<Record<string, unknown>> = [], honourSinceId = true) => {
     const calls: string[] = []
     // Stateful on purpose: sendMessage reconciles against the server once the
     // stream ends, so a stub that kept returning an empty thread would erase
     // the message it had just accepted.
     const stored = [...messages]
+    storedRef = stored
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       calls.push(`${init?.method ?? 'GET'} ${url.replace('http://localhost:8000', '')}`)
@@ -76,16 +81,31 @@ describe('ChatProvider', () => {
       if (url.endsWith('/chat/sessions')) {
         return new Response(JSON.stringify([session]), { status: 200, headers: { 'Content-Type': 'application/json' } })
       }
-      if (url.endsWith('/chat/sessions/1')) {
-        return new Response(JSON.stringify({ ...session, messages: stored }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      const detail = new URL(url)
+      if (detail.pathname === '/chat/sessions/1') {
+        // Mirrors the server: since_id returns only what is newer, and session
+        // metadata comes back either way.
+        const sinceId = honourSinceId ? Number(detail.searchParams.get('since_id') ?? 0) : 0
+        const messages = sinceId ? stored.filter((row) => Number(row.id) > sinceId) : stored
+        return new Response(JSON.stringify({ ...session, messages }), { status: 200, headers: { 'Content-Type': 'application/json' } })
       }
       throw new Error(`Unexpected fetch: ${url}`)
     }))
     return calls
   }
 
-  const mountSurfaces = async (messages: Array<Record<string, unknown>> = []) => {
-    const calls = stubChatApi(messages)
+  const flush = async (times = 4) => {
+    for (let tick = 0; tick < times; tick += 1) {
+      if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(0)
+      else await new Promise((resolve) => window.setTimeout(resolve, 0))
+    }
+  }
+
+  const mountSurfaces = async (
+    messages: Array<Record<string, unknown>> = [],
+    options: { honourSinceId?: boolean } = {},
+  ) => {
+    const calls = stubChatApi(messages, options.honourSinceId ?? true)
     container = document.createElement('div')
     document.body.appendChild(container)
     root = createRoot(container)
@@ -96,9 +116,9 @@ describe('ChatProvider', () => {
           <Surface label="page" />
         </ChatProvider>,
       )
-      for (let tick = 0; tick < 4; tick += 1) await new Promise((resolve) => window.setTimeout(resolve, 0))
+      await flush()
     })
-    return calls
+    return { calls, stored: storedRef }
   }
 
   it('names the provider when a consumer is mounted without one', () => {
@@ -112,7 +132,7 @@ describe('ChatProvider', () => {
 
   // Two useChatSession instances would load the history twice and poll twice.
   it('loads the session once no matter how many surfaces are listening', async () => {
-    const calls = await mountSurfaces()
+    const { calls } = await mountSurfaces()
 
     expect(calls.filter((call) => call === 'GET /chat/sessions')).toHaveLength(1)
     expect(calls.filter((call) => call === 'GET /chat/sessions/1')).toHaveLength(1)
@@ -137,11 +157,71 @@ describe('ChatProvider', () => {
 
     await act(async () => {
       container?.querySelector<HTMLButtonElement>('[data-testid="widget"] .send')?.click()
-      for (let tick = 0; tick < 4; tick += 1) await new Promise((resolve) => window.setTimeout(resolve, 0))
+      await flush()
     })
 
     expect(readOn(container!, 'page', '.thread')).toContain('hello from widget')
     expect(readOn(container!, 'widget', '.thread')).toBe(readOn(container!, 'page', '.thread'))
+  })
+
+  // The 20s poll used to re-download the whole thread every time. With
+  // render_candidate_table payloads (W6) landing in message.content, that gets
+  // expensive fast.
+  it('polls for only the messages it has not already got', async () => {
+    vi.useFakeTimers()
+    const { calls, stored } = await mountSurfaces([
+      { id: 4, role: 'user', content: 'Any replies today?', tool_name: null, created_at: '2026-01-01T00:00:00Z' },
+      { id: 5, role: 'assistant', content: 'Two recruiters replied.', tool_name: null, created_at: '2026-01-01T00:00:01Z' },
+    ])
+    const before = calls.length
+
+    stored.push({ id: 6, role: 'assistant', content: 'A third just came in.', tool_name: null, created_at: '2026-01-01T00:01:00Z' })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20000)
+    })
+
+    const polled = calls.slice(before).filter((call) => call.includes('/chat/sessions/1'))
+    expect(polled).toEqual(['GET /chat/sessions/1?since_id=5'])
+    expect(readOn(container!, 'page', '.thread'))
+      .toBe('Any replies today?|Two recruiters replied.|A third just came in.')
+    expect(readOn(container!, 'widget', '.unseen')).toBe('1')
+  })
+
+  it('asks from the newest id again when a poll brings nothing new', async () => {
+    vi.useFakeTimers()
+    const { calls } = await mountSurfaces([
+      { id: 4, role: 'user', content: 'Any replies today?', tool_name: null, created_at: '2026-01-01T00:00:00Z' },
+    ])
+    const before = calls.length
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(40000)
+    })
+
+    // Two empty polls, and neither one walks the high-water mark backwards or
+    // re-counts the message already on screen.
+    expect(calls.slice(before).filter((call) => call.includes('/chat/sessions/1')))
+      .toEqual(['GET /chat/sessions/1?since_id=4', 'GET /chat/sessions/1?since_id=4'])
+    expect(readOn(container!, 'page', '.thread')).toBe('Any replies today?')
+    expect(readOn(container!, 'widget', '.unseen')).toBe('0')
+  })
+
+  // Deployment order is not guaranteed, and neither is every proxy in between.
+  // Caught for real: the frontend shipped against a backend container that
+  // predated since_id, and the thread quadrupled inside a minute.
+  it('does not duplicate the thread when the server ignores since_id', async () => {
+    vi.useFakeTimers()
+    await mountSurfaces(
+      [{ id: 4, role: 'user', content: 'Any replies today?', tool_name: null, created_at: '2026-01-01T00:00:00Z' }],
+      { honourSinceId: false },
+    )
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60000)
+    })
+
+    expect(readOn(container!, 'page', '.thread')).toBe('Any replies today?')
+    expect(readOn(container!, 'widget', '.unseen')).toBe('0')
   })
 
   it('shares the model choice across surfaces and remembers it', async () => {

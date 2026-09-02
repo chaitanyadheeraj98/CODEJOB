@@ -12,6 +12,7 @@ from sqlalchemy.pool import StaticPool
 
 from app import main
 from app.db import Base
+from app.models import ChatMessage
 from app.runtime_state import runtime_state
 
 
@@ -55,6 +56,62 @@ class ChatRouteTests(unittest.TestCase):
         self.assertEqual(status.status_code, 200, status.text)
         self.assertFalse(status.json()["enabled"])
         self.assertEqual(self.client.post("/chat/sessions").status_code, 404)
+
+    def test_since_id_returns_only_newer_messages(self) -> None:
+        main.settings.feature_chat_enabled = True
+        session_id = self.client.post("/chat/sessions").json()["id"]
+        db = self.SessionLocal()
+        try:
+            for index in range(3):
+                db.add(ChatMessage(session_id=session_id, role="user", content=f"m{index}"))
+            db.commit()
+            ids = [
+                row.id
+                for row in db.query(ChatMessage).filter(ChatMessage.session_id == session_id).order_by(ChatMessage.id)
+            ]
+        finally:
+            db.close()
+
+        full = self.client.get(f"/chat/sessions/{session_id}")
+        self.assertEqual([row["id"] for row in full.json()["messages"]], ids)
+
+        # The poll's normal case: only what arrived after the last known id.
+        delta = self.client.get(f"/chat/sessions/{session_id}", params={"since_id": ids[0]})
+        self.assertEqual([row["id"] for row in delta.json()["messages"]], ids[1:])
+
+        # Caught up: an empty list, but the session metadata still comes back so
+        # the caller does not have to treat "nothing new" as a failure.
+        caught_up = self.client.get(f"/chat/sessions/{session_id}", params={"since_id": ids[-1]})
+        self.assertEqual(caught_up.status_code, 200, caught_up.text)
+        self.assertEqual(caught_up.json()["messages"], [])
+        self.assertEqual(caught_up.json()["id"], session_id)
+
+        beyond = self.client.get(f"/chat/sessions/{session_id}", params={"since_id": ids[-1] + 500})
+        self.assertEqual(beyond.json()["messages"], [])
+
+    def test_since_id_rejects_non_positive_values(self) -> None:
+        main.settings.feature_chat_enabled = True
+        session_id = self.client.post("/chat/sessions").json()["id"]
+        # ge=1 keeps a client that computed its high-water mark from optimistic
+        # negative ids from silently asking for the whole thread every poll.
+        self.assertEqual(self.client.get(f"/chat/sessions/{session_id}", params={"since_id": 0}).status_code, 422)
+        self.assertEqual(self.client.get(f"/chat/sessions/{session_id}", params={"since_id": -3}).status_code, 422)
+
+    def test_since_id_is_scoped_to_the_requested_session(self) -> None:
+        main.settings.feature_chat_enabled = True
+        first = self.client.post("/chat/sessions").json()["id"]
+        second = self.client.post("/chat/sessions").json()["id"]
+        db = self.SessionLocal()
+        try:
+            db.add(ChatMessage(session_id=first, role="user", content="in first"))
+            db.commit()
+            db.add(ChatMessage(session_id=second, role="user", content="in second"))
+            db.commit()
+        finally:
+            db.close()
+
+        body = self.client.get(f"/chat/sessions/{second}", params={"since_id": 1}).json()
+        self.assertEqual([row["content"] for row in body["messages"]], ["in second"])
 
     def test_rename_session_persists_title_and_rejects_blank(self) -> None:
         main.settings.feature_chat_enabled = True

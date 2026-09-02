@@ -57,14 +57,20 @@ class ChatService:
             .all()
         )
 
-    def get_session_messages(self, db: Session, session_id: int) -> list[ChatMessage]:
+    def get_session_messages(
+        self, db: Session, session_id: int, since_id: int | None = None
+    ) -> list[ChatMessage]:
+        """Messages for a session, oldest first.
+
+        `since_id` returns only messages newer than that id, so the dashboard's
+        background poll can ask for the delta instead of re-downloading the whole
+        thread every 20 seconds.
+        """
         self._session_or_404(db, session_id)
-        return (
-            db.query(ChatMessage)
-            .filter(ChatMessage.session_id == session_id)
-            .order_by(ChatMessage.created_at.asc(), ChatMessage.id.asc())
-            .all()
-        )
+        rows = db.query(ChatMessage).filter(ChatMessage.session_id == session_id)
+        if since_id is not None:
+            rows = rows.filter(ChatMessage.id > since_id)
+        return rows.order_by(ChatMessage.created_at.asc(), ChatMessage.id.asc()).all()
 
     def rename_session(self, db: Session, session_id: int, title: str) -> ChatSession:
         cleaned = title.strip()

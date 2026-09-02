@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from time import perf_counter
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -110,11 +110,12 @@ def list_chat_sessions(
 )
 def get_chat_session(
     session_id: int,
+    since_id: int | None = Query(default=None, ge=1),
     db: Session = Depends(get_db),
     service: ChatService = Depends(get_chat_service),
 ) -> ChatSessionDetailResponse:
     session = service._session_or_404(db, session_id)
-    messages = service.get_session_messages(db, session_id)
+    messages = service.get_session_messages(db, session_id, since_id=since_id)
     return ChatSessionDetailResponse(
         **ChatSessionResponse.model_validate(session).model_dump(),
         messages=[ChatMessageResponse.model_validate(row) for row in messages],

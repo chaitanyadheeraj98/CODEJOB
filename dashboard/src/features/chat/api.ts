@@ -24,8 +24,15 @@ export async function createChatSession(apiBase: string): Promise<ChatSession> {
   return (await response.json()) as ChatSession
 }
 
-export async function getChatSession(apiBase: string, sessionId: number): Promise<ChatSessionDetail> {
-  const response = await fetch(`${apiBase}/chat/sessions/${sessionId}`)
+// `sinceId` asks for only the messages newer than that id. Session metadata
+// still comes back in full, so callers that need the whole thread simply omit it.
+export async function getChatSession(
+  apiBase: string,
+  sessionId: number,
+  sinceId?: number,
+): Promise<ChatSessionDetail> {
+  const query = sinceId ? `?since_id=${sinceId}` : ''
+  const response = await fetch(`${apiBase}/chat/sessions/${sessionId}${query}`)
   if (!response.ok) throw await responseError(response, 'Failed to load chat')
   return (await response.json()) as ChatSessionDetail
 }

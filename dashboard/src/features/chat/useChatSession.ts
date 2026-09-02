@@ -19,6 +19,13 @@ function visibleMessages(messages: ChatMessage[]): ChatMessage[] {
   ))
 }
 
+// Tracked against the *unfiltered* server payload. Using the visible list would
+// re-request any trailing message visibleMessages drops on every poll, and using
+// the rendered list at all would pick up sendMessage's optimistic negative ids.
+function newestMessageId(messages: ChatMessage[]): number {
+  return messages.reduce((newest, message) => (message.id > newest ? message.id : newest), 0)
+}
+
 export function useChatSession(apiBase: string, enabled: boolean) {
   const [sessions, setSessions] = useState<ChatSession[]>([])
   const [sessionId, setSessionId] = useState<number | null>(null)
@@ -26,10 +33,7 @@ export function useChatSession(apiBase: string, enabled: boolean) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [unseenCount, setUnseenCount] = useState(0)
-  const messagesRef = useRef<ChatMessage[]>([])
-  useEffect(() => {
-    messagesRef.current = messages
-  }, [messages])
+  const newestIdRef = useRef(0)
 
   const markSeen = useCallback(() => setUnseenCount(0), [])
 
@@ -39,13 +43,17 @@ export function useChatSession(apiBase: string, enabled: boolean) {
     if (!enabled || sessionId == null) return
     const interval = window.setInterval(() => {
       if (busy) return
-      getChatSession(apiBase, sessionId).then((detail) => {
-        const next = visibleMessages(detail.messages)
-        const previous = messagesRef.current
-        if (next.length > previous.length) {
-          setUnseenCount((count) => count + (next.length - previous.length))
-          setMessages(next)
-        }
+      const knownUpTo = newestIdRef.current
+      getChatSession(apiBase, sessionId, knownUpTo || undefined).then((detail) => {
+        newestIdRef.current = Math.max(knownUpTo, newestMessageId(detail.messages))
+        // Re-filter rather than appending whatever came back. A server that
+        // ignores since_id - an older backend, a proxy that drops the query
+        // string - returns the whole thread, and appending it duplicates the
+        // conversation on every poll. Seen for real against a stale container.
+        const added = visibleMessages(detail.messages).filter((message) => message.id > knownUpTo)
+        if (!added.length) return
+        setUnseenCount((count) => count + added.length)
+        setMessages((current) => [...current, ...added])
       }, () => {})
     }, 20000)
     return () => window.clearInterval(interval)
@@ -61,6 +69,7 @@ export function useChatSession(apiBase: string, enabled: boolean) {
         getChatSession(apiBase, rows[0].id).then((detail) => {
           if (!active) return
           setSessionId(detail.id)
+          newestIdRef.current = newestMessageId(detail.messages)
           setMessages(visibleMessages(detail.messages))
         }, (reason: unknown) => {
           if (active) setError(reason instanceof Error ? reason.message : 'Failed to load chat')
@@ -78,6 +87,7 @@ export function useChatSession(apiBase: string, enabled: boolean) {
     const session = await createChatSession(apiBase)
     setSessions((current) => [session, ...current])
     setSessionId(session.id)
+    newestIdRef.current = 0
     setMessages([])
     setError('')
     return session
@@ -89,6 +99,7 @@ export function useChatSession(apiBase: string, enabled: boolean) {
     try {
       const detail = await getChatSession(apiBase, nextId)
       setSessionId(detail.id)
+      newestIdRef.current = newestMessageId(detail.messages)
       setMessages(visibleMessages(detail.messages))
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Failed to load chat')
@@ -111,9 +122,11 @@ export function useChatSession(apiBase: string, enabled: boolean) {
     if (rows[0]) {
       const detail = await getChatSession(apiBase, rows[0].id)
       setSessionId(detail.id)
+      newestIdRef.current = newestMessageId(detail.messages)
       setMessages(visibleMessages(detail.messages))
     } else {
       setSessionId(null)
+      newestIdRef.current = 0
       setMessages([])
     }
   }, [apiBase, sessionId])
@@ -146,6 +159,7 @@ export function useChatSession(apiBase: string, enabled: boolean) {
         }
       }, model)
       const detail = await getChatSession(apiBase, activeSessionId)
+      newestIdRef.current = newestMessageId(detail.messages)
       setMessages(visibleMessages(detail.messages))
       const rows = await listChatSessions(apiBase)
       setSessions(rows)
