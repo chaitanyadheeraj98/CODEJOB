@@ -565,6 +565,7 @@ EVENT_WEIGHTS: dict[str, float] = {
     "view_sent_items": 0.2,
     "view_run_queue": 0.1,
     "view_premium_numbers": 0.1,
+    "view_assistant": 0.1,
 }
 
 ALLOWED_VIEW_EVENTS = {
@@ -574,6 +575,7 @@ ALLOWED_VIEW_EVENTS = {
     "view_sent_items",
     "view_run_queue",
     "view_premium_numbers",
+    "view_assistant",
 }
 
 RANGE_OPTIONS = {"last_1h", "current_day", "current_week", "current_month", "current_year", "last_5y"}
