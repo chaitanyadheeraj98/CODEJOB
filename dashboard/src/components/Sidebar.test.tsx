@@ -45,6 +45,44 @@ describe('Sidebar', () => {
     expect(container.textContent ?? '').toContain('Inbox6')
   })
 
+  it('shows the Assistant entry, badging it only when messages are unseen', () => {
+    const mount = (assistantUnseenCount: number) => {
+      const container = document.createElement('div')
+      document.body.appendChild(container)
+      const root: Root = createRoot(container)
+      cleanups.push(() => {
+        act(() => {
+          root.unmount()
+        })
+        container.remove()
+      })
+      act(() => {
+        root.render(
+          <Sidebar
+            running={false}
+            queueCount={1}
+            failedCount={2}
+            runCount={3}
+            sentCount={4}
+            inboxCount={6}
+            premiumCount={5}
+            assistantUnseenCount={assistantUnseenCount}
+            resumeTrackingEnabled
+            activePage="run_queue"
+            onNavigate={vi.fn()}
+          />,
+        )
+      })
+      return container
+    }
+
+    // A literal 0 must not render an empty badge, which is what a raw count
+    // would do on every page load.
+    expect(mount(0).textContent ?? '').toContain('CodeJob Assistant')
+    expect(mount(0).textContent ?? '').not.toContain('CodeJob Assistant0')
+    expect(mount(3).textContent ?? '').toContain('CodeJob Assistant3')
+  })
+
   it('navigates to Settings from the footer', () => {
     const container = document.createElement('div')
     document.body.appendChild(container)

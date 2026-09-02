@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import './App.css'
-import Sidebar from './components/Sidebar'
+import Sidebar, { type SidebarProps } from './components/Sidebar'
 import CandidateCard from './components/CandidateCard'
 import ResumeTrackingPage from './features/resume_tracking/ResumeTrackingPage'
 import TrustedGmailGroupsPanel, { type TrustedGmailGroup } from './features/gmail_groups/TrustedGmailGroupsPanel'
 import { getDraftSourceLabel } from './features/ai/ui'
 import QueryBucket from './features/query_bucket/QueryBucket'
 import EmailSearch from './features/email_search/EmailSearch'
+import AssistantPage from './features/chat/AssistantPage'
 import ChatProvider from './features/chat/ChatProvider'
+import { useChat } from './features/chat/chatContext'
 import ChatWidget from './features/chat/ChatWidget'
 import { getChatStatus } from './features/chat/api'
 import type { ChatStatus } from './features/chat/types'
@@ -62,14 +64,15 @@ const DRAFT_TEXT_SIZE_STYLES: Record<DraftTextSize, { fontSize: string; lineHeig
   huge: { fontSize: '28px', lineHeight: '1.4' },
 }
 
-type ActivePage = 'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'inbox' | 'premium_numbers' | 'resume_tracking' | 'application_tracking' | 'settings'
-const ACTIVE_PAGES = new Set<ActivePage>(['run_queue', 'needs_review', 'failed_mapping', 'recent_runs', 'sent_items', 'inbox', 'premium_numbers', 'resume_tracking', 'application_tracking', 'settings'])
+type ActivePage = 'assistant' | 'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'inbox' | 'premium_numbers' | 'resume_tracking' | 'application_tracking' | 'settings'
+const ACTIVE_PAGES = new Set<ActivePage>(['assistant', 'run_queue', 'needs_review', 'failed_mapping', 'recent_runs', 'sent_items', 'inbox', 'premium_numbers', 'resume_tracking', 'application_tracking', 'settings'])
 const initialActivePage = (): ActivePage => {
   const page = new URLSearchParams(window.location.search).get('page') as ActivePage | null
   return page && ACTIVE_PAGES.has(page) ? page : 'run_queue'
 }
 
 const PAGE_TITLES: Record<ActivePage, string> = {
+  assistant: 'CodeJob Assistant',
   run_queue: 'Run Queue Dashboard',
   needs_review: 'Needs Review',
   failed_mapping: 'Failed Mapping',
@@ -83,6 +86,7 @@ const PAGE_TITLES: Record<ActivePage, string> = {
 }
 
 const PAGE_SUBTITLES: Record<ActivePage, string> = {
+  assistant: 'Ask about your pipeline, analyse it, and hand off the work.',
   run_queue: 'Manage and monitor your automated recruitment email operations.',
   needs_review: 'Approve, edit, or reject AI-drafted replies before they send.',
   failed_mapping: 'Fix recipient routing for emails the parser could not map.',
@@ -93,6 +97,13 @@ const PAGE_SUBTITLES: Record<ActivePage, string> = {
   resume_tracking: 'See which resume variants move through the funnel and why others stall.',
   application_tracking: 'Review bookmarked requirements and explicitly tracked applications.',
   settings: 'Manage learning queues, trusted Gmail groups, and resume assets.',
+}
+
+// App renders ChatProvider inside its own tree, so App cannot call useChat().
+// This consumer sits below the provider and is the only thing that needs to.
+function SidebarWithAssistantBadge(props: Omit<SidebarProps, 'assistantUnseenCount'>) {
+  const { unseenCount } = useChat()
+  return <Sidebar {...props} assistantUnseenCount={unseenCount} />
 }
 
 export function shouldTrackViewEvent(
@@ -3958,6 +3969,7 @@ function App() {
 
   const trackViewEvent = async (page: typeof activePage) => {
     const eventMap: Record<typeof activePage, string> = {
+      assistant: 'view_assistant',
       run_queue: 'view_run_queue',
       needs_review: 'view_needs_review',
       failed_mapping: 'view_failed_mapping',
@@ -5329,7 +5341,7 @@ function App() {
     // indentation to keep this a two-line diff rather than a 2,200-line reflow.
     <ChatProvider apiBase={apiBase}>
     <main className="gmailShell">
-      <Sidebar
+      <SidebarWithAssistantBadge
         running={running}
         queueCount={bucketMeta.needs_review.total ?? queue.length}
         failedCount={bucketMeta.failed.total ?? failedQueue.length}
@@ -5448,7 +5460,9 @@ function App() {
             </p>
           </div>
 
-          {activePage !== 'settings' ? renderQueueStatusBar() : null}
+          {activePage !== 'settings' && activePage !== 'assistant' ? renderQueueStatusBar() : null}
+
+          {activePage === 'assistant' ? <AssistantPage /> : null}
 
           {activePage === 'run_queue' ? (
             <section className="liveMonitorCard">
@@ -7549,7 +7563,10 @@ function App() {
           ) : null}
         </div>
       </section>
-      <ChatWidget />
+      {/* Hidden on the workspace itself: the launcher is fixed bottom-right and
+          lands on top of the page's own Send button, and a floating copy of the
+          surface you are already looking at is noise either way. */}
+      {activePage !== 'assistant' ? <ChatWidget /> : null}
     </main>
     </ChatProvider>
   )

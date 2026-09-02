@@ -4639,3 +4639,205 @@ button.emailSearchResult:focus-visible {
     flex-wrap: wrap;
   }
 }
+
+/* --- CodeJob Assistant workspace (v1) ------------------------------------ */
+
+.assistantWorkspace {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 16px;
+  /* Sized to the viewport so the thread scrolls internally instead of pushing
+     the composer below the fold, with a floor for short windows. */
+  height: clamp(520px, calc(100vh - 300px), 880px);
+}
+
+.assistantSessions {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  padding: 14px;
+  background: var(--surface);
+}
+
+.assistantNewChat {
+  width: 100%;
+}
+
+.assistantSessionList {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 14px;
+  overflow-y: auto;
+}
+
+.assistantSessionGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.assistantSessionGroup h3 {
+  margin: 0 0 2px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.assistantSessionItem {
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: none;
+  text-align: left;
+  font-size: 13px;
+  color: var(--ink);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assistantSessionItem:hover:not(:disabled) {
+  background: var(--surface-soft);
+}
+
+.assistantSessionItem.active {
+  border-color: var(--line);
+  background: var(--surface-soft);
+  font-weight: 600;
+}
+
+.assistantThread {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.assistantThreadHeader {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--line);
+  padding: 10px 14px;
+}
+
+.assistantTitle {
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 4px 8px;
+  background: none;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--ink);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assistantTitle:hover:not(:disabled) {
+  border-color: var(--line);
+}
+
+.assistantTitleInput {
+  flex: 1;
+  min-width: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.assistantThreadActions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.assistantMessages {
+  padding: 20px 24px;
+}
+
+/* The thread is centred and width-capped: a full-width line of prose across a
+   wide monitor is measurably harder to read than a 76ch column. */
+.assistantMessages > * {
+  width: 100%;
+  max-width: 760px;
+  margin-inline: auto;
+}
+
+.assistantMessages .chatBubble {
+  max-width: min(680px, 86%);
+}
+
+.assistantMessages .chatBubble.user {
+  margin-inline: auto 0;
+}
+
+.assistantMessages .chatBubble.assistant {
+  margin-inline: 0 auto;
+}
+
+.assistantWelcome {
+  margin: auto;
+  padding: 24px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.assistantWelcome strong {
+  font-size: 18px;
+  color: var(--ink);
+}
+
+.assistantWelcome p {
+  margin: 8px 0 18px;
+}
+
+.assistantStarters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
+
+.assistantStarters button {
+  font-size: 13px;
+}
+
+.assistantComposer {
+  gap: 10px;
+  align-items: flex-end;
+  border-top: 1px solid var(--line);
+  padding: 12px 14px;
+}
+
+.assistantComposer textarea {
+  flex: 1;
+  resize: none;
+}
+
+@media (max-width: 1100px) {
+  .assistantWorkspace {
+    grid-template-columns: minmax(0, 1fr);
+    height: auto;
+  }
+
+  .assistantSessions {
+    max-height: 220px;
+  }
+
+  .assistantThread {
+    height: clamp(460px, calc(100vh - 320px), 720px);
+  }
+}
