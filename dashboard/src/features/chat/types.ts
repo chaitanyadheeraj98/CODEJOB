@@ -27,3 +27,14 @@ export type ChatStatus = {
   model: string
   available_models: string[]
 }
+
+export type ChatAttachment = {
+  id: number
+  session_id: number
+  message_id: number | null
+  file_name: string
+  mime_type: string
+  byte_size: number
+  extraction_error: string | null
+  created_at: string
+}

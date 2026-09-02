@@ -6,6 +6,7 @@ import ProposalCard from './ProposalCard'
 import { proposalForMessage } from './proposals'
 import CandidateTableCompact from './CandidateTableCompact'
 import { renderForMessage } from './renderers'
+import { SentAttachmentChips } from './AttachmentChips'
 
 
 // `open` and `draft` stay local: they are genuinely per-surface. Everything
@@ -172,6 +173,10 @@ export default function ChatWidget() {
                       {message.content
                         ? renderMarkdownLite(message.content)
                         : chat.busy && message.role === 'assistant' ? 'Thinking...' : ''}
+                      <SentAttachmentChips
+                        apiBase={chat.apiBase}
+                        attachments={chat.attachments.filter((item) => item.message_id === message.id)}
+                      />
                     </div>
                   )
                 })}

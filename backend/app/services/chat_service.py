@@ -12,6 +12,7 @@ from app.ai.chat import agent as chat_agent
 from app.ai.chat.history import db_messages_to_langchain, langchain_message_to_db_row, message_text
 from app.config import settings
 from app.models import ChatMessage, ChatSession
+from app.services.chat_attachment_service import ChatAttachmentService
 
 
 def _sse(event: str, payload: dict[str, object]) -> str:
@@ -84,12 +85,21 @@ class ChatService:
 
     def delete_session(self, db: Session, session_id: int) -> None:
         row = self._session_or_404(db, session_id)
+        # Attachments first: they hold foreign keys to both the messages and the
+        # session, and they own files on disk that nothing else would clean up.
+        for attachment in ChatAttachmentService.list_for_session(db, session_id):
+            ChatAttachmentService.delete(db, attachment.id)
         db.query(ChatMessage).filter(ChatMessage.session_id == session_id).delete(synchronize_session=False)
         db.delete(row)
         db.commit()
 
     async def send_message(
-        self, db: Session, session_id: int, user_text: str, model: str | None = None
+        self,
+        db: Session,
+        session_id: int,
+        user_text: str,
+        model: str | None = None,
+        attachment_ids: list[int] | None = None,
     ) -> AsyncIterator[str]:
         text = self.validate_message(user_text)
         session = self._session_or_404(db, session_id)
@@ -97,7 +107,18 @@ class ChatService:
         if not session.title:
             session.title = text[:80]
         session.updated_at = now
-        db.add(ChatMessage(session_id=session.id, role="user", content=text, created_at=now))
+        user_message = ChatMessage(session_id=session.id, role="user", content=text, created_at=now)
+        db.add(user_message)
+        db.flush()
+
+        # The note is appended *after* validate_message, not by the client.
+        # Three long filenames would otherwise eat the user's 4000-character
+        # budget and could push a legitimate message over the limit.
+        attached = ChatAttachmentService.bind_to_message(
+            db, session.id, user_message.id, list(attachment_ids or [])
+        )
+        if attached:
+            user_message.content = text + ChatAttachmentService.note_for(attached)
         db.commit()
 
         recent = (

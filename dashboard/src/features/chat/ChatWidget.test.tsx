@@ -387,7 +387,7 @@ describe('ChatWidget', () => {
 
   it('lists the configured models plus Auto, and sends the manually picked model with the message', async () => {
     const session = { id: 1, title: 'Models', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' }
-    const sentBodies: Array<{ text: string; model?: string }> = []
+    const sentBodies: Array<{ text: string; model?: string; attachment_ids?: number[] }> = []
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url.endsWith('/chat/status')) {
@@ -454,6 +454,10 @@ describe('ChatWidget', () => {
       for (let tick = 0; tick < 4; tick += 1) await new Promise((resolve) => window.setTimeout(resolve, 0))
     })
 
-    expect(sentBodies).toEqual([{ text: 'Which model is this?', model: 'nemotron-3-nano:30b-cloud' }])
+    // attachment_ids is always present now, empty from the widget, which has no
+    // upload control by design.
+    expect(sentBodies).toEqual([
+      { text: 'Which model is this?', model: 'nemotron-3-nano:30b-cloud', attachment_ids: [] },
+    ])
   })
 })

@@ -138,7 +138,7 @@ export function useChatSession(apiBase: string, enabled: boolean) {
     }
   }, [apiBase, sessionId])
 
-  const sendMessage = useCallback(async (rawText: string, model?: string) => {
+  const sendMessage = useCallback(async (rawText: string, model?: string, attachmentIds: number[] = []) => {
     const text = rawText.trim()
     if (!text || busy) return
     setBusy(true)
@@ -164,7 +164,7 @@ export function useChatSession(apiBase: string, enabled: boolean) {
             message.id === assistantId ? { ...message, id: data.message_id as number } : message
           )))
         }
-      }, model)
+      }, model, attachmentIds)
       const detail = await getChatSession(apiBase, activeSessionId)
       newestIdRef.current = newestMessageId(detail.messages)
       setMessages(visibleMessages(detail.messages))

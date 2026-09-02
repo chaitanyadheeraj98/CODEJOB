@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 
-import { getChatStatus, runProposalAction } from './api'
+import { getChatStatus, listChatAttachments, runProposalAction } from './api'
 import { ChatContext, type ChatContextValue } from './chatContext'
 import type { ProposalResult } from './ProposalCard'
 import { proposalResultDetail, type ProposalFields, type ProposalHandler } from './proposals'
-import type { ChatStatus } from './types'
+import type { ChatAttachment, ChatStatus } from './types'
 import { useChatSession } from './useChatSession'
 
 
@@ -33,8 +33,35 @@ export default function ChatProvider({ apiBase, onFocusCandidate, children }: Ch
   })
   const [proposalResults, setProposalResults] = useState<Record<number, ProposalResult>>({})
   const [proposalBusyId, setProposalBusyId] = useState<number | null>(null)
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([])
   const ready = Boolean(status?.enabled && status.ollama_running)
   const chat = useChatSession(apiBase, ready)
+  const { sessionId, busy } = chat
+
+  const refreshAttachments = useCallback(async () => {
+    if (!ready || sessionId == null) return
+    try {
+      setAttachments(await listChatAttachments(apiBase, sessionId))
+    } catch {
+      // Chips are a convenience; a failed refresh must not break the thread.
+    }
+  }, [apiBase, ready, sessionId])
+
+  // Reloads on session change and whenever a send finishes, which is the
+  // only moment an upload becomes bound to a message.
+  useEffect(() => {
+    if (!ready || sessionId == null) {
+      setAttachments([])
+      return
+    }
+    if (busy) return
+    let active = true
+    listChatAttachments(apiBase, sessionId).then(
+      (rows) => { if (active) setAttachments(rows) },
+      () => {},
+    )
+    return () => { active = false }
+  }, [apiBase, ready, sessionId, busy])
 
   const refreshStatus = useCallback(async () => {
     setStatusError('')
@@ -119,6 +146,8 @@ export default function ChatProvider({ apiBase, onFocusCandidate, children }: Ch
     approveProposal,
     cancelProposal,
     focusCandidate,
+    attachments,
+    refreshAttachments,
   }
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>

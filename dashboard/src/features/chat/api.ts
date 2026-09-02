@@ -1,4 +1,4 @@
-import type { ChatSession, ChatSessionDetail, ChatStatus } from './types'
+import type { ChatAttachment, ChatSession, ChatSessionDetail, ChatStatus } from './types'
 import type { ProposalFields, ProposalHandler } from './proposals'
 
 async function responseError(response: Response, fallback: string): Promise<Error> {
@@ -99,17 +99,41 @@ export async function consumeSseStream(
   if (parsed) onEvent(parsed)
 }
 
+export async function uploadChatAttachment(
+  apiBase: string,
+  sessionId: number,
+  file: File,
+): Promise<ChatAttachment> {
+  const body = new FormData()
+  body.append('file', file)
+  const response = await fetch(`${apiBase}/chat/sessions/${sessionId}/attachments`, { method: 'POST', body })
+  if (!response.ok) throw await responseError(response, `Could not attach ${file.name}`)
+  return (await response.json()) as ChatAttachment
+}
+
+export async function listChatAttachments(apiBase: string, sessionId: number): Promise<ChatAttachment[]> {
+  const response = await fetch(`${apiBase}/chat/sessions/${sessionId}/attachments`)
+  if (!response.ok) throw await responseError(response, 'Failed to load attachments')
+  return (await response.json()) as ChatAttachment[]
+}
+
+export async function deleteChatAttachment(apiBase: string, attachmentId: number): Promise<void> {
+  const response = await fetch(`${apiBase}/chat/attachments/${attachmentId}`, { method: 'DELETE' })
+  if (!response.ok) throw await responseError(response, 'Failed to remove attachment')
+}
+
 export async function sendChatMessage(
   apiBase: string,
   sessionId: number,
   text: string,
   onEvent: (event: ChatStreamEvent) => void,
   model?: string,
+  attachmentIds: number[] = [],
 ): Promise<void> {
   const response = await fetch(`${apiBase}/chat/sessions/${sessionId}/messages`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, model: model || undefined }),
+    body: JSON.stringify({ text, model: model || undefined, attachment_ids: attachmentIds }),
   })
   if (!response.ok) throw await responseError(response, 'Failed to send message')
   if (!response.body) throw new Error('Chat response did not include a stream')

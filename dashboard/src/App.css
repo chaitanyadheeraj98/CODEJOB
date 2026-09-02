@@ -4947,3 +4947,77 @@ button.emailSearchResult:focus-visible {
 .candidateTableCompact small {
   color: var(--muted);
 }
+
+/* --- Chat attachments (v1 W7) -------------------------------------------- */
+
+.attachmentChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 14px 0;
+  list-style: none;
+}
+
+.attachmentChips.sent {
+  padding: 8px 0 0;
+}
+
+.attachmentChip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  padding: 4px 6px 4px 12px;
+  background: var(--surface-soft);
+  font-size: 12px;
+  max-width: 100%;
+}
+
+.attachmentChip.failed {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.attachmentChipName,
+.attachmentChip a {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+}
+
+.attachmentChipNote {
+  color: var(--muted);
+}
+
+.attachmentChip.failed .attachmentChipNote {
+  color: inherit;
+}
+
+.attachmentChip button {
+  border: none;
+  border-radius: 999px;
+  padding: 0 6px;
+  background: none;
+  font-size: 14px;
+  line-height: 1.2;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.assistantAttach {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  font-size: 18px;
+  line-height: 1;
+}
+
+/* A drop target has to be visibly a drop target while a file is over it. */
+.assistantComposer.dragging {
+  outline: 2px dashed var(--primary);
+  outline-offset: -4px;
+}

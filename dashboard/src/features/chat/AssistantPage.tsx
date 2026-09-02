@@ -1,5 +1,8 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type DragEvent, type FormEvent } from 'react'
 
+import { uploadChatAttachment } from './api'
+import AttachmentChips, { SentAttachmentChips } from './AttachmentChips'
+import { ACCEPTED_EXTENSIONS, type PendingAttachment } from './attachmentDisplay'
 import { useChat } from './chatContext'
 import { renderMarkdownLite } from './markdown'
 import ProposalCard from './ProposalCard'
@@ -56,7 +59,10 @@ export default function AssistantPage() {
   const [draft, setDraft] = useState('')
   const [renaming, setRenaming] = useState(false)
   const [renameDraft, setRenameDraft] = useState('')
+  const [pending, setPending] = useState<PendingAttachment[]>([])
+  const [dragging, setDragging] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement | null>(null)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   const currentSession = chat.sessions.find((session) => session.id === chat.sessionId)
 
@@ -72,12 +78,46 @@ export default function AssistantPage() {
     markSeen()
   }, [markSeen, messageCount])
 
+  // Upload first, then send with the resulting ids: multipart and SSE do not
+  // mix, so the streaming endpoint keeps its JSON contract.
+  const attach = async (files: File[]) => {
+    const sessionId = chat.sessionId ?? (await chat.startSession()).id
+    for (const file of files) {
+      const localId = `${file.name}:${file.size}:${Date.now()}:${Math.random()}`
+      setPending((current) => [...current, { status: 'uploading', localId, fileName: file.name }])
+      try {
+        const attachment = await uploadChatAttachment(chat.apiBase, sessionId, file)
+        setPending((current) => current.map((item) => (
+          item.localId === localId ? { status: 'ready', localId, fileName: file.name, attachment } : item
+        )))
+      } catch (reason) {
+        setPending((current) => current.map((item) => (
+          item.localId === localId
+            ? { status: 'failed', localId, fileName: file.name, error: reason instanceof Error ? reason.message : 'Upload failed' }
+            : item
+        )))
+      }
+    }
+  }
+
+  const onDrop = (event: DragEvent) => {
+    event.preventDefault()
+    setDragging(false)
+    const files = Array.from(event.dataTransfer?.files ?? [])
+    if (files.length) void attach(files)
+  }
+
   const submit = async (event: FormEvent) => {
     event.preventDefault()
     const text = draft.trim()
+    const ready = pending.filter((item) => item.status === 'ready')
     if (!text || chat.busy) return
+    // Uploads still in flight would be silently dropped from the message they
+    // belong to, so the send waits for them rather than losing them.
+    if (pending.some((item) => item.status === 'uploading')) return
     setDraft('')
-    await chat.sendMessage(text, chat.selectedModel)
+    setPending([])
+    await chat.sendMessage(text, chat.selectedModel, ready.map((item) => item.attachment.id))
   }
 
   const commitRename = async () => {
@@ -246,6 +286,10 @@ export default function AssistantPage() {
                 {message.content
                   ? renderMarkdownLite(message.content)
                   : chat.busy && message.role === 'assistant' ? 'Thinking…' : ''}
+                <SentAttachmentChips
+                  apiBase={chat.apiBase}
+                  attachments={chat.attachments.filter((item) => item.message_id === message.id)}
+                />
               </div>
             )
           })}
@@ -254,8 +298,41 @@ export default function AssistantPage() {
 
         {chat.error ? <p className="chatError" role="alert">{chat.error}</p> : null}
 
-        <form className="chatComposer assistantComposer" onSubmit={(event) => void submit(event)}>
+        <AttachmentChips
+          pending={pending}
+          onRemove={(localId) => setPending((current) => current.filter((item) => item.localId !== localId))}
+        />
+
+        <form
+          className={`chatComposer assistantComposer ${dragging ? 'dragging' : ''}`}
+          onSubmit={(event) => void submit(event)}
+          onDragOver={(event) => { event.preventDefault(); setDragging(true) }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={onDrop}
+        >
           <label className="visuallyHidden" htmlFor="assistant-message">Message CodeJob Assistant</label>
+          <input
+            ref={fileInputRef}
+            type="file"
+            className="visuallyHidden"
+            multiple
+            accept={ACCEPTED_EXTENSIONS.join(',')}
+            onChange={(event) => {
+              const files = Array.from(event.target.files ?? [])
+              event.target.value = ''
+              if (files.length) void attach(files)
+            }}
+          />
+          <button
+            type="button"
+            className="assistantAttach"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={chat.busy}
+            aria-label="Attach a file"
+            title={`Attach ${ACCEPTED_EXTENSIONS.join(', ')}`}
+          >
+            +
+          </button>
           <textarea
             id="assistant-message"
             value={draft}
