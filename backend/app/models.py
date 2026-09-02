@@ -33,6 +33,14 @@ class RecruiterEmail(Base):
     subject: Mapped[str] = mapped_column(String(500))
     body: Mapped[str] = mapped_column(Text)
     role: Mapped[str] = mapped_column(Text, default="")
+    # Provenance for `role`. NULL means "written before provenance existed" and must
+    # be read as unverified - never assume "extracted". See services/role_provenance.py.
+    role_source: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # Collapsed taxonomy title for aggregation ("Java Developer"), kept separate so
+    # `role` can stay specific for the draft copy that interpolates it. String(255),
+    # never Text: this one is indexed, and an unbounded indexed column blew the
+    # Postgres btree key limit once already (migration 0051).
+    role_canonical: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     location: Mapped[str] = mapped_column(String(255), default="")
     salary_text: Mapped[str] = mapped_column(String(255), default="")
     skills_text: Mapped[str] = mapped_column(Text, default="")
@@ -110,6 +118,13 @@ class RecruiterEmail(Base):
     resume_file_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     parser_details_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     company: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    # Provenance for company/location, same contract as role_source: NULL means the
+    # value predates tracking (or came straight from the parser) and is unverified.
+    # Set to "taxonomy_matched" only when an approved vocabulary entry filled a gap
+    # the parser left empty - so a matched value is never mistaken for an extracted
+    # one, which is the failure this whole mechanism exists to prevent.
+    company_source: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    location_source: Mapped[str | None] = mapped_column(String(40), nullable=True)
     end_client: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     implementation_partner: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     domain: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)

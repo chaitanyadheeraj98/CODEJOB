@@ -52,6 +52,7 @@ class FilterOptionsApiTests(unittest.TestCase):
         sender: str = "Jane <jane@example.com>",
         interview_type: str | None = "Video",
         marked: bool = False,
+        is_source_parent: bool = False,
     ) -> RecruiterEmail:
         row = RecruiterEmail(
             owner_id=owner_id or main.settings.owner_id,
@@ -63,6 +64,7 @@ class FilterOptionsApiTests(unittest.TestCase):
             state=state,
             interview_type=interview_type,
             marked_for_tracking=marked,
+            is_source_parent=is_source_parent,
         )
         db.add(row)
         db.flush()
@@ -150,6 +152,39 @@ class FilterOptionsApiTests(unittest.TestCase):
             params={"state": "needs_review", "role": values[0], "limit": 10},
         )
         self.assertEqual(listed.json()["total"], 1, "every suggestion must match at least its own row")
+
+    def test_picker_excludes_source_parents(self) -> None:
+        """A multi-requirement container's subject must not be offered as a job title.
+
+        Source parents hold the raw subject in `role` by design (the AI extractor is
+        skipped for manifest status "multiple"); their real roles live on the expanded
+        children. Suggesting the container is what produced the
+        "3 Requirements :: ..." entries in the picker.
+        """
+        parent_role = "3 Requirements :: Java Software Engineer :: SAP QM :: QA Lead"
+        with Session(self.engine) as db:
+            self._email(db, role="Java Developer")
+            self._email(db, role=parent_role, is_source_parent=True)
+            db.commit()
+
+        values = self.client.get(
+            "/filter-options",
+            params={"bucket": "needs_review", "field": "role", "q": "java"},
+        ).json()["values"]
+        self.assertIn("Java Developer", values)
+        self.assertNotIn(parent_role, values)
+
+    def test_bookmarked_bucket_also_excludes_source_parents(self) -> None:
+        with Session(self.engine) as db:
+            self._email(db, role="Java Developer", marked=True)
+            self._email(db, role="9 Requirements :: Java :: SAP", marked=True, is_source_parent=True)
+            db.commit()
+
+        values = self.client.get(
+            "/filter-options",
+            params={"bucket": "appts_bookmarked", "field": "role"},
+        ).json()["values"]
+        self.assertEqual(values, ["Java Developer"])
 
     def test_candidate_buckets_are_isolated_by_state(self) -> None:
         with Session(self.engine) as db:

@@ -585,7 +585,7 @@ type PendingSkill = {
 }
 
 type PendingEntity = {
-  entity_type: 'company' | 'location'
+  entity_type: 'company' | 'location' | 'role'
   display_name: string
   normalized_name: string
   occurrence_count: number
@@ -1345,6 +1345,9 @@ export type Candidate = {
   sender: string
   body: string
   role: string
+  // NULL on rows written before provenance existed - unverified, not 'extracted'.
+  role_source?: string | null
+  role_canonical?: string | null
   location: string
   salary_text: string
   skills_text: string
@@ -2914,6 +2917,7 @@ function App() {
   const [pendingSkills, setPendingSkills] = useState<PendingSkill[]>([])
   const [pendingCompanies, setPendingCompanies] = useState<PendingEntity[]>([])
   const [pendingLocations, setPendingLocations] = useState<PendingEntity[]>([])
+  const [pendingRoles, setPendingRoles] = useState<PendingEntity[]>([])
   const [embeddingPendingCount, setEmbeddingPendingCount] = useState(0)
   const [embeddingSummary, setEmbeddingSummary] = useState('')
   const [skillsLoading, setSkillsLoading] = useState(false)
@@ -3432,6 +3436,25 @@ function App() {
     } finally {
       setSkillsLoading(false)
       setJobIntentLoading(false)
+    }
+
+    // Deliberately sequential, after the batch above has resolved.
+    //
+    // Every /settings/entities/*/pending call re-scans parser_details_json for all
+    // ~8.5k candidate rows and takes 5-9s under load. Adding role harvesting to
+    // that parallel batch pushed peak concurrency past what the backend would
+    // serve: connections were closed mid-flight (ERR_EMPTY_RESPONSE), the
+    // Promise.all rejected, and because the handler sets state only on full
+    // success, *every* queue rendered empty - including companies and locations,
+    // which have nothing to do with roles.
+    //
+    // Its own try/catch for the same reason: a role-harvest failure must not be
+    // able to blank the queues that already loaded.
+    try {
+      const rolesResponse = await fetch(`${apiBase}/settings/entities/role/pending`)
+      if (rolesResponse.ok) setPendingRoles((await rolesResponse.json()) as PendingEntity[])
+    } catch {
+      // Leave the roles queue empty; the rest of the learning data is still good.
     }
   }, [apiBase, hasLoadedLearningData])
 
@@ -6731,6 +6754,15 @@ function App() {
                 approveAll={() => runEntityAction('location', 'approve-all')}
                 approve={(entity) => runEntityAction('location', 'approve', entity)}
                 dismiss={(entity) => runEntityAction('location', 'dismiss', entity)}
+              />
+              <EntityUpgradeSection
+                title="Upgrade Job Roles"
+                pendingEntities={pendingRoles}
+                loading={skillsLoading}
+                busyKey={entityActionKey?.startsWith('role:') ? entityActionKey.slice('role:'.length) : null}
+                approveAll={() => runEntityAction('role', 'approve-all')}
+                approve={(entity) => runEntityAction('role', 'approve', entity)}
+                dismiss={(entity) => runEntityAction('role', 'dismiss', entity)}
               />
               <JobIntentLearningSection
                 pendingSignals={pendingJobIntentSignals}

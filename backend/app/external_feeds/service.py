@@ -17,6 +17,8 @@ from app.automation.queue_preparation import (
     QueuePreparationRequest,
     prepare_candidate_for_queue,
 )
+from app.services.role_provenance import assign_role
+from app.services.role_taxonomy import fill_entity_gaps, role_matcher_for
 from app.models import NumberReviewQueue, PremiumNumberContact, RecentRun, RecruiterEmail, RecruiterOpportunity, ResumeAsset, UserSettings
 from app.parsing import build_skills_json_payload
 from app.premium_numbers.phone_normalization import best_display_phone, canonicalize_phone
@@ -1008,12 +1010,20 @@ class ExternalFeedService:
                 item.external_post_id,
                 recruiter_to,
             )
+            nvoids_role = assign_role(
+                extracted=item.role,
+                subject=item.role or "Nvoids Opportunity",
+                body=item.raw_body,
+                matcher=role_matcher_for(db, owner_id),
+            )
             email = RecruiterEmail(
                 owner_id=owner_id,
                 sender=recruiter_to or extract_email_address(item.recruiter_email or "") or item.recruiter_name or "Nvoids Recruiter",
                 subject=item.role or "Nvoids Opportunity",
                 body=item.raw_body or item.role or "",
-                role=item.role or "",
+                role=nvoids_role.role,
+                role_source=nvoids_role.role_source,
+                role_canonical=nvoids_role.role_canonical,
                 location=item.location or "",
                 salary_text=item.rate or "",
                 skills_text=item.skills_text or "",
@@ -1080,13 +1090,23 @@ class ExternalFeedService:
             )
         screening = CandidateScreeningService().evaluate_parser_details(parser_details, settings)
         if not screening.proceed_to_scoring:
+            # item.role is the feed's own title and counts as an extraction; only when
+            # both it and the parser come back empty does the subject stand in, and
+            # then it is labelled as such rather than passing for a real title.
+            feed_role = assign_role(
+                extracted=item.role or parsed.get("role"),
+                subject=subject,
+                body=body,
+                matcher=role_matcher_for(db, owner_id),
+            )
             email = RecruiterEmail(
                 owner_id=owner_id,
                 sender=sender_identity,
                 subject=subject,
                 body=body,
-                role=str(item.role or parsed.get("role", subject)),
-                location=str(parsed.get("location", item.location or "")),
+                role=feed_role.role,
+                role_source=feed_role.role_source,
+                role_canonical=feed_role.role_canonical,
                 salary_text=str(parsed.get("salary_text", item.rate or "")),
                 skills_text=str(parsed.get("skills_text", item.skills_text or "")),
                 skills_json=json.dumps(
@@ -1096,7 +1116,7 @@ class ExternalFeedService:
                     ),
                     separators=(",", ":"),
                 ),
-                **jd_entity_fields_from_parsed(parsed),
+                **fill_entity_gaps(jd_entity_fields_from_parsed(parsed), db=db, owner_id=owner_id, subject=subject, location=str(parsed.get("location", item.location or "")), body=body),
                 decision="Qualified",
                 state="needs_review",
                 decision_reason="strict_candidate_screening",
@@ -1219,13 +1239,20 @@ class ExternalFeedService:
                 reason_code=preparation.skip_reason or "queue_preparation_outcome",
                 reason_detail=preparation.decision_reason or f"Skipped because queue preparation ended with outcome '{preparation.outcome}'.",
             )
+        feed_role = assign_role(
+            extracted=item.role or preparation.parsed.get("role"),
+            subject=subject,
+            body=body,
+            matcher=role_matcher_for(db, owner_id),
+        )
         email = RecruiterEmail(
             owner_id=owner_id,
             sender=sender_identity,
             subject=subject,
             body=body,
-            role=str(item.role or preparation.parsed.get("role", subject)),
-            location=str(preparation.parsed.get("location", item.location or "")),
+            role=feed_role.role,
+            role_source=feed_role.role_source,
+            role_canonical=feed_role.role_canonical,
             salary_text=str(preparation.parsed.get("salary_text", item.rate or "")),
             skills_text=str(preparation.parsed.get("skills_text", item.skills_text or "")),
             skills_json=json.dumps(
@@ -1235,7 +1262,7 @@ class ExternalFeedService:
                 ),
                 separators=(",", ":"),
             ),
-            **jd_entity_fields_from_parsed(preparation.parsed),
+            **fill_entity_gaps(jd_entity_fields_from_parsed(preparation.parsed), db=db, owner_id=owner_id, subject=subject, location=str(preparation.parsed.get("location", item.location or "")), body=body),
             score=int(preparation.ai_score * 100),
             decision="Qualified",
             state="needs_review",

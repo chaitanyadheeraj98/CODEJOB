@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session
 
 from app.models import RecruiterEmail
 from app.services import opportunity_lineage_service
+from app.services.role_provenance import assign_role
+from app.services.role_taxonomy import role_matcher_for
 from app.services.role_manifest_service import RoleManifestResult
 
 
@@ -104,12 +106,23 @@ class RequirementExpansionService:
         for requirement in manifest_result.requirements:
             child = existing_children.get(requirement.requirement_key)
             if child is None:
+                # The manifest pulled this title out of one requirement block, so it
+                # is a genuine extraction - but it still goes through the ladder so
+                # it is normalised, capped and labelled like every other write.
+                child_role = assign_role(
+                    extracted=requirement.title_hint,
+                    subject=parent.subject,
+                    body=requirement.source_text,
+                    matcher=role_matcher_for(db, parent.owner_id),
+                )
                 child = RecruiterEmail(
                     owner_id=parent.owner_id,
                     sender=parent.sender,
                     subject=parent.subject,
                     body=requirement.source_text,
-                    role=requirement.title_hint,
+                    role=child_role.role,
+                    role_source=child_role.role_source,
+                    role_canonical=child_role.role_canonical,
                     location="unknown",
                     salary_text="not_specified",
                     skills_text="none_detected",

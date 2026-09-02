@@ -12,6 +12,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
 from app.config import settings as app_settings
+from app.services.role_provenance import assign_role
+from app.services.role_taxonomy import fill_entity_gaps, role_matcher_for
 from app.models import RecruiterEmail, ResumeAsset, UserSettings
 from app.parsing import build_skills_json_payload
 from app.phase0 import jd_entity_fields_from_parsed
@@ -669,17 +671,24 @@ class RunOrchestrator:
     ) -> RecruiterEmail:
         if existing:
             return existing
+        assigned = assign_role(
+            extracted=str(parsed.get("role") or ""),
+            subject=str(item["subject"]),
+            body=str(item["body"]),
+            matcher=role_matcher_for(request.db, request.owner_id),
+        )
         email = RecruiterEmail(
             owner_id=request.owner_id,
             sender=str(item["sender"]),
             subject=str(item["subject"]),
             body=str(item["body"]),
-            role=str(parsed["role"]),
-            location=str(parsed["location"]),
+            role=assigned.role,
+            role_source=assigned.role_source,
+            role_canonical=assigned.role_canonical,
             salary_text=str(parsed["salary_text"]),
             skills_text=str(parsed["skills_text"]),
             skills_json=skills_json,
-            **jd_entity_fields_from_parsed(parsed),
+            **fill_entity_gaps(jd_entity_fields_from_parsed(parsed), db=request.db, owner_id=request.owner_id, subject=str(item["subject"]), location=str(parsed["location"]), body=str(item["body"])),
             source="gmail",
             external_message_id=str(item["external_message_id"]),
             external_thread_id=item.get("external_thread_id"),

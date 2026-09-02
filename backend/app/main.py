@@ -232,8 +232,11 @@ from app.services.routing_runtime_service import RoutingRuntimeDeps, RoutingRunt
 from app.services.scoring_runtime_service import ScoringRuntimeDeps, ScoringRuntimeService
 from app.services.settings_bootstrap_service import SettingsBootstrapService
 from app.services.startup_service import StartupService
+from app.services.role_provenance import assign_role
+from app.services.role_taxonomy import clear_role_taxonomy_cache, fill_entity_gaps, role_matcher_for
 from app.services.taxonomy_learning_service import (
     BULK_APPROVAL_MIN_OCCURRENCES,
+    ENTITY_TYPES,
     embed_pending_skills,
     is_safe_for_bulk_entity_approval,
     list_pending_entities,
@@ -3354,7 +3357,7 @@ def list_approved_taxonomy_entities(
     entity_type: str,
     db: Session = Depends(get_db),
 ) -> list[CanonicalEntityTaxonomyEntryResponse]:
-    if entity_type not in {"company", "location"}:
+    if entity_type not in ENTITY_TYPES:
         raise HTTPException(status_code=404, detail="entity_type must be company or location")
     rows = (
         db.query(CanonicalEntityTaxonomyEntry)
@@ -3393,6 +3396,9 @@ def approve_taxonomy_entity(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # Approved/dismissed entries are what load_role_taxonomy reads, so the cached
+    # vocabulary must drop the moment the human changes it.
+    clear_role_taxonomy_cache()
     return _serialize_canonical_entity(row)
 
 
@@ -3426,6 +3432,7 @@ def approve_all_taxonomy_entities(
         approved.append(str(item["display_name"]))
     if approved:
         db.commit()
+        clear_role_taxonomy_cache()
     return BulkApproveEntitiesResponse(
         processed_count=len(pending),
         approved_count=len(approved),
@@ -3453,6 +3460,9 @@ def dismiss_taxonomy_entity(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # Approved/dismissed entries are what load_role_taxonomy reads, so the cached
+    # vocabulary must drop the moment the human changes it.
+    clear_role_taxonomy_cache()
     return _serialize_canonical_entity(row)
 
 
@@ -4553,20 +4563,27 @@ def ingest_email(payload: IngestEmailRequest, db: Session = Depends(get_db)) -> 
     hard_pass, hard_reason = hard_filter_check(parsed, user_settings, effective_policy, parser_details)
     screening = CandidateScreeningService().evaluate_parser_details(parser_details, user_settings)
     if hard_pass and not screening.proceed_to_scoring:
+        assigned = assign_role(
+            extracted=str(parsed.get("role") or ""),
+            subject=payload.subject,
+            body=payload.body,
+            matcher=role_matcher_for(db, settings.owner_id),
+        )
         email = RecruiterEmail(
             owner_id=settings.owner_id,
             sender=payload.sender,
             subject=payload.subject,
             body=payload.body,
-            role=str(parsed["role"]),
-            location=str(parsed["location"]),
+            role=assigned.role,
+            role_source=assigned.role_source,
+            role_canonical=assigned.role_canonical,
             salary_text=str(parsed["salary_text"]),
             skills_text=str(parsed["skills_text"]),
             skills_json=json.dumps(
                 build_skills_json_payload(parser_details, fallback_skills_text=str(parsed["skills_text"])),
                 separators=(",", ":"),
             ),
-            **jd_entity_fields_from_parsed(parsed),
+            **fill_entity_gaps(jd_entity_fields_from_parsed(parsed), db=db, owner_id=settings.owner_id, subject=payload.subject, location=str(parsed["location"]), body=payload.body),
             decision="Qualified",
             state="needs_review",
             decision_reason="strict_candidate_screening",
@@ -4635,20 +4652,27 @@ def ingest_email(payload: IngestEmailRequest, db: Session = Depends(get_db)) -> 
         resume_file_name=resolve_resume_display_name(user_settings, selected_resume.file_name if selected_resume else None),
     )
 
+    assigned = assign_role(
+        extracted=str(parsed.get("role") or ""),
+        subject=payload.subject,
+        body=payload.body,
+        matcher=role_matcher_for(db, settings.owner_id),
+    )
     email = RecruiterEmail(
         owner_id=settings.owner_id,
         sender=payload.sender,
         subject=payload.subject,
         body=payload.body,
-        role=str(parsed["role"]),
-        location=str(parsed["location"]),
+        role=assigned.role,
+        role_source=assigned.role_source,
+        role_canonical=assigned.role_canonical,
         salary_text=str(parsed["salary_text"]),
         skills_text=str(parsed["skills_text"]),
         skills_json=json.dumps(
             build_skills_json_payload(parser_details, fallback_skills_text=str(parsed["skills_text"])),
             separators=(",", ":"),
         ),
-        **jd_entity_fields_from_parsed(parsed),
+        **fill_entity_gaps(jd_entity_fields_from_parsed(parsed), db=db, owner_id=settings.owner_id, subject=payload.subject, location=str(parsed["location"]), body=payload.body),
         score=int(ai_score * 100),
         decision=decision,
         state=state,

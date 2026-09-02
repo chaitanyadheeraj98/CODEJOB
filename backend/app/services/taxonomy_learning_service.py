@@ -18,7 +18,10 @@ from app.skill_taxonomy import (
 )
 
 
-ENTITY_TYPES = {"company", "location"}
+# "role" joins company/location so job titles reuse the same learn -> review ->
+# approve loop rather than getting a parallel mechanism. Seeded role entries are
+# written as "pending": nothing enters the trusted vocabulary without a human.
+ENTITY_TYPES = {"company", "location", "role"}
 BULK_APPROVAL_MIN_OCCURRENCES = 2
 
 
@@ -68,6 +71,14 @@ def _entity_values(parser_details_json: str | None, entity_type: str) -> list[st
         return []
     if entity_type == "company":
         values: list[object] = [ai_result.get("company")]
+    elif entity_type == "role":
+        # role_candidates is the extractor's own shortlist of titles for the JD and is
+        # populated on 4,610 rows; `role` is its single chosen answer. Harvesting both
+        # gives aliases for free ("Sr. Java Developer" alongside "Java Developer").
+        values = [ai_result.get("role")]
+        candidates = ai_result.get("role_candidates")
+        if isinstance(candidates, list):
+            values.extend(candidates)
     else:
         values = [ai_result.get("primary_location")]
         mentioned = ai_result.get("mentioned_locations")
@@ -96,7 +107,7 @@ def _suppressed_entity_keys(db: Session, *, owner_id: str, entity_type: str) -> 
 
 def list_pending_entities(db: Session, *, owner_id: str, entity_type: str) -> list[dict[str, object]]:
     if entity_type not in ENTITY_TYPES:
-        raise ValueError("entity_type must be company or location")
+        raise ValueError(f"entity_type must be one of {sorted(ENTITY_TYPES)}")
     suppressed = _suppressed_entity_keys(db, owner_id=owner_id, entity_type=entity_type)
     aggregated: dict[str, dict[str, object]] = {}
     rows = (
@@ -150,7 +161,7 @@ def upsert_entity(
     auto_commit: bool = True,
 ) -> CanonicalEntityTaxonomyEntry:
     if entity_type not in ENTITY_TYPES:
-        raise ValueError("entity_type must be company or location")
+        raise ValueError(f"entity_type must be one of {sorted(ENTITY_TYPES)}")
     effective_name = _clean_entity_name(canonical_name or display_name)
     if not _valid_entity_name(effective_name):
         raise ValueError("A valid canonical entity name is required")

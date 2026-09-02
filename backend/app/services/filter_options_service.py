@@ -22,10 +22,21 @@ MAX_QUERY_CHARS = 100
 BaseQuery = Callable[[Session, str], Query]
 
 
+# Source parents are excluded from every candidate bucket. A multi-requirement email
+# is a container: run_orchestrator.py:222 deliberately skips the AI extractor when the
+# manifest says "multiple", so `role` there holds the raw subject by design and the real
+# roles live on the expanded children. Offering those subjects as job-title suggestions
+# is what produced the "3 Requirements :: ..." entries in the picker.
+#
+# Deliberate asymmetry: list_candidates does NOT hide source parents, so a parent card
+# stays visible in Needs Review while its role is no longer suggested. That is the safe
+# direction - the picker offers fewer values than exist, never values that return zero
+# rows (temp151 G14). Do not "fix" this by re-including them.
 def _emails(state: str) -> BaseQuery:
     return lambda db, owner: db.query(RecruiterEmail).filter(
         RecruiterEmail.owner_id == owner,
         RecruiterEmail.state == state,
+        RecruiterEmail.is_source_parent.is_(False),
     )
 
 
@@ -36,6 +47,7 @@ def _emails_joined_opportunity(state: str) -> BaseQuery:
         .filter(
             RecruiterEmail.owner_id == owner,
             RecruiterEmail.state == state,
+            RecruiterEmail.is_source_parent.is_(False),
             RecruiterOpportunity.owner_id == owner,
         )
     )
@@ -46,6 +58,7 @@ def _bookmarked() -> BaseQuery:
         RecruiterEmail.owner_id == owner,
         RecruiterEmail.state == "needs_review",
         RecruiterEmail.marked_for_tracking.is_(True),
+        RecruiterEmail.is_source_parent.is_(False),
     )
 
 

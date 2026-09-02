@@ -53,6 +53,39 @@ type CandidateCardProps = {
   sentDetails: SentItemDetails | undefined
 }
 
+/** A quiet marker for a title the extractor did not produce.
+ *
+ * Deliberately not a warning badge: most of these are perfectly good titles, and
+ * a red flag on a third of the queue is a flag people learn to ignore. It says
+ * where the value came from and stops there. An "extracted" role gets nothing,
+ * so the absence of a marker is itself the signal.
+ */
+export function roleProvenanceHint(source: string | null | undefined): { label: string; detail: string } | null {
+  switch (source) {
+    case 'extracted':
+      return null
+    case 'taxonomy_matched':
+      return { label: 'matched', detail: 'Matched against your approved job-role vocabulary, not extracted from this email.' }
+    case 'subject_fallback':
+      return { label: 'from subject', detail: 'Extraction found no job title, so the email subject is standing in. Unverified.' }
+    case 'source_parent':
+      return { label: 'multi-role', detail: 'This email lists several roles; the individual requirements carry the real titles.' }
+    case 'unknown':
+      return { label: 'unverified', detail: 'No job title could be determined for this email.' }
+    default:
+      // NULL - written before provenance tracking existed. Deliberately renders
+      // nothing, even though the DATA meaning is "unverified".
+      //
+      // Every one of the 8,508 pre-existing rows carries NULL, so badging them
+      // would put an identical marker on every card in the queue. A marker on
+      // 100% of rows carries no information and trains people to ignore the
+      // badge, which costs us the cases that matter. Machine consumers - chatbot
+      // context, aggregation - must still treat NULL as unverified; that is a
+      // different consumer with different stakes, not a contradiction.
+      return null
+  }
+}
+
 export default function CandidateCard({
   item,
   searchSection,
@@ -133,7 +166,14 @@ export default function CandidateCard({
         ) : null}
 
         <div className="candidateCardHeaderMain">
-          <h3 className="candidateCardTitle">{item.role || 'Unknown Role'}</h3>
+          <h3 className="candidateCardTitle">
+            {item.role || 'Unknown Role'}
+            {roleProvenanceHint(item.role_source) ? (
+              <span className="roleProvenanceHint" title={roleProvenanceHint(item.role_source)?.detail}>
+                {roleProvenanceHint(item.role_source)?.label}
+              </span>
+            ) : null}
+          </h3>
           <p className="candidateCardSubtitle">
             {item.location || '-'}
             {' · '}{item.salary_text || 'Salary not specified'}

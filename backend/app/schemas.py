@@ -581,6 +581,10 @@ class EmailResponse(BaseModel):
     subject: str
     body: str
     role: str
+    # NULL for every row written before provenance existed - treat as unverified,
+    # never as "extracted". See services/role_provenance.py.
+    role_source: str | None = None
+    role_canonical: str | None = None
     location: str
     company: str | None = None
     end_client: str | None = None

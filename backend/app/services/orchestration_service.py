@@ -62,6 +62,8 @@ from app.services.email_inbox_service import (
 from app.services.gmail_group_source_service import ConfiguredRequirementGroup, resolve_trusted_group_context
 from app.services.requirement_expansion_service import RequirementExpansionService
 from app.services.role_manifest_pipeline import extract_and_score_children
+from app.services.role_provenance import apply_role_assignment, assign_role
+from app.services.role_taxonomy import fill_entity_gaps, role_matcher_for
 from app.services.role_manifest_service import RoleManifestResult, RoleManifestService
 from app.services.sendability_service import apply_resume_sendability, resolve_sendability_status
 
@@ -633,13 +635,20 @@ class OrchestrationService:
                 hard_pass, hard_reason = self.deps.hard_filter_check(parsed, user_settings, effective_policy, parser_details)
                 screening = CandidateScreeningService().evaluate_parser_details(parser_details, user_settings)
                 if hard_pass and not screening.proceed_to_scoring:
+                    assigned = assign_role(
+                        extracted=str(parsed.get("role") or ""),
+                        subject=str(item["subject"]),
+                        body=str(item["body"]),
+                        matcher=role_matcher_for(db, self.deps.owner_id),
+                    )
                     email = RecruiterEmail(
                         owner_id=self.deps.owner_id,
                         sender=item["sender"],
                         subject=item["subject"],
                         body=item["body"],
-                        role=str(parsed["role"]),
-                        location=str(parsed["location"]),
+                        role=assigned.role,
+                        role_source=assigned.role_source,
+                        role_canonical=assigned.role_canonical,
                         salary_text=str(parsed["salary_text"]),
                         skills_text=str(parsed["skills_text"]),
                         skills_json=json.dumps(
@@ -649,7 +658,7 @@ class OrchestrationService:
                             ),
                             separators=(",", ":"),
                         ),
-                        **jd_entity_fields_from_parsed(parsed),
+                        **fill_entity_gaps(jd_entity_fields_from_parsed(parsed), db=db, owner_id=self.deps.owner_id, subject=str(item["subject"]), location=str(parsed["location"]), body=str(item["body"])),
                         decision="Qualified",
                         state="needs_review",
                         decision_reason="strict_candidate_screening",
@@ -782,20 +791,27 @@ class OrchestrationService:
                     qualification_detail = "Qualified for queue review."
                     qualification_context = {"warnings": warnings}
 
+                assigned = assign_role(
+                    extracted=str(parsed.get("role") or ""),
+                    subject=str(item["subject"]),
+                    body=str(item["body"]),
+                    matcher=role_matcher_for(db, self.deps.owner_id),
+                )
                 email = RecruiterEmail(
                     owner_id=self.deps.owner_id,
                     sender=item["sender"],
                     subject=item["subject"],
                     body=item["body"],
-                    role=str(parsed["role"]),
-                    location=str(parsed["location"]),
+                    role=assigned.role,
+                    role_source=assigned.role_source,
+                    role_canonical=assigned.role_canonical,
                     salary_text=str(parsed["salary_text"]),
                     skills_text=str(parsed["skills_text"]),
                     skills_json=json.dumps(
                         build_skills_json_payload(parser_details, fallback_skills_text=str(parsed["skills_text"])),
                         separators=(",", ":"),
                     ),
-                    **jd_entity_fields_from_parsed(parsed),
+                    **fill_entity_gaps(jd_entity_fields_from_parsed(parsed), db=db, owner_id=self.deps.owner_id, subject=str(item["subject"]), location=str(parsed["location"]), body=str(item["body"])),
                     score=int(ai_score * 100),
                     decision=decision,
                     state=state,
@@ -1793,7 +1809,13 @@ class OrchestrationService:
             inherited_constraints=inherited_constraints,
         )
         if not screening.proceed_to_scoring:
-            email.role = str(parsed.get("role") or email.role or parse_subject)
+            apply_role_assignment(
+                email,
+                extracted=parsed.get("role"),
+                subject=parse_subject,
+                body=email.body,
+                matcher=role_matcher_for(db, self.deps.owner_id),
+            )
             email.location = str(parsed.get("location") or email.location or "")
             email.salary_text = str(parsed.get("salary_text") or email.salary_text or "")
             email.skills_text = str(parsed.get("skills_text") or email.skills_text or "")
@@ -1928,7 +1950,13 @@ class OrchestrationService:
             draft_resume_context_status = RESUME_CONTEXT_RULES_ONLY
             score_review_draft_created = True
 
-        email.role = str(preparation.parsed.get("role", email.role or parse_subject))
+        apply_role_assignment(
+            email,
+            extracted=preparation.parsed.get("role"),
+            subject=parse_subject,
+            body=email.body,
+            matcher=role_matcher_for(db, self.deps.owner_id),
+        )
         email.location = str(preparation.parsed.get("location", email.location or ""))
         email.salary_text = str(preparation.parsed.get("salary_text", email.salary_text or ""))
         email.skills_text = str(preparation.parsed.get("skills_text", email.skills_text or ""))
@@ -2156,7 +2184,13 @@ class OrchestrationService:
                 draft_ai_error = "AI enabled but no active resume uploaded; generated rules-only fallback draft."
                 draft_resume_context_status = RESUME_CONTEXT_MISSING
 
-        email.role = role
+        apply_role_assignment(
+            email,
+            extracted=role,
+            subject=email.subject,
+            body=email.body,
+            matcher=role_matcher_for(db, self.deps.owner_id),
+        )
         email.location = str(parsed["location"])
         email.salary_text = str(parsed["salary_text"])
         email.skills_text = str(parsed["skills_text"])
