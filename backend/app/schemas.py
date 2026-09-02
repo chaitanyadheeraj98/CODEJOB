@@ -586,7 +586,9 @@ class EmailResponse(BaseModel):
     role_source: str | None = None
     role_canonical: str | None = None
     location: str
+    location_source: str | None = None
     company: str | None = None
+    company_source: str | None = None
     end_client: str | None = None
     implementation_partner: str | None = None
     domain: str | None = None

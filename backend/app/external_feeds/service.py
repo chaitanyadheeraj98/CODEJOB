@@ -17,7 +17,7 @@ from app.automation.queue_preparation import (
     QueuePreparationRequest,
     prepare_candidate_for_queue,
 )
-from app.services.role_provenance import assign_role
+from app.services.role_provenance import RoleSource, assign_role
 from app.services.role_taxonomy import fill_entity_gaps, role_matcher_for
 from app.models import NumberReviewQueue, PremiumNumberContact, RecentRun, RecruiterEmail, RecruiterOpportunity, ResumeAsset, UserSettings
 from app.parsing import build_skills_json_payload
@@ -1025,6 +1025,9 @@ class ExternalFeedService:
                 role_source=nvoids_role.role_source,
                 role_canonical=nvoids_role.role_canonical,
                 location=item.location or "",
+                # The feed carries location as its own structured field, so a value
+                # here is an extraction; absent stays NULL rather than guessing.
+                location_source=RoleSource.EXTRACTED if (item.location or "").strip() else None,
                 salary_text=item.rate or "",
                 skills_text=item.skills_text or "",
                 decision="Reject",

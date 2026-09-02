@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.models import RecruiterEmail
 from app.services import opportunity_lineage_service
-from app.services.role_provenance import assign_role
+from app.services.role_provenance import RoleSource, assign_role
 from app.services.role_taxonomy import role_matcher_for
 from app.services.role_manifest_service import RoleManifestResult
 
@@ -124,9 +124,17 @@ class RequirementExpansionService:
                     role_source=child_role.role_source,
                     role_canonical=child_role.role_canonical,
                     location="unknown",
+                    # "unknown" is a placeholder, not a value, so it stays
+                    # unlabelled - a child never inherits the parent's location.
+                    location_source=None,
                     salary_text="not_specified",
                     skills_text="none_detected",
                     company=parent.company,
+                    # Inherited, not extracted from this requirement block: the real
+                    # origin is the parent's own company_source, one hop away.
+                    company_source=(
+                        RoleSource.SOURCE_PARENT if (parent.company or "").strip() else None
+                    ),
                     end_client=parent.end_client,
                     implementation_partner=parent.implementation_partner,
                     domain=parent.domain,

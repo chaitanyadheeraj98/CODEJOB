@@ -99,7 +99,9 @@ class EntityGapFillTests(unittest.TestCase):
                 body="",
             )
         self.assertEqual(filled["company"], "Acme Staffing")
-        self.assertNotIn("company_source", filled)
+        # The value is untouched, and now carries its own label rather than the
+        # NULL that used to be indistinguishable from an empty field.
+        self.assertEqual(filled["company_source"], RoleSource.EXTRACTED)
 
     def test_leaves_company_empty_when_nothing_matches(self) -> None:
         """A miss must stay a miss - no nearest-neighbour temptation."""
@@ -201,7 +203,7 @@ class EntityGapFillTests(unittest.TestCase):
                 location="Austin, TX",
             )
         self.assertEqual(filled["location"], "Austin, TX")
-        self.assertNotIn("location_source", filled)
+        self.assertEqual(filled["location_source"], RoleSource.EXTRACTED)
 
     def test_location_body_window_is_tighter_than_company(self) -> None:
         """A city named deep in a posting is not necessarily this job's location."""

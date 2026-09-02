@@ -223,9 +223,17 @@ def fill_entity_gaps(
     taxonomy is a floor for what the base parser can know without AI, not a second
     opinion competing with extraction.
 
-    Both fills are labelled (`company_source` / `location_source`) so a matched
-    value stays distinguishable from an extracted one downstream - in the chatbot
-    context, in aggregation, and on the card.
+    Every outcome is labelled (`company_source` / `location_source`), not just the
+    fills. Labelling only the fills made NULL mean two opposite things - "the
+    parser found this" and "there is nothing here" - which inverted the column's
+    meaning in practice: of 39 rows ingested after provenance shipped, 30 carried a
+    real company and none were labelled, while the single labelled location was the
+    two-letter fragment "IN" that the taxonomy had filled. A consumer asking for
+    verified values got the weakest row and discarded the other 38.
+
+    So an extracted value is now marked `extracted` and a filled one stays
+    `taxonomy_matched`. NULL narrows to one meaning: no value. The label records
+    where a value came from, never that it is correct.
 
     Location is handled more cautiously than company: it is empty on only 13% of
     rows (company: 82%), and city names appear throughout a posting for reasons
@@ -238,7 +246,9 @@ def fill_entity_gaps(
     """
     filled = dict(fields)
 
-    if not (filled.get("company") or "").strip():
+    if (filled.get("company") or "").strip():
+        filled["company_source"] = RoleSource.EXTRACTED
+    else:
         match = match_entity_from_taxonomy(
             db, owner_id=owner_id, entity_type=COMPANY_ENTITY_TYPE, text=subject, body=body
         )
@@ -248,7 +258,11 @@ def fill_entity_gaps(
 
     current = (location or "").strip()
     filled["location"] = current
-    if current.lower() in LOCATION_PLACEHOLDERS:
+    # A placeholder is the parser saying "nothing here", so it is a gap to fill and
+    # never an extraction to label - otherwise "unknown" would be marked verified.
+    if current.lower() not in LOCATION_PLACEHOLDERS:
+        filled["location_source"] = RoleSource.EXTRACTED
+    else:
         match = match_entity_from_taxonomy(
             db, owner_id=owner_id, entity_type=LOCATION_ENTITY_TYPE, text=subject, body=body
         )
