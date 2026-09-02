@@ -1,8 +1,36 @@
 import type { ReactNode } from 'react'
 
 
+const LINK = /^\[([^\]]+)\]\(([^)\s]*)\)$/
+
+// Assistant output quotes recruiter email bodies and untrusted web results, so
+// an href here is attacker-reachable text. Only http(s) and same-origin
+// relative paths become links; everything else - javascript:, data:, and
+// protocol-relative //host or /\host - renders as the literal markdown it was.
+function safeHref(raw: string): string | null {
+  const value = raw.trim()
+  if (!value) return null
+  if (/^https?:\/\//i.test(value)) return value
+  if (!'/?#'.includes(value[0])) return null
+  // `//host` and `/\host` are protocol-relative: they leave the origin, so they
+  // are not relative paths at all.
+  if (value[0] === '/' && (value[1] === '/' || value[1] === '\\')) return null
+  return value
+}
+
 function renderInline(line: string) {
-  return line.split(/(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)/).map((chunk, i) => {
+  return line.split(/(\[[^\]]+\]\([^)\s]*\)|`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)/).map((chunk, i) => {
+    const link = chunk.match(LINK)
+    if (link) {
+      const href = safeHref(link[2])
+      if (!href) return chunk
+      const external = /^https?:/i.test(href)
+      return (
+        <a key={i} href={href} {...(external ? { target: '_blank', rel: 'noopener noreferrer' } : {})}>
+          {link[1]}
+        </a>
+      )
+    }
     if (chunk.startsWith('`') && chunk.endsWith('`') && chunk.length > 1) return <code key={i}>{chunk.slice(1, -1)}</code>
     if (chunk.startsWith('**') && chunk.endsWith('**')) return <strong key={i}>{chunk.slice(2, -2)}</strong>
     if (chunk.startsWith('*') && chunk.endsWith('*') && chunk.length > 1) return <em key={i}>{chunk.slice(1, -1)}</em>
@@ -16,7 +44,7 @@ function splitTableRow(line: string): string[] {
   return line.replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim())
 }
 
-// ponytail: headings/bold/italic/bullets/numbered lists/tables/inline code only, not full markdown. Swap for a real parser if fenced code blocks or links show up.
+// ponytail: headings/bold/italic/bullets/numbered lists/tables/inline code/links only, not full markdown. Swap for a real parser if fenced code blocks show up.
 export function renderMarkdownLite(text: string) {
   const blocks: ReactNode[] = []
   let paragraph: string[] = []

@@ -19,6 +19,10 @@ export type ChatContextValue = ChatSessionApi & {
   proposalBusyId: number | null
   approveProposal: (messageId: number, proposal: { handler: ProposalHandler; fields: ProposalFields }) => Promise<void>
   cancelProposal: (messageId: number) => void
+  // Opens a candidate in Needs Review and highlights it. Supplied by App,
+  // because the navigation state lives there; a no-op when the provider is
+  // mounted without it (tests, or any future host that has no such page).
+  focusCandidate: (candidateId: number) => void
 }
 
 export const ChatContext = createContext<ChatContextValue | null>(null)

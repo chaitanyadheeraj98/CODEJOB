@@ -2849,6 +2849,14 @@ button.emailSearchResult:focus-visible {
   color: #fff;
 }
 
+/* The global link colour is var(--primary), which is exactly the user bubble's
+   background - a link in a user message would be invisible. Underlined and
+   inheriting the bubble's own colour reads on both. */
+.chatBubble a {
+  color: inherit;
+  text-decoration: underline;
+}
+
 .chatBubble.assistant {
   align-self: flex-start;
   border: 1px solid var(--line);
@@ -4840,4 +4848,24 @@ button.emailSearchResult:focus-visible {
   .assistantThread {
     height: clamp(460px, calc(100vh - 320px), 720px);
   }
+}
+
+.focusMissNotice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  border: 1px solid var(--line-strong);
+  border-left: 3px solid var(--primary);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 0 0 12px;
+  background: var(--surface-soft);
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.focusMissNotice button {
+  font-size: 12px;
+  padding: 4px 10px;
 }

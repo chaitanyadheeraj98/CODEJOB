@@ -10,6 +10,7 @@ import { useChatSession } from './useChatSession'
 
 type ChatProviderProps = {
   apiBase: string
+  onFocusCandidate?: (candidateId: number) => void
   children: ReactNode
 }
 
@@ -20,7 +21,7 @@ const MODEL_STORAGE_KEY = 'codejob.chat.model'
 // counters that clear separately, and - the user-visible one - two message
 // lists, so a message sent on one surface would not appear on the other until
 // its own 20s poll fired.
-export default function ChatProvider({ apiBase, children }: ChatProviderProps) {
+export default function ChatProvider({ apiBase, onFocusCandidate, children }: ChatProviderProps) {
   const [status, setStatus] = useState<ChatStatus | null>(null)
   const [statusError, setStatusError] = useState('')
   const [selectedModel, setSelectedModel] = useState(() => {
@@ -100,6 +101,10 @@ export default function ChatProvider({ apiBase, children }: ChatProviderProps) {
     setProposalResults((current) => ({ ...current, [messageId]: 'cancelled' }))
   }, [])
 
+  const focusCandidate = useCallback((candidateId: number) => {
+    onFocusCandidate?.(candidateId)
+  }, [onFocusCandidate])
+
   const value: ChatContextValue = {
     ...chat,
     apiBase,
@@ -113,6 +118,7 @@ export default function ChatProvider({ apiBase, children }: ChatProviderProps) {
     proposalBusyId,
     approveProposal,
     cancelProposal,
+    focusCandidate,
   }
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>

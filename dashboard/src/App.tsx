@@ -23,6 +23,7 @@ import FilterVisibilitySettings from './components/FilterVisibilitySettings'
 import SelectionActionBar from './components/SelectionActionBar'
 import { filterSortRegistry, resolveRegistryEntry } from './filterSortRegistry'
 import { hasActiveTextSearch, narrowValuesToVisible, visibleFieldsFor } from './filterVisibility'
+import { focusedCandidateMissing } from './recordFocus'
 import { buildUrlSearch, parseFilterValuesFromParams } from './useUrlSync'
 import { addCcEmail, removeCcEmail } from './ccEmails'
 import { addEmployerDomain, removeEmployerDomain } from './employerDomains'
@@ -5197,6 +5198,31 @@ function App() {
     emailSearchRelatedId(emailSearchTarget) === String(relatedId)
   )
 
+  const missingFocusedCandidateId = focusedCandidateMissing(
+    emailSearchTarget,
+    queue,
+    bucketMeta.needs_review.hasNext,
+  )
+
+  // Opens one candidate in Needs Review. Deliberately reuses emailSearchTarget
+  // rather than a ?focus= URL param: that machinery already auto-paginates until
+  // the record loads, retries the scroll while the bucket is still fetching,
+  // highlights, and clears on click-away - and a URL param would not survive
+  // buildUrlSearch, which rebuilds the query string from scratch on every render.
+  const focusCandidateRecord = (candidateId: number) => {
+    setEmailSearchTarget({
+      section: 'needs_review',
+      recruiter_email_id: candidateId,
+      sender: '',
+      subject: '',
+      state: '',
+      detail: {},
+      occurred_at: new Date().toISOString(),
+    })
+    window.history.pushState(null, '', `${window.location.pathname}?page=needs_review`)
+    setActivePage('needs_review')
+  }
+
   const navigateFromEmailSearch = (hit: EmailSearchHit) => {
     if (hit.section === 'other') return
     setEmailSearchTarget(hit)
@@ -5339,7 +5365,7 @@ function App() {
     // useChat() - the Assistant sidebar badge reads it from a small consumer
     // rendered below this point instead. Children are left at their original
     // indentation to keep this a two-line diff rather than a 2,200-line reflow.
-    <ChatProvider apiBase={apiBase}>
+    <ChatProvider apiBase={apiBase} onFocusCandidate={focusCandidateRecord}>
     <main className="gmailShell">
       <SidebarWithAssistantBadge
         running={running}
@@ -6876,6 +6902,18 @@ function App() {
           {activePage === 'needs_review' ? (
             <section className="card pageSection">
           <h2>Needs Review (Manual Approval Required)</h2>
+          {missingFocusedCandidateId != null ? (
+            <p className="focusMissNotice" role="status">
+              Record {missingFocusedCandidateId} isn't in the current filter.
+              <button
+                type="button"
+                onClick={() => setPageFilterValues((prev) => ({ ...prev, needs_review: activeFilterSortConfig?.defaultFilterValues ?? {} }))}
+              >
+                Clear filters
+              </button>
+              <button type="button" onClick={() => setEmailSearchTarget(null)}>Dismiss</button>
+            </p>
+          ) : null}
           <label className="selectAllRow"><input type="checkbox" checked={queue.filter((item) => !item.is_source_parent).length > 0 && queue.filter((item) => !item.is_source_parent).every((item) => needsReviewSelected.has(item.id))} onChange={(event) => setNeedsReviewSelected(event.target.checked ? new Set(queue.filter((item) => !item.is_source_parent).map((item) => item.id)) : new Set())} /> Select all visible</label>
           <SelectionActionBar selectedCount={needsReviewSelected.size} busyKey={needsReviewBulkAction} onClearSelection={() => setNeedsReviewSelected(new Set())} actions={[{ key: 'track', label: 'Track Application', onClick: () => void setBulkTracking(true) }, { key: 'untrack', label: 'Untrack selected', onClick: () => void setBulkTracking(false) }, { key: 'approve', label: 'Approve & Send', onClick: () => void runNeedsReviewBulk('approve') }, { key: 'regenerate', label: 'Regenerate', onClick: () => void runNeedsReviewBulk('regenerate') }, { key: 'reject', label: 'Reject', onClick: () => void runNeedsReviewBulk('reject'), variant: 'danger' }, { key: 'send-to-failed-mapping', label: 'Send to Failed Mapping', onClick: () => void runNeedsReviewBulk('send-to-failed-mapping') }]} />
           {queue.filter((item) => !item.is_source_parent).length === 0 ? <p className="subtle">No queued emails match these filters.</p> : null}

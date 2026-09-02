@@ -21,6 +21,7 @@ function Surface({ label }: { label: string }) {
       <p className="unseen">{chat.unseenCount}</p>
       <button type="button" className="send" onClick={() => void chat.sendMessage('hello from ' + label, chat.selectedModel)}>send</button>
       <button type="button" className="pick" onClick={() => chat.selectModel('minimax-m3:cloud')}>pick</button>
+      <button type="button" className="focus" onClick={() => chat.focusCandidate(7323)}>focus</button>
     </section>
   )
 }
@@ -103,7 +104,7 @@ describe('ChatProvider', () => {
 
   const mountSurfaces = async (
     messages: Array<Record<string, unknown>> = [],
-    options: { honourSinceId?: boolean } = {},
+    options: { honourSinceId?: boolean; onFocusCandidate?: (id: number) => void } = {},
   ) => {
     const calls = stubChatApi(messages, options.honourSinceId ?? true)
     container = document.createElement('div')
@@ -111,7 +112,7 @@ describe('ChatProvider', () => {
     root = createRoot(container)
     await act(async () => {
       root?.render(
-        <ChatProvider apiBase="http://localhost:8000">
+        <ChatProvider apiBase="http://localhost:8000" onFocusCandidate={options.onFocusCandidate}>
           <Surface label="widget" />
           <Surface label="page" />
         </ChatProvider>,
@@ -222,6 +223,29 @@ describe('ChatProvider', () => {
 
     expect(readOn(container!, 'page', '.thread')).toBe('Any replies today?')
     expect(readOn(container!, 'widget', '.unseen')).toBe('0')
+  })
+
+  // The seam W6's candidate table navigates through. App owns the navigation
+  // state, so the provider only relays.
+  it('relays a focus request to the host', async () => {
+    const onFocusCandidate = vi.fn()
+    await mountSurfaces([], { onFocusCandidate })
+
+    await act(async () => {
+      container?.querySelector<HTMLButtonElement>('[data-testid="page"] .focus')?.click()
+    })
+
+    expect(onFocusCandidate).toHaveBeenCalledWith(7323)
+  })
+
+  it('treats focus as a no-op when the host supplies no handler', async () => {
+    await mountSurfaces()
+
+    expect(() => {
+      act(() => {
+        container?.querySelector<HTMLButtonElement>('[data-testid="page"] .focus')?.click()
+      })
+    }).not.toThrow()
   })
 
   it('shares the model choice across surfaces and remembers it', async () => {
