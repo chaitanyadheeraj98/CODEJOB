@@ -98,6 +98,35 @@ describe('AssistantPage', () => {
     expect(container?.textContent).toContain('Two recruiters replied.')
   })
 
+  // Same stored message as the widget test renders read-only; here it is
+  // interactive. One tool, two renderings, no surface flag on the request.
+  it('renders a stored table interactively', async () => {
+    await mount({ messages: [
+      {
+        id: 5,
+        role: 'tool',
+        tool_name: 'render_candidate_table',
+        content: JSON.stringify({
+          action: 'render_candidate_table',
+          title: 'Top matches',
+          columns: ['role', 'ats_score', 'state'],
+          rows: [
+            { candidate_id: 11, record_id: 'a', role: 'Backend Engineer', ats_score: 61.5, state: 'needs_review' },
+            { candidate_id: 12, record_id: 'b', role: 'Data Engineer', ats_score: 76.25, state: 'needs_review' },
+          ],
+          dropped: [],
+          truncated: false,
+        }),
+        created_at: '2026-01-01T00:00:01Z',
+      },
+    ] })
+
+    expect(container?.textContent).toContain('Top matches')
+    expect(container?.textContent).toContain('Backend Engineer')
+    expect(container?.querySelectorAll('tbody input[type="checkbox"]')).toHaveLength(2)
+    expect(container?.querySelector('.candidateTableOpen')).not.toBeNull()
+  })
+
   it('offers starter prompts on an empty thread and loads one into the composer', async () => {
     await mount()
 

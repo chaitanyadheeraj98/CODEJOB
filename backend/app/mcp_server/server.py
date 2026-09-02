@@ -23,6 +23,7 @@ from app.mcp_server.tools import (
     propose_create_github_issue,
     propose_create_premium_contact,
     propose_send_email,
+    render_candidate_table,
     search_candidates,
 )
 
@@ -36,6 +37,10 @@ mcp = FastMCP(
 
 BASE_TOOLS = (
     search_candidates,
+    # A read tool, not an action: a table renders whether or not chat actions are
+    # enabled. Acting on a selection routes to /candidates/approve-bulk, which is
+    # the same endpoint the Needs Review bulk bar already uses.
+    render_candidate_table,
     get_candidate,
     count_received_emails,
     get_draft_status,

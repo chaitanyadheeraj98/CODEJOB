@@ -19,6 +19,7 @@ function Surface({ label }: { label: string }) {
       <p className="thread">{chat.messages.map((message) => message.content).join('|')}</p>
       <p className="model">{chat.selectedModel}</p>
       <p className="unseen">{chat.unseenCount}</p>
+      <p className="tools">{chat.messages.map((message) => message.tool_name ?? '-').join('|')}</p>
       <button type="button" className="send" onClick={() => void chat.sendMessage('hello from ' + label, chat.selectedModel)}>send</button>
       <button type="button" className="pick" onClick={() => chat.selectModel('minimax-m3:cloud')}>pick</button>
       <button type="button" className="focus" onClick={() => chat.focusCandidate(7323)}>focus</button>
@@ -246,6 +247,42 @@ describe('ChatProvider', () => {
         container?.querySelector<HTMLButtonElement>('[data-testid="page"] .focus')?.click()
       })
     }).not.toThrow()
+  })
+
+  // visibleMessages drops tool messages nothing knows how to draw. It has to
+  // consult both registries: checking only PROPOSAL_HANDLERS deletes rendered
+  // tables from history on both surfaces, and the failure is silent - the model
+  // reports a table it drew and nothing appears.
+  it('keeps rendered tool messages in history', async () => {
+    await mountSurfaces([
+      { id: 4, role: 'user', content: 'Show me the top matches', tool_name: null, created_at: '2026-01-01T00:00:00Z' },
+      {
+        id: 5,
+        role: 'tool',
+        tool_name: 'render_candidate_table',
+        content: JSON.stringify({
+          action: 'render_candidate_table',
+          title: 'Top matches',
+          columns: ['role'],
+          rows: [{ candidate_id: 11, record_id: 'a', role: 'Backend' }],
+          dropped: [],
+          truncated: false,
+        }),
+        created_at: '2026-01-01T00:00:01Z',
+      },
+    ])
+
+    expect(readOn(container!, 'page', '.tools')).toBe('-|render_candidate_table')
+    expect(readOn(container!, 'widget', '.tools')).toBe('-|render_candidate_table')
+  })
+
+  it('still drops tool messages nothing can draw', async () => {
+    await mountSurfaces([
+      { id: 4, role: 'user', content: 'How many replies?', tool_name: null, created_at: '2026-01-01T00:00:00Z' },
+      { id: 5, role: 'tool', tool_name: 'search_candidates', content: '{"candidates":[]}', created_at: '2026-01-01T00:00:01Z' },
+    ])
+
+    expect(readOn(container!, 'page', '.tools')).toBe('-')
   })
 
   it('shares the model choice across surfaces and remembers it', async () => {

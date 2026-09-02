@@ -105,6 +105,62 @@ describe('ChatWidget', () => {
     expect(Array.from(options).map((option) => option.textContent)).toContain('Gmail Integration Testing')
   })
 
+  // The same stored message the Assistant page renders interactively. Both
+  // surfaces must show something, or a shared session has blank spots depending
+  // on where it is opened.
+  it('renders a stored candidate table read-only', async () => {
+    const session = { id: 1, title: 'Matches', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' }
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/chat/status')) {
+        return new Response(JSON.stringify({
+          enabled: true,
+          ollama_running: true,
+          ollama_last_error: null,
+          ollama_last_success_at: null,
+          chat_last_error: null,
+          mcp_status: 'ok',
+          model: 'gemma4:31b-cloud',
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      if (url.endsWith('/chat/sessions')) {
+        return new Response(JSON.stringify([session]), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      return new Response(JSON.stringify({
+        ...session,
+        messages: [{
+          id: 5,
+          role: 'tool',
+          tool_name: 'render_candidate_table',
+          content: JSON.stringify({
+            action: 'render_candidate_table',
+            title: 'Top matches',
+            columns: ['role', 'ats_score', 'state'],
+            rows: [{ candidate_id: 11, record_id: 'a', role: 'Backend Engineer', ats_score: 61.5, state: 'needs_review' }],
+            dropped: [],
+            truncated: false,
+          }),
+          created_at: '2026-01-01T00:00:01Z',
+        }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }))
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+    await act(async () => {
+      root?.render(renderWithChat(<ChatWidget />))
+      for (let tick = 0; tick < 4; tick += 1) await new Promise((resolve) => window.setTimeout(resolve, 0))
+    })
+    await act(async () => {
+      container?.querySelector<HTMLButtonElement>('[aria-label="Open CodeJob assistant"]')?.click()
+    })
+
+    expect(container.textContent).toContain('Top matches')
+    expect(container.textContent).toContain('Backend Engineer')
+    expect(container.querySelectorAll('.chatMessages input[type="checkbox"]')).toHaveLength(0)
+    expect(container.querySelectorAll('.chatMessages table')).toHaveLength(1)
+  })
+
   it('parses SSE events split across arbitrary response chunks', async () => {
     const encoder = new TextEncoder()
     const stream = new ReadableStream<Uint8Array>({

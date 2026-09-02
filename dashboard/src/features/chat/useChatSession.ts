@@ -10,12 +10,19 @@ import {
 } from './api'
 import type { ChatMessage, ChatSession } from './types'
 import { PROPOSAL_HANDLERS } from './proposals'
+import { RENDER_HANDLERS } from './renderers'
 
 
+// Tool messages are kept only when something knows how to draw them: a
+// confirmation card, or a rendered view. Consulting one registry and not the
+// other silently deletes the other's messages from history on both surfaces.
 function visibleMessages(messages: ChatMessage[]): ChatMessage[] {
   return messages.filter((message) => (
     Boolean(message.content)
-    && (message.role !== 'tool' || Boolean(message.tool_name && PROPOSAL_HANDLERS[message.tool_name]))
+    && (
+      message.role !== 'tool'
+      || Boolean(message.tool_name && (PROPOSAL_HANDLERS[message.tool_name] || RENDER_HANDLERS[message.tool_name]))
+    )
   ))
 }
 

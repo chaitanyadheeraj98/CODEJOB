@@ -4,6 +4,8 @@ import { useChat } from './chatContext'
 import { renderMarkdownLite } from './markdown'
 import ProposalCard from './ProposalCard'
 import { proposalForMessage } from './proposals'
+import CandidateTableCompact from './CandidateTableCompact'
+import { renderForMessage } from './renderers'
 
 
 // `open` and `draft` stay local: they are genuinely per-surface. Everything
@@ -152,6 +154,16 @@ export default function ChatWidget() {
                         onApprove={() => void chat.approveProposal(message.id, proposal)}
                         onCancel={() => chat.cancelProposal(message.id)}
                       />
+                    )
+                  }
+                  // The second filter. visibleMessages keeps render messages;
+                  // without this they still vanish here.
+                  const rendered = renderForMessage(message)
+                  if (rendered) {
+                    return (
+                      <div key={message.id} className="chatBubble assistant">
+                        <CandidateTableCompact data={rendered.data} />
+                      </div>
                     )
                   }
                   if (message.role === 'tool') return null

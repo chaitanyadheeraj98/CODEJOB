@@ -4869,3 +4869,81 @@ button.emailSearchResult:focus-visible {
   font-size: 12px;
   padding: 4px 10px;
 }
+
+/* --- Candidate tables in chat (v1 W6) ------------------------------------ */
+
+.candidateTable {
+  align-self: stretch;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  padding: 14px;
+  background: var(--surface);
+}
+
+.candidateTable h4 {
+  margin: 0 0 10px;
+  font-size: 15px;
+}
+
+/* A wide table scrolls inside its own box; the message thread must not scroll
+   sideways. */
+.candidateTableScroll {
+  overflow-x: auto;
+}
+
+.candidateTable table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.candidateTable th,
+.candidateTable td {
+  border-bottom: 1px solid var(--line);
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+.candidateTable tbody tr.selected {
+  background: var(--surface-soft);
+}
+
+.candidateTableSort {
+  border: none;
+  padding: 0;
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.candidateTableOpen {
+  border: none;
+  padding: 0;
+  background: none;
+  font: inherit;
+  color: var(--primary);
+  text-align: left;
+  text-decoration: underline;
+  cursor: pointer;
+  white-space: normal;
+}
+
+.candidateTableActions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  font-size: 13px;
+}
+
+.candidateTableCompact {
+  font-size: 12px;
+}
+
+.candidateTableCompact small {
+  color: var(--muted);
+}
