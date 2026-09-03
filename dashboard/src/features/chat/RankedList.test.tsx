@@ -168,3 +168,103 @@ describe('analysis payload parsing', () => {
     expect(parsed.data.columns[0].values.outreach_count).toBeNull()
   })
 })
+
+describe('recommend_recruiter renders through the existing ranked list', () => {
+  const inference = {
+    metric: 'Recruiter fit',
+    source: 'recruiter_ranking_service',
+    row_count: 2,
+    date_range: { from: null, to: null },
+    filters: {},
+    assumptions: ['This relationship was inferred from the records listed, not recorded by anyone.'],
+    confidence: 'possible',
+    score: 0.42,
+    evidence: [{
+      signal: 'skill_overlap', left_value: 'java', right_value: 'java, spring',
+      normalized_to: '', match: 'overlap', weight: 0.3, sub_score: 0.5,
+      source: 'recruiter_opportunities',
+    }],
+    semantic_available: false,
+  }
+
+  const payload = (overrides: Record<string, unknown> = {}) => ({
+    action: 'render_ranked_list',
+    title: 'Recruiters worth contacting',
+    measure: 'Fit score',
+    rows: [
+      { rank: 1, record_id: 7, label: 'Sarah Jones', detail: 'no recorded outreach', score: 42, reasons: ['skill overlap: java'], confidence: 'possible', drill_to: null },
+    ],
+    dropped: [],
+    provenance: inference,
+    ...overrides,
+  })
+
+  const message = (content: unknown): ChatMessage => toolMessage(content, 'recommend_recruiter')
+
+  let root: Root | null = null
+  let container: HTMLDivElement | null = null
+
+  afterEach(() => {
+    if (root) act(() => root?.unmount())
+    container?.remove()
+    root = null
+    container = null
+  })
+
+  const draw = (data: RankedListData) => {
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+    act(() => root?.render(
+      <ChatContext.Provider value={{ navigateToQueue: vi.fn() } as unknown as ChatContextValue}>
+        <RankedList data={data} surface="page" />
+      </ChatContext.Provider>,
+    ))
+    return container
+  }
+
+  // No tenth union member: an inferred ranking is the existing kind with a
+  // per-row band.
+  it('parses to the existing ranked_list kind', () => {
+    const parsed = renderForMessage(message(payload()))
+
+    expect(parsed?.kind).toBe('ranked_list')
+    if (parsed?.kind !== 'ranked_list') throw new Error('expected a ranked list')
+    expect(parsed.data.rows[0].confidence).toBe('possible')
+  })
+
+  // An inferred ranking still owes confidence and evidence even though it
+  // draws as an ordinary list.
+  it.each([
+    ['no evidence', { provenance: { ...inference, evidence: [] } }],
+    ['no confidence', { provenance: { ...inference, confidence: undefined } }],
+    ['a plain measured provenance block', { provenance: { metric: 'x', source: 'y', row_count: 1, date_range: {}, filters: {}, assumptions: [] } }],
+  ])('returns null for %s', (_label, overrides) => {
+    expect(renderForMessage(message(payload(overrides)))).toBeNull()
+  })
+
+  it('drops a row confidence this build cannot read rather than badging it wrongly', () => {
+    const parsed = renderForMessage(message(payload({
+      rows: [{ rank: 1, record_id: 7, label: 'Sarah Jones', detail: '', score: 42, reasons: [], confidence: 'certain', drill_to: null }],
+    })))
+
+    if (parsed?.kind !== 'ranked_list') throw new Error('expected a ranked list')
+    expect(parsed.data.rows[0].confidence).toBeUndefined()
+  })
+
+  it('renders a badge beside the score when a row carries one', () => {
+    const parsed = renderForMessage(message(payload()))
+    if (parsed?.kind !== 'ranked_list') throw new Error('expected a ranked list')
+    const el = draw(parsed.data)
+
+    expect(el.querySelector('.chatConfidencePossible')?.textContent).toBe('Possible')
+  })
+
+  it('renders no badge on a measured ranking, which carries no confidence', () => {
+    const parsed = renderForMessage(toolMessage(rankedPayload, 'rank_opportunities'))
+    if (parsed?.kind !== 'ranked_list') throw new Error('expected a ranked list')
+    const el = draw(parsed.data)
+
+    expect(el.querySelector('.chatConfidence')).toBeNull()
+  })
+})

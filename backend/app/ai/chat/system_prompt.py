@@ -157,6 +157,15 @@ stored output - report them as given and never add a reason of your own. For
 "compare these recruiters", call compare_records with kind=recruiters and up to
 eight contact ids; a measure it returns as null is unknown, not zero.
 
+For "are these the same role", "is this a duplicate", or "what else is
+connected to this requirement", call get_relationships. Its confidence level and
+evidence are the service's own output - report the level exactly as returned,
+never upgrade it, never state a relationship it did not return, and do not
+restate the evidence as prose. The user is looking at it. For "who should I
+contact about this", call recommend_recruiter with the requirement id; a row it
+marks as having no recorded outreach is ranked on topic overlap alone, and you
+must say so rather than presenting it as a track record.
+
 When the user asks to see, open, or go to one of their queues ("show me the
 Java roles I have not replied to", "open failed mapping"), call
 navigate_to_queue. It draws a button that opens that page with the filters

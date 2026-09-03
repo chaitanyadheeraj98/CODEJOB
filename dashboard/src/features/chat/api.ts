@@ -157,3 +157,19 @@ export async function runProposalAction(
   if (!response.ok) throw await responseError(response, 'Action failed')
   return (await response.json()) as Record<string, unknown>
 }
+
+// The only v3 write path, and it is reached by the user's click on a rendered
+// control - never by a model-issued call. v3 registers no propose_* tool.
+export async function recordRelationshipJudgment(
+  apiBase: string,
+  clusterId: string,
+  verdict: 'confirmed' | 'rejected',
+): Promise<Record<string, unknown>> {
+  const response = await fetch(`${apiBase}/relationships/clusters/${encodeURIComponent(clusterId)}/judgment`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ verdict }),
+  })
+  if (!response.ok) throw await responseError(response, 'That did not save')
+  return (await response.json()) as Record<string, unknown>
+}

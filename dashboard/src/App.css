@@ -5457,3 +5457,69 @@ button.chatRankedLabel:focus-visible {
 .chatEvidenceFooter {
   margin: 8px 0 0;
 }
+
+/* v3 — an inferred grouping. Deliberately quieter than a candidate table: a
+   claim nobody entered must not look like a record somebody did. */
+.chatRelationship {
+  border-left: 3px solid var(--line-strong);
+  padding-left: 10px;
+}
+
+.chatRelationshipHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.chatRelationshipClaim {
+  margin: 4px 0 8px;
+}
+
+.chatRelationshipMembers {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chatRelationshipMembers > li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 3px 0;
+}
+
+.chatRelationshipInferred {
+  margin: 8px 0 0;
+  font-size: 0.85em;
+  color: var(--muted);
+}
+
+/* Never mistakable for a recorded value at a glance. */
+.chatRelationshipInferredTag {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 6px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 3px;
+  font-size: 0.9em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.chatRelationshipActions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.chatRelationshipSettled {
+  margin: 10px 0 0;
+}
+
+.chatRelationshipError {
+  margin: 8px 0 0;
+  color: var(--danger);
+  font-size: 0.9em;
+}

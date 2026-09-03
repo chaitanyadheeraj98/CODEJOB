@@ -26,6 +26,8 @@ const chatStub = () => ({
   approveProposal: vi.fn(),
   cancelProposal: vi.fn(),
   focusCandidate: vi.fn(),
+  navigateToQueue: vi.fn(),
+  apiBase: 'http://api.test',
 }) as unknown as ChatContextValue
 
 describe('RenderedMessage', () => {
@@ -63,6 +65,40 @@ describe('RenderedMessage', () => {
 
     expect(el.textContent).toContain('Backend Engineer')
     expect(el.querySelectorAll('input[type="checkbox"]').length).toBe(0)
+  })
+
+  it('routes the ninth kind to the relationship renderer', () => {
+    const el = render({
+      kind: 'relationship_cluster',
+      data: {
+        title: 'Wells Fargo programme',
+        claim: 'Two requirements appear to belong together.',
+        cluster_id: 'cluster-1',
+        status: 'proposed',
+        members: [
+          { opportunity_id: 11, label: 'Java Developer', detail: '', confidence: 'likely', drill_to: null },
+        ],
+        inferred: { end_client: '', partner: '', domain: '' },
+        provenance: {
+          metric: 'Related requirements',
+          source: 'v3_weighted_v1',
+          row_count: 1,
+          date_range: { from: null, to: null },
+          filters: {},
+          assumptions: ['This relationship was inferred from the records listed, not recorded by anyone.'],
+          confidence: 'likely',
+          score: 0.81,
+          evidence: [{
+            signal: 'job_title', left_value: 'a', right_value: 'b', normalized_to: '',
+            match: 'exact', weight: 0.2, sub_score: 1, source: 'canonical_entity_taxonomy',
+          }],
+          semantic_available: true,
+        },
+      },
+    }, 'page')
+
+    expect(el.querySelector('.chatRelationship')).not.toBeNull()
+    expect(el.textContent).toContain('Likely')
   })
 
   // A payload kind this build does not know about has to degrade to nothing,

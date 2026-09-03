@@ -13,6 +13,7 @@ from app.mcp_server.tools import (
     get_metrics,
     get_recent_runs,
     get_record_details,
+    get_relationships,
     get_resume,
     get_recruiter_replies,
     get_run_items,
@@ -33,6 +34,7 @@ from app.mcp_server.tools import (
     propose_send_email,
     rank_opportunities,
     read_chat_attachment,
+    recommend_recruiter,
     render_candidate_table,
     resolve_record_reference,
     search_candidates,
@@ -91,8 +93,21 @@ CHAT_ACTION_TOOLS = (
     propose_send_email,
 )
 
+# Read-only, so they belong in BASE_TOOLS - but they are registered only when
+# the feature is on. v2 left the routing/latency measurement at 35 tools owed,
+# and adding to an unmeasured baseline makes any regression unattributable.
+# With the flag off the registry stays at exactly the count v2 shipped.
+RELATIONSHIP_TOOLS = (
+    get_relationships,
+    recommend_recruiter,
+)
+
 for tool in BASE_TOOLS:
     mcp.tool()(tool)
+
+if settings.feature_relationship_intelligence_enabled:
+    for tool in RELATIONSHIP_TOOLS:
+        mcp.tool()(tool)
 
 if settings.feature_chat_actions_enabled:
     for tool in CHAT_ACTION_TOOLS:

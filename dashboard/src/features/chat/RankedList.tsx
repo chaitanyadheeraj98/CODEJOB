@@ -1,3 +1,4 @@
+import Confidence from './Confidence'
 import { useChat } from './chatContext'
 import Provenance from './Provenance'
 import type { RankedListData } from './renderers'
@@ -33,6 +34,9 @@ export default function RankedList({ data, surface }: Props) {
               ) : (
                 <span className="chatRankedLabel">{row.label}</span>
               )}
+              {/* Present only on inferred rankings, so a measured one is
+                  unchanged and needs no separate renderer. */}
+              {row.confidence ? <Confidence level={row.confidence} /> : null}
               <span className="chatRankedScore">{row.score}</span>
             </div>
             {row.detail ? <p className="subtle">{row.detail}</p> : null}

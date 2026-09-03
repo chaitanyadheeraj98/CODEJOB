@@ -85,6 +85,10 @@ export type RankedRow = {
   score: number
   reasons: string[]
   drill_to: QueueTarget | null
+  // Present only on inferred rankings. RankedList renders a badge when it is
+  // here and is otherwise unchanged, so a recruiter recommendation needs no
+  // tenth union member.
+  confidence?: ConfidenceLevel
 }
 
 export type RankedListData = {
@@ -133,6 +137,26 @@ export type DisambiguationData = {
   truncated: boolean
 }
 
+export type RelationshipMember = {
+  opportunity_id: number
+  label: string
+  detail: string
+  confidence: ConfidenceLevel
+  drill_to: QueueTarget | null
+}
+
+export type RelationshipClusterData = {
+  title: string
+  // Server-composed. The model never writes the sentence the user reads
+  // beside a confidence badge.
+  claim: string
+  members: RelationshipMember[]
+  inferred: { end_client: string; partner: string; domain: string }
+  cluster_id: string
+  status: 'proposed' | 'confirmed' | 'rejected'
+  provenance: InferenceProvenanceData
+}
+
 export type WebResult = { url: string; title: string; snippet: string }
 
 export type WebResultsData = { query: string; results: WebResult[] }
@@ -146,6 +170,7 @@ export type RenderedPayload =
   | { kind: 'chart'; data: ChartData }
   | { kind: 'disambiguation'; data: DisambiguationData }
   | { kind: 'web_results'; data: WebResultsData }
+  | { kind: 'relationship_cluster'; data: RelationshipClusterData }
 
 export type RenderHandler = {
   parse: (message: ChatMessage) => RenderedPayload | null
@@ -295,6 +320,9 @@ function asRankedRows(value: unknown): RankedRow[] | null {
       score: row.score,
       reasons: Array.isArray(row.reasons) ? row.reasons.filter((item): item is string => typeof item === 'string') : [],
       drill_to: asQueueTarget(row.drill_to),
+      ...(typeof row.confidence === 'string' && CONFIDENCE_LEVELS.includes(row.confidence)
+        ? { confidence: row.confidence as ConfidenceLevel }
+        : {}),
     })
   }
   return rows
@@ -350,6 +378,29 @@ function asStringMap(value: unknown): Record<string, string> {
 // than prepare a write. Same defensive shape: parse returns null on anything
 // unexpected so a malformed payload degrades to "nothing rendered" instead of
 // throwing inside the message list.
+function asRelationshipMembers(value: unknown): RelationshipMember[] | null {
+  if (!Array.isArray(value) || !value.length) return null
+  const members: RelationshipMember[] = []
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null
+    const row = entry as Record<string, unknown>
+    if (typeof row.opportunity_id !== 'number') return null
+    if (typeof row.label !== 'string' || !row.label) return null
+    // Every member carries its own band. A row whose confidence this build
+    // cannot read would render unbadged, which reads as more certain than it
+    // is - so the whole payload is dropped instead.
+    if (typeof row.confidence !== 'string' || !CONFIDENCE_LEVELS.includes(row.confidence)) return null
+    members.push({
+      opportunity_id: row.opportunity_id,
+      label: row.label,
+      detail: typeof row.detail === 'string' ? row.detail : '',
+      confidence: row.confidence as ConfidenceLevel,
+      drill_to: asQueueTarget(row.drill_to),
+    })
+  }
+  return members
+}
+
 export const RENDER_HANDLERS: Record<string, RenderHandler> = {
   render_candidate_table: {
     parse: (message) => {
@@ -537,6 +588,73 @@ export const RENDER_HANDLERS: Record<string, RenderHandler> = {
         return {
           kind: 'web_results',
           data: { query: typeof payload.query === 'string' ? payload.query : '', results },
+        }
+      } catch {
+        return null
+      }
+    },
+  },
+  get_relationships: {
+    parse: (message) => {
+      try {
+        const payload = JSON.parse(message.content) as Record<string, unknown>
+        if (!payload || payload.action !== 'render_relationship_cluster') return null
+        if (typeof payload.cluster_id !== 'string' || !payload.cluster_id) return null
+        // The inference gate. A relationship arriving without a confidence
+        // level, a server-computed score and at least one piece of evidence
+        // renders nothing at all.
+        const provenance = asInferenceProvenance(payload.provenance)
+        if (!provenance) return null
+        const members = asRelationshipMembers(payload.members)
+        if (!members) return null
+        const status = typeof payload.status === 'string' ? payload.status : ''
+        // A shadow cluster must never reach the DOM. The server filters them
+        // out; this refuses one that somehow arrives anyway.
+        if (status !== 'proposed' && status !== 'confirmed' && status !== 'rejected') return null
+        const inferred = payload.inferred && typeof payload.inferred === 'object' && !Array.isArray(payload.inferred)
+          ? payload.inferred as Record<string, unknown>
+          : {}
+        return {
+          kind: 'relationship_cluster',
+          data: {
+            title: typeof payload.title === 'string' ? payload.title : '',
+            claim: typeof payload.claim === 'string' ? payload.claim : '',
+            members,
+            inferred: {
+              end_client: typeof inferred.end_client === 'string' ? inferred.end_client : '',
+              partner: typeof inferred.partner === 'string' ? inferred.partner : '',
+              domain: typeof inferred.domain === 'string' ? inferred.domain : '',
+            },
+            cluster_id: payload.cluster_id,
+            status,
+            provenance,
+          },
+        }
+      } catch {
+        return null
+      }
+    },
+  },
+  recommend_recruiter: {
+    parse: (message) => {
+      try {
+        const payload = JSON.parse(message.content) as Record<string, unknown>
+        if (!payload || payload.action !== 'render_ranked_list') return null
+        const rows = asRankedRows(payload.rows)
+        if (rows === null) return null
+        // An inferred ranking still owes confidence and evidence, so it is
+        // held to the stricter gate even though it draws as a ranked list.
+        const provenance = asInferenceProvenance(payload.provenance)
+        if (!provenance) return null
+        return {
+          kind: 'ranked_list',
+          data: {
+            title: typeof payload.title === 'string' ? payload.title : '',
+            measure: typeof payload.measure === 'string' ? payload.measure : '',
+            rows,
+            dropped: asDropped(payload.dropped),
+            provenance,
+          },
         }
       } catch {
         return null

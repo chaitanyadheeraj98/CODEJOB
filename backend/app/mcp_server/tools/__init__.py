@@ -24,6 +24,7 @@ from app.mcp_server.tools.premium_numbers import (
     propose_create_premium_contact,
 )
 from app.mcp_server.tools.references import resolve_record_reference
+from app.mcp_server.tools.relationships import get_relationships, recommend_recruiter
 from app.mcp_server.tools.resumes import get_resume, list_resumes
 from app.mcp_server.tools.runs import get_recent_runs, get_run_items
 from app.mcp_server.tools.status import get_ai_status, get_settings_summary
@@ -40,6 +41,7 @@ __all__ = [
     "get_draft_status",
     "get_metrics",
     "get_recent_runs",
+    "get_relationships",
     "get_record_details",
     "get_resume",
     "get_recruiter_replies",
@@ -61,6 +63,7 @@ __all__ = [
     "propose_send_email",
     "rank_opportunities",
     "read_chat_attachment",
+    "recommend_recruiter",
     "render_candidate_table",
     "resolve_record_reference",
     "search_candidates",
