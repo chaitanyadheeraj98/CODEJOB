@@ -24,9 +24,13 @@ describe('renderForMessage', () => {
   it('parses a well-formed table payload', () => {
     const parsed = renderForMessage(toolMessage(payload))
 
-    expect(parsed?.data.title).toBe('Top matches')
-    expect(parsed?.data.columns).toEqual(['role', 'sender'])
-    expect(parsed?.data.rows[0].candidate_id).toBe(7323)
+    // Narrowing on `kind` is the contract now: the union is what lets a second
+    // visualization share this registry without being drawn as a table.
+    expect(parsed?.kind).toBe('candidate_table')
+    if (parsed?.kind !== 'candidate_table') throw new Error('expected a candidate table payload')
+    expect(parsed.data.title).toBe('Top matches')
+    expect(parsed.data.columns).toEqual(['role', 'sender'])
+    expect(parsed.data.rows[0].candidate_id).toBe(7323)
   })
 
   it('ignores tool messages no handler claims', () => {
@@ -56,7 +60,8 @@ describe('renderForMessage', () => {
   it('tolerates a missing dropped list and truncated flag', () => {
     const parsed = renderForMessage(toolMessage({ ...payload, dropped: undefined, truncated: undefined }))
 
-    expect(parsed?.data.dropped).toEqual([])
-    expect(parsed?.data.truncated).toBe(false)
+    if (parsed?.kind !== 'candidate_table') throw new Error('expected a candidate table payload')
+    expect(parsed.data.dropped).toEqual([])
+    expect(parsed.data.truncated).toBe(false)
   })
 })

@@ -15,8 +15,14 @@ export type CandidateTableData = {
   truncated: boolean
 }
 
+// One member per visualization. The discriminant is what lets a single mount
+// point hold more than one kind of output; without it a second handler parses
+// correctly and then draws as a candidate table.
+export type RenderedPayload =
+  | { kind: 'candidate_table'; data: CandidateTableData }
+
 export type RenderHandler = {
-  parse: (message: ChatMessage) => CandidateTableData | null
+  parse: (message: ChatMessage) => RenderedPayload | null
 }
 
 function asRows(value: unknown): CandidateTableRow[] | null {
@@ -46,11 +52,14 @@ export const RENDER_HANDLERS: Record<string, RenderHandler> = {
         const columns = Array.isArray(payload.columns) ? payload.columns.filter((c): c is string => typeof c === 'string') : []
         if (!columns.length) return null
         return {
-          title: typeof payload.title === 'string' ? payload.title : '',
-          columns,
-          rows,
-          dropped: Array.isArray(payload.dropped) ? payload.dropped as CandidateTableData['dropped'] : [],
-          truncated: payload.truncated === true,
+          kind: 'candidate_table',
+          data: {
+            title: typeof payload.title === 'string' ? payload.title : '',
+            columns,
+            rows,
+            dropped: Array.isArray(payload.dropped) ? payload.dropped as CandidateTableData['dropped'] : [],
+            truncated: payload.truncated === true,
+          },
         }
       } catch {
         return null
@@ -59,10 +68,9 @@ export const RENDER_HANDLERS: Record<string, RenderHandler> = {
   },
 }
 
-export function renderForMessage(message: ChatMessage): { handler: RenderHandler; data: CandidateTableData } | null {
+export function renderForMessage(message: ChatMessage): RenderedPayload | null {
   if (message.role !== 'tool' || !message.tool_name) return null
   const handler = RENDER_HANDLERS[message.tool_name]
   if (!handler) return null
-  const data = handler.parse(message)
-  return data ? { handler, data } : null
+  return handler.parse(message)
 }

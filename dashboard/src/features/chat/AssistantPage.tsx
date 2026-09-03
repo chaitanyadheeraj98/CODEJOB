@@ -7,7 +7,7 @@ import { useChat } from './chatContext'
 import { renderMarkdownLite } from './markdown'
 import ProposalCard from './ProposalCard'
 import { proposalForMessage } from './proposals'
-import CandidateTable from './CandidateTable'
+import RenderedMessage from './RenderedMessage'
 import { renderForMessage } from './renderers'
 import type { ChatSession } from './types'
 
@@ -279,7 +279,7 @@ export default function AssistantPage() {
               )
             }
             const rendered = renderForMessage(message)
-            if (rendered) return <CandidateTable key={message.id} messageId={message.id} data={rendered.data} />
+            if (rendered) return <RenderedMessage key={message.id} messageId={message.id} payload={rendered} surface="page" />
             if (message.role === 'tool') return null
             return (
               <div key={message.id} className={`chatBubble ${message.role}`}>

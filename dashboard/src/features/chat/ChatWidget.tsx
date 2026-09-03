@@ -4,7 +4,7 @@ import { useChat } from './chatContext'
 import { renderMarkdownLite } from './markdown'
 import ProposalCard from './ProposalCard'
 import { proposalForMessage } from './proposals'
-import CandidateTableCompact from './CandidateTableCompact'
+import RenderedMessage from './RenderedMessage'
 import { renderForMessage } from './renderers'
 import { SentAttachmentChips } from './AttachmentChips'
 
@@ -163,7 +163,7 @@ export default function ChatWidget() {
                   if (rendered) {
                     return (
                       <div key={message.id} className="chatBubble assistant">
-                        <CandidateTableCompact data={rendered.data} />
+                        <RenderedMessage messageId={message.id} payload={rendered} surface="compact" />
                       </div>
                     )
                   }
