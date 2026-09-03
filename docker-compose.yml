@@ -34,7 +34,9 @@ services:
       - ./backend/.env.postgres
     environment:
       REDIS_URL: redis://redis:6379/0
-    command: rq worker gmail_sync nvoids_sync automation_run embedding_generation --url redis://redis:6379/0 --with-scheduler
+    # scheduled_task must stay on this list. A queue nothing consumes accepts
+    # jobs silently and runs none of them, and no test covers this line.
+    command: rq worker gmail_sync nvoids_sync automation_run embedding_generation scheduled_task --url redis://redis:6379/0 --with-scheduler
     volumes:
       - backend_data:/app/data
     depends_on:

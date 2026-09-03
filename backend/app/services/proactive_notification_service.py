@@ -67,6 +67,76 @@ def _target_session(db: Session) -> ChatSession:
     return session
 
 
+NOTIFICATIONS_SESSION_TITLE = "Notifications"
+
+
+def _notifications_session(db: Session) -> ChatSession:
+    """The dedicated Notifications session, created if absent.
+
+    Deliberately not `_target_session`, which returns the most recently updated
+    session. `chat_history_max_messages` is 20, so a daily digest landing in the
+    conversation the user is actually having would evict a fifth of the model's
+    usable history every morning.
+    """
+    session = (
+        db.query(ChatSession)
+        .filter(
+            ChatSession.owner_id == settings.owner_id,
+            ChatSession.title == NOTIFICATIONS_SESSION_TITLE,
+        )
+        .order_by(ChatSession.id.asc())
+        .first()
+    )
+    if session is None:
+        session = ChatSession(owner_id=settings.owner_id, title=NOTIFICATIONS_SESSION_TITLE)
+        db.add(session)
+        db.flush()
+    return session
+
+
+def notify_scheduled(db: Session, *, title: str, body: str, kind: str = "reminder") -> bool:
+    """Post a scheduling notification. Best-effort: never raises.
+
+    A notification failure must not fail the run that produced it - the work is
+    already prepared and held, and losing the notice is better than losing the
+    batch.
+    """
+    try:
+        session = _notifications_session(db)
+        db.add(
+            ChatMessage(
+                session_id=session.id,
+                role="assistant",
+                content=f"**{title}**\n\n{body}",
+            )
+        )
+        session.updated_at = utc_now()
+        db.commit()
+    except Exception:
+        logger.exception("scheduled_notification_failed kind=%s", kind)
+        db.rollback()
+        return False
+    _notify_telegram(f"{title}\n{body}")
+    return True
+
+
+def _notify_telegram(text: str) -> None:
+    """Telegram notifies; it never approves.
+
+    A run approval can send email or mutate records, and a chat button cannot
+    show ten drafted emails for review. Approving what you cannot see is not
+    approval, so no callback control is attached here.
+    """
+    try:
+        from app.runtime_state import runtime_state
+
+        service = runtime_state.telegram_service
+        if service is not None:
+            service.notify(text)
+    except Exception:
+        logger.warning("scheduled_notification_telegram_failed", exc_info=True)
+
+
 def generate_reply_notifications(db: Session, *, limit: int = 20) -> int:
     """Best-effort: never raises: a failure here must not fail the sync job."""
     pending = (
