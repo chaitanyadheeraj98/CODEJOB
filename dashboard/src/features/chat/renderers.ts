@@ -98,6 +98,15 @@ export type ChartData = {
   provenance: ProvenanceData
 }
 
+export type DisambiguationOption = { id: number; label: string; detail: string }
+
+export type DisambiguationData = {
+  kind: string
+  query: string
+  options: DisambiguationOption[]
+  truncated: boolean
+}
+
 export type RenderedPayload =
   | { kind: 'candidate_table'; data: CandidateTableData }
   | { kind: 'queue_link'; data: QueueLinkData }
@@ -105,6 +114,7 @@ export type RenderedPayload =
   | { kind: 'ranked_list'; data: RankedListData }
   | { kind: 'comparison'; data: ComparisonData }
   | { kind: 'chart'; data: ChartData }
+  | { kind: 'disambiguation'; data: DisambiguationData }
 
 export type RenderHandler = {
   parse: (message: ChatMessage) => RenderedPayload | null
@@ -383,6 +393,41 @@ export const RENDER_HANDLERS: Record<string, RenderHandler> = {
               ? payload.max_value
               : series.reduce((highest, point) => Math.max(highest, point.value), 0),
             provenance,
+          },
+        }
+      } catch {
+        return null
+      }
+    },
+  },
+  resolve_record_reference: {
+    parse: (message) => {
+      try {
+        const payload = JSON.parse(message.content) as Record<string, unknown>
+        // A single confident match resolves silently - the model proceeds and
+        // there is nothing to draw. Only the multi-match case renders.
+        if (!payload || payload.action !== 'render_disambiguation') return null
+        if (typeof payload.kind !== 'string' || !payload.kind) return null
+        if (!Array.isArray(payload.options)) return null
+        const options: DisambiguationOption[] = []
+        for (const entry of payload.options) {
+          if (!entry || typeof entry !== 'object') return null
+          const option = entry as Record<string, unknown>
+          if (typeof option.id !== 'number' || typeof option.label !== 'string') return null
+          options.push({
+            id: option.id,
+            label: option.label,
+            detail: typeof option.detail === 'string' ? option.detail : '',
+          })
+        }
+        if (options.length < 2) return null
+        return {
+          kind: 'disambiguation',
+          data: {
+            kind: payload.kind,
+            query: typeof payload.query === 'string' ? payload.query : '',
+            options,
+            truncated: payload.truncated === true,
           },
         }
       } catch {

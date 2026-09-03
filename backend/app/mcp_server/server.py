@@ -34,6 +34,7 @@ from app.mcp_server.tools import (
     rank_opportunities,
     read_chat_attachment,
     render_candidate_table,
+    resolve_record_reference,
     search_candidates,
 )
 
@@ -77,6 +78,8 @@ BASE_TOOLS = (
     navigate_to_queue,
     rank_opportunities,
     compare_records,
+    # Read-only: it returns options, never a pick.
+    resolve_record_reference,
 )
 
 CHAT_ACTION_TOOLS = (

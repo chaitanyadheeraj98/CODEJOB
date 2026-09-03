@@ -5286,3 +5286,39 @@ button.chatRankedLabel:focus-visible {
   justify-content: space-between;
   gap: 10px;
 }
+
+.chatDisambiguation {
+  margin: 8px 0;
+  padding: 12px;
+  border: 1px solid var(--border, #d8dee9);
+  border-radius: 8px;
+  background: var(--surface, #fff);
+}
+
+.chatDisambiguationOptions {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.chatDisambiguationOptions button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 8px;
+  border: 1px solid var(--border, #e3e8ef);
+  border-radius: 6px;
+  background: var(--bg-subtle, #f7f9fc);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.chatDisambiguationOptions button:hover,
+.chatDisambiguationOptions button:focus-visible,
+.chatDisambiguationOptions button.chosen {
+  border-color: var(--accent, #3b6ea5);
+}

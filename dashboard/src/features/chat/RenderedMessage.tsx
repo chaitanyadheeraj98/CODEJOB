@@ -2,6 +2,7 @@ import CandidateTable from './CandidateTable'
 import CandidateTableCompact from './CandidateTableCompact'
 import Chart from './Chart'
 import ComparisonTable from './ComparisonTable'
+import Disambiguation from './Disambiguation'
 import MetricCards from './MetricCards'
 import RankedList from './RankedList'
 import QueueLink from './QueueLink'
@@ -34,6 +35,8 @@ export default function RenderedMessage({ messageId, payload, surface }: Props) 
       return <ComparisonTable data={payload.data} surface={surface} />
     case 'chart':
       return <Chart data={payload.data} surface={surface} />
+    case 'disambiguation':
+      return <Disambiguation data={payload.data} surface={surface} />
     case 'queue_link':
       return <QueueLink data={payload.data} surface={surface} />
     default:
