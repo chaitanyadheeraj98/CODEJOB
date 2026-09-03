@@ -79,6 +79,21 @@ const initialActivePage = (): ActivePage => {
   return page && ACTIVE_PAGES.has(page) ? page : 'run_queue'
 }
 
+// A short list of common zones for the datalist, not all 418 the browser knows.
+// The control is a free-text input, so any IANA name can still be typed, and the
+// server validates whatever arrives against zoneinfo - a client-supplied list is
+// a convenience, never a validation. Rendering the full set made the settings
+// panel heavy enough to time out its tests under parallel load.
+const COMMON_TIMEZONES = [
+  'UTC', 'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles',
+  'America/Toronto', 'Europe/London', 'Europe/Dublin', 'Europe/Berlin', 'Europe/Paris',
+  'Asia/Kolkata', 'Asia/Dubai', 'Asia/Singapore', 'Asia/Tokyo', 'Australia/Sydney',
+]
+
+const TIMEZONE_OPTIONS = COMMON_TIMEZONES.map((zone) => (
+  <option key={zone} value={zone} />
+))
+
 const PAGE_TITLES: Record<ActivePage, string> = {
   assistant: 'CodeJob Assistant',
   run_queue: 'Run Queue Dashboard',
@@ -292,6 +307,8 @@ type SettingsPayload = {
   feature_application_automation_enabled: boolean
   feature_application_outreach_drafts_enabled: boolean
   feature_reminder_sweep_interval_minutes: number
+  timezone: string
+  feature_scheduling_sweep_interval_minutes: number
   feature_resume_tracking_enabled: boolean
   feature_resume_tracking_sweep_interval_minutes: number
   candidate_work_authorizations: string[]
@@ -2909,6 +2926,8 @@ function App() {
     feature_application_automation_enabled: false,
     feature_application_outreach_drafts_enabled: false,
     feature_reminder_sweep_interval_minutes: 240,
+    timezone: 'UTC',
+    feature_scheduling_sweep_interval_minutes: 15,
     feature_resume_tracking_enabled: false,
     feature_resume_tracking_sweep_interval_minutes: 240,
     candidate_work_authorizations: [],
@@ -3311,6 +3330,10 @@ function App() {
       feature_application_automation_enabled: Boolean(payload.feature_application_automation_enabled),
       feature_application_outreach_drafts_enabled: Boolean(payload.feature_application_outreach_drafts_enabled),
       feature_reminder_sweep_interval_minutes: Math.max(30, Math.min(payload.feature_reminder_sweep_interval_minutes || 240, 1440)),
+      timezone: payload.timezone || 'UTC',
+      // A 5-minute floor, not the 30 its neighbours use: a 30-minute floor
+      // would make a reminder set for 09:15 arrive as late as 09:45.
+      feature_scheduling_sweep_interval_minutes: Math.max(5, Math.min(payload.feature_scheduling_sweep_interval_minutes || 15, 1440)),
       feature_resume_tracking_enabled: Boolean(payload.feature_resume_tracking_enabled),
       feature_resume_tracking_sweep_interval_minutes: Math.max(30, Math.min(payload.feature_resume_tracking_sweep_interval_minutes || 240, 1440)),
       candidate_work_authorizations: payload.candidate_work_authorizations ?? [],
@@ -6573,6 +6596,28 @@ function App() {
                     </span>
                   </label>
                   <p className="subtle">Uses AI only to propose editable application emails. Sending always requires a separate click.</p>
+                  <label>
+                    Time zone
+                    <input
+                      type="text"
+                      list="timezone-options"
+                      value={settings.timezone}
+                      placeholder="UTC"
+                      onChange={(event) => setSettings({ ...settings, timezone: event.target.value })}
+                    />
+                    <datalist id="timezone-options">{TIMEZONE_OPTIONS}</datalist>
+                  </label>
+                  <p className="subtle">An IANA name such as America/New_York. Scheduled work is interpreted in this zone; records are still stored in UTC.</p>
+                  <label>
+                    Scheduling sweep interval (minutes)
+                    <input
+                      type="number"
+                      min={5}
+                      max={1440}
+                      value={settings.feature_scheduling_sweep_interval_minutes}
+                      onChange={(event) => setSettings({ ...settings, feature_scheduling_sweep_interval_minutes: Number(event.target.value) })}
+                    />
+                  </label>
                   <label>
                     Reminder sweep interval (minutes)
                     <input
