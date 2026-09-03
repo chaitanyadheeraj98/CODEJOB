@@ -12,9 +12,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libreoffice \
     && rm -rf /var/lib/apt/lists/*
 
+# Dependency manifests only, and deliberately before `COPY . .` below: this
+# layer is the expensive one (212 packages, including torch and the CUDA stack),
+# so it must not be invalidated by an ordinary source edit. Touching
+# pyproject.toml or uv.lock rebuilds it; nothing else does.
 COPY pyproject.toml uv.lock ./
+# `uv pip install .` ignores uv.lock - it is the pip-compatible interface and
+# re-resolves all 212 packages from pyproject.toml on every rebuild. The lock
+# was being copied into the image and never read. Exporting it first pins every
+# version to the one already resolved on the host, so a rebuild installs a known
+# answer instead of solving for it again.
+#
+# --no-emit-project: the app runs from /app via WORKDIR, not as an installed
+# package (nothing imports `backend`), so only its dependencies are needed here.
+# uv itself is pinned because an unpinned build tool is an unpinned dependency.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    pip install --no-cache-dir uv && uv pip install --system .
+    pip install --no-cache-dir uv==0.11.8 \
+    && uv export --frozen --no-dev --no-emit-project --no-hashes \
+        --format requirements-txt -o /tmp/requirements.txt \
+    && uv pip install --system -r /tmp/requirements.txt
 RUN python -c "from unstructured.nlp.tokenize import _load_spacy_model; _load_spacy_model()"
 
 COPY . .
