@@ -21,7 +21,7 @@ class QueuePreparationTests(unittest.TestCase):
             parse_email=lambda subject, body: {"role": "AI Engineer", "location": "remote", "salary_text": "", "skills_text": "Python"},
             hard_filter_check=hard_filter,
             compute_blended_ai_score=lambda *args: (0.9, "", "test", None, None, None),
-            policy_f2f_block=lambda parsed, policy: (False, ""),
+            policy_f2f_block=lambda parsed, policy, settings: (False, ""),
             evaluate_routing_policy=lambda *args: SimpleNamespace(),
             greeting_from_to_contact=lambda *args: "Hello,",
             build_user_fallback_draft=lambda *args: "draft",

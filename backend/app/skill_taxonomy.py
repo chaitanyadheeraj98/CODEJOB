@@ -1012,6 +1012,29 @@ def detect_role_family_from_entries(
     return "general"
 
 
+def role_family_fit_score(
+    *,
+    jd_role_family: str,
+    resume_role_family: str,
+    role_alignment_score: float,
+    foundation_score: float,
+    jd_priority_score: float,
+) -> tuple[float, str]:
+    adjusted = role_alignment_score
+    if jd_role_family == resume_role_family:
+        return max(0.0, min(adjusted, 1.0)), "direct_family_alignment"
+    if jd_role_family == "general":
+        return max(0.0, min(max(adjusted, 0.7), 1.0)), "general_family_fallback"
+    if jd_role_family != "ai" and resume_role_family == "ai":
+        if foundation_score >= 0.60 and jd_priority_score >= 0.50:
+            return max(0.0, min(max(adjusted, 0.72), 1.0)), "ai_enabled_fullstack_override"
+        if foundation_score < 0.55 and jd_priority_score < 0.50:
+            return max(0.0, min(min(adjusted, 0.25), 1.0)), "generic_ai_guardrail"
+    if foundation_score >= 0.65 and jd_priority_score >= 0.45:
+        return max(0.0, min(max(adjusted, 0.68), 1.0)), "foundation_priority_override"
+    return max(0.0, min(adjusted, 1.0)), "role_alignment_only"
+
+
 def build_semantic_skill_summary(skills_text: str | None, *, role_text: str | None = None, limit: int = 12) -> str:
     entries = entries_from_skills_text(skills_text)
     if not entries:

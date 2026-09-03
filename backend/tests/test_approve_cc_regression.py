@@ -4,6 +4,7 @@ import unittest
 from datetime import UTC, datetime
 import json
 from types import SimpleNamespace
+from uuid import uuid4
 
 os.environ["DEBUG"] = "false"
 
@@ -14,7 +15,17 @@ from sqlalchemy.pool import StaticPool
 
 from app import main
 from app.db import Base
-from app.models import AttachmentAsset, RecruiterEmail, ResumeAsset, UserSettings
+from app.models import (
+    AppTSApplication,
+    AttachmentAsset,
+    Application,
+    CandidateRecord,
+    OpportunityLifecycleEvent,
+    OpportunityLineage,
+    RecruiterEmail,
+    ResumeAsset,
+    UserSettings,
+)
 
 
 class ApproveCcRegressionTests(unittest.TestCase):
@@ -127,8 +138,8 @@ class ApproveCcRegressionTests(unittest.TestCase):
             approval_status="pending",
             sent_status="not_sent",
             source="gmail",
-            external_message_id=f"msg-{now.timestamp()}",
-            external_thread_id=f"thread-{now.timestamp()}",
+            external_message_id=f"msg-{uuid4()}",
+            external_thread_id=f"thread-{uuid4()}",
             gmail_received_at=now,
             recipient_email="ankit.negi@codinix.com",
             cc_email=cc_email,
@@ -145,6 +156,25 @@ class ApproveCcRegressionTests(unittest.TestCase):
         db.commit()
         db.refresh(email)
         return email
+
+    def _link_lineage(self, db: Session, email: RecruiterEmail) -> OpportunityLineage:
+        lineage = OpportunityLineage(
+            id=f"lineage-{email.id}",
+            owner_id=main.settings.owner_id,
+            origin_type="gmail",
+            current_status="active",
+        )
+        record = CandidateRecord(
+            id=f"record-{email.id}",
+            owner_id=main.settings.owner_id,
+            origin_type="gmail",
+            internal_lineage_id=lineage.id,
+        )
+        email.record_id = record.id
+        db.add_all([lineage, record])
+        db.commit()
+        db.refresh(lineage)
+        return lineage
 
     def _add_needs_review_nvoids_email(self, db: Session, *, cc_email: str | None) -> RecruiterEmail:
         now = datetime.now(UTC)
@@ -168,8 +198,8 @@ class ApproveCcRegressionTests(unittest.TestCase):
             approval_status="pending",
             sent_status="not_sent",
             source="nvoids",
-            external_message_id=f"nvoids:{now.timestamp()}",
-            external_thread_id=f"nvoids:{now.timestamp()}",
+            external_message_id=f"nvoids:{uuid4()}",
+            external_thread_id=f"nvoids:{uuid4()}",
             gmail_received_at=now,
             recipient_email="nvoids@example.com",
             cc_email=cc_email,
@@ -292,7 +322,7 @@ class ApproveCcRegressionTests(unittest.TestCase):
                 resume_embedding_json=None,
                 semantic_diag=SimpleNamespace(input_source="latest_block", input_chars=100, chunks=1, fallback_reason=None),
             )
-            main.should_block_f2f = lambda _p: (False, None)
+            main.should_block_f2f = lambda *_args, **_kwargs: (False, None)
             main._analyze_email_routing = lambda _db, _sender, _subject, _body, _snippet="": main.RoutingResult(
                 to_email="ankit.negi@codinix.com",
                 cc_email="vaishnavi@horizonsoftech.net",
@@ -359,6 +389,87 @@ class ApproveCcRegressionTests(unittest.TestCase):
                 refreshed = db.get(RecruiterEmail, email.id)
                 assert refreshed is not None
                 self.assertEqual(json.loads(refreshed.sent_attachment_file_names_json or "[]"), ["cover-letter.pdf"])
+                self.assertEqual(db.query(Application).count(), 0)
+        finally:
+            main.send_reply_with_attachment = original_send_reply
+            main.send_new_email_with_attachment = original_send_new
+            main.mark_message_processed = original_mark_processed
+            main.append_tracking_sheet_row = original_append_tracking
+
+    def test_approve_send_does_not_auto_log_application_when_not_tracked(self) -> None:
+        # AppTS superseded the old "auto-log every approved send" behavior: an
+        # application row (legacy or AppTS) is only created when the user explicitly
+        # flags the card via Track Application (RecruiterEmail.marked_for_tracking).
+        original_send_reply = main.send_reply_with_attachment
+        original_send_new = main.send_new_email_with_attachment
+        original_mark_processed = main.mark_message_processed
+        original_append_tracking = main.append_tracking_sheet_row
+        try:
+            main.send_reply_with_attachment = lambda *_args, **_kwargs: "sent-rt-1"
+            main.send_new_email_with_attachment = lambda *_args, **_kwargs: "new-rt-1"
+            main.mark_message_processed = lambda *_args, **_kwargs: None
+            main.append_tracking_sheet_row = lambda **_kwargs: None
+            with Session(self.engine) as db:
+                settings_row = db.query(UserSettings).filter(UserSettings.owner_id == main.settings.owner_id).first()
+                assert settings_row is not None
+                settings_row.feature_resume_tracking_enabled = True
+                resume = self._add_resume(db)
+                resume_id = resume.id
+                email = self._add_needs_review_email(db, cc_email="vaishnavi@horizonsoftech.net")
+                email.company = "Horizon Softech"
+                email.end_client = "Acme Bank"
+                email.marked_for_tracking = False
+                db.commit()
+                email_id = email.id
+
+            response = self.client.post(f"/candidates/{email_id}/approve-send", json={"edited_reply": None})
+            self.assertEqual(response.status_code, 200, response.text)
+
+            summary = self.client.get("/resumes/performance-summary")
+            self.assertEqual(summary.status_code, 200, summary.text)
+            items = {item["resume"]["id"]: item for item in summary.json()["items"]}
+            self.assertEqual(items.get(resume_id, {}).get("submission_count", 0), 0)
+
+            with Session(self.engine) as db:
+                self.assertIsNone(db.query(Application).filter(Application.resume_asset_id == resume_id).first())
+                self.assertIsNone(db.query(AppTSApplication).filter(AppTSApplication.resume_asset_id == resume_id).first())
+        finally:
+            main.send_reply_with_attachment = original_send_reply
+            main.send_new_email_with_attachment = original_send_new
+            main.mark_message_processed = original_mark_processed
+            main.append_tracking_sheet_row = original_append_tracking
+
+    def test_approve_send_creates_appts_application_when_tracked(self) -> None:
+        original_send_reply = main.send_reply_with_attachment
+        original_send_new = main.send_new_email_with_attachment
+        original_mark_processed = main.mark_message_processed
+        original_append_tracking = main.append_tracking_sheet_row
+        try:
+            main.send_reply_with_attachment = lambda *_args, **_kwargs: "sent-rt-1"
+            main.send_new_email_with_attachment = lambda *_args, **_kwargs: "new-rt-1"
+            main.mark_message_processed = lambda *_args, **_kwargs: None
+            main.append_tracking_sheet_row = lambda **_kwargs: None
+            with Session(self.engine) as db:
+                resume = self._add_resume(db)
+                resume_id = resume.id
+                email = self._add_needs_review_email(db, cc_email="vaishnavi@horizonsoftech.net")
+                email.company = "Horizon Softech"
+                email.end_client = "Acme Bank"
+                email.marked_for_tracking = True
+                db.commit()
+                email_id = email.id
+
+            response = self.client.post(f"/candidates/{email_id}/approve-send", json={"edited_reply": None})
+            self.assertEqual(response.status_code, 200, response.text)
+
+            with Session(self.engine) as db:
+                application = db.query(AppTSApplication).filter(AppTSApplication.resume_asset_id == resume_id).first()
+                assert application is not None
+                self.assertEqual(application.resume_submission_status, "submitted")
+                self.assertEqual(application.dedupe_key, f"appts_email:{email_id}")
+                self.assertEqual(application.recruiter_company_snapshot, "Horizon Softech")
+                self.assertEqual(application.end_client_snapshot, "Acme Bank")
+                self.assertIsNone(db.query(Application).filter(Application.resume_asset_id == resume_id).first())
         finally:
             main.send_reply_with_attachment = original_send_reply
             main.send_new_email_with_attachment = original_send_new
@@ -514,16 +625,56 @@ class ApproveCcRegressionTests(unittest.TestCase):
             main.send_new_email_with_attachment = original_send_new
             main.append_tracking_sheet_row = original_append_tracking
 
-    def test_send_to_failed_mapping_from_needs_review_marks_routing_unconfirmed(self) -> None:
+    def test_send_to_failed_mapping_preserves_safe_routing_and_records_lifecycle_event(self) -> None:
         with Session(self.engine) as db:
             email = self._add_needs_review_email(db, cc_email="vaishnavi@horizonsoftech.net")
+            lineage = self._link_lineage(db, email)
+            email_id = email.id
+            lineage_id = lineage.id
 
-        response = self.client.post(f"/candidates/{email.id}/send-to-failed-mapping")
+        response = self.client.post(f"/candidates/{email_id}/send-to-failed-mapping")
         self.assertEqual(response.status_code, 200, response.text)
         payload = response.json()
         self.assertEqual(payload["state"], "failed")
         self.assertFalse(payload["routing_confirmed"])
-        self.assertEqual(payload["routing_status"], "ambiguous")
+        self.assertEqual(payload["routing_status"], "safe")
+        self.assertIn("prior routing: safe", payload["routing_reason"])
+
+        with Session(self.engine) as db:
+            event = db.query(OpportunityLifecycleEvent).filter_by(lineage_id=lineage_id).one()
+            self.assertEqual(event.event_type, "failed_mapping")
+            self.assertEqual(event.related_record_id, email_id)
+            self.assertEqual(db.get(OpportunityLineage, lineage_id).current_status, "active")
+
+    def test_reject_closes_lineage_and_records_lifecycle_event(self) -> None:
+        with Session(self.engine) as db:
+            email = self._add_needs_review_email(db, cc_email="vaishnavi@horizonsoftech.net")
+            lineage = self._link_lineage(db, email)
+            email_id = email.id
+            lineage_id = lineage.id
+
+        response = self.client.post(f"/candidates/{email_id}/reject", json={"reason": "Not a fit"})
+        self.assertEqual(response.status_code, 200, response.text)
+
+        with Session(self.engine) as db:
+            lineage = db.get(OpportunityLineage, lineage_id)
+            assert lineage is not None
+            self.assertEqual(lineage.current_status, "closed")
+            self.assertIsNotNone(lineage.closed_at)
+            event = db.query(OpportunityLifecycleEvent).filter_by(lineage_id=lineage_id).one()
+            self.assertEqual(event.event_type, "rejected")
+            self.assertEqual(event.related_record_id, email_id)
+
+    def test_resolve_recipients_rejects_non_failed_candidate(self) -> None:
+        with Session(self.engine) as db:
+            email = self._add_needs_review_email(db, cc_email="vaishnavi@horizonsoftech.net")
+
+        response = self.client.post(
+            f"/candidates/{email.id}/resolve-recipients",
+            json={"to_email": "recruiter@example.com", "cc_email": "employer@example.com"},
+        )
+        self.assertEqual(response.status_code, 400, response.text)
+        self.assertEqual(response.json()["detail"], "Only failed candidates can have recipients resolved")
 
     def test_delete_failed_candidate_soft_dismisses_card(self) -> None:
         with Session(self.engine) as db:

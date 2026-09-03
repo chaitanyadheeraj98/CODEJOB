@@ -66,13 +66,25 @@ class ChatService:
             .all()
         )
 
+    def rename_session(self, db: Session, session_id: int, title: str) -> ChatSession:
+        cleaned = title.strip()
+        if not cleaned:
+            raise HTTPException(status_code=422, detail="Title is required")
+        row = self._session_or_404(db, session_id)
+        row.title = cleaned[:120]
+        db.commit()
+        db.refresh(row)
+        return row
+
     def delete_session(self, db: Session, session_id: int) -> None:
         row = self._session_or_404(db, session_id)
         db.query(ChatMessage).filter(ChatMessage.session_id == session_id).delete(synchronize_session=False)
         db.delete(row)
         db.commit()
 
-    async def send_message(self, db: Session, session_id: int, user_text: str) -> AsyncIterator[str]:
+    async def send_message(
+        self, db: Session, session_id: int, user_text: str, model: str | None = None
+    ) -> AsyncIterator[str]:
         text = self.validate_message(user_text)
         session = self._session_or_404(db, session_id)
         now = datetime.now(UTC)
@@ -92,7 +104,7 @@ class ChatService:
         history = db_messages_to_langchain(list(reversed(recent)))
         streamed_text = ""
         generated: list[BaseMessage] = []
-        async for kind, payload in chat_agent.stream_chat_agent(history):
+        async for kind, payload in chat_agent.stream_chat_agent(history, model=model):
             if kind == "delta":
                 delta = str(payload)
                 streamed_text += delta

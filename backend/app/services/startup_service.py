@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from collections.abc import Callable
 
@@ -41,6 +42,11 @@ class StartupService:
         MigrationRuntimeService().ensure_schema_ready()
         self._ensure_default_settings()
         self._ensure_labeling_service()
+        if "PYTEST_CURRENT_TEST" in os.environ:
+            # Under pytest: skip real outbound calls (Gmail label sync, Telegram polling)
+            # and background automation - TestClient triggers this on every test's first
+            # request, and these have no timeout, so they'd hang or spam real services.
+            return
         if is_gmail_configured():
             try:
                 runtime_state.gmail_labeling_service.ensure_target_labels()

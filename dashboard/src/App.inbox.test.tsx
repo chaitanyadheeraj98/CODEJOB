@@ -158,7 +158,7 @@ describe('Inbox dashboard', () => {
       if (url.includes('/recruiter-numbers')) return makeResponse({ items: [], next_cursor: null, has_next: false })
       if (url.includes('/employer-numbers')) return makeResponse({ items: [], next_cursor: null, has_next: false })
       if (url.includes('/recruiter-opportunities')) return makeResponse({ items: [], next_cursor: null, has_next: false })
-      if (url.endsWith('/inbox/conversations')) return makeResponse(conversations)
+      if (url.includes('/inbox/conversations?')) return makeResponse(conversations)
       if (url.endsWith('/inbox/conversations/1')) return makeResponse(detail)
       throw new Error(`Unhandled fetch: ${url}`)
     }))
@@ -186,6 +186,7 @@ describe('Inbox dashboard', () => {
 
     const refreshButton = container.querySelector<HTMLButtonElement>('button[aria-label="Refresh conversations"]')
     expect(refreshButton?.title).toBe('Refresh')
+    expect(container.querySelectorAll('.filterSortBar input[role="combobox"]')).toHaveLength(4)
 
     const unreadRow = container.querySelector<HTMLButtonElement>('.conversationListItem.unread')
     expect(unreadRow?.querySelector('.unreadDot')).not.toBeNull()

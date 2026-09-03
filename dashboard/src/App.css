@@ -12,6 +12,11 @@
   --ok: #0f4bcf;
 }
 
+input[type='checkbox'],
+input[type='radio'] {
+  accent-color: var(--primary);
+}
+
 .gmailShell {
   display: grid;
   grid-template-columns: 326px minmax(0, 1fr);
@@ -421,11 +426,19 @@ button.emailSearchResult:focus-visible {
   border-radius: 10px;
   background: var(--surface);
   padding: 12px 14px;
+  border-left: 4px solid var(--line-strong);
 }
+
+.jobProgressCard--queued { border-left-color: #94a3b8; }
+.jobProgressCard--running { border-left-color: var(--primary); }
+.jobProgressCard--ok { border-left-color: #137333; }
+.jobProgressCard--failed { border-left-color: var(--danger); }
+.jobProgressCard--canceled { border-left-color: #9a5b00; }
 
 .jobProgressCard div {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   gap: 12px;
   margin-bottom: 8px;
 }
@@ -436,13 +449,119 @@ button.emailSearchResult:focus-visible {
   font-size: 13px;
 }
 
-.jobProgressCard progress {
-  width: 100%;
-  height: 12px;
-}
-
 .jobProgressCard p {
   margin: 7px 0 0;
+}
+
+.jobStatusPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: fit-content;
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-size: 11px;
+  line-height: 1.4;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.jobStatusPill--queued { background: #f1f5f9; color: #475569; border-color: #cbd5e1; }
+.jobStatusPill--running { background: #e6edff; color: var(--primary-strong); border-color: #b9c9f7; }
+.jobStatusPill--ok { background: #eaf8ee; color: #137333; border-color: #b8dec3; }
+.jobStatusPill--failed { background: #fff0f2; color: var(--danger); border-color: #efb7bd; }
+.jobStatusPill--canceled { background: #fff7df; color: #9a5b00; border-color: #efd49b; }
+
+.jobStatusPill--running .jobStatusDot {
+  animation: jobPulse 1.2s ease-in-out infinite;
+}
+
+.jobStatusDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: 0 0 auto;
+}
+
+@keyframes jobPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.jobProgressBar {
+  display: flex;
+  width: 100%;
+  height: 10px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: #eef1f7;
+}
+
+.jobProgressBar__segment {
+  height: 100%;
+  transition: flex-basis 0.3s ease;
+}
+
+.jobProgressBar__segment--done { background: #1e9e4c; }
+.jobProgressBar__segment--skipped { background: var(--danger); }
+.jobProgressBar__segment--remaining { background: transparent; }
+
+.jobProgressLegend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 6px;
+  font-size: 11px;
+  color: #64748b;
+}
+
+.jobProgressLegend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+}
+
+.jobProgressLegend i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.jobLiveSkipped {
+  margin-top: 10px;
+  max-height: 160px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.jobLiveSkippedRow {
+  border-left: 3px solid var(--danger);
+  background: #fff5f6;
+  border-radius: 4px;
+  padding: 5px 8px;
+}
+
+.jobLiveSkippedRow p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.jobLiveSkippedRow p:first-child {
+  color: #1f2937;
+  font-weight: 600;
+}
+
+.jobLiveSkippedRow p:last-child {
+  color: #7a1420;
 }
 
 .queryBucketInline {
@@ -784,7 +903,7 @@ button.emailSearchResult:focus-visible {
 
 .search,
 .actionBar input,
-.card input,
+.card input:not([type="checkbox"]):not([type="radio"]),
 .card textarea,
 .card select {
   width: 100%;
@@ -1036,13 +1155,45 @@ button.emailSearchResult:focus-visible {
 }
 
 .rowBtns button,
-.card button {
+.card button,
+.detailPanel button:not(.iconBtn),
+.rowBtns .linkButton {
   height: 42px;
   border-radius: 7px;
   border: 1px solid var(--line-strong);
   background: var(--surface);
   padding: 0 14px;
   color: #1c2535;
+  font: inherit;
+  cursor: pointer;
+}
+
+.rowBtns .linkButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
+.rowBtns button:hover:not(:disabled),
+.card button:hover:not(:disabled),
+.detailPanel button:hover:not(:disabled):not(.iconBtn) {
+  border-color: var(--line-strong);
+  background: var(--surface-soft);
+}
+
+.rowBtns button:disabled,
+.card button:disabled,
+.detailPanel button:disabled:not(.iconBtn) {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.rowBtns button:focus-visible,
+.card button:focus-visible,
+.detailPanel button:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
 }
 
 .rowBtns button[type='submit'],
@@ -1052,6 +1203,19 @@ button.emailSearchResult:focus-visible {
   border-color: var(--primary);
   background: var(--primary);
   color: #fff;
+}
+
+/* !important: matches .dangerButton's own pattern - needed to outrank the more
+   specific ".detailPanel button:not(.iconBtn)" base rule above. */
+.primaryButton {
+  border-color: var(--primary) !important;
+  background: var(--primary) !important;
+  color: #fff !important;
+}
+
+.primaryButton:hover:not(:disabled) {
+  background: var(--primary-strong) !important;
+  border-color: var(--primary-strong) !important;
 }
 
 .resumeDatabaseCard,
@@ -1093,6 +1257,10 @@ button.emailSearchResult:focus-visible {
   display: grid;
   gap: 12px;
   align-content: start;
+}
+
+.resumeDatabaseItem.focused {
+  outline: 2px solid var(--primary);
 }
 
 .resumeDatabaseHeader {
@@ -1370,6 +1538,27 @@ button.emailSearchResult:focus-visible {
   padding: 14px;
   margin-top: 12px;
   background: var(--surface-soft);
+}
+
+.skippedItemRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.skippedItemCheckbox {
+  flex: 0 0 auto;
+  padding-top: 4px;
+}
+
+.skippedItemCheckbox input {
+  width: 18px;
+  height: 18px;
+}
+
+.skippedItemContent {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .sentItemCard {
@@ -2010,6 +2199,28 @@ button.emailSearchResult:focus-visible {
 .inboxHeaderActions {
   display: flex;
   align-items: center;
+  gap: 10px;
+}
+
+.inboxTabGroup {
+  display: flex;
+  gap: 4px;
+}
+
+.inboxTabBtn {
+  border: 1px solid var(--inbox-border-strong);
+  border-radius: 999px;
+  background: transparent;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.inboxTabBtn.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
 }
 
 .inboxSection .inboxRefreshBtn {
@@ -2100,6 +2311,10 @@ button.emailSearchResult:focus-visible {
   background: transparent;
 }
 
+.conversationListItemWrap {
+  position: relative;
+}
+
 .inboxSection .conversationListItem {
   display: flex;
   flex-direction: column;
@@ -2110,10 +2325,38 @@ button.emailSearchResult:focus-visible {
   border: 1px solid var(--inbox-border);
   border-left: 4px solid transparent;
   border-radius: 12px;
-  padding: 13px 12px 13px 10px;
+  padding: 13px 32px 13px 10px;
   background: var(--inbox-surface);
   color: inherit;
   text-align: left;
+}
+
+.conversationGmailLink {
+  display: inline-grid;
+  position: absolute;
+  top: 10px;
+  right: 8px;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border-radius: 999px;
+  color: var(--inbox-muted);
+}
+
+.conversationGmailLink:hover,
+.conversationGmailLink:focus-visible {
+  background: #eef4ff;
+  color: var(--inbox-avatar-ink);
+}
+
+.conversationGmailLink svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .inboxSection .conversationListItem:not(.active):hover {
@@ -2409,6 +2652,7 @@ button.emailSearchResult:focus-visible {
 }
 
 .chatLauncher {
+  position: relative;
   width: 58px;
   height: 58px;
   border: 0;
@@ -2421,6 +2665,24 @@ button.emailSearchResult:focus-visible {
 
 .chatLauncher:hover {
   background: var(--primary-strong);
+}
+
+.chatBadge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: #dc2626;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  box-shadow: 0 0 0 2px var(--surface, #fff);
 }
 
 .chatPanel {
@@ -2436,7 +2698,6 @@ button.emailSearchResult:focus-visible {
 }
 
 .chatHeader,
-.chatHistoryBar,
 .chatComposer {
   display: flex;
   align-items: center;
@@ -2480,11 +2741,21 @@ button.emailSearchResult:focus-visible {
 }
 
 .chatHistoryBar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   border-bottom: 1px solid var(--line);
   padding: 8px 10px;
 }
 
-.chatHistoryBar label {
+.chatHistoryRow,
+.chatModelRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.chatHistoryRow label {
   min-width: 0;
   flex: 1;
 }
@@ -2498,11 +2769,35 @@ button.emailSearchResult:focus-visible {
   background: var(--surface);
 }
 
-.chatHistoryBar button {
+.chatHistoryRow button {
   border: 0;
   background: transparent;
   color: var(--danger);
   font-size: 12px;
+}
+
+.chatHistoryRow button[aria-label="Rename current chat"] {
+  color: var(--primary);
+}
+
+.chatModelPicker {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.chatModelPicker select {
+  flex: 1;
+  font-size: 12px;
+  text-transform: none;
+  letter-spacing: normal;
 }
 
 .chatMessages {
@@ -2561,17 +2856,63 @@ button.emailSearchResult:focus-visible {
   color: var(--ink);
 }
 
+.chatProposal {
+  align-self: stretch;
+  border: 1px solid var(--primary);
+  border-radius: 12px;
+  padding: 12px;
+  background: var(--surface);
+}
+
+.chatProposal dl,
+.chatProposal p {
+  margin: 8px 0 0;
+}
+
+.chatProposal dl div {
+  display: grid;
+  grid-template-columns: 72px 1fr;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.chatProposal dt {
+  font-weight: 700;
+}
+
+.chatProposal dd {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.chatProposalActions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.chatProposalActions button:first-child {
+  background: var(--primary);
+  color: #fff;
+}
+
 .chatBubble p {
   margin: 0 0 8px;
 }
 
-.chatBubble ul {
+.chatBubble ul,
+.chatBubble ol {
   margin: 4px 0 8px;
   padding-left: 20px;
 }
 
 .chatBubble li {
   margin: 2px 0;
+}
+
+.chatBubble li + li {
+  margin-top: 4px;
 }
 
 .chatBubble h4,
@@ -2588,8 +2929,63 @@ button.emailSearchResult:focus-visible {
 }
 
 .chatBubble p:last-child,
-.chatBubble ul:last-child {
+.chatBubble ul:last-child,
+.chatBubble ol:last-child,
+.chatBubble table:last-child {
   margin-bottom: 0;
+}
+
+.chatBubble table {
+  display: block;
+  max-width: 100%;
+  margin: 4px 0 10px;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 0.85em;
+  line-height: 1.35;
+  -webkit-overflow-scrolling: touch;
+}
+
+.chatBubble thead {
+  display: table-header-group;
+}
+
+.chatBubble th,
+.chatBubble td {
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.chatBubble th {
+  background: var(--surface-soft);
+  font-weight: 700;
+}
+
+.chatBubble.assistant tbody tr:nth-child(even) {
+  background: var(--surface-soft);
+}
+
+.chatBubble code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--surface-soft);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+
+.chatBubble.user code {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.chatBubble.user th,
+.chatBubble.user td {
+  border-color: rgba(255, 255, 255, 0.28);
+}
+
+.chatBubble.user th {
+  background: rgba(255, 255, 255, 0.14);
 }
 
 .chatError {
@@ -2628,7 +3024,8 @@ button.emailSearchResult:focus-visible {
 
 .chatComposer button:disabled,
 .chatHeaderActions button:disabled,
-.chatHistoryBar button:disabled {
+.chatHistoryRow button:disabled,
+.chatModelPicker select:disabled {
   cursor: not-allowed;
   opacity: 0.5;
 }
@@ -2641,5 +3038,1604 @@ button.emailSearchResult:focus-visible {
 
   .chatPanel {
     height: calc(100vh - 96px);
+  }
+}
+/* Premium Numbers inventory redesign */
+.premiumNumbersPage {
+  display: grid;
+  gap: 20px;
+  position: relative;
+}
+
+.premiumNumbersPage button:not(:disabled) {
+  transition: transform 90ms ease, opacity 90ms ease;
+}
+
+.premiumNumbersPage button:not(:disabled):active {
+  transform: scale(0.96);
+}
+
+.premiumNumbersPage button:disabled {
+  opacity: 0.65;
+  cursor: progress;
+}
+
+.actionToast {
+  position: fixed;
+  /* Top-right, well clear of the bottom-right chat launcher - a fixed bottom-corner
+     position kept landing behind or too close to that widget no matter the offset. */
+  top: 24px;
+  right: 24px;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(420px, calc(100vw - 48px));
+  padding: 10px 12px 10px 16px;
+  border-radius: 8px;
+  background: var(--ink);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 6px 18px rgb(15 23 42 / 20%);
+  animation: action-toast-in 160ms ease-out;
+}
+
+.actionToast--error {
+  background: var(--danger);
+}
+
+.actionToastClose {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 15%);
+  color: inherit;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.actionToastClose:hover {
+  background: rgb(255 255 255 / 28%);
+}
+
+@keyframes action-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.premiumNumbersHeader {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 16px;
+}
+
+.premiumNumbersHeader h2,
+.premiumNumbersHeader p {
+  margin: 0;
+}
+
+.premiumNumbersHeader p {
+  margin-top: 5px;
+}
+
+.premiumTabs {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-soft);
+}
+
+.premiumTabs button {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 9px 14px;
+  border-radius: 6px;
+  font-weight: 600;
+}
+
+.premiumTabs button.active {
+  background: var(--surface);
+  color: var(--primary);
+  box-shadow: 0 1px 3px rgb(15 23 42 / 12%);
+}
+
+.inventoryPanel,
+.opportunitiesTab,
+.applicationsTab {
+  display: grid;
+  gap: 16px;
+}
+
+.inventoryToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+}
+
+.inventoryToolbar label {
+  display: grid;
+  gap: 5px;
+  min-width: 160px;
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.inventoryToolbar input,
+.inventoryToolbar select {
+  min-height: 40px;
+  font-size: 14px;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.inventorySearchField {
+  flex: 1 1 300px;
+}
+
+.selectAllRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 10px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.selectAllRow input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+}
+
+.selectionBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 9px;
+  min-height: 48px;
+  padding: 8px 12px;
+  border: 1px solid #c4d4f7;
+  border-radius: 7px;
+  background: #eef4ff;
+}
+
+.selectionBar > span {
+  color: var(--muted);
+}
+
+.selectionActions {
+  margin-left: auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.selectionActions button,
+.opportunityCard .rowBtns button {
+  min-height: 34px;
+  padding: 7px 12px;
+}
+
+.detailPanel .detailPanelActions button {
+  height: 36px;
+  padding: 0 12px;
+}
+
+.dangerButton {
+  border-color: #e5a3aa !important;
+  background: #fff7f8 !important;
+  color: var(--danger) !important;
+}
+
+.sendActionButton {
+  border-color: var(--primary) !important;
+  background: var(--primary) !important;
+  color: #fff !important;
+  font-weight: 600;
+}
+
+.sendActionButton:hover:not(:disabled) {
+  background: var(--primary-strong) !important;
+}
+
+.sendActionButton:disabled {
+  opacity: 0.55;
+}
+
+.dangerText {
+  color: var(--danger) !important;
+}
+
+.inventoryNote,
+.inventoryApproximation {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.inventoryTableCard {
+  position: relative;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 1px 3px rgb(15 23 42 / 7%);
+}
+
+.inventoryTableScroll {
+  overflow-x: auto;
+}
+
+.inventoryTable {
+  width: 100%;
+  min-width: 850px;
+  border-collapse: collapse;
+  table-layout: auto;
+}
+
+.inventoryTable th,
+.inventoryTable td {
+  padding: 12px 10px;
+  border-bottom: 1px solid #e2e6ee;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.inventoryTable th {
+  background: #f7f8fb;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.inventoryTable tbody tr {
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.inventoryTable tbody tr:hover,
+.inventoryRow--selected {
+  background: #f1f5ff;
+}
+
+.inventoryTable tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.inventoryCheckboxCell {
+  width: 38px;
+  text-align: center !important;
+}
+
+.inventoryFavoriteCell {
+  width: 34px;
+  text-align: center !important;
+  cursor: default;
+}
+
+.inventoryFavoriteToggle {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  padding: 2px;
+  color: #cbd5e1;
+}
+
+.inventoryFavoriteToggle--active {
+  color: #f2b705;
+}
+
+.inventoryNumber,
+.inventoryScore {
+  color: #073eaf;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.inventoryNumber--empty {
+  color: var(--muted);
+  font-weight: 400;
+  font-style: italic;
+}
+
+.inventoryTable td small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+}
+
+.categoryChips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+
+.categoryChip,
+.statusBadge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+  line-height: 1.35;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.categoryChip {
+  background: #f2f5fb;
+  color: #334155;
+}
+
+.statusBadge--active {
+  border-color: #b8dec3;
+  background: #eaf8ee;
+  color: #137333;
+}
+
+.statusBadge--pending {
+  border-color: #efd49b;
+  background: #fff7df;
+  color: #9a5b00;
+}
+
+.statusBadge--flagged {
+  border-color: #efb7bd;
+  background: #fff0f2;
+  color: var(--danger);
+}
+
+.statusBadge--identity-conflict {
+  border-color: #efb7bd;
+  background: #fff0f2;
+  color: var(--danger);
+}
+
+.statusBadge--insufficient-evidence,
+.statusBadge--source-attribution-failure {
+  border-color: #efd49b;
+  background: #fff7df;
+  color: #9a5b00;
+}
+
+.statusBadge--international-number-needs-verification {
+  border-color: #b9d5f5;
+  background: #eef6ff;
+  color: #245d9c;
+}
+
+.inventoryMenuCell {
+  width: 40px;
+  position: relative;
+}
+
+.recycleBinRowActions {
+  display: flex;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.inventoryMenu summary {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 5px;
+  color: #123d8f;
+  cursor: pointer;
+  font-size: 20px;
+  list-style: none;
+}
+
+.inventoryMenu summary::-webkit-details-marker {
+  display: none;
+}
+
+.inventoryMenu[open] summary {
+  background: #e9effc;
+}
+
+.inventoryMenuPopover {
+  position: absolute;
+  z-index: 12;
+  right: 8px;
+  top: 42px;
+  display: grid;
+  min-width: 170px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+  box-shadow: 0 10px 28px rgb(15 23 42 / 16%);
+}
+
+.inventoryMenuPopover button {
+  border: 0;
+  background: transparent;
+  padding: 8px 9px;
+  text-align: left;
+}
+
+.inventoryMenuPopover button:hover {
+  background: var(--surface-soft);
+}
+
+.inventoryEmpty {
+  margin: 0;
+  padding: 28px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.inventoryPaginationFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 52px;
+  padding: 9px 12px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pagination button {
+  min-width: 32px;
+  min-height: 30px;
+  padding: 4px 8px;
+}
+
+.pagination button.active {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: #fff;
+}
+
+.errorBanner {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid #efb7bd;
+  border-radius: 7px;
+  background: #fff5f6;
+  color: var(--danger);
+}
+
+.detailPanelOverlay {
+  position: fixed;
+  z-index: 80;
+  inset: 0;
+  display: flex;
+  justify-content: flex-end;
+  background: rgb(15 23 42 / 42%);
+}
+
+.detailPanel {
+  width: min(620px, 94vw);
+  height: 100%;
+  overflow-y: auto;
+  background: var(--surface);
+  box-shadow: -10px 0 36px rgb(15 23 42 / 22%);
+  outline: none;
+}
+
+.detailPanelHeader {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.detailPanelHeader h3,
+.detailPanelHeader p {
+  margin: 0;
+}
+
+.detailPanelNumberEmpty {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.detailPanelEyebrow {
+  margin-bottom: 3px !important;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.detailPanelHeader .categoryChips {
+  margin-top: 9px;
+}
+
+.detailPanelBody {
+  display: grid;
+  gap: 14px;
+  padding: 18px 20px 90px;
+}
+
+.detailSection {
+  display: grid;
+  gap: 12px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.detailSection h4 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #3c465a;
+}
+
+:where(.detailSection > p:not(.subtle):not(.errorMessage)) {
+  margin: 0;
+  font-size: 14px;
+  color: #333c50;
+  font-weight: 500;
+}
+
+:where(.detailSection > p:not(.subtle):not(.errorMessage)) strong {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.emailItem > .detailSection {
+  margin-top: 20px;
+  padding-bottom: 18px;
+}
+
+.emailItem > .detailSection:last-of-type {
+  border-bottom: 0;
+  padding-bottom: 4px;
+}
+
+.emailItem .rowBtns {
+  margin-top: 4px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.emailItem .rowBtns .verdictBadge {
+  margin-left: auto;
+}
+
+.detailSectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.detailPanel .detailSectionHeader button {
+  height: 36px;
+  padding: 0 12px;
+}
+
+.detailEditActions {
+  display: flex;
+  gap: 8px;
+}
+
+.detailFormGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.detailFormGridFullRow {
+  grid-column: 1 / -1;
+}
+
+.detailFormGrid label,
+.detailSection > label,
+.opportunityCard > label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.detailFormGrid input,
+.detailFormGrid select,
+.detailSection > label input,
+.detailSection > label select,
+.opportunityCard > label input,
+.opportunityCard > label select,
+.opportunityCard > header select,
+.phoneListEditorRow input {
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 400;
+}
+
+.detailFormGrid input::placeholder,
+.phoneListEditorRow input::placeholder {
+  color: #8b93a7;
+}
+
+.detailFormGrid input:focus-visible,
+.detailFormGrid select:focus-visible,
+.detailSection > label input:focus-visible,
+.detailSection > label select:focus-visible,
+.phoneListEditorRow input:focus-visible,
+.emailListEditorRow input:focus-visible {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgb(15 75 207 / 15%);
+}
+
+.detailList .phoneNumbersList,
+.detailList .emailAddressesList {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 4px;
+}
+
+.phoneNumbersList .phoneNumbersListRow,
+.emailAddressesList .emailAddressesListRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.phoneNumbersList .phoneNumbersListRow span,
+.emailAddressesList .emailAddressesListRow a {
+  white-space: nowrap;
+}
+
+.phoneListEditor,
+.emailListEditor {
+  display: grid;
+  gap: 8px;
+}
+
+.phoneListEditorRow,
+.emailListEditorRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.phoneListEditorRow input,
+.emailListEditorRow input {
+  min-width: 0;
+}
+
+.phoneListEditorRow .categoryChip,
+.emailListEditorRow .categoryChip {
+  flex-shrink: 0;
+}
+
+.phoneListEditorRow .iconBtn,
+.emailListEditorRow .iconBtn {
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.phoneListEditorRow .iconBtn:hover,
+.emailListEditorRow .iconBtn:hover {
+  border-color: #e5a3aa;
+  background: #fff7f8;
+  color: var(--danger);
+}
+
+.phoneListEditor > button,
+.emailListEditor > button {
+  justify-self: start;
+  height: 34px !important;
+  padding: 0 12px !important;
+  font-size: 13px;
+  color: var(--primary) !important;
+  border-style: dashed !important;
+}
+
+.detailList {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.detailList div {
+  display: grid;
+  grid-template-columns: 135px minmax(0, 1fr);
+  gap: 12px;
+}
+
+.detailList dt {
+  color: var(--muted);
+}
+
+.detailList dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.detailPanelActions {
+  position: sticky;
+  z-index: 3;
+  bottom: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.detailPanelActions > .subtle {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.opportunityGrid {
+  display: grid;
+  gap: 14px;
+}
+
+.opportunityCard {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+}
+
+.opportunityCard > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.opportunityCard h3 {
+  margin: 7px 0 0;
+}
+
+.opportunityCard > header select {
+  width: 160px;
+  flex-shrink: 0;
+}
+
+.applicationCardTopRight {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.candidateCardHeaderMain .categoryChip {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.opportunitySummary {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--muted);
+}
+
+.opportunitySummary p {
+  margin: 0;
+}
+
+.opportunityCard .detailFormGrid {
+  grid-template-columns: 1fr;
+}
+
+.applicationSummary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.applicationSummary > div {
+  display: grid;
+  gap: 3px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.applicationSummary strong {
+  color: var(--primary);
+  font-size: 24px;
+}
+
+.applicationSummary span,
+.snapshotNotice,
+.applicationTimeline time,
+.applicationTimeline small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.resumeLockPicker,
+.applicationTimeline {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.resumeLockPicker > label,
+.applicationEventForm label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.resumeLockPicker p {
+  margin: 0;
+}
+
+.applicationTimeline ol {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.applicationTimeline li {
+  display: grid;
+  gap: 3px;
+  padding-left: 12px;
+  border-left: 3px solid #c4d4f7;
+}
+
+.applicationTimeline li p {
+  margin: 2px 0 0;
+  white-space: pre-wrap;
+}
+
+.applicationEventForm {
+  display: grid;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.applicationEventForm button {
+  width: fit-content;
+}
+
+.applicationWorkflowPanel {
+  padding: 0 0 14px;
+}
+
+.applicationDraftPanel textarea {
+  min-height: 150px;
+  resize: vertical;
+}
+
+.applicationDraftActions,
+.applicationDraftPanel > .checkboxLabel,
+.applicationAttachmentList .checkboxLabel {
+  align-items: center;
+}
+
+.applicationDraftSource {
+  align-self: center;
+}
+
+.applicationAttachmentList {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.applicationDraftPanel > .checkboxLabel,
+.applicationAttachmentList .checkboxLabel {
+  display: flex;
+  gap: 8px;
+}
+
+.applicationInterviewList,
+.applicationInterviewRow,
+.duplicateConflict,
+.opportunityJobDetails > .detailFormGrid {
+  display: grid;
+  gap: 10px;
+}
+
+.applicationInterviewRow,
+.duplicateConflict {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.applicationInterviewRow > p,
+.duplicateConflict > p,
+.duplicateConflict > ul {
+  margin: 0;
+}
+
+.opportunityJobDetails > summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.opportunityJobDetails > .detailFormGrid {
+  margin-top: 12px;
+}
+
+.detailFormGrid .checkboxLabel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.checkboxLabel input[type='checkbox'] {
+  width: auto;
+}
+
+.applicationSuggestions,
+.opportunityMatchEvidence,
+.recruiterReputation {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px;
+}
+
+.mergePreviewGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.mergePreviewCard {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.mergePreviewCard--selected {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 1px var(--primary);
+}
+
+@media (max-width: 640px) {
+  .mergePreviewGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.applicationSuggestions {
+  margin-bottom: 16px;
+}
+
+.applicationSuggestionList {
+  display: grid;
+  gap: 10px;
+}
+
+.applicationSuggestionRow {
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 12px;
+}
+
+.opportunityMatchEvidence ul {
+  margin: 8px 0 0;
+  padding-left: 20px;
+}
+
+.limitedHistoryLabel {
+  font-weight: 700;
+}
+
+.settingsCheckboxGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+@media (max-width: 900px) {
+  .premiumNumbersHeader,
+  .inventoryPaginationFooter,
+  .opportunityCard > header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .premiumTabs,
+  .premiumTabs button {
+    width: 100%;
+  }
+
+  .premiumTabs {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  }
+
+  .applicationSummary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .selectionActions {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .detailFormGrid {
+    grid-template-columns: 1fr;
+  }
+}
+.resumeTrackingPage { display: grid; gap: 1.25rem; }
+.resumeTrackingHeader, .buttonRow, .funnelStrip { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; }
+.resumeTrackingToolbar, .submissionActions { display: flex; gap: .75rem; align-items: flex-end; flex-wrap: wrap; }
+.resumeTrackingHeader { justify-content: space-between; }
+.resumeTrackingHeader h2 { margin: 0; }
+.tabBar { display: flex; gap: .25rem; }
+.tabBar button.active { background: var(--primary); color: white; }
+.resumeTrackingPanel { display: grid; gap: 1.25rem; }
+.resumeTrackingToolbar { padding: .8rem 1rem; background: var(--surface-soft); border: 1px solid var(--line); border-radius: .75rem; }
+.resumeTrackingToolbar label, .resumeTrackingForm label, .submissionActions label { display: grid; gap: .3rem; font-size: .78rem; font-weight: 600; color: var(--muted); }
+.resumeTrackingToolbar label:first-child { flex: 1 1 220px; }
+.resumeTrackingForm { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: .85rem; padding: 1.25rem; border: 1px solid var(--line); border-radius: .75rem; background: var(--surface); }
+.resumeTrackingForm .wideField, .resumeTrackingForm h3 { grid-column: 1 / -1; }
+.resumeTrackingForm h3 { margin: 0 0 .1rem; }
+.resumeTrackingForm textarea { min-height: 7rem; resize: vertical; }
+.resumeCardGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 14px; background: var(--surface-soft); border-radius: .75rem; padding: 14px; }
+.resumeCard, .submissionCard, .trackingSuggestions article { border: 1px solid var(--line); border-radius: .75rem; padding: 16px; background: var(--surface); }
+.resumeCard { display: grid; gap: 12px; border-left: 4px solid var(--line-strong); box-shadow: 0 1px 3px rgb(15 23 42 / 7%); transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease; }
+.resumeCard:hover, .resumeCard:focus-within { box-shadow: 0 4px 14px rgb(15 23 42 / 10%); transform: translateY(-1px); }
+.resumeCard.selected { outline: 2px solid var(--primary); outline-offset: 1px; }
+.resumeCard.high { border-left-color: #137333; }
+.resumeCard.mid { border-left-color: #9a5b00; }
+.resumeCard > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.resumeCardMain { display: grid; gap: .3rem; min-width: 0; }
+.resumeCardMain > button { display: grid; gap: .2rem; width: 100%; min-width: 0; text-align: left; background: transparent; color: inherit; border: 0; padding: 0; font: inherit; cursor: pointer; border-radius: 4px; }
+.resumeCardMain > button:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
+.resumeCardTitle { font-weight: 700; font-size: 1rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.resumeCardRole { color: var(--muted); font-size: .85rem; }
+.resumeCardMissingDetails { background: transparent; border: 0; padding: 0; margin: 0; color: var(--primary); font-size: .78rem; text-decoration: underline; cursor: pointer; width: fit-content; }
+.resumeCardMissingDetails:hover, .resumeCardMissingDetails:focus-visible { color: var(--primary-strong); }
+.resumeCardStat { display: grid; justify-items: end; gap: 1px; flex-shrink: 0; }
+.resumeCardPct { font-size: 1.4rem; font-weight: 700; line-height: 1; color: var(--muted); font-variant-numeric: tabular-nums; }
+.resumeCardStat.high .resumeCardPct { color: #137333; }
+.resumeCardStat.mid .resumeCardPct { color: #9a5b00; }
+.resumeCardStatLabel { font-size: .68rem; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; font-weight: 600; }
+.resumeCardBar { display: flex; align-items: center; gap: .6rem; }
+.resumeCardBarLabel { font-size: .78rem; color: var(--muted); flex-shrink: 0; }
+.resumeCardBarTrack { flex: 1; display: block; height: 6px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.resumeCardBarFill { display: block; height: 100%; border-radius: inherit; background: #94a3b8; }
+.resumeCardBarFill.high { background: #137333; }
+.resumeCardBarFill.mid { background: #9a5b00; }
+.resumeCardBarFill.zero { background: transparent; }
+.resumeCard .skillChips { margin-top: 0; }
+.skillChips, .gapPanel { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .65rem; align-items: center; }
+.trackingChip { display: inline-block; border-radius: 999px; padding: .2rem .6rem; background: var(--surface-soft); border: 1px solid var(--line); color: #475569; font-size: .78rem; }
+.funnelStrip { justify-content: space-between; padding: .9rem 1.1rem; background: var(--surface-soft); border: 1px solid var(--line); border-radius: .75rem; }
+.funnelStat { display: grid; gap: .2rem; justify-items: start; }
+.funnelStat strong { color: var(--ink); font-size: 1.15rem; font-variant-numeric: tabular-nums; }
+.funnelStat span { color: var(--muted); font-size: .68rem; text-transform: uppercase; letter-spacing: .05em; font-weight: 600; }
+.submissionList { display: grid; gap: .85rem; max-height: 70vh; overflow-y: auto; padding-right: 4px; }
+.submissionCard { display: grid; grid-template-columns: minmax(220px, 1fr) auto; gap: .75rem; transition: box-shadow .15s ease; }
+.submissionCard:hover, .submissionCard:focus-within { box-shadow: 0 4px 14px rgb(15 23 42 / 9%); }
+.submissionCard h3 { margin: 0 0 .2rem; font-size: .95rem; }
+.submissionCard > div > p { margin: .15rem 0 0; }
+.submissionActions, .rejectionTagRow, .gapPanel, .aiTagPrompt { grid-column: 1 / -1; }
+.rejectionTagRow { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; padding: .6rem .75rem; background: var(--surface-soft); border: 1px solid var(--line); border-radius: .5rem; }
+.rejectionTagRow input { flex: 1; min-width: 140px; }
+.rejectionTagRow button:first-of-type { margin-left: auto; }
+.trackingSuggestions { display: grid; gap: .5rem; }
+.aiTagPrompt { padding: .5rem .65rem; background: #fff7df; border: 1px solid #efd49b; border-radius: .5rem; color: #6b4400; }
+.aiTagPrompt button { margin-left: .5rem; }
+.statusBadge--neutral { border-color: var(--line-strong); background: var(--surface-soft); color: var(--muted); }
+@media (max-width: 700px) {
+  .submissionCard { grid-template-columns: 1fr; }
+  .statusBadge { justify-self: start; }
+  .resumeCardGrid { grid-template-columns: 1fr; }
+  .funnelStrip { justify-content: flex-start; gap: 1.5rem; }
+}
+.filterFieldWithHint label span:first-child { text-decoration: underline dotted; text-underline-offset: 3px; cursor: help; }
+.filterSortClearButton { align-self: end; min-height: 40px; }
+.filterSortBar--disabled { opacity: .55; }
+.filterSortBar--active { border-color: var(--primary); background: #e6edff; }
+.filterSortMoreToggle { flex-basis: 100%; }
+.filterSortMoreToggle > summary { min-height: 40px; display: flex; align-items: center; width: fit-content; padding: 0 4px; color: var(--primary); font-weight: 700; font-size: 13px; cursor: pointer; list-style: none; }
+.filterSortMoreToggle > summary:hover, .filterSortMoreToggle > summary:focus-visible { color: var(--primary-strong); }
+.filterSortMoreFields { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); }
+.filterSortStatus { display: flex; align-items: center; gap: 8px; align-self: center; color: var(--muted); font-size: 12px; font-weight: 600; }
+.roleProvenanceHint {
+  margin-left: 8px;
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: .01em;
+  text-transform: none;
+  vertical-align: middle;
+  white-space: nowrap;
+  cursor: help;
+}
+.filterSortScopeNote {
+  align-self: center;
+  padding: 3px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: normal;
+  text-transform: none;
+  white-space: nowrap;
+}
+.filterSortSpinner { flex: none; width: 16px; height: 16px; border: 2px solid var(--line); border-top-color: var(--primary); border-radius: 50%; }
+@media (prefers-reduced-motion: no-preference) { .filterSortSpinner { animation: inbox-spin 700ms linear infinite; } }
+.filterRangeInputs { display: flex; align-items: center; gap: 6px; }
+.filterRangeInputs input { width: 80px; }
+.filterMultiselectField { position: relative; }
+.filterMultiselectPopover { position: relative; }
+.filterMultiselectPopover summary {
+  position: relative;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 0 34px 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+  list-style: none;
+  font-size: 14px;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+}
+.filterMultiselectPopover summary::-webkit-details-marker { display: none; }
+.filterMultiselectPopover summary::after {
+  content: "";
+  position: absolute;
+  right: 12px;
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid var(--muted);
+  border-bottom: 1.5px solid var(--muted);
+  transform: rotate(45deg);
+}
+.filterMultiselectPopover[open] summary {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgb(37 99 235 / 12%);
+}
+.filterMultiselectPopover[open] summary::after { transform: translateY(3px) rotate(225deg); }
+.filterMultiselectOptions {
+  position: absolute;
+  z-index: 50;
+  top: calc(100% + 6px);
+  left: 0;
+  display: grid;
+  gap: 2px;
+  min-width: 220px;
+  max-height: 260px;
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+  box-shadow: 0 16px 32px rgb(15 23 42 / 16%);
+}
+.filterMultiselectOption {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  min-height: 32px;
+  padding: 6px 8px;
+  border-radius: 5px;
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: normal;
+  text-transform: none;
+}
+.filterMultiselectOption:hover { background: var(--surface-soft); }
+.filterMultiselectOption input[type='checkbox'] {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+  margin: 0;
+  accent-color: var(--primary);
+}
+.filterComboboxField { position: relative; }
+.filterComboboxShell { position: relative; }
+.filterComboboxPanel {
+  position: absolute;
+  z-index: 50;
+  top: calc(100% + 6px);
+  left: 0;
+  display: grid;
+  gap: 2px;
+  min-width: 240px;
+  width: 100%;
+  max-height: 260px;
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+  box-shadow: 0 16px 32px rgb(15 23 42 / 16%);
+}
+.filterComboboxOption {
+  display: block;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: normal;
+  text-transform: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.filterComboboxOption:hover,
+.filterComboboxOption.is-active { background: var(--surface-soft); }
+.filterComboboxOption.is-active { box-shadow: inset 2px 0 0 var(--primary); }
+.filterComboboxNote { margin: 0; padding: 8px; color: var(--muted); font-size: 12px; font-weight: 600; }
+.filterComboboxField input:focus-visible {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgb(37 99 235 / 12%);
+}
+@media (max-width: 640px) { .filterSortBar .filterComboboxField { width: 100%; } }
+/* Filter visibility -------------------------------------------------------
+   `.runQueueGrid > .card > :not(h2)` makes every direct child its own flex +
+   scroll region, so this card keeps exactly one child (.filterVisibilityBody)
+   and does its own layout inside it. Adding a second direct child re-splits
+   the 30rem card and clips every row. */
+.filterVisibilityBody { position: relative; }
+.filterVisibilityIntro {
+  margin: 0 0 12px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.filterVisibilityList { display: grid; gap: 2px; }
+
+.filterVisibilityGroup {
+  min-width: 0;
+  border-radius: 9px;
+  transition: background-color 160ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.filterVisibilityGroup[open] { background: var(--surface-soft); }
+
+.filterVisibilityGroup > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 0 10px 0 12px;
+  border-radius: 9px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  list-style: none;
+  transition: background-color 160ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.filterVisibilityGroup > summary::-webkit-details-marker { display: none; }
+.filterVisibilityGroup > summary:hover { background: var(--surface-soft); }
+.filterVisibilityGroup[open] > summary:hover { background: #eef2f9; }
+.filterVisibilityGroup > summary:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgb(15 75 207 / 18%);
+}
+
+/* Disclosure caret, same border-triangle idiom as .filterMultiselectPopover. */
+.filterVisibilityGroup > summary::after {
+  content: "";
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin-left: 2px;
+  border-right: 1.5px solid var(--muted);
+  border-bottom: 1.5px solid var(--muted);
+  transform: translateY(-2px) rotate(45deg);
+  transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.filterVisibilityGroup[open] > summary::after { transform: translateY(1px) rotate(225deg); }
+
+/* The leaf is what you scan for, so it never truncates; the family prefix does. */
+.filterVisibilityName { display: flex; align-items: baseline; gap: 5px; min-width: 0; overflow: hidden; flex: 1 1 auto; }
+/* Scope gives way first; the leaf is what you scan for, so it truncates last. */
+.filterVisibilityLeaf { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.filterVisibilityScope {
+  /* Shrinks ~100x faster than the leaf: the repeated family prefix gives way,
+     the distinguishing leaf keeps its characters. */
+  flex: 0 100 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.filterVisibilityScope::after { content: " ·"; }
+
+.filterVisibilityCount {
+  flex: none;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  transition: color 160ms ease;
+}
+.filterVisibilityCount.is-reduced { color: var(--primary); font-weight: 700; }
+
+.filterVisibilityPanel { padding: 0 12px 12px; }
+@media (prefers-reduced-motion: no-preference) {
+  .filterVisibilityGroup[open] > .filterVisibilityPanel {
+    animation: filterVisibilityReveal 220ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+}
+@keyframes filterVisibilityReveal {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+
+.filterVisibilityActions { display: flex; align-items: center; gap: 10px; margin: 0 0 8px; }
+.filterVisibilityActions button {
+  padding: 2px 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--primary);
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: color 140ms ease;
+}
+.filterVisibilityActions button:hover { color: var(--primary-strong); }
+.filterVisibilityActions button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgb(15 75 207 / 18%);
+}
+.filterVisibilityActionsDivider { width: 1px; height: 11px; background: var(--line); }
+
+.filterVisibilityFields { display: grid; gap: 1px; }
+.filterVisibilityField {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+  min-height: 30px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 140ms ease;
+}
+.filterVisibilityField:hover { background: var(--surface); }
+.filterVisibilityField.is-locked { cursor: default; }
+.filterVisibilityField input[type="checkbox"] {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  min-height: 0;
+  margin: 0;
+  accent-color: var(--primary);
+}
+.filterVisibilityField input[type="checkbox"]:disabled { opacity: .55; }
+.filterVisibilityFieldName { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.filterVisibilityLock {
+  margin-left: auto;
+  flex: none;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: .01em;
+}
+
+/* Stays put while you scroll the list, so save state is never hunted for. */
+.filterVisibilityStatus {
+  position: sticky;
+  bottom: 0;
+  min-height: 20px;
+  margin: 6px 0 0;
+  padding-top: 6px;
+  background: linear-gradient(to bottom, rgb(255 255 255 / 0%), var(--surface) 45%);
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+.filterVisibilityStatus.is-visible { opacity: 1; }
+@media (max-width: 640px) { .filterSortBar { flex-direction: column; align-items: stretch; } .filterSortBar > label, .filterSortBar .filterRangeField, .filterSortBar .filterMultiselectField { width: 100%; } .filterSortMoreFields { flex-direction: column; } }
+.emailItemCheckbox { float: left; margin-right: 10px; width: 16px; height: 16px; }
+
+.candidateCardTop {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.candidateCardCheckbox {
+  float: none;
+  margin: 4px 0 0;
+  flex: 0 0 auto;
+}
+
+.candidateCardHeaderMain {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.candidateCardTitle {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--ink);
+  line-height: 1.3;
+}
+
+.candidateCardSubtitle {
+  margin: 0 0 4px;
+  color: #3c465a;
+  font-size: 13.5px;
+  font-weight: 500;
+}
+
+.candidateCardMeta {
+  margin: 0;
+  font-size: 13px;
+  color: #333c50;
+  font-weight: 500;
+}
+
+.candidateCardMeta strong {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.candidateCardLinks {
+  display: flex;
+  gap: 14px;
+}
+
+.candidateCardRecordId {
+  margin: 6px 0 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.01em;
+}
+
+.candidateCardBadges {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 7px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-soft);
+  min-width: 176px;
+}
+
+.candidateCardBadges .statusBadge {
+  width: fit-content;
+}
+
+.statusBadge--lg {
+  font-size: 13px;
+  padding: 5px 12px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+@media (max-width: 720px) {
+  .candidateCardTop {
+    flex-direction: column;
+  }
+
+  .candidateCardBadges {
+    align-items: flex-start;
+    width: 100%;
+    flex-direction: row;
+    flex-wrap: wrap;
   }
 }

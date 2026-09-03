@@ -1,8 +1,8 @@
 from datetime import UTC, datetime
 from urllib.parse import quote
 
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text, UniqueConstraint
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import Boolean, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy.orm import Mapped, mapped_column, synonym
 
 from app.ai.draft_quality import assess_draft_quality
 from app.db import Base, UTCDateTime
@@ -10,6 +10,15 @@ from app.db import Base, UTCDateTime
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+class BulkActionIdempotencyKey(Base):
+    __tablename__ = "bulk_action_idempotency_keys"
+
+    owner_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    response_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, index=True)
 
 
 class RecruiterEmail(Base):
@@ -23,7 +32,15 @@ class RecruiterEmail(Base):
     sender: Mapped[str] = mapped_column(String(255), index=True)
     subject: Mapped[str] = mapped_column(String(500))
     body: Mapped[str] = mapped_column(Text)
-    role: Mapped[str] = mapped_column(String(255), default="")
+    role: Mapped[str] = mapped_column(Text, default="")
+    # Provenance for `role`. NULL means "written before provenance existed" and must
+    # be read as unverified - never assume "extracted". See services/role_provenance.py.
+    role_source: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # Collapsed taxonomy title for aggregation ("Java Developer"), kept separate so
+    # `role` can stay specific for the draft copy that interpolates it. String(255),
+    # never Text: this one is indexed, and an unbounded indexed column blew the
+    # Postgres btree key limit once already (migration 0051).
+    role_canonical: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     location: Mapped[str] = mapped_column(String(255), default="")
     salary_text: Mapped[str] = mapped_column(String(255), default="")
     skills_text: Mapped[str] = mapped_column(Text, default="")
@@ -60,6 +77,11 @@ class RecruiterEmail(Base):
     intent_negative_evidence_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     gate_action: Mapped[str | None] = mapped_column(String(40), nullable=True)
     gate_provider: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    # Why the gate fell back. Short slugs only (`deepseek_invalid_shape`,
+    # `groq_timeout`), no index - this is for diagnosis, not filtering. Without it
+    # the provider column can show *that* half the calls degraded to the taxonomy
+    # but never *why*, which is how a 12-day systematic failure went unnoticed.
+    gate_error: Mapped[str | None] = mapped_column(String(80), nullable=True)
     source_group_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     source_group_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     source_group_match_method: Mapped[str | None] = mapped_column(String(80), nullable=True)
@@ -75,6 +97,10 @@ class RecruiterEmail(Base):
     draft_ai_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     draft_resume_context_status: Mapped[str | None] = mapped_column(String(40), nullable=True)
     semantic_embedding: Mapped[str | None] = mapped_column(Text, nullable=True)
+    embedding_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    marked_for_tracking: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    resolved_recruiter_contact_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    resolved_recruiter_email: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     approval_status: Mapped[str] = mapped_column(String(50), default="pending")
     sent_status: Mapped[str] = mapped_column(String(50), default="not_sent")
     source: Mapped[str] = mapped_column(String(20), default="manual")
@@ -97,6 +123,13 @@ class RecruiterEmail(Base):
     resume_file_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     parser_details_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     company: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    # Provenance for company/location, same contract as role_source: NULL means the
+    # value predates tracking (or came straight from the parser) and is unverified.
+    # Set to "taxonomy_matched" only when an approved vocabulary entry filled a gap
+    # the parser left empty - so a matched value is never mistaken for an extracted
+    # one, which is the failure this whole mechanism exists to prevent.
+    company_source: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    location_source: Mapped[str | None] = mapped_column(String(40), nullable=True)
     end_client: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     implementation_partner: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     domain: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
@@ -125,6 +158,12 @@ class RecruiterEmail(Base):
     open_count: Mapped[int] = mapped_column(Integer, default=0)
     sent_attachment_file_names_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    record_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("candidate_records.id", name="fk_recruiter_emails_record"),
+        nullable=True,
+        index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
 
@@ -189,6 +228,9 @@ class UserSettings(Base):
     nvoids_batch_limit: Mapped[int] = mapped_column(Integer, default=10)
     nvoids_detail_title_mode: Mapped[str] = mapped_column(String(40), default="job_details")
     nvoids_locations: Mapped[str] = mapped_column(Text, default="")
+    nvoids_job_role: Mapped[str] = mapped_column(Text, default="")
+    nvoids_search_location: Mapped[str] = mapped_column(Text, default="")
+    nvoids_custom_query: Mapped[str] = mapped_column(Text, default="")
     feature_auto_send: Mapped[bool] = mapped_column(default=False)
     feature_retry_queue: Mapped[bool] = mapped_column(default=False)
     feature_ai_enabled: Mapped[bool] = mapped_column(default=False)
@@ -200,7 +242,16 @@ class UserSettings(Base):
     feature_strict_candidate_screening_enabled: Mapped[bool] = mapped_column(default=False)
     feature_email_tracking_enabled: Mapped[bool] = mapped_column(default=False)
     feature_reply_inbox_enabled: Mapped[bool] = mapped_column(default=False)
+    feature_applications_enabled: Mapped[bool] = mapped_column(default=False)
+    feature_application_automation_enabled: Mapped[bool] = mapped_column(default=False)
+    feature_application_outreach_drafts_enabled: Mapped[bool] = mapped_column(default=False)
+    feature_reminder_sweep_interval_minutes: Mapped[int] = mapped_column(Integer, default=240)
+    feature_resume_tracking_enabled: Mapped[bool] = mapped_column(default=False)
+    feature_resume_tracking_sweep_interval_minutes: Mapped[int] = mapped_column(Integer, default=240)
     candidate_work_authorizations_json: Mapped[str] = mapped_column(Text, default="[]")
+    preferred_employment_types_json: Mapped[str] = mapped_column(Text, default="[]")
+    visible_filters_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    preferred_minimum_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
     candidate_total_experience_years: Mapped[float | None] = mapped_column(Float, nullable=True)
     candidate_us_experience_years: Mapped[float | None] = mapped_column(Float, nullable=True)
     candidate_current_location: Mapped[str] = mapped_column(String(255), default="")
@@ -229,9 +280,15 @@ class ResumeAsset(Base):
     sha256: Mapped[str] = mapped_column(String(64), index=True)
     version: Mapped[int] = mapped_column(Integer, default=1)
     skills_text: Mapped[str] = mapped_column(Text, default="")
+    primary_role: Mapped[str] = mapped_column(String(255), default='')
+    structured_skills_json: Mapped[str] = mapped_column(Text, default='[]')
+    variant_label: Mapped[str] = mapped_column(String(120), default='')
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     is_current: Mapped[bool] = mapped_column(default=True)
     semantic_embedding: Mapped[str | None] = mapped_column(Text, nullable=True)
+    content_markdown: Mapped[str | None] = mapped_column(Text, nullable=True)
+    content_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    content_evidence_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
 
@@ -273,7 +330,7 @@ class CustomSkillTaxonomyEntry(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     owner_id: Mapped[str] = mapped_column(String(100), index=True)
-    canonical_name: Mapped[str] = mapped_column(String(255), index=True)
+    canonical_name: Mapped[str] = mapped_column(String(1000), index=True)
     aliases_json: Mapped[str] = mapped_column(Text, default="[]")
     category: Mapped[str] = mapped_column(String(120), default="custom")
     cluster_hint: Mapped[str | None] = mapped_column(String(120), nullable=True)
@@ -308,7 +365,11 @@ class EmailConversation(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     owner_id: Mapped[str] = mapped_column(String(100), default="default-owner", index=True)
-    root_recruiter_email_id: Mapped[int] = mapped_column(Integer, index=True)
+    root_recruiter_email_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("recruiter_emails.id", name="fk_email_conversations_root_recruiter_email", ondelete="RESTRICT"),
+        index=True,
+    )
     external_thread_id: Mapped[str] = mapped_column(String(255), index=True)
     status: Mapped[str] = mapped_column(String(40), default="sent", index=True)
     last_message_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, index=True)
@@ -336,6 +397,7 @@ class EmailReplyMessage(Base):
     snippet: Mapped[str] = mapped_column(Text, default="")
     received_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, index=True)
     read_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    notified_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
 
 class ChatSession(Base):
@@ -460,7 +522,7 @@ class RecentRunSkippedItem(Base):
     external_thread_id: Mapped[str | None] = mapped_column(String(1200), nullable=True)
     candidate_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     external_opportunity_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
-    title_or_subject: Mapped[str] = mapped_column(String(500), default="")
+    title_or_subject: Mapped[str] = mapped_column(Text, default="")
     sender: Mapped[str] = mapped_column(String(255), default="")
     location: Mapped[str | None] = mapped_column(String(255), nullable=True)
     source_url: Mapped[str | None] = mapped_column(String(1200), nullable=True)
@@ -472,6 +534,11 @@ class RecentRunSkippedItem(Base):
     intent_negative_evidence_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     gate_action: Mapped[str | None] = mapped_column(String(40), nullable=True)
     gate_provider: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    # Why the gate fell back. Short slugs only (`deepseek_invalid_shape`,
+    # `groq_timeout`), no index - this is for diagnosis, not filtering. Without it
+    # the provider column can show *that* half the calls degraded to the taxonomy
+    # but never *why*, which is how a 12-day systematic failure went unnoticed.
+    gate_error: Mapped[str | None] = mapped_column(String(80), nullable=True)
     source_group_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     source_group_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     source_group_match_method: Mapped[str | None] = mapped_column(String(80), nullable=True)
@@ -514,9 +581,28 @@ class PremiumNumberLead(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     owner_id: Mapped[str] = mapped_column(String(100), index=True)
-    recruiter_email_id: Mapped[int] = mapped_column(Integer, index=True)
+    recruiter_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    external_opportunity_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey(
+            "external_opportunities.id",
+            name="fk_premium_number_leads_external_opportunity",
+        ),
+        nullable=True,
+        index=True,
+    )
+    contact_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("premium_number_contacts.id", name="fk_premium_number_leads_contact"),
+        nullable=True,
+        index=True,
+    )
     phone_number_normalized: Mapped[str] = mapped_column(String(40), index=True)
     phone_number_display: Mapped[str] = mapped_column(String(80))
+    phone_extension: Mapped[str] = mapped_column(String(10), default="")
+    role: Mapped[str] = mapped_column(String(20), default="recruiter")
+    extraction_source: Mapped[str] = mapped_column(String(50), default="ai")
+    contact_email: Mapped[str] = mapped_column(String(255), default="")
     owner_name: Mapped[str] = mapped_column(String(255), default="Unknown")
     company: Mapped[str] = mapped_column(String(255), default="Unknown")
     designation: Mapped[str] = mapped_column(String(255), default="Unknown")
@@ -530,8 +616,30 @@ class PremiumNumberLead(Base):
     source_email_sender: Mapped[str] = mapped_column(String(255), default="")
     source_email_subject: Mapped[str] = mapped_column(String(500), default="")
     source_email_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    source_url: Mapped[str | None] = mapped_column(String(1200), nullable=True)
+    linkedin_url: Mapped[str] = mapped_column(String(500), default="")
+    source_section: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    block_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    evidence_offset_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    evidence_offset_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    colocation_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
+
+
+class PremiumNumberExtractionAudit(Base):
+    __tablename__ = "premium_number_extraction_audit"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    source_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    source_external_opportunity_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    raw_value: Mapped[str] = mapped_column(String(120))
+    normalized_value: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    status: Mapped[str] = mapped_column(String(20))
+    stage: Mapped[str] = mapped_column(String(40))
+    reason: Mapped[str] = mapped_column(String(160))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
 
 
 class RecruiterNumber(Base):
@@ -570,6 +678,101 @@ class EmployerNumber(Base):
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
 
 
+class PremiumNumberContact(Base):
+    __tablename__ = "premium_number_contacts"
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_id",
+            "normalized_phone_number",
+            "phone_extension",
+            name="ux_premium_number_contacts_owner_phone",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    normalized_phone_number: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    display_phone_number: Mapped[str] = mapped_column(String(80))
+    phone_extension: Mapped[str] = mapped_column(String(10), default="")
+    phone_is_valid: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_recruiter: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_employer: Mapped[bool] = mapped_column(Boolean, default=False)
+    recruiter_name: Mapped[str] = mapped_column(String(255), default="Unknown")
+    designation: Mapped[str] = mapped_column(String(255), default="Unknown")
+    recruiter_email: Mapped[str] = mapped_column(String(255), default="")
+    recruiter_email_domain: Mapped[str] = mapped_column(String(255), default="", index=True)
+    owner_name: Mapped[str] = mapped_column(String(255), default="Unknown")
+    employer_email: Mapped[str] = mapped_column(String(255), default="")
+    employer_email_domain: Mapped[str] = mapped_column(String(255), default="", index=True)
+    company: Mapped[str] = mapped_column(String(255), default="Unknown")
+    secondary_company: Mapped[str] = mapped_column(String(255), default="")
+    first_detected_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    active_recruiter_lead_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey(
+            "premium_number_leads.id",
+            name="fk_premium_number_contacts_active_recruiter_lead",
+            use_alter=True,
+        ),
+        nullable=True,
+    )
+    active_employer_lead_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey(
+            "premium_number_leads.id",
+            name="fk_premium_number_contacts_active_employer_lead",
+            use_alter=True,
+        ),
+        nullable=True,
+    )
+    linkedin_url: Mapped[str] = mapped_column(String(500), default="")
+    recruiter_verification_level: Mapped[str] = mapped_column(String(20), default="unverified")
+    do_not_work_again: Mapped[bool] = mapped_column(Boolean, default=False)
+    do_not_work_again_reason: Mapped[str] = mapped_column(Text, default="")
+    is_favorite: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    source_type: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
+    source_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_link_url: Mapped[str | None] = mapped_column(String(1200), nullable=True)
+    seen_count: Mapped[int] = mapped_column(Integer, default=1)
+    deleted_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
+
+
+class PremiumContactEmail(Base):
+    __tablename__ = "premium_contact_emails"
+    __table_args__ = (UniqueConstraint("owner_id", "normalized_email", name="ux_premium_contact_emails_owner_email"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    premium_contact_id: Mapped[int] = mapped_column(Integer, ForeignKey("premium_number_contacts.id"), index=True)
+    normalized_email: Mapped[str] = mapped_column(String(255), index=True)
+    domain: Mapped[str] = mapped_column(String(255), default="", index=True)
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Which headline column this address feeds. A dual-role contact has two of them, so
+    # without this the write-through sync in contact_identity_service is ambiguous.
+    role: Mapped[str] = mapped_column(String(20), default="recruiter")
+    source_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+
+
+class PremiumContactPhone(Base):
+    __tablename__ = "premium_contact_phones"
+    __table_args__ = (UniqueConstraint("owner_id", "normalized_phone_number", "phone_extension", name="ux_premium_contact_phones_owner_phone"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    premium_contact_id: Mapped[int] = mapped_column(Integer, ForeignKey("premium_number_contacts.id"), index=True)
+    normalized_phone_number: Mapped[str] = mapped_column(String(40), index=True)
+    phone_extension: Mapped[str] = mapped_column(String(10), default="")
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    source: Mapped[str] = mapped_column(String(50), default="unknown")
+    label: Mapped[str] = mapped_column(String(20), default="")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+
+
 class RecruiterOpportunity(Base):
     __tablename__ = "recruiter_opportunities"
     __table_args__ = (
@@ -583,6 +786,7 @@ class RecruiterOpportunity(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    # Fossil name: this targets premium_number_contacts.id, not the removed RecruiterNumber model.
     recruiter_number_id: Mapped[int] = mapped_column(Integer, index=True)
     source_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     gmail_message_id: Mapped[str] = mapped_column(String(255), index=True)
@@ -593,19 +797,486 @@ class RecruiterOpportunity(Base):
     email_sender: Mapped[str] = mapped_column(String(255), default="")
     gmail_open_url: Mapped[str] = mapped_column(String(1000), default="")
     received_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
-    job_title: Mapped[str] = mapped_column(String(255), default="")
-    client: Mapped[str] = mapped_column(String(255), default="")
+    job_title: Mapped[str] = mapped_column(Text, default="")
+    end_client: Mapped[str] = mapped_column(Text, default="")
+    # Transitional Python alias for callers migrating from the pre-unification name.
+    client = synonym("end_client")
     location: Mapped[str] = mapped_column(String(255), default="")
     work_mode: Mapped[str] = mapped_column(String(80), default="")
     visa_restrictions: Mapped[str] = mapped_column(String(255), default="")
+    resume_file_name: Mapped[str] = mapped_column(String(255), default="")
+    resume_asset_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("resume_assets.id", name="fk_recruiter_opportunities_resume_asset", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    implementation_partner: Mapped[str] = mapped_column(String(255), default="")
+    prime_vendor: Mapped[str] = mapped_column(String(255), default="")
+    domain: Mapped[str] = mapped_column(String(255), default="")
     extracted_skills: Mapped[str] = mapped_column(Text, default="")
     evidence: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(40), default="New")
     notes: Mapped[str] = mapped_column(Text, default="")
+    employment_type: Mapped[str] = mapped_column(String(40), default="")
+    rate_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rate_currency: Mapped[str] = mapped_column(String(10), default="USD")
+    rate_unit: Mapped[str] = mapped_column(String(20), default="")
+    contract_duration: Mapped[str] = mapped_column(String(120), default="")
+    relocation_required: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    extension_likely: Mapped[str] = mapped_column(String(20), default="unknown")
+    end_client_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
+    job_confidence: Mapped[str] = mapped_column(String(20), default="unknown")
     cold_call_script: Mapped[str | None] = mapped_column(Text, nullable=True)
     cold_call_script_updated_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    record_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey(
+            "candidate_records.id",
+            name="fk_recruiter_opportunities_record",
+            # Breaks the recruiter_opportunities -> candidate_records ->
+            # opportunity_lineages -> recruiter_opportunities FK cycle for
+            # Base.metadata.create_all()/drop_all() (used by unit tests), which
+            # can't otherwise topologically sort the three tables. Matches
+            # production reality: migration 20260826_0032 already adds this exact
+            # constraint via a separate ALTER after all three tables exist, not
+            # inline at CREATE TABLE time - use_alter just tells the ORM-level
+            # DDL sorter the same thing. No migration or schema change implied.
+            use_alter=True,
+        ),
+        nullable=True,
+        index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
+
+
+APPLICATION_STATUS_VALUES = (
+    "matched",
+    "contacted",
+    "recruiter_responded",
+    "resume_shared",
+    "rtr_requested",
+    "rtr_confirmed",
+    "submitted_to_client",
+    "client_reviewing",
+    "interview_1",
+    "interview_2",
+    "final_interview",
+    "offer",
+    "hired",
+    "rejected",
+    "withdrawn",
+    "no_response",
+    "position_closed",
+    "duplicate",
+)
+
+APPLICATION_CLOSED_STATUS_VALUES = (
+    "hired",
+    "rejected",
+    "withdrawn",
+    "no_response",
+    "position_closed",
+    "duplicate",
+)
+
+RESUME_SUBMISSION_STATUS_VALUES = (
+    'not_submitted',
+    'submitted',
+    'viewed',
+    'shortlisted',
+    'interview_scheduled',
+    'offered',
+    'hired',
+    'rejected',
+    'withdrawn',
+)
+SUBMISSION_METHOD_VALUES = ('email',)
+REJECTION_DETAIL_TAG_VALUES = (
+    'missing_skill',
+    'missing_experience',
+    'missing_domain_knowledge',
+    'email_positioning',
+    'rate_mismatch',
+    'other',
+)
+
+
+class Application(Base):
+    __tablename__ = "applications"
+    __table_args__ = (
+        UniqueConstraint(
+            'owner_id',
+            'dedupe_key',
+            name='ux_applications_owner_dedupe_key',
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), default="default-owner", index=True)
+    resume_asset_id: Mapped[int] = mapped_column(Integer, index=True)
+    resume_version_snapshot: Mapped[int] = mapped_column(Integer)
+    resume_file_name_snapshot: Mapped[str] = mapped_column(String(255))
+    resume_sha256_snapshot: Mapped[str] = mapped_column(String(64))
+    recruiter_opportunity_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("recruiter_opportunities.id", name="fk_applications_recruiter_opportunity", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    recruiter_contact_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("premium_number_contacts.id", name="fk_applications_recruiter_contact", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    recruiter_name_snapshot: Mapped[str] = mapped_column(String(255), default="")
+    recruiter_company_snapshot: Mapped[str] = mapped_column(String(255), default="")
+    job_title_snapshot: Mapped[str] = mapped_column(Text, default="")
+    end_client_snapshot: Mapped[str] = mapped_column(Text, default="")
+    manual_recruiter_name: Mapped[str] = mapped_column(String(255), default='')
+    manual_recruiter_company: Mapped[str] = mapped_column(String(255), default='')
+    manual_recruiter_email: Mapped[str] = mapped_column(String(255), default='')
+    manual_recruiter_phone: Mapped[str] = mapped_column(String(80), default='')
+    manual_recruiter_linkedin_url: Mapped[str] = mapped_column(Text, default='')
+    manual_job_title: Mapped[str] = mapped_column(Text, default='')
+    manual_end_client: Mapped[str] = mapped_column(Text, default='')
+    manual_jd_text: Mapped[str] = mapped_column(Text, default='')
+    manual_source_note: Mapped[str] = mapped_column(Text, default='')
+    resume_submission_status: Mapped[str] = mapped_column(String(30), index=True, default='not_submitted')
+    resume_submitted_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    submission_method: Mapped[str] = mapped_column(String(20), default='email')
+    rejection_detail_tags_json: Mapped[str] = mapped_column(Text, default='[]')
+    dedupe_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    promoted_to_appts_application_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    resume_skills_snapshot_json: Mapped[str] = mapped_column(Text, default='[]')
+    resume_primary_role_snapshot: Mapped[str] = mapped_column(String(255), default='')
+    milestones_reached_json: Mapped[str] = mapped_column(Text, default='{}')
+    status: Mapped[str] = mapped_column(String(40), index=True, default="matched")
+    status_changed_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    resume_shared_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    submitted_to_client_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    next_action_type: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    next_action_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
+    follow_up_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_contact_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    closed_reason: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    closed_reason_code: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
+
+
+class ApplicationEvent(Base):
+    __tablename__ = "application_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), default="default-owner", index=True)
+    application_id: Mapped[int] = mapped_column(Integer, index=True)
+    event_type: Mapped[str] = mapped_column(String(80), index=True)
+    event_source: Mapped[str] = mapped_column(String(40), default="user")
+    note: Mapped[str] = mapped_column(Text, default="")
+    linked_recruiter_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    occurred_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+
+
+RTR_STATUS_VALUES = ("requested", "confirmed", "expired", "revoked")
+
+
+class ApplicationRTR(Base):
+    __tablename__ = "application_rtrs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), default="default-owner", index=True)
+    application_id: Mapped[int] = mapped_column(Integer, index=True)
+    status: Mapped[str] = mapped_column(String(20), index=True, default="requested")
+    role_scope: Mapped[str] = mapped_column(Text, default="")
+    end_client_scope: Mapped[str] = mapped_column(Text, default="")
+    requested_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    confirmed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    proof_attachment_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    proof_recruiter_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    note: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
+
+
+INTERVIEW_ROUND_TYPE_VALUES = (
+    "recruiter_screen",
+    "interview_1",
+    "interview_2",
+    "final_interview",
+    "other",
+)
+INTERVIEW_RESULT_VALUES = ("scheduled", "completed", "passed", "failed", "cancelled", "rescheduled")
+
+
+class ApplicationInterview(Base):
+    __tablename__ = "application_interviews"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), default="default-owner", index=True)
+    application_id: Mapped[int] = mapped_column(Integer, index=True)
+    round_type: Mapped[str] = mapped_column(String(40), default="interview_1")
+    scheduled_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
+    format: Mapped[str] = mapped_column(String(40), default="")
+    interviewer_names: Mapped[str] = mapped_column(Text, default="")
+    feedback: Mapped[str] = mapped_column(Text, default="")
+    result: Mapped[str] = mapped_column(String(20), default="scheduled")
+    follow_up_task_note: Mapped[str] = mapped_column(Text, default="")
+    deleted_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
+
+
+APPLICATION_SUGGESTION_TYPE_VALUES = (
+    'link_reply',
+    'status_change',
+    'next_action',
+    'stale_prompt',
+    'new_variant_needed',
+    'email_positioning',
+    'skill_gap_pattern',
+)
+APPLICATION_SUGGESTION_STATUS_VALUES = ("pending", "accepted", "dismissed")
+APPLICATION_SUGGESTION_CONFIDENCE_VALUES = ("high", "medium")
+
+
+class ApplicationSuggestion(Base):
+    __tablename__ = "application_suggestions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), default="default-owner", index=True)
+    application_id: Mapped[int] = mapped_column(Integer, index=True)
+    suggestion_type: Mapped[str] = mapped_column(String(20), index=True)
+    status: Mapped[str] = mapped_column(String(20), index=True, default="pending")
+    confidence: Mapped[str] = mapped_column(String(10), default="high")
+    reply_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    recruiter_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    suggested_status: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    suggested_next_action_type: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    suggested_next_action_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    reason: Mapped[str] = mapped_column(Text, default="")
+    payload_json: Mapped[str] = mapped_column(Text, default='{}')
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, index=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+
+class ApplicationSkillGapSnapshot(Base):
+    __tablename__ = 'application_skill_gap_snapshots'
+    __table_args__ = (
+        UniqueConstraint('owner_id', 'application_id', name='ux_skill_gap_snapshot_application'),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), default='default-owner', index=True)
+    application_id: Mapped[int] = mapped_column(Integer, index=True)
+    source: Mapped[str] = mapped_column(String(20), default='fallback_text')
+    matched_required_json: Mapped[str] = mapped_column(Text, default='[]')
+    missing_required_json: Mapped[str] = mapped_column(Text, default='[]')
+    matched_preferred_json: Mapped[str] = mapped_column(Text, default='[]')
+    missing_preferred_json: Mapped[str] = mapped_column(Text, default='[]')
+    computed_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+
+
+class ApplicationOutreachMessage(Base):
+    __tablename__ = 'application_outreach_messages'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), default='default-owner', index=True)
+    application_id: Mapped[int] = mapped_column(Integer, index=True)
+    message_kind: Mapped[str] = mapped_column(String(40))
+    draft_source: Mapped[str] = mapped_column(String(20), default='unknown')
+    ai_model: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    subject: Mapped[str] = mapped_column(Text, default='')
+    body: Mapped[str] = mapped_column(Text, default='')
+    sent_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, index=True)
+
+
+class AppTSApplication(Base):
+    __tablename__ = "appts_applications"
+    __table_args__ = (UniqueConstraint("owner_id", "dedupe_key", name="ux_appts_applications_owner_dedupe_key"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), default="default-owner", index=True)
+    resume_asset_id: Mapped[int] = mapped_column(Integer, index=True)
+    resume_version_snapshot: Mapped[int] = mapped_column(Integer)
+    resume_file_name_snapshot: Mapped[str] = mapped_column(String(255))
+    resume_sha256_snapshot: Mapped[str] = mapped_column(String(64))
+    recruiter_opportunity_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("recruiter_opportunities.id", name="fk_appts_applications_recruiter_opportunity", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    recruiter_contact_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("premium_number_contacts.id", name="fk_appts_applications_recruiter_contact", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    recruiter_name_snapshot: Mapped[str] = mapped_column(String(255), default="")
+    recruiter_company_snapshot: Mapped[str] = mapped_column(String(255), default="")
+    job_title_snapshot: Mapped[str] = mapped_column(Text, default="")
+    end_client_snapshot: Mapped[str] = mapped_column(Text, default="")
+    location_snapshot: Mapped[str] = mapped_column(Text, default="")
+    manual_recruiter_name: Mapped[str] = mapped_column(String(255), default="")
+    manual_recruiter_company: Mapped[str] = mapped_column(String(255), default="")
+    manual_recruiter_email: Mapped[str] = mapped_column(String(255), default="")
+    manual_recruiter_phone: Mapped[str] = mapped_column(String(80), default="")
+    manual_recruiter_linkedin_url: Mapped[str] = mapped_column(Text, default="")
+    manual_job_title: Mapped[str] = mapped_column(Text, default="")
+    manual_end_client: Mapped[str] = mapped_column(Text, default="")
+    manual_jd_text: Mapped[str] = mapped_column(Text, default="")
+    manual_source_note: Mapped[str] = mapped_column(Text, default="")
+    resume_submission_status: Mapped[str] = mapped_column(String(30), index=True, default="not_submitted")
+    resume_submitted_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    submission_method: Mapped[str] = mapped_column(String(20), default="email")
+    rejection_detail_tags_json: Mapped[str] = mapped_column(Text, default="[]")
+    dedupe_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    resume_skills_snapshot_json: Mapped[str] = mapped_column(Text, default="[]")
+    resume_primary_role_snapshot: Mapped[str] = mapped_column(String(255), default="")
+    milestones_reached_json: Mapped[str] = mapped_column(Text, default="{}")
+    status: Mapped[str] = mapped_column(String(40), index=True, default="matched")
+    status_changed_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    resume_shared_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    submitted_to_client_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    next_action_type: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    next_action_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
+    follow_up_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_contact_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    closed_reason: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    closed_reason_code: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    embedding: Mapped[str | None] = mapped_column(Text, nullable=True)
+    embedding_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    resolved_recruiter_contact_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    resolved_recruiter_email: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    source_recruiter_email_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("recruiter_emails.id", name="fk_appts_applications_source_recruiter_email", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
+
+
+class AppTSApplicationEvent(Base):
+    __tablename__ = "appts_application_events"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), default="default-owner", index=True)
+    application_id: Mapped[int] = mapped_column(Integer, ForeignKey("appts_applications.id"), index=True)
+    event_type: Mapped[str] = mapped_column(String(80), index=True)
+    event_source: Mapped[str] = mapped_column(String(40), default="user")
+    note: Mapped[str] = mapped_column(Text, default="")
+    linked_recruiter_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    occurred_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+
+
+class AppTSApplicationRTR(Base):
+    __tablename__ = "appts_application_rtrs"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), default="default-owner", index=True)
+    application_id: Mapped[int] = mapped_column(Integer, ForeignKey("appts_applications.id"), index=True)
+    status: Mapped[str] = mapped_column(String(20), index=True, default="requested")
+    role_scope: Mapped[str] = mapped_column(Text, default="")
+    end_client_scope: Mapped[str] = mapped_column(Text, default="")
+    requested_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    confirmed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    proof_attachment_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    proof_recruiter_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    note: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
+
+
+class AppTSApplicationInterview(Base):
+    __tablename__ = "appts_application_interviews"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), default="default-owner", index=True)
+    application_id: Mapped[int] = mapped_column(Integer, ForeignKey("appts_applications.id"), index=True)
+    round_type: Mapped[str] = mapped_column(String(40), default="interview_1")
+    scheduled_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
+    format: Mapped[str] = mapped_column(String(40), default="")
+    interviewer_names: Mapped[str] = mapped_column(Text, default="")
+    feedback: Mapped[str] = mapped_column(Text, default="")
+    result: Mapped[str] = mapped_column(String(20), default="scheduled")
+    follow_up_task_note: Mapped[str] = mapped_column(Text, default="")
+    deleted_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
+
+
+class AppTSApplicationSuggestion(Base):
+    __tablename__ = "appts_application_suggestions"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), default="default-owner", index=True)
+    application_id: Mapped[int] = mapped_column(Integer, ForeignKey("appts_applications.id"), index=True)
+    suggestion_type: Mapped[str] = mapped_column(String(20), index=True)
+    status: Mapped[str] = mapped_column(String(20), index=True, default="pending")
+    confidence: Mapped[str] = mapped_column(String(10), default="high")
+    reply_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    recruiter_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    suggested_status: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    suggested_next_action_type: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    suggested_next_action_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    reason: Mapped[str] = mapped_column(Text, default="")
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, index=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+
+class AppTSApplicationSkillGapSnapshot(Base):
+    __tablename__ = "appts_application_skill_gap_snapshots"
+    __table_args__ = (UniqueConstraint("owner_id", "application_id", name="ux_appts_skill_gap_snapshot_application"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), default="default-owner", index=True)
+    application_id: Mapped[int] = mapped_column(Integer, ForeignKey("appts_applications.id"), index=True)
+    source: Mapped[str] = mapped_column(String(20), default="fallback_text")
+    matched_required_json: Mapped[str] = mapped_column(Text, default="[]")
+    missing_required_json: Mapped[str] = mapped_column(Text, default="[]")
+    matched_preferred_json: Mapped[str] = mapped_column(Text, default="[]")
+    missing_preferred_json: Mapped[str] = mapped_column(Text, default="[]")
+    computed_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+
+
+class AppTSApplicationOutreachMessage(Base):
+    __tablename__ = "appts_application_outreach_messages"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), default="default-owner", index=True)
+    application_id: Mapped[int] = mapped_column(Integer, ForeignKey("appts_applications.id"), index=True)
+    message_kind: Mapped[str] = mapped_column(String(40))
+    draft_source: Mapped[str] = mapped_column(String(20), default="unknown")
+    ai_model: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    subject: Mapped[str] = mapped_column(Text, default="")
+    body: Mapped[str] = mapped_column(Text, default="")
+    sent_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, index=True)
+
+
+class RoleSimilarityCheck(Base):
+    __tablename__ = "role_similarity_checks"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    left_record_type: Mapped[str] = mapped_column(String(40))
+    left_record_id: Mapped[int] = mapped_column(Integer)
+    right_record_type: Mapped[str] = mapped_column(String(40))
+    right_record_id: Mapped[int] = mapped_column(Integer)
+    skill_overlap_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    embedding_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    final_score: Mapped[float] = mapped_column(Float)
+    tier: Mapped[str] = mapped_column(String(20))
+    method: Mapped[str] = mapped_column(String(20))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, index=True)
 
 
 class NumberReviewQueue(Base):
@@ -617,11 +1288,50 @@ class NumberReviewQueue(Base):
             "source_email_id",
             name="ux_number_review_queue_owner_phone_email",
         ),
+        Index(
+            "ix_number_review_queue_conflict_lookup",
+            "owner_id",
+            "normalized_phone_number",
+            "role",
+            "reason_code",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     owner_id: Mapped[str] = mapped_column(String(100), index=True)
-    source_email_id: Mapped[int] = mapped_column(Integer, index=True)
+    lineage_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey(
+            "opportunity_lineages.id",
+            name="fk_number_review_queue_lineage",
+        ),
+        nullable=True,
+        index=True,
+    )
+    record_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("candidate_records.id", name="fk_number_review_queue_record"),
+        nullable=True,
+        index=True,
+    )
+    source_email_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    source_external_opportunity_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey(
+            "external_opportunities.id",
+            name="fk_number_review_queue_external_opportunity",
+        ),
+        nullable=True,
+        index=True,
+    )
+    source_lead_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("premium_number_leads.id", name="fk_number_review_queue_source_lead", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    target_contact_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    secondary_contact_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     normalized_phone_number: Mapped[str] = mapped_column(String(40), index=True)
     display_phone_number: Mapped[str] = mapped_column(String(80))
     owner_name: Mapped[str] = mapped_column(String(255), default="Unknown")
@@ -632,10 +1342,35 @@ class NumberReviewQueue(Base):
     evidence_snippet: Mapped[str] = mapped_column(Text, default="")
     email_subject: Mapped[str] = mapped_column(String(500), default="")
     email_sender: Mapped[str] = mapped_column(String(255), default="")
+    contact_email: Mapped[str] = mapped_column(String(255), default="")
+    linkedin_url: Mapped[str] = mapped_column(String(500), default="")
+    contact_type: Mapped[str] = mapped_column(String(40), default="unknown")
+    recruiter_relevance_score: Mapped[int] = mapped_column(Integer, default=0)
+    relevance_reason: Mapped[str] = mapped_column(String(255), default="")
+    extraction_source: Mapped[str] = mapped_column(String(50), default="ai")
+    scored_with: Mapped[str] = mapped_column(String(20), default="legacy")
     gmail_open_url: Mapped[str] = mapped_column(String(1000), default="")
     state: Mapped[str] = mapped_column(String(40), default="pending")
+    role: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    reason_code: Mapped[str] = mapped_column(String(40), default="new_number")
+    field_changes_json: Mapped[str] = mapped_column(Text, default="")
+    occurrence_count: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
+
+
+class ContactIdentityAction(Base):
+    __tablename__ = "contact_identity_actions"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    action_type: Mapped[str] = mapped_column(String(30), index=True)
+    primary_contact_id: Mapped[int] = mapped_column(Integer, index=True)
+    secondary_contact_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Holds JSON payloads (soft-delete identifier snapshots, migration reports), not just
+    # a single identifier - 500 chars is not enough.
+    value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source: Mapped[str] = mapped_column(String(40))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, index=True)
 
 
 class ProductivityEvent(Base):
@@ -646,9 +1381,108 @@ class ProductivityEvent(Base):
     event_type: Mapped[str] = mapped_column(String(80), index=True)
     event_source: Mapped[str] = mapped_column(String(40), default="system")
     entity_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    entity_type: Mapped[str] = mapped_column(String(40), default="", index=True)
     weight: Mapped[float] = mapped_column(Float, default=0.0)
     metadata_json: Mapped[str] = mapped_column(Text, default="{}")
     occurred_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+
+
+class OpportunityLineage(Base):
+    __tablename__ = "opportunity_lineages"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    origin_type: Mapped[str] = mapped_column(String(20), index=True)
+    recruiter_opportunity_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey(
+            "recruiter_opportunities.id",
+            name="fk_opportunity_lineage_recruiter_opportunity",
+        ),
+        unique=True,
+        index=True,
+        nullable=True,
+    )
+    current_status: Mapped[str] = mapped_column(String(20), default="active")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    # This is the current closure timestamp and is reset on reopen. The full
+    # close/reopen history remains append-only in OpportunityLifecycleEvent.
+    closed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+
+class OpportunitySourceReference(Base):
+    __tablename__ = "opportunity_source_references"
+    __table_args__ = (
+        UniqueConstraint(
+            "lineage_id",
+            "source_type",
+            "external_id",
+            name="ux_opportunity_source_reference",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    lineage_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey(
+            "opportunity_lineages.id",
+            name="fk_source_reference_lineage",
+        ),
+        index=True,
+    )
+    source_type: Mapped[str] = mapped_column(String(20), index=True)
+    external_id: Mapped[str] = mapped_column(String(255))
+    source_url: Mapped[str] = mapped_column(String(1200), default="")
+    first_seen_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    last_seen_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
+
+
+class OpportunityLifecycleEvent(Base):
+    __tablename__ = "opportunity_lifecycle_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    lineage_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey(
+            "opportunity_lineages.id",
+            name="fk_lifecycle_event_lineage",
+        ),
+        index=True,
+    )
+    event_type: Mapped[str] = mapped_column(String(40), index=True)
+    occurred_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, index=True)
+    actor: Mapped[str] = mapped_column(String(20), default="system")
+    process_name: Mapped[str] = mapped_column(String(60), default="")
+    related_record_type: Mapped[str] = mapped_column(String(40), default="")
+    related_record_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    note: Mapped[str] = mapped_column(Text, default="")
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+
+
+class CandidateRecord(Base):
+    """Permanent, user-facing identity for a candidate, minted at the same two anchor
+    points as OpportunityLineage (RecruiterEmail for Gmail, ExternalOpportunity for
+    Nvoids) but independent of whether the candidate ever becomes an opportunity.
+    Status is always resolved through the owning RecruiterEmail/ExternalOpportunity row
+    or, once linked, through OpportunityLineage - this table is identity + link only.
+    """
+
+    __tablename__ = "candidate_records"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    origin_type: Mapped[str] = mapped_column(String(20), index=True)
+    internal_lineage_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("opportunity_lineages.id", name="fk_candidate_record_lineage"),
+        unique=True,
+        index=True,
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
 
 

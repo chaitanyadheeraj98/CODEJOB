@@ -36,6 +36,7 @@ describe('Failed Mapping delete flow', () => {
     let failedItems = [
       {
         id: 101,
+        record_id: 'record-failed-101',
         owner_id: 'default-owner',
         sender: 'Recruiter <recruiter@example.com>',
         subject: 'Needs routing help',
@@ -269,11 +270,29 @@ describe('Failed Mapping delete flow', () => {
     })
 
     expect(container.textContent ?? '').toContain('Failed Recipient Mapping (Teach the model)')
+    expect(container.querySelectorAll('.filterSortBar input[role="combobox"]')).toHaveLength(2)
+    expect(container.textContent ?? '').toContain('Record ID:')
+    expect(container.textContent ?? '').toContain('record-failed-101')
     expect(container.textContent ?? '').toContain('Delete')
     const nvoidsLink = Array.from(container.querySelectorAll('a')).find(
       (link) => link.textContent === 'Open Original Post',
     )
     expect(nvoidsLink?.getAttribute('href')).toBe('https://nvoids.com/job_details.jsp?id=3566946')
+
+    const mappingInputs = Array.from(container.querySelectorAll('input[type="email"]')) as HTMLInputElement[]
+    const saveMappingButton = Array.from(container.querySelectorAll('button')).find((button) =>
+      button.textContent === 'Save Mapping & Move to Review',
+    ) as HTMLButtonElement | undefined
+    expect(saveMappingButton?.disabled).toBe(true)
+    await act(async () => {
+      const setNativeValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+      setNativeValue?.call(mappingInputs[0], 'not-an-email')
+      mappingInputs[0].dispatchEvent(new Event('input', { bubbles: true }))
+      setNativeValue?.call(mappingInputs[1], 'also-invalid')
+      mappingInputs[1].dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(mappingInputs[0].getAttribute('aria-invalid')).toBe('true')
+    expect(saveMappingButton?.disabled).toBe(true)
 
     const deleteButton = Array.from(container.querySelectorAll('button')).find((button) =>
       button.textContent?.includes('Delete'),
@@ -291,7 +310,7 @@ describe('Failed Mapping delete flow', () => {
       await Promise.resolve()
     })
 
-    expect(container.textContent ?? '').toContain('No failed emails.')
+    expect(container.textContent ?? '').toContain('No failed emails match these filters.')
     expect(globalThis.confirm).toHaveBeenCalled()
   })
 })

@@ -36,6 +36,9 @@ describe('ResumeDatabaseSection', () => {
             sha256: 'abc',
             version: 7,
             skills_text: 'java, spring boot, microservices, react, aws',
+            primary_role: 'Java Developer',
+            structured_skills: ['Java', 'Spring Boot'],
+            variant_label: 'Backend',
             is_enabled: true,
             is_current: true,
             created_at: '2026-06-14T00:00:00Z',
@@ -43,7 +46,11 @@ describe('ResumeDatabaseSection', () => {
           }}
           resumeFile={null}
           resumeSkillsInput="java, spring boot, microservices, react, aws"
+          resumePrimaryRoleInput="Java Developer"
+          resumeStructuredSkillsInput="Java, Spring Boot"
+          resumeVariantLabelInput="Backend"
           resumeSkillEdits={{ 1: 'java, spring boot, microservices, react, aws' }}
+          resumeMetadataEdits={{ 1: { primary_role: 'Java Developer', structured_skills: 'Java, Spring Boot', variant_label: 'Backend' } }}
           resumeAssets={[
             {
               id: 1,
@@ -52,15 +59,24 @@ describe('ResumeDatabaseSection', () => {
               sha256: 'abc',
               version: 7,
               skills_text: 'java, spring boot, microservices, react, aws',
+              primary_role: 'Java Developer',
+              structured_skills: ['Java', 'Spring Boot'],
+              variant_label: 'Backend',
               is_enabled: true,
               is_current: true,
               created_at: '2026-06-14T00:00:00Z',
               updated_at: '2026-06-14T00:00:00Z',
             },
           ]}
+          resumeUploading={false}
+          focusResumeId={null}
           setResumeFile={vi.fn()}
           setResumeSkillsInput={vi.fn()}
+          setResumePrimaryRoleInput={vi.fn()}
+          setResumeStructuredSkillsInput={vi.fn()}
+          setResumeVariantLabelInput={vi.fn()}
           setResumeSkillEdits={vi.fn()}
+          setResumeMetadataEdits={vi.fn()}
           uploadResume={vi.fn()}
           saveResumeSkills={vi.fn()}
           toggleResumeAsset={vi.fn()}
@@ -85,7 +101,7 @@ describe('ResumeDatabaseSection', () => {
 
     expect(container.querySelector('.resumeDatabaseBody')).not.toBeNull()
     expect(container.querySelector('.resumeDatabaseActions')).not.toBeNull()
-    expect(container.querySelector('.resumeDatabaseButtons')?.textContent ?? '').toContain('Save Skills')
+    expect(container.querySelector('.resumeDatabaseButtons')?.textContent ?? '').toContain('Save resume details')
     expect(container.querySelector('.resumeDatabaseButtons')?.textContent ?? '').toContain('Delete')
     expect(container.querySelector('.resumeDatabaseMatch')?.textContent ?? '').toContain('Matching skills:')
 
@@ -94,5 +110,48 @@ describe('ResumeDatabaseSection', () => {
     })
 
     expect(container.querySelector('.resumeDatabaseBody')).toBeNull()
+  })
+
+  it('shows a processing state while resume enrichment runs', () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+    })
+
+    act(() => {
+      root.render(
+        <ResumeDatabaseSection
+          activeResume={null}
+          resumeFile={new File(['resume'], 'resume.pdf')}
+          resumeSkillsInput="Java"
+          resumePrimaryRoleInput=""
+          resumeStructuredSkillsInput=""
+          resumeVariantLabelInput=""
+          resumeSkillEdits={{}}
+          resumeMetadataEdits={{}}
+          resumeAssets={[]}
+          resumeUploading
+          focusResumeId={null}
+          setResumeFile={vi.fn()}
+          setResumeSkillsInput={vi.fn()}
+          setResumePrimaryRoleInput={vi.fn()}
+          setResumeStructuredSkillsInput={vi.fn()}
+          setResumeVariantLabelInput={vi.fn()}
+          setResumeSkillEdits={vi.fn()}
+          setResumeMetadataEdits={vi.fn()}
+          uploadResume={vi.fn()}
+          saveResumeSkills={vi.fn()}
+          toggleResumeAsset={vi.fn()}
+          deleteResumeAsset={vi.fn()}
+        />,
+      )
+    })
+
+    expect(container.textContent).toContain('Processing Resume...')
+    expect(container.textContent).toContain('extracting content and preparing ATS profile')
+    expect(container.querySelector<HTMLButtonElement>('.resumeDatabaseUpload button')?.disabled).toBe(true)
   })
 })

@@ -30,6 +30,7 @@ describe('ATS review UI', () => {
   it('renders the ATS score in Needs Review without changing the real resume variant name', async () => {
     const candidate = {
       id: 42,
+      record_id: 'record-ats-42',
       owner_id: 'default-owner',
       sender: 'Recruiter <recruiter@example.com>',
       subject: 'Java Developer',
@@ -260,7 +261,10 @@ describe('ATS review UI', () => {
       await Promise.resolve()
     })
 
-    expect(container.textContent ?? '').toContain('ATS Score:')
+    expect(container.textContent ?? '').toContain('Record ID:')
+    expect(container.textContent ?? '').toContain('record-ats-42')
+    expect(container.textContent ?? '').not.toContain('Email ID:')
+    expect(container.textContent ?? '').toContain('ATS Strong')
     expect(container.textContent ?? '').toContain('84')
     expect(container.textContent ?? '').toContain('Strong')
     expect(container.textContent ?? '').toContain('Resume:')

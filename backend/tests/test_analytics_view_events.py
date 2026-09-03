@@ -48,6 +48,8 @@ class AnalyticsViewEventTests(unittest.TestCase):
             json={
                 "event_type": "view_needs_review",
                 "event_source": "ui",
+                "entity_id": 1,
+                "entity_type": "DashboardPage",
                 "metadata": {"page": "needs_review", "range": "current_day"},
             },
         )
@@ -56,9 +58,11 @@ class AnalyticsViewEventTests(unittest.TestCase):
         payload = response.json()
         self.assertGreater(payload["id"], 0)
         self.assertEqual(payload["event_type"], "view_needs_review")
+        self.assertEqual(payload["entity_type"], "DashboardPage")
         self.assertEqual(payload["metadata"]["page"], "needs_review")
         with self.SessionLocal() as db:
             self.assertEqual(db.query(ProductivityEvent).count(), 1)
+            self.assertEqual(db.query(ProductivityEvent).one().entity_type, "DashboardPage")
 
     def test_view_event_drops_sqlite_locked_error(self) -> None:
         def locked_record(*_args, **_kwargs):

@@ -42,6 +42,25 @@ class ScoringRuntimeServiceTests(unittest.TestCase):
         text = service.semantic_text_for_resume(Resume(), allow_file_fallback=False)
         self.assertEqual(text, "")
 
+    def test_semantic_text_for_resume_prefers_flattened_evidence(self) -> None:
+        service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1], "hash")))
+
+        class Resume:
+            skills_text = "Java"
+            content_evidence_json = json.dumps({
+                "skills": [{"name": "Spring Boot", "evidence": "Built payment microservices."}],
+                "years_detected": 6,
+                "titles": ["Senior Backend Engineer"],
+                "certifications": ["AWS Certified Developer"],
+                "projects": [],
+                "domain": "fintech",
+            })
+
+        text = service.semantic_text_for_resume(Resume())
+        self.assertIn("Spring Boot (Built payment microservices.)", text)
+        self.assertIn("Experience: 6 years", text)
+        self.assertNotEqual(text, "Skills: Java")
+
     def test_extract_latest_message_block_prefers_newest_segment(self) -> None:
         service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1], "hash")))
         body = (
@@ -190,6 +209,49 @@ class ScoringRuntimeServiceTests(unittest.TestCase):
         self.assertLess(score, 45.0)
         self.assertIn("weak_signals=", summary or "")
         self.assertIn("weak_signal_hits", json.loads(breakdown or "{}"))
+
+    def test_compute_ats_score_rewards_skill_evidence_over_bare_skill_list(self) -> None:
+        service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1], "hash")))
+        parsed = {"role": "Java Engineer", "skills_text": "Java, Spring Boot", "domain": "fintech"}
+
+        class Settings:
+            feature_semantic_enabled = False
+
+        class Resume:
+            file_name = "resume.docx"
+            skills_text = "Java, Spring Boot"
+
+            def __init__(self, evidence: str):
+                self.content_evidence_json = evidence
+
+        bare = Resume("{}")
+        backed = Resume(json.dumps({
+            "skills": [
+                {"name": "Java", "evidence": "Built Java payment APIs."},
+                {"name": "Spring Boot", "evidence": "Built Spring Boot microservices."},
+            ],
+            "years_detected": 6,
+            "titles": ["Java Engineer"],
+            "certifications": [],
+            "projects": ["Delivered a fintech payment platform with Java and Spring Boot."],
+            "domain": "fintech",
+        }))
+        bare_score, *_bare_rest = service.compute_ats_score(
+            subject="Java Engineer",
+            body="Build fintech payment APIs with Java and Spring Boot.",
+            parsed=parsed,
+            user_settings=Settings(),
+            resume=bare,
+        )
+        backed_score, _source, _summary, breakdown_json = service.compute_ats_score(
+            subject="Java Engineer",
+            body="Build fintech payment APIs with Java and Spring Boot.",
+            parsed=parsed,
+            user_settings=Settings(),
+            resume=backed,
+        )
+        self.assertGreater(backed_score or 0, bare_score or 0)
+        self.assertEqual(json.loads(breakdown_json or "{}")["required_skills_match"], 1.0)
 
     def test_weak_skills_uses_rich_fallback_keyword_source(self) -> None:
         service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1], "hash")))

@@ -19,7 +19,7 @@ class QueuePreparationDependencies:
         tuple[bool, str],
     ]
     compute_blended_ai_score: Callable[..., tuple[float, str, str, str | None, str | None, Any]]
-    policy_f2f_block: Callable[[dict[str, str | int | bool], Mapping[str, Any]], tuple[bool, str]]
+    policy_f2f_block: Callable[[dict[str, str | int | bool], Mapping[str, Any], UserSettings], tuple[bool, str]]
     evaluate_routing_policy: Callable[..., RoutingDecision]
     greeting_from_to_contact: Callable[[str | None, str], str]
     build_user_fallback_draft: Callable[..., str]
@@ -216,7 +216,7 @@ def prepare_candidate_for_queue(
             request.owner_id,
             str(request.external_thread_id or ""),
         )
-    blocked, block_reason = deps.policy_f2f_block(parsed, request.effective_policy)
+    blocked, block_reason = deps.policy_f2f_block(parsed, request.effective_policy, request.user_settings)
     if not blocked and block_reason:
         warning_messages.append(block_reason)
     score_mode = policy_service.draft_rule_mode(request.effective_policy, "score_threshold")

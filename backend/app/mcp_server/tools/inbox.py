@@ -161,6 +161,7 @@ def get_recruiter_replies(urgent_only: bool = False, limit: int = 25) -> dict[st
                 {
                     "conversation_id": conversation.id,
                     "candidate_email_id": conversation.root_recruiter_email_id,
+                    "record_id": root.record_id if root else None,
                     "opportunity_id": opportunity_by_email_id.get(conversation.root_recruiter_email_id),
                     "reply_count": len(messages),
                     "latest_message_id": latest.id,

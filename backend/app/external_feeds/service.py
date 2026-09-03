@@ -6,7 +6,7 @@ import logging
 import re
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from typing import cast
+from typing import Any, cast
 
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -17,7 +17,9 @@ from app.automation.queue_preparation import (
     QueuePreparationRequest,
     prepare_candidate_for_queue,
 )
-from app.models import EmployerNumber, NumberReviewQueue, RecentRun, RecruiterEmail, RecruiterNumber, RecruiterOpportunity, ResumeAsset, UserSettings
+from app.services.role_provenance import RoleSource, assign_role
+from app.services.role_taxonomy import fill_entity_gaps, role_matcher_for
+from app.models import NumberReviewQueue, PremiumNumberContact, RecentRun, RecruiterEmail, RecruiterOpportunity, ResumeAsset, UserSettings
 from app.parsing import build_skills_json_payload
 from app.premium_numbers.phone_normalization import best_display_phone, canonicalize_phone
 from app.phase0 import (
@@ -43,11 +45,16 @@ from app.recent_runs import (
 )
 from app.routing import CcSelectionRequest, RoutingDecision, RoutingPolicyService
 from app.semantic.embeddings_service import generate_embedding
-from app.services import policy_service
+from app.services import opportunity_lineage_service, policy_service, recruiter_identity_service
 from app.services.candidate_runtime_service import CandidateRuntimeDeps, CandidateRuntimeService
 from app.services.candidate_screening_service import CandidateScreeningService, apply_screening_decision
 from app.services.scoring_runtime_service import ScoringRuntimeDeps, ScoringRuntimeService
 from app.services.sendability_service import apply_resume_sendability
+from app.services.phone_intelligence_workflow_service import (
+    JobMetadataAiExtraction,
+    PhoneIntelligenceWorkflowService,
+    job_metadata_ai_extraction_from_parsed,
+)
 
 from .collector import NvoidsCollector
 from .dedupe import build_dedupe_hash
@@ -56,11 +63,10 @@ from .parser import (
     classify_nvoids_page_title,
     extract_nvoids_page_title,
     parse_external_post,
-    parse_job_detail_contacts,
     parse_listing_rows,
     parse_nvoids_detail,
 )
-from .types import ExternalFeedSyncResult
+from .types import ExternalFeedSyncResult, ParsedNvoidsDetail
 
 
 logger = logging.getLogger(__name__)
@@ -69,6 +75,7 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class EnqueueResult:
     enqueued: bool
+    failed: bool = False
     reason_code: str | None = None
     reason_detail: str | None = None
     candidate_email_id: int | None = None
@@ -91,6 +98,7 @@ class ExternalFeedService:
                 apply_routing_decision=lambda *_args, **_kwargs: None,
             )
         )
+        self.phone_intelligence_workflow = PhoneIntelligenceWorkflowService(manage_transaction=False)
 
     @staticmethod
     def _normalize_location_tokens(raw_locations: list[str] | tuple[str, ...] | None) -> list[str]:
@@ -104,12 +112,22 @@ class ExternalFeedService:
             normalized.append(token)
         return normalized
 
-    def build_nvoids_query(self, raw_locations: list[str] | tuple[str, ...] | None) -> str:
-        locations = self._normalize_location_tokens(raw_locations)
-        if not locations:
+    def build_nvoids_query(
+        self,
+        *,
+        job_role: str | None = None,
+        search_location: str | None = None,
+        custom_query: str | None = None,
+    ) -> str:
+        custom = (custom_query or "").strip()
+        if custom:
+            return custom
+        role = (job_role or "").strip()
+        location = (search_location or "").strip()
+        if not role and not location:
             return self.default_query
-        location_clause = " or ".join(locations)
-        return f"({location_clause}) and java and spring* not(*js)"
+        role_clause = role or "java and spring* not(*js)"
+        return f"({location}) and {role_clause}" if location else role_clause
 
     def row_matches_locations(self, row_location: str, raw_locations: list[str] | tuple[str, ...] | None) -> bool:
         locations = self._normalize_location_tokens(raw_locations)
@@ -192,7 +210,11 @@ class ExternalFeedService:
         )
         location_filters = self._normalize_location_tokens((user_settings.nvoids_locations or "").split(","))
         detail_title_mode = self.normalize_nvoids_detail_title_mode(getattr(user_settings, "nvoids_detail_title_mode", None))
-        query = self.build_nvoids_query(location_filters)
+        query = self.build_nvoids_query(
+            job_role=user_settings.nvoids_job_role,
+            search_location=user_settings.nvoids_search_location,
+            custom_query=user_settings.nvoids_custom_query,
+        )
         run = ExternalScrapeRun(owner_id=owner_id, source_type="nvoids", started_at=datetime.now(UTC), notes="")
         db.add(run)
         db.commit()
@@ -299,9 +321,7 @@ class ExternalFeedService:
                         continue
                     detail_html = ""
                     detail_url = row.href
-                    recruiter_email = ""
-                    recruiter_phone = ""
-                    recruiter_name = ""
+                    detail: ParsedNvoidsDetail | None = None
                     fallback_used = False
                     try:
                         detail_page = self.collector.fetch_detail_page(url=row.href)
@@ -356,7 +376,7 @@ class ExternalFeedService:
                         continue
                     try:
                         if detail_html.strip():
-                            recruiter_email, recruiter_phone, recruiter_name = parse_job_detail_contacts(detail_html)
+                            detail = parse_nvoids_detail(detail_html, row.title, row.location)
                         else:
                             fallback_used = True
                         parsed = parse_external_post(
@@ -367,6 +387,7 @@ class ExternalFeedService:
                             posted_text=row.posted_text,
                             raw_body=detail_html or "",
                             raw_html=detail_html or "",
+                            nvoids_detail=detail,
                         )
                     except Exception:
                         failed_count += 1
@@ -379,16 +400,6 @@ class ExternalFeedService:
                         )
                         report_item()
                         continue
-                    if recruiter_email:
-                        parsed = parsed.__class__(
-                            **{
-                                **parsed.__dict__,
-                                "recruiter_email": recruiter_email,
-                                "recruiter_phone": recruiter_phone or parsed.recruiter_phone,
-                                "recruiter_name": recruiter_name or parsed.recruiter_name,
-                                "parse_confidence": max(parsed.parse_confidence, 0.8),
-                            }
-                        )
                     if fallback_used:
                         logger.info(
                             "nvoids_sync_row_fallback_used page=%s external_post_id=%r title=%r detail_html_present=%s recruiter_email=%r",
@@ -465,13 +476,39 @@ class ExternalFeedService:
                     )
                     db.add(record)
                     db.flush()
-                    if self._bridge_to_recruiter_opportunity(db, owner_id=owner_id, item=record):
+                    candidate_record = opportunity_lineage_service.create_candidate_record(
+                        db, owner_id=owner_id, origin_type="nvoids"
+                    )
+                    record.record_id = candidate_record.id
+                    nvoids_ai_parsed, nvoids_ai_parser_details = self.compute_nvoids_ai_parse(
+                        db,
+                        owner_id=owner_id,
+                        item=record,
+                        detail=detail,
+                        user_settings=user_settings,
+                    )
+                    nvoids_ai_extraction = job_metadata_ai_extraction_from_parsed(nvoids_ai_parsed, nvoids_ai_parser_details)
+                    if self._bridge_to_recruiter_opportunity(
+                        db,
+                        owner_id=owner_id,
+                        item=record,
+                        jd_body=(detail.jd_body if detail else parsed.raw_body),
+                        ai_extraction=nvoids_ai_extraction,
+                    ):
                         record.bridge_status = "bridged"
                     enqueue_attempts += 1
-                    enqueue_result = self._enqueue_needs_review_candidate(db, owner_id=owner_id, item=record)
+                    enqueue_result = self._enqueue_needs_review_candidate(
+                        db,
+                        owner_id=owner_id,
+                        item=record,
+                        detail=detail,
+                        precomputed_ai_parse=(nvoids_ai_parsed, nvoids_ai_parser_details),
+                    )
                     if enqueue_result.enqueued:
                         enqueue_successes += 1
                     else:
+                        if enqueue_result.failed:
+                            failed_count += 1
                         skipped_item_count += 1
                         record_skipped_item(
                             db,
@@ -596,9 +633,13 @@ class ExternalFeedService:
         for row in rows:
             scanned += 1
             try:
-                _, strict_phone, strict_name = parse_job_detail_contacts(row.raw_html or row.raw_body or "")
-                strict_phone = strict_phone.strip()
-                strict_name = strict_name.strip()
+                detail = parse_nvoids_detail(
+                    row.raw_html or row.raw_body or "",
+                    row.role or "",
+                    row.location or "",
+                )
+                strict_phone = detail.recruiter_phone.strip()
+                strict_name = detail.recruiter_name.strip()
                 old_phone = (row.recruiter_phone or "").strip()
                 if strict_name and (not row.recruiter_name or row.recruiter_name.strip().lower() in {"", "unknown"}):
                     row.recruiter_name = strict_name
@@ -621,10 +662,11 @@ class ExternalFeedService:
                     )
                     for existing_link in existing_links:
                         linked_recruiter = (
-                            db.query(RecruiterNumber)
+                            db.query(PremiumNumberContact)
                             .filter(
-                                RecruiterNumber.owner_id == owner_id,
-                                RecruiterNumber.id == existing_link.recruiter_number_id,
+                                PremiumNumberContact.owner_id == owner_id,
+                                PremiumNumberContact.id == existing_link.recruiter_number_id,
+                                PremiumNumberContact.deleted_at.is_(None),
                             )
                             .first()
                         )
@@ -646,11 +688,19 @@ class ExternalFeedService:
                             .first()
                         )
                         if remaining_opportunities is None:
-                            db.delete(linked_recruiter)
+                            linked_recruiter.is_recruiter = False
+                            linked_recruiter.active_recruiter_lead_id = None
+                            if not linked_recruiter.is_employer:
+                                db.delete(linked_recruiter)
                             deleted_placeholder_recruiters += 1
                             db.flush()
 
-                    if self._bridge_to_recruiter_opportunity(db, owner_id=owner_id, item=row):
+                    if self._bridge_to_recruiter_opportunity(
+                        db,
+                        owner_id=owner_id,
+                        item=row,
+                        jd_body=detail.jd_body,
+                    ):
                         row.bridge_status = "bridged"
                         bridged += 1
             except Exception:
@@ -659,8 +709,12 @@ class ExternalFeedService:
         db.flush()
 
         recruiter_numbers = (
-            db.query(RecruiterNumber)
-            .filter(RecruiterNumber.owner_id == owner_id)
+            db.query(PremiumNumberContact)
+            .filter(
+                PremiumNumberContact.owner_id == owner_id,
+                PremiumNumberContact.is_recruiter.is_(True),
+                PremiumNumberContact.deleted_at.is_(None),
+            )
             .all()
         )
         for recruiter in recruiter_numbers:
@@ -686,6 +740,20 @@ class ExternalFeedService:
                 continue
 
             for opportunity, _ext in nvoids_opportunities:
+                lineage = (
+                    opportunity_lineage_service.detach_recruiter_opportunity_for_deletion(
+                        db,
+                        owner_id=owner_id,
+                        recruiter_opportunity_id=opportunity.id,
+                        process_name="external_feed_service",
+                    )
+                )
+                if lineage is None:
+                    logger.warning(
+                        "Missing opportunity lineage for recruiter opportunity %s during "
+                        "Nvoids placeholder cleanup",
+                        opportunity.id,
+                    )
                 db.delete(opportunity)
                 deleted_placeholder_opportunities += 1
             db.flush()
@@ -699,12 +767,19 @@ class ExternalFeedService:
                 .first()
             )
             if remaining_opportunities is None:
-                db.delete(recruiter)
+                recruiter.is_recruiter = False
+                recruiter.active_recruiter_lead_id = None
+                if not recruiter.is_employer:
+                    db.delete(recruiter)
                 deleted_placeholder_recruiters += 1
 
         recruiter_numbers = (
-            db.query(RecruiterNumber)
-            .filter(RecruiterNumber.owner_id == owner_id)
+            db.query(PremiumNumberContact)
+            .filter(
+                PremiumNumberContact.owner_id == owner_id,
+                PremiumNumberContact.is_recruiter.is_(True),
+                PremiumNumberContact.deleted_at.is_(None),
+            )
             .all()
         )
         for recruiter in recruiter_numbers:
@@ -717,8 +792,12 @@ class ExternalFeedService:
                 recruiter_numbers_reformatted += 1
 
         employer_numbers = (
-            db.query(EmployerNumber)
-            .filter(EmployerNumber.owner_id == owner_id)
+            db.query(PremiumNumberContact)
+            .filter(
+                PremiumNumberContact.owner_id == owner_id,
+                PremiumNumberContact.is_employer.is_(True),
+                PremiumNumberContact.deleted_at.is_(None),
+            )
             .all()
         )
         for employer in employer_numbers:
@@ -824,11 +903,17 @@ class ExternalFeedService:
         )
 
     @staticmethod
-    def _policy_f2f_block(parsed: dict[str, str | int | bool], policy: policy_service.PolicyConfig) -> tuple[bool, str]:
+    def _policy_f2f_block(
+        parsed: dict[str, str | int | bool], policy: policy_service.PolicyConfig, user_settings: UserSettings
+    ) -> tuple[bool, str]:
         normalized = policy_service.normalize_policy(policy)
         qualification = normalized["qualification"]
         strictness = policy_service.as_str(qualification.get("location_strictness", "balanced"), "balanced")
-        f2f_blocked, f2f_reason = should_block_f2f(parsed)
+        accepted_rule = qualification["draft_rules"]["accepted_location"]
+        accepted_locations = [loc.strip().lower() for loc in accepted_rule.get("locations", []) if loc.strip()] or [
+            loc.strip().lower() for loc in user_settings.accepted_locations.split(",") if loc.strip()
+        ]
+        f2f_blocked, f2f_reason = should_block_f2f(parsed, accepted_locations)
         if strictness == "lenient":
             f2f_blocked = False
             f2f_reason = ""
@@ -858,7 +943,15 @@ class ExternalFeedService:
             .all()
         )
 
-    def _enqueue_needs_review_candidate(self, db: Session, *, owner_id: str, item: ExternalOpportunity) -> EnqueueResult:
+    def _enqueue_needs_review_candidate(
+        self,
+        db: Session,
+        *,
+        owner_id: str,
+        item: ExternalOpportunity,
+        detail: ParsedNvoidsDetail | None = None,
+        precomputed_ai_parse: tuple[dict[str, Any], dict[str, Any]] | None = None,
+    ) -> EnqueueResult:
         external_message_id = f"nvoids:{item.external_post_id}"
         existing = (
             db.query(RecruiterEmail)
@@ -877,6 +970,25 @@ class ExternalFeedService:
                 reason_detail="Skipped because this Nvoids listing already exists as a candidate.",
                 candidate_email_id=existing.id,
             )
+
+        def persist_email(email: RecruiterEmail) -> RecruiterEmail:
+            email.record_id = item.record_id
+            if email.record_id is None:
+                logger.warning(
+                    "nvoids_enqueue_missing_record_id external_post_id=%r item_id=%s",
+                    item.external_post_id,
+                    item.id,
+                )
+                email.record_id = opportunity_lineage_service.create_candidate_record(
+                    db,
+                    owner_id=owner_id,
+                    origin_type="nvoids",
+                ).id
+            recruiter_identity_service.stamp_recruiter_email_identity(db, email)
+            db.add(email)
+            db.flush()
+            return email
+
         settings = (
             db.query(UserSettings).filter(UserSettings.owner_id == owner_id).first()
             or UserSettings(owner_id=owner_id)
@@ -893,55 +1005,111 @@ class ExternalFeedService:
         cc_email = routing_decision.cc_email
         if routing_decision.should_mark_failed and recipient_mapping_mode == "block":
             logger.info(
-                "nvoids_enqueue_skip reason=%s external_post_id=%r recruiter_to=%r",
+                "nvoids_enqueue_failed_mapping reason=%s external_post_id=%r recruiter_to=%r",
                 routing_decision.recommended_skip_reason,
                 item.external_post_id,
                 recruiter_to,
             )
+            nvoids_role = assign_role(
+                extracted=item.role,
+                subject=item.role or "Nvoids Opportunity",
+                body=item.raw_body,
+                matcher=role_matcher_for(db, owner_id),
+            )
+            email = RecruiterEmail(
+                owner_id=owner_id,
+                sender=recruiter_to or extract_email_address(item.recruiter_email or "") or item.recruiter_name or "Nvoids Recruiter",
+                subject=item.role or "Nvoids Opportunity",
+                body=item.raw_body or item.role or "",
+                role=nvoids_role.role,
+                role_source=nvoids_role.role_source,
+                role_canonical=nvoids_role.role_canonical,
+                location=item.location or "",
+                # The feed carries location as its own structured field, so a value
+                # here is an extraction; absent stays NULL rather than guessing.
+                location_source=RoleSource.EXTRACTED if (item.location or "").strip() else None,
+                salary_text=item.rate or "",
+                skills_text=item.skills_text or "",
+                decision="Reject",
+                state="failed",
+                decision_reason=routing_decision.reason,
+                last_error="Could not resolve recruiter To and employer CC",
+                skip_reason=routing_decision.recommended_skip_reason,
+                approval_status="pending",
+                sent_status="not_sent",
+                source="nvoids",
+                external_message_id=external_message_id,
+                external_thread_id=item.source_url or external_message_id,
+                gmail_received_at=item.posted_at or datetime.now(UTC),
+                recipient_email=recruiter_to or None,
+                cc_email=cc_email,
+                routing_status=routing_decision.status,
+                routing_confidence=routing_decision.confidence,
+                routing_reason=routing_decision.reason,
+                routing_evidence=json.dumps([asdict(entry) for entry in routing_decision.evidence], separators=(",", ":")),
+                routing_candidates=json.dumps([asdict(entry) for entry in routing_decision.candidates], separators=(",", ":")),
+                routing_confirmed=False,
+            )
+            persist_email(email)
             return EnqueueResult(
                 enqueued=False,
+                failed=True,
                 reason_code=routing_decision.recommended_skip_reason,
                 reason_detail=routing_decision.reason,
+                candidate_email_id=email.id,
             )
         body = item.raw_body or item.role or ""
         subject = item.role or "Nvoids Opportunity"
         ai_parse_body = body
         ai_input_source = ""
         if item.source_type == "nvoids" and item.raw_html:
-            detail = parse_nvoids_detail(item.raw_html, item.role or subject, item.location or "")
-            ai_parse_body = detail.jd_body or ""
-            ai_input_source = detail.jd_body_source or ""
+            parsed_detail = detail or parse_nvoids_detail(item.raw_html, item.role or subject, item.location or "")
+            ai_parse_body = parsed_detail.jd_body or ""
+            ai_input_source = parsed_detail.jd_body_source or ""
         active_resume = self._active_resume(db, owner_id=owner_id)
         enabled_resumes = self._enabled_resumes(db, owner_id=owner_id)
         threshold = policy_service.policy_threshold(settings.qualification_threshold, effective_policy)
         sender_identity = recruiter_to or extract_email_address(item.recruiter_email or "") or item.recruiter_name or "Nvoids Recruiter"
         routing_evidence = json.dumps([asdict(entry) for entry in routing_decision.evidence], separators=(",", ":"))
         routing_candidates = json.dumps([asdict(entry) for entry in routing_decision.candidates], separators=(",", ":"))
-        parsed, parser_details = parse_email_with_details(
-            subject,
-            body,
-            source="nvoids",
-            ai_extractor_enabled=settings.feature_ai_extractor_enabled,
-            ai_body_override=ai_parse_body,
-            source_hints={
-                "canonical_title": item.role,
-                "canonical_location": item.location,
-                "company": item.company,
-                "work_mode": item.work_mode,
-                "visa_hints": item.visa_hints,
-                "ai_input_source": ai_input_source,
-                "ai_input_chars": len(ai_parse_body or ""),
-            },
-        )
+        if precomputed_ai_parse is not None:
+            parsed, parser_details = precomputed_ai_parse
+        else:
+            parsed, parser_details = parse_email_with_details(
+                subject,
+                body,
+                source="nvoids",
+                ai_extractor_enabled=settings.feature_ai_extractor_enabled,
+                ai_body_override=ai_parse_body,
+                source_hints={
+                    "canonical_title": item.role,
+                    "canonical_location": item.location,
+                    "company": item.company,
+                    "work_mode": item.work_mode,
+                    "visa_hints": item.visa_hints,
+                    "ai_input_source": ai_input_source,
+                    "ai_input_chars": len(ai_parse_body or ""),
+                },
+            )
         screening = CandidateScreeningService().evaluate_parser_details(parser_details, settings)
         if not screening.proceed_to_scoring:
+            # item.role is the feed's own title and counts as an extraction; only when
+            # both it and the parser come back empty does the subject stand in, and
+            # then it is labelled as such rather than passing for a real title.
+            feed_role = assign_role(
+                extracted=item.role or parsed.get("role"),
+                subject=subject,
+                body=body,
+                matcher=role_matcher_for(db, owner_id),
+            )
             email = RecruiterEmail(
                 owner_id=owner_id,
                 sender=sender_identity,
                 subject=subject,
                 body=body,
-                role=str(item.role or parsed.get("role", subject)),
-                location=str(parsed.get("location", item.location or "")),
+                role=feed_role.role,
+                role_source=feed_role.role_source,
+                role_canonical=feed_role.role_canonical,
                 salary_text=str(parsed.get("salary_text", item.rate or "")),
                 skills_text=str(parsed.get("skills_text", item.skills_text or "")),
                 skills_json=json.dumps(
@@ -951,7 +1119,7 @@ class ExternalFeedService:
                     ),
                     separators=(",", ":"),
                 ),
-                **jd_entity_fields_from_parsed(parsed),
+                **fill_entity_gaps(jd_entity_fields_from_parsed(parsed), db=db, owner_id=owner_id, subject=subject, location=str(parsed.get("location", item.location or "")), body=body),
                 decision="Qualified",
                 state="needs_review",
                 decision_reason="strict_candidate_screening",
@@ -973,8 +1141,7 @@ class ExternalFeedService:
                 parser_details_json=json.dumps(parser_details, separators=(",", ":")),
             )
             apply_screening_decision(email, screening)
-            db.add(email)
-            db.flush()
+            persist_email(email)
             return EnqueueResult(enqueued=True, candidate_email_id=email.id)
         resume_selection = self.scoring_runtime.select_best_resume_match(
             subject=subject,
@@ -1075,13 +1242,20 @@ class ExternalFeedService:
                 reason_code=preparation.skip_reason or "queue_preparation_outcome",
                 reason_detail=preparation.decision_reason or f"Skipped because queue preparation ended with outcome '{preparation.outcome}'.",
             )
+        feed_role = assign_role(
+            extracted=item.role or preparation.parsed.get("role"),
+            subject=subject,
+            body=body,
+            matcher=role_matcher_for(db, owner_id),
+        )
         email = RecruiterEmail(
             owner_id=owner_id,
             sender=sender_identity,
             subject=subject,
             body=body,
-            role=str(item.role or preparation.parsed.get("role", subject)),
-            location=str(preparation.parsed.get("location", item.location or "")),
+            role=feed_role.role,
+            role_source=feed_role.role_source,
+            role_canonical=feed_role.role_canonical,
             salary_text=str(preparation.parsed.get("salary_text", item.rate or "")),
             skills_text=str(preparation.parsed.get("skills_text", item.skills_text or "")),
             skills_json=json.dumps(
@@ -1091,7 +1265,7 @@ class ExternalFeedService:
                 ),
                 separators=(",", ":"),
             ),
-            **jd_entity_fields_from_parsed(preparation.parsed),
+            **fill_entity_gaps(jd_entity_fields_from_parsed(preparation.parsed), db=db, owner_id=owner_id, subject=subject, location=str(preparation.parsed.get("location", item.location or "")), body=body),
             score=int(preparation.ai_score * 100),
             decision="Qualified",
             state="needs_review",
@@ -1155,77 +1329,85 @@ class ExternalFeedService:
             email.resume_file_name,
             email.draft_source,
         )
-        db.add(email)
-        db.flush()
+        persist_email(email)
         return EnqueueResult(enqueued=True, candidate_email_id=email.id)
 
-    def _bridge_to_recruiter_opportunity(self, db: Session, *, owner_id: str, item: ExternalOpportunity) -> bool:
-        canonical = canonicalize_phone(item.recruiter_phone or "")
-        if not canonical and not item.recruiter_email:
+    def compute_nvoids_ai_parse(
+        self,
+        db: Session,
+        *,
+        owner_id: str,
+        item: ExternalOpportunity,
+        detail: ParsedNvoidsDetail | None = None,
+        user_settings: UserSettings | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Run the shared AI-first JD parse for a Nvoids posting (job_title/location/domain/
+        end_client/implementation_partner/work_mode/visa) on its raw JD text. Reused by the
+        sync loop (new postings) and the opportunity-metadata refresh endpoint (existing cards)
+        so both go through the exact same DeepSeek-first, regex-fallback contract.
+        """
+        settings_row = user_settings or (
+            db.query(UserSettings).filter(UserSettings.owner_id == owner_id).first()
+            or UserSettings(owner_id=owner_id)
+        )
+        resolved_detail = detail
+        if resolved_detail is None and item.raw_html:
+            resolved_detail = parse_nvoids_detail(item.raw_html, item.role or "", item.location or "")
+        if resolved_detail is not None:
+            ai_parse_body = resolved_detail.jd_body or ""
+            ai_input_source = resolved_detail.jd_body_source or ""
+        else:
+            ai_parse_body = item.raw_body or item.role or ""
+            ai_input_source = ""
+        return parse_email_with_details(
+            item.role or "Nvoids Opportunity",
+            item.raw_body or item.role or "",
+            source="nvoids",
+            ai_extractor_enabled=settings_row.feature_ai_extractor_enabled,
+            ai_body_override=ai_parse_body,
+            source_hints={
+                "canonical_title": item.role,
+                "canonical_location": item.location,
+                "company": item.company,
+                "work_mode": item.work_mode,
+                "visa_hints": item.visa_hints,
+                "ai_input_source": ai_input_source,
+                "ai_input_chars": len(ai_parse_body),
+            },
+        )
+
+    def _bridge_to_recruiter_opportunity(
+        self,
+        db: Session,
+        *,
+        owner_id: str,
+        item: ExternalOpportunity,
+        jd_body: str | None = None,
+        ai_extraction: JobMetadataAiExtraction | None = None,
+    ) -> bool:
+        if item.owner_id != owner_id:
             item.bridge_status = "ignored"
             return False
-        if not canonical:
-            item.bridge_status = "ignored_no_phone"
+        result = self.phone_intelligence_workflow.capture_premium_numbers_for_nvoids(
+            db,
+            item,
+            jd_body or item.raw_body or "",
+            ai_extraction,
+        )
+        if result.processed_numbers == 0:
+            item.bridge_status = "ignored"
             return False
-
-        recruiter = None
-        if canonical:
-            recruiter = (
-                db.query(RecruiterNumber)
-                .filter(RecruiterNumber.owner_id == owner_id, RecruiterNumber.normalized_phone_number == canonical)
-                .first()
-            )
-        if not recruiter:
-            recruiter = RecruiterNumber(
-                owner_id=owner_id,
-                normalized_phone_number=canonical or f"nvoids-{item.id}",
-                display_phone_number=best_display_phone(item.recruiter_phone or canonical, fallback="Unknown"),
-                recruiter_name=item.recruiter_name or "Unknown",
-                company=item.company or "Unknown",
-                designation="Recruiter",
-                recruiter_email=item.recruiter_email or "",
-                first_detected_email_id=None,
-            )
-            db.add(recruiter)
-            db.flush()
-
-        existing = (
+        opportunity = (
             db.query(RecruiterOpportunity)
             .filter(
                 RecruiterOpportunity.owner_id == owner_id,
-                RecruiterOpportunity.recruiter_number_id == recruiter.id,
-                RecruiterOpportunity.gmail_message_id == f"nvoids:{item.external_post_id}",
+                RecruiterOpportunity.external_opportunity_id == item.id,
             )
             .first()
         )
-        if existing:
-            item.bridge_status = "duplicate"
-            item.bridge_target_opportunity_id = existing.id
-            return False
-
-        opp = RecruiterOpportunity(
-            owner_id=owner_id,
-            recruiter_number_id=recruiter.id,
-            source_email_id=None,
-            gmail_message_id=f"nvoids:{item.external_post_id}",
-            email_subject=item.role,
-            email_sender=item.recruiter_email or "nvoids",
-            gmail_open_url=item.source_url,
-            received_at=item.posted_at or datetime.now(UTC),
-            job_title=item.role,
-            client=item.company,
-            location=item.location,
-            work_mode=item.work_mode,
-            visa_restrictions=item.visa_hints,
-            extracted_skills=item.skills_text,
-            evidence="External feed: nvoids",
-            status="New",
-            notes="",
-            source_type="nvoids",
-            source_url=item.source_url,
-            external_opportunity_id=item.id,
-        )
-        db.add(opp)
-        db.flush()
-        item.bridge_target_opportunity_id = opp.id
-        return True
+        if opportunity:
+            item.bridge_target_opportunity_id = opportunity.id
+            item.bridge_status = "duplicate" if result.opportunity_existing else "bridged"
+            return not bool(result.opportunity_existing)
+        item.bridge_status = "needs_review"
+        return False

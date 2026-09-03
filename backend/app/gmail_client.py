@@ -5,6 +5,7 @@ import html
 import json
 import logging
 import mimetypes
+import os
 import re
 import threading
 from dataclasses import dataclass
@@ -118,6 +119,13 @@ def _load_credentials() -> Credentials:
         _ensure_token_parent()
         token_path.write_text(creds.to_json(), encoding="utf-8")
         return creds
+
+    if "PYTEST_CURRENT_TEST" in os.environ:
+        raise RuntimeError(
+            "Gmail OAuth would require an interactive browser flow here, which hangs "
+            "under pytest (no cached/refreshable token). The calling function needs "
+            "to be mocked in this test instead of reaching _load_credentials()."
+        )
 
     global _oauth_last_authorization_url
     flow = InstalledAppFlow.from_client_config(_credentials_payload(), SCOPES)
@@ -434,6 +442,28 @@ def list_unread_candidates_by_query(
         if not next_token:
             break
         page_token = next_token
+    return results
+
+
+def get_candidates_by_message_ids(message_ids: list[str]) -> list[GmailMessageCandidate]:
+    """Fetch specific messages by id, independent of the is:unread query/label state.
+
+    Used to retry skipped items directly by their stored Gmail message id, so retry
+    works regardless of whether the message is currently marked read or unread.
+    """
+    service = _gmail_service()
+    results: list[GmailMessageCandidate] = []
+    for message_id in message_ids:
+        try:
+            details = _as_dict(
+                service.users().messages().get(userId="me", id=message_id, format="full").execute()
+            )
+        except HttpError:
+            logger.exception("gmail_message_fetch_failed message_id=%s", message_id)
+            continue
+        candidate = _message_details_to_candidate(details)
+        if candidate is not None:
+            results.append(candidate)
     return results
 
 

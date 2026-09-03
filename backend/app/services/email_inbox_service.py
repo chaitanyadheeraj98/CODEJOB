@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.gmail_client import GmailMessageCandidate
 from app.models import EmailConversation, EmailOpenEvent, EmailReplyMessage, RecruiterEmail
 from app.parsing.document_extraction import extract_gmail_reply_body
+from app.recent_runs import build_gmail_message_url
 from app.schemas import ConversationDetailResponse, ConversationMessageResponse, ConversationSummaryResponse
 
 
@@ -110,10 +111,18 @@ def capture_inbound_reply(
     *,
     owner_id: str,
     item: GmailMessageCandidate,
+    owner_email: str,
 ) -> tuple[bool, bool]:
     thread_id = (item.get("external_thread_id") or "").strip()
     if not thread_id:
         return False, False
+    # Thread scans (list_thread_messages) return every message in the thread,
+    # including ones we sent ourselves. Without this check they'd get stored as
+    # a second "inbound" row under our own name instead of being recognized as
+    # already covered by the outbound row written at send time.
+    _, sender_email = parseaddr(item.get("sender") or "")
+    if sender_email.strip().lower() == owner_email.strip().lower():
+        return True, False
     conversation = (
         db.query(EmailConversation)
         .filter(
@@ -164,6 +173,14 @@ def capture_inbound_reply(
     if root_email is None:
         return False, False
 
+    message_id = item["external_message_id"]
+    # The JD-scan query re-returns this same message every run as long as it stays
+    # unread in Gmail (we never mark source messages read). Once a sent conversation
+    # exists for its thread, that's indistinguishable from a genuine reply unless we
+    # recognize it as the original message the candidate/reply was seeded from.
+    if root_email.external_message_id and message_id == root_email.external_message_id:
+        return True, False
+
     if conversation is None:
         conversation = ensure_sent_conversation(
             db,
@@ -171,7 +188,6 @@ def capture_inbound_reply(
             root_email=root_email,
             thread_id=thread_id,
         )
-    message_id = item["external_message_id"]
     existing = (
         db.query(EmailReplyMessage.id)
         .filter(
@@ -285,18 +301,53 @@ def _summary(db: Session, conversation: EmailConversation, root_email: Recruiter
         last_message_preview=((latest.snippet or latest.body)[:240] if latest else (root_email.draft_reply or "")[:240]),
         last_message_at=conversation.last_message_at,
         unread_reply_count=conversation.unread_reply_count,
+        gmail_thread_link=build_gmail_message_url(
+            external_message_id=root_email.external_message_id,
+            external_thread_id=conversation.external_thread_id,
+            external_rfc_message_id=root_email.external_rfc_message_id,
+        ),
     )
 
 
-def list_conversations(db: Session, owner_id: str) -> list[ConversationSummaryResponse]:
-    rows = (
-        db.query(EmailConversation, RecruiterEmail)
+def list_conversations(db: Session, owner_id: str, *, recruiter: str | None = None, subject: str | None = None, status: str | None = None, unread_only: bool | None = None, role: str | None = None, location: str | None = None, interview_type: str | None = None, sort: str = "newest", date_from: datetime | None = None, date_to: datetime | None = None) -> list[ConversationSummaryResponse]:
+    if sort not in {"newest", "oldest", "unread_first"}:
+        raise HTTPException(status_code=422, detail="Invalid sort. Must be one of: newest, oldest, unread_first")
+
+    # last_message_at also moves on outbound replies (see send_conversation_reply), so it
+    # can't be trusted as "when they replied" — compute that straight from inbound messages.
+    last_inbound = (
+        db.query(
+            EmailReplyMessage.conversation_id.label("conversation_id"),
+            func.max(EmailReplyMessage.received_at).label("last_inbound_at"),
+        )
+        .filter(EmailReplyMessage.owner_id == owner_id, EmailReplyMessage.direction == "inbound")
+        .group_by(EmailReplyMessage.conversation_id)
+        .subquery()
+    )
+    query = (
+        db.query(EmailConversation, RecruiterEmail, last_inbound.c.last_inbound_at)
         .join(RecruiterEmail, RecruiterEmail.id == EmailConversation.root_recruiter_email_id)
+        .outerjoin(last_inbound, last_inbound.c.conversation_id == EmailConversation.id)
         .filter(EmailConversation.owner_id == owner_id, RecruiterEmail.owner_id == owner_id)
-        .order_by(EmailConversation.last_message_at.desc(), EmailConversation.id.desc())
-        .all()
     )
-    return [_summary(db, conversation, root_email) for conversation, root_email in rows]
+    if recruiter and recruiter.strip(): query = query.filter(RecruiterEmail.sender.ilike(f"%{recruiter.strip()}%"))
+    if subject and subject.strip(): query = query.filter(RecruiterEmail.subject.ilike(f"%{subject.strip()}%"))
+    for value, column in ((role, RecruiterEmail.role), (location, RecruiterEmail.location), (interview_type, RecruiterEmail.interview_type)):
+        if value and value.strip(): query = query.filter(column.ilike(f"%{value.strip()}%"))
+    if status:
+        values = [value.strip() for value in status.split(",") if value.strip()]
+        if values: query = query.filter(EmailConversation.status.in_(values))
+    if unread_only is not None: query = query.filter(EmailConversation.unread_reply_count > 0 if unread_only else EmailConversation.unread_reply_count == 0)
+    if date_from is not None: query = query.filter(EmailConversation.last_message_at >= date_from)
+    if date_to is not None: query = query.filter(EmailConversation.last_message_at < date_to)
+    if sort == "oldest": query = query.order_by(EmailConversation.last_message_at.asc(), EmailConversation.id.asc())
+    elif sort == "unread_first": query = query.order_by((EmailConversation.unread_reply_count > 0).desc(), func.coalesce(last_inbound.c.last_inbound_at, EmailConversation.last_message_at).desc(), EmailConversation.id.desc())
+    else: query = query.order_by(EmailConversation.last_message_at.desc(), EmailConversation.id.desc())
+    rows = query.all()
+    return [
+        _summary(db, conversation, root_email).model_copy(update={"last_inbound_reply_at": last_inbound_at})
+        for conversation, root_email, last_inbound_at in rows
+    ]
 
 
 def conversation_detail(db: Session, owner_id: str, conversation_id: int) -> ConversationDetailResponse:

@@ -1,5 +1,6 @@
 from mcp.server.fastmcp import FastMCP
 
+from app.config import settings
 from app.mcp_server.tools import (
     count_received_emails,
     get_ai_status,
@@ -8,6 +9,8 @@ from app.mcp_server.tools import (
     get_conversation,
     get_draft_status,
     get_recent_runs,
+    get_record_details,
+    get_resume,
     get_recruiter_replies,
     get_run_items,
     get_settings_summary,
@@ -16,6 +19,10 @@ from app.mcp_server.tools import (
     list_external_opportunities,
     list_recruiter_opportunities,
     list_resumes,
+    propose_bulk_approve_candidates,
+    propose_create_github_issue,
+    propose_create_premium_contact,
+    propose_send_email,
     search_candidates,
 )
 
@@ -27,7 +34,7 @@ mcp = FastMCP(
     stateless_http=True,
 )
 
-for tool in (
+BASE_TOOLS = (
     search_candidates,
     get_candidate,
     count_received_emails,
@@ -43,8 +50,28 @@ for tool in (
     get_app_help,
     list_contact_numbers,
     list_recruiter_opportunities,
+    get_record_details,
     list_external_opportunities,
-):
+    get_resume,
+)
+
+CHAT_ACTION_TOOLS = (
+    propose_bulk_approve_candidates,
+    propose_create_premium_contact,
+    propose_send_email,
+)
+
+for tool in BASE_TOOLS:
     mcp.tool()(tool)
+
+if settings.feature_chat_actions_enabled:
+    for tool in CHAT_ACTION_TOOLS:
+        mcp.tool()(tool)
+    if settings.searxng_url:
+        from app.mcp_server.tools.web_search import search_web
+
+        mcp.tool()(search_web)
+    if settings.github_token and settings.github_repo:
+        mcp.tool()(propose_create_github_issue)
 
 mcp_app = mcp.streamable_http_app()

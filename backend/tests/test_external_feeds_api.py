@@ -12,7 +12,7 @@ import json
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app import main
@@ -23,7 +23,22 @@ from app.external_feeds.parser import parse_nvoids_detail
 from app.external_feeds import service as external_feed_service_module
 from app.external_feeds.service import ExternalFeedService
 from app.external_feeds.models import ExternalFeedSource, ExternalOpportunity
-from app.models import AttachmentAsset, CustomSkillTaxonomyEntry, EmployerNumber, NumberReviewQueue, RecentRun, RecentRunSkippedItem, RecruiterEmail, RecruiterNumber, RecruiterOpportunity, ResumeAsset, UserSettings
+from app.models import (
+    AttachmentAsset,
+    CustomSkillTaxonomyEntry,
+    NumberReviewQueue,
+    OpportunityLifecycleEvent,
+    OpportunityLineage,
+    PremiumNumberContact,
+    PremiumNumberLead,
+    RecentRun,
+    RecentRunSkippedItem,
+    RecruiterEmail,
+    RecruiterOpportunity,
+    ResumeAsset,
+    UserSettings,
+)
+from app.services import opportunity_lineage_service
 from app.services.role_manifest_service import RoleManifestService
 from role_manifest_fixtures import (
     REAL_NVOIDS_SIX_ROLE_MANIFEST,
@@ -33,6 +48,14 @@ from role_manifest_fixtures import (
     REAL_NVOIDS_THREE_ROLE_SOURCE,
     REAL_NVOIDS_THREE_ROLE_TITLES,
 )
+
+
+def RecruiterNumber(**values):
+    return PremiumNumberContact(is_recruiter=True, **values)
+
+
+def EmployerNumber(**values):
+    return PremiumNumberContact(is_employer=True, **values)
 
 
 class _FakeCollector:
@@ -200,6 +223,17 @@ class ExternalFeedsApiTests(unittest.TestCase):
                 status="New",
             )
             db.add(opportunity)
+            db.flush()
+            opportunity_lineage_service.create_lineage(
+                db,
+                owner_id=main.settings.owner_id,
+                origin_type="nvoids",
+                source_type="nvoids",
+                external_id=str(ext.id),
+                source_url=ext.source_url,
+                process_name="test_fixture",
+                recruiter_opportunity_id=opportunity.id,
+            )
             db.commit()
             return recruiter.id, opportunity.id, ext.id
 
@@ -902,7 +936,7 @@ Job ID: ENG-2"""
         self.assertEqual(decision.to_email, "sheshwika@horizonsoftech.net")
         self.assertEqual(decision.cc_email, "kartheek@horizonsoftech.net")
 
-    def test_manual_sync_bridges_recruiter_when_row_3_contains_phone_and_name(self) -> None:
+    def test_manual_sync_routes_uncertain_row_3_phones_to_needs_review(self) -> None:
         class _PhoneCollector(_FakeCollector):
             def fetch_detail_page(self, *, url: str) -> CollectedPage:
                 phone_line = "From: Shivam Singh<br>Phone: 240-657-1540"
@@ -923,19 +957,31 @@ Job ID: ENG-2"""
 
         main.external_feed_service.collector = _PhoneCollector()
 
-        sync = self.client.post("/external-feeds/nvoids/sync")
+        with patch.object(
+            external_feed_service_module,
+            "parse_nvoids_detail",
+            wraps=parse_nvoids_detail,
+        ) as parse_detail, patch(
+            "app.premium_numbers.extraction._llm_extract",
+            return_value=[],
+        ), patch(
+            "app.premium_numbers.extraction._sbert_keep_candidate",
+            return_value=(True, "test"),
+        ):
+            sync = self.client.post("/external-feeds/nvoids/sync")
         self.assertEqual(sync.status_code, 200, sync.text)
+        self.assertEqual(parse_detail.call_count, 2)
 
         with self.SessionLocal() as db:
             rows = (
-                db.query(RecruiterNumber)
-                .filter(RecruiterNumber.owner_id == main.settings.owner_id)
-                .order_by(RecruiterNumber.id.asc())
+                db.query(NumberReviewQueue)
+                .filter(NumberReviewQueue.owner_id == main.settings.owner_id)
+                .order_by(NumberReviewQueue.id.asc())
                 .all()
             )
             self.assertEqual(len(rows), 2)
-            self.assertEqual(rows[0].recruiter_name, "Shivam Singh")
-            self.assertEqual(rows[1].recruiter_name, "Nupur Kumari")
+            self.assertTrue(all(row.owner_name == "Unknown" for row in rows))
+            self.assertTrue(all(row.source_external_opportunity_id is not None for row in rows))
             self.assertEqual(rows[0].display_phone_number, "(240) 657-1540")
             self.assertEqual(rows[1].display_phone_number, "(201) 277-2419")
 
@@ -946,7 +992,7 @@ Job ID: ENG-2"""
                 .all()
             )
             self.assertEqual(len(ext_rows), 2)
-            self.assertTrue(all((row.bridge_status or "") == "bridged" for row in ext_rows))
+            self.assertTrue(all((row.bridge_status or "") == "needs_review" for row in ext_rows))
 
             recruiter_opportunities = (
                 db.query(RecruiterOpportunity)
@@ -954,9 +1000,9 @@ Job ID: ENG-2"""
                 .order_by(RecruiterOpportunity.id.asc())
                 .all()
             )
-            self.assertEqual(len(recruiter_opportunities), 2)
+            self.assertEqual(recruiter_opportunities, [])
 
-    def test_manual_sync_bridges_recruiter_when_row_3_uses_ph_no_signature_variant(self) -> None:
+    def test_manual_sync_routes_ph_no_signature_variant_to_needs_review(self) -> None:
         class _PhNoCollector(_FakeCollector):
             def fetch_detail_page(self, *, url: str) -> CollectedPage:
                 html = """
@@ -974,28 +1020,43 @@ Job ID: ENG-2"""
 
         main.external_feed_service.collector = _PhNoCollector()
 
-        sync = self.client.post("/external-feeds/nvoids/sync")
+        with patch(
+            "app.premium_numbers.extraction._llm_extract",
+            return_value=[],
+        ), patch(
+            "app.premium_numbers.extraction._sbert_keep_candidate",
+            return_value=(True, "test"),
+        ):
+            sync = self.client.post("/external-feeds/nvoids/sync")
         self.assertEqual(sync.status_code, 200, sync.text)
 
         with self.SessionLocal() as db:
-            recruiter = (
-                db.query(RecruiterNumber)
-                .filter(RecruiterNumber.owner_id == main.settings.owner_id, RecruiterNumber.recruiter_email == "sharma.gopal@net2source.com")
+            review = (
+                db.query(NumberReviewQueue)
+                .filter(
+                    NumberReviewQueue.owner_id == main.settings.owner_id,
+                    NumberReviewQueue.contact_email == "sharma.gopal@net2source.com",
+                )
                 .first()
             )
-            self.assertIsNotNone(recruiter)
-            assert recruiter is not None
-            self.assertEqual(recruiter.recruiter_name, "Gopal Sharma")
-            self.assertEqual(recruiter.display_phone_number, "(551) 303-0028")
+            self.assertIsNotNone(review)
+            assert review is not None
+            self.assertEqual(review.owner_name, "Unknown")
+            self.assertEqual(review.display_phone_number, "(551) 303-0028")
 
             ext_rows = (
                 db.query(ExternalOpportunity)
                 .filter(ExternalOpportunity.owner_id == main.settings.owner_id, ExternalOpportunity.source_type == "nvoids")
                 .all()
             )
-            self.assertTrue(all((row.bridge_status or "") == "bridged" for row in ext_rows))
+            self.assertTrue(all((row.bridge_status or "") == "needs_review" for row in ext_rows))
 
     def test_manual_sync_keeps_nvoids_candidate_but_skips_unknown_phone_bridge(self) -> None:
+        # Policy: a nvoids posting with zero phone signal but a known recruiter_email now
+        # surfaces via Needs Review instead of being silently ignored (matching the same
+        # "email is a valid identity on its own" fix applied to gmail extraction) - it does
+        # not auto-promote to a contact/opportunity, since no evidence was actually verified
+        # against the posting text, only the platform's own structured metadata.
         sync = self.client.post("/external-feeds/nvoids/sync")
         self.assertEqual(sync.status_code, 200, sync.text)
 
@@ -1007,7 +1068,7 @@ Job ID: ENG-2"""
                 .all()
             )
             self.assertGreaterEqual(len(ext_rows), 1)
-            self.assertTrue(all((row.bridge_status or "") == "ignored_no_phone" for row in ext_rows))
+            self.assertTrue(all((row.bridge_status or "") == "needs_review" for row in ext_rows))
 
             email_rows = (
                 db.query(RecruiterEmail)
@@ -1020,7 +1081,7 @@ Job ID: ENG-2"""
             )
             self.assertGreaterEqual(len(email_rows), 1)
 
-            recruiter_numbers = db.query(RecruiterNumber).filter(RecruiterNumber.owner_id == main.settings.owner_id).all()
+            recruiter_numbers = db.query(PremiumNumberContact).filter(PremiumNumberContact.owner_id == main.settings.owner_id).all()
             recruiter_opportunities = (
                 db.query(RecruiterOpportunity)
                 .filter(RecruiterOpportunity.owner_id == main.settings.owner_id, RecruiterOpportunity.source_type == "nvoids")
@@ -1028,6 +1089,190 @@ Job ID: ENG-2"""
             )
             self.assertEqual(recruiter_numbers, [])
             self.assertEqual(recruiter_opportunities, [])
+
+            number_review_rows = (
+                db.query(NumberReviewQueue)
+                .filter(NumberReviewQueue.owner_id == main.settings.owner_id, NumberReviewQueue.reason_code == "new_number")
+                .all()
+            )
+            self.assertEqual(len(number_review_rows), len(ext_rows))
+            self.assertTrue(all(row.contact_email.endswith("@example.com") for row in number_review_rows))
+
+    def test_nvoids_bridge_calls_shared_workflow(self) -> None:
+        # Regression guard for the Premium Numbers Redesign: `_bridge_to_recruiter_opportunity`
+        # must route every Nvoids posting through the shared `PhoneIntelligenceWorkflowService`
+        # (`capture_premium_numbers_for_nvoids`) instead of constructing RecruiterNumber /
+        # RecruiterOpportunity rows itself. Spy on the shared method (still delegating to the
+        # real implementation, captured before patching, so behavior is unchanged) and assert
+        # the *call* happened with the right (db, item, jd_body) shape - not just that some
+        # end-state row exists, which a hand-built parallel path could fake too. Call-shape data
+        # is captured inside the spy itself (not after the request), because the per-request DB
+        # session - and the ExternalOpportunity instances loaded on it - are closed/detached by
+        # the time `self.client.post(...)` returns.
+        workflow = main.external_feed_service.phone_intelligence_workflow
+        real_capture = workflow.capture_premium_numbers_for_nvoids
+        captured_calls: list[tuple[bool, bool, str, str, bool]] = []
+
+        def _capture_and_delegate(db, item, jd_body, ai_extraction=None):
+            captured_calls.append(
+                (
+                    isinstance(db, Session),
+                    isinstance(item, ExternalOpportunity),
+                    item.source_type,
+                    item.external_post_id,
+                    bool(jd_body),
+                )
+            )
+            return real_capture(db, item, jd_body, ai_extraction)
+
+        with patch.object(
+            workflow,
+            "capture_premium_numbers_for_nvoids",
+            side_effect=_capture_and_delegate,
+        ) as capture_spy:
+            sync = self.client.post("/external-feeds/nvoids/sync")
+        self.assertEqual(sync.status_code, 200, sync.text)
+
+        with self.SessionLocal() as db:
+            ext_rows = (
+                db.query(ExternalOpportunity)
+                .filter(ExternalOpportunity.owner_id == main.settings.owner_id, ExternalOpportunity.source_type == "nvoids")
+                .order_by(ExternalOpportunity.id.asc())
+                .all()
+            )
+            ext_post_ids = {row.external_post_id for row in ext_rows}
+
+        # One shared-workflow call per Nvoids posting the sync created - proves the bridge
+        # is not skipping the shared workflow for some rows and hand-rolling others.
+        self.assertGreaterEqual(len(ext_rows), 1)
+        self.assertEqual(capture_spy.call_count, len(ext_rows))
+        self.assertEqual(len(captured_calls), len(ext_rows))
+
+        called_post_ids = set()
+        for is_session_arg, is_ext_opportunity_arg, source_type, external_post_id, jd_body_is_truthy in captured_calls:
+            self.assertTrue(is_session_arg)
+            self.assertTrue(is_ext_opportunity_arg)
+            self.assertEqual(source_type, "nvoids")
+            self.assertTrue(jd_body_is_truthy)
+            called_post_ids.add(external_post_id)
+
+        self.assertEqual(called_post_ids, ext_post_ids)
+
+    def test_nvoids_uncertain_lead_lands_in_needs_review(self) -> None:
+        # A low-confidence / role="unknown" Nvoids extraction (regex fallback, no AI match) must
+        # land in NumberReviewQueue keyed by source_external_opportunity_id (source_email_id null),
+        # not get auto-promoted into a PremiumNumberContact.
+        class _UncertainSinglePhoneCollector(_FakeCollector):
+            def fetch_page(self, _base_url: str, page: int) -> CollectedPage:
+                if page > 0:
+                    return CollectedPage(url="https://www.nvoids.com/index.jsp?p=1", html="<html><body></body></html>")
+                html = """
+                <table>
+                  <tr><td><a href='job1.jsp?id=1'>Senior Python Developer</a></td><td>Dallas, Texas, USA</td><td>11:00 PM 07-May-26</td></tr>
+                </table>
+                """
+                return CollectedPage(url="https://www.nvoids.com/index.jsp", html=html)
+
+            def fetch_detail_page(self, *, url: str) -> CollectedPage:
+                html = """
+                <html><body>
+                <table>
+                  <tr><td>Senior Python Developer at Dallas, Texas, USA</td></tr>
+                  <tr><td>Email: recruiter@example.com</td></tr>
+                  <tr><td>From: Shivam Singh<br>Phone: 240-657-1540<br>Java, Spring Boot</td></tr>
+                  <tr><td>recruiter@example.com | View All</td></tr>
+                  <tr><td>11:00 PM 07-May-26</td></tr>
+                </table>
+                </body></html>
+                """
+                return CollectedPage(url=url, html=html)
+
+        main.external_feed_service.collector = _UncertainSinglePhoneCollector()
+
+        with patch(
+            "app.premium_numbers.extraction._llm_extract",
+            return_value=[],
+        ), patch(
+            "app.premium_numbers.extraction._sbert_keep_candidate",
+            return_value=(True, "test"),
+        ):
+            sync = self.client.post("/external-feeds/nvoids/sync")
+        self.assertEqual(sync.status_code, 200, sync.text)
+
+        with self.SessionLocal() as db:
+            ext_row = (
+                db.query(ExternalOpportunity)
+                .filter(ExternalOpportunity.owner_id == main.settings.owner_id, ExternalOpportunity.source_type == "nvoids")
+                .one()
+            )
+            self.assertEqual(ext_row.bridge_status, "needs_review")
+
+            review_rows = db.query(NumberReviewQueue).filter(NumberReviewQueue.owner_id == main.settings.owner_id).all()
+            self.assertEqual(len(review_rows), 1)
+            review = review_rows[0]
+            self.assertEqual(review.source_external_opportunity_id, ext_row.id)
+            self.assertIsNone(review.source_email_id)
+            self.assertEqual(review.display_phone_number, "(240) 657-1540")
+
+            self.assertEqual(db.query(PremiumNumberContact).filter(PremiumNumberContact.owner_id == main.settings.owner_id).count(), 0)
+
+    def test_nvoids_zero_leads_with_known_email_sets_bridge_status_needs_review(self) -> None:
+        # Was "§25.8 ignored": when neither AI nor the regex fallback finds any phone lead at
+        # all for a posting, the bridge used to set bridge_status to "ignored" and create
+        # neither a NumberReviewQueue row nor a PremiumNumberContact row. Policy changed to
+        # match the "email is a valid identity on its own" fix applied to gmail extraction -
+        # a known recruiter_email (from the platform's own structured metadata, even when
+        # absent from the JD body used for extraction) now surfaces via Needs Review instead
+        # of vanishing with zero trace. It still does not auto-promote to a contact, since no
+        # evidence was actually verified against the posting text.
+        class _NoPhoneSingleItemCollector(_FakeCollector):
+            def fetch_page(self, _base_url: str, page: int) -> CollectedPage:
+                if page > 0:
+                    return CollectedPage(url="https://www.nvoids.com/index.jsp?p=1", html="<html><body></body></html>")
+                html = """
+                <table>
+                  <tr><td><a href='job1.jsp?id=1'>Senior Python Developer</a></td><td>Dallas, Texas, USA</td><td>11:00 PM 07-May-26</td></tr>
+                </table>
+                """
+                return CollectedPage(url="https://www.nvoids.com/index.jsp", html=html)
+
+            def fetch_detail_page(self, *, url: str) -> CollectedPage:
+                html = """
+                <html><body>
+                <table>
+                  <tr><td>Senior Python Developer at Dallas, Texas, USA</td></tr>
+                  <tr><td>Email: recruiter@example.com</td></tr>
+                  <tr><td>No phone number mentioned anywhere in this posting.<br>Java, Spring Boot</td></tr>
+                  <tr><td>recruiter@example.com | View All</td></tr>
+                  <tr><td>11:00 PM 07-May-26</td></tr>
+                </table>
+                </body></html>
+                """
+                return CollectedPage(url=url, html=html)
+
+        main.external_feed_service.collector = _NoPhoneSingleItemCollector()
+
+        sync = self.client.post("/external-feeds/nvoids/sync")
+        self.assertEqual(sync.status_code, 200, sync.text)
+
+        with self.SessionLocal() as db:
+            ext_row = (
+                db.query(ExternalOpportunity)
+                .filter(ExternalOpportunity.owner_id == main.settings.owner_id, ExternalOpportunity.source_type == "nvoids")
+                .one()
+            )
+            self.assertEqual(ext_row.bridge_status, "needs_review")
+
+            review_rows = (
+                db.query(NumberReviewQueue)
+                .filter(NumberReviewQueue.source_external_opportunity_id == ext_row.id)
+                .all()
+            )
+            self.assertEqual(len(review_rows), 1)
+            self.assertEqual(review_rows[0].contact_email, "recruiter@example.com")
+            self.assertEqual(review_rows[0].reason_code, "new_number")
+            self.assertEqual(review_rows[0].normalized_phone_number, "")
+            self.assertEqual(db.query(PremiumNumberContact).filter(PremiumNumberContact.owner_id == main.settings.owner_id).count(), 0)
 
     def test_settings_round_trip_includes_nvoids_locations_and_preferred_employer_cc(self) -> None:
         res = self.client.put(
@@ -2151,7 +2396,7 @@ Job ID: ENG-2"""
         finally:
             main.external_feed_service.scoring_runtime.compute_blended_ai_score = original_compute
 
-    def test_sync_skips_missing_cc_when_routing_toggle_is_on(self) -> None:
+    def test_sync_records_missing_cc_in_failed_mapping_when_routing_toggle_is_on(self) -> None:
         with self.SessionLocal() as db:
             settings = db.query(UserSettings).filter(UserSettings.owner_id == main.settings.owner_id).first()
             assert settings is not None
@@ -2162,6 +2407,7 @@ Job ID: ENG-2"""
 
         sync = self.client.post("/external-feeds/nvoids/sync")
         self.assertEqual(sync.status_code, 200, sync.text)
+        self.assertEqual(sync.json()["failed_count"], 2)
 
         with self.SessionLocal() as db:
             rows = (
@@ -2169,7 +2415,16 @@ Job ID: ENG-2"""
                 .filter(RecruiterEmail.owner_id == main.settings.owner_id, RecruiterEmail.source == "nvoids")
                 .all()
             )
-            self.assertEqual(rows, [])
+            self.assertEqual(len(rows), 2)
+            self.assertTrue(all(row.state == "failed" for row in rows))
+            self.assertEqual({row.skip_reason for row in rows}, {"missing_default_employer_cc"})
+            self.assertTrue(all(row.record_id for row in rows))
+            self.assertEqual(
+                {row.resolved_recruiter_email for row in rows},
+                {"recruiter_1@example.com", "recruiter_2@example.com"},
+            )
+            skipped = db.query(RecentRunSkippedItem).filter_by(run_source="nvoids_sync").all()
+            self.assertEqual({item.candidate_email_id for item in skipped}, {row.id for row in rows})
 
     def test_sync_allows_missing_cc_when_routing_toggle_is_off(self) -> None:
         with self.SessionLocal() as db:
@@ -2479,6 +2734,70 @@ Job ID: ENG-2"""
         finally:
             external_feed_service_module.parse_email_with_details = original_parse_email_with_details
 
+    def test_nvoids_bridge_passes_ai_extracted_job_metadata_to_shared_workflow(self) -> None:
+        # Round 4/5 follow-up: Nvoids Opportunity-card job metadata (job_title, location,
+        # work_mode, visa, domain, end_client, implementation_partner) must be AI-first, with
+        # the crude subject/body regex used only when AI extraction did not run or returned
+        # nothing. Fake a successful ai_primary DeepSeek parse and assert the exact values it
+        # returns are the ones threaded into capture_premium_numbers_for_nvoids - proving the
+        # sync loop -> _bridge_to_recruiter_opportunity -> capture_premium_numbers_for_nvoids
+        # wiring, not just that some AI call happened somewhere.
+        def _fake_parse_email_with_details(subject: str, body: str, **kwargs: object) -> tuple[dict[str, object], dict[str, object]]:
+            parsed = {
+                "role": "Senior Java Developer",
+                "location": "Fort Worth, TX",
+                "domain": "Airline",
+                "end_client": "Major Airline Co",
+                "implementation_partner": "Jasvik Solutions",
+                "skills_text": "Java, Spring Boot",
+            }
+            parser_details = {
+                "parser_mode": "ai_primary",
+                "ai_extractor_result": {
+                    "work_mode": "Onsite",
+                    "visa_hints": ["H1B", "GC"],
+                },
+            }
+            return parsed, parser_details
+
+        with self.SessionLocal() as db:
+            settings = db.query(UserSettings).filter(UserSettings.owner_id == main.settings.owner_id).first()
+            assert settings is not None
+            settings.feature_ai_extractor_enabled = True
+            db.commit()
+
+        workflow = main.external_feed_service.phone_intelligence_workflow
+        real_capture = workflow.capture_premium_numbers_for_nvoids
+        captured_ai_extractions: list[object] = []
+
+        def _capture_and_delegate(db, item, jd_body, ai_extraction=None):
+            captured_ai_extractions.append(ai_extraction)
+            return real_capture(db, item, jd_body, ai_extraction)
+
+        original_parse_email_with_details = external_feed_service_module.parse_email_with_details
+        try:
+            external_feed_service_module.parse_email_with_details = _fake_parse_email_with_details
+            with patch.object(
+                workflow,
+                "capture_premium_numbers_for_nvoids",
+                side_effect=_capture_and_delegate,
+            ):
+                sync = self.client.post("/external-feeds/nvoids/sync")
+            self.assertEqual(sync.status_code, 200, sync.text)
+        finally:
+            external_feed_service_module.parse_email_with_details = original_parse_email_with_details
+
+        self.assertGreaterEqual(len(captured_ai_extractions), 1)
+        for ai_extraction in captured_ai_extractions:
+            self.assertIsNotNone(ai_extraction)
+            self.assertEqual(ai_extraction.job_title, "Senior Java Developer")
+            self.assertEqual(ai_extraction.location, "Fort Worth, TX")
+            self.assertEqual(ai_extraction.work_mode, "Onsite")
+            self.assertEqual(ai_extraction.visa_restrictions, "H1B, GC")
+            self.assertEqual(ai_extraction.domain, "Airline")
+            self.assertEqual(ai_extraction.end_client, "Major Airline Co")
+            self.assertEqual(ai_extraction.implementation_partner, "Jasvik Solutions")
+
     def test_sync_continues_when_detail_fetch_times_out(self) -> None:
         class _TimeoutCollector(_FakeCollector):
             def reset_detail_fetch_metrics(self) -> None:
@@ -2557,7 +2876,17 @@ Job ID: ENG-2"""
     def test_sync_continues_when_one_row_parser_fails(self) -> None:
         original_parse_external_post = external_feed_service_module.parse_external_post
 
-        def _boom(*, source_type: str, source_url: str, title: str, location: str, posted_text: str, raw_body: str, raw_html: str):
+        def _boom(
+            *,
+            source_type: str,
+            source_url: str,
+            title: str,
+            location: str,
+            posted_text: str,
+            raw_body: str,
+            raw_html: str,
+            nvoids_detail=None,
+        ):
             if title == "Senior Python Developer":
                 raise RuntimeError("forced row parse failure")
             return original_parse_external_post(
@@ -2568,6 +2897,7 @@ Job ID: ENG-2"""
                 posted_text=posted_text,
                 raw_body=raw_body,
                 raw_html=raw_html,
+                nvoids_detail=nvoids_detail,
             )
 
         external_feed_service_module.parse_external_post = _boom
@@ -2585,26 +2915,6 @@ Job ID: ENG-2"""
                 self.assertEqual(ext_rows[0].external_post_id, "nvoids:2")
         finally:
             external_feed_service_module.parse_external_post = original_parse_external_post
-
-    def test_sync_skips_queue_creation_when_no_cc_configured(self) -> None:
-        with self.SessionLocal() as db:
-            settings = db.query(UserSettings).filter(UserSettings.owner_id == main.settings.owner_id).first()
-            assert settings is not None
-            settings.preferred_employer_cc_email = ""
-            settings.preferred_employer_cc_emails = ""
-            settings.default_employer_cc_emails = ""
-            db.commit()
-
-        sync = self.client.post("/external-feeds/nvoids/sync")
-        self.assertEqual(sync.status_code, 200, sync.text)
-
-        with self.SessionLocal() as db:
-            rows = (
-                db.query(RecruiterEmail)
-                .filter(RecruiterEmail.owner_id == main.settings.owner_id, RecruiterEmail.source == "nvoids")
-                .all()
-            )
-            self.assertEqual(rows, [])
 
     def test_recruiter_numbers_hides_nvoids_placeholder_rows_but_keeps_real_rows(self) -> None:
         self._seed_nvoids_placeholder_recruiter()
@@ -2756,7 +3066,7 @@ Job ID: ENG-2"""
             assert updated_ext is not None
             self.assertEqual(updated_ext.recruiter_phone, "")
             self.assertEqual(updated_ext.recruiter_name, "Unknown")
-            updated_recruiter = db.query(RecruiterNumber).filter(RecruiterNumber.id == 1).first()
+            updated_recruiter = db.query(PremiumNumberContact).filter(PremiumNumberContact.id == 1).first()
             self.assertIsNone(updated_recruiter)
             recruiter_opp = db.query(RecruiterOpportunity).filter(RecruiterOpportunity.recruiter_number_id == 1).first()
             self.assertIsNone(recruiter_opp)
@@ -2770,6 +3080,14 @@ Job ID: ENG-2"""
             company="Valid Co",
             external_phone="+1 214 555 0125",
         )
+        with self.SessionLocal() as db:
+            lineage = opportunity_lineage_service.get_lineage_for_opportunity(
+                db,
+                owner_id=main.settings.owner_id,
+                recruiter_opportunity_id=opportunity_id,
+            )
+            assert lineage is not None
+            lineage_id = lineage.id
 
         res = self.client.post("/external-feeds/nvoids/backfill-phones?limit=100")
         self.assertEqual(res.status_code, 200, res.text)
@@ -2782,10 +3100,19 @@ Job ID: ENG-2"""
             self.assertIsNotNone(ext)
             assert ext is not None
             self.assertEqual(ext.recruiter_phone, "")
-            self.assertIsNone(db.query(RecruiterNumber).filter(RecruiterNumber.id == recruiter_id).first())
+            self.assertIsNone(db.query(PremiumNumberContact).filter(PremiumNumberContact.id == recruiter_id).first())
             self.assertIsNone(db.query(RecruiterOpportunity).filter(RecruiterOpportunity.id == opportunity_id).first())
+            lineage = db.get(OpportunityLineage, lineage_id)
+            self.assertIsNone(lineage.recruiter_opportunity_id)
+            self.assertEqual(lineage.current_status, "closed")
+            self.assertEqual(
+                db.query(OpportunityLifecycleEvent)
+                .filter_by(lineage_id=lineage_id, event_type="deleted")
+                .count(),
+                1,
+            )
 
-    def test_backfill_recovers_row_3_phone_and_name_and_rebridges(self) -> None:
+    def test_backfill_recovers_row_3_phone_and_routes_fallback_to_review(self) -> None:
         recruiter_id, opportunity_id, ext_id = self._seed_nvoids_placeholder_recruiter(
             normalized_phone_number="nvoids-seed-bridge",
             display_phone_number="Unknown",
@@ -2812,11 +3139,18 @@ Job ID: ENG-2"""
             ext.bridge_status = "ignored_no_phone"
             db.commit()
 
-        res = self.client.post("/external-feeds/nvoids/backfill-phones?limit=100")
+        with patch(
+            "app.premium_numbers.extraction._llm_extract",
+            return_value=[],
+        ), patch(
+            "app.premium_numbers.extraction._sbert_keep_candidate",
+            return_value=(True, "test"),
+        ):
+            res = self.client.post("/external-feeds/nvoids/backfill-phones?limit=100")
         self.assertEqual(res.status_code, 200, res.text)
         payload = res.json()
         self.assertGreaterEqual(payload["corrected"], 1)
-        self.assertGreaterEqual(payload["bridged"], 1)
+        self.assertEqual(payload["bridged"], 0)
         self.assertEqual(payload["deleted_placeholder_opportunities"], 1)
         self.assertEqual(payload["deleted_placeholder_recruiters"], 1)
 
@@ -2826,33 +3160,19 @@ Job ID: ENG-2"""
             assert ext is not None
             self.assertIn("240", ext.recruiter_phone or "")
             self.assertEqual(ext.recruiter_name, "Shivam Singh")
-            self.assertEqual(ext.bridge_status, "bridged")
+            self.assertEqual(ext.bridge_status, "needs_review")
 
-            old_placeholder = db.query(RecruiterNumber).filter(RecruiterNumber.id == recruiter_id).first()
+            old_placeholder = db.query(PremiumNumberContact).filter(PremiumNumberContact.id == recruiter_id).first()
             if old_placeholder is not None:
                 self.assertEqual(old_placeholder.normalized_phone_number, "12406571540")
                 self.assertEqual(old_placeholder.recruiter_name, "Shivam Singh")
 
-            bridged_recruiter = (
-                db.query(RecruiterNumber)
-                .filter(RecruiterNumber.owner_id == main.settings.owner_id, RecruiterNumber.recruiter_email == "bridge@example.com")
-                .first()
-            )
-            self.assertIsNotNone(bridged_recruiter)
-            assert bridged_recruiter is not None
-            self.assertEqual(bridged_recruiter.recruiter_name, "Shivam Singh")
-            self.assertEqual(bridged_recruiter.display_phone_number, "(240) 657-1540")
-
-            bridged_opportunity = (
-                db.query(RecruiterOpportunity)
-                .filter(
-                    RecruiterOpportunity.owner_id == main.settings.owner_id,
-                    RecruiterOpportunity.external_opportunity_id == ext_id,
-                    RecruiterOpportunity.recruiter_number_id == bridged_recruiter.id,
-                )
-                .first()
-            )
-            self.assertIsNotNone(bridged_opportunity)
+            review = db.query(NumberReviewQueue).filter(
+                NumberReviewQueue.source_external_opportunity_id == ext_id,
+            ).one()
+            self.assertEqual(review.owner_name, "Unknown")
+            self.assertEqual(review.contact_email, "bridge@example.com")
+            self.assertEqual(review.display_phone_number, "(240) 657-1540")
             linked_nvoids_opps = (
                 db.query(RecruiterOpportunity)
                 .filter(
@@ -2862,9 +3182,9 @@ Job ID: ENG-2"""
                 )
                 .all()
             )
-            self.assertEqual(len(linked_nvoids_opps), 1)
+            self.assertEqual(linked_nvoids_opps, [])
 
-    def test_backfill_recovers_ph_no_signature_variant_from_row_3(self) -> None:
+    def test_backfill_recovers_ph_no_signature_variant_into_review(self) -> None:
         recruiter_id, _opportunity_id, ext_id = self._seed_nvoids_placeholder_recruiter(
             normalized_phone_number="nvoids-seed-phno",
             display_phone_number="Unknown",
@@ -2891,11 +3211,18 @@ Job ID: ENG-2"""
             ext.bridge_status = "ignored_no_phone"
             db.commit()
 
-        res = self.client.post("/external-feeds/nvoids/backfill-phones?limit=100")
+        with patch(
+            "app.premium_numbers.extraction._llm_extract",
+            return_value=[],
+        ), patch(
+            "app.premium_numbers.extraction._sbert_keep_candidate",
+            return_value=(True, "test"),
+        ):
+            res = self.client.post("/external-feeds/nvoids/backfill-phones?limit=100")
         self.assertEqual(res.status_code, 200, res.text)
         payload = res.json()
         self.assertGreaterEqual(payload["corrected"], 1)
-        self.assertGreaterEqual(payload["bridged"], 1)
+        self.assertEqual(payload["bridged"], 0)
 
         with self.SessionLocal() as db:
             ext = db.query(ExternalOpportunity).filter(ExternalOpportunity.id == ext_id).first()
@@ -2903,19 +3230,16 @@ Job ID: ENG-2"""
             assert ext is not None
             self.assertEqual(ext.recruiter_name, "Gopal Sharma")
             self.assertIn("551", ext.recruiter_phone or "")
-            self.assertEqual(ext.bridge_status, "bridged")
+            self.assertEqual(ext.bridge_status, "needs_review")
 
-            recruiter = (
-                db.query(RecruiterNumber)
-                .filter(RecruiterNumber.owner_id == main.settings.owner_id, RecruiterNumber.recruiter_email == "sharma.gopal@net2source.com")
-                .first()
-            )
-            self.assertIsNotNone(recruiter)
-            assert recruiter is not None
-            self.assertEqual(recruiter.display_phone_number, "(551) 303-0028")
-            self.assertEqual(recruiter.recruiter_name, "Gopal Sharma")
+            review = db.query(NumberReviewQueue).filter(
+                NumberReviewQueue.source_external_opportunity_id == ext_id,
+            ).one()
+            self.assertEqual(review.display_phone_number, "(551) 303-0028")
+            self.assertEqual(review.owner_name, "Unknown")
+            self.assertEqual(review.contact_email, "sharma.gopal@net2source.com")
 
-            placeholder = db.query(RecruiterNumber).filter(RecruiterNumber.id == recruiter_id).first()
+            placeholder = db.query(PremiumNumberContact).filter(PremiumNumberContact.id == recruiter_id).first()
             if placeholder is not None:
                 self.assertEqual(placeholder.normalized_phone_number, "15513030028")
 
@@ -2987,8 +3311,8 @@ Job ID: ENG-2"""
         self.assertEqual(payload["review_numbers_reformatted"], 1)
 
         with self.SessionLocal() as db:
-            recruiter = db.query(RecruiterNumber).filter(RecruiterNumber.recruiter_email == "nancy@example.com").first()
-            employer = db.query(EmployerNumber).filter(EmployerNumber.company == "Corp").first()
+            recruiter = db.query(PremiumNumberContact).filter(PremiumNumberContact.recruiter_email == "nancy@example.com").first()
+            employer = db.query(PremiumNumberContact).filter(PremiumNumberContact.company == "Corp", PremiumNumberContact.is_employer.is_(True)).first()
             review = db.query(NumberReviewQueue).filter(NumberReviewQueue.owner_name == "Review Owner").first()
             assert recruiter is not None and employer is not None and review is not None
             self.assertEqual(recruiter.display_phone_number, "(240) 657-1540")
@@ -3030,9 +3354,9 @@ Job ID: ENG-2"""
 
         with self.SessionLocal() as db:
             rows = (
-                db.query(RecruiterNumber)
-                .filter(RecruiterNumber.recruiter_email.in_(["dharma@example.com", "vikas@example.com"]))
-                .order_by(RecruiterNumber.recruiter_email.asc())
+                db.query(PremiumNumberContact)
+                .filter(PremiumNumberContact.recruiter_email.in_(["dharma@example.com", "vikas@example.com"]))
+                .order_by(PremiumNumberContact.recruiter_email.asc())
                 .all()
             )
             self.assertEqual(len(rows), 2)
@@ -3041,13 +3365,38 @@ Job ID: ENG-2"""
 
 
 class ExternalFeedServiceQueryTests(unittest.TestCase):
-    def test_build_nvoids_query_uses_default_when_locations_empty(self) -> None:
+    def test_build_nvoids_query_uses_default_when_nothing_configured(self) -> None:
         service = ExternalFeedService()
-        self.assertEqual(service.build_nvoids_query([]), "(tx or texas) and java and spring* not(*js)")
+        self.assertEqual(service.build_nvoids_query(), "(tx or texas) and java and spring* not(*js)")
 
-    def test_build_nvoids_query_includes_location_tokens(self) -> None:
+    def test_build_nvoids_query_combines_job_role_and_search_location(self) -> None:
         service = ExternalFeedService()
-        self.assertEqual(service.build_nvoids_query(["texas", "remote"]), "(texas or remote) and java and spring* not(*js)")
+        self.assertEqual(
+            service.build_nvoids_query(job_role="ai engineer", search_location="new jersey"),
+            "(new jersey) and ai engineer",
+        )
+
+    def test_build_nvoids_query_job_role_only_omits_location_clause(self) -> None:
+        service = ExternalFeedService()
+        self.assertEqual(service.build_nvoids_query(job_role="data scientist"), "data scientist")
+
+    def test_build_nvoids_query_search_location_only_falls_back_to_default_role(self) -> None:
+        service = ExternalFeedService()
+        self.assertEqual(
+            service.build_nvoids_query(search_location="remote"),
+            "(remote) and java and spring* not(*js)",
+        )
+
+    def test_build_nvoids_query_custom_query_overrides_job_role_and_location(self) -> None:
+        service = ExternalFeedService()
+        self.assertEqual(
+            service.build_nvoids_query(
+                job_role="ai engineer",
+                search_location="texas",
+                custom_query="  python and (aws or gcp)  ",
+            ),
+            "python and (aws or gcp)",
+        )
 
     def test_row_matches_locations_treats_remote_as_explicit_token(self) -> None:
         service = ExternalFeedService()

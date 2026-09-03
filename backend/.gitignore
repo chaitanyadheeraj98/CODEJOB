@@ -10,4 +10,8 @@ wheels/
 .venv
 
 # Environment files
-.env
+.env*
+
+# pytest caches
+.pytest_cache/
+.testmondata*

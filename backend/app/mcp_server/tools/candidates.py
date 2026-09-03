@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import difflib
+import json
+import re
 from datetime import date, datetime, time, timedelta
 
 from sqlalchemy import func, or_
@@ -54,8 +56,10 @@ def _parse_date(value: str) -> date | None:
 def _summary(row: RecruiterEmail) -> dict[str, object]:
     return {
         "id": row.id,
+        "record_id": row.record_id,
         "state": row.state,
         "score": row.score,
+        "ats_score": row.ats_score,
         "decision": row.decision,
         "created_at": row.created_at.isoformat(),
         "untrusted_candidate_data": (
@@ -67,8 +71,28 @@ def _summary(row: RecruiterEmail) -> dict[str, object]:
     }
 
 
-def search_candidates(query: str = "", status: str = "", limit: int = 10) -> dict[str, object]:
-    """Search the owner's candidates by text and optional queue status (fuzzy-matched)."""
+def _sent_attachment_names(row: RecruiterEmail) -> list[str]:
+    try:
+        values = json.loads(row.sent_attachment_file_names_json or "[]")
+    except json.JSONDecodeError:
+        return []
+    return [str(value) for value in values] if isinstance(values, list) else []
+
+
+def search_candidates(
+    query: str = "", status: str = "", limit: int = 10, record_ids: list[str] | None = None
+) -> dict[str, object]:
+    """Search the owner's candidates by text and optional queue status (fuzzy-matched).
+
+    Each result has both "score" (AI match score x100, not ATS) and "ats_score"
+    (the real ATS score) - use ats_score when the user asks about ATS scores,
+    ranking, or "best" candidates by ATS.
+
+    Pass record_ids (the permanent Record IDs shown to the user, e.g. from an
+    earlier search or get_record_details) to look candidates up by exact
+    Record ID instead of text - do not put Record IDs in query, they are UUIDs
+    and will not match the text/numeric-id search there.
+    """
     db = SessionLocal()
     try:
         resolved_status, status_error = _resolve_status(status)
@@ -77,21 +101,49 @@ def search_candidates(query: str = "", status: str = "", limit: int = 10) -> dic
         rows = db.query(RecruiterEmail).filter(RecruiterEmail.owner_id == settings.owner_id)
         if resolved_status:
             rows = rows.filter(RecruiterEmail.state == resolved_status)
-        if query.strip():
-            term = f"%{query.strip()}%"
-            rows = rows.filter(
-                or_(
-                    RecruiterEmail.role.ilike(term),
-                    RecruiterEmail.subject.ilike(term),
-                    RecruiterEmail.sender.ilike(term),
-                    RecruiterEmail.skills_text.ilike(term),
-                )
-            )
+        if record_ids:
+            rows = rows.filter(RecruiterEmail.record_id.in_(record_ids))
+        elif query.strip():
+            stripped = query.strip()
+            term = f"%{stripped}%"
+            conditions = [
+                RecruiterEmail.role.ilike(term),
+                RecruiterEmail.subject.ilike(term),
+                RecruiterEmail.sender.ilike(term),
+                RecruiterEmail.skills_text.ilike(term),
+            ]
+            ids_in_query = [int(n) for n in re.findall(r"\d+", stripped)]
+            if ids_in_query:
+                conditions.append(RecruiterEmail.id.in_(ids_in_query))
+            rows = rows.filter(or_(*conditions))
         total = rows.count()
         visible = rows.order_by(RecruiterEmail.created_at.desc()).limit(max(1, min(limit, 25))).all()
         return {"candidates": [_summary(row) for row in visible], "count": total}
     finally:
         db.close()
+
+
+def propose_bulk_approve_candidates(
+    query: str = "", status: str = "needs_review", limit: int = 25, record_ids: list[str] | None = None
+) -> dict[str, object]:
+    """Prepare, but never execute, a proposal to approve matching review candidates.
+
+    Pass record_ids when the user names specific Record IDs to approve (e.g.
+    "approve these record ids") - do not put Record IDs in query.
+    """
+    result = search_candidates(query=query, status=status, limit=limit, record_ids=record_ids)
+    if "error" in result:
+        return result
+    candidates = [
+        row for row in result.get("candidates", [])
+        if isinstance(row, dict) and row.get("state") == "needs_review"
+    ]
+    return {
+        "action": "approve_candidates",
+        "candidate_ids": [row["id"] for row in candidates],
+        "candidates": candidates,
+        "count": len(candidates),
+    }
 
 
 def get_candidate(email_id: int) -> dict[str, object]:
@@ -109,6 +161,18 @@ def get_candidate(email_id: int) -> dict[str, object]:
         payload.update(
             {
                 "sendability_status": row.sendability_status,
+                "resume_asset_id": row.resume_asset_id,
+                "resume_file_name": row.resume_file_name,
+                "sent_attachment_file_names": _sent_attachment_names(row),
+                "sent_at": row.sent_at.isoformat() if row.sent_at else None,
+                "ats_score_source": row.ats_score_source,
+                "ai_score": row.ai_score,
+                "ai_score_source": row.ai_score_source,
+                "resume_picker_score": row.resume_picker_score,
+                "resume_picker_reason": row.resume_picker_reason,
+                "decision_reason": row.decision_reason,
+                "auto_reject_reason": row.auto_reject_reason,
+                "hard_filter_result": row.hard_filter_result,
                 "untrusted_source_data": (
                     "<untrusted_candidate_data>\n"
                     f"Role: {row.role}\nLocation: {row.location}\n"
@@ -197,6 +261,10 @@ def get_draft_status(email_id: int) -> dict[str, object]:
             "draft_resume_context_status": row.draft_resume_context_status,
             "approval_status": row.approval_status,
             "sent_status": row.sent_status,
+            "resume_asset_id": row.resume_asset_id,
+            "resume_file_name": row.resume_file_name,
+            "sent_attachment_file_names": _sent_attachment_names(row),
+            "sent_at": row.sent_at.isoformat() if row.sent_at else None,
             "draft_quality": row.draft_quality if has_draft else None,
         }
     finally:

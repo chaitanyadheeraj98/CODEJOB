@@ -35,12 +35,13 @@ describe('Sidebar', () => {
           sentCount={4}
           inboxCount={6}
           premiumCount={5}
+          resumeTrackingEnabled
           activePage="run_queue"
           onNavigate={vi.fn()}
         />,
       )
     })
-    expect(container.textContent ?? '').toContain('Premium Numbers')
+    expect(container.textContent ?? '').toContain('Premium Contacts')
     expect(container.textContent ?? '').toContain('Inbox6')
   })
 
@@ -64,6 +65,7 @@ describe('Sidebar', () => {
           runCount={0}
           sentCount={0}
           premiumCount={0}
+          resumeTrackingEnabled={false}
           activePage="run_queue"
           onNavigate={onNavigate}
         />,

@@ -7,7 +7,11 @@ from typing import Any
 from openai import APIError, APITimeoutError, BadRequestError, OpenAI, RateLimitError
 
 from app.config import settings
-from app.ai.json_object import JSONObjectParseError, parse_json_object
+from app.ai.json_object import (
+    JSONObjectParseError,
+    parse_json_object,
+    validate_schema_subset as _validate_schema_subset,
+)
 STRUCTURED_OUTPUT_MODELS = frozenset(
     {
         "openai/gpt-oss-20b",
@@ -36,54 +40,6 @@ def _parse_json_object(content: str) -> dict[str, object]:
         if exc.kind == "empty":
             raise ValueError("Groq returned empty content") from exc
         raise json.JSONDecodeError("Groq returned malformed JSON content", exc.content, 0) from exc
-
-
-def _is_number(value: object) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
-
-
-def _validate_schema_subset(value: object, schema: dict[str, object]) -> bool:
-    schema_type = schema.get("type")
-    if schema_type == "object":
-        if not isinstance(value, dict):
-            return False
-        properties = schema.get("properties")
-        if not isinstance(properties, dict):
-            properties = {}
-        required = schema.get("required")
-        if isinstance(required, list):
-            for key in required:
-                if isinstance(key, str) and key not in value:
-                    return False
-        if schema.get("additionalProperties") is False:
-            allowed_keys = {key for key in properties if isinstance(key, str)}
-            if any(key not in allowed_keys for key in value):
-                return False
-        for key, item_schema in properties.items():
-            if key not in value:
-                continue
-            if isinstance(item_schema, dict) and not _validate_schema_subset(value[key], item_schema):
-                return False
-        return True
-    if schema_type == "array":
-        if not isinstance(value, list):
-            return False
-        item_schema = schema.get("items")
-        if isinstance(item_schema, dict):
-            return all(_validate_schema_subset(item, item_schema) for item in value)
-        return True
-    if schema_type == "string":
-        if not isinstance(value, str):
-            return False
-    elif schema_type in ("number", "integer"):
-        if not _is_number(value):
-            return False
-    elif schema_type is not None:
-        return False
-    enum = schema.get("enum")
-    if isinstance(enum, list) and value not in enum:
-        return False
-    return True
 
 
 def _classify_bad_request(exc: BadRequestError, *, request_mode: str) -> str:

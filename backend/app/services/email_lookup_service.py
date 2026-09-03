@@ -9,16 +9,18 @@ from sqlalchemy.orm import Session
 
 from app.models import (
     EmailConversation,
-    EmployerNumber,
     NumberReviewQueue,
+    PremiumNumberContact,
     PremiumNumberLead,
     RecentRun,
     RecentRunSkippedItem,
     RecruiterEmail,
-    RecruiterNumber,
     RecruiterOpportunity,
 )
-from app.premium_numbers.phone_normalization import canonicalize_phone
+from app.premium_numbers.domain_guard import (
+    is_hidden_invalid_employer_number,
+    is_hidden_nvoids_placeholder_recruiter,
+)
 
 
 MAX_EMAIL_SEARCH_HITS = 200
@@ -70,20 +72,6 @@ class EmailSearchHit:
 def _query_limit() -> int:
     # Keep one extra result so the HTTP layer can report that the response was truncated.
     return MAX_EMAIL_SEARCH_HITS + 1
-
-
-def _is_hidden_nvoids_placeholder_recruiter(row: RecruiterNumber) -> bool:
-    normalized = str(row.normalized_phone_number or "").strip().lower()
-    display = str(row.display_phone_number or "").strip().lower()
-    return normalized.startswith("nvoids-") and display == "unknown" and row.first_detected_email_id is None
-
-
-def _is_hidden_invalid_employer_number(row: EmployerNumber) -> bool:
-    display = str(row.display_phone_number or "").strip()
-    if not display or display.lower() == "unknown":
-        return False
-    normalized = str(row.normalized_phone_number or "").strip()
-    return not canonicalize_phone(normalized) and not canonicalize_phone(display)
 
 
 def search_email(
@@ -178,6 +166,7 @@ def search_email(
                 state=root_email.state,
                 detail={
                     "premium_number_lead_id": lead.id,
+                    "contact_id": lead.contact_id,
                     "phone_number_display": lead.phone_number_display,
                     "company": lead.company,
                     "confidence": lead.confidence,
@@ -226,26 +215,28 @@ def search_email(
         )
 
     recruiter_number_conditions = [
-        RecruiterNumber.display_phone_number.ilike(like),
-        RecruiterNumber.recruiter_name.ilike(like),
-        RecruiterNumber.company.ilike(like),
-        RecruiterNumber.designation.ilike(like),
-        RecruiterNumber.recruiter_email.ilike(like),
+        PremiumNumberContact.display_phone_number.ilike(like),
+        PremiumNumberContact.recruiter_name.ilike(like),
+        PremiumNumberContact.company.ilike(like),
+        PremiumNumberContact.designation.ilike(like),
+        PremiumNumberContact.recruiter_email.ilike(like),
     ]
     if phone_like:
-        recruiter_number_conditions.append(RecruiterNumber.normalized_phone_number.ilike(phone_like))
+        recruiter_number_conditions.append(PremiumNumberContact.normalized_phone_number.ilike(phone_like))
     recruiter_number_rows = (
-        db.query(RecruiterNumber)
+        db.query(PremiumNumberContact)
         .filter(
-            RecruiterNumber.owner_id == owner_id,
+            PremiumNumberContact.owner_id == owner_id,
+            PremiumNumberContact.is_recruiter.is_(True),
+            PremiumNumberContact.deleted_at.is_(None),
             or_(*recruiter_number_conditions),
         )
-        .order_by(RecruiterNumber.updated_at.desc(), RecruiterNumber.id.desc())
+        .order_by(PremiumNumberContact.updated_at.desc(), PremiumNumberContact.id.desc())
         .limit(_query_limit())
         .all()
     )
     for recruiter_number in recruiter_number_rows:
-        if _is_hidden_nvoids_placeholder_recruiter(recruiter_number):
+        if is_hidden_nvoids_placeholder_recruiter(recruiter_number):
             continue
         hits.append(
             EmailSearchHit(
@@ -264,24 +255,26 @@ def search_email(
         )
 
     employer_number_conditions = [
-        EmployerNumber.display_phone_number.ilike(like),
-        EmployerNumber.owner_name.ilike(like),
-        EmployerNumber.company.ilike(like),
+        PremiumNumberContact.display_phone_number.ilike(like),
+        PremiumNumberContact.owner_name.ilike(like),
+        PremiumNumberContact.company.ilike(like),
     ]
     if phone_like:
-        employer_number_conditions.append(EmployerNumber.normalized_phone_number.ilike(phone_like))
+        employer_number_conditions.append(PremiumNumberContact.normalized_phone_number.ilike(phone_like))
     employer_number_rows = (
-        db.query(EmployerNumber)
+        db.query(PremiumNumberContact)
         .filter(
-            EmployerNumber.owner_id == owner_id,
+            PremiumNumberContact.owner_id == owner_id,
+            PremiumNumberContact.is_employer.is_(True),
+            PremiumNumberContact.deleted_at.is_(None),
             or_(*employer_number_conditions),
         )
-        .order_by(EmployerNumber.updated_at.desc(), EmployerNumber.id.desc())
+        .order_by(PremiumNumberContact.updated_at.desc(), PremiumNumberContact.id.desc())
         .limit(_query_limit())
         .all()
     )
     for employer_number in employer_number_rows:
-        if _is_hidden_invalid_employer_number(employer_number):
+        if is_hidden_invalid_employer_number(employer_number):
             continue
         hits.append(
             EmailSearchHit(
@@ -303,7 +296,7 @@ def search_email(
         RecruiterOpportunity.email_subject.ilike(like),
         RecruiterOpportunity.email_sender.ilike(like),
         RecruiterOpportunity.job_title.ilike(like),
-        RecruiterOpportunity.client.ilike(like),
+        RecruiterOpportunity.end_client.ilike(like),
         RecruiterOpportunity.location.ilike(like),
         RecruiterOpportunity.extracted_skills.ilike(like),
     ]
@@ -328,7 +321,7 @@ def search_email(
                 detail={
                     "recruiter_opportunity_id": opportunity.id,
                     "job_title": opportunity.job_title,
-                    "client": opportunity.client,
+                    "end_client": opportunity.end_client,
                 },
                 occurred_at=opportunity.updated_at or opportunity.created_at,
             )

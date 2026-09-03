@@ -23,6 +23,8 @@ class AutoRunnerService:
         run_once: Callable[[object | None, Session], object],
         run_nvoids_once: Callable[[Session, int], object],
         check_live_replies: Callable[[Session], None],
+        run_reminder_sweep: Callable[[Session], None],
+        run_resume_tracking_sweep: Callable[[Session], None],
         action_lock: Lock,
         stop_event: Event,
     ) -> None:
@@ -31,6 +33,8 @@ class AutoRunnerService:
         self._run_once = run_once
         self._run_nvoids_once = run_nvoids_once
         self._check_live_replies = check_live_replies
+        self._run_reminder_sweep = run_reminder_sweep
+        self._run_resume_tracking_sweep = run_resume_tracking_sweep
         self._action_lock = action_lock
         self._stop_event = stop_event
 
@@ -46,10 +50,20 @@ class AutoRunnerService:
     def nvoids_batch_limit(user_settings: UserSettings) -> int:
         return max(1, min(int(user_settings.nvoids_batch_limit or 10), 50))
 
+    @staticmethod
+    def reminder_sweep_interval_minutes(user_settings: UserSettings) -> int:
+        return max(30, min(int(user_settings.feature_reminder_sweep_interval_minutes or 240), 1440))
+
+    @staticmethod
+    def resume_tracking_sweep_interval_minutes(user_settings: UserSettings) -> int:
+        return max(30, min(int(user_settings.feature_resume_tracking_sweep_interval_minutes or 240), 1440))
+
     def run_loop(self) -> None:
         next_run_at = datetime.now(UTC)
         next_nvoids_run_at = datetime.now(UTC)
         next_live_check_at = datetime.now(UTC)
+        next_reminder_sweep_at = datetime.now(UTC)
+        next_resume_tracking_sweep_at = datetime.now(UTC)
         while not self._stop_event.wait(5):
             db = self._session_factory()
             try:
@@ -101,6 +115,35 @@ class AutoRunnerService:
                         except Exception:
                             logger.exception("Auto nvoids sync crashed")
                     next_nvoids_run_at = datetime.now(UTC) + timedelta(minutes=nvoids_interval_minutes)
+
+                if (
+                    user_settings.enabled
+                    and user_settings.feature_applications_enabled
+                    and user_settings.feature_application_automation_enabled
+                    and now_utc >= next_reminder_sweep_at
+                ):
+                    reminder_interval_minutes = self.reminder_sweep_interval_minutes(user_settings)
+                    with self._action_lock:
+                        try:
+                            self._run_reminder_sweep(db)
+                        except Exception:
+                            logger.exception("Reminder sweep crashed")
+                    next_reminder_sweep_at = datetime.now(UTC) + timedelta(minutes=reminder_interval_minutes)
+
+                if (
+                    user_settings.enabled
+                    and user_settings.feature_resume_tracking_enabled
+                    and now_utc >= next_resume_tracking_sweep_at
+                ):
+                    resume_tracking_interval_minutes = self.resume_tracking_sweep_interval_minutes(user_settings)
+                    with self._action_lock:
+                        try:
+                            self._run_resume_tracking_sweep(db)
+                        except Exception:
+                            logger.exception("Resume tracking sweep crashed")
+                    next_resume_tracking_sweep_at = datetime.now(UTC) + timedelta(
+                        minutes=resume_tracking_interval_minutes
+                    )
             except Exception:
                 logger.exception("Auto runner loop error")
             finally:

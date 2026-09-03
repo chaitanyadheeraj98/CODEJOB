@@ -868,15 +868,19 @@ def ai_assist_score(parsed: dict[str, str | int], settings: UserSettings) -> tup
     return score, f"AI fit score computed from role keywords and skill overlap ({score:.2f})"
 
 
-def should_block_f2f(parsed: dict[str, str | int | bool]) -> tuple[bool, str]:
+def should_block_f2f(parsed: dict[str, str | int | bool], accepted_locations: list[str] | None = None) -> tuple[bool, str]:
     f2f_mentioned = bool(parsed.get("f2f_mentioned", False))
     if not f2f_mentioned:
         return False, ""
     location_text = str(parsed.get("job_location_text", "unknown"))
-    is_texas = bool(parsed.get("is_texas_role", False))
-    if not is_texas:
-        return True, f"F2F mentioned but non-Texas location ({location_text})"
-    return False, ""
+    accepted = [loc.strip().lower() for loc in (accepted_locations or []) if loc.strip()]
+    if not accepted or "any" in accepted:
+        return False, ""
+    if TEXAS_RE.search(location_text) and ("texas" in accepted or "tx" in accepted):
+        return False, ""
+    if any(loc in location_text.lower() for loc in accepted):
+        return False, ""
+    return True, f"F2F mentioned but location outside accepted locations ({location_text})"
 
 
 GENERIC_TO_LOCAL_PARTS = {

@@ -45,6 +45,10 @@ if is_sqlite:
     @event.listens_for(engine, "connect")
     def _set_sqlite_pragmas(dbapi_connection, _connection_record) -> None:
         cursor = dbapi_connection.cursor()
+        # SQLite defaults foreign_keys OFF, which silently makes every ForeignKey in
+        # models.py decorative - including the ondelete=SET NULL links that keep an
+        # application from pointing at a deleted opportunity, contact, or resume.
+        cursor.execute("PRAGMA foreign_keys=ON")
         cursor.execute("PRAGMA busy_timeout=10000")
         cursor.execute("PRAGMA journal_mode=WAL")
         cursor.execute("PRAGMA synchronous=NORMAL")

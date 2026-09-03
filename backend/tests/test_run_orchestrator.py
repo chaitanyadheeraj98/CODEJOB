@@ -149,7 +149,7 @@ class RunOrchestratorTests(unittest.TestCase):
             return ai_score, "summary", "v1", None, None, diag
 
         def policy_f2f_block(
-            _parsed: dict[str, str | int | bool], _policy: dict[str, object]
+            _parsed: dict[str, str | int | bool], _policy: dict[str, object], _settings: UserSettings
         ) -> tuple[bool, str]:
             return (True, "blocked") if blocked else (False, "")
 
@@ -520,6 +520,7 @@ class RunOrchestratorTests(unittest.TestCase):
             assert row is not None
             self.assertEqual(row.state, "needs_review")
             self.assertEqual(row.draft_source, "rules_only")
+            self.assertEqual(row.resolved_recruiter_email, "to@example.com")
             self.assertEqual(result.queued_count, 1)
             self.assertEqual(marked, ["m-5"])
             self.assertIn(("needs_review_marked", "state"), events)

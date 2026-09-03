@@ -9,7 +9,8 @@ from app.config import settings
 GMAIL_SYNC_QUEUE = "gmail_sync"
 NVOIDS_SYNC_QUEUE = "nvoids_sync"
 AUTOMATION_RUN_QUEUE = "automation_run"
-QUEUE_NAMES = frozenset({GMAIL_SYNC_QUEUE, NVOIDS_SYNC_QUEUE, AUTOMATION_RUN_QUEUE})
+EMBEDDING_QUEUE = "embedding_generation"
+QUEUE_NAMES = frozenset({GMAIL_SYNC_QUEUE, NVOIDS_SYNC_QUEUE, AUTOMATION_RUN_QUEUE, EMBEDDING_QUEUE})
 
 
 def get_redis_connection() -> Redis:
@@ -33,4 +34,3 @@ def active_job_id(name: str, *, connection: Redis | None = None) -> str | None:
 
 def redis_is_ready(*, connection: Redis | None = None) -> bool:
     return bool((connection or get_redis_connection()).ping())
-

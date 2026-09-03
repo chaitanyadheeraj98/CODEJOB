@@ -23,7 +23,18 @@
 | Nvoids sync | Sync rejects requests when `feature_nvoids_enabled` is false and requires the external integration. | `POST /external-feeds/nvoids/sync` checks `feature_nvoids_enabled`. |
 | Telegram | Bot configuration and polling runtime are required. | `GET /telegram/status` and `app/telegram_bot.py`. |
 | Google Sheets append | The send-side integration requires configuration and was not exercised in this audit. | Send orchestration integration path. |
-| In-app assistant | `FEATURE_CHAT_ENABLED=true` and a reachable local Ollama daemon are required. The widget remains visible with an explanatory disabled state otherwise. | `/chat/*`, `/mcp`, `app/ai/chat/*`, and `dashboard/src/features/chat/*`. |
+| In-app assistant | `FEATURE_CHAT_ENABLED=true` and a reachable local Ollama daemon are required. Write proposals/confirm endpoints additionally require `FEATURE_CHAT_ACTIONS_ENABLED=true`; web search is registered only when `SEARXNG_URL` is set and the `searxng` Compose service is reachable at that address. The widget remains visible with an explanatory disabled state otherwise. | `/chat/*`, `/mcp`, `app/ai/chat/*`, and `dashboard/src/features/chat/*`. |
+
+Chat actions remain opt-in. Configure the backend with copyable dotenv values, then recreate it:
+
+```dotenv
+FEATURE_CHAT_ACTIONS_ENABLED=false
+SEARXNG_URL=
+```
+
+```powershell
+docker compose up -d --no-deps --force-recreate backend
+```
 
 ## Persisted Flags With Runtime Effect
 

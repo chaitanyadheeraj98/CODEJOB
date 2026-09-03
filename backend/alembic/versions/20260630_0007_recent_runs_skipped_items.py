@@ -16,6 +16,9 @@ depends_on = None
 
 
 def upgrade() -> None:
+    existing = set(sa.inspect(op.get_bind()).get_table_names())
+    if "recent_runs" in existing and "recent_run_skipped_items" in existing:
+        return
     op.create_table(
         "recent_runs",
         sa.Column("id", sa.Integer(), primary_key=True),
@@ -65,6 +68,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    existing = set(sa.inspect(op.get_bind()).get_table_names())
+    if "recent_runs" not in existing and "recent_run_skipped_items" not in existing:
+        return
     op.drop_index("ix_recent_run_skipped_items_reason_code", table_name="recent_run_skipped_items")
     op.drop_index("ix_recent_run_skipped_items_run_key", table_name="recent_run_skipped_items")
     op.drop_index("ix_recent_run_skipped_items_owner_id", table_name="recent_run_skipped_items")

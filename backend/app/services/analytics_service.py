@@ -20,6 +20,7 @@ def record_productivity_event(
     event_type: str,
     event_source: str,
     entity_id: int | None = None,
+    entity_type: str = "",
     metadata: Mapping[str, object] | None = None,
     occurred_at: datetime | None = None,
 ) -> ProductivityEvent:
@@ -28,6 +29,7 @@ def record_productivity_event(
         event_type=event_type,
         event_source=event_source,
         entity_id=entity_id,
+        entity_type=entity_type,
         weight=event_weights.get(event_type, 0.0),
         metadata_json=json.dumps(dict(metadata or {})),
         occurred_at=occurred_at or datetime.now(UTC),
@@ -52,6 +54,7 @@ def event_response(event: ProductivityEvent) -> ProductivityEventResponse:
         event_type=event.event_type,
         event_source=event.event_source,
         entity_id=event.entity_id,
+        entity_type=event.entity_type,
         weight=event.weight,
         metadata=parsed_metadata,
         occurred_at=event.occurred_at,

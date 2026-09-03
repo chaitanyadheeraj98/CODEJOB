@@ -39,13 +39,13 @@ class ExternalOpportunity(Base):
     recruiter_email: Mapped[str] = mapped_column(String(255), default="", index=True)
     recruiter_phone: Mapped[str] = mapped_column(String(80), default="", index=True)
     recruiter_name: Mapped[str] = mapped_column(String(255), default="")
-    company: Mapped[str] = mapped_column(String(255), default="")
-    role: Mapped[str] = mapped_column(String(255), default="")
+    company: Mapped[str] = mapped_column(Text, default="")
+    role: Mapped[str] = mapped_column(Text, default="")
     location: Mapped[str] = mapped_column(String(255), default="")
     work_mode: Mapped[str] = mapped_column(String(80), default="")
     visa_hints: Mapped[str] = mapped_column(String(255), default="")
-    duration: Mapped[str] = mapped_column(String(255), default="")
-    rate: Mapped[str] = mapped_column(String(255), default="")
+    duration: Mapped[str] = mapped_column(Text, default="")
+    rate: Mapped[str] = mapped_column(Text, default="")
     skills_text: Mapped[str] = mapped_column(Text, default="")
     raw_body: Mapped[str] = mapped_column(Text, default="")
     raw_html: Mapped[str] = mapped_column(Text, default="")
@@ -54,6 +54,12 @@ class ExternalOpportunity(Base):
     ingested_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
     bridge_status: Mapped[str] = mapped_column(String(40), default="pending")
     bridge_target_opportunity_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    record_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("candidate_records.id", name="fk_external_opportunities_record"),
+        nullable=True,
+        index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
 

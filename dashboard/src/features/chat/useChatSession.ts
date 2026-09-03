@@ -1,14 +1,23 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import {
   createChatSession,
   deleteChatSession,
   getChatSession,
   listChatSessions,
+  renameChatSession,
   sendChatMessage,
 } from './api'
 import type { ChatMessage, ChatSession } from './types'
+import { PROPOSAL_HANDLERS } from './proposals'
 
+
+function visibleMessages(messages: ChatMessage[]): ChatMessage[] {
+  return messages.filter((message) => (
+    Boolean(message.content)
+    && (message.role !== 'tool' || Boolean(message.tool_name && PROPOSAL_HANDLERS[message.tool_name]))
+  ))
+}
 
 export function useChatSession(apiBase: string, enabled: boolean) {
   const [sessions, setSessions] = useState<ChatSession[]>([])
@@ -16,6 +25,31 @@ export function useChatSession(apiBase: string, enabled: boolean) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [unseenCount, setUnseenCount] = useState(0)
+  const messagesRef = useRef<ChatMessage[]>([])
+  useEffect(() => {
+    messagesRef.current = messages
+  }, [messages])
+
+  const markSeen = useCallback(() => setUnseenCount(0), [])
+
+  // Picks up notifications a background sync posts into this session (e.g. a
+  // recruiter reply worth flagging) without the user having to send a message.
+  useEffect(() => {
+    if (!enabled || sessionId == null) return
+    const interval = window.setInterval(() => {
+      if (busy) return
+      getChatSession(apiBase, sessionId).then((detail) => {
+        const next = visibleMessages(detail.messages)
+        const previous = messagesRef.current
+        if (next.length > previous.length) {
+          setUnseenCount((count) => count + (next.length - previous.length))
+          setMessages(next)
+        }
+      }, () => {})
+    }, 20000)
+    return () => window.clearInterval(interval)
+  }, [apiBase, enabled, sessionId, busy])
 
   useEffect(() => {
     if (!enabled) return
@@ -27,7 +61,7 @@ export function useChatSession(apiBase: string, enabled: boolean) {
         getChatSession(apiBase, rows[0].id).then((detail) => {
           if (!active) return
           setSessionId(detail.id)
-          setMessages(detail.messages.filter((message) => message.role !== 'tool' && message.content))
+          setMessages(visibleMessages(detail.messages))
         }, (reason: unknown) => {
           if (active) setError(reason instanceof Error ? reason.message : 'Failed to load chat')
         })
@@ -55,13 +89,19 @@ export function useChatSession(apiBase: string, enabled: boolean) {
     try {
       const detail = await getChatSession(apiBase, nextId)
       setSessionId(detail.id)
-      setMessages(detail.messages.filter((message) => message.role !== 'tool' && message.content))
+      setMessages(visibleMessages(detail.messages))
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Failed to load chat')
     } finally {
       setBusy(false)
     }
   }, [apiBase])
+
+  const renameCurrentSession = useCallback(async (title: string) => {
+    if (sessionId == null) return
+    const updated = await renameChatSession(apiBase, sessionId, title)
+    setSessions((current) => current.map((session) => (session.id === updated.id ? updated : session)))
+  }, [apiBase, sessionId])
 
   const removeCurrentSession = useCallback(async () => {
     if (sessionId == null) return
@@ -71,14 +111,14 @@ export function useChatSession(apiBase: string, enabled: boolean) {
     if (rows[0]) {
       const detail = await getChatSession(apiBase, rows[0].id)
       setSessionId(detail.id)
-      setMessages(detail.messages.filter((message) => message.role !== 'tool' && message.content))
+      setMessages(visibleMessages(detail.messages))
     } else {
       setSessionId(null)
       setMessages([])
     }
   }, [apiBase, sessionId])
 
-  const sendMessage = useCallback(async (rawText: string) => {
+  const sendMessage = useCallback(async (rawText: string, model?: string) => {
     const text = rawText.trim()
     if (!text || busy) return
     setBusy(true)
@@ -104,7 +144,9 @@ export function useChatSession(apiBase: string, enabled: boolean) {
             message.id === assistantId ? { ...message, id: data.message_id as number } : message
           )))
         }
-      })
+      }, model)
+      const detail = await getChatSession(apiBase, activeSessionId)
+      setMessages(visibleMessages(detail.messages))
       const rows = await listChatSessions(apiBase)
       setSessions(rows)
     } catch (reason) {
@@ -120,8 +162,11 @@ export function useChatSession(apiBase: string, enabled: boolean) {
     messages,
     busy,
     error,
+    unseenCount,
+    markSeen,
     startSession,
     selectSession,
+    renameCurrentSession,
     removeCurrentSession,
     sendMessage,
   }

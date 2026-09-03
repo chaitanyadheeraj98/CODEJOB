@@ -5,6 +5,16 @@ backend/test-data/
 data/
 dashboard/.tsbuildinfo/
 .github/agents/
-.agents/skills/
+.agents/
 tmp_resume_match_report*.json
 docs/temp files/
+.codex/
+.claude/
+raw/
+.codex/hooks.json
+.codex/hooks/set-rule-mode.ps1
+.codex/hooks/README-rule-modes.md
+.codex/hooks/pre_tool_use_graphify.ps1
+.codex/hooks/pre_tool_use_enforce_rules.ps1
+dashboard/scratch/
+.impeccable/

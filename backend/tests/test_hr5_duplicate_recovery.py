@@ -124,7 +124,7 @@ class HR5DuplicateRecoveryTests(unittest.TestCase):
                 None,
                 SimpleNamespace(input_source="latest_block", input_chars=80, chunks=1, fallback_reason=None),
             ),
-            policy_f2f_block=lambda _p, _ep: (False, ""),
+            policy_f2f_block=lambda _p, _ep, _us: (False, ""),
             evaluate_routing_policy=lambda *_args, **_kwargs: base_decision,
             greeting_from_to_contact=lambda *_args, **_kwargs: "Hi,",
             build_user_fallback_draft=lambda *_args, **_kwargs: "fallback draft",

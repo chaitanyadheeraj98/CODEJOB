@@ -10,7 +10,7 @@ def get_ai_status() -> dict[str, object]:
     """Return non-secret AI provider runtime health for this CodeJob process."""
     return {
         "chat_enabled": settings.feature_chat_enabled,
-        "chat_model": settings.ollama_chat_model,
+        "chat_model": runtime_state.chat_active_model or settings.ollama_chat_model,
         "chat_last_error": runtime_state.chat_last_error,
         "chat_last_success_at": (
             runtime_state.chat_last_success_at.isoformat() if runtime_state.chat_last_success_at else None

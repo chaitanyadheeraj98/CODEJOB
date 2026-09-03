@@ -1,7 +1,7 @@
 from datetime import datetime
 import json
 import re
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from pydantic import AliasChoices, BaseModel, Field, field_validator
 
@@ -24,8 +24,61 @@ class RejectRequest(BaseModel):
 
 
 class BulkRejectRequest(BaseModel):
-    ids: list[int]
+    ids: list[int] = Field(max_length=25)
     reason: str | None = None
+
+
+class BulkApproveRequest(BaseModel):
+    ids: list[int] = Field(max_length=25)
+    edited_replies: dict[int, str] | None = None
+    idempotency_key: str | None = Field(default=None, max_length=64)
+
+
+class BulkRegenerateRequest(BaseModel):
+    ids: list[int] = Field(max_length=25)
+
+
+class BulkSendToFailedMappingRequest(BaseModel):
+    ids: list[int] = Field(max_length=25)
+
+
+class BulkTrackRequest(BaseModel):
+    ids: list[int] = Field(max_length=25)
+    tracked: bool
+
+
+class BulkResolveRecipientsRequest(BaseModel):
+    fixes: dict[int, "ResolveRecipientsRequest"] = Field(max_length=25)
+
+
+class BulkDeleteCandidatesRequest(BaseModel):
+    ids: list[int] = Field(max_length=25)
+
+
+class BulkCandidateActionResponse(BaseModel):
+    succeeded_ids: list[int]
+    failed: list[dict[str, object]]
+
+
+class ManualPremiumContactRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    title: str = Field(default="", max_length=255)
+    company: str = Field(default="", max_length=255)
+    email: str = Field(default="", max_length=255)
+    phone: str = Field(default="", max_length=80)
+    role: Literal["recruiter", "employer"] = "recruiter"
+
+
+class ChatSendReplyRequest(BaseModel):
+    body: str = Field(min_length=1, max_length=20000)
+    subject: str | None = Field(default=None, max_length=998)
+
+
+class GithubIssueCreateRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=250)
+    user_report: str = Field(min_length=1, max_length=4000)
+    ai_summary: str = Field(min_length=1, max_length=4000)
+    context: str = Field(default="", max_length=4000)
 
 
 class ResolveRecipientsRequest(BaseModel):
@@ -36,6 +89,7 @@ class ResolveRecipientsRequest(BaseModel):
 class RegenerateCandidateRequest(BaseModel):
     preserve_manual_routing: bool = True
     preserve_review_visibility: bool = True
+    allow_role_manifest_fork: bool = False
 
 
 class RoleDetectionRetryResponse(BaseModel):
@@ -55,6 +109,25 @@ class RoutingEvidenceResponse(BaseModel):
 RoutingItemDict = dict[str, object]
 RoutingListInput = list[RoutingItemDict] | list[RoutingEvidenceResponse]
 PolicyDict = dict[str, Any]
+
+
+def _validate_visible_filters(value: dict[str, list[str]]) -> dict[str, list[str]]:
+    if len(value) > 40:
+        raise ValueError("visible_filters may contain at most 40 dashboard keys")
+    normalized: dict[str, list[str]] = {}
+    for dashboard_key, field_keys in value.items():
+        if len(dashboard_key) > 80:
+            raise ValueError("visible_filters keys may contain at most 80 characters")
+        if len(field_keys) > 60:
+            raise ValueError("visible_filters dashboards may contain at most 60 fields")
+        unique: list[str] = []
+        for field_key in field_keys:
+            if len(field_key) > 80:
+                raise ValueError("visible_filters field keys may contain at most 80 characters")
+            if field_key not in unique:
+                unique.append(field_key)
+        normalized[dashboard_key] = unique
+    return normalized
 
 
 class SettingsRequest(BaseModel):
@@ -81,6 +154,9 @@ class SettingsRequest(BaseModel):
     nvoids_batch_limit: int = 10
     nvoids_detail_title_mode: str = "job_details"
     nvoids_locations: list[str] = Field(default_factory=list)
+    nvoids_job_role: str = ""
+    nvoids_search_location: str = ""
+    nvoids_custom_query: str = ""
     feature_auto_send: bool = False
     feature_retry_queue: bool = False
     feature_ai_enabled: bool = False
@@ -92,7 +168,16 @@ class SettingsRequest(BaseModel):
     feature_strict_candidate_screening_enabled: bool = False
     feature_email_tracking_enabled: bool = False
     feature_reply_inbox_enabled: bool = False
+    feature_applications_enabled: bool = False
+    feature_application_automation_enabled: bool = False
+    feature_application_outreach_drafts_enabled: bool = False
+    feature_reminder_sweep_interval_minutes: int = 240
+    feature_resume_tracking_enabled: bool = False
+    feature_resume_tracking_sweep_interval_minutes: int = 240
     candidate_work_authorizations: list[str] | None = Field(default_factory=list)
+    preferred_employment_types: list[Literal["C2C", "W2", "1099", "FT"]] = Field(default_factory=list)
+    visible_filters: dict[str, list[str]] = Field(default_factory=dict)
+    preferred_minimum_rate: float | None = Field(default=None, ge=0)
     candidate_total_experience_years: float | None = Field(default=None, ge=0)
     candidate_us_experience_years: float | None = Field(default=None, ge=0)
     candidate_current_location: str | None = ""
@@ -133,6 +218,14 @@ class SettingsRequest(BaseModel):
     @classmethod
     def validate_nvoids_poll_interval(cls, value: int) -> int:
         return max(1, min(int(value), 1440))
+
+    @field_validator(
+        "feature_reminder_sweep_interval_minutes",
+        "feature_resume_tracking_sweep_interval_minutes",
+    )
+    @classmethod
+    def validate_reminder_sweep_interval(cls, value: int) -> int:
+        return max(30, min(int(value), 1440))
 
     @field_validator("nvoids_batch_limit")
     @classmethod
@@ -177,6 +270,20 @@ class SettingsRequest(BaseModel):
                 normalized.append(email)
         return normalized
 
+    @field_validator("visible_filters")
+    @classmethod
+    def validate_visible_filters(cls, value: dict[str, list[str]]) -> dict[str, list[str]]:
+        return _validate_visible_filters(value)
+
+
+class VisibleFiltersRequest(BaseModel):
+    visible_filters: dict[str, list[str]] = Field(default_factory=dict)
+
+    @field_validator("visible_filters")
+    @classmethod
+    def validate_visible_filters(cls, value: dict[str, list[str]]) -> dict[str, list[str]]:
+        return _validate_visible_filters(value)
+
 
 class SettingsResponse(SettingsRequest):
     policy_profile_options: list[str] | None = None
@@ -188,6 +295,12 @@ class SettingsResponse(SettingsRequest):
     model_config = {"from_attributes": True}
 
 
+class FilterOptionsResponse(BaseModel):
+    bucket: str
+    field: str
+    values: list[str] = Field(default_factory=list)
+
+
 class ResumeResponse(BaseModel):
     id: int
     owner_id: str
@@ -196,8 +309,12 @@ class ResumeResponse(BaseModel):
     sha256: str
     version: int
     skills_text: str
+    primary_role: str = ""
+    structured_skills: list[str] = Field(default_factory=list)
+    variant_label: str = ""
     is_enabled: bool
     is_current: bool
+    content_summary: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -207,6 +324,9 @@ class ResumeResponse(BaseModel):
 class ResumeUpdateRequest(BaseModel):
     is_enabled: bool | None = None
     skills_text: str | None = None
+    primary_role: str | None = None
+    structured_skills: list[str] | None = None
+    variant_label: str | None = None
 
 
 class AttachmentAssetResponse(BaseModel):
@@ -461,8 +581,14 @@ class EmailResponse(BaseModel):
     subject: str
     body: str
     role: str
+    # NULL for every row written before provenance existed - treat as unverified,
+    # never as "extracted". See services/role_provenance.py.
+    role_source: str | None = None
+    role_canonical: str | None = None
     location: str
+    location_source: str | None = None
     company: str | None = None
+    company_source: str | None = None
     end_client: str | None = None
     implementation_partner: str | None = None
     domain: str | None = None
@@ -473,6 +599,11 @@ class EmailResponse(BaseModel):
     score: int
     decision: str
     state: str
+    marked_for_tracking: bool = False
+    premium_status: str | None = None
+    premium_verification_level: str | None = None
+    following_badge: Literal["bookmarked", "tracked", "active"] | None = None
+    following_warning: str | None = None
     decision_reason: str | None
     hard_filter_result: str | None
     auto_reject_reason: str | None
@@ -511,6 +642,7 @@ class EmailResponse(BaseModel):
     intent_negative_evidence: list[str] = Field(default_factory=list, validation_alias=AliasChoices("intent_negative_evidence", "intent_negative_evidence_json"))
     gate_action: str | None = None
     gate_provider: str | None = None
+    gate_error: str | None = None
     source_group_name: str | None = None
     source_group_email: str | None = None
     source_group_match_method: str | None = None
@@ -586,6 +718,7 @@ class EmailResponse(BaseModel):
     sent_at: datetime | None
     gmail_sent_id: str | None
     last_error: str | None
+    record_id: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -690,6 +823,22 @@ class AIStatusResponse(BaseModel):
     groq_last_attempted_at: datetime | None = None
     groq_last_success_at: datetime | None = None
     groq_last_duration_ms: int | None = None
+    # Provider-neutral intent-gate status. Added alongside the groq_* fields rather
+    # than replacing them so the AI Access card can be relabelled without a
+    # breaking API change, and so Groq stays observable while it is the rollback.
+    intent_gate_provider: str = ""
+    intent_gate_model: str = ""
+    intent_gate_configured: bool = False
+    intent_gate_enabled_in_settings: bool = False
+    intent_gate_runtime_healthy: bool | None = None
+    intent_gate_last_error: str | None = None
+    intent_gate_detail: str = ""
+    intent_gate_effort_ladder: str = ""
+    intent_gate_last_rung: str = ""
+    intent_gate_min_taxonomy_confidence: float = 0.0
+    intent_gate_last_attempted_at: datetime | None = None
+    intent_gate_last_success_at: datetime | None = None
+    intent_gate_last_duration_ms: int | None = None
     semantic_input_source: str | None = None
     semantic_input_chars: int | None = None
     semantic_chunks: int | None = None
@@ -756,6 +905,11 @@ class ChatSessionDetailResponse(ChatSessionResponse):
 
 class ChatMessageRequest(BaseModel):
     text: str
+    model: str | None = None
+
+
+class ChatSessionRenameRequest(BaseModel):
+    title: str
 
 
 class ChatDeleteResponse(BaseModel):
@@ -771,6 +925,7 @@ class ChatStatusResponse(BaseModel):
     chat_last_error: str | None = None
     mcp_status: str
     model: str
+    available_models: list[str]
 
 
 class SentItemDetailsResponse(BaseModel):
@@ -784,7 +939,14 @@ class SentItemDetailsResponse(BaseModel):
     company: str | None = None
     recruiter_name: str | None = None
     recruiter_email: str | None = None
+    recruiter_email_domain: str | None = None
     recruiter_phone: str | None = None
+    recruiter_company: str | None = None
+    employer_name: str | None = None
+    employer_email: str | None = None
+    employer_email_domain: str | None = None
+    employer_phone: str | None = None
+    employer_company: str | None = None
     end_client: str | None = None
     implementation_partner: str | None = None
     vendor: str | None = None
@@ -812,6 +974,8 @@ class ConversationSummaryResponse(BaseModel):
     last_message_preview: str
     last_message_at: datetime
     unread_reply_count: int
+    last_inbound_reply_at: datetime | None = None
+    gmail_thread_link: str | None = None
 
 
 class ConversationMessageResponse(BaseModel):
@@ -852,9 +1016,14 @@ class EmailSearchResponse(BaseModel):
 
 class PremiumNumberResponse(BaseModel):
     id: int
-    recruiter_email_id: int
+    recruiter_email_id: int | None
+    external_opportunity_id: int | None = None
+    contact_id: int | None = None
     phone_number_display: str
     phone_number_normalized: str
+    role: str = "recruiter"
+    extraction_source: str = "ai"
+    contact_email: str = ""
     owner_name: str
     company: str
     designation: str
@@ -868,6 +1037,13 @@ class PremiumNumberResponse(BaseModel):
     source_email_sender: str
     source_email_subject: str
     source_email_message_id: str | None
+    source_url: str | None = None
+    linkedin_url: str = ""
+    source_section: str | None = None
+    block_id: str | None = None
+    evidence_offset_start: int | None = None
+    evidence_offset_end: int | None = None
+    colocation_verified: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -882,7 +1058,11 @@ class PremiumNumberListResponse(BaseModel):
 
 class UnknownNumberReviewCardResponse(BaseModel):
     id: int
-    source_email_id: int
+    source_email_id: int | None
+    source_external_opportunity_id: int | None = None
+    source_lead_id: int | None = None
+    target_contact_id: int | None = None
+    secondary_contact_id: int | None = None
     normalized_phone_number: str
     display_phone_number: str
     owner_name: str
@@ -893,10 +1073,22 @@ class UnknownNumberReviewCardResponse(BaseModel):
     evidence_snippet: str
     email_subject: str
     email_sender: str
+    contact_email: str = ""
+    linkedin_url: str = ""
+    contact_type: str = "unknown"
+    recruiter_relevance_score: int = 0
+    relevance_reason: str = ""
+    extraction_source: str = "ai"
+    scored_with: str = "legacy"
     gmail_open_url: str
     state: str
+    role: str | None = None
+    reason_code: str = "new_number"
+    field_changes_json: str = ""
+    occurrence_count: int = 1
     created_at: datetime
     updated_at: datetime
+    evidence_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 
@@ -907,32 +1099,117 @@ class UnknownNumberReviewCardListResponse(BaseModel):
     has_next: bool
 
 
+class ExtractionAuditEntryResponse(BaseModel):
+    id: int
+    source_email_id: int | None
+    source_external_opportunity_id: int | None
+    raw_value: str
+    normalized_value: str | None
+    status: str
+    stage: str
+    reason: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ExtractionAuditListResponse(BaseModel):
+    items: list[ExtractionAuditEntryResponse]
+
+
 class RecruiterNumberResponse(BaseModel):
     id: int
-    normalized_phone_number: str
+    normalized_phone_number: str | None
     display_phone_number: str
     recruiter_name: str
     company: str
+    secondary_company: str = ""
     designation: str
     recruiter_email: str
+    recruiter_email_domain: str = ""
+    employer_email_domain: str = ""
+    is_favorite: bool = False
+    emails: list[dict[str, object]] = Field(default_factory=list)
+    phones: list[dict[str, object]] = Field(default_factory=list)
     first_detected_email_id: int | None
+    source_type: str | None = None
+    source_id: int | None = None
+    source_link_url: str | None = None
+    active_lead_id: int | None = None
+    version_count: int = 0
+    seen_count: int = 1
+    linkedin_url: str = ""
+    recruiter_verification_level: str = "unverified"
+    do_not_work_again: bool = False
+    do_not_work_again_reason: str = ""
     total_opportunity_count: int = 0
     last_email_received_at: datetime | None = None
+    is_recruiter: bool = True
+    is_employer: bool = False
+    recruiter_relevance_score: int | None = None
+    status: str = "Active"
+    flagged: bool = False
     created_at: datetime
     updated_at: datetime
 
 
 class EmployerNumberResponse(BaseModel):
     id: int
-    normalized_phone_number: str
+    normalized_phone_number: str | None
     display_phone_number: str
     owner_name: str
+    designation: str = "Unknown"
     company: str
+    secondary_company: str = ""
+    employer_email: str = ""
+    employer_email_domain: str = ""
+    is_favorite: bool = False
+    emails: list[dict[str, object]] = Field(default_factory=list)
     source_email_id: int | None
+    source_type: str | None = None
+    source_id: int | None = None
+    source_link_url: str | None = None
+    active_lead_id: int | None = None
+    version_count: int = 0
+    seen_count: int = 1
+    phones: list[dict[str, object]] = Field(default_factory=list)
+    linkedin_url: str = ""
+    recruiter_verification_level: str = "unverified"
+    do_not_work_again: bool = False
+    do_not_work_again_reason: str = ""
+    is_recruiter: bool = False
+    is_employer: bool = True
+    recruiter_relevance_score: int | None = None
+    status: str = "Active"
+    flagged: bool = False
     created_at: datetime
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class PremiumNumberInventoryItemResponse(BaseModel):
+    key: str
+    kind: Literal["review", "contact"]
+    id: int
+    number: str
+    owner: str
+    company: str
+    categories: list[Literal["Recruiter", "Employer"]]
+    status: Literal["Pending", "Active", "Flagged", "Unscored"]
+    score: int | None
+    sourceType: Literal["gmail", "nvoids"] | None
+    lastCheckedAt: datetime
+    review: UnknownNumberReviewCardResponse | None = None
+    recruiter: RecruiterNumberResponse | None = None
+    employer: EmployerNumberResponse | None = None
+
+
+class PremiumNumberInventoryListResponse(BaseModel):
+    items: list[PremiumNumberInventoryItemResponse]
+    next_cursor: int | None
+    has_next: bool
+    total: int
 
 
 class RecruiterNumberListResponse(BaseModel):
@@ -955,23 +1232,41 @@ class RecruiterOpportunityResponse(BaseModel):
     source_type: str = "gmail"
     source_url: str | None = None
     external_opportunity_id: int | None = None
+    email_id: int | None = None
+    record_id: str | None = None
     email_subject: str
     email_sender: str
     gmail_open_url: str
     received_at: datetime | None
     job_title: str
-    client: str
+    end_client: str
     location: str
     work_mode: str
     visa_restrictions: str
+    resume_file_name: str = ""
+    resume_asset_id: int | None = None
+    implementation_partner: str = ""
+    prime_vendor: str = ""
+    domain: str = ""
     extracted_skills: str
     evidence: str
     recruiter_name: str = ""
     recruiter_email: str = ""
     recruiter_phone_display: str = ""
     recruiter_phone_normalized: str = ""
+    recruiter_company: str = ""
+    linkedin_url: str = ""
     status: str
     notes: str
+    employment_type: str = ""
+    rate_amount: float | None = None
+    rate_currency: str = "USD"
+    rate_unit: str = ""
+    contract_duration: str = ""
+    relocation_required: bool | None = None
+    extension_likely: str = "unknown"
+    end_client_confirmed: bool = False
+    job_confidence: str = "unknown"
     cold_call_script: str | None = None
     cold_call_script_updated_at: datetime | None = None
     created_at: datetime
@@ -984,11 +1279,618 @@ class RecruiterOpportunityListResponse(BaseModel):
     items: list[RecruiterOpportunityResponse]
     next_cursor: int | None
     has_next: bool
+    total: int
 
 
 class RecruiterOpportunityPatchRequest(BaseModel):
     status: str | None = None
     notes: str | None = None
+    job_title: str | None = None
+    location: str | None = None
+    work_mode: str | None = None
+    visa_restrictions: str | None = None
+    resume_file_name: str | None = None
+    implementation_partner: str | None = None
+    prime_vendor: str | None = None
+    end_client: str | None = None
+    domain: str | None = None
+    extracted_skills: str | None = None
+    employment_type: str | None = None
+    rate_amount: float | None = None
+    rate_currency: str | None = None
+    rate_unit: str | None = None
+    contract_duration: str | None = None
+    relocation_required: bool | None = None
+    extension_likely: str | None = None
+    end_client_confirmed: bool | None = None
+    job_confidence: str | None = None
+
+
+class ApplicationCreateRequest(BaseModel):
+    resume_asset_id: int | None = Field(default=None, gt=0)
+    recruiter_opportunity_id: int = Field(gt=0)
+    dedupe_key: str = Field(min_length=1, max_length=64)
+
+
+class ManualApplicationCreateRequest(BaseModel):
+    resume_asset_id: int = Field(gt=0)
+    recruiter_opportunity_id: int | None = Field(default=None, gt=0)
+    dedupe_key: str = Field(min_length=1, max_length=64)
+    manual_recruiter_name: str = Field(min_length=1, max_length=255)
+    manual_recruiter_company: str = Field(min_length=1, max_length=255)
+    manual_recruiter_email: str = Field(default="", max_length=255)
+    manual_recruiter_phone: str = Field(default="", max_length=80)
+    manual_recruiter_linkedin_url: str = Field(default="", max_length=2000)
+    manual_job_title: str = Field(min_length=1)
+    manual_end_client: str = Field(min_length=1)
+    manual_jd_text: str = ""
+    manual_source_note: str = ""
+    submission_method: str = Field(default="email", min_length=1, max_length=20)
+    resume_submitted_at: datetime | None = None
+    location_snapshot: str = ""
+
+
+class RejectionDetailTagInput(BaseModel):
+    category: Literal[
+        "missing_skill",
+        "missing_experience",
+        "missing_domain_knowledge",
+        "rate_mismatch",
+        "email_positioning",
+        "other",
+    ]
+    value: str = ""
+
+
+class RejectionDetailTagResponse(BaseModel):
+    category: str
+    value: str
+    source: Literal["ai", "user"]
+    confirmed_at: datetime | None = None
+
+
+class ResumeSubmissionStatusUpdateRequest(BaseModel):
+    new_status: Literal["viewed", "shortlisted", "offered", "hired", "rejected", "withdrawn"]
+    rejection_detail_tags: list[RejectionDetailTagInput] = Field(default_factory=list)
+    note: str = ""
+    force: bool = False
+
+
+class ApplicationPatchRequest(BaseModel):
+    status: str | None = None
+    next_action_type: str | None = Field(default=None, max_length=80)
+    next_action_at: datetime | None = None
+    closed_reason: str | None = Field(default=None, max_length=120)
+    closed_reason_code: str | None = None
+
+
+class ApplicationEventCreateRequest(BaseModel):
+    event_type: Literal["note", "email_linked", "call_note"]
+    note: str = ""
+    linked_recruiter_email_id: int | None = Field(default=None, gt=0)
+
+
+class ApplicationEventResponse(BaseModel):
+    id: int
+    owner_id: str
+    application_id: int
+    event_type: str
+    event_source: str
+    note: str
+    linked_recruiter_email_id: int | None
+    metadata_json: str
+    occurred_at: datetime
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ApplicationRTRRequest(BaseModel):
+    role_scope: str = ""
+    end_client_scope: str = ""
+    expires_at: datetime | None = None
+
+
+class ApplicationRTRUpdateRequest(BaseModel):
+    status: Literal["confirmed", "expired", "revoked"]
+    proof_attachment_id: int | None = Field(default=None, gt=0)
+    proof_recruiter_email_id: int | None = Field(default=None, gt=0)
+
+
+class ApplicationRTRResponse(BaseModel):
+    id: int
+    status: str
+    role_scope: str
+    end_client_scope: str
+    requested_at: datetime
+    confirmed_at: datetime | None
+    expires_at: datetime | None
+    proof_attachment_id: int | None
+    proof_recruiter_email_id: int | None
+    note: str
+
+    model_config = {"from_attributes": True}
+
+
+class ApplicationInterviewCreateRequest(BaseModel):
+    round_type: Literal["recruiter_screen", "interview_1", "interview_2", "final_interview", "other"]
+    scheduled_at: datetime | None = None
+    format: str = ""
+    interviewer_names: str = ""
+    sync_application_status: bool = True
+
+
+class ApplicationInterviewPatchRequest(BaseModel):
+    scheduled_at: datetime | None = None
+    format: str | None = None
+    interviewer_names: str | None = None
+    feedback: str | None = None
+    result: Literal["scheduled", "completed", "passed", "failed", "cancelled", "rescheduled"] | None = None
+    follow_up_task_note: str | None = None
+
+
+class ApplicationInterviewResponse(BaseModel):
+    id: int
+    round_type: str
+    scheduled_at: datetime | None
+    format: str
+    interviewer_names: str
+    feedback: str
+    result: str
+    follow_up_task_note: str
+
+    model_config = {"from_attributes": True}
+
+
+class ApplicationSubmitToClientRequest(BaseModel):
+    override_duplicate_warning: bool = False
+
+
+class ApplicationDraftMessageRequest(BaseModel):
+    message_kind: Literal["followup", "submission_to_recruiter"] = "followup"
+
+
+class ApplicationDraftMessageResponse(BaseModel):
+    to: str
+    cc: str | None
+    thread_id: str | None
+    subject: str
+    body: str
+    source: str
+    ai_model: str | None
+    ai_error: str | None
+    resume_context_status: str
+    resume_file_name: str
+    message_kind: str
+
+
+class ApplicationSendMessageRequest(BaseModel):
+    to: str
+    cc: str | None = None
+    subject: str
+    body: str
+    thread_id: str | None = None
+    message_kind: Literal["followup", "submission_to_recruiter"] = "followup"
+    include_resume: bool = True
+    attachment_asset_ids: list[int] = Field(default_factory=list)
+    draft_source: str = "unknown"
+    ai_model: str | None = None
+
+    @field_validator("to")
+    @classmethod
+    def validate_to(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Recipient email is required")
+        return cleaned
+
+    @field_validator("body")
+    @classmethod
+    def validate_body(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Message body is required")
+        return value
+
+
+class ApplicationSkillGapResponse(BaseModel):
+    source: str
+    matched_required: list[str]
+    missing_required: list[str]
+    matched_preferred: list[str]
+    missing_preferred: list[str]
+    computed_at: datetime
+
+
+class ApplicationResponse(BaseModel):
+    id: int
+    owner_id: str
+    resume_asset_id: int
+    resume_version_snapshot: int
+    resume_file_name_snapshot: str
+    resume_sha256_snapshot: str
+    recruiter_opportunity_id: int | None
+    recruiter_contact_id: int | None
+    recruiter_name_snapshot: str
+    recruiter_company_snapshot: str
+    job_title_snapshot: str
+    end_client_snapshot: str
+    location_snapshot: str = ""
+    resume_skills_snapshot: list[str] = Field(default_factory=list)
+    record_id: str | None = None
+    status: str
+    status_changed_at: datetime
+    resume_shared_at: datetime | None
+    submitted_to_client_at: datetime | None
+    next_action_type: str | None
+    next_action_at: datetime | None
+    follow_up_count: int
+    last_contact_at: datetime | None
+    closed_at: datetime | None
+    closed_reason: str | None
+    closed_reason_code: str | None
+    resume_submission_status: str
+    resume_submitted_at: datetime | None
+    submission_method: str
+    rejection_detail_tags: list[RejectionDetailTagResponse] = Field(default_factory=list)
+    dedupe_key: str | None
+    promoted_to_appts_application_id: int | None = None
+    is_manual_entry: bool = False
+    milestones_reached: dict[str, datetime] = Field(default_factory=dict)
+    manual_recruiter_name: str = ""
+    manual_recruiter_company: str = ""
+    manual_recruiter_email: str = ""
+    manual_recruiter_phone: str = ""
+    manual_recruiter_linkedin_url: str = ""
+    manual_job_title: str = ""
+    manual_end_client: str = ""
+    created_at: datetime
+    updated_at: datetime
+    current_recruiter_name: str = ""
+    current_recruiter_company: str = ""
+    current_recruiter_phone_display: str = ""
+    current_recruiter_email: str = ""
+    current_recruiter_linkedin_url: str = ""
+    current_job_title: str = ""
+    current_end_client: str = ""
+    current_recruiter_categories: list[str] = Field(default_factory=list)
+    current_recruiter_status: str = ""
+    current_recruiter_verification_level: str = ""
+    current_source_url: str | None = None
+    source_recruiter_email_id: int | None = None
+    ats_score: float | None = None
+    ats_summary: str | None = None
+    sent_gmail_message_link: str | None = None
+    events: list[ApplicationEventResponse] = Field(default_factory=list)
+    rtr_history: list[ApplicationRTRResponse] = Field(default_factory=list)
+    interviews: list[ApplicationInterviewResponse] = Field(default_factory=list)
+    skill_gap: ApplicationSkillGapResponse | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class ApplicationSendMessageResponse(BaseModel):
+    sent: bool
+    gmail_message_id: str
+    application: ApplicationResponse
+
+
+class ApplicationListResponse(BaseModel):
+    items: list[ApplicationResponse]
+    next_cursor: int | None
+    has_next: bool
+    total: int
+
+
+class RecordSourceResponse(BaseModel):
+    type: str
+    recruiter_email_id: int | None = None
+    external_opportunity_id: int | None = None
+    state: str | None = None
+    subject: str = ""
+    sender: str = ""
+
+
+class RecordLineageResponse(BaseModel):
+    lineage_id: str
+    current_status: str
+    closed_at: datetime | None = None
+    event_count: int
+
+
+class RecordEmailResponse(BaseModel):
+    recruiter_email_id: int
+    recipient_email: str | None = None
+    cc_email: str | None = None
+    sent_status: str
+    sent_at: datetime | None = None
+
+
+class RecordOutcomesResponse(BaseModel):
+    sent: bool
+    sent_count: int
+    opened: bool
+    open_count: int
+    replied: bool
+    inbound_reply_count: int
+    first_reply_at: datetime | None = None
+    days_to_first_reply: float | None = None
+    interviewed: bool
+    current_status: str | None = None
+
+
+class RecordLifecycleEventResponse(BaseModel):
+    id: int
+    event_type: str
+    occurred_at: datetime
+    actor: str
+    process_name: str
+    related_record_type: str
+    related_record_id: int | None = None
+    note: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class RecordDetailResponse(BaseModel):
+    record_id: str
+    origin_type: str
+    created_at: datetime
+    source: RecordSourceResponse
+    lineage: RecordLineageResponse | None = None
+    recruiter_opportunity: RecruiterOpportunityResponse | None = None
+    applications_enabled: bool
+    resume_tracking_enabled: bool
+    applications: list[ApplicationResponse] = Field(default_factory=list)
+    legacy_applications: list[ApplicationResponse] = Field(default_factory=list)
+    emails: list[RecordEmailResponse] = Field(default_factory=list)
+    outcomes: RecordOutcomesResponse
+    lifecycle_events: list[RecordLifecycleEventResponse] = Field(default_factory=list)
+
+
+class ApplicationDashboardSummaryResponse(BaseModel):
+    due_today: int
+    waiting_on_recruiter: int
+    interviews: int
+    closed_recent: int
+    pending_suggestions: int = 0
+
+
+class OpportunityMatchResponse(BaseModel):
+    opportunity: RecruiterOpportunityResponse
+    score: float
+    reasons: list[str]
+
+
+class OpportunityMatchListResponse(BaseModel):
+    items: list[OpportunityMatchResponse]
+
+
+class RecruiterReputationResponse(BaseModel):
+    recruiter_contact_id: int
+    history_label: Literal["limited_history", "established"]
+    outreach_count: int
+    replies_count: int
+    median_first_reply_business_days: float | None
+    submissions_count: int
+    interviews_after_submission_count: int
+    offers_count: int
+    last_active_at: datetime | None
+
+    model_config = {"from_attributes": True}
+
+
+class ApplicationSuggestionResponse(BaseModel):
+    id: int
+    application_id: int
+    suggestion_type: Literal[
+        "link_reply",
+        "status_change",
+        "next_action",
+        "stale_prompt",
+        "new_variant_needed",
+        "email_positioning",
+        "skill_gap_pattern",
+    ]
+    status: Literal["pending", "accepted", "dismissed"]
+    confidence: Literal["high", "medium"]
+    recruiter_email_id: int | None
+    suggested_status: str | None
+    suggested_next_action_type: str | None
+    suggested_next_action_at: datetime | None
+    reason: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    resolved_at: datetime | None
+
+    model_config = {"from_attributes": True}
+
+
+class ApplicationSuggestionListResponse(BaseModel):
+    items: list[ApplicationSuggestionResponse]
+
+
+class ResumeFunnelMetricsResponse(BaseModel):
+    resume_asset_id: int
+    total_submissions: int
+    not_submitted_count: int
+    view_rate: float
+    shortlist_rate: float
+    interview_rate: float
+    offer_rate: float
+    hire_rate: float
+    rejection_rate: float
+    acceptance_rate: float
+    median_days_to_shortlist: float | None
+    median_days_to_interview: float | None
+    median_days_to_offer: float | None
+    top_rejection_reasons: list[dict[str, Any]]
+    top_missing_skills: list[dict[str, Any]]
+
+
+class ResumePerformanceSummaryItem(BaseModel):
+    resume: ResumeResponse
+    submission_count: int
+    acceptance_rate: float
+
+
+class ResumePerformanceSummaryResponse(BaseModel):
+    items: list[ResumePerformanceSummaryItem]
+
+
+class ApplicationOutreachMessageResponse(BaseModel):
+    id: int
+    application_id: int
+    message_kind: str
+    draft_source: str
+    ai_model: str | None
+    subject: str
+    body: str
+    sent_at: datetime
+
+
+class ApplicationSuggestionResolveRequest(BaseModel):
+    override_next_action_at: datetime | None = None
+
+
+class BulkNumberReviewRequest(BaseModel):
+    review_ids: list[int]
+
+
+class BulkNumberReviewResultItem(BaseModel):
+    review_id: int
+    status: str
+
+
+class BulkNumberReviewResponse(BaseModel):
+    results: list[BulkNumberReviewResultItem]
+
+
+class BulkContactActionRequest(BaseModel):
+    contact_ids: list[int]
+
+
+class BulkContactActionResultItem(BaseModel):
+    contact_id: int
+    status: str
+
+
+class BulkContactActionResponse(BaseModel):
+    results: list[BulkContactActionResultItem]
+
+
+class ContactFieldChange(BaseModel):
+    field: str
+    label: str
+    old: str
+    new: str
+
+
+class ContactRescoreResponse(BaseModel):
+    id: int
+    status: str
+    changes: list[ContactFieldChange] = []
+
+
+class ContactMergePreviewLead(BaseModel):
+    id: int
+    role: str
+    company: str
+    owner_name: str
+    contact_email: str
+    phone_number_display: str
+    extraction_source: str
+    created_at: datetime
+
+
+class ContactMergePreviewSide(BaseModel):
+    id: int
+    recruiter_name: str
+    owner_name: str
+    company: str
+    secondary_company: str = ""
+    recruiter_email: str
+    employer_email: str
+    normalized_phone_number: str | None
+    display_phone_number: str
+    phones: list[dict] = Field(default_factory=list)
+    emails: list[dict] = Field(default_factory=list)
+    is_recruiter: bool
+    is_employer: bool
+    lead_count: int
+    latest_evidence_at: datetime | None
+    leads: list[ContactMergePreviewLead]
+
+
+class ContactMergePreviewResponse(BaseModel):
+    contact_a: ContactMergePreviewSide
+    contact_b: ContactMergePreviewSide
+
+
+class ContactMergeRequest(BaseModel):
+    canonical_contact_id: int
+    loser_contact_id: int
+
+
+class ContactMergeResponse(BaseModel):
+    canonical_contact_id: int
+    loser_contact_id: int
+    status: str
+
+
+class DuplicateContactBackfillResponse(BaseModel):
+    groups_merged: int
+    contacts_merged: int
+
+
+class RecentRunSkippedItemRetryRequest(BaseModel):
+    skipped_item_ids: list[int]
+
+
+class PendingNumberReviewCountResponse(BaseModel):
+    count: int
+
+
+class NumberReviewSubmitRequest(BaseModel):
+    owner_name: str | None = None
+    company: str | None = None
+    display_phone_number: str | None = None
+    contact_email: str | None = None
+    designation: str | None = None
+    linkedin_url: str | None = None
+
+
+class ContactMergeApprovalRequest(BaseModel):
+    canonical_contact_id: int | None = Field(default=None, gt=0)
+
+
+class RecruiterNumberPatchRequest(BaseModel):
+    recruiter_name: str | None = None
+    company: str | None = None
+    secondary_company: str | None = None
+    designation: str | None = None
+    recruiter_email: str | None = None
+    phone_number: str | None = None
+    phones: list[str] | None = None
+    emails: list[str] | None = None
+    linkedin_url: str | None = None
+    recruiter_verification_level: Literal["unverified", "verified", "trusted"] | None = None
+    do_not_work_again: bool | None = None
+    do_not_work_again_reason: str | None = None
+    is_favorite: bool | None = None
+
+
+class EmployerNumberPatchRequest(BaseModel):
+    owner_name: str | None = None
+    designation: str | None = None
+    is_favorite: bool | None = None
+    company: str | None = None
+    secondary_company: str | None = None
+    employer_email: str | None = None
+    phones: list[str] | None = None
+    emails: list[str] | None = None
+    linkedin_url: str | None = None
+    recruiter_verification_level: Literal["unverified", "verified", "trusted"] | None = None
+    do_not_work_again: bool | None = None
+    do_not_work_again_reason: str | None = None
 
 
 class RecruiterOpportunityDeleteResponse(BaseModel):
@@ -1067,6 +1969,7 @@ class RecentRunItemResponse(BaseModel):
     intent_negative_evidence: list[str] = Field(default_factory=list)
     gate_action: str | None = None
     gate_provider: str | None = None
+    gate_error: str | None = None
     source_group_name: str | None = None
     source_group_email: str | None = None
     source_group_match_method: str | None = None
@@ -1209,6 +2112,7 @@ class ProductivityEventCreateRequest(BaseModel):
     event_type: str
     event_source: str = "ui"
     entity_id: int | None = None
+    entity_type: str = ""
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -1218,6 +2122,7 @@ class ProductivityEventResponse(BaseModel):
     event_type: str
     event_source: str
     entity_id: int | None
+    entity_type: str
     weight: float
     metadata: dict[str, Any] = Field(default_factory=dict)
     occurred_at: datetime

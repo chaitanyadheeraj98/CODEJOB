@@ -1,4 +1,5 @@
-FROM python:3.12-slim
+# syntax=docker/dockerfile:1
+FROM python:3.12.11-slim@sha256:47ae396f09c1303b8653019811a8498470603d7ffefc29cb07c88f1f8cb3d19f
 
 WORKDIR /app
 
@@ -11,8 +12,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libreoffice \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml ./
-RUN pip install --no-cache-dir uv && uv pip install --system .
+COPY pyproject.toml uv.lock ./
+RUN --mount=type=cache,target=/root/.cache/uv \
+    pip install --no-cache-dir uv && uv pip install --system .
 RUN python -c "from unstructured.nlp.tokenize import _load_spacy_model; _load_spacy_model()"
 
 COPY . .

@@ -19,7 +19,7 @@ function makeResponse(payload: unknown): MockResponse {
   }
 }
 
-function makeBootstrapPayload() {
+function makeBootstrapPayload(featureApplicationsEnabled = false) {
   return {
     settings: {
       enabled: true,
@@ -49,6 +49,7 @@ function makeBootstrapPayload() {
       feature_ai_enabled: false,
       feature_ai_extractor_enabled: false,
       feature_semantic_enabled: false,
+      feature_applications_enabled: featureApplicationsEnabled,
       draft_text_size: 'normal',
       fallback_draft_template: '',
       signature_name: '',
@@ -68,7 +69,7 @@ function makeBootstrapPayload() {
   }
 }
 
-function stubAppFetch(candidate: Record<string, unknown>, sentDetails: Record<string, unknown>) {
+function stubAppFetch(candidate: Record<string, unknown>, sentDetails: Record<string, unknown>, featureApplicationsEnabled = false) {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL) => {
@@ -77,7 +78,7 @@ function stubAppFetch(candidate: Record<string, unknown>, sentDetails: Record<st
       if (url.endsWith('/ai/status')) return makeResponse({ configured: true, connected: true, running: false, provider: 'mock', model: 'mock', detail: 'ok', last_error: null, last_started_at: null, last_finished_at: null, last_duration_ms: null, last_draft_source: null })
       if (url.endsWith('/telegram/status')) return makeResponse({ enabled: false, polling: false, alerts_enabled: false, authorized_chats: 0, detail: 'off' })
       if (url.endsWith('/gmail/oauth/url')) return makeResponse({ authorization_url: null })
-      if (url.includes('/settings/bootstrap')) return makeResponse(makeBootstrapPayload())
+      if (url.includes('/settings/bootstrap')) return makeResponse(makeBootstrapPayload(featureApplicationsEnabled))
       if (url.includes('/recent-runs/')) return makeResponse({ items: [], next_cursor: null, has_next: false })
       if (url.includes('/recent-runs')) return makeResponse({ items: [], next_cursor: null, has_next: false })
       if (url.includes('/candidates/99/sent-details')) return makeResponse(sentDetails)
@@ -109,6 +110,7 @@ describe('Sent Items audit view', () => {
     stubAppFetch(
       {
         id: 99,
+        record_id: 'record-sent-99',
         owner_id: 'default-owner',
         sender: 'Recruiter <recruiter@example.com>',
         subject: 'Java Developer',
@@ -199,6 +201,7 @@ describe('Sent Items audit view', () => {
         cc_email: 'manager@example.com',
         sent_at: '2026-06-27T18:00:00Z',
       },
+      true,
     )
 
     const container = document.createElement('div')
@@ -227,8 +230,13 @@ describe('Sent Items audit view', () => {
       await Promise.resolve()
     })
 
+    expect(container.textContent ?? '').toContain('Record ID:')
+    expect(container.querySelectorAll('.filterSortBar input[role="combobox"]')).toHaveLength(4)
+    expect(container.textContent ?? '').toContain('record-sent-99')
+    expect(Array.from(container.querySelectorAll('button')).some((button) => button.textContent === 'Track Application')).toBe(true)
+
     const viewDetailsButton = Array.from(container.querySelectorAll('button')).find((button) =>
-      button.textContent === 'View Details',
+      button.textContent === 'Sourcing Audit Trail',
     ) as HTMLButtonElement | undefined
     expect(viewDetailsButton).toBeDefined()
 
@@ -250,7 +258,6 @@ describe('Sent Items audit view', () => {
     expect(links).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ text: 'Open requirement', href: 'https://mail.google.com/mail/u/0/#all/msg-1' }),
-        expect.objectContaining({ text: 'Open original email', href: 'https://mail.google.com/mail/u/0/#all/msg-1' }),
         expect.objectContaining({ text: 'Open sent message', href: 'https://mail.google.com/mail/u/0/#all/sent-1' }),
       ]),
     )

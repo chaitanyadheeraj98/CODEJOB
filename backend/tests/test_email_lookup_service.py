@@ -13,15 +13,22 @@ from app import main
 from app.db import Base
 from app.models import (
     EmailConversation,
-    EmployerNumber,
     NumberReviewQueue,
     PremiumNumberLead,
+    PremiumNumberContact,
     RecentRun,
     RecentRunSkippedItem,
     RecruiterEmail,
-    RecruiterNumber,
     RecruiterOpportunity,
 )
+
+
+def RecruiterNumber(**values):
+    return PremiumNumberContact(is_recruiter=True, **values)
+
+
+def EmployerNumber(**values):
+    return PremiumNumberContact(is_employer=True, **values)
 
 
 class EmailLookupApiTests(unittest.TestCase):
@@ -242,6 +249,43 @@ class EmailLookupApiTests(unittest.TestCase):
         self.assertTrue(any("conversation_id" in detail for detail in details))
         self.assertTrue(any("recent_run_skipped_item_id" in detail for detail in details))
         self.assertTrue(any("recent_run_id" in detail for detail in details))
+
+    def test_premium_number_lead_hit_exposes_promoted_contact_id(self) -> None:
+        # Dashboard navigation for a premium_numbers hit needs contact_id to find the
+        # promoted PremiumNumberContact row - without it, clicking the search result
+        # has nowhere in the Premium Numbers page to navigate to.
+        with Session(self.engine) as db:
+            email = self._add_email(db, sender="Promoted Recruiter <promoted@example.com>", suffix="promoted")
+            contact = RecruiterNumber(
+                owner_id=main.settings.owner_id,
+                normalized_phone_number="13105551234",
+                display_phone_number="(310) 555-1234",
+                recruiter_name="Promoted Recruiter",
+                company="Promoted Inc",
+            )
+            db.add(contact)
+            db.flush()
+            db.add(
+                PremiumNumberLead(
+                    owner_id=main.settings.owner_id,
+                    recruiter_email_id=email.id,
+                    contact_id=contact.id,
+                    phone_number_normalized="13105551234",
+                    phone_number_display="(310) 555-1234",
+                    company="Promoted Inc",
+                    confidence="high",
+                    source_email_sender=email.sender,
+                    source_email_subject=email.subject,
+                )
+            )
+            db.commit()
+            contact_id = contact.id
+
+        response = self.client.get("/search/email", params={"q": "promoted@example.com"})
+
+        self.assertEqual(response.status_code, 200, response.text)
+        lead_hit = next(hit for hit in response.json()["hits"] if "premium_number_lead_id" in hit["detail"])
+        self.assertEqual(lead_hit["detail"]["contact_id"], contact_id)
 
     def test_unmatched_search_is_empty_and_short_query_is_rejected(self) -> None:
         empty = self.client.get("/search/email", params={"q": "missing@example.com"})

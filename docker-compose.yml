@@ -5,8 +5,8 @@ services:
     container_name: codejob-backend
     env_file:
       - ./backend/.env
+      - ./backend/.env.postgres
     environment:
-      DATABASE_URL: sqlite:///./data/codejob.db
       REDIS_URL: redis://redis:6379/0
       OLLAMA_BASE_URL: http://host.docker.internal:11434
     command: >
@@ -20,6 +20,10 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
+      searxng:
+        condition: service_started
 
   worker:
     build:
@@ -27,16 +31,18 @@ services:
     container_name: codejob-worker
     env_file:
       - ./backend/.env
+      - ./backend/.env.postgres
     environment:
-      DATABASE_URL: sqlite:///./data/codejob.db
       REDIS_URL: redis://redis:6379/0
-    command: rq worker gmail_sync nvoids_sync automation_run --url redis://redis:6379/0 --with-scheduler
+    command: rq worker gmail_sync nvoids_sync automation_run embedding_generation --url redis://redis:6379/0 --with-scheduler
     volumes:
       - backend_data:/app/data
     depends_on:
       backend:
         condition: service_started
       redis:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
 
   dashboard:
@@ -63,6 +69,29 @@ services:
       timeout: 5s
       retries: 5
 
+  postgres:
+    image: postgres:16
+    container_name: codejob-postgres
+    env_file:
+      - ./backend/.env.postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U codejob -d codejob"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  searxng:
+    image: searxng/searxng:latest
+    container_name: codejob-searxng
+    environment:
+      SEARXNG_BASE_URL: http://searxng:8080/
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    restart: unless-stopped
+
 volumes:
   backend_data:
   redis_data:
+  postgres_data:

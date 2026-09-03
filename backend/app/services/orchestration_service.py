@@ -20,19 +20,20 @@ from app.automation.queue_preparation import (
     describe_score_threshold_block,
     prepare_candidate_for_queue,
 )
-from app.gates import EmailIntentDecision
+from app.gates import EmailIntentDecision, llm_decided
+from app.gates.sender_denylist import SENDER_DENYLIST
 from app.ai.resume_context_attribution import RESUME_CONTEXT_MISSING, RESUME_CONTEXT_RULES_ONLY
 from app.automation import RunOrchestrator, RunOrchestratorDependencies, RunOrchestratorRequest
 from app.external_feeds.models import ExternalOpportunity
 from app.external_feeds.parser import parse_nvoids_detail
 from app.job_intent_learning import approved_learning_signals_for_owner, record_pending_job_intent_learning
-from app.services import policy_service
+from app.services import application_intelligence_service, appts_service, opportunity_lineage_service, policy_service
 from app.services.policy_service import EffectiveRunInputs
 from app.gmail_client import GmailMessageCandidate, MailAttachment
-from app.models import AttachmentAsset, DraftEditFeedback, EmailConversation, EmailReplyMessage, GmailRequirementGroup, RecipientRoutingFeedback, RecentRun, RecentRunSkippedItem, RecruiterEmail, ResumeAsset, SyncRun, UserSettings
+from app.models import AttachmentAsset, DraftEditFeedback, EmailConversation, EmailReplyMessage, GmailRequirementGroup, OpportunityLineage, RecipientRoutingFeedback, RecentRun, RecentRunSkippedItem, RecruiterEmail, ResumeAsset, SyncRun, UserSettings
 from app.parsing import build_skills_json_payload
 from app.parsing.document_extraction import prepare_gmail_parse_body
-from app.phase0 import RoutingResult, jd_entity_fields_from_parsed, parse_email_with_details
+from app.phase0 import DEFAULT_SIGNATURE_EMAIL, RoutingResult, jd_entity_fields_from_parsed, parse_email_with_details
 from app.recent_runs import (
     RUN_SOURCE_AUTOMATION,
     RUN_SOURCE_GMAIL_SYNC,
@@ -61,6 +62,8 @@ from app.services.email_inbox_service import (
 from app.services.gmail_group_source_service import ConfiguredRequirementGroup, resolve_trusted_group_context
 from app.services.requirement_expansion_service import RequirementExpansionService
 from app.services.role_manifest_pipeline import extract_and_score_children
+from app.services.role_provenance import apply_role_assignment, assign_role
+from app.services.role_taxonomy import fill_entity_gaps, role_matcher_for
 from app.services.role_manifest_service import RoleManifestResult, RoleManifestService
 from app.services.sendability_service import apply_resume_sendability, resolve_sendability_status
 
@@ -91,7 +94,7 @@ class OrchestrationDeps:
     policy_threshold: Callable[[UserSettings, Any], float]
     policy_batch_limit: Callable[[Any, int], int]
     policy_dry_run: Callable[[Any], bool]
-    policy_f2f_block: Callable[[dict[str, str | int | bool], Any], tuple[bool, str]]
+    policy_f2f_block: Callable[[dict[str, str | int | bool], Any, UserSettings], tuple[bool, str]]
     evaluate_routing_policy: Callable[..., Any]
     apply_routing_decision: Callable[[RecruiterEmail, Any], None]
     capture_premium_numbers: Callable[[Session, RecruiterEmail], None]
@@ -334,26 +337,41 @@ class OrchestrationService:
                     candidates.append(item)
                     seen_message_ids.add(item["external_message_id"])
 
+        owner_email = (user_settings.signature_email or "").strip() or DEFAULT_SIGNATURE_EMAIL
         matched_count = 0
         created_count = 0
         for item in candidates:
-            existing_candidate_email = (
-                db.query(RecruiterEmail.id)
-                .filter(
-                    RecruiterEmail.owner_id == self.deps.owner_id,
-                    RecruiterEmail.external_message_id == item["external_message_id"],
-                )
-                .first()
-            )
-            if existing_candidate_email:
-                continue
-            matched_reply, created_reply = capture_inbound_reply(db, owner_id=self.deps.owner_id, item=item)
+            # No "already a RecruiterEmail candidate" skip here: a message that also matched
+            # the JD-candidate scan (e.g. a reply whose subject happens to match the saved
+            # search) must still be captured as a reply. capture_inbound_reply is already
+            # idempotent on external_message_id, so this can't double-insert.
+            matched_reply, created_reply = capture_inbound_reply(db, owner_id=self.deps.owner_id, item=item, owner_email=owner_email)
             if not matched_reply:
                 continue
             matched_count += 1
             if created_reply:
                 created_count += 1
             db.commit()
+            if created_reply and user_settings.feature_application_automation_enabled:
+                reply = (
+                    db.query(EmailReplyMessage)
+                    .filter(
+                        EmailReplyMessage.owner_id == self.deps.owner_id,
+                        EmailReplyMessage.external_message_id == item["external_message_id"],
+                    )
+                    .first()
+                )
+                if reply is not None:
+                    try:
+                        application_intelligence_service.correlate_reply_to_application(
+                            db,
+                            owner_id=self.deps.owner_id,
+                            reply_message_id=reply.id,
+                        )
+                        db.commit()
+                    except Exception:
+                        db.rollback()
+                        logger.exception("application_reply_correlation_failed reply_message_id=%s", reply.id)
             try:
                 if self.deps.mark_reply_processed is not None:
                     self.deps.mark_reply_processed(item["external_message_id"], item.get("label_ids"))
@@ -484,6 +502,7 @@ class OrchestrationService:
                         db,
                         owner_id=self.deps.owner_id,
                         item=item,
+                        owner_email=(user_settings.signature_email or "").strip() or DEFAULT_SIGNATURE_EMAIL,
                     )
                     if matched_reply:
                         if created_reply:
@@ -518,6 +537,36 @@ class OrchestrationService:
                     delivered_to=item.get("delivered_to"),
                     mailing_list=item.get("mailing_list"),
                 )
+                sender_domain = self.deps.email_domain(item["sender"])
+                if sender_domain in SENDER_DENYLIST:
+                    skipped_count += 1
+                    skipped_item_count += 1
+                    record_skipped_item(
+                        db,
+                        SkippedItemRecord(
+                            owner_id=self.deps.owner_id,
+                            run_source=RUN_SOURCE_GMAIL_SYNC,
+                            run_key=run_key,
+                            source_type="gmail",
+                            reason_code="denylisted_sender_domain",
+                            reason_detail=f"Skipped deterministic sender denylist match: {sender_domain}",
+                            external_message_id=item["external_message_id"],
+                            external_thread_id=item["external_thread_id"],
+                            title_or_subject=item["subject"],
+                            sender=item["sender"],
+                            gate_action="skip",
+                            gate_provider="sender_denylist",
+                            gate_error=None,
+                            source_group_name=trusted_group_context.group_name,
+                            source_group_email=trusted_group_context.group_email,
+                            source_group_match_method=trusted_group_context.match_method,
+                            source_group_trusted=(
+                                trusted_group_context.trusted if trusted_group_context.matched else False
+                            ),
+                        ),
+                    )
+                    report_item()
+                    continue
                 approved_learning_signals = approved_learning_signals_for_owner(db, self.deps.owner_id)
                 intent_decision = self.deps.classify_email_intent(
                     sender=item["sender"],
@@ -529,7 +578,7 @@ class OrchestrationService:
                     trusted_group_context=trusted_group_context,
                     approved_learning_signals=approved_learning_signals,
                 )
-                if intent_decision.provider == "groq" and intent_decision.learned_signals:
+                if llm_decided(intent_decision.provider) and intent_decision.learned_signals:
                     record_pending_job_intent_learning(
                         db,
                         owner_id=self.deps.owner_id,
@@ -562,6 +611,7 @@ class OrchestrationService:
                             intent_negative_evidence=intent_decision.negative_evidence,
                             gate_action=intent_decision.action,
                             gate_provider=intent_decision.provider,
+                            gate_error=intent_decision.error,
                             source_group_name=trusted_group_context.group_name,
                             source_group_email=trusted_group_context.group_email,
                             source_group_match_method=trusted_group_context.match_method,
@@ -587,13 +637,20 @@ class OrchestrationService:
                 hard_pass, hard_reason = self.deps.hard_filter_check(parsed, user_settings, effective_policy, parser_details)
                 screening = CandidateScreeningService().evaluate_parser_details(parser_details, user_settings)
                 if hard_pass and not screening.proceed_to_scoring:
+                    assigned = assign_role(
+                        extracted=str(parsed.get("role") or ""),
+                        subject=str(item["subject"]),
+                        body=str(item["body"]),
+                        matcher=role_matcher_for(db, self.deps.owner_id),
+                    )
                     email = RecruiterEmail(
                         owner_id=self.deps.owner_id,
                         sender=item["sender"],
                         subject=item["subject"],
                         body=item["body"],
-                        role=str(parsed["role"]),
-                        location=str(parsed["location"]),
+                        role=assigned.role,
+                        role_source=assigned.role_source,
+                        role_canonical=assigned.role_canonical,
                         salary_text=str(parsed["salary_text"]),
                         skills_text=str(parsed["skills_text"]),
                         skills_json=json.dumps(
@@ -603,7 +660,7 @@ class OrchestrationService:
                             ),
                             separators=(",", ":"),
                         ),
-                        **jd_entity_fields_from_parsed(parsed),
+                        **fill_entity_gaps(jd_entity_fields_from_parsed(parsed), db=db, owner_id=self.deps.owner_id, subject=str(item["subject"]), location=str(parsed["location"]), body=str(item["body"])),
                         decision="Qualified",
                         state="needs_review",
                         decision_reason="strict_candidate_screening",
@@ -622,6 +679,11 @@ class OrchestrationService:
                     apply_screening_decision(email, screening)
                     self.deps.apply_gmail_label_for_email(email=email, candidate_item=item)
                     db.add(email)
+                    if email.record_id is None:
+                        candidate_record = opportunity_lineage_service.create_candidate_record(
+                            db, owner_id=email.owner_id, origin_type="gmail"
+                        )
+                        email.record_id = candidate_record.id
                     imported_count += 1
                     report_item()
                     if manifest_result is not None:
@@ -698,7 +760,7 @@ class OrchestrationService:
                 else:
                     if policy_service.draft_rule_mode(effective_policy, "score_threshold") == "warn" and ai_score < threshold:
                         warnings.append(f"score_below_threshold:{ai_score:.2f}<{threshold:.2f}")
-                    blocked, block_reason = self.deps.policy_f2f_block(parsed, effective_policy)
+                    blocked, block_reason = self.deps.policy_f2f_block(parsed, effective_policy, user_settings)
                     if blocked:
                         state = "auto_rejected"
                         decision = "Reject"
@@ -731,20 +793,27 @@ class OrchestrationService:
                     qualification_detail = "Qualified for queue review."
                     qualification_context = {"warnings": warnings}
 
+                assigned = assign_role(
+                    extracted=str(parsed.get("role") or ""),
+                    subject=str(item["subject"]),
+                    body=str(item["body"]),
+                    matcher=role_matcher_for(db, self.deps.owner_id),
+                )
                 email = RecruiterEmail(
                     owner_id=self.deps.owner_id,
                     sender=item["sender"],
                     subject=item["subject"],
                     body=item["body"],
-                    role=str(parsed["role"]),
-                    location=str(parsed["location"]),
+                    role=assigned.role,
+                    role_source=assigned.role_source,
+                    role_canonical=assigned.role_canonical,
                     salary_text=str(parsed["salary_text"]),
                     skills_text=str(parsed["skills_text"]),
                     skills_json=json.dumps(
                         build_skills_json_payload(parser_details, fallback_skills_text=str(parsed["skills_text"])),
                         separators=(",", ":"),
                     ),
-                    **jd_entity_fields_from_parsed(parsed),
+                    **fill_entity_gaps(jd_entity_fields_from_parsed(parsed), db=db, owner_id=self.deps.owner_id, subject=str(item["subject"]), location=str(parsed["location"]), body=str(item["body"])),
                     score=int(ai_score * 100),
                     decision=decision,
                     state=state,
@@ -777,6 +846,7 @@ class OrchestrationService:
                     intent_negative_evidence_json=json.dumps(intent_decision.negative_evidence, separators=(",", ":")),
                     gate_action=intent_decision.action,
                     gate_provider=intent_decision.provider,
+                    gate_error=intent_decision.error,
                     source_group_name=trusted_group_context.group_name,
                     source_group_email=trusted_group_context.group_email,
                     source_group_match_method=trusted_group_context.match_method,
@@ -813,6 +883,11 @@ class OrchestrationService:
                 if selected_resume and resume_embedding_json and selected_resume.semantic_embedding != resume_embedding_json:
                     selected_resume.semantic_embedding = resume_embedding_json
                 db.add(email)
+                if email.record_id is None:
+                    candidate_record = opportunity_lineage_service.create_candidate_record(
+                        db, owner_id=email.owner_id, origin_type="gmail"
+                    )
+                    email.record_id = candidate_record.id
                 imported_count += 1
                 report_item()
                 if manifest_result is not None:
@@ -868,6 +943,7 @@ class OrchestrationService:
         db: Session,
         *,
         run_key_override: str | None = None,
+        items_override: list[GmailMessageCandidate] | None = None,
     ) -> AutomationRunResponse:
         run_key = run_key_override or automation_run_key(str(uuid.uuid4()))
         recent_run = db.query(RecentRun).filter(RecentRun.run_key == run_key).first()
@@ -928,11 +1004,20 @@ class OrchestrationService:
         threshold = self.deps.policy_threshold(user_settings, effective_policy)
         batch_limit = self.deps.policy_batch_limit(effective_policy, default_value=20)
         dry_run = self.deps.policy_dry_run(effective_policy)
-        items = self.deps.list_unread_candidates_by_query(effective_query, max_results_per_page=batch_limit)[:batch_limit]
+        items = (
+            items_override
+            if items_override is not None
+            else self.deps.list_unread_candidates_by_query(effective_query, max_results_per_page=batch_limit)[:batch_limit]
+        )
         if not items:
+            idle_detail = (
+                "None of the selected messages could be retrieved from Gmail (they may have been deleted)."
+                if items_override is not None
+                else f"No unread matching emails found for query: {effective_query}"
+            )
             response = self.deps.build_run_response(
                 "idle",
-                f"No unread matching emails found for query: {effective_query}",
+                idle_detail,
                 run_key=run_key,
                 effective_query=effective_query,
                 matched_count=0,
@@ -955,6 +1040,23 @@ class OrchestrationService:
             self.deps.telegram_notify(self.deps.build_telegram_digest("Run Digest", response))
             self.deps.log_gmail_labeling_stats()
             return response
+
+        if user_settings.feature_reply_inbox_enabled:
+            # Candidates here come from the JD-scan query, which can also match a reply on
+            # a thread we already have a conversation for (e.g. its subject still says "Java
+            # Full Stack Developer"). Log it as a reply too rather than assuming thread
+            # membership means it isn't also a genuine new requirement from that recruiter -
+            # classification below still runs on every item regardless.
+            owner_email = (user_settings.signature_email or "").strip() or DEFAULT_SIGNATURE_EMAIL
+            for item in items:
+                try:
+                    capture_inbound_reply(db, owner_id=self.deps.owner_id, item=item, owner_email=owner_email)
+                except Exception:
+                    logger.exception(
+                        "reply_capture_failed_for_candidate_item external_message_id=%s",
+                        item.get("external_message_id"),
+                    )
+            db.commit()
 
         capture_started = False
         if self.deps.embedding_latency_log_enabled():
@@ -1055,15 +1157,16 @@ class OrchestrationService:
                     result.queued_email_ids, db
                 )
 
+            matched_label = "selected emails" if items_override is not None else "unread matching emails"
             if result.queued_count > 0:
                 status = "ready"
-                detail = f"Processed {result.matched_count} unread matching emails: queued={result.queued_count}, skipped={result.skipped_count}, failed={result.failed_count}."
+                detail = f"Processed {result.matched_count} {matched_label}: queued={result.queued_count}, skipped={result.skipped_count}, failed={result.failed_count}."
             elif result.failed_count > 0:
                 status = "failed"
-                detail = f"Processed {result.matched_count} unread matching emails: queued=0, skipped={result.skipped_count}, failed={result.failed_count}."
+                detail = f"Processed {result.matched_count} {matched_label}: queued=0, skipped={result.skipped_count}, failed={result.failed_count}."
             else:
                 status = "skipped"
-                detail = f"Processed {result.matched_count} unread matching emails: queued=0, skipped={result.skipped_count}, failed=0."
+                detail = f"Processed {result.matched_count} {matched_label}: queued=0, skipped={result.skipped_count}, failed=0."
             if dry_run:
                 detail = f"[Dry run] {detail} No database or Gmail label changes were made. (batch_limit={batch_limit}, threshold={threshold:.2f})"
             else:
@@ -1119,8 +1222,9 @@ class OrchestrationService:
             self.deps.record_productivity_event(
                 db,
                 event_type="recent_run_recorded",
-                event_source="run_once",
+                event_source="run_once_retry" if items_override is not None else "run_once",
                 entity_id=response.email_id,
+                entity_type="RecruiterEmail" if response.email_id is not None else "",
                 metadata={
                     "status": response.status,
                     "matched_count": response.matched_count or 0,
@@ -1195,6 +1299,7 @@ class OrchestrationService:
                     event_type="auto_send_failed",
                     event_source="automation",
                     entity_id=email_id,
+                    entity_type="RecruiterEmail",
                     metadata={"detail": str(exc.detail)},
                 )
             except Exception:
@@ -1205,6 +1310,7 @@ class OrchestrationService:
                     event_type="auto_send_failed",
                     event_source="automation",
                     entity_id=email_id,
+                    entity_type="RecruiterEmail",
                     metadata={"detail": "unexpected_auto_send_error"},
                 )
         return auto_sent_count, auto_send_failed_count
@@ -1256,6 +1362,7 @@ class OrchestrationService:
                         event_type="needs_review_marked",
                         event_source="state",
                         entity_id=email.id,
+                        entity_type="RecruiterEmail",
                         metadata={"source": "retry_queue"},
                     )
                 except Exception:
@@ -1471,7 +1578,7 @@ class OrchestrationService:
             )
         db.commit()
         db.refresh(email)
-        self.deps.record_productivity_event(db, event_type="approved_sent", event_source="action", entity_id=email.id, metadata={"state": email.state, "sent_status": email.sent_status})
+        self.deps.record_productivity_event(db, event_type="approved_sent", event_source="action", entity_id=email.id, entity_type="RecruiterEmail", metadata={"state": email.state, "sent_status": email.sent_status})
 
         try:
             logger.info("Appending Google Sheets tracking row for approved email_id=%s", email.id)
@@ -1491,10 +1598,32 @@ class OrchestrationService:
             db.commit()
             db.refresh(email)
 
+        if email.marked_for_tracking:
+            try:
+                result = appts_service.create_tracked_application_from_email(
+                    db, email, owner_id=self.deps.owner_id,
+                )
+                db.commit()
+                if result and result[1]:
+                    appts_service.enqueue_embedding_generation(result[0].id)
+            except Exception as exc:
+                db.rollback()
+                logger.warning("Failed to create tracked AppTS application for email_id=%s: %s", email.id, exc)
+
         return email
 
-    def list_inbox_conversations(self, db: Session) -> list[ConversationSummaryResponse]:
-        return list_conversations(db, self.deps.owner_id)
+    def list_inbox_conversations(self, db: Session, **filters: object) -> list[ConversationSummaryResponse]:
+        return list_conversations(db, self.deps.owner_id, **filters)
+
+    def refresh_inbox_replies(self, db: Session, **filters: object) -> list[ConversationSummaryResponse]:
+        """Cheap reply-only refresh for the inbox refresh icon: no candidate import/scoring/queueing."""
+        if not self.deps.is_gmail_configured():
+            raise HTTPException(status_code=400, detail="Gmail OAuth is not configured")
+        user_settings = self.deps.get_settings(db)
+        if not user_settings.enabled:
+            raise HTTPException(status_code=400, detail="Pipeline is disabled in settings")
+        self._capture_inbound_replies(db, user_settings)
+        return list_conversations(db, self.deps.owner_id, **filters)
 
     def get_inbox_conversation(self, conversation_id: int, db: Session) -> ConversationDetailResponse:
         return conversation_detail(db, self.deps.owner_id, conversation_id)
@@ -1543,6 +1672,24 @@ class OrchestrationService:
         email.decision_reason = payload.reason or "Rejected by user"
         email.approval_status = "rejected"
         email.sent_status = "not_sent"
+        email.marked_for_tracking = False
+        record = opportunity_lineage_service.get_record(
+            db,
+            owner_id=self.deps.owner_id,
+            record_id=email.record_id or "",
+        )
+        lineage = db.get(OpportunityLineage, record.internal_lineage_id) if record and record.internal_lineage_id else None
+        if lineage is not None:
+            opportunity_lineage_service.record_event(
+                db,
+                lineage_id=lineage.id,
+                event_type="rejected",
+                process_name="orchestration_service",
+                related_record_type="RecruiterEmail",
+                related_record_id=email.id,
+            )
+            lineage.current_status = "closed"
+            lineage.closed_at = datetime.now(UTC)
         db.commit()
         db.refresh(email)
         return email
@@ -1560,19 +1707,47 @@ class OrchestrationService:
         if email.state != "needs_review":
             raise HTTPException(status_code=400, detail="Only needs_review candidates can be moved to failed mapping")
 
+        prior_status = email.routing_status
         email.state = "failed"
         email.routing_confirmed = False
-        email.routing_status = "ambiguous"
-        email.routing_confidence = min(float(email.routing_confidence or 0.0), 0.5)
-        email.routing_reason = "Manually moved to failed mapping for recipient remap."
+        if prior_status not in {"safe", "confirmed"}:
+            email.routing_status = "ambiguous"
+            email.routing_confidence = min(float(email.routing_confidence or 0.0), 0.5)
+        email.routing_reason = f"Manually moved to failed mapping for recipient remap (prior routing: {prior_status})."
         email.last_error = "Recipient mapping flagged for manual remap"
         email.skip_reason = "manual_failed_mapping"
         email.decision_reason = "Moved to failed mapping by user"
         email.approval_status = "pending"
         email.sent_status = "not_sent"
+        email.marked_for_tracking = False
+        record = opportunity_lineage_service.get_record(
+            db,
+            owner_id=self.deps.owner_id,
+            record_id=email.record_id or "",
+        )
+        if record and record.internal_lineage_id:
+            opportunity_lineage_service.record_event(
+                db,
+                lineage_id=record.internal_lineage_id,
+                event_type="failed_mapping",
+                process_name="orchestration_service",
+                related_record_type="RecruiterEmail",
+                related_record_id=email.id,
+            )
         db.commit()
         db.refresh(email)
-        self.deps.record_productivity_event(db, event_type="failed_mapping_marked", event_source="action", entity_id=email.id, metadata={"source": "manual_move_to_failed_mapping"})
+        self.deps.record_productivity_event(db, event_type="failed_mapping_marked", event_source="action", entity_id=email.id, entity_type="RecruiterEmail", metadata={"source": "manual_move_to_failed_mapping", "prior_routing_status": prior_status})
+        return email
+
+    def set_tracking(self, email_id: int, tracked: bool, db: Session) -> RecruiterEmail:
+        email = db.query(RecruiterEmail).filter(RecruiterEmail.owner_id == self.deps.owner_id, RecruiterEmail.id == email_id).first()
+        if not email:
+            raise HTTPException(status_code=404, detail="Candidate not found")
+        if email.state != "needs_review":
+            raise HTTPException(status_code=400, detail="Only needs_review candidates can be tracked/untracked")
+        email.marked_for_tracking = tracked
+        db.commit()
+        db.refresh(email)
         return email
 
     def regenerate_candidate(self, email_id: int, payload: RegenerateCandidateRequest, db: Session) -> RecruiterEmail:
@@ -1637,7 +1812,13 @@ class OrchestrationService:
             inherited_constraints=inherited_constraints,
         )
         if not screening.proceed_to_scoring:
-            email.role = str(parsed.get("role") or email.role or parse_subject)
+            apply_role_assignment(
+                email,
+                extracted=parsed.get("role"),
+                subject=parse_subject,
+                body=email.body,
+                matcher=role_matcher_for(db, self.deps.owner_id),
+            )
             email.location = str(parsed.get("location") or email.location or "")
             email.salary_text = str(parsed.get("salary_text") or email.salary_text or "")
             email.skills_text = str(parsed.get("skills_text") or email.skills_text or "")
@@ -1772,7 +1953,13 @@ class OrchestrationService:
             draft_resume_context_status = RESUME_CONTEXT_RULES_ONLY
             score_review_draft_created = True
 
-        email.role = str(preparation.parsed.get("role", email.role or parse_subject))
+        apply_role_assignment(
+            email,
+            extracted=preparation.parsed.get("role"),
+            subject=parse_subject,
+            body=email.body,
+            matcher=role_matcher_for(db, self.deps.owner_id),
+        )
         email.location = str(preparation.parsed.get("location", email.location or ""))
         email.salary_text = str(preparation.parsed.get("salary_text", email.salary_text or ""))
         email.skills_text = str(preparation.parsed.get("skills_text", email.skills_text or ""))
@@ -1860,6 +2047,7 @@ class OrchestrationService:
             event_type="needs_review_marked" if email.state == "needs_review" else "failed_mapping_marked",
             event_source="action",
             entity_id=email.id,
+            entity_type="RecruiterEmail",
             metadata={"source": "regenerate_candidate", "outcome": preparation.outcome},
         )
         return email
@@ -1885,6 +2073,7 @@ class OrchestrationService:
             event_type="failed_mapping_dismissed",
             event_source="action",
             entity_id=email.id,
+            entity_type="RecruiterEmail",
             metadata={"source": "failed_mapping_delete_button"},
         )
         return {"id": email.id, "deleted": True, "state": email.state}
@@ -1897,6 +2086,8 @@ class OrchestrationService:
         )
         if not email:
             raise HTTPException(status_code=404, detail="Candidate not found")
+        if email.state != "failed":
+            raise HTTPException(status_code=400, detail="Only failed candidates can have recipients resolved")
 
         to_email = payload.to_email.strip()
         cc_email = payload.cc_email.strip()
@@ -1996,7 +2187,13 @@ class OrchestrationService:
                 draft_ai_error = "AI enabled but no active resume uploaded; generated rules-only fallback draft."
                 draft_resume_context_status = RESUME_CONTEXT_MISSING
 
-        email.role = role
+        apply_role_assignment(
+            email,
+            extracted=role,
+            subject=email.subject,
+            body=email.body,
+            matcher=role_matcher_for(db, self.deps.owner_id),
+        )
         email.location = str(parsed["location"])
         email.salary_text = str(parsed["salary_text"])
         email.skills_text = str(parsed["skills_text"])
@@ -2026,5 +2223,5 @@ class OrchestrationService:
 
         db.commit()
         db.refresh(email)
-        self.deps.record_productivity_event(db, event_type="needs_review_marked", event_source="state", entity_id=email.id, metadata={"source": "resolve_recipients"})
+        self.deps.record_productivity_event(db, event_type="needs_review_marked", event_source="state", entity_id=email.id, entity_type="RecruiterEmail", metadata={"source": "resolve_recipients"})
         return email

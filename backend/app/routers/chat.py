@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
+from app.ai.chat.agent import chat_models
 from app.config import settings
 from app.db import get_db
 from app.runtime_state import runtime_state
@@ -16,6 +17,7 @@ from app.schemas import (
     ChatMessageRequest,
     ChatMessageResponse,
     ChatSessionDetailResponse,
+    ChatSessionRenameRequest,
     ChatSessionResponse,
     ChatStatusResponse,
 )
@@ -36,6 +38,12 @@ def get_chat_service() -> ChatService:
 def require_chat_enabled() -> None:
     if not settings.feature_chat_enabled:
         raise HTTPException(status_code=404, detail="Chat is disabled")
+
+
+def require_chat_actions_enabled() -> None:
+    require_chat_enabled()
+    if not settings.feature_chat_actions_enabled:
+        raise HTTPException(status_code=404, detail="Chat actions are disabled")
 
 
 async def _ollama_running() -> bool:
@@ -66,7 +74,8 @@ async def chat_status() -> ChatStatusResponse:
         ollama_last_success_at=runtime_state.ollama_last_success_at,
         chat_last_error=runtime_state.chat_last_error,
         mcp_status=runtime_state.chat_mcp_status,
-        model=settings.ollama_chat_model,
+        model=runtime_state.chat_active_model or settings.ollama_chat_model,
+        available_models=chat_models(),
     )
 
 
@@ -112,6 +121,20 @@ def get_chat_session(
     )
 
 
+@router.patch(
+    "/sessions/{session_id}",
+    response_model=ChatSessionResponse,
+    dependencies=[Depends(require_chat_enabled)],
+)
+def rename_chat_session(
+    session_id: int,
+    payload: ChatSessionRenameRequest,
+    db: Session = Depends(get_db),
+    service: ChatService = Depends(get_chat_service),
+) -> ChatSessionResponse:
+    return ChatSessionResponse.model_validate(service.rename_session(db, session_id, payload.title))
+
+
 @router.delete(
     "/sessions/{session_id}",
     response_model=ChatDeleteResponse,
@@ -139,7 +162,7 @@ def send_chat_message(
     text = service.validate_message(payload.text)
     service._session_or_404(db, session_id)
     return StreamingResponse(
-        service.send_message(db, session_id, text),
+        service.send_message(db, session_id, text, model=payload.model),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

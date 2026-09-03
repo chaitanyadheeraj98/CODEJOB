@@ -6,6 +6,9 @@ from dataclasses import asdict, dataclass
 from sqlalchemy.orm import Session
 
 from app.models import RecruiterEmail
+from app.services import opportunity_lineage_service
+from app.services.role_provenance import RoleSource, assign_role
+from app.services.role_taxonomy import role_matcher_for
 from app.services.role_manifest_service import RoleManifestResult
 
 
@@ -95,19 +98,43 @@ class RequirementExpansionService:
 
         child_ids: list[int] = []
         source_identity = (parent.external_message_id or f"source-{parent.id}").strip()
+        parent_record = opportunity_lineage_service.get_record(
+            db,
+            owner_id=parent.owner_id,
+            record_id=parent.record_id or "",
+        )
         for requirement in manifest_result.requirements:
             child = existing_children.get(requirement.requirement_key)
             if child is None:
+                # The manifest pulled this title out of one requirement block, so it
+                # is a genuine extraction - but it still goes through the ladder so
+                # it is normalised, capped and labelled like every other write.
+                child_role = assign_role(
+                    extracted=requirement.title_hint,
+                    subject=parent.subject,
+                    body=requirement.source_text,
+                    matcher=role_matcher_for(db, parent.owner_id),
+                )
                 child = RecruiterEmail(
                     owner_id=parent.owner_id,
                     sender=parent.sender,
                     subject=parent.subject,
                     body=requirement.source_text,
-                    role=requirement.title_hint,
+                    role=child_role.role,
+                    role_source=child_role.role_source,
+                    role_canonical=child_role.role_canonical,
                     location="unknown",
+                    # "unknown" is a placeholder, not a value, so it stays
+                    # unlabelled - a child never inherits the parent's location.
+                    location_source=None,
                     salary_text="not_specified",
                     skills_text="none_detected",
                     company=parent.company,
+                    # Inherited, not extracted from this requirement block: the real
+                    # origin is the parent's own company_source, one hop away.
+                    company_source=(
+                        RoleSource.SOURCE_PARENT if (parent.company or "").strip() else None
+                    ),
                     end_client=parent.end_client,
                     implementation_partner=parent.implementation_partner,
                     domain=parent.domain,
@@ -134,6 +161,26 @@ class RequirementExpansionService:
                     requirement_key=requirement.requirement_key,
                 )
                 db.add(child)
+                db.flush()
+                child_record = opportunity_lineage_service.create_candidate_record(
+                    db,
+                    owner_id=parent.owner_id,
+                    origin_type="nvoids" if parent.source == "nvoids" else "gmail",
+                )
+                child.record_id = child_record.id
+                if parent_record and parent_record.internal_lineage_id:
+                    opportunity_lineage_service.record_event(
+                        db,
+                        lineage_id=parent_record.internal_lineage_id,
+                        event_type="forked_into_requirement",
+                        process_name="requirement_expansion_service",
+                        related_record_type="RecruiterEmail",
+                        related_record_id=child.id,
+                        metadata={
+                            "child_record_id": child_record.id,
+                            "child_email_id": child.id,
+                        },
+                    )
             elif child.state in TERMINAL_STATES:
                 child_ids.append(child.id)
                 continue

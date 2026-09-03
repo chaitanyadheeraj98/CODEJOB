@@ -2,6 +2,7 @@ import json
 import os
 import unittest
 from datetime import UTC, date, datetime
+from time import perf_counter
 
 os.environ["DEBUG"] = "false"
 
@@ -59,6 +60,7 @@ class CandidateDateFilteringTests(unittest.TestCase):
         sent_at: datetime | None = None,
         source: str = "gmail",
         created_at: datetime | None = None,
+        role: str = "Python Developer",
     ) -> None:
         timestamp = created_at or sent_at or gmail_received_at or datetime(2026, 5, 12, 12, 0, tzinfo=UTC)
         with Session(self.engine) as db:
@@ -68,7 +70,7 @@ class CandidateDateFilteringTests(unittest.TestCase):
                     sender="recruiter@example.com",
                     subject=subject,
                     body="Body",
-                    role="Python Developer",
+                    role=role,
                     location="Remote",
                     salary_text="",
                     skills_text="Python",
@@ -102,6 +104,73 @@ class CandidateDateFilteringTests(unittest.TestCase):
         response = self.client.get("/candidates", params={"state": state, "mail_date": mail_date, "limit": 100})
         self.assertEqual(response.status_code, 200, response.text)
         return [item["subject"] for item in response.json()["items"]]
+
+    def test_text_search_widens_past_the_implicit_mail_date_scope(self) -> None:
+        """Typing a role must reach every matching row, not just the selected day.
+
+        Regression: the /filter-options picker offers values from the whole bucket,
+        so a suggestion drawn from an older email returned zero rows while mail_date
+        still pinned the list to one day.
+        """
+        old = datetime(2026, 5, 1, 12, 0, tzinfo=UTC)
+        today = datetime(2026, 5, 12, 12, 0, tzinfo=UTC)
+        self.add_email("old-java", "needs_review", gmail_received_at=old, role="Java Developer")
+        self.add_email("today-java", "needs_review", gmail_received_at=today, role="Java Developer")
+        self.add_email("today-python", "needs_review", gmail_received_at=today, role="Python Developer")
+
+        browsing = self.client.get(
+            "/candidates",
+            params={"state": "needs_review", "mail_date": "2026-05-12", "limit": 100},
+        )
+        self.assertEqual(
+            {item["subject"] for item in browsing.json()["items"]},
+            {"today-java", "today-python"},
+            "without a text search the day scope still applies",
+        )
+
+        searching = self.client.get(
+            "/candidates",
+            params={"state": "needs_review", "mail_date": "2026-05-12", "role": "java", "limit": 100},
+        )
+        self.assertEqual(
+            {item["subject"] for item in searching.json()["items"]},
+            {"old-java", "today-java"},
+            "a text search spans every date",
+        )
+
+    def test_explicit_date_filter_outranks_a_text_search(self) -> None:
+        """Only the implicit mail_date gives way; a chosen range is deliberate."""
+        old = datetime(2026, 5, 1, 12, 0, tzinfo=UTC)
+        today = datetime(2026, 5, 12, 12, 0, tzinfo=UTC)
+        self.add_email("old-java", "needs_review", gmail_received_at=old, role="Java Developer")
+        self.add_email("today-java", "needs_review", gmail_received_at=today, role="Java Developer")
+
+        response = self.client.get(
+            "/candidates",
+            params={
+                "state": "needs_review",
+                "mail_date": "2026-05-12",
+                "role": "java",
+                "date_filter": "custom",
+                "date_from": "2026-05-12",
+                "date_to": "2026-05-12",
+                "limit": 100,
+            },
+        )
+        self.assertEqual({item["subject"] for item in response.json()["items"]}, {"today-java"})
+
+    def test_structural_filters_do_not_widen_the_day_scope(self) -> None:
+        """A toggle refines what is on screen; it is not a search."""
+        old = datetime(2026, 5, 1, 12, 0, tzinfo=UTC)
+        today = datetime(2026, 5, 12, 12, 0, tzinfo=UTC)
+        self.add_email("old-gmail", "needs_review", gmail_received_at=old)
+        self.add_email("today-gmail", "needs_review", gmail_received_at=today)
+
+        response = self.client.get(
+            "/candidates",
+            params={"state": "needs_review", "mail_date": "2026-05-12", "source": "gmail", "limit": 100},
+        )
+        self.assertEqual({item["subject"] for item in response.json()["items"]}, {"today-gmail"})
 
     def test_sent_state_uses_sent_at_field(self) -> None:
         self.assertEqual(_mail_date_filter_field(["approved_sent"]), "sent_at")
@@ -303,6 +372,62 @@ class CandidateDateFilteringTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.headers.get("content-encoding"), "gzip")
+
+    def test_candidate_filters_sort_validation_and_filtered_total(self) -> None:
+        self.add_email("Java Remote", "needs_review", gmail_received_at=datetime(2026, 5, 12, 16, 0, tzinfo=UTC), source="gmail")
+        self.add_email("Python Dallas", "needs_review", gmail_received_at=datetime(2026, 5, 12, 17, 0, tzinfo=UTC), source="manual")
+        with Session(self.engine) as db:
+            java = db.query(RecruiterEmail).filter(RecruiterEmail.subject == "Java Remote").one()
+            java.role, java.location, java.ats_score, java.resume_file_name = "Java Developer", "Remote", 91, "java.pdf"
+            python = db.query(RecruiterEmail).filter(RecruiterEmail.subject == "Python Dallas").one()
+            python.role, python.location, python.ats_score, python.resume_file_name = "Python Developer", "Dallas", 70, ""
+            db.commit()
+        response = self.client.get("/candidates", params={"state": "needs_review", "source": "gmail", "has_resume": "true", "min_ats_score": 90, "role": "java", "sort": "highest_score"})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["total"], 1)
+        self.assertEqual(response.json()["items"][0]["subject"], "Java Remote")
+        self.assertEqual(self.client.get("/candidates", params={"sort": "invalid"}).status_code, 422)
+        self.assertEqual(self.client.get("/candidates", params={"min_ats_score": 90, "max_ats_score": 10}).status_code, 422)
+
+    def test_candidate_filter_sort_perf_smoke(self) -> None:
+        timestamp = datetime(2026, 5, 12, 12, 0, tzinfo=UTC)
+        rows = [
+            {
+                "owner_id": main.settings.owner_id,
+                "sender": f"recruiter-{index}@example.com",
+                "subject": f"Backend role {index}",
+                "body": "Body",
+                "role": "Backend Engineer" if index % 2 == 0 else "Data Analyst",
+                "score": index % 101,
+                "ats_score": float(index % 101),
+                "decision": "approved",
+                "state": "needs_review",
+                "source": "gmail",
+                "external_message_id": f"perf-message-{index}",
+                "created_at": timestamp,
+                "updated_at": timestamp,
+            }
+            for index in range(5_000)
+        ]
+        with Session(self.engine) as db:
+            db.bulk_insert_mappings(RecruiterEmail, rows)
+            db.commit()
+
+        started_at = perf_counter()
+        response = self.client.get(
+            "/candidates",
+            params={
+                "state": "needs_review",
+                "source": "gmail",
+                "role": "backend",
+                "sort": "highest_score",
+                "limit": 100,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["total"], 2_500)
+        self.assertLess(perf_counter() - started_at, 0.5)
 
 
 if __name__ == "__main__":

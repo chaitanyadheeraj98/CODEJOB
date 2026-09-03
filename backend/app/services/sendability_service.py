@@ -17,6 +17,13 @@ STRUCTURAL_BLOCKING_STATUSES = frozenset(
 ELIGIBILITY_BLOCKING_STATUSES = frozenset({"blocked_ineligible", "eligibility_review"})
 MANDATORY_BLOCKING_STATUSES = frozenset({"mandatory_resume_fail", "mandatory_resume_review"})
 STRICT_SCREENING_BLOCKING_STATUSES = ELIGIBILITY_BLOCKING_STATUSES | MANDATORY_BLOCKING_STATUSES
+SENDABILITY_BUCKETS: dict[str, frozenset[str]] = {
+    "sendable": frozenset({"sendable"}),
+    "structural_block": STRUCTURAL_BLOCKING_STATUSES,
+    "eligibility_block": ELIGIBILITY_BLOCKING_STATUSES,
+    "resume_block": MANDATORY_BLOCKING_STATUSES,
+    "not_ready": frozenset({"not_ready"}),
+}
 
 
 def mandatory_gate_status(email: RecruiterEmail) -> str:

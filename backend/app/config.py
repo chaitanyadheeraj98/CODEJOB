@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -34,6 +36,31 @@ class Settings(BaseSettings):
     groq_gate_body_char_limit: int = 6000
     groq_gate_max_retries: int = 2
     groq_gate_redact_contact_info: bool = True
+    # Which backend answers the job-intent gate. "taxonomy" disables the LLM entirely.
+    # This is the rollback lever: flipping to "groq" restores the pre-migration
+    # behaviour without a deploy, which matters because this gate decides what
+    # enters the queue at all.
+    intent_gate_provider: Literal["deepseek", "groq", "taxonomy"] = "deepseek"
+    intent_gate_model: str = ""            # "" -> deepseek_model_fast
+    # Reasoning-effort ladder, attempted in order; first success wins. Comma-separated
+    # so it is env-overridable, and its length is the hard attempt cap.
+    #
+    # Ships as a single no-thinking rung: escalation is INERT until the agreement
+    # harness shows it earns its cost. Candidate once measured: "disabled,high".
+    #
+    # This is the escalation axis that actually works. The role-manifest ladder escalates
+    # on `temperature`, which thinking mode silently ignores - reasoning effort is
+    # honoured, so it replaces a dead dimension rather than adding a new one.
+    intent_gate_effort_ladder: str = "disabled"
+    # Escalate when the model returns valid JSON but disagrees with the rules taxonomy.
+    # Hard failures always escalate; this covers the confident-but-ambiguous case, which
+    # is where the real misclassifications live. Off until measured.
+    intent_gate_escalate_on_disagreement: bool = False
+    # Skip the LLM when the rules taxonomy is at least this confident.
+    # 0.0 preserves today's always-call behaviour; raise only on measured agreement.
+    intent_gate_min_taxonomy_confidence: float = 0.0
+    intent_gate_timeout_seconds: float = 12.0   # total budget per email, not per attempt
+    role_manifest_final_rung: Literal["deepseek_pro", "groq", "off"] = "deepseek_pro"
     role_manifest_groq_model: str = "llama-3.1-8b-instant"
     role_manifest_extraction_passes_deterministic: int = 1
     role_manifest_extraction_passes_variance: int = 2
@@ -43,11 +70,16 @@ class Settings(BaseSettings):
     role_manifest_max_source_chars: int = 12000
     ollama_base_url: str = "http://localhost:11434"
     ollama_chat_model: str = "gemma4:31b-cloud"
+    ollama_chat_model_fallback: str = "minimax-m3:cloud"
+    ollama_chat_model_fallback2: str = "nemotron-3-nano:30b-cloud"
     ollama_timeout_seconds: float = 60.0
     ollama_max_tool_iterations: int = 6
     feature_chat_enabled: bool = False
+    feature_chat_actions_enabled: bool = False
     chat_history_max_messages: int = 20
     chat_message_char_limit: int = 4000
+    searxng_url: str = Field(default="", validation_alias=AliasChoices("SEARXNG_URL"))
+    chat_web_search_max_results: int = 5
     google_client_id: str = ""
     google_client_secret: str = ""
     google_redirect_uri: str = "http://localhost:8080/"
@@ -111,6 +143,8 @@ class Settings(BaseSettings):
     telegram_action_pin: str = ""
     telegram_alerts_enabled: bool = True
     telegram_auth_ttl_minutes: int = 30
+    github_token: str = Field(default="", validation_alias=AliasChoices("GITHUB_TOKEN"))
+    github_repo: str = Field(default="", validation_alias=AliasChoices("GITHUB_REPO"))
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

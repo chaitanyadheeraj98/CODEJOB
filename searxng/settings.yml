@@ -1,0 +1,15 @@
+use_default_settings: true
+
+general:
+  debug: false
+
+server:
+  secret_key: "codejob-local-searxng-secret-change-me"
+  limiter: false
+  image_proxy: false
+
+search:
+  safe_search: 0
+  formats:
+    - html
+    - json

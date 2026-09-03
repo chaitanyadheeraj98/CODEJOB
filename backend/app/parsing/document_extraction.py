@@ -5,13 +5,13 @@ import re
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 from xml.etree import ElementTree
 
 from bs4 import BeautifulSoup
-from unstructured.chunking.title import chunk_by_title
-from unstructured.documents.elements import Element
-from unstructured.partition.auto import partition
-from unstructured.partition.html import partition_html
+
+if TYPE_CHECKING:
+    from unstructured.documents.elements import Element
 
 
 logger = logging.getLogger(__name__)
@@ -119,6 +119,8 @@ def _render_with_limit(elements: list[Element], max_chars: int | None) -> tuple[
     if max_chars <= 0:
         return "", "", bool(markdown)
 
+    from unstructured.chunking.title import chunk_by_title
+
     chunks = chunk_by_title(
         content,
         combine_text_under_n_chars=0,
@@ -198,6 +200,8 @@ def extract_document_text(
         return _fallback_document(path, file_name, max_chars)
 
     try:
+        from unstructured.partition.auto import partition
+
         elements = list(partition(filename=str(path), strategy="fast"))
         markdown, plain, truncated = _render_with_limit(elements, max_chars)
         if markdown:
@@ -231,6 +235,8 @@ def clean_html_text(html: str, *, max_chars: int | None = None) -> str:
     if not html.strip():
         return ""
     try:
+        from unstructured.partition.html import partition_html
+
         elements = list(partition_html(text=_normalize_line_breaks_for_partitioning(html)))
         markdown, _plain, _truncated = _render_with_limit(elements, max_chars)
         if markdown:
@@ -297,8 +303,9 @@ def _strip_trailing_signature(lines: list[str]) -> list[str]:
     return lines
 
 
-def _clean_email_segment(lines: list[str]) -> list[str]:
-    return _strip_trailing_signature(_strip_google_groups_footers(lines))
+def _clean_email_segment(lines: list[str], *, strip_signature: bool = True) -> list[str]:
+    lines = _strip_google_groups_footers(lines)
+    return _strip_trailing_signature(lines) if strip_signature else lines
 
 
 def strip_gmail_boilerplate(text: str) -> str:
@@ -326,8 +333,12 @@ def strip_gmail_boilerplate(text: str) -> str:
     return cleaned or text.strip()
 
 
-def extract_gmail_reply_body(text: str) -> str:
-    """Return only the newest Gmail reply, without quoted thread history."""
+def extract_gmail_reply_body(text: str, *, strip_signature: bool = True) -> str:
+    """Return only the newest Gmail reply, without quoted thread history.
+
+    strip_signature=False keeps the sender's own trailing signature block - a phone
+    number extractor needs it, since that's exactly where a recruiter's number lives.
+    """
     source = clean_html_if_present(text)
     lines = source.replace("\r\n", "\n").replace("\r", "\n").splitlines()
     marker_start = next(
@@ -335,7 +346,7 @@ def extract_gmail_reply_body(text: str) -> str:
         len(lines),
     )
     current = lines[:marker_start]
-    cleaned_lines = _clean_email_segment(current)
+    cleaned_lines = _clean_email_segment(current, strip_signature=strip_signature)
     if not any(_email_line_text(line) for line in cleaned_lines):
         cleaned_lines = _strip_google_groups_footers(current)
     cleaned = re.sub(r"\n{3,}", "\n\n", "\n".join(cleaned_lines)).strip()

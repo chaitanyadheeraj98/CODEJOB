@@ -24,6 +24,12 @@ def format_phone(raw: str) -> tuple[str, str, str]:
         canonical = digits
     elif len(digits) == 10:
         canonical = f"1{digits}"
+    elif (base_text.startswith("+") and 8 <= len(digits) <= 15) or 11 <= len(digits) <= 15:
+        canonical = f"+{digits}"
+        display = canonical
+        if extension:
+            display = f"{display} ext {extension}"
+        return canonical, display, extension
     else:
         return "", "", ""
 

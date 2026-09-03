@@ -6,19 +6,21 @@ from datetime import UTC, datetime
 import logging
 from typing import Any, Callable, Mapping, cast
 
-from app.gates import EmailIntentDecision
+from app.gates import EmailIntentDecision, llm_decided
 from app.job_intent_learning import approved_learning_signals_for_owner, record_pending_job_intent_learning
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
 from app.config import settings as app_settings
+from app.services.role_provenance import assign_role
+from app.services.role_taxonomy import fill_entity_gaps, role_matcher_for
 from app.models import RecruiterEmail, ResumeAsset, UserSettings
 from app.parsing import build_skills_json_payload
 from app.phase0 import jd_entity_fields_from_parsed
 from app.parsing.document_extraction import prepare_gmail_parse_body
 from app.recent_runs import SkippedItemRecord
 from app.routing import RoutingDecision
-from app.services import policy_service
+from app.services import opportunity_lineage_service, policy_service, recruiter_identity_service
 from app.services.gmail_group_source_service import ConfiguredRequirementGroup, resolve_trusted_group_context
 from app.services.candidate_screening_service import CandidateScreeningService, apply_screening_decision
 from app.services.requirement_expansion_service import RequirementExpansionService
@@ -65,7 +67,7 @@ class RunOrchestratorDependencies:
         [str, str, dict[str, str | int | bool], UserSettings, RecruiterEmail | None, ResumeAsset | None],
         tuple[float, str, str, str | None, str | None, Any],
     ]
-    policy_f2f_block: Callable[[dict[str, str | int | bool], Mapping[str, Any]], tuple[bool, str]]
+    policy_f2f_block: Callable[[dict[str, str | int | bool], Mapping[str, Any], UserSettings], tuple[bool, str]]
     evaluate_routing_policy: Callable[[Session, str, str, str, str, bool], RoutingDecision]
     greeting_from_to_contact: Callable[[str | None, str], str]
     build_user_fallback_draft: Callable[
@@ -192,7 +194,7 @@ class RunOrchestrator:
                 trusted_group_context=trusted_group_context,
                 approved_learning_signals=approved_learning_signals,
             )
-            if intent_decision.provider == "groq" and intent_decision.learned_signals:
+            if llm_decided(intent_decision.provider) and intent_decision.learned_signals:
                 record_pending_job_intent_learning(
                     request.db,
                     owner_id=request.owner_id,
@@ -397,6 +399,7 @@ class RunOrchestrator:
                     target.intent_negative_evidence_json = json.dumps(intent_decision.negative_evidence, separators=(",", ":"))
                     target.gate_action = intent_decision.action
                     target.gate_provider = intent_decision.provider
+                    target.gate_error = intent_decision.error
                     target.source_group_name = trusted_group_context.group_name
                     target.source_group_email = trusted_group_context.group_email
                     target.source_group_match_method = trusted_group_context.match_method
@@ -465,6 +468,7 @@ class RunOrchestrator:
                     target.intent_negative_evidence_json = json.dumps(intent_decision.negative_evidence, separators=(",", ":"))
                     target.gate_action = intent_decision.action
                     target.gate_provider = intent_decision.provider
+                    target.gate_error = intent_decision.error
                     target.source_group_name = trusted_group_context.group_name
                     target.source_group_email = trusted_group_context.group_email
                     target.source_group_match_method = trusted_group_context.match_method
@@ -504,6 +508,7 @@ class RunOrchestrator:
                     event_type="failed_mapping_marked",
                     event_source="state",
                     entity_id=email.id,
+                    entity_type="RecruiterEmail",
                     metadata={"reason": email.skip_reason or "missing_to_or_cc"},
                 )
                 request.deps.apply_gmail_label(request.db, email, item)
@@ -553,6 +558,7 @@ class RunOrchestrator:
                 target.intent_negative_evidence_json = json.dumps(intent_decision.negative_evidence, separators=(",", ":"))
                 target.gate_action = intent_decision.action
                 target.gate_provider = intent_decision.provider
+                target.gate_error = intent_decision.error
                 target.source_group_name = trusted_group_context.group_name
                 target.source_group_email = trusted_group_context.group_email
                 target.source_group_match_method = trusted_group_context.match_method
@@ -606,6 +612,7 @@ class RunOrchestrator:
                 event_type="needs_review_marked",
                 event_source="state",
                 entity_id=email.id,
+                entity_type="RecruiterEmail",
                 metadata={"source": "automation_run"},
             )
             request.deps.apply_gmail_label(request.db, email, item)
@@ -667,17 +674,24 @@ class RunOrchestrator:
     ) -> RecruiterEmail:
         if existing:
             return existing
-        return RecruiterEmail(
+        assigned = assign_role(
+            extracted=str(parsed.get("role") or ""),
+            subject=str(item["subject"]),
+            body=str(item["body"]),
+            matcher=role_matcher_for(request.db, request.owner_id),
+        )
+        email = RecruiterEmail(
             owner_id=request.owner_id,
             sender=str(item["sender"]),
             subject=str(item["subject"]),
             body=str(item["body"]),
-            role=str(parsed["role"]),
-            location=str(parsed["location"]),
+            role=assigned.role,
+            role_source=assigned.role_source,
+            role_canonical=assigned.role_canonical,
             salary_text=str(parsed["salary_text"]),
             skills_text=str(parsed["skills_text"]),
             skills_json=skills_json,
-            **jd_entity_fields_from_parsed(parsed),
+            **fill_entity_gaps(jd_entity_fields_from_parsed(parsed), db=request.db, owner_id=request.owner_id, subject=str(item["subject"]), location=str(parsed["location"]), body=str(item["body"])),
             source="gmail",
             external_message_id=str(item["external_message_id"]),
             external_thread_id=item.get("external_thread_id"),
@@ -686,6 +700,12 @@ class RunOrchestrator:
             recipient_email=item.get("recipient_email"),
             parser_details_json=parser_details_json,
         )
+        if email.record_id is None:
+            candidate_record = opportunity_lineage_service.create_candidate_record(
+                request.db, owner_id=request.owner_id, origin_type="gmail"
+            )
+            email.record_id = candidate_record.id
+        return email
 
     def _commit_email_phase(
         self,
@@ -697,6 +717,7 @@ class RunOrchestrator:
         branch_name: str,
         reapply_state: Callable[[RecruiterEmail], None],
     ) -> RecruiterEmail:
+        recruiter_identity_service.stamp_recruiter_email_identity(request.db, email)
         if not existing:
             request.db.add(email)
         try:
@@ -721,6 +742,7 @@ class RunOrchestrator:
                 external_message_id,
             )
             reapply_state(recovered)
+            recruiter_identity_service.stamp_recruiter_email_identity(request.db, recovered)
             request.db.commit()
             return recovered
 
@@ -768,6 +790,7 @@ class RunOrchestrator:
                 intent_negative_evidence=intent_decision.negative_evidence if intent_decision else None,
                 gate_action=intent_decision.action if intent_decision else None,
                 gate_provider=intent_decision.provider if intent_decision else None,
+                gate_error=intent_decision.error if intent_decision else None,
                 source_group_name=getattr(trusted_group_context, "group_name", None),
                 source_group_email=getattr(trusted_group_context, "group_email", None),
                 source_group_match_method=getattr(trusted_group_context, "match_method", None),

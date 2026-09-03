@@ -1,3 +1,13 @@
-from app.gates.job_description_gate import EmailIntentDecision, classify_email_intent
+from app.gates.job_description_gate import (
+    LLM_DECIDED_PROVIDERS,
+    EmailIntentDecision,
+    classify_email_intent,
+    llm_decided,
+)
 
-__all__ = ["EmailIntentDecision", "classify_email_intent"]
+__all__ = [
+    "LLM_DECIDED_PROVIDERS",
+    "EmailIntentDecision",
+    "classify_email_intent",
+    "llm_decided",
+]

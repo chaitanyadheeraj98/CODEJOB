@@ -2,8 +2,27 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from app.models import RecruiterEmail, UserSettings
+from app.models import PremiumNumberContact, UserSettings
+from app.premium_numbers.phone_normalization import canonicalize_phone
 from app.phase0 import email_domain, normalize_employer_domains
+
+PERSONAL_EMAIL_DOMAINS: frozenset[str] = frozenset(
+    {
+        "gmail.com",
+        "yahoo.com",
+        "outlook.com",
+        "hotmail.com",
+        "icloud.com",
+        "aol.com",
+        "protonmail.com",
+        "live.com",
+        "msn.com",
+        "ymail.com",
+        "rediffmail.com",
+        "mail.com",
+        "gmx.com",
+    }
+)
 
 
 def employer_domains_for_owner(db: Session, owner_id: str) -> set[str]:
@@ -14,9 +33,30 @@ def employer_domains_for_owner(db: Session, owner_id: str) -> set[str]:
     return normalize_employer_domains(raw_domains)
 
 
-def should_capture_premium_numbers(db: Session, email: RecruiterEmail) -> tuple[bool, str, str]:
-    domains = employer_domains_for_owner(db, email.owner_id)
-    sender_domain = email_domain(email.sender or "")
-    if sender_domain and sender_domain in domains:
-        return True, sender_domain, ",".join(sorted(domains))
-    return False, sender_domain, ",".join(sorted(domains))
+def is_derivable_company_domain(db: Session, owner_id: str, email: str | None) -> bool:
+    domain = email_domain(email or "")
+    if not domain:
+        return False
+    if domain in PERSONAL_EMAIL_DOMAINS:
+        return False
+    return domain not in employer_domains_for_owner(db, owner_id)
+
+
+def is_hidden_nvoids_placeholder_recruiter(row: PremiumNumberContact | None) -> bool:
+    if row is None:
+        return False
+    normalized = str(row.normalized_phone_number or "").strip().lower()
+    display = str(row.display_phone_number or "").strip().lower()
+    if normalized.startswith("nvoids-") and display == "unknown" and row.first_detected_email_id is None:
+        return True
+    return not normalized
+
+
+def is_hidden_invalid_employer_number(row: PremiumNumberContact | None) -> bool:
+    if row is None:
+        return False
+    display = str(row.display_phone_number or "").strip()
+    if not display or display.lower() == "unknown":
+        return False
+    normalized = str(row.normalized_phone_number or "").strip()
+    return not canonicalize_phone(normalized) and not canonicalize_phone(display)

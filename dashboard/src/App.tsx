@@ -1,32 +1,35 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import './App.css'
 import Sidebar from './components/Sidebar'
+import CandidateCard from './components/CandidateCard'
+import ResumeTrackingPage from './features/resume_tracking/ResumeTrackingPage'
 import TrustedGmailGroupsPanel, { type TrustedGmailGroup } from './features/gmail_groups/TrustedGmailGroupsPanel'
 import { getDraftSourceLabel } from './features/ai/ui'
 import QueryBucket from './features/query_bucket/QueryBucket'
 import EmailSearch from './features/email_search/EmailSearch'
 import ChatWidget from './features/chat/ChatWidget'
+import { getChatStatus } from './features/chat/api'
+import type { ChatStatus } from './features/chat/types'
+import PremiumNumbersPage from './features/premium_numbers/PremiumNumbersPage'
+import AppTSPage from './features/application_tracking/AppTSPage'
+import VerificationBadge from './features/premium_numbers/VerificationBadge'
 import { type CandidateState, useCandidateBuckets } from './candidateBuckets'
+import type { CandidateQueryOptions } from './candidateBuckets'
+import FilterSortBar, { type FilterValues } from './components/FilterSortBar'
+import FilterVisibilitySettings from './components/FilterVisibilitySettings'
+import SelectionActionBar from './components/SelectionActionBar'
+import { filterSortRegistry, resolveRegistryEntry } from './filterSortRegistry'
+import { hasActiveTextSearch, narrowValuesToVisible, visibleFieldsFor } from './filterVisibility'
+import { buildUrlSearch, parseFilterValuesFromParams } from './useUrlSync'
 import { addCcEmail, removeCcEmail } from './ccEmails'
 import { addEmployerDomain, removeEmployerDomain } from './employerDomains'
 import { formatRelativeInboxTime, getInitials } from './inboxFormat'
-import { buildPremiumScopeUrl, defaultPremiumPageMeta, type PremiumScope } from './premiumNumbers'
 import type { EmailSearchHit } from './emailSearch'
 
 const GMAIL_OAUTH_POLL_INTERVAL_MS = 2000
 const GMAIL_OAUTH_POLL_TIMEOUT_MS = 180000
 const VIEW_EVENT_THROTTLE_MS = 60000
-const PREMIUM_PAGE_LIMIT = 25
 const SETTINGS_REVIEW_BATCH_SIZE = 50
-
-function emailSearchPremiumScope(hit: EmailSearchHit): PremiumScope | null {
-  if (hit.section !== 'premium_numbers') return null
-  if (hit.detail.number_review_id != null) return 'all_review'
-  if (hit.detail.recruiter_number_id != null) return 'recruiter_numbers'
-  if (hit.detail.employer_number_id != null) return 'employer_numbers'
-  if (hit.detail.recruiter_opportunity_id != null) return 'recruiter_opportunities'
-  return null
-}
 
 function emailSearchRelatedId(hit: EmailSearchHit): string | null {
   if (hit.section === 'inbox') {
@@ -41,7 +44,8 @@ function emailSearchRelatedId(hit: EmailSearchHit): string | null {
       hit.detail.number_review_id ??
       hit.detail.recruiter_number_id ??
       hit.detail.employer_number_id ??
-      hit.detail.recruiter_opportunity_id
+      hit.detail.recruiter_opportunity_id ??
+      hit.detail.contact_id
     return related == null ? null : String(related)
   }
   return hit.recruiter_email_id == null ? null : String(hit.recruiter_email_id)
@@ -57,6 +61,39 @@ const DRAFT_TEXT_SIZE_STYLES: Record<DraftTextSize, { fontSize: string; lineHeig
   huge: { fontSize: '28px', lineHeight: '1.4' },
 }
 
+type ActivePage = 'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'inbox' | 'premium_numbers' | 'resume_tracking' | 'application_tracking' | 'settings'
+const ACTIVE_PAGES = new Set<ActivePage>(['run_queue', 'needs_review', 'failed_mapping', 'recent_runs', 'sent_items', 'inbox', 'premium_numbers', 'resume_tracking', 'application_tracking', 'settings'])
+const initialActivePage = (): ActivePage => {
+  const page = new URLSearchParams(window.location.search).get('page') as ActivePage | null
+  return page && ACTIVE_PAGES.has(page) ? page : 'run_queue'
+}
+
+const PAGE_TITLES: Record<ActivePage, string> = {
+  run_queue: 'Run Queue Dashboard',
+  needs_review: 'Needs Review',
+  failed_mapping: 'Failed Mapping',
+  recent_runs: 'Recent Runs',
+  sent_items: 'Sent Items',
+  inbox: 'Reply Inbox',
+  premium_numbers: 'Premium Numbers',
+  resume_tracking: 'Resume Tracking',
+  application_tracking: 'Application Tracking',
+  settings: 'Settings',
+}
+
+const PAGE_SUBTITLES: Record<ActivePage, string> = {
+  run_queue: 'Manage and monitor your automated recruitment email operations.',
+  needs_review: 'Approve, edit, or reject AI-drafted replies before they send.',
+  failed_mapping: 'Fix recipient routing for emails the parser could not map.',
+  recent_runs: 'See automation run history and outcomes.',
+  sent_items: 'Review emails that have already been sent.',
+  inbox: 'Review recruiter replies and continue Gmail conversations.',
+  premium_numbers: 'Manage inventory, assignments, and rescoring operations.',
+  resume_tracking: 'See which resume variants move through the funnel and why others stall.',
+  application_tracking: 'Review bookmarked requirements and explicitly tracked applications.',
+  settings: 'Manage learning queues, trusted Gmail groups, and resume assets.',
+}
+
 export function shouldTrackViewEvent(
   lastTrackedAtByKey: Record<string, number>,
   throttleKey: string,
@@ -67,6 +104,8 @@ export function shouldTrackViewEvent(
   if (lastTrackedAt === undefined) return true
   return now - lastTrackedAt >= throttleMs
 }
+
+const isValidEmailAddress = (value: string): boolean => Boolean(value.trim()) && addCcEmail([], value).error === null
 
 function escapeHtml(text: string): string {
   return text
@@ -157,6 +196,19 @@ type AiStatus = {
   groq_last_attempted_at?: string | null
   groq_last_success_at?: string | null
   groq_last_duration_ms?: number | null
+  intent_gate_provider?: string
+  intent_gate_model?: string
+  intent_gate_configured?: boolean
+  intent_gate_enabled_in_settings?: boolean
+  intent_gate_runtime_healthy?: boolean | null
+  intent_gate_last_error?: string | null
+  intent_gate_detail?: string
+  intent_gate_effort_ladder?: string
+  intent_gate_last_rung?: string
+  intent_gate_min_taxonomy_confidence?: number
+  intent_gate_last_attempted_at?: string | null
+  intent_gate_last_success_at?: string | null
+  intent_gate_last_duration_ms?: number | null
   last_error: string | null
   last_started_at: string | null
   last_finished_at: string | null
@@ -196,6 +248,9 @@ type SettingsPayload = {
   nvoids_batch_limit: number
   nvoids_detail_title_mode: NvoidsDetailTitleMode
   nvoids_locations: string[]
+  nvoids_job_role: string
+  nvoids_search_location: string
+  nvoids_custom_query: string
   feature_auto_send: boolean
   feature_retry_queue: boolean
   feature_ai_enabled: boolean
@@ -207,7 +262,16 @@ type SettingsPayload = {
   feature_strict_candidate_screening_enabled: boolean
   feature_email_tracking_enabled: boolean
   feature_reply_inbox_enabled: boolean
+  feature_applications_enabled: boolean
+  feature_application_automation_enabled: boolean
+  feature_application_outreach_drafts_enabled: boolean
+  feature_reminder_sweep_interval_minutes: number
+  feature_resume_tracking_enabled: boolean
+  feature_resume_tracking_sweep_interval_minutes: number
   candidate_work_authorizations: string[]
+  preferred_employment_types: Array<'C2C' | 'W2' | '1099' | 'FT'>
+  visible_filters: Record<string, string[]>
+  preferred_minimum_rate: number | null
   candidate_total_experience_years: number | null
   candidate_us_experience_years: number | null
   candidate_current_location: string
@@ -448,6 +512,9 @@ type RecentRunCard = AutomationRunResponse & {
   skipped_items_loaded?: boolean
   skipped_items_loading?: boolean
   skipped_items_error?: string | null
+  selected_skipped_ids?: number[]
+  retrying_skipped?: boolean
+  retry_error?: string | null
 }
 
 type BackgroundJob = {
@@ -459,6 +526,8 @@ type BackgroundJob = {
   total_items: number | null
   progress_pct: number | null
   queue_name: string | null
+  skipped_item_count?: number | null
+  failed_count?: number | null
 }
 
 type JobEnqueueResponse = {
@@ -498,6 +567,9 @@ type ResumeAsset = {
   sha256: string
   version: number
   skills_text: string
+  primary_role: string
+  structured_skills: string[]
+  variant_label: string
   is_enabled: boolean
   is_current: boolean
   created_at: string
@@ -526,7 +598,7 @@ type PendingSkill = {
 }
 
 type PendingEntity = {
-  entity_type: 'company' | 'location'
+  entity_type: 'company' | 'location' | 'role'
   display_name: string
   normalized_name: string
   occurrence_count: number
@@ -581,11 +653,21 @@ type ResumeDatabaseSectionProps = {
   activeResume: ResumeAsset | null
   resumeFile: File | null
   resumeSkillsInput: string
+  resumePrimaryRoleInput: string
+  resumeStructuredSkillsInput: string
+  resumeVariantLabelInput: string
   resumeSkillEdits: Record<number, string>
+  resumeMetadataEdits: Record<number, { primary_role: string; structured_skills: string; variant_label: string }>
   resumeAssets: ResumeAsset[]
+  resumeUploading: boolean
+  focusResumeId: number | null
   setResumeFile: (file: File | null) => void
   setResumeSkillsInput: (value: string) => void
+  setResumePrimaryRoleInput: (value: string) => void
+  setResumeStructuredSkillsInput: (value: string) => void
+  setResumeVariantLabelInput: (value: string) => void
   setResumeSkillEdits: React.Dispatch<React.SetStateAction<Record<number, string>>>
+  setResumeMetadataEdits: React.Dispatch<React.SetStateAction<Record<number, { primary_role: string; structured_skills: string; variant_label: string }>>>
   uploadResume: () => void
   saveResumeSkills: (resumeId: number) => void
   toggleResumeAsset: (resumeId: number, isEnabled: boolean) => void
@@ -596,17 +678,38 @@ export function ResumeDatabaseSection({
   activeResume,
   resumeFile,
   resumeSkillsInput,
+  resumePrimaryRoleInput,
+  resumeStructuredSkillsInput,
+  resumeVariantLabelInput,
   resumeSkillEdits,
+  resumeMetadataEdits,
   resumeAssets,
+  resumeUploading,
+  focusResumeId,
   setResumeFile,
   setResumeSkillsInput,
+  setResumePrimaryRoleInput,
+  setResumeStructuredSkillsInput,
+  setResumeVariantLabelInput,
   setResumeSkillEdits,
+  setResumeMetadataEdits,
   uploadResume,
   saveResumeSkills,
   toggleResumeAsset,
   deleteResumeAsset,
 }: ResumeDatabaseSectionProps) {
   const [expandedResumeIds, setExpandedResumeIds] = useState<Record<number, boolean>>({})
+  const [handledFocusResumeId, setHandledFocusResumeId] = useState<number | null>(null)
+
+  if (focusResumeId !== null && focusResumeId !== handledFocusResumeId && resumeAssets.some((resume) => resume.id === focusResumeId)) {
+    setHandledFocusResumeId(focusResumeId)
+    setExpandedResumeIds((prev) => ({ ...prev, [focusResumeId]: true }))
+  }
+
+  useEffect(() => {
+    if (focusResumeId === null) return
+    document.getElementById(`resume-row-${focusResumeId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [focusResumeId])
 
   const toggleResumeExpanded = (resumeId: number) => {
     setExpandedResumeIds((prev) => ({
@@ -637,6 +740,7 @@ export function ResumeDatabaseSection({
             type="file"
             accept=".pdf,.doc,.docx"
             aria-label="Upload resume file"
+            disabled={resumeUploading}
             onChange={(e) => setResumeFile(e.target.files?.[0] ?? null)}
           />
           <label className="resumeDatabaseField">
@@ -649,10 +753,16 @@ export function ResumeDatabaseSection({
               placeholder="java, spring boot, microservices, aws"
             />
           </label>
+          <label className="resumeDatabaseField"><span>Primary role</span><input value={resumePrimaryRoleInput} onChange={(event) => setResumePrimaryRoleInput(event.target.value)} placeholder="Senior Java Developer" /></label>
+          <label className="resumeDatabaseField"><span>Structured skills</span><input value={resumeStructuredSkillsInput} onChange={(event) => setResumeStructuredSkillsInput(event.target.value)} placeholder="Java, Spring Boot, AWS" /></label>
+          <label className="resumeDatabaseField"><span>Variant label</span><input value={resumeVariantLabelInput} onChange={(event) => setResumeVariantLabelInput(event.target.value)} placeholder="Java / Banking" /></label>
           <p className="subtle resumeDatabaseHelp">Use clean comma-separated skills for faster and more accurate resume matching.</p>
-          <button type="button" onClick={uploadResume} disabled={!resumeFile}>
-            Upload Resume To Database
+          <button type="button" onClick={uploadResume} disabled={!resumeFile || resumeUploading}>
+            {resumeUploading ? 'Processing Resume...' : 'Upload Resume To Database'}
           </button>
+          {resumeUploading ? (
+            <p className="subtle" aria-live="polite">Processing resume - extracting content and preparing ATS profile...</p>
+          ) : null}
         </div>
         {resumeAssets.length === 0 ? (
           <p className="subtle">No resumes stored yet.</p>
@@ -661,7 +771,7 @@ export function ResumeDatabaseSection({
             {resumeAssets.map((resume) => {
               const isExpanded = !!expandedResumeIds[resume.id]
               return (
-                <article key={resume.id} className="resumeDatabaseItem pillRow">
+                <article key={resume.id} id={`resume-row-${resume.id}`} className={`resumeDatabaseItem pillRow ${resume.id === focusResumeId ? 'focused' : ''}`}>
                   <div className="resumeDatabaseHeader">
                     <div className="resumeDatabaseTitleBlock">
                       <strong className="resumeDatabaseFileName">{resume.file_name}</strong>
@@ -706,6 +816,9 @@ export function ResumeDatabaseSection({
                           ? `Matching skills: ${resume.skills_text}`
                           : 'No manual skills saved yet. File extraction will be used as fallback.'}
                       </p>
+                      <label className="resumeDatabaseField"><span>Primary role</span><input value={resumeMetadataEdits[resume.id]?.primary_role ?? ''} onChange={(event) => setResumeMetadataEdits((current) => ({ ...current, [resume.id]: { ...(current[resume.id] ?? { structured_skills: '', variant_label: '' }), primary_role: event.target.value } }))} /></label>
+                      <label className="resumeDatabaseField"><span>Structured skills</span><input value={resumeMetadataEdits[resume.id]?.structured_skills ?? ''} onChange={(event) => setResumeMetadataEdits((current) => ({ ...current, [resume.id]: { ...(current[resume.id] ?? { primary_role: '', variant_label: '' }), structured_skills: event.target.value } }))} /></label>
+                      <label className="resumeDatabaseField"><span>Variant label</span><input value={resumeMetadataEdits[resume.id]?.variant_label ?? ''} onChange={(event) => setResumeMetadataEdits((current) => ({ ...current, [resume.id]: { ...(current[resume.id] ?? { primary_role: '', structured_skills: '' }), variant_label: event.target.value } }))} /></label>
                       <div className="resumeDatabaseActions">
                         <label className="toggleRow pillRow resumeDatabaseToggle">
                           <span>{resume.is_enabled ? 'Enabled' : 'Disabled'}</span>
@@ -720,7 +833,7 @@ export function ResumeDatabaseSection({
                         </label>
                         <div className="resumeDatabaseButtons">
                           <button type="button" onClick={() => saveResumeSkills(resume.id)}>
-                            Save Skills
+                            Save resume details
                           </button>
                           <button type="button" onClick={() => deleteResumeAsset(resume.id)}>
                             Delete
@@ -1238,12 +1351,16 @@ export function JobIntentLearningSection({
   )
 }
 
-type Candidate = {
+export type Candidate = {
   id: number
+  record_id?: string | null
   subject: string
   sender: string
   body: string
   role: string
+  // NULL on rows written before provenance existed - unverified, not 'extracted'.
+  role_source?: string | null
+  role_canonical?: string | null
   location: string
   salary_text: string
   skills_text: string
@@ -1297,9 +1414,14 @@ type Candidate = {
   eligibility_details?: Record<string, unknown> | null
   sendability_status?: string | null
   screening_mode?: 'compatibility' | 'strict' | null
+  marked_for_tracking: boolean
+  premium_status?: string | null
+  premium_verification_level?: 'unverified' | 'verified' | 'trusted' | null
+  following_badge?: 'bookmarked' | 'tracked' | 'active' | null
+  following_warning?: string | null
 }
 
-type SentItemDetails = {
+export type SentItemDetails = {
   email_id: number
   source_type: string
   source_label: string
@@ -1310,7 +1432,14 @@ type SentItemDetails = {
   company: string | null
   recruiter_name: string | null
   recruiter_email: string | null
+  recruiter_email_domain: string | null
   recruiter_phone: string | null
+  recruiter_company: string | null
+  employer_name: string | null
+  employer_email: string | null
+  employer_email_domain: string | null
+  employer_phone: string | null
+  employer_company: string | null
   end_client: string | null
   implementation_partner: string | null
   vendor: string | null
@@ -1338,6 +1467,8 @@ type ConversationSummary = {
   last_message_preview: string
   last_message_at: string
   unread_reply_count: number
+  last_inbound_reply_at: string | null
+  gmail_thread_link: string | null
 }
 
 type ConversationMessage = {
@@ -1381,7 +1512,22 @@ function renderTextOrDash(value: string | null | undefined): string {
   return text || '-'
 }
 
-function jdSummarySkills(item: Candidate): string[] {
+function jobStatusMeta(status: string): { label: string; className: string; checkmark: boolean } {
+  switch (status) {
+    case 'running':
+      return { label: 'Running', className: 'running', checkmark: false }
+    case 'ok':
+      return { label: 'Completed', className: 'ok', checkmark: true }
+    case 'failed':
+      return { label: 'Failed', className: 'failed', checkmark: false }
+    case 'canceled':
+      return { label: 'Canceled', className: 'canceled', checkmark: false }
+    default:
+      return { label: 'Queued', className: 'queued', checkmark: false }
+  }
+}
+
+export function jdSummarySkills(item: Candidate): string[] {
   const breakdown = item.resume_picker_breakdown ?? {}
   const matchedPriority = Array.isArray(breakdown.matched_priority_skills)
     ? breakdown.matched_priority_skills.filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
@@ -1449,89 +1595,6 @@ export function ResumePickerPanel({ candidate }: ResumePickerPanelProps) {
       ) : null}
     </div>
   )
-}
-
-type PremiumNumberConfidence = 'high' | 'medium' | 'low'
-
-type PaginatedListResponse<TItem> = {
-  items: TItem[]
-  next_cursor: number | null
-  has_next: boolean
-}
-
-type NumberReviewCard = {
-  id: number
-  source_email_id: number
-  normalized_phone_number: string
-  display_phone_number: string
-  owner_name: string
-  company: string
-  designation: string
-  confidence: PremiumNumberConfidence
-  purpose: string
-  evidence_snippet: string
-  email_subject: string
-  email_sender: string
-  gmail_open_url: string
-  state: string
-}
-
-type RecruiterNumberCard = {
-  id: number
-  normalized_phone_number: string
-  display_phone_number: string
-  recruiter_name: string
-  company: string
-  designation: string
-  recruiter_email: string
-  total_opportunity_count: number
-  last_email_received_at: string | null
-}
-
-type EmployerNumberCard = {
-  id: number
-  normalized_phone_number: string
-  display_phone_number: string
-  owner_name: string
-  company: string
-  source_email_id: number | null
-}
-
-type OpportunityStatus = 'New' | 'Called' | 'Applied' | 'Follow Up' | 'Closed' | 'Not Interested'
-
-type RecruiterOpportunityCard = {
-  id: number
-  recruiter_number_id: number
-  source_email_id: number | null
-  gmail_message_id: string
-  source_type: 'gmail' | 'nvoids'
-  source_url: string | null
-  external_opportunity_id: number | null
-  email_subject: string
-  email_sender: string
-  gmail_open_url: string
-  received_at: string | null
-  job_title: string
-  client: string
-  location: string
-  work_mode: string
-  visa_restrictions: string
-  extracted_skills: string
-  evidence: string
-  recruiter_name: string
-  recruiter_email: string
-  recruiter_phone_display: string
-  recruiter_phone_normalized: string
-  status: OpportunityStatus
-  notes: string
-  cold_call_script: string | null
-  cold_call_script_updated_at: string | null
-}
-
-type RecruiterOpportunityDeleteResponse = {
-  id: number
-  deleted: boolean
-  recruiter_number_deleted: boolean
 }
 
 type CandidateDeleteResponse = {
@@ -1625,12 +1688,12 @@ export function clamp100(value: number): number {
   return Math.max(0, Math.min(Math.round(value), 100))
 }
 
-function formatAtsScore(value: number | null | undefined): string {
+export function formatAtsScore(value: number | null | undefined): string {
   if (typeof value !== 'number' || Number.isNaN(value)) return '-'
   return String(Math.round(value))
 }
 
-function getAtsStrengthLabel(value: number | null | undefined): string {
+export function getAtsStrengthLabel(value: number | null | undefined): string {
   if (typeof value !== 'number' || Number.isNaN(value)) return 'Unknown'
   if (value >= 80) return 'Strong'
   if (value >= 60) return 'Moderate'
@@ -1682,7 +1745,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function normalizeParserDetails(value: unknown): ParserDetailsPayload | null {
+export function normalizeParserDetails(value: unknown): ParserDetailsPayload | null {
   if (!isRecord(value)) return null
   return value as ParserDetailsPayload
 }
@@ -2063,6 +2126,91 @@ function ParserDetailsCard({
       <h3>{title}</h3>
       <div className={bodyClasses}>{children}</div>
     </section>
+  )
+}
+
+type ContactDetailsSourceItem = {
+  id: number
+  role?: string | null
+  location?: string | null
+  salary_text?: string | null
+  skills_text?: string | null
+  resume_file_name?: string | null
+  recipient_email?: string | null
+  cc_email?: string | null
+  ats_score?: number | null
+  ats_summary?: string | null
+}
+
+export function renderContactDetailsGrid(details: SentItemDetails, item: ContactDetailsSourceItem) {
+  return (
+    <div className="parserDetailsSummaryGrid">
+      <ParserDetailsCard title="Source" className="parserDetailsSummaryBlock">
+        <div className="sentItemLinkList">
+          <p><strong>Source:</strong> {renderTextOrDash(details.source_label)}</p>
+          <p>
+            <strong>Requirement Link:</strong>{' '}
+            {details.requirement_received_link ? (
+              <a href={details.requirement_received_link} target="_blank" rel="noreferrer">
+                Open requirement
+              </a>
+            ) : '-'}
+          </p>
+          <p>
+            <strong>Sent Gmail Link:</strong>{' '}
+            {details.sent_gmail_message_link ? (
+              <a href={details.sent_gmail_message_link} target="_blank" rel="noreferrer">
+                Open sent message
+              </a>
+            ) : '-'}
+          </p>
+        </div>
+      </ParserDetailsCard>
+      <ParserDetailsCard title="Requirement" className="parserDetailsSummaryBlock">
+        <pre className="parserCardPre">{[
+          `Role: ${renderTextOrDash(item.role)}`,
+          `Location: ${renderTextOrDash(item.location)}`,
+          `Salary: ${renderTextOrDash(item.salary_text)}`,
+          `Skills: ${renderTextOrDash(item.skills_text)}`,
+          `Company: ${renderTextOrDash(details.company)}`,
+          `End Client: ${renderTextOrDash(details.end_client)}`,
+          `Implementation Partner: ${renderTextOrDash(details.implementation_partner)}`,
+          `Vendor: ${renderTextOrDash(details.vendor)}`,
+          `Domain Mentioned: ${renderTextOrDash(details.domain_mentioned)}`,
+          `Experience Required: ${renderTextOrDash(details.experience_required)}`,
+          `Mandatory Skills: ${renderListOrDash(details.mandatory_skills)}`,
+          `Missing Skills: ${renderListOrDash(details.missing_skills)}`,
+        ].join('\n')}</pre>
+      </ParserDetailsCard>
+      <ParserDetailsCard title="Resume / Send Audit" className="parserDetailsSummaryBlock">
+        <pre className="parserCardPre">{[
+          `Resume Variant Sent: ${renderTextOrDash(details.resume_variant_sent ?? item.resume_file_name)}`,
+          `Attached Files: ${renderListOrDash(details.attached_files)}`,
+          `To: ${renderTextOrDash(details.to_email ?? item.recipient_email)}`,
+          `CC: ${renderTextOrDash(details.cc_email ?? item.cc_email)}`,
+          `ATS Score: ${formatAtsScore(details.ats_score ?? item.ats_score)}${(details.ats_score ?? item.ats_score) != null ? ` (${getAtsStrengthLabel(details.ats_score ?? item.ats_score)})` : ''}`,
+          `ATS Summary: ${renderTextOrDash(details.ats_summary ?? item.ats_summary)}`,
+        ].join('\n')}</pre>
+      </ParserDetailsCard>
+      <ParserDetailsCard title="Recruiter" className="parserDetailsSummaryBlock">
+        <pre className="parserCardPre">{[
+          `Recruiter Name: ${renderTextOrDash(details.recruiter_name)}`,
+          `Recruiter Email: ${renderTextOrDash(details.recruiter_email)}`,
+          `Recruiter Email Domain: ${renderTextOrDash(details.recruiter_email_domain)}`,
+          `Recruiter Phone: ${renderTextOrDash(details.recruiter_phone)}`,
+          `Recruiter Company: ${renderTextOrDash(details.recruiter_company)}`,
+        ].join('\n')}</pre>
+      </ParserDetailsCard>
+      <ParserDetailsCard title="Employer" className="parserDetailsSummaryBlock">
+        <pre className="parserCardPre">{[
+          `Employer Name: ${renderTextOrDash(details.employer_name)}`,
+          `Employer Email: ${renderTextOrDash(details.employer_email)}`,
+          `Employer Email Domain: ${renderTextOrDash(details.employer_email_domain)}`,
+          `Employer Phone: ${renderTextOrDash(details.employer_phone)}`,
+          `Employer Company: ${renderTextOrDash(details.employer_company)}`,
+        ].join('\n')}</pre>
+      </ParserDetailsCard>
+    </div>
   )
 }
 
@@ -2493,7 +2641,54 @@ export function getOverallVerdict(
   return { score, label: 'Risky', tone: 'risky' }
 }
 
-function getResumeContextLabel(value: string | null | undefined): string {
+export const canTrustRouting = (candidate: Candidate) =>
+  candidate.routing_confirmed ||
+  (['safe', 'confirmed'].includes(candidate.routing_status) && candidate.routing_confidence >= 0.8)
+
+export const sourceLabel = (source: string) =>
+  source
+    .split('_')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
+
+export const renderRoutingPanel = (item: Candidate) => (
+  <div className={`routingPanel ${canTrustRouting(item) ? 'safe' : 'blocked'}`}>
+    <div className="routingPanelHeader">
+      <strong>Routing: {item.routing_status || 'unverified'}</strong>
+      <span>{Math.round((item.routing_confidence ?? 0) * 100)}% confidence</span>
+    </div>
+    <p>{item.routing_reason || 'No routing evidence captured yet.'}</p>
+    {item.routing_evidence?.length ? (
+      <div className="evidenceGrid">
+        {item.routing_evidence.map((evidence, index) => (
+          <div key={`${item.id}-evidence-${index}`} className="evidenceItem">
+            <small>{evidence.role.toUpperCase()} from {sourceLabel(evidence.source)}</small>
+            <span>{evidence.email}</span>
+          </div>
+        ))}
+      </div>
+    ) : null}
+    {!canTrustRouting(item) ? (
+      <p className="routingWarning">Approval is blocked until routing is safe or manually confirmed.</p>
+    ) : null}
+  </div>
+)
+
+export const renderCandidateEmails = (item: Candidate) => {
+  if (!item.routing_candidates?.length) return null
+  return (
+    <div className="candidateEmailList">
+      <strong>Extracted email candidates</strong>
+      {item.routing_candidates.map((candidate, index) => (
+        <p key={`${item.id}-candidate-${index}`}>
+          <span>{candidate.role.toUpperCase()}</span> {candidate.email} <small>({sourceLabel(candidate.source)})</small>
+        </p>
+      ))}
+    </div>
+  )
+}
+
+export function getResumeContextLabel(value: string | null | undefined): string {
   if (value === 'injected') return 'Injected'
   if (value === 'limited') return 'Limited'
   if (value === 'missing_resume') return 'Missing Resume'
@@ -2569,6 +2764,9 @@ function CcEmailList({
   )
 }
 
+// Endpoints that apply the implicit one-day mail_date scope; only these widen on text search.
+const MAIL_DATE_SCOPED_BUCKETS = new Set(['needs_review', 'failed', 'approved_sent', 'recruiter_opportunities'])
+
 function App() {
   const INITIAL_BUCKET_LIMIT = 25
   const PAGE_BUCKET_LIMIT = 25
@@ -2640,6 +2838,7 @@ function App() {
   const profileNames: PolicyProfileName[] = ['Flexible Drafting', 'Balanced', 'Strict']
   const [status, setStatus] = useState<GmailStatus | null>(null)
   const [aiStatus, setAiStatus] = useState<AiStatus | null>(null)
+  const [chatStatus, setChatStatus] = useState<ChatStatus | null>(null)
   const [telegramStatus, setTelegramStatus] = useState<TelegramStatus | null>(null)
   const [settings, setSettingsState] = useState<SettingsPayload>({
     enabled: true,
@@ -2665,6 +2864,9 @@ function App() {
     nvoids_batch_limit: 10,
     nvoids_detail_title_mode: 'job_details',
     nvoids_locations: [],
+    nvoids_job_role: '',
+    nvoids_search_location: '',
+    nvoids_custom_query: '',
     feature_auto_send: false,
     feature_retry_queue: false,
     feature_ai_enabled: false,
@@ -2676,7 +2878,16 @@ function App() {
     feature_strict_candidate_screening_enabled: false,
     feature_email_tracking_enabled: false,
     feature_reply_inbox_enabled: false,
+    feature_applications_enabled: false,
+    feature_application_automation_enabled: false,
+    feature_application_outreach_drafts_enabled: false,
+    feature_reminder_sweep_interval_minutes: 240,
+    feature_resume_tracking_enabled: false,
+    feature_resume_tracking_sweep_interval_minutes: 240,
     candidate_work_authorizations: [],
+    preferred_employment_types: [],
+    visible_filters: {},
+    preferred_minimum_rate: null,
     candidate_total_experience_years: null,
     candidate_us_experience_years: null,
     candidate_current_location: '',
@@ -2696,17 +2907,30 @@ function App() {
     settingsRef.current = value
     setSettingsState(value)
   }
+  const [filterVisibilityStatus, setFilterVisibilityStatus] = useState('')
+  const filterVisibilitySaveTimerRef = useRef<number | null>(null)
+  const filterVisibilityStatusTimerRef = useRef<number | null>(null)
+  const filterVisibilitySaveVersionRef = useRef(0)
   const [resumeFile, setResumeFile] = useState<File | null>(null)
   const [resumeSkillsInput, setResumeSkillsInput] = useState('')
+  const [resumePrimaryRoleInput, setResumePrimaryRoleInput] = useState('')
+  const [resumeStructuredSkillsInput, setResumeStructuredSkillsInput] = useState('')
+  const [resumeVariantLabelInput, setResumeVariantLabelInput] = useState('')
   const [resumeSkillEdits, setResumeSkillEdits] = useState<Record<number, string>>({})
+  const [resumeMetadataEdits, setResumeMetadataEdits] = useState<Record<number, { primary_role: string; structured_skills: string; variant_label: string }>>({})
+  const [resumeUploading, setResumeUploading] = useState(false)
+  const [focusResumeId, setFocusResumeId] = useState<number | null>(null)
   const [attachmentUploadFiles, setAttachmentUploadFiles] = useState<File[]>([])
   const [gmailRequirementGroups, setGmailRequirementGroups] = useState<TrustedGmailGroup[]>([])
   const [gmailGroupsBusy, setGmailGroupsBusy] = useState(false)
   const [resumeAssets, setResumeAssets] = useState<ResumeAsset[]>([])
+  const resumeAssetsRef = useRef(resumeAssets)
+  useEffect(() => { resumeAssetsRef.current = resumeAssets }, [resumeAssets])
   const [attachmentFiles, setAttachmentFiles] = useState<AttachmentAsset[]>([])
   const [pendingSkills, setPendingSkills] = useState<PendingSkill[]>([])
   const [pendingCompanies, setPendingCompanies] = useState<PendingEntity[]>([])
   const [pendingLocations, setPendingLocations] = useState<PendingEntity[]>([])
+  const [pendingRoles, setPendingRoles] = useState<PendingEntity[]>([])
   const [embeddingPendingCount, setEmbeddingPendingCount] = useState(0)
   const [embeddingSummary, setEmbeddingSummary] = useState('')
   const [skillsLoading, setSkillsLoading] = useState(false)
@@ -2721,6 +2945,8 @@ function App() {
   const [nvoidsRunning, setNvoidsRunning] = useState(false)
   const [automationJob, setAutomationJob] = useState<BackgroundJob | null>(null)
   const [nvoidsJob, setNvoidsJob] = useState<BackgroundJob | null>(null)
+  const [automationLiveSkipped, setAutomationLiveSkipped] = useState<RecentRunItem[]>([])
+  const [nvoidsLiveSkipped, setNvoidsLiveSkipped] = useState<RecentRunItem[]>([])
   const [oauthInProgress, setOauthInProgress] = useState(false)
   const [oauthAuthorizationUrl, setOauthAuthorizationUrl] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -2739,7 +2965,16 @@ function App() {
   const [routingFixes, setRoutingFixes] = useState<Record<number, { to: string; cc: string }>>({})
   const [fixingId, setFixingId] = useState<number | null>(null)
   const [deletingFailedId, setDeletingFailedId] = useState<number | null>(null)
-  const [activePage, setActivePage] = useState<'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'inbox' | 'premium_numbers' | 'settings'>('run_queue')
+  const [activePage, setActivePage] = useState<ActivePage>(initialActivePage)
+  const [premiumTab, setPremiumTab] = useState<'inventory' | 'opportunities' | 'recycle_bin'>('inventory')
+  const [applicationTrackingTab, setApplicationTrackingTab] = useState<'bookmarked' | 'tracked'>('bookmarked')
+  const [resumeTrackingTab, setResumeTrackingTab] = useState<'resumes' | 'submissions'>('resumes')
+  const [pageFilterValues, setPageFilterValues] = useState<Partial<Record<string, FilterValues>>>({})
+  const [pageSortValues, setPageSortValues] = useState<Partial<Record<string, string>>>({})
+  const [needsReviewSelected, setNeedsReviewSelected] = useState<Set<number>>(new Set())
+  const [needsReviewBulkAction, setNeedsReviewBulkAction] = useState<string | null>(null)
+  const [failedMappingSelected, setFailedMappingSelected] = useState<Set<number>>(new Set())
+  const [failedMappingBulkAction, setFailedMappingBulkAction] = useState<string | null>(null)
   const [emailSearchTarget, setEmailSearchTarget] = useState<EmailSearchHit | null>(null)
   const [inboxConversations, setInboxConversations] = useState<ConversationSummary[]>([])
   const [selectedConversationId, setSelectedConversationId] = useState<number | null>(null)
@@ -2760,23 +2995,11 @@ function App() {
   const [roleManifestChildCreationEnabled, setRoleManifestChildCreationEnabled] = useState(false)
   const [skillDraft, setSkillDraft] = useState('')
   const [nvoidsLocationDraft, setNvoidsLocationDraft] = useState('')
+  const [acceptedLocationDraft, setAcceptedLocationDraft] = useState('')
   const [employerDomainDraft, setEmployerDomainDraft] = useState('')
   const [employerDomainError, setEmployerDomainError] = useState('')
-  const [numberReviewCards, setNumberReviewCards] = useState<NumberReviewCard[]>([])
-  const [recruiterNumberCards, setRecruiterNumberCards] = useState<RecruiterNumberCard[]>([])
-  const [employerNumberCards, setEmployerNumberCards] = useState<EmployerNumberCard[]>([])
-  const [opportunityCards, setOpportunityCards] = useState<RecruiterOpportunityCard[]>([])
-  const [premiumPageMeta, setPremiumPageMeta] = useState(defaultPremiumPageMeta())
-  const [premiumLoading, setPremiumLoading] = useState(false)
-  const [premiumError, setPremiumError] = useState('')
-  const [premiumScopeFilter, setPremiumScopeFilter] = useState<PremiumScope>('all_review')
-  const [opportunityStatusFilter, setOpportunityStatusFilter] = useState<'all' | OpportunityStatus>('all')
-  const [opportunitySourceFilter, setOpportunitySourceFilter] = useState<'all' | 'gmail' | 'nvoids'>('all')
-  const [premiumSearch, setPremiumSearch] = useState('')
-  const [updatingOpportunityId, setUpdatingOpportunityId] = useState<number | null>(null)
-  const [deletingOpportunityId, setDeletingOpportunityId] = useState<number | null>(null)
-  const [generatingColdCallId, setGeneratingColdCallId] = useState<number | null>(null)
-  const [classifyingReviewId, setClassifyingReviewId] = useState<number | null>(null)
+  const [premiumPendingCount, setPremiumPendingCount] = useState(0)
+  const [premiumRefreshToken, setPremiumRefreshToken] = useState(0)
   const [timeRange, setTimeRange] = useState<TimeRangeKey>('current_day')
   const [productivityEvents, setProductivityEvents] = useState<ProductivityEvent[]>([])
   const [productivityTrend, setProductivityTrend] = useState<ProductivityTrendResponse | null>(null)
@@ -2787,8 +3010,7 @@ function App() {
   const hasBootstrappedCandidatesRef = useRef(false)
   const oauthPollingStartedAtRef = useRef<number | null>(null)
   const refreshTimerRef = useRef<number | null>(null)
-  const premiumRequestTrackerRef = useRef(0)
-  const premiumLoadingRef = useRef(false)
+  const filterRequestControllerRef = useRef<AbortController | null>(null)
 
   const {
     queue,
@@ -2946,6 +3168,21 @@ function App() {
       },
     })
   }
+  const addAcceptedLocation = (raw: string) => {
+    const location = raw.trim()
+    if (!location) return
+    const current = draftRules.accepted_location.locations ?? settings.accepted_locations
+    if (current.some((s) => s.toLowerCase() === location.toLowerCase())) {
+      setAcceptedLocationDraft('')
+      return
+    }
+    updateRuleValue('accepted_location', [...current, location].join(','))
+    setAcceptedLocationDraft('')
+  }
+  const removeAcceptedLocation = (locationToRemove: string) => {
+    const current = draftRules.accepted_location.locations ?? settings.accepted_locations
+    updateRuleValue('accepted_location', current.filter((s) => s.toLowerCase() !== locationToRemove.toLowerCase()).join(','))
+  }
   const detectProfileFromPolicy = (policy: DynamicPolicy): PolicyProfileName | null => {
     for (const profileName of profileNames) {
       if (JSON.stringify(policyProfiles[profileName]) === JSON.stringify(policy)) return profileName
@@ -3006,6 +3243,10 @@ function App() {
     setAiStatus((await res.json()) as AiStatus)
   }
 
+  const loadChatStatus = async () => {
+    setChatStatus(await getChatStatus(apiBase))
+  }
+
   const loadTelegramStatus = async () => {
     const res = await fetch(`${apiBase}/telegram/status`)
     if (!res.ok) throw new Error('Failed to load Telegram status')
@@ -3038,7 +3279,16 @@ function App() {
       feature_gmail_requirement_groups_enabled: Boolean(payload.feature_gmail_requirement_groups_enabled),
       feature_role_manifest_enabled: Boolean(payload.feature_role_manifest_enabled),
       feature_strict_candidate_screening_enabled: Boolean(payload.feature_strict_candidate_screening_enabled),
+      feature_applications_enabled: Boolean(payload.feature_applications_enabled),
+      feature_application_automation_enabled: Boolean(payload.feature_application_automation_enabled),
+      feature_application_outreach_drafts_enabled: Boolean(payload.feature_application_outreach_drafts_enabled),
+      feature_reminder_sweep_interval_minutes: Math.max(30, Math.min(payload.feature_reminder_sweep_interval_minutes || 240, 1440)),
+      feature_resume_tracking_enabled: Boolean(payload.feature_resume_tracking_enabled),
+      feature_resume_tracking_sweep_interval_minutes: Math.max(30, Math.min(payload.feature_resume_tracking_sweep_interval_minutes || 240, 1440)),
       candidate_work_authorizations: payload.candidate_work_authorizations ?? [],
+      preferred_employment_types: payload.preferred_employment_types ?? [],
+      visible_filters: payload.visible_filters ?? {},
+      preferred_minimum_rate: payload.preferred_minimum_rate ?? null,
       candidate_total_experience_years: payload.candidate_total_experience_years ?? null,
       candidate_us_experience_years: payload.candidate_us_experience_years ?? null,
       candidate_current_location: payload.candidate_current_location ?? '',
@@ -3052,6 +3302,9 @@ function App() {
       nvoids_batch_limit: Math.max(1, Math.min(payload.nvoids_batch_limit || 10, 50)),
       nvoids_detail_title_mode: normalizeNvoidsDetailTitleMode(payload.nvoids_detail_title_mode),
       nvoids_locations: payload.nvoids_locations ?? [],
+      nvoids_job_role: payload.nvoids_job_role ?? '',
+      nvoids_search_location: payload.nvoids_search_location ?? '',
+      nvoids_custom_query: payload.nvoids_custom_query ?? '',
       employer_domains: payload.employer_domains ?? [],
       draft_text_size: normalizeDraftTextSize(payload.draft_text_size),
       preferred_employer_cc_emails:
@@ -3064,6 +3317,54 @@ function App() {
     }
   }
 
+  useEffect(() => () => {
+    if (filterVisibilitySaveTimerRef.current != null) window.clearTimeout(filterVisibilitySaveTimerRef.current)
+    if (filterVisibilityStatusTimerRef.current != null) window.clearTimeout(filterVisibilityStatusTimerRef.current)
+  }, [])
+
+  const updateVisibleFilters = (next: Record<string, string[]>) => {
+    const version = ++filterVisibilitySaveVersionRef.current
+    setSettings({ ...settingsRef.current, visible_filters: next })
+    setPageFilterValues((previous) => {
+      let updated = previous
+      for (const [registryKey, preference] of Object.entries(next)) {
+        const config = resolveRegistryEntry(filterSortRegistry[registryKey], { resumeAssets })
+        if (!config) continue
+        const current = previous[registryKey] ?? config.defaultFilterValues
+        const narrowed = narrowValuesToVisible(
+          visibleFieldsFor(config.fields, preference),
+          current,
+          config.defaultFilterValues,
+        )
+        if (narrowed !== current) {
+          if (updated === previous) updated = { ...previous }
+          updated[registryKey] = narrowed
+        }
+      }
+      return updated
+    })
+    if (filterVisibilitySaveTimerRef.current != null) window.clearTimeout(filterVisibilitySaveTimerRef.current)
+    if (filterVisibilityStatusTimerRef.current != null) window.clearTimeout(filterVisibilityStatusTimerRef.current)
+    setFilterVisibilityStatus('Saving\u2026')
+    filterVisibilitySaveTimerRef.current = window.setTimeout(async () => {
+      try {
+        const response = await fetch(`${apiBase}/settings/visible-filters`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ visible_filters: next }),
+        })
+        if (!response.ok) throw new Error('Failed to save filter visibility')
+        const saved = await response.json() as SettingsPayload
+        if (version !== filterVisibilitySaveVersionRef.current) return
+        setSettings({ ...settingsRef.current, visible_filters: saved.visible_filters ?? next })
+        setFilterVisibilityStatus('Saved')
+        filterVisibilityStatusTimerRef.current = window.setTimeout(() => setFilterVisibilityStatus(''), 2000)
+      } catch {
+        if (version === filterVisibilitySaveVersionRef.current) setFilterVisibilityStatus("Couldn't save")
+      }
+    }, 600)
+  }
+
   const applySettingsBootstrapPayload = (payload: SettingsBootstrapPayload): SettingsPayload => {
     const normalized = normalizeSettingsPayload(payload.settings)
     setSettings(normalized)
@@ -3071,6 +3372,7 @@ function App() {
     setGmailRequirementGroups(payload.gmail_requirement_groups ?? [])
     setResumeAssets(payload.resumes ?? [])
     setResumeSkillEdits(Object.fromEntries((payload.resumes ?? []).map((resume) => [resume.id, resume.skills_text ?? ''])))
+    setResumeMetadataEdits(Object.fromEntries((payload.resumes ?? []).map((resume) => [resume.id, { primary_role: resume.primary_role ?? '', structured_skills: (resume.structured_skills ?? []).join(', '), variant_label: resume.variant_label ?? '' }])))
     setAttachmentFiles(payload.attachments ?? [])
     setPendingSkills(payload.pending_skills ?? [])
     setPendingJobIntentSignals(payload.pending_job_intent_signals ?? [])
@@ -3147,6 +3449,25 @@ function App() {
     } finally {
       setSkillsLoading(false)
       setJobIntentLoading(false)
+    }
+
+    // Deliberately sequential, after the batch above has resolved.
+    //
+    // Every /settings/entities/*/pending call re-scans parser_details_json for all
+    // ~8.5k candidate rows and takes 5-9s under load. Adding role harvesting to
+    // that parallel batch pushed peak concurrency past what the backend would
+    // serve: connections were closed mid-flight (ERR_EMPTY_RESPONSE), the
+    // Promise.all rejected, and because the handler sets state only on full
+    // success, *every* queue rendered empty - including companies and locations,
+    // which have nothing to do with roles.
+    //
+    // Its own try/catch for the same reason: a role-harvest failure must not be
+    // able to blank the queues that already loaded.
+    try {
+      const rolesResponse = await fetch(`${apiBase}/settings/entities/role/pending`)
+      if (rolesResponse.ok) setPendingRoles((await rolesResponse.json()) as PendingEntity[])
+    } catch {
+      // Leave the roles queue empty; the rest of the learning data is still good.
     }
   }, [apiBase, hasLoadedLearningData])
 
@@ -3225,175 +3546,17 @@ function App() {
 
   const activeResume = resumeAssets.find((item) => item.is_current) ?? null
 
-  const loadPremiumNumbers = async (opts?: { append?: boolean; cursor?: number | null; mailDate?: string | null }) => {
-    const append = Boolean(opts?.append)
-    const cursor = opts?.cursor ?? 0
-    const mailDate = opts?.mailDate ?? settings.mail_date
-    const scope = premiumScopeFilter
-    const requestId = premiumRequestTrackerRef.current + 1
-    premiumRequestTrackerRef.current = requestId
-    premiumLoadingRef.current = true
-    setPremiumLoading(true)
-    setPremiumError('')
+  const loadPremiumNumbers = async (_opts?: { append?: boolean; cursor?: number | null; mailDate?: string | null }) => {
+    void _opts
+    setPremiumRefreshToken((value) => value + 1)
     try {
-      const url = buildPremiumScopeUrl({
-        apiBase,
-        scope,
-        cursor,
-        limit: PREMIUM_PAGE_LIMIT,
-        q: premiumSearch,
-        mailDate,
-        opportunityStatus: opportunityStatusFilter,
-        opportunitySource: opportunitySourceFilter,
-      })
-      const res = await fetch(url)
-      if (!res.ok) {
-        const errorLabel =
-          scope === 'all_review'
-            ? 'number review queue'
-            : scope === 'recruiter_numbers'
-              ? 'recruiter numbers'
-              : scope === 'employer_numbers'
-                ? 'employer numbers'
-                : 'recruiter opportunities'
-        throw new Error(`Failed to load ${errorLabel}`)
+      const response = await fetch(`${apiBase}/number-review/pending-count`)
+      if (response.ok) {
+        const payload = await response.json() as { count: number }
+        setPremiumPendingCount(payload.count)
       }
-      if (requestId !== premiumRequestTrackerRef.current) return
-      if (scope === 'all_review') {
-        const payload = (await res.json()) as PaginatedListResponse<NumberReviewCard>
-        setNumberReviewCards((prev) => (append ? [...prev, ...payload.items] : payload.items))
-        setPremiumPageMeta((prev) => ({
-          ...prev,
-          [scope]: { nextCursor: payload.next_cursor, hasNext: payload.has_next },
-        }))
-      } else if (scope === 'recruiter_numbers') {
-        const payload = (await res.json()) as PaginatedListResponse<RecruiterNumberCard>
-        setRecruiterNumberCards((prev) => (append ? [...prev, ...payload.items] : payload.items))
-        setPremiumPageMeta((prev) => ({
-          ...prev,
-          [scope]: { nextCursor: payload.next_cursor, hasNext: payload.has_next },
-        }))
-      } else if (scope === 'employer_numbers') {
-        const payload = (await res.json()) as PaginatedListResponse<EmployerNumberCard>
-        setEmployerNumberCards((prev) => (append ? [...prev, ...payload.items] : payload.items))
-        setPremiumPageMeta((prev) => ({
-          ...prev,
-          [scope]: { nextCursor: payload.next_cursor, hasNext: payload.has_next },
-        }))
-      } else {
-        const payload = (await res.json()) as PaginatedListResponse<RecruiterOpportunityCard>
-        setOpportunityCards((prev) => (append ? [...prev, ...payload.items] : payload.items))
-        setPremiumPageMeta((prev) => ({
-          ...prev,
-          [scope]: { nextCursor: payload.next_cursor, hasNext: payload.has_next },
-        }))
-      }
-    } catch (e) {
-      if (requestId === premiumRequestTrackerRef.current) {
-        setPremiumError((e as Error).message)
-      }
-    } finally {
-      if (requestId === premiumRequestTrackerRef.current) {
-        premiumLoadingRef.current = false
-        setPremiumLoading(false)
-      }
-    }
-  }
-
-  const markReviewCard = async (reviewId: number, mode: 'recruiter' | 'employer') => {
-    setClassifyingReviewId(reviewId)
-    try {
-      const res = await fetch(
-        `${apiBase}/number-review/${reviewId}/${mode === 'recruiter' ? 'mark-recruiter' : 'mark-employer'}`,
-        { method: 'POST' },
-      )
-      if (!res.ok) throw new Error(`Failed to mark as ${mode}`)
-      await loadPremiumNumbers({ append: false, cursor: 0 })
-    } catch (e) {
-      setPremiumError((e as Error).message)
-    } finally {
-      setClassifyingReviewId(null)
-    }
-  }
-
-  const deleteReviewCard = async (reviewId: number) => {
-    setClassifyingReviewId(reviewId)
-    try {
-      const res = await fetch(`${apiBase}/number-review/${reviewId}`, { method: 'DELETE' })
-      if (!res.ok) throw new Error('Failed to delete review card')
-      await loadPremiumNumbers({ append: false, cursor: 0 })
-    } catch (e) {
-      setPremiumError((e as Error).message)
-    } finally {
-      setClassifyingReviewId(null)
-    }
-  }
-
-  const updateOpportunity = async (id: number, patch: Partial<Pick<RecruiterOpportunityCard, 'status' | 'notes'>>) => {
-    setUpdatingOpportunityId(id)
-    try {
-      const res = await fetch(`${apiBase}/recruiter-opportunities/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(patch),
-      })
-      if (!res.ok) throw new Error('Failed to update opportunity')
-      const updated = (await res.json()) as RecruiterOpportunityCard
-      setOpportunityCards((prev) => prev.map((item) => (item.id === id ? updated : item)))
-    } catch (e) {
-      setPremiumError((e as Error).message)
-    } finally {
-      setUpdatingOpportunityId(null)
-    }
-  }
-
-  const generateColdCallScript = async (id: number) => {
-    setGeneratingColdCallId(id)
-    try {
-      const res = await fetch(`${apiBase}/recruiter-opportunities/${id}/generate-cold-call-script`, {
-        method: 'POST',
-      })
-      if (!res.ok) throw new Error('Failed to generate cold call script')
-      const updated = (await res.json()) as RecruiterOpportunityCard
-      setOpportunityCards((prev) => prev.map((item) => (item.id === id ? updated : item)))
-    } catch (e) {
-      setPremiumError((e as Error).message)
-    } finally {
-      setGeneratingColdCallId(null)
-    }
-  }
-
-  const deleteOpportunity = async (id: number) => {
-    setDeletingOpportunityId(id)
-    try {
-      const res = await fetch(`${apiBase}/recruiter-opportunities/${id}`, {
-        method: 'DELETE',
-      })
-      if (!res.ok) throw new Error('Failed to delete opportunity')
-      await res.json() as RecruiterOpportunityDeleteResponse
-      setOpportunityCards((prev) => prev.filter((item) => item.id !== id))
-      schedulePostMutationRefresh()
-    } catch (e) {
-      setPremiumError((e as Error).message)
-    } finally {
-      setDeletingOpportunityId(null)
-    }
-  }
-
-  const swapNumberBucket = async (id: number, from: 'recruiter' | 'employer') => {
-    setClassifyingReviewId(id)
-    try {
-      const endpoint =
-        from === 'recruiter'
-          ? `${apiBase}/recruiter-numbers/${id}/swap-to-employer`
-          : `${apiBase}/employer-numbers/${id}/swap-to-recruiter`
-      const res = await fetch(endpoint, { method: 'POST' })
-      if (!res.ok) throw new Error('Failed to swap number bucket')
-      await loadPremiumNumbers({ append: false, cursor: 0 })
-    } catch (e) {
-      setPremiumError((e as Error).message)
-    } finally {
-      setClassifyingReviewId(null)
+    } catch {
+      // Keep the last known sidebar badge if a background refresh is temporarily unavailable.
     }
   }
 
@@ -3403,6 +3566,114 @@ function App() {
     if (page === 'sent_items') return 'approved_sent'
     return null
   }
+
+  const activeRegistryKey = activePage === 'premium_numbers'
+    ? `premium_numbers:${premiumTab}`
+    : activePage === 'application_tracking'
+      ? `application_tracking:${applicationTrackingTab}`
+      : activePage === 'resume_tracking'
+        ? `resume_tracking:${resumeTrackingTab}`
+        : activePage
+  const activeFilterSortConfig = useMemo(
+    () => resolveRegistryEntry(filterSortRegistry[activeRegistryKey], { resumeAssets }) ?? null,
+    [activeRegistryKey, resumeAssets],
+  )
+  const activeVisibleFields = useMemo(
+    () => activeFilterSortConfig
+      ? visibleFieldsFor(activeFilterSortConfig.fields, settings.visible_filters?.[activeRegistryKey])
+      : [],
+    [activeFilterSortConfig, activeRegistryKey, settings.visible_filters],
+  )
+  const rawFilterValues = activeFilterSortConfig ? pageFilterValues[activeRegistryKey] ?? activeFilterSortConfig.defaultFilterValues : {}
+  const activeFilterValues = useMemo(
+    () => activeFilterSortConfig
+      ? narrowValuesToVisible(activeVisibleFields, rawFilterValues, activeFilterSortConfig.defaultFilterValues)
+      : {},
+    [activeFilterSortConfig, activeVisibleFields, rawFilterValues],
+  )
+  useEffect(() => {
+    if (!activeFilterSortConfig || activeFilterValues === rawFilterValues) return
+    setPageFilterValues((current) => ({ ...current, [activeRegistryKey]: activeFilterValues }))
+  }, [activeFilterSortConfig, activeFilterValues, activeRegistryKey, rawFilterValues])
+  // The backend drops the implicit one-day `mail_date` scope when a text search is active
+  // (see _text_search_active in main.py), but only on the endpoints that accept mail_date.
+  // Surfacing it keeps the visible "Sep 1, 2026" chip from looking like a lie.
+  const dateScopeWidened = !!settings.mail_date
+    && !!activeFilterSortConfig
+    && MAIL_DATE_SCOPED_BUCKETS.has(activeFilterSortConfig.bucket)
+    && hasActiveTextSearch(activeVisibleFields, activeFilterValues)
+  const activeSortValue = activeFilterSortConfig ? pageSortValues[activeRegistryKey] ?? activeFilterSortConfig.sortOptions[0]?.value ?? 'newest' : 'newest'
+  const activeQueryOptions = useCallback((): CandidateQueryOptions | undefined => activeFilterSortConfig ? { sort: activeSortValue, filters: activeFilterSortConfig.toParams(activeFilterValues) } : undefined, [activeFilterSortConfig, activeFilterValues, activeSortValue])
+
+  // Registry key each candidate bucket is filtered/sorted under (mirrors bucketForPage in reverse).
+  const registryKeyForBucket: Record<CandidateState, string> = { needs_review: 'needs_review', failed: 'failed_mapping', approved_sent: 'sent_items' }
+  // Buckets refresh independently (each may have its own sort/filter selected), so a post-mutation
+  // refresh must look up each bucket's own registry entry rather than reusing activeQueryOptions()
+  // (which only reflects whichever page is currently active) - otherwise refreshing e.g. Failed
+  // Mapping after a Needs Review action would silently overwrite its sort with Needs Review's.
+  const queryOptionsForBucket = (bucket: CandidateState): CandidateQueryOptions | undefined => {
+    const key = registryKeyForBucket[bucket]
+    const config = resolveRegistryEntry(filterSortRegistry[key], { resumeAssets })
+    if (!config) return undefined
+    const filterValues = narrowValuesToVisible(
+      visibleFieldsFor(config.fields, settings.visible_filters?.[key]),
+      pageFilterValues[key] ?? config.defaultFilterValues,
+      config.defaultFilterValues,
+    )
+    const sortValue = pageSortValues[key] ?? config.sortOptions[0]?.value ?? 'newest'
+    return { sort: sortValue, filters: config.toParams(filterValues) }
+  }
+
+  // Must run (and read window.location.search) before the URL-sync-write effect below, so it
+  // captures the URL from actual browser navigation/popstate rather than a version the write
+  // effect already rewrote this same commit using stale (not-yet-restored) tab/page state.
+  useEffect(() => {
+    const restore = () => {
+      const params = new URLSearchParams(window.location.search)
+      const page = params.get('page') as ActivePage | null
+      if (!page || !ACTIVE_PAGES.has(page)) return
+      const tab = params.get('tab')
+      if (page === 'premium_numbers' && (tab === 'inventory' || tab === 'opportunities' || tab === 'recycle_bin')) setPremiumTab(tab)
+      if (page === 'application_tracking' && (tab === 'bookmarked' || tab === 'tracked')) setApplicationTrackingTab(tab)
+      if (page === 'resume_tracking' && (tab === 'resumes' || tab === 'submissions')) setResumeTrackingTab(tab)
+      const key = tab && ['premium_numbers', 'application_tracking', 'resume_tracking'].includes(page) ? `${page}:${tab}` : page
+      const entry = resolveRegistryEntry(filterSortRegistry[key], { resumeAssets: resumeAssetsRef.current })
+      if (entry) {
+        setPageFilterValues((current) => ({ ...current, [key]: (entry.fromParams ?? ((value) => parseFilterValuesFromParams(entry.fields, entry.defaultFilterValues, value)))(params) }))
+        const sort = params.get('sort')
+        if (sort && entry.sortOptions.some((option) => option.value === sort)) setPageSortValues((current) => ({ ...current, [key]: sort }))
+      }
+      setActivePage(page)
+    }
+    window.addEventListener('popstate', restore)
+    restore()
+    return () => window.removeEventListener('popstate', restore)
+    // Runs once on mount plus on browser back/forward (popstate) only — resumeAssets is read
+    // via a ref (see resumeAssetsRef above) so a resumeAssets reload elsewhere (e.g. after
+    // Settings save) can't retrigger this and silently snap activePage back to a stale URL.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    if (!activeFilterSortConfig) return
+    // Deferred to a macrotask so this always runs after React (including StrictMode's
+    // dev-mode double-invoke of effects) has fully settled on the current render's state.
+    // Without this, StrictMode's synchronous mount->cleanup->remount cycle can run this
+    // effect a second time using a stale tab value captured before the restore-on-mount
+    // effect's setPremiumTab/etc had been applied, permanently overwriting the URL's tab
+    // with the wrong one (window.history, unlike component state, isn't reset between
+    // StrictMode's simulated passes).
+    const timer = window.setTimeout(() => {
+      const tab = activePage === 'premium_numbers' ? premiumTab : activePage === 'application_tracking' ? applicationTrackingTab : activePage === 'resume_tracking' ? resumeTrackingTab : null
+      // Pagination position is intentionally not encoded here (0 = omit) — the registry's
+      // paginationParamName for several pages is literally "page", which collides with the
+      // section-navigation "page" key (?page=premium_numbers) also written by buildUrlSearch;
+      // writing a real pagination value here would silently clobber the section identifier.
+      const search = buildUrlSearch(activePage, tab, activeSortValue, activeFilterValues, activeFilterSortConfig, 0)
+      window.history.replaceState(null, '', `${window.location.pathname}?${search}`)
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [activeFilterSortConfig, activeFilterValues, activePage, activeSortValue, applicationTrackingTab, premiumTab, resumeTrackingTab])
 
   const refreshVisibleCandidates = async (
     mailDate: string | null,
@@ -3454,12 +3725,36 @@ function App() {
     )
   }
 
-  const loadInboxConversations = async (): Promise<ConversationSummary[]> => {
+  const loadInboxConversations = async (options?: { signal?: AbortSignal }): Promise<ConversationSummary[]> => {
     setInboxLoading(true)
     setInboxError('')
     try {
-      const res = await fetch(`${apiBase}/inbox/conversations`)
+      const params = new URLSearchParams({ sort: activeSortValue })
+      for (const [key, value] of Object.entries(activeFilterSortConfig?.toParams(activeFilterValues) ?? {})) params.set(key, value)
+      const res = await fetch(`${apiBase}/inbox/conversations?${params}`, { signal: options?.signal })
       if (!res.ok) throw new Error('Failed to load inbox conversations')
+      const payload = (await res.json()) as ConversationSummary[]
+      setInboxConversations(payload)
+      return payload
+    } catch (e) {
+      if ((e as Error).name !== 'AbortError') setInboxError((e as Error).message)
+      return []
+    } finally {
+      setInboxLoading(false)
+    }
+  }
+
+  const refreshInboxReplies = async (): Promise<ConversationSummary[]> => {
+    setInboxLoading(true)
+    setInboxError('')
+    try {
+      const params = new URLSearchParams({ sort: activeSortValue })
+      for (const [key, value] of Object.entries(activeFilterSortConfig?.toParams(activeFilterValues) ?? {})) params.set(key, value)
+      const res = await fetch(`${apiBase}/inbox/conversations/refresh?${params}`, { method: 'POST' })
+      if (!res.ok) {
+        const details = await res.json().catch(() => null)
+        throw new Error(details?.detail ?? 'Failed to refresh conversations')
+      }
       const payload = (await res.json()) as ConversationSummary[]
       setInboxConversations(payload)
       return payload
@@ -3566,6 +3861,100 @@ function App() {
     }
   }
 
+  const toggleSkippedItemSelected = (runKey: string | null | undefined, itemId: number) => {
+    if (!runKey) return
+    setLogs((prev) =>
+      prev.map((item) => {
+        if (item.run_key !== runKey) return item
+        const selected = item.selected_skipped_ids ?? []
+        const next = selected.includes(itemId)
+          ? selected.filter((id) => id !== itemId)
+          : [...selected, itemId]
+        return { ...item, selected_skipped_ids: next }
+      }),
+    )
+  }
+
+  const selectAllSkippedItems = (runKey: string | null | undefined, checked: boolean) => {
+    if (!runKey) return
+    setLogs((prev) =>
+      prev.map((item) => {
+        if (item.run_key !== runKey) return item
+        const retryableIds = (item.skipped_items ?? [])
+          .filter((skipped) => Boolean(skipped.external_message_id))
+          .map((skipped) => skipped.id)
+        return { ...item, selected_skipped_ids: checked ? retryableIds : [] }
+      }),
+    )
+  }
+
+  const retrySelectedSkippedItems = async (runKey: string | null | undefined) => {
+    if (!runKey) return
+    const current = logs.find((item) => item.run_key === runKey)
+    const selected = current?.selected_skipped_ids ?? []
+    if (selected.length === 0) return
+    const confirmed = window.confirm(
+      `Retry ${selected.length} selected email(s)? Each will be re-fetched from Gmail by message id and run through Sync + Queue again.`,
+    )
+    if (!confirmed) return
+    setRunning(true)
+    setError('')
+    setLogs((prev) =>
+      prev.map((item) => (item.run_key === runKey ? { ...item, retrying_skipped: true, retry_error: null } : item)),
+    )
+    try {
+      const res = await fetch(`${apiBase}/recent-runs/skipped/retry`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skipped_item_ids: selected }),
+      })
+      if (!res.ok) {
+        const details = await res.json().catch(() => null)
+        const attachRunKey = details?.detail?.run_key as string | undefined
+        if (details?.detail?.code === 'another_job_in_progress' && attachRunKey) {
+          // Already-running job (e.g. a manual Sync + Queue): attach to it so the existing
+          // poller shows real progress instead of a raw "another_job_in_progress" error.
+          setAutomationJob({
+            run_key: attachRunKey, job_id: details.detail.job_id ?? null, status: 'running',
+            detail: 'Attaching to the automation run already in progress.',
+            processed_items: 0, total_items: null, progress_pct: null, queue_name: 'automation_run',
+          })
+          setAutomationLiveSkipped([])
+          setLogs((prev) =>
+            prev.map((item) =>
+              item.run_key === runKey ? { ...item, retrying_skipped: false, selected_skipped_ids: [] } : item,
+            ),
+          )
+          return
+        }
+        throw new Error(typeof details?.detail === 'string' ? details.detail : 'Failed to retry selected items')
+      }
+      const data = (await res.json()) as JobEnqueueResponse
+      setAutomationJob({
+        ...data,
+        detail: `Queued ${selected.length} selected email(s) for retry.`,
+        processed_items: 0,
+        total_items: selected.length,
+        progress_pct: 0,
+        queue_name: 'automation_run',
+      })
+      setAutomationLiveSkipped([])
+      setLogs((prev) =>
+        prev.map((item) =>
+          item.run_key === runKey ? { ...item, retrying_skipped: false, selected_skipped_ids: [] } : item,
+        ),
+      )
+      await loadRecentRuns(settings.mail_date ?? null)
+    } catch (e) {
+      setRunning(false)
+      setLogs((prev) =>
+        prev.map((item) =>
+          item.run_key === runKey ? { ...item, retrying_skipped: false, retry_error: (e as Error).message } : item,
+        ),
+      )
+    }
+  }
+
   const trackViewEvent = async (page: typeof activePage) => {
     const eventMap: Record<typeof activePage, string> = {
       run_queue: 'view_run_queue',
@@ -3575,6 +3964,8 @@ function App() {
       sent_items: 'view_sent_items',
       inbox: 'view_sent_items',
       premium_numbers: 'view_premium_numbers',
+      resume_tracking: 'view_premium_numbers',
+      application_tracking: 'view_premium_numbers',
       settings: 'view_run_queue',
     }
     const eventType = eventMap[page]
@@ -3600,7 +3991,9 @@ function App() {
       window.clearTimeout(refreshTimerRef.current)
     }
     refreshTimerRef.current = window.setTimeout(() => {
-      refreshVisibleCandidates(settings.mail_date ?? null, { activeOnly: true, includeLoaded: true }).catch(() => {
+      const activeBucket = bucketForPage(activePage) ?? 'needs_review'
+      const bucketsToRefresh = (['needs_review', 'failed', 'approved_sent'] as CandidateState[]).filter((bucket) => bucket === activeBucket || bucketMeta[bucket].loaded)
+      Promise.all(bucketsToRefresh.map((bucket) => refreshCandidates(settings.mail_date ?? null, bucket, { activeOnly: true, queryOptions: queryOptionsForBucket(bucket) }))).catch(() => {
         // Keep UI responsive if one refresh call fails; error surfaces on next action.
       })
       loadProductivityAnalytics(timeRange).catch(() => {
@@ -3613,6 +4006,63 @@ function App() {
         // Keep UI responsive if job summary refresh fails transiently.
       })
     }, 200)
+  }
+
+  const runNeedsReviewBulk = async (action: 'approve' | 'regenerate' | 'reject' | 'send-to-failed-mapping') => {
+    const ids = [...needsReviewSelected]
+    if (!ids.length) return
+    const messages = { approve: `Send ${ids.length} application${ids.length === 1 ? '' : 's'} now? This emails each recruiter directly and cannot be undone.`, regenerate: `Regenerate AI replies for ${ids.length} candidate${ids.length === 1 ? '' : 's'}? This overwrites the current draft reply for each.`, reject: `Reject ${ids.length} candidate${ids.length === 1 ? '' : 's'}?`, 'send-to-failed-mapping': `Move ${ids.length} candidate${ids.length === 1 ? '' : 's'} to Failed Mapping?` }
+    let message = messages[action]
+    if (action === 'approve') { const count = ids.filter((id) => draftEdits[id] !== undefined && draftEdits[id] !== queue.find((item) => item.id === id)?.draft_reply).length; if (count) message += ` ${count} of these have unsaved draft edits that will be sent as-is.` }
+    if (!window.confirm(message)) return
+    setNeedsReviewBulkAction(action)
+    try {
+      const endpoint = { approve: 'approve-bulk', regenerate: 'regenerate-bulk', reject: 'reject-bulk', 'send-to-failed-mapping': 'send-to-failed-mapping-bulk' }[action]
+      const body = action === 'approve' ? { ids, edited_replies: Object.fromEntries(ids.map((id) => [id, draftEdits[id] ?? queue.find((item) => item.id === id)?.draft_reply ?? ''])), idempotency_key: crypto.randomUUID() } : { ids }
+      const response = await fetch(`${apiBase}/candidates/${endpoint}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      if (!response.ok) throw new Error((await response.json().catch(() => null))?.detail ?? `Bulk ${action} failed`)
+      const result = await response.json() as { succeeded_ids: number[]; failed: Array<{ id: number; error: string }> }
+      if (result.failed.length) setError(`${result.succeeded_ids.length} succeeded, ${result.failed.length} failed: ${result.failed.map((item) => `#${item.id} (${item.error})`).join(', ')}`)
+      setNeedsReviewSelected(new Set())
+      schedulePostMutationRefresh()
+    } catch (e) { setError((e as Error).message) } finally { setNeedsReviewBulkAction(null) }
+  }
+
+  const setBulkTracking = async (tracked: boolean) => {
+    const ids = [...needsReviewSelected]
+    if (!ids.length) return
+    setNeedsReviewBulkAction(tracked ? 'track' : 'untrack')
+    try {
+      const response = await fetch(`${apiBase}/candidates/track-bulk`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids, tracked }) })
+      if (!response.ok) throw new Error((await response.json().catch(() => null))?.detail ?? 'Bulk tracking update failed')
+      setNeedsReviewSelected(new Set())
+      schedulePostMutationRefresh()
+    } catch (reason) { setError((reason as Error).message) } finally { setNeedsReviewBulkAction(null) }
+  }
+
+  const toggleTracking = async (candidateId: number) => {
+    const response = await fetch(`${apiBase}/candidates/${candidateId}/track`, { method: 'POST' })
+    if (!response.ok) throw new Error((await response.json().catch(() => null))?.detail ?? 'Tracking update failed')
+    schedulePostMutationRefresh()
+  }
+
+  const runFailedMappingBulk = async (action: 'save' | 'delete') => {
+    const ids = [...failedMappingSelected]
+    const fixes = Object.fromEntries(ids.filter((id) => isValidEmailAddress(routingFixes[id]?.to ?? '') && isValidEmailAddress(routingFixes[id]?.cc ?? '')).map((id) => [id, { to_email: routingFixes[id].to, cc_email: routingFixes[id].cc }]))
+    const ready = Object.keys(fixes).length
+    if (!ids.length || (action === 'save' && !ready)) return
+    if (!window.confirm(action === 'save' ? `Save routing corrections and move ${ready} candidate${ready === 1 ? '' : 's'} to Review?${ready < ids.length ? ` ${ids.length - ready} selected rows have no correction entered and will be skipped.` : ''}` : `Delete ${ids.length} failed mapping card${ids.length === 1 ? '' : 's'} from the dashboard?`)) return
+    setFailedMappingBulkAction(action)
+    try {
+      const response = await fetch(`${apiBase}/candidates/${action === 'save' ? 'resolve-recipients-bulk' : 'delete-bulk'}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(action === 'save' ? { fixes } : { ids }) })
+      if (!response.ok) throw new Error((await response.json().catch(() => null))?.detail ?? `Bulk ${action} failed`)
+      const result = await response.json() as { succeeded_ids: number[]; failed: Array<{ id: number; error: string }> }
+      const skipped = action === 'save' ? ids.filter((id) => !(id in fixes)).map((id) => ({ id, error: 'No correction entered' })) : []
+      const failed = [...result.failed, ...skipped]
+      if (failed.length) setError(`${result.succeeded_ids.length} succeeded, ${failed.length} skipped: ${failed.map((item) => `#${item.id} (${item.error})`).join(', ')}`)
+      setFailedMappingSelected(new Set())
+      schedulePostMutationRefresh()
+    } catch (e) { setError((e as Error).message) } finally { setFailedMappingBulkAction(null) }
   }
 
   const retrySettingsBootstrap = async () => {
@@ -3631,9 +4081,10 @@ function App() {
   useEffect(() => {
     const bootstrap = async () => {
       try {
-        const [, , , normalizedSettings] = await Promise.all([
+        const [, , , , normalizedSettings] = await Promise.all([
           loadStatus(),
           loadAiStatus(),
+          loadChatStatus().catch(() => {}),
           loadTelegramStatus(),
           loadSettingsBootstrap(),
         ])
@@ -3674,51 +4125,41 @@ function App() {
   }, [activePage, settings.mail_date, bucketMeta.failed.loaded, bucketMeta.needs_review.loaded, bucketMeta.approved_sent.loaded, settingsBootstrapReady])
 
   useEffect(() => {
+    if (!hasBootstrappedCandidatesRef.current || !settingsBootstrapReady || !activeFilterSortConfig) return
+    filterRequestControllerRef.current?.abort()
+    const controller = new AbortController()
+    filterRequestControllerRef.current = controller
+    const bucket = activeFilterSortConfig.bucket
+    const request =
+      bucket === 'inbox_conversations'
+        ? loadInboxConversations({ signal: controller.signal })
+        : bucket === 'needs_review' || bucket === 'failed' || bucket === 'approved_sent'
+          ? refreshCandidates(settings.mail_date ?? null, bucket, { activeOnly: true, queryOptions: { ...activeQueryOptions(), signal: controller.signal } })
+          : null
+    request?.catch((e) => {
+      if ((e as Error).name !== 'AbortError') setError((e as Error).message)
+    })
+    return () => controller.abort()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeRegistryKey, pageFilterValues[activeRegistryKey], pageSortValues[activeRegistryKey]])
+
+  useEffect(() => setNeedsReviewSelected(new Set()), [pageFilterValues.needs_review, pageSortValues.needs_review])
+  useEffect(() => setFailedMappingSelected(new Set()), [pageFilterValues.failed_mapping, pageSortValues.failed_mapping])
+
+  useEffect(() => {
     if (!emailSearchTarget) return
     const relatedId = emailSearchRelatedId(emailSearchTarget)
     if (relatedId == null) return
     const section = emailSearchTarget.section
     if (section === 'needs_review' && bucketMeta.needs_review.hasNext && !queue.some((item) => String(item.id) === relatedId)) {
-      loadMoreCandidates('needs_review', settings.mail_date ?? null)
+      loadMoreCandidates('needs_review', settings.mail_date ?? null, activeQueryOptions())
     } else if (section === 'failed_mapping' && bucketMeta.failed.hasNext && !failedQueue.some((item) => String(item.id) === relatedId)) {
-      loadMoreCandidates('failed', settings.mail_date ?? null)
+      loadMoreCandidates('failed', settings.mail_date ?? null, activeQueryOptions())
     } else if (section === 'sent_items' && bucketMeta.approved_sent.hasNext && !sentQueue.some((item) => String(item.id) === relatedId)) {
-      loadMoreCandidates('approved_sent', settings.mail_date ?? null)
+      loadMoreCandidates('approved_sent', settings.mail_date ?? null, activeQueryOptions())
     }
   }, [emailSearchTarget, queue, failedQueue, sentQueue, bucketMeta, settings.mail_date])
 
-  useEffect(() => {
-    if (!hasBootstrappedCandidatesRef.current || !settingsBootstrapReady) return
-    if (activePage !== 'premium_numbers') return
-    loadPremiumNumbers({ append: false, cursor: 0 }).catch((e) => setPremiumError((e as Error).message))
-  }, [activePage, premiumScopeFilter, premiumSearch, settings.mail_date, opportunityStatusFilter, opportunitySourceFilter, settingsBootstrapReady])
-
-  useEffect(() => {
-    if (activePage !== 'premium_numbers' || !emailSearchTarget || emailSearchTarget.section !== 'premium_numbers') return
-    if (premiumLoadingRef.current) return
-    const scope = emailSearchPremiumScope(emailSearchTarget)
-    if (!scope || scope !== premiumScopeFilter) return
-    const relatedId = emailSearchRelatedId(emailSearchTarget)
-    if (relatedId == null) return
-    const cards =
-      scope === 'all_review' ? numberReviewCards
-      : scope === 'recruiter_numbers' ? recruiterNumberCards
-      : scope === 'employer_numbers' ? employerNumberCards
-      : opportunityCards
-    if (cards.some((item) => String(item.id) === relatedId)) return
-    const meta = premiumPageMeta[scope]
-    if (!meta.hasNext || meta.nextCursor == null) return
-    loadPremiumNumbers({ append: true, cursor: meta.nextCursor }).catch((e) => setPremiumError((e as Error).message))
-  }, [
-    activePage,
-    emailSearchTarget,
-    premiumScopeFilter,
-    premiumPageMeta,
-    numberReviewCards,
-    recruiterNumberCards,
-    employerNumberCards,
-    opportunityCards,
-  ])
 
   useEffect(() => {
     if (activePage !== 'inbox') return
@@ -3761,27 +4202,41 @@ function App() {
     if (!emailSearchTarget) return
     const relatedId = emailSearchRelatedId(emailSearchTarget)
     if (relatedId == null) return
-    const timerId = window.setTimeout(() => {
-      const target = Array.from(document.querySelectorAll<HTMLElement>('[data-email-search-section]')).find((element) => (
-        element.dataset.emailSearchSection === emailSearchTarget.section &&
-        element.dataset.emailSearchRelatedId === relatedId
-      ))
-      target?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
-    }, 0)
+    const findTarget = () => Array.from(document.querySelectorAll<HTMLElement>('[data-email-search-section]')).find((element) => (
+      element.dataset.emailSearchSection === emailSearchTarget.section &&
+      element.dataset.emailSearchRelatedId === relatedId
+    ))
+    // Bucket data for a freshly-navigated section can still be loading, so retry briefly
+    // instead of depending on queue/failedQueue/etc - those change on every unrelated
+    // background refresh and would re-trigger this scroll long after the user moved on.
+    let attempts = 0
+    let timerId: number
+    const tryScroll = () => {
+      const target = findTarget()
+      if (target) {
+        target.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
+        return
+      }
+      attempts += 1
+      if (attempts < 10) timerId = window.setTimeout(tryScroll, 200)
+    }
+    timerId = window.setTimeout(tryScroll, 0)
     return () => window.clearTimeout(timerId)
-  }, [
-    activePage,
-    emailSearchTarget,
-    queue,
-    failedQueue,
-    sentQueue,
-    logs,
-    numberReviewCards,
-    recruiterNumberCards,
-    employerNumberCards,
-    opportunityCards,
-    inboxConversations,
-  ])
+  }, [emailSearchTarget])
+
+  useEffect(() => {
+    if (!emailSearchTarget) return
+    const relatedId = emailSearchRelatedId(emailSearchTarget)
+    if (relatedId == null) return
+    const detach = (event: MouseEvent) => {
+      const card = (event.target as HTMLElement).closest<HTMLElement>('[data-email-search-section]')
+      const isCurrentCard = card?.dataset.emailSearchSection === emailSearchTarget.section
+        && card?.dataset.emailSearchRelatedId === relatedId
+      if (!isCurrentCard) setEmailSearchTarget(null)
+    }
+    document.addEventListener('mousedown', detach)
+    return () => document.removeEventListener('mousedown', detach)
+  }, [emailSearchTarget])
 
   useEffect(() => {
     if (!running) return
@@ -3819,9 +4274,15 @@ function App() {
     let timerId: number | null = null
     const poll = async () => {
       const results = await Promise.all(pendingJobs.map(async ({ kind, job }) => {
-        const response = await fetch(`${apiBase}/jobs/${encodeURIComponent(job.run_key)}`)
-        if (!response.ok) throw new Error(`Failed to load ${kind} job progress`)
-        return { kind, job: (await response.json()) as BackgroundJob }
+        const [statusRes, itemsRes] = await Promise.all([
+          fetch(`${apiBase}/jobs/${encodeURIComponent(job.run_key)}`),
+          fetch(`${apiBase}/recent-runs/${encodeURIComponent(job.run_key)}/items?outcome=skipped&limit=25`),
+        ])
+        if (!statusRes.ok) throw new Error(`Failed to load ${kind} job progress`)
+        const items = itemsRes.ok
+          ? (((await itemsRes.json()) as RecentRunItemListResponse).items ?? [])
+          : []
+        return { kind, job: (await statusRes.json()) as BackgroundJob, items }
       }))
       if (canceled) return
 
@@ -3830,9 +4291,11 @@ function App() {
         const isTerminal = result.job.status !== 'queued' && result.job.status !== 'running'
         if (result.kind === 'automation') {
           setAutomationJob(result.job)
+          setAutomationLiveSkipped(result.items)
           if (isTerminal) setRunning(false)
         } else {
           setNvoidsJob(result.job)
+          setNvoidsLiveSkipped(result.items)
           if (isTerminal) setNvoidsRunning(false)
         }
         terminal = terminal || isTerminal
@@ -3949,14 +4412,23 @@ function App() {
     const fd = new FormData()
     fd.append('file', resumeFile)
     fd.append('skills_text', resumeSkillsInput)
+    fd.append('primary_role', resumePrimaryRoleInput)
+    fd.append('structured_skills_text', resumeStructuredSkillsInput)
+    fd.append('variant_label', resumeVariantLabelInput)
+    setResumeUploading(true)
     try {
       const res = await fetch(`${apiBase}/settings/resume`, { method: 'POST', body: fd })
       if (!res.ok) throw new Error('Failed to upload resume')
       setResumeFile(null)
       setResumeSkillsInput('')
+      setResumePrimaryRoleInput('')
+      setResumeStructuredSkillsInput('')
+      setResumeVariantLabelInput('')
       await loadSettingsBootstrap()
     } catch (e) {
       setError((e as Error).message)
+    } finally {
+      setResumeUploading(false)
     }
   }
 
@@ -3966,7 +4438,12 @@ function App() {
       const res = await fetch(`${apiBase}/settings/resumes/${resumeId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ skills_text: resumeSkillEdits[resumeId] ?? '' }),
+        body: JSON.stringify({
+          skills_text: resumeSkillEdits[resumeId] ?? '',
+          primary_role: resumeMetadataEdits[resumeId]?.primary_role ?? '',
+          structured_skills: (resumeMetadataEdits[resumeId]?.structured_skills ?? '').split(',').map((value) => value.trim()).filter(Boolean),
+          variant_label: resumeMetadataEdits[resumeId]?.variant_label ?? '',
+        }),
       })
       if (!res.ok) throw new Error('Failed to save resume skills')
       await loadSettingsBootstrap()
@@ -4225,6 +4702,7 @@ function App() {
             detail: 'Attaching to the automation run already in progress.',
             processed_items: 0, total_items: null, progress_pct: null, queue_name: 'automation_run',
           })
+          setAutomationLiveSkipped([])
           return
         }
         throw new Error(typeof details?.detail === 'string' ? details.detail : 'Automation run failed')
@@ -4238,6 +4716,7 @@ function App() {
         progress_pct: 0,
         queue_name: 'automation_run',
       })
+      setAutomationLiveSkipped([])
       await loadRecentRuns(settings.mail_date ?? null)
     } catch (e) {
       setError((e as Error).message)
@@ -4267,6 +4746,7 @@ function App() {
             detail: 'Attaching to the Nvoids sync already in progress.',
             processed_items: 0, total_items: null, progress_pct: null, queue_name: 'nvoids_sync',
           })
+          setNvoidsLiveSkipped([])
           return
         }
         throw new Error(typeof details?.detail === 'string' ? details.detail : 'Nvoids sync failed')
@@ -4280,6 +4760,7 @@ function App() {
         progress_pct: 0,
         queue_name: 'nvoids_sync',
       })
+      setNvoidsLiveSkipped([])
       await loadRecentRuns(settings.mail_date ?? null)
     } catch (e) {
       setError((e as Error).message)
@@ -4389,19 +4870,30 @@ function App() {
     setRegeneratingId(candidateId)
     setError('')
     try {
-      const res = await fetch(`${apiBase}/candidates/${candidateId}/regenerate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          preserve_manual_routing: true,
-          preserve_review_visibility: true,
-        }),
-      })
-      if (!res.ok) {
-        const details = await res.json().catch(() => null)
-        throw new Error(details?.detail ?? 'Regenerate failed')
+      const requestRegeneration = async (allowRoleManifestFork: boolean): Promise<Candidate | null> => {
+        const res = await fetch(`${apiBase}/candidates/${candidateId}/regenerate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            preserve_manual_routing: true,
+            preserve_review_visibility: true,
+            allow_role_manifest_fork: allowRoleManifestFork,
+          }),
+        })
+        if (!res.ok) {
+          const details = await res.json().catch(() => null)
+          const fork = details?.detail
+          if (!allowRoleManifestFork && res.status === 409 && fork?.code === 'role_manifest_fork_required') {
+            const count = Number(fork.requirement_count ?? 0)
+            if (!window.confirm(`This requirement contains ${count} roles and regeneration will create ${count} separate candidate cards. Continue?`)) return null
+            return requestRegeneration(true)
+          }
+          throw new Error(typeof details?.detail === 'string' ? details.detail : 'Regenerate failed')
+        }
+        return await res.json() as Candidate
       }
-      const updated = (await res.json()) as Candidate
+      const updated = await requestRegeneration(false)
+      if (!updated) return
       setDraftEdits((prev) => ({ ...prev, [updated.id]: updated.draft_reply ?? '' }))
       schedulePostMutationRefresh()
     } catch (e) {
@@ -4430,7 +4922,7 @@ function App() {
 
   const saveRoutingAndRequeue = async (candidateId: number) => {
     const fix = routingFixes[candidateId]
-    if (!fix?.to || !fix?.cc) return
+    if (!fix || !isValidEmailAddress(fix.to) || !isValidEmailAddress(fix.cc)) return
     setFixingId(candidateId)
     setError('')
     try {
@@ -4480,10 +4972,6 @@ function App() {
     }
   }
 
-  const canTrustRouting = (candidate: Candidate) =>
-    candidate.routing_confirmed ||
-    (['safe', 'confirmed'].includes(candidate.routing_status) && candidate.routing_confidence >= 0.8)
-
   const fetchSentDetails = async (candidateId: number): Promise<SentItemDetails> => {
     const res = await fetch(`${apiBase}/candidates/${candidateId}/sent-details`)
     if (!res.ok) {
@@ -4513,12 +5001,6 @@ function App() {
     }
   }
 
-  const sourceLabel = (source: string) =>
-    source
-      .split('_')
-      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-      .join(' ')
-
   const openDatePicker = () => {
     const picker = datePickerRef.current
     if (!picker) return
@@ -4546,6 +5028,9 @@ function App() {
   const groqLastDuration = aiStatus?.groq_last_duration_ms
     ? `${(aiStatus.groq_last_duration_ms / 1000).toFixed(1)}s`
     : null
+  const intentGateLastDuration = aiStatus?.intent_gate_last_duration_ms
+    ? `${(aiStatus.intent_gate_last_duration_ms / 1000).toFixed(1)}s`
+    : null
   const trendBars: ProductivityBarPoint[] = productivityTrend?.bars ?? []
   const latestScore = productivityTrend?.kpi_total_sent ?? trendBars.reduce((sum, bar) => sum + bar.sent_count, 0)
   const trendDelta = productivityTrend?.trend_delta_pct ?? 0
@@ -4569,43 +5054,6 @@ function App() {
       return dt.toLocaleDateString([], { month: 'short', day: 'numeric' })
     }
     return dt.toLocaleDateString([], { month: 'short', year: '2-digit' })
-  }
-
-  const renderRoutingPanel = (item: Candidate) => (
-    <div className={`routingPanel ${canTrustRouting(item) ? 'safe' : 'blocked'}`}>
-      <div className="routingPanelHeader">
-        <strong>Routing: {item.routing_status || 'unverified'}</strong>
-        <span>{Math.round((item.routing_confidence ?? 0) * 100)}% confidence</span>
-      </div>
-      <p>{item.routing_reason || 'No routing evidence captured yet.'}</p>
-      {item.routing_evidence?.length ? (
-        <div className="evidenceGrid">
-          {item.routing_evidence.map((evidence, index) => (
-            <div key={`${item.id}-evidence-${index}`} className="evidenceItem">
-              <small>{evidence.role.toUpperCase()} from {sourceLabel(evidence.source)}</small>
-              <span>{evidence.email}</span>
-            </div>
-          ))}
-        </div>
-      ) : null}
-      {!canTrustRouting(item) ? (
-        <p className="routingWarning">Approval is blocked until routing is safe or manually confirmed.</p>
-      ) : null}
-    </div>
-  )
-
-  const renderCandidateEmails = (item: Candidate) => {
-    if (!item.routing_candidates?.length) return null
-    return (
-      <div className="candidateEmailList">
-        <strong>Extracted email candidates</strong>
-        {item.routing_candidates.map((candidate, index) => (
-          <p key={`${item.id}-candidate-${index}`}>
-            <span>{candidate.role.toUpperCase()}</span> {candidate.email} <small>({sourceLabel(candidate.source)})</small>
-          </p>
-        ))}
-      </div>
-    )
   }
 
   const addMustHaveSkill = (raw: string) => {
@@ -4742,14 +5190,134 @@ function App() {
     if (hit.section === 'inbox' && typeof hit.detail.conversation_id === 'number') {
       setSelectedConversationId(hit.detail.conversation_id)
     }
-    if (hit.section === 'premium_numbers') {
-      const scope = emailSearchPremiumScope(hit)
-      if (scope) setPremiumScopeFilter(scope)
+    if (hit.section === 'recent_runs' && hit.detail.recent_run_skipped_item_id != null) {
+      // The skipped-item row only exists in the DOM once its parent run's
+      // "Skipped Items" section is expanded - without this the scroll-to-target
+      // effect never finds it.
+      const runKey = typeof hit.detail.run_key === 'string' ? hit.detail.run_key : null
+      const run = logs.find((item) => item.run_key === runKey)
+      if (run && !run.skipped_items_loaded) void toggleRecentRunItems(runKey)
     }
     setActivePage(hit.section)
   }
 
   const inboxUnreadCount = inboxConversations.reduce((total, row) => total + row.unread_reply_count, 0)
+
+  const renderQueueStatusBar = () => (
+    <>
+      <section className="statsGrid">
+        <article className="statCard">
+          <p>Needs Review</p>
+          <strong>{bucketMeta.needs_review.total ?? queue.length}</strong>
+        </article>
+        <article className="statCard error">
+          <p>Failed Mapping</p>
+          <strong>{bucketMeta.failed.total ?? failedQueue.length}</strong>
+        </article>
+        <article className="statCard">
+          <p>Recent Runs</p>
+          <strong>{logs.length}</strong>
+        </article>
+      </section>
+      {isCandidateRefreshing ? <p className="subtle">Refreshing filtered counts...</p> : null}
+      {candidateRefreshError ? <p className="subtle">Counts refresh issue: {candidateRefreshError}</p> : null}
+
+      <section className="actionBar">
+        <QueryBucket
+          queryValue={settings.gmail_query}
+          savedQueries={settings.saved_gmail_queries}
+          onQueryChange={(value) => setSettings({ ...settings, gmail_query: value })}
+          onQuerySelect={(value) => setSettings({ ...settings, gmail_query: value })}
+          onSavedQueriesChange={updateSavedQueries}
+        />
+        <button
+          type="button"
+          className="syncBtn topBarAction"
+          onClick={status?.authenticated ? runAutomation : connectGmail}
+          disabled={running || oauthInProgress}
+        >
+          {running ? 'Running...' : status?.authenticated ? 'Sync + Queue' : oauthInProgress ? 'OAuth In Progress...' : 'Connect Gmail'}
+        </button>
+        <EmailSearch apiBase={apiBase} onNavigate={navigateFromEmailSearch} currentSection={activePage} />
+        <button
+          type="button"
+          className="syncBtn topBarAction"
+          onClick={runNvoidsSync}
+          disabled={nvoidsRunning || !settings.feature_nvoids_enabled}
+        >
+          {nvoidsRunning ? 'Syncing Nvoids...' : 'Sync + Queue Nvoids'}
+        </button>
+      </section>
+      <FilterSortBar
+        apiBase={apiBase}
+        fields={activeVisibleFields}
+        values={activeFilterValues}
+        onFieldChange={(key, value) => setPageFilterValues((prev) => ({ ...prev, [activeRegistryKey]: { ...(prev[activeRegistryKey] ?? activeFilterSortConfig?.defaultFilterValues ?? {}), [key]: value } }))}
+        onClear={() => setPageFilterValues((prev) => ({ ...prev, [activeRegistryKey]: activeFilterSortConfig?.defaultFilterValues ?? {} }))}
+        sortOptions={activeFilterSortConfig?.sortOptions ?? []}
+        sortValue={activeSortValue}
+        onSortChange={(value) => setPageSortValues((prev) => ({ ...prev, [activeRegistryKey]: value }))}
+        disabled={!activeFilterSortConfig}
+        loading={activeFilterSortConfig?.bucket === 'inbox_conversations' ? inboxLoading : isCandidateRefreshing}
+        dateScopeWidened={dateScopeWidened}
+      />
+      {automationJob || nvoidsJob ? (
+        <section className="jobProgressGrid" aria-label="Background job progress">
+          {[
+            automationJob ? { job: automationJob, liveSkipped: automationLiveSkipped } : null,
+            nvoidsJob ? { job: nvoidsJob, liveSkipped: nvoidsLiveSkipped } : null,
+          ]
+            .filter((entry): entry is { job: BackgroundJob; liveSkipped: RecentRunItem[] } => entry !== null)
+            .map(({ job, liveSkipped }) => {
+              const meta = jobStatusMeta(job.status)
+              const isTerminal = job.status !== 'queued' && job.status !== 'running'
+              const total = Math.max(job.total_items ?? job.processed_items, job.processed_items, 1)
+              const skippedCount = isTerminal
+                ? (job.skipped_item_count ?? liveSkipped.length)
+                : liveSkipped.length
+              const doneCount = Math.max(0, job.processed_items - skippedCount)
+              const donePct = Math.min(100, (doneCount / total) * 100)
+              const skippedPct = Math.min(100 - donePct, (skippedCount / total) * 100)
+              return (
+                <article className={`jobProgressCard jobProgressCard--${meta.className}`} key={job.run_key}>
+                  <div>
+                    <strong>{job.queue_name === 'nvoids_sync' ? 'Nvoids sync' : 'Gmail automation'}</strong>
+                    <span className={`jobStatusPill jobStatusPill--${meta.className}`}>
+                      <i className="jobStatusDot" aria-hidden="true" />
+                      {meta.checkmark ? '✓ ' : ''}{meta.label}
+                    </span>
+                  </div>
+                  <div>
+                    <span>{job.processed_items}/{job.total_items ?? '?'} processed</span>
+                    <span>{job.progress_pct ?? Math.round(donePct + skippedPct)}%</span>
+                  </div>
+                  <div className="jobProgressBar" role="progressbar" aria-valuenow={job.progress_pct ?? 0} aria-valuemin={0} aria-valuemax={100}>
+                    <div className="jobProgressBar__segment jobProgressBar__segment--done" style={{ flexBasis: `${donePct}%` }} />
+                    <div className="jobProgressBar__segment jobProgressBar__segment--skipped" style={{ flexBasis: `${skippedPct}%` }} />
+                    <div className="jobProgressBar__segment jobProgressBar__segment--remaining" style={{ flexBasis: `${Math.max(0, 100 - donePct - skippedPct)}%` }} />
+                  </div>
+                  <div className="jobProgressLegend">
+                    <span><i style={{ background: '#1e9e4c' }} />Processed {doneCount}</span>
+                    <span><i style={{ background: 'var(--danger)' }} />Skipped {skippedCount}</span>
+                  </div>
+                  <p>{job.detail}</p>
+                  {liveSkipped.length > 0 ? (
+                    <div className="jobLiveSkipped" aria-label="Recently skipped items">
+                      {liveSkipped.slice(0, 8).map((item) => (
+                        <div className="jobLiveSkippedRow" key={item.id}>
+                          <p>{renderTextOrDash(item.title_or_subject)}</p>
+                          <p>{renderTextOrDash(item.reason_detail || item.reason_code)}</p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </article>
+              )
+            })}
+        </section>
+      ) : null}
+    </>
+  )
 
   return (
     <main className="gmailShell">
@@ -4760,9 +5328,11 @@ function App() {
         runCount={logs.length}
         sentCount={bucketMeta.approved_sent.total ?? sentQueue.length}
         inboxCount={inboxUnreadCount}
-        premiumCount={numberReviewCards.length}
+        premiumCount={premiumPendingCount}
+        resumeTrackingEnabled={settings.feature_resume_tracking_enabled}
+        applicationsEnabled={settings.feature_applications_enabled}
         activePage={activePage}
-        onNavigate={setActivePage}
+        onNavigate={(page) => { window.history.pushState(null, '', `${window.location.pathname}?page=${page}`); setActivePage(page) }}
       />
 
       <section className="mainPane">
@@ -4864,75 +5434,13 @@ function App() {
 
         <div className="pageBody">
           <div className="titleBlock">
-            <h1>{activePage === 'settings' ? 'Settings' : activePage === 'inbox' ? 'Reply Inbox' : 'Run Queue Dashboard'}</h1>
+            <h1>{PAGE_TITLES[activePage]}</h1>
             <p>
-              {activePage === 'settings'
-                ? 'Manage learning queues, trusted Gmail groups, and resume assets.'
-                : activePage === 'inbox'
-                  ? 'Review recruiter replies and continue Gmail conversations.'
-                : 'Manage and monitor your automated recruitment email operations.'}
+              {PAGE_SUBTITLES[activePage]}
             </p>
           </div>
 
-          <section className="statsGrid">
-            <article className="statCard">
-              <p>Needs Review</p>
-              <strong>{bucketMeta.needs_review.total ?? queue.length}</strong>
-            </article>
-            <article className="statCard error">
-              <p>Failed Mapping</p>
-              <strong>{bucketMeta.failed.total ?? failedQueue.length}</strong>
-            </article>
-            <article className="statCard">
-              <p>Recent Runs</p>
-              <strong>{logs.length}</strong>
-            </article>
-          </section>
-          {isCandidateRefreshing ? <p className="subtle">Refreshing filtered counts...</p> : null}
-          {candidateRefreshError ? <p className="subtle">Counts refresh issue: {candidateRefreshError}</p> : null}
-
-          <section className="actionBar">
-            <QueryBucket
-              queryValue={settings.gmail_query}
-              savedQueries={settings.saved_gmail_queries}
-              onQueryChange={(value) => setSettings({ ...settings, gmail_query: value })}
-              onQuerySelect={(value) => setSettings({ ...settings, gmail_query: value })}
-              onSavedQueriesChange={updateSavedQueries}
-            />
-            <button
-              type="button"
-              className="syncBtn topBarAction"
-              onClick={status?.authenticated ? runAutomation : connectGmail}
-              disabled={running || oauthInProgress}
-            >
-              {running ? 'Running...' : status?.authenticated ? 'Sync + Queue' : oauthInProgress ? 'OAuth In Progress...' : 'Connect Gmail'}
-            </button>
-            <EmailSearch apiBase={apiBase} onNavigate={navigateFromEmailSearch} currentSection={activePage} />
-            <button
-              type="button"
-              className="syncBtn topBarAction"
-              onClick={runNvoidsSync}
-              disabled={nvoidsRunning || !settings.feature_nvoids_enabled}
-            >
-              {nvoidsRunning ? 'Syncing Nvoids...' : 'Sync + Queue Nvoids'}
-            </button>
-          </section>
-          {automationJob || nvoidsJob ? (
-            <section className="jobProgressGrid" aria-label="Background job progress">
-              {[automationJob, nvoidsJob].filter((job): job is BackgroundJob => job !== null).map((job) => (
-                <article className="jobProgressCard" key={job.run_key}>
-                  <div>
-                    <strong>{job.queue_name === 'nvoids_sync' ? 'Nvoids sync' : 'Gmail automation'}</strong>
-                    <span>{job.status} · {job.processed_items}/{job.total_items ?? '?'}</span>
-                  </div>
-                  <progress max={100} value={job.progress_pct ?? 0}>
-                    {job.progress_pct ?? 0}%
-                  </progress>
-                  <p>{job.detail}</p>
-                </article>
-              ))}
-            </section>
-          ) : null}
+          {activePage !== 'settings' ? renderQueueStatusBar() : null}
 
           {activePage === 'run_queue' ? (
             <section className="liveMonitorCard">
@@ -5048,6 +5556,16 @@ function App() {
                   {configRow('Provider', aiStatus?.provider ?? 'DeepSeek')}
                   {configRow('Model', aiStatus?.model ?? 'deepseek-v4-flash')}
                   {configRow('Connection', aiStatus?.connected ? 'Healthy' : 'Disconnected')}
+                  {configRow('Intent Gate', formatBool(!!aiStatus?.intent_gate_enabled_in_settings))}
+                  {configRow('Intent Gate Provider', aiStatus?.intent_gate_provider || 'Unknown')}
+                  {configRow('Intent Gate Model', aiStatus?.intent_gate_model || 'Unknown')}
+                  {configRow('Intent Gate Config', typeof aiStatus?.intent_gate_configured === 'boolean' ? (aiStatus.intent_gate_configured ? 'Configured' : 'Missing setup') : 'Unknown')}
+                  {configRow('Intent Gate Runtime', typeof aiStatus?.intent_gate_runtime_healthy === 'boolean' ? (aiStatus.intent_gate_runtime_healthy ? 'Healthy' : 'Fallback') : 'Unknown')}
+                  {aiStatus?.intent_gate_last_rung ? configRow('Intent Gate Rung', aiStatus.intent_gate_last_rung) : null}
+                  {aiStatus?.intent_gate_last_error ? configRow('Intent Gate Error', aiStatus.intent_gate_last_error) : null}
+                  {aiStatus?.intent_gate_detail ? configRow('Intent Gate Detail', aiStatus.intent_gate_detail) : null}
+                  {aiStatus?.intent_gate_last_success_at ? configRow('Intent Gate Last Success', aiStatus.intent_gate_last_success_at) : null}
+                  {intentGateLastDuration ? configRow('Intent Gate Duration', intentGateLastDuration) : null}
                   {configRow('Groq Enabled', formatBool(!!aiStatus?.groq_enabled_in_settings))}
                   {configRow('Groq Config', typeof aiStatus?.groq_configured === 'boolean' ? (aiStatus.groq_configured ? 'Configured' : 'Missing setup') : 'Unknown')}
                   {configRow('Groq Model', aiStatus?.groq_model ?? 'llama-3.1-8b-instant')}
@@ -5070,21 +5588,24 @@ function App() {
                   {aiStatus?.embedding_last_error ? configRow('Embedding Error', aiStatus.embedding_last_error) : null}
                   {aiStatus?.embedding_last_success_at ? configRow('Embedding Last Success', aiStatus.embedding_last_success_at) : null}
                   {embeddingLastDuration ? configRow('Embedding Duration', embeddingLastDuration) : null}
+                  {configRow('Chatbot (Ollama)', chatStatus?.enabled ? (chatStatus.ollama_running ? 'Running' : 'Not Running') : 'Disabled')}
+                  {chatStatus?.model ? configRow('Ollama Model', chatStatus.model) : null}
+                  {chatStatus?.mcp_status ? configRow('Ollama MCP Status', chatStatus.mcp_status) : null}
+                  {chatStatus?.ollama_last_error ? configRow('Ollama Error', chatStatus.ollama_last_error) : null}
+                  {chatStatus?.ollama_last_success_at ? configRow('Ollama Last Success', chatStatus.ollama_last_success_at) : null}
                   {aiStatus?.last_draft_source ? configRow('Draft Source', getDraftSourceLabel(aiStatus.last_draft_source)) : null}
                   {aiLastDuration ? configRow('Last Duration', aiLastDuration) : null}
                 </div>
               </section>
 
               <section className="liveMonitorCard configSummaryCard">
-                <h3>Automation Filters</h3>
+                <h3>AI Automation Access</h3>
                 <div className="configSummaryList">
                   {configRow('Enable AI Features', formatBool(activeConfigurationSettings.feature_ai_enabled))}
                   {configRow('Enable AI Extractor', formatBool(activeConfigurationSettings.feature_ai_extractor_enabled))}
                   {configRow('Enable Role Manifest Detection', formatBool(activeConfigurationSettings.feature_role_manifest_enabled))}
                   {configRow('Enable Semantic Matching', formatBool(activeConfigurationSettings.feature_semantic_enabled))}
-                  {configRow('Enable Groq Smart Job Parser', formatBool(activeConfigurationSettings.feature_groq_job_parser_enabled))}
-                  {configRow('Qualification Threshold', activeConfigurationSettings.qualification_threshold.toFixed(2))}
-                  {configRow('Must-have Skills', summarizeConfigList(activeConfigurationSettings.must_have_skills))}
+                  {configRow('Enable AI Job Intent Gate', formatBool(activeConfigurationSettings.feature_groq_job_parser_enabled))}
                 </div>
               </section>
 
@@ -5117,7 +5638,7 @@ function App() {
                   {configRow('Must-have Skills', summarizeConfigList(activeConfigurationDraftRules.must_have_skills.skills ?? activeConfigurationSettings.must_have_skills))}
                   {configRow('Score Threshold Rule', formatRuleMode(activeConfigurationDraftRules.score_threshold.mode))}
                   {configRow('Score Threshold Value', activeConfigurationDraftRules.score_threshold.value ?? activeConfigurationSettings.qualification_threshold)}
-                  {configRow('F2F Non-Texas Rule', formatRuleMode(activeConfigurationDraftRules.f2f_non_texas.mode))}
+                  {configRow('F2F Location Rule', formatRuleMode(activeConfigurationDraftRules.f2f_non_texas.mode))}
                   {configRow('Unknown Location Rule', formatRuleMode(activeConfigurationDraftRules.unknown_location.mode))}
                   {configRow('Recipient Mapping Rule', formatRuleMode(activeConfigurationDraftRules.recipient_mapping.mode))}
                 </div>
@@ -5164,6 +5685,9 @@ function App() {
                   {configRow('Auto Sync Nvoids', formatBool(activeConfigurationSettings.feature_nvoids_auto_sync))}
                   {configRow('Nvoids Detail Page Type', nvoidsDetailTitleModeLabel)}
                   {configRow('Preferred Nvoids Locations', summarizeConfigList(activeConfigurationSettings.nvoids_locations))}
+                  {configRow('Nvoids Job Role', truncateConfigValue(activeConfigurationSettings.nvoids_job_role))}
+                  {configRow('Nvoids Search Location', truncateConfigValue(activeConfigurationSettings.nvoids_search_location))}
+                  {configRow('Nvoids Custom Query', truncateConfigValue(activeConfigurationSettings.nvoids_custom_query, 80))}
                 </div>
               </section>
             </div>
@@ -5221,6 +5745,16 @@ function App() {
                   <div className="row"><span className="label">Provider</span><span>{aiStatus?.provider ?? 'DeepSeek'}</span></div>
                   <div className="row"><span className="label">Model</span><span className="tag">{aiStatus?.model ?? 'deepseek-v4-flash'}</span></div>
                   <div className="row"><span className="label">Connection</span><span className="dotOk">{aiStatus?.connected ? 'Healthy' : 'Disconnected'}</span></div>
+                  <div className="row"><span className="label">Intent Gate</span><span>{aiStatus?.intent_gate_enabled_in_settings ? 'On' : 'Off'}</span></div>
+                  <div className="row"><span className="label">Intent Gate Provider</span><span className="tag">{aiStatus?.intent_gate_provider || 'Unknown'}</span></div>
+                  <div className="row"><span className="label">Intent Gate Model</span><span className="tag">{aiStatus?.intent_gate_model || 'Unknown'}</span></div>
+                  <div className="row"><span className="label">Intent Gate Config</span><span>{typeof aiStatus?.intent_gate_configured === 'boolean' ? (aiStatus.intent_gate_configured ? 'Configured' : 'Missing setup') : 'Unknown'}</span></div>
+                  <div className="row"><span className="label">Intent Gate Runtime</span><span>{typeof aiStatus?.intent_gate_runtime_healthy === 'boolean' ? (aiStatus.intent_gate_runtime_healthy ? 'Healthy' : 'Fallback') : 'Unknown'}</span></div>
+                  {aiStatus?.intent_gate_last_rung ? <div className="row"><span className="label">Intent Gate Rung</span><span>{aiStatus.intent_gate_last_rung}</span></div> : null}
+                  {aiStatus?.intent_gate_last_error ? <div className="row"><span className="label">Intent Gate Error</span><span>{aiStatus.intent_gate_last_error}</span></div> : null}
+                  {aiStatus?.intent_gate_detail ? <div className="row"><span className="label">Intent Gate Detail</span><span>{aiStatus.intent_gate_detail}</span></div> : null}
+                  {aiStatus?.intent_gate_last_success_at ? <div className="row"><span className="label">Intent Gate Last Success</span><span>{aiStatus.intent_gate_last_success_at}</span></div> : null}
+                  {intentGateLastDuration ? <div className="row"><span className="label">Intent Gate Duration</span><span>{intentGateLastDuration}</span></div> : null}
                   <div className="row"><span className="label">Groq Enabled</span><span>{aiStatus?.groq_enabled_in_settings ? 'On' : 'Off'}</span></div>
                   <div className="row"><span className="label">Groq Config</span><span>{typeof aiStatus?.groq_configured === 'boolean' ? (aiStatus.groq_configured ? 'Configured' : 'Missing setup') : 'Unknown'}</span></div>
                   <div className="row"><span className="label">Groq Model</span><span className="tag">{aiStatus?.groq_model ?? 'llama-3.1-8b-instant'}</span></div>
@@ -5235,13 +5769,18 @@ function App() {
                   {aiStatus?.embedding_last_error ? <div className="row"><span className="label">Embedding Error</span><span>{aiStatus.embedding_last_error}</span></div> : null}
                   {aiStatus?.embedding_last_success_at ? <div className="row"><span className="label">Embedding Last Success</span><span>{aiStatus.embedding_last_success_at}</span></div> : null}
                   {embeddingLastDuration ? <div className="row"><span className="label">Embedding Duration</span><span>{embeddingLastDuration}</span></div> : null}
+                  <div className="row"><span className="label">Chatbot (Ollama)</span><span>{chatStatus?.enabled ? (chatStatus.ollama_running ? 'Running' : 'Not Running') : 'Disabled'}</span></div>
+                  {chatStatus?.model ? <div className="row"><span className="label">Ollama Model</span><span className="tag">{chatStatus.model}</span></div> : null}
+                  {chatStatus?.mcp_status ? <div className="row"><span className="label">Ollama MCP Status</span><span>{chatStatus.mcp_status}</span></div> : null}
+                  {chatStatus?.ollama_last_error ? <div className="row"><span className="label">Ollama Error</span><span>{chatStatus.ollama_last_error}</span></div> : null}
+                  {chatStatus?.ollama_last_success_at ? <div className="row"><span className="label">Ollama Last Success</span><span>{chatStatus.ollama_last_success_at}</span></div> : null}
                   {aiStatus?.last_draft_source ? <div className="row"><span className="label">Draft Source</span><span>{getDraftSourceLabel(aiStatus.last_draft_source)}</span></div> : null}
                   {aiLastDuration ? <div className="row"><span className="label">Last Duration</span><span>{aiLastDuration}</span></div> : null}
                 </div>
               </section>
 
               <section className="card">
-                <h2>Automation Filters</h2>
+                <h2>AI Automation Access</h2>
                 <div className="stack">
                   <label className="toggleRow">
                     <span>Enable AI Features</span>
@@ -5293,7 +5832,7 @@ function App() {
                     </span>
                   </label>
                   <label className="toggleRow">
-                    <span>Enable Groq Smart Job Parser</span>
+                    <span>Enable AI Job Intent Gate</span>
                     <span className="toggleSwitch">
                       <input
                         type="checkbox"
@@ -5303,51 +5842,7 @@ function App() {
                       <span className="toggleTrack" />
                     </span>
                   </label>
-                  <label>
-                    Qualification Threshold
-                    <input
-                      type="number"
-                      min={0}
-                      max={1}
-                      step={0.01}
-                      value={settings.qualification_threshold}
-                      onChange={(e) => updateRuleValue('score_threshold', e.target.value)}
-                    />
-                  </label>
-                  <label>
-                    Must-have Skills (comma-separated)
-                    <div className="skillBox">
-                      {settings.must_have_skills.map((skill) => (
-                        <span key={skill} className="skillChip">
-                          {skill}
-                          <button
-                            type="button"
-                            className="chipRemove"
-                            onClick={() => removeMustHaveSkill(skill)}
-                            aria-label={`Remove ${skill}`}
-                            title={`Remove ${skill}`}
-                          >
-                            x
-                          </button>
-                        </span>
-                      ))}
-                      <input
-                        value={skillDraft}
-                        className="skillInput"
-                        onChange={(e) => setSkillDraft(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' || e.key === ',') {
-                            e.preventDefault()
-                            addMustHaveSkill(skillDraft)
-                          } else if (e.key === 'Backspace' && !skillDraft && settings.must_have_skills.length > 0) {
-                            removeMustHaveSkill(settings.must_have_skills[settings.must_have_skills.length - 1])
-                          }
-                        }}
-                        onBlur={() => addMustHaveSkill(skillDraft)}
-                        placeholder="Add skill..."
-                      />
-                    </div>
-                  </label>
+                  <p className="subtle">Lets an AI model make the final call on whether an email is a genuine requirement, a hotlist, or noise. Off leaves that decision to the rules taxonomy alone. Which model answers is shown under AI Access.</p>
                 </div>
               </section>
 
@@ -5518,11 +6013,38 @@ function App() {
                   </label>
                   <label>
                     Accepted locations
-                    <input
-                      value={(draftRules.accepted_location.locations ?? settings.accepted_locations).join(', ')}
-                      onChange={(e) => updateRuleValue('accepted_location', e.target.value)}
-                      placeholder="texas, remote"
-                    />
+                    <div className="skillBox">
+                      {(draftRules.accepted_location.locations ?? settings.accepted_locations).map((location) => (
+                        <span key={location} className="skillChip">
+                          {location}
+                          <button
+                            type="button"
+                            className="chipRemove"
+                            onClick={() => removeAcceptedLocation(location)}
+                            aria-label={`Remove ${location}`}
+                            title={`Remove ${location}`}
+                          >
+                            x
+                          </button>
+                        </span>
+                      ))}
+                      <input
+                        value={acceptedLocationDraft}
+                        className="skillInput"
+                        onChange={(e) => setAcceptedLocationDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ',') {
+                            e.preventDefault()
+                            addAcceptedLocation(acceptedLocationDraft)
+                          } else if (e.key === 'Backspace' && !acceptedLocationDraft) {
+                            const current = draftRules.accepted_location.locations ?? settings.accepted_locations
+                            if (current.length > 0) removeAcceptedLocation(current[current.length - 1])
+                          }
+                        }}
+                        onBlur={() => addAcceptedLocation(acceptedLocationDraft)}
+                        placeholder="Add location..."
+                      />
+                    </div>
                   </label>
                   <p className="subtle">Uses your accepted location list and can ignore, warn, or block when parsed locations do not match.</p>
 
@@ -5561,11 +6083,38 @@ function App() {
                   </label>
                   <label>
                     Must-have skills
-                    <input
-                      value={(draftRules.must_have_skills.skills ?? settings.must_have_skills).join(', ')}
-                      onChange={(e) => updateRuleValue('must_have_skills', e.target.value)}
-                      placeholder="java, spring"
-                    />
+                    <div className="skillBox">
+                      {(draftRules.must_have_skills.skills ?? settings.must_have_skills).map((skill) => (
+                        <span key={skill} className="skillChip">
+                          {skill}
+                          <button
+                            type="button"
+                            className="chipRemove"
+                            onClick={() => removeMustHaveSkill(skill)}
+                            aria-label={`Remove ${skill}`}
+                            title={`Remove ${skill}`}
+                          >
+                            x
+                          </button>
+                        </span>
+                      ))}
+                      <input
+                        value={skillDraft}
+                        className="skillInput"
+                        onChange={(e) => setSkillDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ',') {
+                            e.preventDefault()
+                            addMustHaveSkill(skillDraft)
+                          } else if (e.key === 'Backspace' && !skillDraft) {
+                            const current = draftRules.must_have_skills.skills ?? settings.must_have_skills
+                            if (current.length > 0) removeMustHaveSkill(current[current.length - 1])
+                          }
+                        }}
+                        onBlur={() => addMustHaveSkill(skillDraft)}
+                        placeholder="Add skill..."
+                      />
+                    </div>
                   </label>
                   <p className="subtle">Controls whether missing required skills are ignored, shown as warnings, or block drafting.</p>
 
@@ -5594,7 +6143,7 @@ function App() {
                   <p className="subtle">Low scores can be ignored, surfaced as warnings, or block drafting.</p>
 
                   <label>
-                    F2F non-Texas rule
+                    F2F location rule
                     <select
                       value={draftRules.f2f_non_texas.mode}
                       onChange={(e) => updateRuleMode('f2f_non_texas', e.target.value as RuleMode)}
@@ -5604,7 +6153,7 @@ function App() {
                       <option value="block">Block Draft</option>
                     </select>
                   </label>
-                  <p className="subtle">Controls how face-to-face roles outside Texas are handled.</p>
+                  <p className="subtle">Controls how face-to-face roles outside your accepted locations are handled.</p>
 
                   <label>
                     Unknown location rule
@@ -5843,6 +6392,100 @@ function App() {
                     </span>
                   </label>
                   <p className="subtle">Checks unread Gmail on the existing polling interval and captures replies from previously sent threads before JD parsing.</p>
+                  <label className="toggleRow pillRow">
+                    <span>Application Tracker</span>
+                    <span className="toggleSwitch">
+                      <input
+                        type="checkbox"
+                        checked={settings.feature_applications_enabled}
+                        onChange={(e) => setSettings({ ...settings, feature_applications_enabled: e.target.checked })}
+                      />
+                      <span className="toggleTrack" />
+                    </span>
+                  </label>
+                  <label className="toggleRow pillRow">
+                    <span>Resume Tracking</span>
+                    <span className="toggleSwitch">
+                      <input
+                        type="checkbox"
+                        checked={settings.feature_resume_tracking_enabled}
+                        onChange={(e) => setSettings({ ...settings, feature_resume_tracking_enabled: e.target.checked })}
+                      />
+                      <span className="toggleTrack" />
+                    </span>
+                  </label>
+                  <label>
+                    Resume suggestion sweep (minutes)
+                    <input type="number" min={30} max={1440} value={settings.feature_resume_tracking_sweep_interval_minutes} onChange={(event) => setSettings({ ...settings, feature_resume_tracking_sweep_interval_minutes: Number(event.target.value) })} />
+                  </label>
+                  <fieldset>
+                    <legend>Preferred employment types</legend>
+                    <div className="settingsCheckboxGrid">
+                      {(['C2C', 'W2', '1099', 'FT'] as const).map((employmentType) => (
+                        <label key={employmentType} className="checkboxLabel">
+                          <input
+                            type="checkbox"
+                            checked={settings.preferred_employment_types.includes(employmentType)}
+                            onChange={(event) => setSettings({
+                              ...settings,
+                              preferred_employment_types: event.target.checked
+                                ? [...settings.preferred_employment_types, employmentType]
+                                : settings.preferred_employment_types.filter((value) => value !== employmentType),
+                            })}
+                          />
+                          {employmentType}
+                        </label>
+                      ))}
+                    </div>
+                  </fieldset>
+                  <label>
+                    Preferred minimum rate
+                    <input
+                      type="number"
+                      min={0}
+                      step="any"
+                      value={settings.preferred_minimum_rate ?? ''}
+                      onChange={(event) => setSettings({ ...settings, preferred_minimum_rate: event.target.value === '' ? null : Number(event.target.value) })}
+                    />
+                  </label>
+                  <p className="subtle">Shows the manual application pipeline inside Premium Numbers.</p>
+                  <label className="toggleRow pillRow">
+                    <span>Application Automation</span>
+                    <span className="toggleSwitch">
+                      <input
+                        type="checkbox"
+                        checked={settings.feature_application_automation_enabled}
+                        onChange={(event) => setSettings({ ...settings, feature_application_automation_enabled: event.target.checked })}
+                        disabled={!settings.feature_applications_enabled}
+                      />
+                      <span className="toggleTrack" />
+                    </span>
+                  </label>
+                  <p className="subtle">Requires Application Tracker. Generates reviewable reply and reminder suggestions; it never advances a stage by itself.</p>
+                  <label className="toggleRow pillRow">
+                    <span>AI-assisted outreach drafts</span>
+                    <span className="toggleSwitch">
+                      <input
+                        type="checkbox"
+                        checked={settings.feature_application_outreach_drafts_enabled}
+                        onChange={(event) => setSettings({ ...settings, feature_application_outreach_drafts_enabled: event.target.checked })}
+                        disabled={!settings.feature_applications_enabled}
+                      />
+                      <span className="toggleTrack" />
+                    </span>
+                  </label>
+                  <p className="subtle">Uses AI only to propose editable application emails. Sending always requires a separate click.</p>
+                  <label>
+                    Reminder sweep interval (minutes)
+                    <input
+                      type="number"
+                      min={30}
+                      max={1440}
+                      value={settings.feature_reminder_sweep_interval_minutes}
+                      onChange={(event) => setSettings({ ...settings, feature_reminder_sweep_interval_minutes: Number(event.target.value) })}
+                      disabled={!settings.feature_applications_enabled || !settings.feature_application_automation_enabled}
+                    />
+                  </label>
                   <label>
                     Batch Limit
                     <input
@@ -6039,6 +6682,34 @@ function App() {
                       />
                     </div>
                   </label>
+                  <p className="subtle">
+                    Preferred Nvoids Locations filters results after they're fetched, before they're forwarded as
+                    candidates. Use Search Location below to narrow the actual Nvoids search itself.
+                  </p>
+                  <label>
+                    Nvoids Job Role
+                    <input
+                      value={settings.nvoids_job_role}
+                      onChange={(e) => setSettings({ ...settings, nvoids_job_role: e.target.value })}
+                      placeholder="e.g. AI Engineer, Machine Learning Engineer"
+                    />
+                  </label>
+                  <label>
+                    Nvoids Search Location
+                    <input
+                      value={settings.nvoids_search_location}
+                      onChange={(e) => setSettings({ ...settings, nvoids_search_location: e.target.value })}
+                      placeholder="e.g. New Jersey"
+                    />
+                  </label>
+                  <label>
+                    Nvoids Custom Query
+                    <input
+                      value={settings.nvoids_custom_query}
+                      onChange={(e) => setSettings({ ...settings, nvoids_custom_query: e.target.value })}
+                      placeholder="Overrides Job Role and Search Location when set, e.g. python and (aws or gcp)"
+                    />
+                  </label>
                   <label>
                     Nvoids Batch Limit (per run)
                     <input
@@ -6097,6 +6768,12 @@ function App() {
                 embeddingSummary={embeddingSummary}
                 embedSkills={embedPendingSkills}
               />
+              <FilterVisibilitySettings
+                visibleFilters={settings.visible_filters}
+                onChange={updateVisibleFilters}
+                resumeAssets={resumeAssets}
+                savingLabel={filterVisibilityStatus}
+              />
               <EntityUpgradeSection
                 title="Upgrade Companies"
                 pendingEntities={pendingCompanies}
@@ -6114,6 +6791,15 @@ function App() {
                 approveAll={() => runEntityAction('location', 'approve-all')}
                 approve={(entity) => runEntityAction('location', 'approve', entity)}
                 dismiss={(entity) => runEntityAction('location', 'dismiss', entity)}
+              />
+              <EntityUpgradeSection
+                title="Upgrade Job Roles"
+                pendingEntities={pendingRoles}
+                loading={skillsLoading}
+                busyKey={entityActionKey?.startsWith('role:') ? entityActionKey.slice('role:'.length) : null}
+                approveAll={() => runEntityAction('role', 'approve-all')}
+                approve={(entity) => runEntityAction('role', 'approve', entity)}
+                dismiss={(entity) => runEntityAction('role', 'dismiss', entity)}
               />
               <JobIntentLearningSection
                 pendingSignals={pendingJobIntentSignals}
@@ -6140,11 +6826,21 @@ function App() {
                 activeResume={activeResume}
                 resumeFile={resumeFile}
                 resumeSkillsInput={resumeSkillsInput}
+                resumePrimaryRoleInput={resumePrimaryRoleInput}
+                resumeStructuredSkillsInput={resumeStructuredSkillsInput}
+                resumeVariantLabelInput={resumeVariantLabelInput}
                 resumeSkillEdits={resumeSkillEdits}
+                resumeMetadataEdits={resumeMetadataEdits}
                 resumeAssets={resumeAssets}
+                resumeUploading={resumeUploading}
+                focusResumeId={focusResumeId}
                 setResumeFile={setResumeFile}
                 setResumeSkillsInput={setResumeSkillsInput}
+                setResumePrimaryRoleInput={setResumePrimaryRoleInput}
+                setResumeStructuredSkillsInput={setResumeStructuredSkillsInput}
+                setResumeVariantLabelInput={setResumeVariantLabelInput}
                 setResumeSkillEdits={setResumeSkillEdits}
+                setResumeMetadataEdits={setResumeMetadataEdits}
                 uploadResume={uploadResume}
                 saveResumeSkills={saveResumeSkills}
                 toggleResumeAsset={toggleResumeAsset}
@@ -6158,36 +6854,11 @@ function App() {
           {activePage === 'needs_review' ? (
             <section className="card pageSection">
           <h2>Needs Review (Manual Approval Required)</h2>
-          {queue.filter((item) => !item.is_source_parent).length === 0 ? <p className="subtle">No queued emails.</p> : null}
+          <label className="selectAllRow"><input type="checkbox" checked={queue.filter((item) => !item.is_source_parent).length > 0 && queue.filter((item) => !item.is_source_parent).every((item) => needsReviewSelected.has(item.id))} onChange={(event) => setNeedsReviewSelected(event.target.checked ? new Set(queue.filter((item) => !item.is_source_parent).map((item) => item.id)) : new Set())} /> Select all visible</label>
+          <SelectionActionBar selectedCount={needsReviewSelected.size} busyKey={needsReviewBulkAction} onClearSelection={() => setNeedsReviewSelected(new Set())} actions={[{ key: 'track', label: 'Track Application', onClick: () => void setBulkTracking(true) }, { key: 'untrack', label: 'Untrack selected', onClick: () => void setBulkTracking(false) }, { key: 'approve', label: 'Approve & Send', onClick: () => void runNeedsReviewBulk('approve') }, { key: 'regenerate', label: 'Regenerate', onClick: () => void runNeedsReviewBulk('regenerate') }, { key: 'reject', label: 'Reject', onClick: () => void runNeedsReviewBulk('reject'), variant: 'danger' }, { key: 'send-to-failed-mapping', label: 'Send to Failed Mapping', onClick: () => void runNeedsReviewBulk('send-to-failed-mapping') }]} />
+          {queue.filter((item) => !item.is_source_parent).length === 0 ? <p className="subtle">No queued emails match these filters.</p> : null}
           {queue.filter((item) => !item.is_source_parent).map((item, index, visibleQueue) => {
             const effectiveDraft = draftEdits[item.id] ?? item.draft_reply
-            const routingTrusted = canTrustRouting(item)
-            const verdict = getOverallVerdict(item, effectiveDraft, routingTrusted)
-            const parserDetails = normalizeParserDetails(item.parser_details)
-            const parserExpanded = Boolean(expandedParserDetailIds[item.id])
-            const requiresResumeForApproval = item.source === 'gmail'
-            const structuralSendabilityBlock = [
-              'source_parent',
-              'superseded_multi_role',
-              'manifest_review',
-              'extraction_review',
-              'score_review',
-            ].includes(item.sendability_status ?? '')
-            const historicalSafetyBlock =
-              item.screening_mode == null &&
-              ['blocked_ineligible', 'eligibility_review', 'mandatory_resume_fail', 'mandatory_resume_review']
-                .includes(item.sendability_status ?? '')
-            const screeningAllowsApproval =
-              !structuralSendabilityBlock &&
-              !historicalSafetyBlock &&
-              (item.screening_mode !== 'strict' || item.sendability_status === 'sendable')
-            const canApprove =
-              screeningAllowsApproval &&
-              Boolean(item.recipient_email) &&
-              Boolean(item.cc_email) &&
-              Boolean(effectiveDraft?.trim()) &&
-              (!requiresResumeForApproval || Boolean(item.resume_file_name)) &&
-              routingTrusted
             const showSourceHeader = Boolean(
               item.source_parent_email_id &&
               visibleQueue[index - 1]?.source_parent_email_id !== item.source_parent_email_id,
@@ -6203,169 +6874,44 @@ function App() {
                   </button>
                 </div>
               ) : null}
-              <article
-                className={`emailItem ${isEmailSearchHighlight('needs_review', item.id) ? 'emailSearchHighlight' : ''}`}
-                data-email-search-section="needs_review"
-                data-email-search-related-id={item.id}
-              >
-                <p><strong>Email ID:</strong> {item.id}</p>
-                {item.is_multi_role_child ? (
-                  <p><strong>Requirement:</strong> {item.requirement_index ?? '-'} of {item.requirement_count ?? '-'}</p>
-                ) : null}
-                <p><strong>From:</strong> {item.sender}</p>
-                <p><strong>Subject:</strong> {item.subject}</p>
-                <p className="jdSummary">
-                  <strong>{item.role || 'Unknown Role'}</strong>
-                  {' · '}{item.location || '-'}
-                  {' · '}{item.salary_text || 'Salary not specified'}
-                  {' · '}{jdSummarySkills(item).join(', ') || '-'}
-                </p>
-                {sourceListingUrl(item) ? (
-                  <p>
-                    <strong>Source Listing:</strong>{' '}
-                    <a href={sourceListingUrl(item)!} target="_blank" rel="noreferrer">
-                      Open source listing
-                    </a>
-                  </p>
-                ) : null}
-                {item.gmail_message_url ? (
-                  <p>
-                    <strong>Open:</strong>{' '}
-                    <a href={item.gmail_message_url} target="_blank" rel="noreferrer">
-                      Open exact email in Gmail
-                    </a>
-                  </p>
-                ) : null}
-                <p><strong>To/CC:</strong> {item.recipient_email ?? '-'} / {item.cc_email ?? '-'}</p>
-                <p><strong>ATS Score:</strong> {formatAtsScore(item.ats_score)} {item.ats_score != null ? `(${getAtsStrengthLabel(item.ats_score)})` : ''}</p>
-                {renderRoutingPanel(item)}
-                <p><strong>Resume:</strong> {item.resume_file_name ?? '-'}</p>
-                <p><strong>Sendability:</strong> {item.sendability_status ?? 'legacy evaluation'}</p>
-                {item.role_manifest_status === 'single_fallback' ? (
-                  <p className="subtle">Auto-resolved as one role because a confident split was unavailable.</p>
-                ) : null}
-                <p><strong>Screening Mode:</strong> {item.screening_mode ?? 'historical / not recorded'}</p>
-                {item.eligibility_status ? <p><strong>Eligibility:</strong> {item.eligibility_status}</p> : null}
-                {item.eligibility_details ? (
-                  <details>
-                    <summary>Eligibility diagnostics</summary>
-                    <pre>{JSON.stringify(item.eligibility_details, null, 2)}</pre>
-                  </details>
-                ) : null}
-                {item.inherited_constraints?.length ? (
-                  <details>
-                    <summary>Inherited source constraints</summary>
-                    <pre>{JSON.stringify(item.inherited_constraints, null, 2)}</pre>
-                  </details>
-                ) : null}
-                {item.role_manifest_diagnostics ? (
-                  <details>
-                    <summary>Role manifest diagnostics</summary>
-                    <pre>{JSON.stringify(item.role_manifest_diagnostics, null, 2)}</pre>
-                  </details>
-                ) : null}
-                <ResumePickerPanel candidate={item} />
-                <p><strong>Attachment files:</strong> {(enabledAttachmentNames.length > 0 ? enabledAttachmentNames : item.attachment_file_names ?? []).join(', ') || '-'}</p>
-                <p>
-                  <strong>Draft source:</strong> {getDraftSourceLabel(item.draft_source)}
-                  {item.draft_model ? ` (${item.draft_model})` : ''}
-                </p>
-                <p><strong>Resume Context:</strong> {getResumeContextLabel(item.draft_resume_context_status)}</p>
-                <ParserDetailsPanel
-                  candidateId={item.id}
-                  source={item.source}
-                  parserDetails={parserDetails}
-                  atsScore={item.ats_score}
-                  atsSource={item.ats_score_source}
-                  atsSummary={item.ats_summary}
-                  atsBreakdown={item.ats_breakdown}
-                  resumePickerBreakdown={item.resume_picker_breakdown}
-                  expanded={parserExpanded}
-                  onToggle={(candidateId) =>
-                    setExpandedParserDetailIds((prev) => ({
-                      ...prev,
-                      [candidateId]: !prev[candidateId],
-                    }))
-                  }
-                />
-                {item.draft_ai_error ? <p className="subtle"><strong>AI fallback:</strong> {item.draft_ai_error}</p> : null}
-                <p><strong>Draft:</strong></p>
-                <div className="draftUnified">
-                  <label className="draftPaneLabel">Editable Draft</label>
-                  <textarea
-                    value={effectiveDraft}
-                    rows={10}
-                    onChange={(e) => setDraftEdits((prev) => ({ ...prev, [item.id]: e.target.value }))}
-                  />
-                  <label className="draftPaneLabel">Live Preview</label>
-                  <div
-                    className="draftPreview"
-                    style={draftTextSizeToPreviewStyle(settings.draft_text_size)}
-                    dangerouslySetInnerHTML={{ __html: draftToPreviewHtml(effectiveDraft) }}
-                  />
-                </div>
-                {item.last_error ? <p className="errorMessage"><strong>Last Error:</strong> {item.last_error}</p> : null}
-                <div className="rowBtns">
-                  <button
-                    type="button"
-                    onClick={() => approveSend(item)}
-                    disabled={!canApprove || sendingId === item.id}
-                    title={
-                      !canApprove
-                        ? requiresResumeForApproval
-                          ? 'Safe routing, To, CC, body, and resume are required before send'
-                          : 'Safe routing, To, CC, and body are required before approval'
-                        : requiresResumeForApproval
-                          ? 'Approve and send'
-                          : 'Approve candidate'
-                    }
-                  >
-                    {sendingId === item.id ? 'Sending...' : requiresResumeForApproval ? 'Approve & Send' : 'Approve'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => regenerateCandidate(item.id)}
-                    disabled={regeneratingId === item.id || sendingId === item.id || rejectingId === item.id || movingToFailedId === item.id}
-                    title="Re-run parser, resume match, ATS and semantic scoring, routing, and draft generation with current settings"
-                  >
-                    {regeneratingId === item.id ? 'Regenerating...' : 'Regenerate'}
-                  </button>
-                  {['invalid', 'uncertain'].includes(item.role_manifest_status ?? '') || item.sendability_status === 'superseded_multi_role' ? (
-                    <button
-                      type="button"
-                      onClick={() => retryRoleDetection(item.source_parent_email_id ?? item.id)}
-                      disabled={regeneratingId === item.id}
-                    >
-                      {regeneratingId === item.id ? 'Detecting...' : 'Retry Detection'}
-                    </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    onClick={() => rejectSend(item.id)}
-                    disabled={rejectingId === item.id}
-                  >
-                    {rejectingId === item.id ? 'Rejecting...' : 'Reject'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => moveToFailedMapping(item.id)}
-                    disabled={movingToFailedId === item.id}
-                    title="Move to Failed Mapping so recipients can be remapped"
-                  >
-                    {movingToFailedId === item.id ? 'Moving...' : 'Send to Failed Mapping'}
-                  </button>
-                  <span className={`verdictBadge verdict-${verdict.tone}`} title="Overall Verdict">
-                    {verdict.label} • {verdict.score}
-                  </span>
-                </div>
-              </article>
+              <CandidateCard
+                item={item}
+                searchSection="needs_review"
+                isSearchHighlighted={isEmailSearchHighlight('needs_review', item.id)}
+                draftValue={effectiveDraft}
+                onDraftChange={(value) => setDraftEdits((prev) => ({ ...prev, [item.id]: value }))}
+                draftTextSize={settings.draft_text_size}
+                enabledAttachmentNames={enabledAttachmentNames}
+                activeResumeName={activeResume?.file_name}
+                parserExpanded={Boolean(expandedParserDetailIds[item.id])}
+                onToggleParserExpanded={() => setExpandedParserDetailIds((prev) => ({ ...prev, [item.id]: !prev[item.id] }))}
+                selection={{
+                  checked: needsReviewSelected.has(item.id),
+                  onToggle: () => setNeedsReviewSelected((previous) => { const next = new Set(previous); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next }),
+                }}
+                isSending={sendingId === item.id}
+                onApprove={approveSend}
+                isRegenerating={regeneratingId === item.id}
+                onRegenerate={regenerateCandidate}
+                onRetryDetection={retryRoleDetection}
+                isRejecting={rejectingId === item.id}
+                onReject={rejectSend}
+                isMovingToFailedMapping={movingToFailedId === item.id}
+                onSendToFailedMapping={moveToFailedMapping}
+                onToggleTracking={(id) => void toggleTracking(id).catch((reason) => setError((reason as Error).message))}
+                sentDetailsExpanded={Boolean(expandedSentDetailIds[item.id])}
+                onToggleSentDetails={toggleSentDetails}
+                sentDetailsLoading={Boolean(sentDetailLoadingIds[item.id])}
+                sentDetailsError={sentDetailErrors[item.id]}
+                sentDetails={sentDetailsById[item.id]}
+              />
               </div>
             )
           })}
           {bucketMeta.needs_review.hasNext ? (
             <button
               type="button"
-              onClick={() => loadMoreCandidates('needs_review', settings.mail_date ?? null)}
+              onClick={() => loadMoreCandidates('needs_review', settings.mail_date ?? null, activeQueryOptions())}
               disabled={loadingMoreKey === 'needs_review'}
             >
               {loadingMoreKey === 'needs_review' ? 'Loading...' : 'Load More'}
@@ -6377,10 +6923,17 @@ function App() {
           {activePage === 'failed_mapping' ? (
             <section className="card pageSection">
           <h2>Failed Recipient Mapping (Teach the model)</h2>
-          {failedQueue.length === 0 ? <p className="subtle">No failed emails.</p> : null}
+          <label className="selectAllRow"><input type="checkbox" checked={failedQueue.length > 0 && failedQueue.every((item) => failedMappingSelected.has(item.id))} onChange={(event) => setFailedMappingSelected(event.target.checked ? new Set(failedQueue.map((item) => item.id)) : new Set())} /> Select all visible</label>
+          <SelectionActionBar selectedCount={failedMappingSelected.size} busyKey={failedMappingBulkAction} onClearSelection={() => setFailedMappingSelected(new Set())} actions={[{ key: 'save', label: 'Save Mapping & Move to Review', onClick: () => void runFailedMappingBulk('save'), disabled: ![...failedMappingSelected].some((id) => isValidEmailAddress(routingFixes[id]?.to ?? '') && isValidEmailAddress(routingFixes[id]?.cc ?? '')) }, { key: 'delete', label: 'Delete', onClick: () => void runFailedMappingBulk('delete'), variant: 'danger' }]} />
+          {failedQueue.length === 0 ? <p className="subtle">No failed emails match these filters.</p> : null}
           {failedQueue.map((item) => {
             const fix = routingFixes[item.id] ?? { to: '', cc: '' }
             const openUrl = sourceListingUrl(item) ?? item.gmail_message_url
+            const atsStrength = getAtsStrengthLabel(item.ats_score)
+            const atsTone = atsStrength === 'Strong' ? 'active' : atsStrength === 'Moderate' ? 'pending' : 'flagged'
+            const hasCandidateBadges = Boolean(
+              item.ats_score != null || item.premium_status || item.premium_verification_level || item.following_badge,
+            )
             return (
               <article
                 key={`failed-${item.id}`}
@@ -6388,52 +6941,91 @@ function App() {
                 data-email-search-section="failed_mapping"
                 data-email-search-related-id={item.id}
               >
-                <p><strong>Email ID:</strong> {item.id}</p>
-                <p><strong>From:</strong> {item.sender}</p>
-                <p><strong>Subject:</strong> {item.subject}</p>
-                {openUrl ? (
-                  <p>
-                    <strong>Open:</strong>{' '}
-                    <a href={openUrl} target="_blank" rel="noreferrer">
-                      {item.source === 'nvoids' ? 'Open Original Post' : 'Open exact email in Gmail'}
-                    </a>
-                  </p>
-                ) : null}
-                <p><strong>Reason:</strong> {item.last_error ?? item.state}</p>
-                {renderRoutingPanel(item)}
-                {renderCandidateEmails(item)}
-                <label>
-                  Full Email Content (for recipient mapping)
-                  <textarea value={item.body ?? ''} readOnly rows={8} />
-                </label>
-                <label>
-                  Correct To
-                  <input
-                    value={fix.to}
-                    onChange={(e) =>
-                      setRoutingFixes((prev) => ({ ...prev, [item.id]: { ...fix, to: e.target.value } }))
-                    }
-                  />
-                </label>
-                <label>
-                  Correct CC
-                  <input
-                    value={fix.cc}
-                    onChange={(e) =>
-                      setRoutingFixes((prev) => ({ ...prev, [item.id]: { ...fix, cc: e.target.value } }))
-                    }
-                  />
-                </label>
+                <div className="candidateCardTop">
+                  <input type="checkbox" className="emailItemCheckbox candidateCardCheckbox" aria-label={`Select candidate ${item.id}`} checked={failedMappingSelected.has(item.id)} onChange={() => setFailedMappingSelected((previous) => { const next = new Set(previous); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next })} />
+
+                  <div className="candidateCardHeaderMain">
+                    <h3 className="candidateCardTitle">{item.role || item.subject || 'Unknown Role'}</h3>
+                    <p className="candidateCardSubtitle">
+                      {item.location || '-'}
+                      {' · '}{item.salary_text || 'Salary not specified'}
+                      {' · '}{jdSummarySkills(item).join(', ') || '-'}
+                    </p>
+                    <p className="candidateCardMeta"><strong>From:</strong> {item.sender}</p>
+                    <p className="candidateCardMeta"><strong>Subject:</strong> {item.subject}</p>
+                    {openUrl ? (
+                      <p className="candidateCardMeta candidateCardLinks">
+                        <a href={openUrl} target="_blank" rel="noreferrer">
+                          {item.source === 'nvoids' ? 'Open Original Post' : 'Open exact email in Gmail'}
+                        </a>
+                      </p>
+                    ) : null}
+                    <p className="candidateCardMeta"><strong>Reason:</strong> {item.last_error ?? item.state}</p>
+                    <p className="candidateCardRecordId">Record ID: {item.record_id ?? '-'}</p>
+                  </div>
+
+                  {hasCandidateBadges ? (
+                    <div className="candidateCardBadges" aria-label="Candidate status badges">
+                      {item.ats_score != null ? (
+                        <span className={`statusBadge statusBadge--lg statusBadge--${atsTone}`}>
+                          ATS {atsStrength} · {formatAtsScore(item.ats_score)}
+                        </span>
+                      ) : null}
+                      {item.premium_status ? <span className={`statusBadge statusBadge--${item.premium_status === 'Active' ? 'active' : 'flagged'}`}>{item.premium_status}</span> : null}
+                      {item.premium_verification_level ? <VerificationBadge level={item.premium_verification_level} /> : null}
+                      {item.following_badge ? <span className="statusBadge statusBadge--pending" title={item.following_warning ?? undefined}>{item.following_badge === 'active' ? 'Active Following' : item.following_badge === 'tracked' ? 'Tracked' : 'Bookmarked Requirement'}</span> : null}
+                    </div>
+                  ) : null}
+                </div>
+
+                <section className="detailSection">
+                  <h4>Routing &amp; Screening</h4>
+                  {renderRoutingPanel(item)}
+                  {renderCandidateEmails(item)}
+                </section>
+
+                <section className="detailSection">
+                  <h4>Correct Recipients</h4>
+                  <label>
+                    Full Email Content (for recipient mapping)
+                    <textarea value={item.body ?? ''} readOnly rows={8} />
+                  </label>
+                  <label>
+                    Correct To
+                    <input
+                      type="email"
+                      value={fix.to}
+                      aria-invalid={Boolean(fix.to) && !isValidEmailAddress(fix.to)}
+                      onChange={(e) =>
+                        setRoutingFixes((prev) => ({ ...prev, [item.id]: { ...fix, to: e.target.value } }))
+                      }
+                    />
+                  </label>
+                  <label>
+                    Correct CC
+                    <input
+                      type="email"
+                      value={fix.cc}
+                      aria-invalid={Boolean(fix.cc) && !isValidEmailAddress(fix.cc)}
+                      onChange={(e) =>
+                        setRoutingFixes((prev) => ({ ...prev, [item.id]: { ...fix, cc: e.target.value } }))
+                      }
+                    />
+                  </label>
+                </section>
+
                 <div className="rowBtns">
                   <button
                     type="button"
+                    className="sendActionButton"
                     onClick={() => saveRoutingAndRequeue(item.id)}
-                    disabled={fixingId === item.id || deletingFailedId === item.id || !fix.to || !fix.cc}
+                    disabled={fixingId === item.id || deletingFailedId === item.id || !isValidEmailAddress(fix.to) || !isValidEmailAddress(fix.cc)}
                   >
                     {fixingId === item.id ? 'Saving...' : 'Save Mapping & Move to Review'}
                   </button>
                   <button
                     type="button"
+                    className="dangerButton"
                     onClick={() => deleteFailedMapping(item.id)}
                     disabled={deletingFailedId === item.id || fixingId === item.id}
                     title="Delete this failed mapping card from the dashboard"
@@ -6447,7 +7039,7 @@ function App() {
           {bucketMeta.failed.hasNext ? (
             <button
               type="button"
-              onClick={() => loadMoreCandidates('failed', settings.mail_date ?? null)}
+              onClick={() => loadMoreCandidates('failed', settings.mail_date ?? null, activeQueryOptions())}
               disabled={loadingMoreKey === 'failed'}
             >
               {loadingMoreKey === 'failed' ? 'Loading...' : 'Load More'}
@@ -6525,12 +7117,40 @@ function App() {
                   </button>
                   {item.skipped_items_loading ? <p className="subtle">Loading skipped items...</p> : null}
                   {item.skipped_items_error ? <p className="errorMessage">{item.skipped_items_error}</p> : null}
+                  {item.retry_error ? <p className="errorMessage">{item.retry_error}</p> : null}
                   {item.skipped_items_loaded ? (
                     item.skipped_items && item.skipped_items.length > 0 ? (
                       <div className="stack">
+                        {(() => {
+                          const retryableIds = item.skipped_items
+                            .filter((skipped) => Boolean(skipped.external_message_id))
+                            .map((skipped) => skipped.id)
+                          const selected = item.selected_skipped_ids ?? []
+                          if (retryableIds.length === 0) return null
+                          return (
+                            <div className="automationMetrics">
+                              <label>
+                                <input
+                                  type="checkbox"
+                                  checked={selected.length > 0 && retryableIds.every((id) => selected.includes(id))}
+                                  onChange={(e) => selectAllSkippedItems(item.run_key, e.target.checked)}
+                                />{' '}
+                                Select All
+                              </label>
+                              <button
+                                type="button"
+                                disabled={selected.length === 0 || item.retrying_skipped}
+                                onClick={() => void retrySelectedSkippedItems(item.run_key)}
+                              >
+                                {item.retrying_skipped ? 'Retrying...' : `Retry Selected (${selected.length})`}
+                              </button>
+                            </div>
+                          )
+                        })()}
                         {item.skipped_items.map((skipped) => {
                           const intentEvidence = skipped.intent_evidence ?? []
                           const intentNegativeEvidence = skipped.intent_negative_evidence ?? []
+                          const isSelected = (item.selected_skipped_ids ?? []).includes(skipped.id)
                           return (
                           <article
                             key={`${item.run_key}-${skipped.id}`}
@@ -6538,63 +7158,78 @@ function App() {
                             data-email-search-section="recent_runs"
                             data-email-search-related-id={skipped.id}
                           >
-                            <p><strong>Source:</strong> {getSourceLabel(skipped.source_type)}</p>
-                            <p><strong>Title:</strong> {renderTextOrDash(skipped.title_or_subject)}</p>
-                            <p><strong>Why:</strong> {renderTextOrDash(skipped.reason_detail || skipped.reason_code)}</p>
-                            {skipped.source_group_name || skipped.source_group_email ? (
-                              <p>
-                                <strong>Source Group:</strong>{' '}
-                                {[skipped.source_group_name, skipped.source_group_email].filter(Boolean).join(' | ')}
-                              </p>
-                            ) : null}
-                            {skipped.source_group_match_method ? (
-                              <p><strong>Matched Through:</strong> {skipped.source_group_match_method}</p>
-                            ) : null}
-                            {skipped.intent_type || skipped.gate_action || skipped.gate_provider ? (
-                              <p>
-                                <strong>Gate:</strong>{' '}
-                                {[skipped.intent_type, skipped.gate_action, skipped.gate_provider].filter(Boolean).join(' | ')}
-                              </p>
-                            ) : null}
-                            {skipped.intent_confidence != null ? (
-                              <p><strong>Confidence:</strong> {skipped.intent_confidence.toFixed(2)}</p>
-                            ) : null}
-                            {skipped.intent_reason && skipped.intent_reason !== skipped.reason_detail ? (
-                              <p><strong>Intent Reason:</strong> {skipped.intent_reason}</p>
-                            ) : null}
-                            {skipped.qualification_result ? (
-                              <p><strong>Qualification Result:</strong> {skipped.qualification_result}</p>
-                            ) : null}
-                            {skipped.blocking_rule ? (
-                              <p><strong>Blocking Rule:</strong> {skipped.blocking_rule}</p>
-                            ) : null}
-                            {skipped.qualification_detail && skipped.qualification_detail !== skipped.reason_detail ? (
-                              <p><strong>Qualification Detail:</strong> {skipped.qualification_detail}</p>
-                            ) : null}
-                            {intentEvidence.length > 0 ? (
-                              <div className="automationMetrics">
-                                <strong>Evidence:</strong>
-                                {intentEvidence.map((entry) => (
-                                  <span key={`${skipped.id}-${entry}`} className="tag">{entry}</span>
-                                ))}
+                            <div className="skippedItemRow">
+                              <div className="skippedItemCheckbox">
+                                {skipped.external_message_id ? (
+                                  <input
+                                    type="checkbox"
+                                    checked={isSelected}
+                                    aria-label="Select for retry"
+                                    title="Select for retry"
+                                    onChange={() => toggleSkippedItemSelected(item.run_key, skipped.id)}
+                                  />
+                                ) : null}
                               </div>
-                            ) : null}
-                            {intentNegativeEvidence.length > 0 ? (
-                              <div className="automationMetrics">
-                                <strong>Negative Evidence:</strong>
-                                {intentNegativeEvidence.map((entry) => (
-                                  <span key={`${skipped.id}-neg-${entry}`} className="tag">{entry}</span>
-                                ))}
+                              <div className="skippedItemContent">
+                                <p><strong>Source:</strong> {getSourceLabel(skipped.source_type)}</p>
+                                <p><strong>Title:</strong> {renderTextOrDash(skipped.title_or_subject)}</p>
+                                <p><strong>Why:</strong> {renderTextOrDash(skipped.reason_detail || skipped.reason_code)}</p>
+                                {skipped.source_group_name || skipped.source_group_email ? (
+                                  <p>
+                                    <strong>Source Group:</strong>{' '}
+                                    {[skipped.source_group_name, skipped.source_group_email].filter(Boolean).join(' | ')}
+                                  </p>
+                                ) : null}
+                                {skipped.source_group_match_method ? (
+                                  <p><strong>Matched Through:</strong> {skipped.source_group_match_method}</p>
+                                ) : null}
+                                {skipped.intent_type || skipped.gate_action || skipped.gate_provider ? (
+                                  <p>
+                                    <strong>Gate:</strong>{' '}
+                                    {[skipped.intent_type, skipped.gate_action, skipped.gate_provider].filter(Boolean).join(' | ')}
+                                  </p>
+                                ) : null}
+                                {skipped.intent_confidence != null ? (
+                                  <p><strong>Confidence:</strong> {skipped.intent_confidence.toFixed(2)}</p>
+                                ) : null}
+                                {skipped.intent_reason && skipped.intent_reason !== skipped.reason_detail ? (
+                                  <p><strong>Intent Reason:</strong> {skipped.intent_reason}</p>
+                                ) : null}
+                                {skipped.qualification_result ? (
+                                  <p><strong>Qualification Result:</strong> {skipped.qualification_result}</p>
+                                ) : null}
+                                {skipped.blocking_rule ? (
+                                  <p><strong>Blocking Rule:</strong> {skipped.blocking_rule}</p>
+                                ) : null}
+                                {skipped.qualification_detail && skipped.qualification_detail !== skipped.reason_detail ? (
+                                  <p><strong>Qualification Detail:</strong> {skipped.qualification_detail}</p>
+                                ) : null}
+                                {intentEvidence.length > 0 ? (
+                                  <div className="automationMetrics">
+                                    <strong>Evidence:</strong>
+                                    {intentEvidence.map((entry) => (
+                                      <span key={`${skipped.id}-${entry}`} className="tag">{entry}</span>
+                                    ))}
+                                  </div>
+                                ) : null}
+                                {intentNegativeEvidence.length > 0 ? (
+                                  <div className="automationMetrics">
+                                    <strong>Negative Evidence:</strong>
+                                    {intentNegativeEvidence.map((entry) => (
+                                      <span key={`${skipped.id}-neg-${entry}`} className="tag">{entry}</span>
+                                    ))}
+                                  </div>
+                                ) : null}
+                                {skipped.source_url || skipped.gmail_message_url ? (
+                                  <p>
+                                    <strong>Open:</strong>{' '}
+                                    <a href={skipped.source_url ?? skipped.gmail_message_url ?? undefined} target="_blank" rel="noreferrer">
+                                      {skipped.source_type === 'nvoids' ? 'Open Original Post' : 'Open exact email in Gmail'}
+                                    </a>
+                                  </p>
+                                ) : null}
                               </div>
-                            ) : null}
-                            {skipped.source_url || skipped.gmail_message_url ? (
-                              <p>
-                                <strong>Open:</strong>{' '}
-                                <a href={skipped.source_url ?? skipped.gmail_message_url ?? undefined} target="_blank" rel="noreferrer">
-                                  {skipped.source_type === 'nvoids' ? 'Open Original Post' : 'Open exact email in Gmail'}
-                                </a>
-                              </p>
-                            ) : null}
+                            </div>
                           </article>
                           )
                         })}
@@ -6611,277 +7246,23 @@ function App() {
           ) : null}
 
           {activePage === 'premium_numbers' ? (
-            <section className="card pageSection">
-              <h2>Premium Numbers</h2>
-              <div className="actionBar">
-                <select
-                  value={premiumScopeFilter}
-                  onChange={(e) => setPremiumScopeFilter(e.target.value as PremiumScope)}
-                >
-                  <option value="all_review">All</option>
-                  <option value="recruiter_numbers">Recruiter Numbers</option>
-                  <option value="employer_numbers">Employer Numbers</option>
-                  <option value="recruiter_opportunities">Recruiter Opportunities</option>
-                </select>
-                {premiumScopeFilter === 'recruiter_opportunities' ? (
-                  <>
-                    <select
-                      value={opportunityStatusFilter}
-                      onChange={(e) => setOpportunityStatusFilter(e.target.value as 'all' | OpportunityStatus)}
-                    >
-                      <option value="all">All statuses</option>
-                      <option value="New">New</option>
-                      <option value="Called">Called</option>
-                      <option value="Applied">Applied</option>
-                      <option value="Follow Up">Follow Up</option>
-                      <option value="Closed">Closed</option>
-                      <option value="Not Interested">Not Interested</option>
-                    </select>
-                    <select
-                      value={opportunitySourceFilter}
-                      onChange={(e) => setOpportunitySourceFilter(e.target.value as 'all' | 'gmail' | 'nvoids')}
-                    >
-                      <option value="all">All sources</option>
-                      <option value="gmail">Gmail</option>
-                      <option value="nvoids">Nvoids</option>
-                    </select>
-                  </>
-                ) : null}
-                <input
-                  value={premiumSearch}
-                  onChange={(e) => setPremiumSearch(e.target.value)}
-                  placeholder="Search number, owner, company..."
-                />
-              </div>
-              {premiumLoading ? <p className="subtle">Loading premium numbers...</p> : null}
-              {premiumError ? <p className="subtle">Premium numbers error: {premiumError}</p> : null}
-              {premiumScopeFilter === 'all_review' && !premiumLoading && numberReviewCards.length === 0 ? (
-                <p className="subtle">No unknown numbers pending review.</p>
-              ) : null}
-              {premiumScopeFilter === 'all_review'
-                ? numberReviewCards.map((item) => (
-                    <article
-                      key={`review-${item.id}`}
-                      className={`emailItem ${isEmailSearchHighlight('premium_numbers', item.id) ? 'emailSearchHighlight' : ''}`}
-                      data-email-search-section="premium_numbers"
-                      data-email-search-related-id={item.id}
-                    >
-                      <p><strong>Phone:</strong> {item.display_phone_number}</p>
-                      <p><strong>Owner:</strong> {item.owner_name}</p>
-                      <p><strong>Company:</strong> {item.company}</p>
-                      <p><strong>Designation:</strong> {item.designation}</p>
-                      <p><strong>Confidence:</strong> {item.confidence.toUpperCase()}</p>
-                      <p><strong>Purpose:</strong> {item.purpose}</p>
-                      <p><strong>Email Sender:</strong> {item.email_sender}</p>
-                      <p><strong>Email Subject:</strong> {item.email_subject}</p>
-                      {item.gmail_open_url ? (
-                        <p><strong>Open:</strong> <a href={item.gmail_open_url} target="_blank" rel="noreferrer">Open exact email in Gmail</a></p>
-                      ) : null}
-                      <p className="subtle"><strong>Evidence:</strong> {item.evidence_snippet}</p>
-                      <div className="rowBtns">
-                        <button
-                          type="button"
-                          onClick={() => markReviewCard(item.id, 'recruiter')}
-                          disabled={classifyingReviewId === item.id}
-                        >
-                          Mark as Recruiter
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => markReviewCard(item.id, 'employer')}
-                          disabled={classifyingReviewId === item.id}
-                        >
-                          Mark as Employer
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => deleteReviewCard(item.id)}
-                          disabled={classifyingReviewId === item.id}
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </article>
-                  ))
-                : null}
-
-              {premiumScopeFilter === 'recruiter_numbers' && !premiumLoading && recruiterNumberCards.length === 0 ? (
-                <p className="subtle">No recruiter numbers found.</p>
-              ) : null}
-              {premiumScopeFilter === 'recruiter_numbers'
-                ? recruiterNumberCards.map((item) => (
-                    <article
-                      key={`recruiter-number-${item.id}`}
-                      className={`emailItem ${isEmailSearchHighlight('premium_numbers', item.id) ? 'emailSearchHighlight' : ''}`}
-                      data-email-search-section="premium_numbers"
-                      data-email-search-related-id={item.id}
-                    >
-                      <p><strong>Recruiter:</strong> {item.recruiter_name}</p>
-                      <p><strong>Phone:</strong> {item.display_phone_number}</p>
-                      <p><strong>Company:</strong> {item.company}</p>
-                      <p><strong>Designation:</strong> {item.designation}</p>
-                      <p><strong>Recruiter Email:</strong> {item.recruiter_email || '-'}</p>
-                      <p><strong>Total Opportunities:</strong> {item.total_opportunity_count}</p>
-                      <p><strong>Last Email:</strong> {item.last_email_received_at ? new Date(item.last_email_received_at).toLocaleString() : '-'}</p>
-                      <div className="rowBtns">
-                        <button
-                          type="button"
-                          onClick={() => swapNumberBucket(item.id, 'recruiter')}
-                          disabled={classifyingReviewId === item.id}
-                        >
-                          Swap to Employer
-                        </button>
-                      </div>
-                    </article>
-                  ))
-                : null}
-
-              {premiumScopeFilter === 'employer_numbers' && !premiumLoading && employerNumberCards.length === 0 ? (
-                <p className="subtle">No employer numbers found.</p>
-              ) : null}
-              {premiumScopeFilter === 'employer_numbers'
-                ? employerNumberCards.map((item) => (
-                    <article
-                      key={`employer-number-${item.id}`}
-                      className={`emailItem ${isEmailSearchHighlight('premium_numbers', item.id) ? 'emailSearchHighlight' : ''}`}
-                      data-email-search-section="premium_numbers"
-                      data-email-search-related-id={item.id}
-                    >
-                      <p><strong>Phone:</strong> {item.display_phone_number}</p>
-                      <p><strong>Owner:</strong> {item.owner_name}</p>
-                      <p><strong>Company:</strong> {item.company}</p>
-                      <p><strong>Source Email ID:</strong> {item.source_email_id ?? '-'}</p>
-                      <div className="rowBtns">
-                        <button
-                          type="button"
-                          onClick={() => swapNumberBucket(item.id, 'employer')}
-                          disabled={classifyingReviewId === item.id}
-                        >
-                          Swap to Recruiter
-                        </button>
-                      </div>
-                    </article>
-                  ))
-                : null}
-
-              {premiumScopeFilter === 'recruiter_opportunities' && !premiumLoading && opportunityCards.length === 0 ? (
-                <p className="subtle">No recruiter opportunities found.</p>
-              ) : null}
-              {premiumScopeFilter === 'recruiter_opportunities'
-                ? opportunityCards.map((item) => (
-                    <article
-                      key={`opportunity-${item.id}`}
-                      className={`emailItem ${isEmailSearchHighlight('premium_numbers', item.id) ? 'emailSearchHighlight' : ''}`}
-                      data-email-search-section="premium_numbers"
-                      data-email-search-related-id={item.id}
-                    >
-                      <p><strong>Subject:</strong> {item.email_subject}</p>
-                      <p><strong>Source:</strong> {(item.source_type || 'gmail').toUpperCase()}</p>
-                      <p><strong>Recruiter Name:</strong> {item.recruiter_name || '-'}</p>
-                      <p><strong>Recruiter Email:</strong> {item.recruiter_email || '-'}</p>
-                      <p><strong>Recruiter Phone:</strong> {item.recruiter_phone_display || '-'}</p>
-                      <p><strong>Email Sender:</strong> {item.email_sender || '-'}</p>
-                      <p><strong>Job Title:</strong> {item.job_title || '-'}</p>
-                      <p><strong>Client:</strong> {item.client || '-'}</p>
-                      <p><strong>Location:</strong> {item.location || '-'}</p>
-                      <p><strong>Work Mode:</strong> {item.work_mode || '-'}</p>
-                      <p><strong>Visa:</strong> {item.visa_restrictions || '-'}</p>
-                      <p><strong>Skills:</strong> {item.extracted_skills || '-'}</p>
-                      {item.source_url || item.gmail_open_url ? (
-                        <p>
-                          <strong>Open:</strong>{' '}
-                          <a href={item.source_url || item.gmail_open_url} target="_blank" rel="noreferrer">
-                            {item.source_type === 'nvoids' ? 'Open Original Post' : 'Open exact email in Gmail'}
-                          </a>
-                        </p>
-                      ) : null}
-                      <label>
-                        Status
-                        <select
-                          value={item.status}
-                          onChange={(e) => updateOpportunity(item.id, { status: e.target.value as OpportunityStatus })}
-                          disabled={updatingOpportunityId === item.id}
-                        >
-                          <option value="New">New</option>
-                          <option value="Called">Called</option>
-                          <option value="Applied">Applied</option>
-                          <option value="Follow Up">Follow Up</option>
-                          <option value="Closed">Closed</option>
-                          <option value="Not Interested">Not Interested</option>
-                        </select>
-                      </label>
-                      <label>
-                        Notes
-                        <textarea
-                          value={item.notes || ''}
-                          rows={3}
-                          onChange={(e) =>
-                            setOpportunityCards((prev) =>
-                              prev.map((entry) => (entry.id === item.id ? { ...entry, notes: e.target.value } : entry)),
-                            )
-                          }
-                          onBlur={(e) => updateOpportunity(item.id, { notes: e.target.value })}
-                          disabled={updatingOpportunityId === item.id}
-                        />
-                      </label>
-                      <div className="rowBtns">
-                        <button
-                          type="button"
-                          onClick={() => generateColdCallScript(item.id)}
-                          disabled={generatingColdCallId === item.id || deletingOpportunityId === item.id}
-                        >
-                          {generatingColdCallId === item.id ? 'Generating...' : 'Generate Cold Call Script'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => deleteOpportunity(item.id)}
-                          disabled={deletingOpportunityId === item.id}
-                        >
-                          {deletingOpportunityId === item.id ? 'Deleting...' : 'Delete'}
-                        </button>
-                        {item.cold_call_script ? (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              navigator.clipboard.writeText(item.cold_call_script || '').catch(() => {
-                                setPremiumError('Failed to copy cold call script')
-                              })
-                            }}
-                          >
-                            Copy Script
-                          </button>
-                        ) : null}
-                      </div>
-                      {item.cold_call_script ? (
-                        <label>
-                          Cold Call Script
-                          <textarea
-                            value={item.cold_call_script}
-                            rows={4}
-                            readOnly
-                          />
-                        </label>
-                      ) : null}
-                    </article>
-                  ))
-                : null}
-              {premiumPageMeta[premiumScopeFilter].hasNext ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    const nextCursor = premiumPageMeta[premiumScopeFilter].nextCursor
-                    if (nextCursor == null) return
-                    loadPremiumNumbers({ append: true, cursor: nextCursor }).catch((e) =>
-                      setPremiumError((e as Error).message),
-                    )
-                  }}
-                  disabled={premiumLoading || premiumPageMeta[premiumScopeFilter].nextCursor == null}
-                >
-                  {premiumLoading ? 'Loading...' : 'Load More'}
-                </button>
-              ) : null}
-            </section>
+            <PremiumNumbersPage
+              apiBase={apiBase}
+              mailDate={settings.mail_date ?? null}
+              emailSearchTarget={emailSearchTarget}
+              refreshToken={premiumRefreshToken}
+              applicationsEnabled={settings.feature_applications_enabled}
+              onPendingCountChange={setPremiumPendingCount}
+              activeTab={premiumTab}
+              onTabChange={setPremiumTab}
+              filterValues={activeFilterValues}
+              sortValue={activeSortValue}
+            />
           ) : null}
+
+          {activePage === 'application_tracking' ? <AppTSPage apiBase={apiBase} refreshToken={premiumRefreshToken} activeTab={applicationTrackingTab} onTabChange={setApplicationTrackingTab} filterValues={activeFilterValues} sortValue={activeSortValue} /> : null}
+
+          {activePage === 'resume_tracking' ? <ResumeTrackingPage apiBase={apiBase} onNavigateToSettings={(resumeId) => { setFocusResumeId(resumeId); setActivePage('settings') }} activeTab={resumeTrackingTab} onTabChange={setResumeTrackingTab} filterValues={activeFilterValues} sortValue={activeSortValue} /> : null}
 
           {activePage === 'inbox' ? (
             <section className="card pageSection inboxSection">
@@ -6894,7 +7275,7 @@ function App() {
                   <button
                     type="button"
                     className={`iconBtn inboxRefreshBtn ${inboxLoading ? 'loading' : ''}`}
-                    onClick={() => void loadInboxConversations()}
+                    onClick={() => void refreshInboxReplies()}
                     disabled={inboxLoading}
                     aria-label="Refresh conversations"
                     aria-busy={inboxLoading}
@@ -6917,32 +7298,49 @@ function App() {
                   ) : null}
                   {inboxConversations.map((conversation) => {
                     const isUnread = conversation.unread_reply_count > 0
-                    const absoluteTime = new Date(conversation.last_message_at).toLocaleString()
+                    const displayTime = conversation.last_inbound_reply_at ?? conversation.last_message_at
+                    const absoluteTime = new Date(displayTime).toLocaleString()
                     return (
-                      <button
-                        key={conversation.id}
-                        type="button"
-                        className={`conversationListItem ${isUnread ? 'unread' : ''} ${selectedConversationId === conversation.id ? 'active' : ''} ${isEmailSearchHighlight('inbox', conversation.id) ? 'emailSearchHighlight' : ''}`}
-                        data-email-search-section="inbox"
-                        data-email-search-related-id={conversation.id}
-                        onClick={() => void openInboxConversation(conversation.id)}
-                        aria-label={`${isUnread ? 'Unread: ' : ''}${conversation.recruiter}, ${conversation.subject}, ${absoluteTime}`}
-                        title={absoluteTime}
-                      >
-                        <span className="conversationListTopline">
-                          <span className="conversationListIdentity">
-                            <span className="conversationListSender">{conversation.recruiter}</span>
-                            <span className="conversationListSubject">{conversation.subject}</span>
+                      <div key={conversation.id} className="conversationListItemWrap">
+                        <button
+                          type="button"
+                          className={`conversationListItem ${isUnread ? 'unread' : ''} ${selectedConversationId === conversation.id ? 'active' : ''} ${isEmailSearchHighlight('inbox', conversation.id) ? 'emailSearchHighlight' : ''}`}
+                          data-email-search-section="inbox"
+                          data-email-search-related-id={conversation.id}
+                          onClick={() => void openInboxConversation(conversation.id)}
+                          aria-label={`${isUnread ? 'Unread: ' : ''}${conversation.recruiter}, ${conversation.subject}, ${absoluteTime}`}
+                          title={absoluteTime}
+                        >
+                          <span className="conversationListTopline">
+                            <span className="conversationListIdentity">
+                              <span className="conversationListSender">{conversation.recruiter}</span>
+                              <span className="conversationListSubject">{conversation.subject}</span>
+                            </span>
+                            <span className="conversationListMeta">
+                              {isUnread ? <span className="unreadDot" aria-hidden="true" /> : null}
+                              <time dateTime={displayTime} title={absoluteTime}>
+                                {formatRelativeInboxTime(displayTime)}
+                              </time>
+                            </span>
                           </span>
-                          <span className="conversationListMeta">
-                            {isUnread ? <span className="unreadDot" aria-hidden="true" /> : null}
-                            <time dateTime={conversation.last_message_at} title={absoluteTime}>
-                              {formatRelativeInboxTime(conversation.last_message_at)}
-                            </time>
-                          </span>
-                        </span>
-                        <small className="conversationPreview">{conversation.last_message_preview || 'No message preview'}</small>
-                      </button>
+                          <small className="conversationPreview">{conversation.last_message_preview || 'No message preview'}</small>
+                        </button>
+                        {conversation.gmail_thread_link ? (
+                          <a
+                            className="conversationGmailLink"
+                            href={conversation.gmail_thread_link}
+                            target="_blank"
+                            rel="noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            title="Open original thread in Gmail"
+                            aria-label="Open original thread in Gmail"
+                          >
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                              <path d="M14 4h6v6M20 4 11 13M9 5H5a1 1 0 0 0-1 1v13a1 1 0 0 0 1 1h13a1 1 0 0 0 1-1v-4" />
+                            </svg>
+                          </a>
+                        ) : null}
+                      </div>
                     )
                   })}
                 </div>
@@ -7041,7 +7439,11 @@ function App() {
             const sentDetailError = sentDetailErrors[item.id]
             const sentDetailLoading = Boolean(sentDetailLoadingIds[item.id])
             const parserExpanded = Boolean(expandedParserDetailIds[item.id])
-            const listingUrl = sourceListingUrl(item)
+            const atsStrength = getAtsStrengthLabel(item.ats_score)
+            const atsTone = atsStrength === 'Strong' ? 'active' : atsStrength === 'Moderate' ? 'pending' : 'flagged'
+            const hasCandidateBadges = Boolean(
+              item.ats_score != null || item.premium_status || item.premium_verification_level || item.following_badge,
+            )
             return (
               <article
                 key={`sent-${item.id}`}
@@ -7049,19 +7451,40 @@ function App() {
                 data-email-search-section="sent_items"
                 data-email-search-related-id={item.id}
               >
-                <div className="sentItemHeader">
-                  <div className="sentItemHeaderText">
-                    <p><strong>Email ID:</strong> {item.id}</p>
-                    <p><strong>From:</strong> {item.sender}</p>
-                    <p><strong>Subject:</strong> {item.subject}</p>
-                    <p><strong>Sent at:</strong> {item.sent_at ? new Date(item.sent_at).toLocaleString() : '-'}</p>
+                <div className="candidateCardTop">
+                  <div className="candidateCardHeaderMain">
+                    <h3 className="candidateCardTitle">{item.role || item.subject || 'Unknown Role'}</h3>
+                    <p className="candidateCardSubtitle">
+                      {item.location || '-'}
+                      {' · '}{item.salary_text || 'Salary not specified'}
+                      {' · '}{jdSummarySkills(item).join(', ') || '-'}
+                    </p>
+                    <p className="candidateCardMeta"><strong>From:</strong> {item.sender}</p>
+                    <p className="candidateCardMeta"><strong>Subject:</strong> {item.subject}</p>
+                    <p className="candidateCardMeta"><strong>Sent at:</strong> {item.sent_at ? new Date(item.sent_at).toLocaleString() : '-'}</p>
+                    <p className="candidateCardRecordId">Record ID: {item.record_id ?? '-'}</p>
                   </div>
-                  <div className="sentItemHeaderActions">
-                    <span className="sourceBadge">{getSourceLabel(item.source)}</span>
-                    <button type="button" onClick={() => void toggleSentDetails(item.id)}>
-                      {isExpanded ? 'Hide Details' : 'View Details'}
-                    </button>
-                  </div>
+
+                  {hasCandidateBadges ? (
+                    <div className="candidateCardBadges" aria-label="Candidate status badges">
+                      {item.ats_score != null ? (
+                        <span className={`statusBadge statusBadge--lg statusBadge--${atsTone}`}>
+                          ATS {atsStrength} · {formatAtsScore(item.ats_score)}
+                        </span>
+                      ) : null}
+                      {item.premium_status ? <span className={`statusBadge statusBadge--${item.premium_status === 'Active' ? 'active' : 'flagged'}`}>{item.premium_status}</span> : null}
+                      {item.premium_verification_level ? <VerificationBadge level={item.premium_verification_level} /> : null}
+                      {item.following_badge ? <span className="statusBadge statusBadge--pending" title={item.following_warning ?? undefined}>{item.following_badge === 'active' ? 'Active Following' : item.following_badge === 'tracked' ? 'Tracked' : 'Bookmarked Requirement'}</span> : null}
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="sentItemHeaderActions">
+                  <span className="sourceBadge">{getSourceLabel(item.source)}</span>
+                  {settings.feature_applications_enabled ? <button type="button" onClick={() => void toggleTracking(item.id).catch((reason) => setError((reason as Error).message))}>Track Application</button> : null}
+                  <button type="button" onClick={() => void toggleSentDetails(item.id)}>
+                    {isExpanded ? 'Hide Sourcing Audit Trail' : 'Sourcing Audit Trail'}
+                  </button>
                 </div>
                 {isExpanded ? (
                   <div className="parserDetailsPanel sentItemDetailsPanel">
@@ -7080,78 +7503,7 @@ function App() {
                           </span>
                           <span className="trackingBadge">Replies: {sentDetails.reply_count}</span>
                         </div>
-                        <div className="parserDetailsSummaryGrid">
-                          <ParserDetailsCard title="Source" className="parserDetailsSummaryBlock">
-                            <div className="sentItemLinkList">
-                              <p><strong>Source:</strong> {renderTextOrDash(sentDetails.source_label)}</p>
-                              <p>
-                                <strong>Requirement Link:</strong>{' '}
-                                {sentDetails.requirement_received_link ? (
-                                  <a href={sentDetails.requirement_received_link} target="_blank" rel="noreferrer">
-                                    Open requirement
-                                  </a>
-                                ) : '-'}
-                              </p>
-                              <p>
-                                <strong>Original Gmail Link:</strong>{' '}
-                                {item.gmail_message_url ? (
-                                  <a href={item.gmail_message_url} target="_blank" rel="noreferrer">
-                                    Open original email
-                                  </a>
-                                ) : '-'}
-                              </p>
-                              <p>
-                                <strong>Source Listing Link:</strong>{' '}
-                                {listingUrl ? (
-                                  <a href={listingUrl} target="_blank" rel="noreferrer">
-                                    Open source listing
-                                  </a>
-                                ) : '-'}
-                              </p>
-                              <p>
-                                <strong>Sent Gmail Link:</strong>{' '}
-                                {sentDetails.sent_gmail_message_link ? (
-                                  <a href={sentDetails.sent_gmail_message_link} target="_blank" rel="noreferrer">
-                                  Open sent message
-                                </a>
-                              ) : '-'}
-                              </p>
-                            </div>
-                          </ParserDetailsCard>
-                          <ParserDetailsCard title="Requirement" className="parserDetailsSummaryBlock">
-                            <pre className="parserCardPre">{[
-                              `Role: ${renderTextOrDash(item.role)}`,
-                              `Location: ${renderTextOrDash(item.location)}`,
-                              `Salary: ${renderTextOrDash(item.salary_text)}`,
-                              `Skills: ${renderTextOrDash(item.skills_text)}`,
-                              `Company: ${renderTextOrDash(sentDetails.company)}`,
-                              `End Client: ${renderTextOrDash(sentDetails.end_client)}`,
-                              `Implementation Partner: ${renderTextOrDash(sentDetails.implementation_partner)}`,
-                              `Vendor: ${renderTextOrDash(sentDetails.vendor)}`,
-                              `Domain Mentioned: ${renderTextOrDash(sentDetails.domain_mentioned)}`,
-                              `Experience Required: ${renderTextOrDash(sentDetails.experience_required)}`,
-                              `Mandatory Skills: ${renderListOrDash(sentDetails.mandatory_skills)}`,
-                              `Missing Skills: ${renderListOrDash(sentDetails.missing_skills)}`,
-                            ].join('\n')}</pre>
-                          </ParserDetailsCard>
-                          <ParserDetailsCard title="Resume / Send Audit" className="parserDetailsSummaryBlock">
-                            <pre className="parserCardPre">{[
-                              `Resume Variant Sent: ${renderTextOrDash(sentDetails.resume_variant_sent ?? item.resume_file_name)}`,
-                              `Attached Files: ${renderListOrDash(sentDetails.attached_files)}`,
-                              `To: ${renderTextOrDash(sentDetails.to_email ?? item.recipient_email)}`,
-                              `CC: ${renderTextOrDash(sentDetails.cc_email ?? item.cc_email)}`,
-                              `ATS Score: ${formatAtsScore(sentDetails.ats_score ?? item.ats_score)}${(sentDetails.ats_score ?? item.ats_score) != null ? ` (${getAtsStrengthLabel(sentDetails.ats_score ?? item.ats_score)})` : ''}`,
-                              `ATS Summary: ${renderTextOrDash(sentDetails.ats_summary ?? item.ats_summary)}`,
-                            ].join('\n')}</pre>
-                          </ParserDetailsCard>
-                          <ParserDetailsCard title="Recruiter" className="parserDetailsSummaryBlock">
-                            <pre className="parserCardPre">{[
-                              `Recruiter Name: ${renderTextOrDash(sentDetails.recruiter_name)}`,
-                              `Recruiter Email: ${renderTextOrDash(sentDetails.recruiter_email)}`,
-                              `Recruiter Phone: ${renderTextOrDash(sentDetails.recruiter_phone)}`,
-                            ].join('\n')}</pre>
-                          </ParserDetailsCard>
-                        </div>
+                        {renderContactDetailsGrid(sentDetails, item)}
                         <ParserDetailsPanel
                           candidateId={item.id}
                           source={item.source}
@@ -7179,7 +7531,7 @@ function App() {
           {bucketMeta.approved_sent.hasNext ? (
             <button
               type="button"
-              onClick={() => loadMoreCandidates('approved_sent', settings.mail_date ?? null)}
+              onClick={() => loadMoreCandidates('approved_sent', settings.mail_date ?? null, activeQueryOptions())}
               disabled={loadingMoreKey === 'approved_sent'}
             >
               {loadingMoreKey === 'approved_sent' ? 'Loading...' : 'Load More'}
