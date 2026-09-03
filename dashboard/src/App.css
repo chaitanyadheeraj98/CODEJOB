@@ -5322,3 +5322,43 @@ button.chatRankedLabel:focus-visible {
 .chatDisambiguationOptions button.chosen {
   border-color: var(--accent, #3b6ea5);
 }
+
+/* Web citations (v2 W9). Deliberately unlike any internal-data surface: a
+   search result that looks like a stored record is a claim the product did
+   not make. Nothing here reuses .candidateTable. */
+.chatWebResults {
+  margin: 8px 0;
+  padding: 10px 12px;
+  border: 1px dashed var(--border, #c7d0dd);
+  border-radius: 8px;
+  background: var(--bg-subtle, #f7f9fc);
+}
+
+.chatWebLabel {
+  margin: 0 0 6px;
+  font-size: 0.75em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.7;
+}
+
+.chatWebList {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 0.9em;
+}
+
+.chatWebList > li + li {
+  margin-top: 8px;
+}
+
+.chatWebHost {
+  font-size: 0.85em;
+  opacity: 0.65;
+}
+
+.chatWebSnippet {
+  margin: 2px 0 0;
+  font-size: 0.9em;
+  opacity: 0.85;
+}

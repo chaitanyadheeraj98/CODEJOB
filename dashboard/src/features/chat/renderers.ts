@@ -107,6 +107,10 @@ export type DisambiguationData = {
   truncated: boolean
 }
 
+export type WebResult = { url: string; title: string; snippet: string }
+
+export type WebResultsData = { query: string; results: WebResult[] }
+
 export type RenderedPayload =
   | { kind: 'candidate_table'; data: CandidateTableData }
   | { kind: 'queue_link'; data: QueueLinkData }
@@ -115,6 +119,7 @@ export type RenderedPayload =
   | { kind: 'comparison'; data: ComparisonData }
   | { kind: 'chart'; data: ChartData }
   | { kind: 'disambiguation'; data: DisambiguationData }
+  | { kind: 'web_results'; data: WebResultsData }
 
 export type RenderHandler = {
   parse: (message: ChatMessage) => RenderedPayload | null
@@ -429,6 +434,32 @@ export const RENDER_HANDLERS: Record<string, RenderHandler> = {
             options,
             truncated: payload.truncated === true,
           },
+        }
+      } catch {
+        return null
+      }
+    },
+  },
+  search_web: {
+    parse: (message) => {
+      try {
+        const payload = JSON.parse(message.content) as Record<string, unknown>
+        if (!payload || payload.action !== 'search_web') return null
+        if (!Array.isArray(payload.results)) return null
+        const results: WebResult[] = []
+        for (const entry of payload.results) {
+          if (!entry || typeof entry !== 'object') return null
+          const row = entry as Record<string, unknown>
+          if (typeof row.url !== 'string') return null
+          results.push({
+            url: row.url,
+            title: typeof row.title === 'string' ? row.title : '',
+            snippet: typeof row.snippet === 'string' ? row.snippet : '',
+          })
+        }
+        return {
+          kind: 'web_results',
+          data: { query: typeof payload.query === 'string' ? payload.query : '', results },
         }
       } catch {
         return null

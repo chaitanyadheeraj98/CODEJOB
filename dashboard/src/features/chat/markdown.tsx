@@ -7,7 +7,7 @@ const LINK = /^\[([^\]]+)\]\(([^)\s]*)\)$/
 // an href here is attacker-reachable text. Only http(s) and same-origin
 // relative paths become links; everything else - javascript:, data:, and
 // protocol-relative //host or /\host - renders as the literal markdown it was.
-function safeHref(raw: string): string | null {
+export function safeHref(raw: string): string | null {
   const value = raw.trim()
   if (!value) return null
   if (/^https?:\/\//i.test(value)) return value
