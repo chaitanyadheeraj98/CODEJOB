@@ -10,6 +10,42 @@
   --primary-strong: #0b3faa;
   --danger: #b60f1f;
   --ok: #0f4bcf;
+
+  /* Type scale. The app had a hole between 14px and 32px: a handful of
+     elements at 32-58px sitting over ~100 declarations at 11-13px, with
+     nothing between. That gap is why a dense operations UI read as shouty
+     rather than composed. Roles map onto these steps below. */
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 20px;
+  --text-2xl: 26px;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+
+  /* Offset plus soft blur - a zero-offset halo is decoration, not depth. */
+  --shadow-sm: 0 1px 2px rgba(17, 24, 39, 0.05);
+  --shadow-md: 0 6px 16px -6px rgba(17, 24, 39, 0.16);
+
+  --focus: #2563eb;
+  --selection: #cbdcff;
+}
+
+/* Browser surfaces ship with defaults belonging to no design system. Theming
+   the caret, selection and focus ring is the cheapest signal that a page was
+   built rather than assembled. */
+::selection {
+  background: var(--selection);
+  color: #0b1a3d;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
 }
 
 input[type='checkbox'],
@@ -28,25 +64,31 @@ input[type='radio'] {
   position: sticky;
   top: 0;
   height: 100vh;
+  /* The rail is exactly one viewport tall, so without this its own content
+     (nav plus the Settings/Help footer) spills past the background and the
+     last two items render on the page canvas instead of the rail. */
+  overflow-y: auto;
+  overscroll-behavior: contain;
   border-right: 1px solid var(--line-strong);
   background: #b8bfd8;
-  padding: 20px;
+  padding: 18px 16px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
 }
 
 .brandWrap {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding-bottom: 18px;
+  gap: 12px;
+  padding-bottom: 14px;
 }
 
 .brandIcon {
-  width: 46px;
-  height: 46px;
-  border-radius: 10px;
+  width: 38px;
+  height: 38px;
+  flex: none;
+  border-radius: var(--radius-md);
   background: linear-gradient(135deg, #f4f7ff, #dbe4ff);
   color: var(--primary);
   font-size: 12px;
@@ -58,17 +100,19 @@ input[type='radio'] {
 .brand {
   margin: 0;
   color: var(--primary);
-  font-size: 46px;
-  line-height: 0.95;
+  font-size: var(--text-xl);
+  line-height: 1.15;
   font-weight: 700;
-  letter-spacing: -0.03em;
-  max-width: 220px;
+  letter-spacing: -0.02em;
 }
 
 .brandSub {
   margin: 8px 0 0;
-  color: #4f5970;
-  font-size: 32px;
+  /* 5.25:1 on the rail. At its old 32px this passed as large text on 3:1;
+     bringing it down to 12px moved it under the 4.5:1 body rule, so the
+     colour had to come with it. */
+  color: #3d4557;
+  font-size: var(--text-sm);
 }
 
 .composeBtn {
@@ -76,10 +120,10 @@ input[type='radio'] {
   margin: 6px 0 0;
   padding: 12px 14px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--primary);
   color: #fff;
-  font-size: 16px;
+  font-size: var(--text-md);
   font-weight: 600;
   cursor: pointer;
 }
@@ -91,7 +135,7 @@ input[type='radio'] {
 .queueStatus {
   margin: -4px 0 4px;
   color: #34405a;
-  font-size: 12px;
+  font-size: var(--text-xs);
 }
 
 .navList,
@@ -107,12 +151,12 @@ input[type='radio'] {
 
 .navItem {
   border: 0;
-  border-radius: 10px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: #293246;
-  padding: 12px 14px;
+  padding: 9px 12px;
   text-align: left;
-  font-size: 18px;
+  font-size: var(--text-md);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -128,7 +172,9 @@ input[type='radio'] {
 .navCount {
   min-width: 22px;
   text-align: right;
-  font-size: 14px;
+  font-size: var(--text-sm);
+  /* Counts sit in a column and must not jitter as digits change. */
+  font-variant-numeric: tabular-nums;
 }
 
 .mainPane {
@@ -139,7 +185,7 @@ input[type='radio'] {
   position: sticky;
   top: 0;
   z-index: 20;
-  height: 80px;
+  height: 64px;
   background: var(--surface-soft);
   border-bottom: 1px solid var(--line-strong);
   display: flex;
@@ -160,13 +206,15 @@ input[type='radio'] {
 
 .topSearch input {
   width: 100%;
-  height: 50px;
+  height: 36px;
   border: 1px solid #d8deea;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: #f0f3f8;
-  font-size: 33px;
+  /* Was 33px. A Gmail query is scanned, not read aloud - at display size it
+     dominated a header whose own controls sit at 13px. */
+  font-size: var(--text-base);
   color: #4b556b;
-  padding: 0 16px;
+  padding: 0 12px;
 }
 
 .visuallyHidden {
@@ -290,7 +338,7 @@ button.emailSearchResult:focus-visible {
   margin-left: auto;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
 }
 
 .btnMuted,
@@ -299,15 +347,23 @@ button.emailSearchResult:focus-visible {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 46px;
-  border-radius: 7px;
-  padding: 0 18px;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  padding: 0 13px;
   border: 1px solid var(--line-strong);
   background: var(--surface);
   color: var(--ink);
+  font-size: var(--text-base);
   font-weight: 500;
+  white-space: nowrap;
   cursor: pointer;
   text-decoration: none;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.btnMuted:hover {
+  background: #eef2f9;
+  border-color: #9aa8c4;
 }
 
 .btnPrimary,
@@ -344,36 +400,40 @@ button.emailSearchResult:focus-visible {
 }
 
 .pageBody {
-  padding: 24px 28px 34px;
+  padding: 26px 28px 40px;
 }
 
 .titleBlock h1 {
   margin: 0;
-  font-size: 58px;
-  line-height: 1.05;
-  letter-spacing: -0.035em;
+  font-size: var(--text-2xl);
+  line-height: 1.2;
+  font-weight: 650;
+  letter-spacing: -0.02em;
   color: #11131a;
 }
 
 .titleBlock p {
-  margin: 8px 0 0;
-  font-size: 14px;
-  color: #3f4759;
+  margin: 5px 0 0;
+  font-size: var(--text-base);
+  color: var(--muted);
+  max-width: 68ch;
 }
 
 .statsGrid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 18px;
-  margin: 22px 0;
+  gap: 14px;
+  /* More space above the group than below it. */
+  margin: 24px 0 18px;
 }
 
 .statCard {
   background: var(--surface);
   border: 1px solid var(--line-strong);
-  border-radius: 12px;
-  padding: 18px 24px;
-  min-height: 118px;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  padding: 16px 20px;
+  min-height: 92px;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -394,8 +454,11 @@ button.emailSearchResult:focus-visible {
 
 .statCard strong {
   display: block;
-  margin-top: 6px;
-  font-size: 44px;
+  margin-top: 4px;
+  font-size: 30px;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
   color: #0f1218;
 }
 
@@ -863,7 +926,8 @@ button.emailSearchResult:focus-visible {
   margin-top: 0;
   display: flex;
   flex-direction: column;
-  height: 26rem;
+  height: auto;
+  max-height: 26rem;
   overflow: hidden;
 }
 
@@ -878,6 +942,22 @@ button.emailSearchResult:focus-visible {
   gap: 8px;
   overflow-y: auto;
   padding-right: 6px;
+  scrollbar-gutter: stable;
+}
+
+.configSummaryList::-webkit-scrollbar {
+  width: 10px;
+}
+
+.configSummaryList::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+.configSummaryList::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .configSummaryRow {
@@ -1010,6 +1090,11 @@ button.emailSearchResult:focus-visible {
 
 .stack {
   display: grid;
+  /* An implicit grid column is auto-sized, so it resolves to the widest
+     child's max-content and quietly exceeds its own container - min-width:0
+     on the child cannot fix that, because the column is what overflows.
+     This is the shared cause behind the settings page overflowing on mobile. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
 }
 
@@ -1395,6 +1480,15 @@ button.emailSearchResult:focus-visible {
 .intentTabBar {
   display: flex;
   gap: 8px;
+  /* A tab strip can legitimately be wider than a phone. It scrolls inside its
+     own box so the page body never scrolls horizontally. */
+  overflow-x: auto;
+  scrollbar-width: thin;
+  padding-bottom: 2px;
+}
+
+.intentTab {
+  flex: none;
 }
 
 .intentTab {
@@ -1625,6 +1719,10 @@ button.emailSearchResult:focus-visible {
   background: #fff;
   padding: 12px;
   display: grid;
+  /* Same implicit auto-column trap as .stack: without an explicit track this
+     resolves to the max-content of .parserDetailsGrid below, which is 300px
+     per auto-fit column - 1063px inside a 390px viewport. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
 }
 
@@ -1674,14 +1772,16 @@ button.emailSearchResult:focus-visible {
 .parserDetailsSummaryGrid {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  /* min() so the track floor collapses below 300px rather than forcing the
+     container wider than the viewport on a phone. */
+  grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr));
   align-items: stretch;
 }
 
 .parserDetailsGrid {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr));
   align-items: stretch;
 }
 
@@ -1980,14 +2080,7 @@ button.emailSearchResult:focus-visible {
   .leftRail {
     position: static;
     height: auto;
-  }
-
-  .brand {
-    font-size: 36px;
-  }
-
-  .brandSub {
-    font-size: 24px;
+    overflow-y: visible;
   }
 
   .configGrid,
@@ -2000,7 +2093,7 @@ button.emailSearchResult:focus-visible {
   }
 
   .configSummaryCard {
-    height: 24rem;
+    max-height: 24rem;
   }
 
   .parserDetailsPanel {
@@ -2023,10 +2116,16 @@ button.emailSearchResult:focus-visible {
     max-width: none;
   }
 
+  .topActions {
+    margin-left: 0;
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+
   .topSearch input,
   .emailSearchInput {
-    font-size: 20px;
-    height: 42px;
+    font-size: var(--text-base);
+    height: 36px;
   }
 
   .pageBody {
@@ -2034,7 +2133,8 @@ button.emailSearchResult:focus-visible {
   }
 
   .titleBlock h1 {
-    font-size: 36px;
+    /* Was 36px, which made the mobile title larger than the desktop one. */
+    font-size: var(--text-xl);
   }
 
   .statsGrid,
@@ -2188,7 +2288,8 @@ button.emailSearchResult:focus-visible {
   margin: 0 0 6px;
   border: 0;
   padding: 0;
-  font-size: 24px;
+  /* One clear step below the page title rather than a near-match. */
+  font-size: var(--text-xl);
 }
 
 .inboxHeader p,
@@ -3608,9 +3709,23 @@ button.emailSearchResult:focus-visible {
 
 .detailSection {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   padding-bottom: 16px;
   border-bottom: 1px solid var(--line);
+}
+
+/* This is an email operations tool, so its content is full of strings with no
+   break opportunity: addresses, URLs, message ids, Gmail queries. Left alone
+   they set a huge max-content width, which an auto-sized grid column then
+   adopts - the actual reason three separate panels overflowed a phone. */
+.detailSection p,
+.detailSection li,
+.detailSection td,
+.emailItem p,
+.parserDetailsBlock p,
+.parserDetailsBlock li {
+  overflow-wrap: anywhere;
 }
 
 .detailSection h4 {
