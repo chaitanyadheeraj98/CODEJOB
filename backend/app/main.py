@@ -636,54 +636,6 @@ def _generate_embedding_with_health(text: str) -> tuple[list[float], str]:
     return vector, provider
 
 
-def _default_bucket_for_range(range_key: str) -> str:
-    if range_key == "last_1h":
-        return "five_min"
-    if range_key == "current_day":
-        return "hour"
-    if range_key == "current_week":
-        return "day"
-    if range_key == "current_month":
-        return "day"
-    if range_key == "current_year":
-        return "month"
-    return "quarter"
-
-
-def _bucket_start(ts: datetime, bucket: str) -> datetime:
-    if bucket == "five_min":
-        minute = (ts.minute // 5) * 5
-        return ts.replace(minute=minute, second=0, microsecond=0)
-    if bucket == "hour":
-        return ts.replace(minute=0, second=0, microsecond=0)
-    if bucket == "day":
-        return ts.replace(hour=0, minute=0, second=0, microsecond=0)
-    if bucket == "month":
-        return ts.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    month = ts.month
-    quarter_month = ((month - 1) // 3) * 3 + 1
-    return ts.replace(month=quarter_month, day=1, hour=0, minute=0, second=0, microsecond=0)
-
-
-def _add_months(ts: datetime, months: int) -> datetime:
-    month_index = (ts.month - 1) + months
-    year = ts.year + month_index // 12
-    month = month_index % 12 + 1
-    return datetime(year, month, 1, tzinfo=UTC)
-
-
-def _next_bucket(ts: datetime, bucket: str) -> datetime:
-    if bucket == "five_min":
-        return ts + timedelta(minutes=5)
-    if bucket == "hour":
-        return ts + timedelta(hours=1)
-    if bucket == "day":
-        return ts + timedelta(days=1)
-    if bucket == "month":
-        return _add_months(ts, 1)
-    return _add_months(ts, 3)
-
-
 def _mail_date_utc_window(selected: date) -> tuple[datetime, datetime]:
     start_local = datetime(selected.year, selected.month, selected.day, tzinfo=BUSINESS_TZ)
     end_local = start_local + timedelta(days=1)
@@ -3891,63 +3843,28 @@ def productivity_trend(
 ) -> ProductivityTrendResponse:
     if range not in RANGE_OPTIONS:
         raise HTTPException(status_code=400, detail="Invalid range")
-    resolved_bucket = bucket or _default_bucket_for_range(range)
+    resolved_bucket = bucket or analytics_service.default_bucket_for_range(range)
     if resolved_bucket not in BUCKET_OPTIONS:
         raise HTTPException(status_code=400, detail="Invalid bucket")
 
     start, end = _range_bounds(range)
     start = _ensure_utc(start)
     end = _ensure_utc(end)
-    rows = (
-        db.query(ProductivityEvent)
-        .filter(ProductivityEvent.owner_id == settings.owner_id)
-        .filter(ProductivityEvent.occurred_at >= start, ProductivityEvent.occurred_at <= end)
-        .order_by(ProductivityEvent.occurred_at.asc())
-        .all()
-    )
 
-    grouped: dict[datetime, dict[str, int]] = {}
-    for row in rows:
-        ts = _bucket_start(_ensure_utc(row.occurred_at), resolved_bucket)
-        if ts not in grouped:
-            grouped[ts] = {
-                "sent_count": 0,
-                "failed_count": 0,
-                "needs_review_count": 0,
-                "recent_run_count": 0,
-            }
-        if row.event_type == "approved_sent":
-            grouped[ts]["sent_count"] += 1
-        elif row.event_type == "failed_mapping_marked":
-            grouped[ts]["failed_count"] += 1
-        elif row.event_type == "needs_review_marked":
-            grouped[ts]["needs_review_count"] += 1
-        elif row.event_type == "recent_run_recorded":
-            grouped[ts]["recent_run_count"] += 1
-
-    bars: list[ProductivityBarPoint] = []
-    cursor = _bucket_start(start, resolved_bucket)
-    end_bucket = _bucket_start(end, resolved_bucket)
-    while cursor <= end_bucket:
-        payload = grouped.get(
-            cursor,
-            {
-                "sent_count": 0,
-                "failed_count": 0,
-                "needs_review_count": 0,
-                "recent_run_count": 0,
-            },
+    # The bucketing loop lives in analytics_service so this route and the
+    # chat's get_chart tool cannot drift apart.
+    bars = [
+        ProductivityBarPoint(
+            ts=row["ts"],
+            sent_count=row["sent_count"],
+            failed_count=row["failed_count"],
+            needs_review_count=row["needs_review_count"],
+            recent_run_count=row["recent_run_count"],
         )
-        bars.append(
-            ProductivityBarPoint(
-                ts=cursor,
-                sent_count=payload["sent_count"],
-                failed_count=payload["failed_count"],
-                needs_review_count=payload["needs_review_count"],
-                recent_run_count=payload["recent_run_count"],
-            )
+        for row in analytics_service.productivity_trend_bars(
+            db, owner_id=settings.owner_id, start=start, end=end, bucket=resolved_bucket
         )
-        cursor = _next_bucket(cursor, resolved_bucket)
+    ]
 
     current_total_sent = sum(point.sent_count for point in bars)
 
@@ -3965,25 +3882,16 @@ def productivity_trend(
             bars=bars,
         )
 
-    duration = end - start
-    prev_start = start - duration
-    prev_end = start
-    prev_rows = (
-        db.query(ProductivityEvent)
-        .filter(ProductivityEvent.owner_id == settings.owner_id)
-        .filter(ProductivityEvent.event_type == "approved_sent")
-        .filter(ProductivityEvent.occurred_at >= prev_start, ProductivityEvent.occurred_at < prev_end)
-        .all()
+    previous_total_sent = analytics_service.previous_period_sent_count(
+        db, owner_id=settings.owner_id, start=start, end=end
     )
-    previous_total_sent = len(prev_rows)
     delta = current_total_sent - previous_total_sent
     direction = "flat"
     if delta > 0:
         direction = "up"
     elif delta < 0:
         direction = "down"
-    base = float(max(previous_total_sent, 1))
-    delta_pct = round((delta / base) * 100, 2)
+    delta_pct = round((delta / float(max(previous_total_sent, 1))) * 100, 2)
 
     return ProductivityTrendResponse(
         range=range,
