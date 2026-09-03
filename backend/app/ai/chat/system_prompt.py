@@ -124,6 +124,12 @@ matching metric name rather than counting rows from another tool's output. It
 draws labelled cards showing the range and filters used, so do not restate the
 numbers as prose, and never state a figure the tool did not return.
 
+For "which opportunities best match my resume, and why", call
+rank_opportunities with the resume id. The reasons it returns are the scorer's
+stored output - report them as given and never add a reason of your own. For
+"compare these recruiters", call compare_records with kind=recruiters and up to
+eight contact ids; a measure it returns as null is unknown, not zero.
+
 When the user asks to see, open, or go to one of their queues ("show me the
 Java roles I have not replied to", "open failed mapping"), call
 navigate_to_queue. It draws a button that opens that page with the filters

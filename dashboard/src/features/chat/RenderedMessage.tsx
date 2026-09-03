@@ -1,6 +1,8 @@
 import CandidateTable from './CandidateTable'
 import CandidateTableCompact from './CandidateTableCompact'
+import ComparisonTable from './ComparisonTable'
 import MetricCards from './MetricCards'
+import RankedList from './RankedList'
 import QueueLink from './QueueLink'
 import type { RenderedPayload } from './renderers'
 
@@ -25,6 +27,10 @@ export default function RenderedMessage({ messageId, payload, surface }: Props) 
         : <CandidateTableCompact data={payload.data} />
     case 'metric_cards':
       return <MetricCards data={payload.data} surface={surface} />
+    case 'ranked_list':
+      return <RankedList data={payload.data} surface={surface} />
+    case 'comparison':
+      return <ComparisonTable data={payload.data} surface={surface} />
     case 'queue_link':
       return <QueueLink data={payload.data} surface={surface} />
     default:

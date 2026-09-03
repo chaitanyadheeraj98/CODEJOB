@@ -51,10 +51,44 @@ export type MetricCardsData = {
   provenance: ProvenanceData
 }
 
+export type RankedRow = {
+  rank: number
+  record_id: number
+  label: string
+  detail: string
+  score: number
+  reasons: string[]
+  drill_to: QueueTarget | null
+}
+
+export type RankedListData = {
+  title: string
+  measure: string
+  rows: RankedRow[]
+  dropped: Array<{ key: string; reason: string }>
+  provenance: ProvenanceData
+}
+
+export type ComparisonColumn = {
+  record_id: number
+  label: string
+  values: Record<string, number | string | null>
+}
+
+export type ComparisonData = {
+  title: string
+  measures: Array<{ key: string; label: string }>
+  columns: ComparisonColumn[]
+  dropped: Array<{ key: string; reason: string }>
+  provenance: ProvenanceData
+}
+
 export type RenderedPayload =
   | { kind: 'candidate_table'; data: CandidateTableData }
   | { kind: 'queue_link'; data: QueueLinkData }
   | { kind: 'metric_cards'; data: MetricCardsData }
+  | { kind: 'ranked_list'; data: RankedListData }
+  | { kind: 'comparison'; data: ComparisonData }
 
 export type RenderHandler = {
   parse: (message: ChatMessage) => RenderedPayload | null
@@ -129,6 +163,54 @@ function asMetricCards(value: unknown): MetricCard[] | null {
   return cards
 }
 
+function asDropped(value: unknown): Array<{ key: string; reason: string }> {
+  if (!Array.isArray(value)) return []
+  return value.filter((entry): entry is { key: string; reason: string } =>
+    !!entry && typeof entry === 'object'
+    && typeof (entry as Record<string, unknown>).key === 'string'
+    && typeof (entry as Record<string, unknown>).reason === 'string')
+}
+
+function asRankedRows(value: unknown): RankedRow[] | null {
+  if (!Array.isArray(value)) return null
+  const rows: RankedRow[] = []
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object') return null
+    const row = entry as Record<string, unknown>
+    if (typeof row.record_id !== 'number' || typeof row.label !== 'string') return null
+    if (typeof row.score !== 'number' || !Number.isFinite(row.score)) return null
+    rows.push({
+      rank: typeof row.rank === 'number' ? row.rank : rows.length + 1,
+      record_id: row.record_id,
+      label: row.label,
+      detail: typeof row.detail === 'string' ? row.detail : '',
+      score: row.score,
+      reasons: Array.isArray(row.reasons) ? row.reasons.filter((item): item is string => typeof item === 'string') : [],
+      drill_to: asQueueTarget(row.drill_to),
+    })
+  }
+  return rows
+}
+
+function asComparisonColumns(value: unknown): ComparisonColumn[] | null {
+  if (!Array.isArray(value)) return null
+  const columns: ComparisonColumn[] = []
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object') return null
+    const column = entry as Record<string, unknown>
+    if (typeof column.record_id !== 'number' || typeof column.label !== 'string') return null
+    const raw = column.values && typeof column.values === 'object' && !Array.isArray(column.values)
+      ? column.values as Record<string, unknown>
+      : {}
+    const values: Record<string, number | string | null> = {}
+    for (const [key, item] of Object.entries(raw)) {
+      values[key] = typeof item === 'number' || typeof item === 'string' ? item : null
+    }
+    columns.push({ record_id: column.record_id, label: column.label, values })
+  }
+  return columns
+}
+
 function asStringMap(value: unknown): Record<string, string> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
   const out: Record<string, string> = {}
@@ -181,6 +263,61 @@ export const RENDER_HANDLERS: Record<string, RenderHandler> = {
           data: {
             title: typeof payload.title === 'string' ? payload.title : '',
             cards,
+            provenance,
+          },
+        }
+      } catch {
+        return null
+      }
+    },
+  },
+  rank_opportunities: {
+    parse: (message) => {
+      try {
+        const payload = JSON.parse(message.content) as Record<string, unknown>
+        if (!payload || payload.action !== 'render_ranked_list') return null
+        const rows = asRankedRows(payload.rows)
+        if (rows === null) return null
+        const provenance = asProvenance(payload.provenance)
+        if (!provenance) return null
+        return {
+          kind: 'ranked_list',
+          data: {
+            title: typeof payload.title === 'string' ? payload.title : '',
+            measure: typeof payload.measure === 'string' ? payload.measure : '',
+            rows,
+            dropped: asDropped(payload.dropped),
+            provenance,
+          },
+        }
+      } catch {
+        return null
+      }
+    },
+  },
+  compare_records: {
+    parse: (message) => {
+      try {
+        const payload = JSON.parse(message.content) as Record<string, unknown>
+        if (!payload || payload.action !== 'render_comparison') return null
+        const columns = asComparisonColumns(payload.columns)
+        if (columns === null) return null
+        const measures = Array.isArray(payload.measures)
+          ? payload.measures.filter((entry): entry is { key: string; label: string } =>
+              !!entry && typeof entry === 'object'
+              && typeof (entry as Record<string, unknown>).key === 'string'
+              && typeof (entry as Record<string, unknown>).label === 'string')
+          : []
+        if (!measures.length) return null
+        const provenance = asProvenance(payload.provenance)
+        if (!provenance) return null
+        return {
+          kind: 'comparison',
+          data: {
+            title: typeof payload.title === 'string' ? payload.title : '',
+            measures,
+            columns,
+            dropped: asDropped(payload.dropped),
             provenance,
           },
         }

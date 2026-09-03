@@ -2,6 +2,7 @@ from mcp.server.fastmcp import FastMCP
 
 from app.config import settings
 from app.mcp_server.tools import (
+    compare_records,
     count_received_emails,
     get_ai_status,
     get_app_help,
@@ -26,6 +27,7 @@ from app.mcp_server.tools import (
     propose_create_github_issue,
     propose_create_premium_contact,
     propose_send_email,
+    rank_opportunities,
     read_chat_attachment,
     render_candidate_table,
     search_candidates,
@@ -68,6 +70,8 @@ BASE_TOOLS = (
     # Read-only: it draws a button, and the user's click navigates. Registered
     # in BASE_TOOLS so queues stay reachable with chat actions disabled.
     navigate_to_queue,
+    rank_opportunities,
+    compare_records,
 )
 
 CHAT_ACTION_TOOLS = (
