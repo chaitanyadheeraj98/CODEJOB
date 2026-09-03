@@ -76,6 +76,18 @@ class Settings(BaseSettings):
     ollama_max_tool_iterations: int = 6
     feature_chat_enabled: bool = False
     feature_chat_actions_enabled: bool = False
+    # Two flags, not one. Clustering is designed to run and persist long before
+    # it may be shown: the whole point of shadow mode is that the scorer earns
+    # the right to surface by being measured first. Collapsing these into one
+    # switch would make that state unexpressible.
+    feature_relationship_intelligence_enabled: bool = False
+    # Do not enable until the Likely-band precision bar has actually been
+    # measured against a labeled set. See temp160.md §11.4.
+    feature_relationship_surfacing_enabled: bool = False
+    # Env-backed rather than a UserSettings column: the master switch above is
+    # env-only, so a runtime-tunable cadence for an env-gated feature buys
+    # nothing and would cost a migration on a table every request reads.
+    feature_relationship_sweep_interval_minutes: int = 720
     chat_history_max_messages: int = 20
     chat_message_char_limit: int = 4000
     searxng_url: str = Field(default="", validation_alias=AliasChoices("SEARXNG_URL"))
