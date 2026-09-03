@@ -83,12 +83,28 @@ export type ComparisonData = {
   provenance: ProvenanceData
 }
 
+export type ChartPoint = {
+  label: string
+  value: number
+  rate_of_previous: number | null
+  drill_to: QueueTarget | null
+}
+
+export type ChartData = {
+  chart_type: string
+  title: string
+  series: ChartPoint[]
+  max_value: number
+  provenance: ProvenanceData
+}
+
 export type RenderedPayload =
   | { kind: 'candidate_table'; data: CandidateTableData }
   | { kind: 'queue_link'; data: QueueLinkData }
   | { kind: 'metric_cards'; data: MetricCardsData }
   | { kind: 'ranked_list'; data: RankedListData }
   | { kind: 'comparison'; data: ComparisonData }
+  | { kind: 'chart'; data: ChartData }
 
 export type RenderHandler = {
   parse: (message: ChatMessage) => RenderedPayload | null
@@ -211,6 +227,24 @@ function asComparisonColumns(value: unknown): ComparisonColumn[] | null {
   return columns
 }
 
+function asChartSeries(value: unknown): ChartPoint[] | null {
+  if (!Array.isArray(value)) return null
+  const points: ChartPoint[] = []
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object') return null
+    const point = entry as Record<string, unknown>
+    if (typeof point.label !== 'string') return null
+    if (typeof point.value !== 'number' || !Number.isFinite(point.value)) return null
+    points.push({
+      label: point.label,
+      value: point.value,
+      rate_of_previous: typeof point.rate_of_previous === 'number' ? point.rate_of_previous : null,
+      drill_to: asQueueTarget(point.drill_to),
+    })
+  }
+  return points
+}
+
 function asStringMap(value: unknown): Record<string, string> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
   const out: Record<string, string> = {}
@@ -318,6 +352,36 @@ export const RENDER_HANDLERS: Record<string, RenderHandler> = {
             measures,
             columns,
             dropped: asDropped(payload.dropped),
+            provenance,
+          },
+        }
+      } catch {
+        return null
+      }
+    },
+  },
+  get_chart: {
+    parse: (message) => {
+      try {
+        const payload = JSON.parse(message.content) as Record<string, unknown>
+        if (!payload || payload.action !== 'render_chart') return null
+        if (typeof payload.chart_type !== 'string' || !payload.chart_type) return null
+        const series = asChartSeries(payload.series)
+        if (series === null) return null
+        const provenance = asProvenance(payload.provenance)
+        if (!provenance) return null
+        return {
+          kind: 'chart',
+          data: {
+            chart_type: payload.chart_type,
+            title: typeof payload.title === 'string' ? payload.title : '',
+            series,
+            // Server-computed, so a truncated series cannot silently rescale
+            // itself. Falling back to the series maximum keeps an older
+            // payload drawable rather than blank.
+            max_value: typeof payload.max_value === 'number' && Number.isFinite(payload.max_value)
+              ? payload.max_value
+              : series.reduce((highest, point) => Math.max(highest, point.value), 0),
             provenance,
           },
         }

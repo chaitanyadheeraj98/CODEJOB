@@ -7,6 +7,7 @@ from app.mcp_server.tools import (
     get_ai_status,
     get_app_help,
     get_candidate,
+    get_chart,
     get_conversation,
     get_draft_status,
     get_metrics,
@@ -48,6 +49,7 @@ BASE_TOOLS = (
     # the same endpoint the Needs Review bulk bar already uses.
     render_candidate_table,
     get_candidate,
+    get_chart,
     count_received_emails,
     get_draft_status,
     get_metrics,

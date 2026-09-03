@@ -5209,3 +5209,80 @@ button.chatRankedLabel:focus-visible {
 .chatComparisonTable td {
   font-variant-numeric: tabular-nums;
 }
+
+/* Chat charts (v2 W5). Hand-rolled, no library: the server buckets the data
+   and these draw proportional bars, which is the same shape as the Run Queue's
+   hBarChart - deliberately duplicated rather than shared, so restyling one
+   page never silently restyles the other. */
+.chatChart {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.chatChartRow {
+  display: grid;
+  grid-template-columns: minmax(80px, 30%) 1fr auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.chatChartRow.interactive {
+  cursor: pointer;
+}
+
+.chatChartRow.interactive:hover .chatChartFill,
+.chatChartRow.interactive:focus-visible .chatChartFill {
+  filter: brightness(1.1);
+}
+
+.chatChartLabel {
+  font-size: 0.85em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chatChartTrack {
+  display: block;
+  height: 12px;
+  border-radius: 3px;
+  background: var(--bg-subtle, #eef2f7);
+  overflow: hidden;
+}
+
+.chatChartFill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent, #3b6ea5);
+}
+
+.chatChartValue {
+  font-size: 0.85em;
+  font-variant-numeric: tabular-nums;
+}
+
+.chatChartRate {
+  opacity: 0.65;
+}
+
+.chatChartList {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 0.9em;
+}
+
+.chatChartList li {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}

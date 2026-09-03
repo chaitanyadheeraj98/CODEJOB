@@ -8,6 +8,7 @@ from app.mcp_server.tools.candidates import (
 from app.mcp_server.tools.email_actions import propose_send_email
 from app.mcp_server.tools.external_feed import list_external_opportunities
 from app.mcp_server.tools.help import get_app_help
+from app.mcp_server.tools.charts import get_chart
 from app.mcp_server.tools.analysis import compare_records, rank_opportunities
 from app.mcp_server.tools.metrics import get_metrics
 from app.mcp_server.tools.inbox import get_conversation, get_recruiter_replies, list_conversations
@@ -31,6 +32,7 @@ __all__ = [
     "get_ai_status",
     "get_app_help",
     "get_candidate",
+    "get_chart",
     "get_conversation",
     "get_draft_status",
     "get_metrics",
