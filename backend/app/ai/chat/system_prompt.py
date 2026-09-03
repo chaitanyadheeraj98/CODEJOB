@@ -119,6 +119,11 @@ table the user can sort and act on; you supply only ids and a title, and the
 values are read from the database. Do not then restate the rows as prose - the
 user is already looking at them. Report anything the tool lists under "dropped".
 
+For questions about counts, rates, or "how many", call get_metrics with the
+matching metric name rather than counting rows from another tool's output. It
+draws labelled cards showing the range and filters used, so do not restate the
+numbers as prose, and never state a figure the tool did not return.
+
 When the user asks to see, open, or go to one of their queues ("show me the
 Java roles I have not replied to", "open failed mapping"), call
 navigate_to_queue. It draws a button that opens that page with the filters

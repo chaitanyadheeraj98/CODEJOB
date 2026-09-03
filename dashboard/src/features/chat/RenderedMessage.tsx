@@ -1,5 +1,6 @@
 import CandidateTable from './CandidateTable'
 import CandidateTableCompact from './CandidateTableCompact'
+import MetricCards from './MetricCards'
 import QueueLink from './QueueLink'
 import type { RenderedPayload } from './renderers'
 
@@ -22,6 +23,8 @@ export default function RenderedMessage({ messageId, payload, surface }: Props) 
       return surface === 'page'
         ? <CandidateTable messageId={messageId} data={payload.data} />
         : <CandidateTableCompact data={payload.data} />
+    case 'metric_cards':
+      return <MetricCards data={payload.data} surface={surface} />
     case 'queue_link':
       return <QueueLink data={payload.data} surface={surface} />
     default:

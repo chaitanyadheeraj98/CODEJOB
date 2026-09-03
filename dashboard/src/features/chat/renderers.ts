@@ -1,3 +1,4 @@
+import type { QueueTarget } from '../../queueNavigation'
 import type { ChatMessage } from './types'
 
 export type CandidateTableCell = string | number | null
@@ -27,9 +28,33 @@ export type QueueLinkData = {
   dropped: Array<{ key: string; reason: string }>
 }
 
+export type ProvenanceData = {
+  metric: string
+  source: string
+  row_count: number
+  date_range: { from: string | null; to: string | null }
+  filters: Record<string, string>
+  assumptions: string[]
+}
+
+export type MetricCard = {
+  label: string
+  value: number | string
+  unit: string
+  delta: number | null
+  drill_to: QueueTarget | null
+}
+
+export type MetricCardsData = {
+  title: string
+  cards: MetricCard[]
+  provenance: ProvenanceData
+}
+
 export type RenderedPayload =
   | { kind: 'candidate_table'; data: CandidateTableData }
   | { kind: 'queue_link'; data: QueueLinkData }
+  | { kind: 'metric_cards'; data: MetricCardsData }
 
 export type RenderHandler = {
   parse: (message: ChatMessage) => RenderedPayload | null
@@ -45,6 +70,63 @@ function asRows(value: unknown): CandidateTableRow[] | null {
     rows.push(row as CandidateTableRow)
   }
   return rows
+}
+
+/**
+ * The provenance gate. A payload without a well-formed provenance block renders
+ * NOTHING - not a chart with a caveat, which is still a chart. This is the most
+ * important control in the phase: it is what makes a displayed number worth
+ * believing, and it is enforced here rather than in the prompt.
+ */
+export function asProvenance(value: unknown): ProvenanceData | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const block = value as Record<string, unknown>
+  if (typeof block.metric !== 'string' || !block.metric) return null
+  if (typeof block.row_count !== 'number' || !Number.isFinite(block.row_count)) return null
+  const range = block.date_range && typeof block.date_range === 'object' && !Array.isArray(block.date_range)
+    ? block.date_range as Record<string, unknown>
+    : {}
+  return {
+    metric: block.metric,
+    source: typeof block.source === 'string' ? block.source : '',
+    row_count: block.row_count,
+    date_range: {
+      from: typeof range.from === 'string' ? range.from : null,
+      to: typeof range.to === 'string' ? range.to : null,
+    },
+    filters: asStringMap(block.filters),
+    assumptions: Array.isArray(block.assumptions) ? block.assumptions.filter((item): item is string => typeof item === 'string') : [],
+  }
+}
+
+function asQueueTarget(value: unknown): QueueTarget | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const target = value as Record<string, unknown>
+  if (typeof target.page !== 'string' || !target.page) return null
+  return {
+    page: target.page,
+    tab: typeof target.tab === 'string' ? target.tab : null,
+    filters: asStringMap(target.filters),
+  }
+}
+
+function asMetricCards(value: unknown): MetricCard[] | null {
+  if (!Array.isArray(value)) return null
+  const cards: MetricCard[] = []
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object') return null
+    const card = entry as Record<string, unknown>
+    if (typeof card.label !== 'string' || !card.label) return null
+    if (typeof card.value !== 'number' && typeof card.value !== 'string') return null
+    cards.push({
+      label: card.label,
+      value: card.value,
+      unit: typeof card.unit === 'string' ? card.unit : '',
+      delta: typeof card.delta === 'number' ? card.delta : null,
+      drill_to: asQueueTarget(card.drill_to),
+    })
+  }
+  return cards
 }
 
 function asStringMap(value: unknown): Record<string, string> {
@@ -78,6 +160,28 @@ export const RENDER_HANDLERS: Record<string, RenderHandler> = {
             rows,
             dropped: Array.isArray(payload.dropped) ? payload.dropped as CandidateTableData['dropped'] : [],
             truncated: payload.truncated === true,
+          },
+        }
+      } catch {
+        return null
+      }
+    },
+  },
+  get_metrics: {
+    parse: (message) => {
+      try {
+        const payload = JSON.parse(message.content) as Record<string, unknown>
+        if (!payload || payload.action !== 'render_metric_cards') return null
+        const cards = asMetricCards(payload.cards)
+        if (cards === null) return null
+        const provenance = asProvenance(payload.provenance)
+        if (!provenance) return null
+        return {
+          kind: 'metric_cards',
+          data: {
+            title: typeof payload.title === 'string' ? payload.title : '',
+            cards,
+            provenance,
           },
         }
       } catch {
