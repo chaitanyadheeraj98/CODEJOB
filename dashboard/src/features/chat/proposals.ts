@@ -4,7 +4,7 @@ export type ProposalFields = Record<string, unknown>
 
 export type ProposalHandler = {
   endpoint: string | ((fields: ProposalFields) => string)
-  method: 'POST'
+  method: 'POST' | 'PATCH'
   buildBody: (fields: ProposalFields) => unknown
   confirmLabel: (fields: ProposalFields) => string
   summary: (fields: ProposalFields) => Array<[string, string]>
@@ -27,6 +27,12 @@ const CANDIDATE_ACTION_ENDPOINTS: Record<string, string> = {
   untrack: '/candidates/track-bulk',
   regenerate: '/candidates/regenerate-bulk',
   send_to_failed_mapping: '/candidates/send-to-failed-mapping-bulk',
+}
+
+const RECORD_UPDATE_ENDPOINTS: Record<string, (id: number) => string> = {
+  opportunity: (id) => `/recruiter-opportunities/${id}`,
+  application: (id) => `/applications/${id}`,
+  contact: (id) => `/recruiter-numbers/${id}`,
 }
 
 export const PROPOSAL_HANDLERS: Record<string, ProposalHandler> = {
@@ -66,6 +72,50 @@ export const PROPOSAL_HANDLERS: Record<string, ProposalHandler> = {
     summary: (fields) => [
       ['Action', 'Approve and send candidate emails'],
       ['Email IDs', Array.isArray(fields.candidate_ids) ? fields.candidate_ids.join(', ') : ''],
+    ],
+  },
+  propose_record_update: {
+    endpoint: (fields) => RECORD_UPDATE_ENDPOINTS[String(fields.record_kind)]?.(Number(fields.record_id)) ?? '',
+    method: 'PATCH',
+    buildBody: (fields) => record(fields.fields),
+    confirmLabel: (fields) => `Update ${text(fields.record_kind) || 'record'}`,
+    summary: (fields) => [
+      ['Record', text(fields.record_label)],
+      // from -> to, with the "from" read from the database by the tool. Only
+      // the server can supply that half honestly.
+      ...(Array.isArray(fields.changes)
+        ? (fields.changes as Array<Record<string, unknown>>).map((change): [string, string] => [
+          text(change.field),
+          `${text(change.from) || '(empty)'} → ${text(change.to) || '(empty)'}`,
+        ])
+        : []),
+    ],
+  },
+  propose_add_note: {
+    endpoint: (fields) => (
+      fields.record_kind === 'application'
+        ? `/applications/${Number(fields.record_id)}/events`
+        : `/recruiter-opportunities/${Number(fields.record_id)}`
+    ),
+    method: 'POST',
+    buildBody: (fields) => (
+      fields.record_kind === 'application'
+        ? { event_type: 'note', note: fields.note }
+        : { notes: fields.combined_notes }
+    ),
+    confirmLabel: () => 'Add Note',
+    summary: (fields) => [
+      ['Record', text(fields.record_label)],
+      ['Note', text(fields.note)],
+      // An opportunity's notes column is replaced, not appended, so the card
+      // shows what is already there and exactly what will be stored.
+      ...(fields.replaces === true
+        ? [
+          ['Existing note', text(fields.existing_notes) || '(none)'] as [string, string],
+          ['Will be stored', text(fields.combined_notes)] as [string, string],
+        ]
+        : [['Appended as', 'A new note event on the application'] as [string, string]]),
+      ['Written by', 'The assistant, from your records - check it before saving'],
     ],
   },
   propose_create_premium_contact: {
@@ -141,6 +191,10 @@ export function proposalResultDetail(payload: Record<string, unknown>, fields: P
   }
   if (payload.sent) return 'Email sent.'
   if (typeof payload.issue_number === 'number') return `Issue #${payload.issue_number} created.`
+  // Every PATCH and event POST echoes the row back, so `id` alone cannot tell
+  // a saved contact from an updated opportunity. The proposal knows which.
+  if (fields.action === 'propose_record_update') return `${text(fields.record_label) || 'Record'} updated.`
+  if (fields.action === 'propose_add_note') return 'Note added.'
   if (typeof payload.id === 'number') return `Saved as contact ${payload.id}.`
   return 'Action completed.'
 }

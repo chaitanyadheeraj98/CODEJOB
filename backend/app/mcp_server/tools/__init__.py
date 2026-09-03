@@ -10,6 +10,7 @@ from app.mcp_server.tools.external_feed import list_external_opportunities
 from app.mcp_server.tools.help import get_app_help
 from app.mcp_server.tools.candidate_actions import propose_candidate_action
 from app.mcp_server.tools.charts import get_chart
+from app.mcp_server.tools.record_actions import propose_add_note, propose_record_update
 from app.mcp_server.tools.analysis import compare_records, rank_opportunities
 from app.mcp_server.tools.metrics import get_metrics
 from app.mcp_server.tools.inbox import get_conversation, get_recruiter_replies, list_conversations
@@ -51,9 +52,11 @@ __all__ = [
     "list_resumes",
     "navigate_to_queue",
     "propose_bulk_approve_candidates",
+    "propose_add_note",
     "propose_candidate_action",
     "propose_create_github_issue",
     "propose_create_premium_contact",
+    "propose_record_update",
     "propose_send_email",
     "rank_opportunities",
     "read_chat_attachment",

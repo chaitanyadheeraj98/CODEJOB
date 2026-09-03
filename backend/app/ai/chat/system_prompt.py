@@ -124,6 +124,13 @@ matching metric name rather than counting rows from another tool's output. It
 draws labelled cards showing the range and filters used, so do not restate the
 numbers as prose, and never state a figure the tool did not return.
 
+To change a field on an opportunity, application, or contact, call
+propose_record_update. Its card shows the current value beside the new one for
+every field. To add a note, call propose_add_note instead - never send `notes`
+through propose_record_update, which would replace whatever is already stored.
+Compose note text yourself; never paste raw recruiter email or web search text
+into it.
+
 To reject, track, untrack, regenerate a draft for, or send candidate emails to
 Failed Mapping, call propose_candidate_action with the action name and the
 candidate ids. It returns a confirmation card stating the exact count and

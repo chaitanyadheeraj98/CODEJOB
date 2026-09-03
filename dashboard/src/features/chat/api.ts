@@ -146,6 +146,9 @@ export async function runProposalAction(
   fields: ProposalFields,
 ): Promise<Record<string, unknown>> {
   const endpoint = typeof handler.endpoint === 'function' ? handler.endpoint(fields) : handler.endpoint
+  // A function endpoint resolves to '' when the payload names something the
+  // client does not know. Without this the request would go to the API root.
+  if (!endpoint) throw new Error('This action is not one the app can perform.')
   const response = await fetch(`${apiBase}${endpoint}`, {
     method: handler.method,
     headers: { 'Content-Type': 'application/json' },
