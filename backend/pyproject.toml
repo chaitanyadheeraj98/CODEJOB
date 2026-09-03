@@ -7,6 +7,10 @@ requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.18.4",
     "beautifulsoup4>=4.13.5",
+    # Already present transitively via rq, and used directly for schedule
+    # computation. Declared so an rq upgrade that drops or replaces it fails
+    # resolution instead of silently breaking every schedule in the product.
+    "croniter>=6.2.2",
     "fastapi>=0.136.1",
     "google-api-python-client>=2.181.0",
     "google-auth-oauthlib>=1.2.2",

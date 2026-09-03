@@ -2,6 +2,7 @@ from datetime import datetime
 import json
 import re
 from typing import Any, Literal, cast
+from zoneinfo import available_timezones
 
 from pydantic import AliasChoices, BaseModel, Field, field_validator
 
@@ -192,6 +193,27 @@ class SettingsRequest(BaseModel):
     preferred_employer_cc_email: str = ""
     resume_display_name: str = ""
     policy: PolicyDict | None = None
+    timezone: str = "UTC"
+    feature_scheduling_sweep_interval_minutes: int = 15
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value: str) -> str:
+        name = (value or "").strip() or "UTC"
+        # available_timezones() needs tzdata on Windows and in slim containers.
+        # It is already a declared dependency and, until now, never imported.
+        if name not in available_timezones():
+            raise ValueError("Unknown timezone")
+        return name
+
+    # Deliberately NOT added to validate_reminder_sweep_interval's tuple: that
+    # would loosen two shipped sweeps from a 30-minute floor to 5 as a side
+    # effect. Scheduling needs a 5-minute floor of its own, because a 30-minute
+    # floor makes a reminder set for 09:15 arrive as late as 09:45.
+    @field_validator("feature_scheduling_sweep_interval_minutes")
+    @classmethod
+    def validate_scheduling_sweep_interval(cls, value: int) -> int:
+        return max(5, min(int(value), 1440))
 
     @field_validator("mail_date")
     @classmethod

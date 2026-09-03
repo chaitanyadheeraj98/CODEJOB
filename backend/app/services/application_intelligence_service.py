@@ -21,6 +21,7 @@ from app.models import (
     ResumeAsset,
     UserSettings,
     utc_now,
+    SUGGESTION_RETENTION_HOURS,
 )
 from app.services.application_service import ApplicationReferenceNotFoundError, append_event, find_duplicate_candidates
 from app.skill_taxonomy import compute_intent_weighted_match, role_family_fit_score
@@ -359,13 +360,74 @@ def detect_status_change_signal(reply_body: str) -> tuple[str, str] | None:
     return None
 
 
-def _pending_suggestion(db: Session, owner_id: str, application_id: int, suggestion_type: str) -> bool:
-    return db.query(ApplicationSuggestion.id).filter(
+# Types whose newer item makes an older pending one redundant. Both are
+# recomputed from an application's *current* state on every sweep, so a fresh
+# one says everything the stale one did. link_reply and status_change are
+# addressed to a specific reply message and never supersede: each points at
+# different work, so expiring the older would silently drop it.
+SUPERSEDING_SUGGESTION_TYPES = ("next_action", "stale_prompt")
+
+def _pending_suggestions(
+    db: Session, owner_id: str, application_id: int, suggestion_type: str
+) -> list[ApplicationSuggestion]:
+    return db.query(ApplicationSuggestion).filter(
         ApplicationSuggestion.owner_id == owner_id,
         ApplicationSuggestion.application_id == application_id,
         ApplicationSuggestion.suggestion_type == suggestion_type,
         ApplicationSuggestion.status == "pending",
-    ).first() is not None
+    ).all()
+
+
+def _supersede_pending(
+    db: Session,
+    owner_id: str,
+    application_id: int,
+    suggestion_type: str,
+    *,
+    reason: str,
+    next_action_type: str | None,
+) -> tuple[int, bool]:
+    """Expire the pending suggestions this one replaces.
+
+    Returns (how many were expired, whether the new one should be created).
+
+    Newest-wins, with one qualification the production data forced. The sweep
+    recomputes the same predicates every pass, so a pure newest-wins rule would
+    expire and recreate an identical row on every sweep - churn with no
+    information gain, and it would reset `created_at` each time, destroying the
+    only signal telling the user this has been waiting three weeks.
+
+    So: an item that says something *different* supersedes; an item that is the
+    same claim recomputed leaves the original standing. `suggested_next_action_at`
+    is excluded from the comparison because the sweep sets it to `now`, which
+    would make every recomputation look like new information.
+    """
+    pending = _pending_suggestions(db, owner_id, application_id, suggestion_type)
+    if not pending:
+        return 0, True
+
+    if suggestion_type not in SUPERSEDING_SUGGESTION_TYPES:
+        # Non-superseding types keep the shipped behaviour: one pending item of
+        # this type at a time, and the existing one wins.
+        return 0, False
+
+    unchanged = [
+        row
+        for row in pending
+        if (row.reason or "") == (reason or "")
+        and (row.suggested_next_action_type or "") == (next_action_type or "")
+    ]
+    if unchanged:
+        return 0, False
+
+    now = utc_now()
+    for row in pending:
+        row.status = "expired"
+        # resolved_at is this table's "when did it stop being actionable"; a
+        # separate expired_at would be a second column meaning the same thing.
+        row.resolved_at = now
+        row.expiry_reason = "superseded"
+    return len(pending), True
 
 
 def correlate_reply_to_application(
@@ -423,7 +485,11 @@ def correlate_reply_to_application(
         application.last_contact_at = utc_now()
 
     signal = detect_status_change_signal(reply.body)
-    if signal is None or signal[0] == application.status or _pending_suggestion(db, owner_id, application.id, "status_change"):
+    # status_change is not a superseding type: it is tied to a specific reply,
+    # so an existing pending one still points at work the user has not done.
+    if signal is None or signal[0] == application.status or _pending_suggestions(
+        db, owner_id, application.id, "status_change"
+    ):
         return None
     suggestion = ApplicationSuggestion(
         owner_id=owner_id,
@@ -437,6 +503,9 @@ def correlate_reply_to_application(
         reason=f"Matched phrase: '{signal[1]}'",
         created_at=utc_now(),
     )
+    # Every pending suggestion ages, whatever produced it. A review surface with
+    # one immortal source is the accumulation problem with extra steps.
+    suggestion.expires_at = suggestion.created_at + timedelta(hours=SUGGESTION_RETENTION_HOURS)
     db.add(suggestion)
     return suggestion
 
@@ -450,8 +519,17 @@ def _create_reminder(
     next_action_type: str | None = None,
     next_action_at: datetime | None = None,
 ) -> ApplicationSuggestion | None:
-    if _pending_suggestion(db, application.owner_id, application.id, suggestion_type):
+    _, should_create = _supersede_pending(
+        db,
+        application.owner_id,
+        application.id,
+        suggestion_type,
+        reason=reason,
+        next_action_type=next_action_type,
+    )
+    if not should_create:
         return None
+    created_at = utc_now()
     suggestion = ApplicationSuggestion(
         owner_id=application.owner_id,
         application_id=application.id,
@@ -461,10 +539,33 @@ def _create_reminder(
         suggested_next_action_type=next_action_type,
         suggested_next_action_at=next_action_at,
         reason=reason,
-        created_at=utc_now(),
+        created_at=created_at,
+        # Written at creation, so expiry is enforceable rather than an unused
+        # column - the shipped failure mode this replaces.
+        expires_at=created_at + timedelta(hours=SUGGESTION_RETENTION_HOURS),
     )
     db.add(suggestion)
     return suggestion
+
+
+def expire_stale_suggestions(db: Session, *, owner_id: str, now: datetime | None = None) -> int:
+    """Expire pending suggestions past their retention window. Returns how many.
+
+    This is the half of F7 that has no equivalent in shipped code: two
+    `expires_at` columns are written today and never compared against a clock.
+    """
+    moment = now or utc_now()
+    rows = db.query(ApplicationSuggestion).filter(
+        ApplicationSuggestion.owner_id == owner_id,
+        ApplicationSuggestion.status == "pending",
+        ApplicationSuggestion.expires_at.isnot(None),
+        ApplicationSuggestion.expires_at <= moment,
+    ).all()
+    for row in rows:
+        row.status = "expired"
+        row.resolved_at = moment
+        row.expiry_reason = "not_reviewed"
+    return len(rows)
 
 
 def generate_reminder_sweep_suggestions(db: Session, *, owner_id: str) -> list[ApplicationSuggestion]:
