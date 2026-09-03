@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter, defaultdict
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from email.utils import parseaddr
 from statistics import median
 
@@ -23,6 +23,7 @@ from app.models import (
     RecruiterOpportunity,
     ResumeAsset,
     utc_now,
+    SUGGESTION_RETENTION_HOURS,
 )
 from app.parsing.jd_requirements import ParsedJDRequirements, requirements_from_payload
 from app.skill_taxonomy import compute_intent_weighted_match, detect_role_family
@@ -759,6 +760,7 @@ def _new_suggestion(
         suggestion_type=suggestion_type,
     ):
         return None
+    created_at = utc_now()
     suggestion = ApplicationSuggestion(
         owner_id=application.owner_id,
         application_id=application.id,
@@ -767,7 +769,10 @@ def _new_suggestion(
         confidence='high',
         reason=reason,
         payload_json=_dump(payload),
-        created_at=utc_now(),
+        created_at=created_at,
+        # Ages like every other pending suggestion, so one review surface can
+        # apply one retention rule rather than one rule per producer.
+        expires_at=created_at + timedelta(hours=SUGGESTION_RETENTION_HOURS),
     )
     db.add(suggestion)
     return suggestion

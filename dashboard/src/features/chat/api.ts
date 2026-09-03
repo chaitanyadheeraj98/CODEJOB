@@ -146,11 +146,31 @@ export async function runProposalAction(
   fields: ProposalFields,
 ): Promise<Record<string, unknown>> {
   const endpoint = typeof handler.endpoint === 'function' ? handler.endpoint(fields) : handler.endpoint
+  // A function endpoint resolves to '' when the payload names something the
+  // client does not know. Without this the request would go to the API root.
+  if (!endpoint) throw new Error('This action is not one the app can perform.')
+  const method = typeof handler.method === 'function' ? handler.method(fields) : handler.method
   const response = await fetch(`${apiBase}${endpoint}`, {
-    method: handler.method,
+    method,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(handler.buildBody(fields)),
   })
   if (!response.ok) throw await responseError(response, 'Action failed')
+  return (await response.json()) as Record<string, unknown>
+}
+
+// The only v3 write path, and it is reached by the user's click on a rendered
+// control - never by a model-issued call. v3 registers no propose_* tool.
+export async function recordRelationshipJudgment(
+  apiBase: string,
+  clusterId: string,
+  verdict: 'confirmed' | 'rejected',
+): Promise<Record<string, unknown>> {
+  const response = await fetch(`${apiBase}/relationships/clusters/${encodeURIComponent(clusterId)}/judgment`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ verdict }),
+  })
+  if (!response.ok) throw await responseError(response, 'That did not save')
   return (await response.json()) as Record<string, unknown>
 }

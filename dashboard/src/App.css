@@ -10,6 +10,42 @@
   --primary-strong: #0b3faa;
   --danger: #b60f1f;
   --ok: #0f4bcf;
+
+  /* Type scale. The app had a hole between 14px and 32px: a handful of
+     elements at 32-58px sitting over ~100 declarations at 11-13px, with
+     nothing between. That gap is why a dense operations UI read as shouty
+     rather than composed. Roles map onto these steps below. */
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 20px;
+  --text-2xl: 26px;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+
+  /* Offset plus soft blur - a zero-offset halo is decoration, not depth. */
+  --shadow-sm: 0 1px 2px rgba(17, 24, 39, 0.05);
+  --shadow-md: 0 6px 16px -6px rgba(17, 24, 39, 0.16);
+
+  --focus: #2563eb;
+  --selection: #cbdcff;
+}
+
+/* Browser surfaces ship with defaults belonging to no design system. Theming
+   the caret, selection and focus ring is the cheapest signal that a page was
+   built rather than assembled. */
+::selection {
+  background: var(--selection);
+  color: #0b1a3d;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
 }
 
 input[type='checkbox'],
@@ -28,25 +64,31 @@ input[type='radio'] {
   position: sticky;
   top: 0;
   height: 100vh;
+  /* The rail is exactly one viewport tall, so without this its own content
+     (nav plus the Settings/Help footer) spills past the background and the
+     last two items render on the page canvas instead of the rail. */
+  overflow-y: auto;
+  overscroll-behavior: contain;
   border-right: 1px solid var(--line-strong);
   background: #b8bfd8;
-  padding: 20px;
+  padding: 18px 16px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
 }
 
 .brandWrap {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding-bottom: 18px;
+  gap: 12px;
+  padding-bottom: 14px;
 }
 
 .brandIcon {
-  width: 46px;
-  height: 46px;
-  border-radius: 10px;
+  width: 38px;
+  height: 38px;
+  flex: none;
+  border-radius: var(--radius-md);
   background: linear-gradient(135deg, #f4f7ff, #dbe4ff);
   color: var(--primary);
   font-size: 12px;
@@ -58,17 +100,19 @@ input[type='radio'] {
 .brand {
   margin: 0;
   color: var(--primary);
-  font-size: 46px;
-  line-height: 0.95;
+  font-size: var(--text-xl);
+  line-height: 1.15;
   font-weight: 700;
-  letter-spacing: -0.03em;
-  max-width: 220px;
+  letter-spacing: -0.02em;
 }
 
 .brandSub {
   margin: 8px 0 0;
-  color: #4f5970;
-  font-size: 32px;
+  /* 5.25:1 on the rail. At its old 32px this passed as large text on 3:1;
+     bringing it down to 12px moved it under the 4.5:1 body rule, so the
+     colour had to come with it. */
+  color: #3d4557;
+  font-size: var(--text-sm);
 }
 
 .composeBtn {
@@ -76,10 +120,10 @@ input[type='radio'] {
   margin: 6px 0 0;
   padding: 12px 14px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--primary);
   color: #fff;
-  font-size: 16px;
+  font-size: var(--text-md);
   font-weight: 600;
   cursor: pointer;
 }
@@ -91,7 +135,7 @@ input[type='radio'] {
 .queueStatus {
   margin: -4px 0 4px;
   color: #34405a;
-  font-size: 12px;
+  font-size: var(--text-xs);
 }
 
 .navList,
@@ -107,12 +151,12 @@ input[type='radio'] {
 
 .navItem {
   border: 0;
-  border-radius: 10px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: #293246;
-  padding: 12px 14px;
+  padding: 9px 12px;
   text-align: left;
-  font-size: 18px;
+  font-size: var(--text-md);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -128,7 +172,9 @@ input[type='radio'] {
 .navCount {
   min-width: 22px;
   text-align: right;
-  font-size: 14px;
+  font-size: var(--text-sm);
+  /* Counts sit in a column and must not jitter as digits change. */
+  font-variant-numeric: tabular-nums;
 }
 
 .mainPane {
@@ -139,7 +185,7 @@ input[type='radio'] {
   position: sticky;
   top: 0;
   z-index: 20;
-  height: 80px;
+  height: 64px;
   background: var(--surface-soft);
   border-bottom: 1px solid var(--line-strong);
   display: flex;
@@ -160,13 +206,15 @@ input[type='radio'] {
 
 .topSearch input {
   width: 100%;
-  height: 50px;
+  height: 36px;
   border: 1px solid #d8deea;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: #f0f3f8;
-  font-size: 33px;
+  /* Was 33px. A Gmail query is scanned, not read aloud - at display size it
+     dominated a header whose own controls sit at 13px. */
+  font-size: var(--text-base);
   color: #4b556b;
-  padding: 0 16px;
+  padding: 0 12px;
 }
 
 .visuallyHidden {
@@ -290,7 +338,7 @@ button.emailSearchResult:focus-visible {
   margin-left: auto;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
 }
 
 .btnMuted,
@@ -299,15 +347,23 @@ button.emailSearchResult:focus-visible {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 46px;
-  border-radius: 7px;
-  padding: 0 18px;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  padding: 0 13px;
   border: 1px solid var(--line-strong);
   background: var(--surface);
   color: var(--ink);
+  font-size: var(--text-base);
   font-weight: 500;
+  white-space: nowrap;
   cursor: pointer;
   text-decoration: none;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.btnMuted:hover {
+  background: #eef2f9;
+  border-color: #9aa8c4;
 }
 
 .btnPrimary,
@@ -344,36 +400,40 @@ button.emailSearchResult:focus-visible {
 }
 
 .pageBody {
-  padding: 24px 28px 34px;
+  padding: 26px 28px 40px;
 }
 
 .titleBlock h1 {
   margin: 0;
-  font-size: 58px;
-  line-height: 1.05;
-  letter-spacing: -0.035em;
+  font-size: var(--text-2xl);
+  line-height: 1.2;
+  font-weight: 650;
+  letter-spacing: -0.02em;
   color: #11131a;
 }
 
 .titleBlock p {
-  margin: 8px 0 0;
-  font-size: 14px;
-  color: #3f4759;
+  margin: 5px 0 0;
+  font-size: var(--text-base);
+  color: var(--muted);
+  max-width: 68ch;
 }
 
 .statsGrid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 18px;
-  margin: 22px 0;
+  gap: 14px;
+  /* More space above the group than below it. */
+  margin: 24px 0 18px;
 }
 
 .statCard {
   background: var(--surface);
   border: 1px solid var(--line-strong);
-  border-radius: 12px;
-  padding: 18px 24px;
-  min-height: 118px;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  padding: 16px 20px;
+  min-height: 92px;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -394,8 +454,11 @@ button.emailSearchResult:focus-visible {
 
 .statCard strong {
   display: block;
-  margin-top: 6px;
-  font-size: 44px;
+  margin-top: 4px;
+  font-size: 30px;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
   color: #0f1218;
 }
 
@@ -863,7 +926,8 @@ button.emailSearchResult:focus-visible {
   margin-top: 0;
   display: flex;
   flex-direction: column;
-  height: 26rem;
+  height: auto;
+  max-height: 26rem;
   overflow: hidden;
 }
 
@@ -878,6 +942,22 @@ button.emailSearchResult:focus-visible {
   gap: 8px;
   overflow-y: auto;
   padding-right: 6px;
+  scrollbar-gutter: stable;
+}
+
+.configSummaryList::-webkit-scrollbar {
+  width: 10px;
+}
+
+.configSummaryList::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+.configSummaryList::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .configSummaryRow {
@@ -1010,6 +1090,11 @@ button.emailSearchResult:focus-visible {
 
 .stack {
   display: grid;
+  /* An implicit grid column is auto-sized, so it resolves to the widest
+     child's max-content and quietly exceeds its own container - min-width:0
+     on the child cannot fix that, because the column is what overflows.
+     This is the shared cause behind the settings page overflowing on mobile. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
 }
 
@@ -1395,6 +1480,15 @@ button.emailSearchResult:focus-visible {
 .intentTabBar {
   display: flex;
   gap: 8px;
+  /* A tab strip can legitimately be wider than a phone. It scrolls inside its
+     own box so the page body never scrolls horizontally. */
+  overflow-x: auto;
+  scrollbar-width: thin;
+  padding-bottom: 2px;
+}
+
+.intentTab {
+  flex: none;
 }
 
 .intentTab {
@@ -1625,6 +1719,10 @@ button.emailSearchResult:focus-visible {
   background: #fff;
   padding: 12px;
   display: grid;
+  /* Same implicit auto-column trap as .stack: without an explicit track this
+     resolves to the max-content of .parserDetailsGrid below, which is 300px
+     per auto-fit column - 1063px inside a 390px viewport. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
 }
 
@@ -1674,14 +1772,16 @@ button.emailSearchResult:focus-visible {
 .parserDetailsSummaryGrid {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  /* min() so the track floor collapses below 300px rather than forcing the
+     container wider than the viewport on a phone. */
+  grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr));
   align-items: stretch;
 }
 
 .parserDetailsGrid {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr));
   align-items: stretch;
 }
 
@@ -1980,14 +2080,7 @@ button.emailSearchResult:focus-visible {
   .leftRail {
     position: static;
     height: auto;
-  }
-
-  .brand {
-    font-size: 36px;
-  }
-
-  .brandSub {
-    font-size: 24px;
+    overflow-y: visible;
   }
 
   .configGrid,
@@ -2000,7 +2093,7 @@ button.emailSearchResult:focus-visible {
   }
 
   .configSummaryCard {
-    height: 24rem;
+    max-height: 24rem;
   }
 
   .parserDetailsPanel {
@@ -2023,10 +2116,16 @@ button.emailSearchResult:focus-visible {
     max-width: none;
   }
 
+  .topActions {
+    margin-left: 0;
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+
   .topSearch input,
   .emailSearchInput {
-    font-size: 20px;
-    height: 42px;
+    font-size: var(--text-base);
+    height: 36px;
   }
 
   .pageBody {
@@ -2034,7 +2133,8 @@ button.emailSearchResult:focus-visible {
   }
 
   .titleBlock h1 {
-    font-size: 36px;
+    /* Was 36px, which made the mobile title larger than the desktop one. */
+    font-size: var(--text-xl);
   }
 
   .statsGrid,
@@ -2188,7 +2288,8 @@ button.emailSearchResult:focus-visible {
   margin: 0 0 6px;
   border: 0;
   padding: 0;
-  font-size: 24px;
+  /* One clear step below the page title rather than a near-match. */
+  font-size: var(--text-xl);
 }
 
 .inboxHeader p,
@@ -3608,9 +3709,23 @@ button.emailSearchResult:focus-visible {
 
 .detailSection {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   padding-bottom: 16px;
   border-bottom: 1px solid var(--line);
+}
+
+/* This is an email operations tool, so its content is full of strings with no
+   break opportunity: addresses, URLs, message ids, Gmail queries. Left alone
+   they set a huge max-content width, which an auto-sized grid column then
+   adopts - the actual reason three separate panels overflowed a phone. */
+.detailSection p,
+.detailSection li,
+.detailSection td,
+.emailItem p,
+.parserDetailsBlock p,
+.parserDetailsBlock li {
+  overflow-wrap: anywhere;
 }
 
 .detailSection h4 {
@@ -5020,4 +5135,832 @@ button.emailSearchResult:focus-visible {
 .assistantComposer.dragging {
   outline: 2px dashed var(--primary);
   outline-offset: -4px;
+}
+
+/* Chat queue links (v2 W2). Navigation is a button, not a proposal card: it
+   changes no data, so the user's click is the whole action. */
+.chatQueueLink {
+  border: 1px solid var(--border, #d8dee9);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 6px 0;
+  background: var(--surface, #fff);
+}
+
+.chatQueueLinkButton {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  font-weight: 600;
+  cursor: pointer;
+  border: 0;
+  background: none;
+  padding: 0;
+  color: inherit;
+}
+
+.chatQueueLinkButton:hover .chatQueueLinkTitle,
+.chatQueueLinkButton:focus-visible .chatQueueLinkTitle {
+  text-decoration: underline;
+}
+
+.chatQueueLinkTitle {
+  font-weight: 400;
+  font-size: 0.85em;
+  opacity: 0.75;
+}
+
+.chatQueueLinkFilters {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 0.85em;
+  opacity: 0.8;
+}
+
+/* Chat analysis output (v2 W3-W5). Scoped to the assistant rather than reusing
+   the Run Queue chart classes: the workspace has its own palette, and coupling
+   the two means a Run Queue restyle silently restyles chat. */
+.chatMetricCards,
+.chatAnalysisFigure {
+  margin: 8px 0;
+  padding: 12px;
+  border: 1px solid var(--border, #d8dee9);
+  border-radius: 8px;
+  background: var(--surface, #fff);
+}
+
+.chatMetricCardsTitle {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.chatMetricGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+}
+
+.chatMetricCard {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--border, #e3e8ef);
+  border-radius: 6px;
+  text-align: left;
+  background: var(--bg-subtle, #f7f9fc);
+  color: inherit;
+}
+
+.chatMetricCard.interactive {
+  cursor: pointer;
+}
+
+.chatMetricCard.interactive:hover,
+.chatMetricCard.interactive:focus-visible {
+  border-color: var(--accent, #3b6ea5);
+}
+
+.chatMetricValue {
+  font-size: 1.4em;
+  font-weight: 600;
+  line-height: 1.1;
+}
+
+.chatMetricLabel {
+  font-size: 0.8em;
+  opacity: 0.75;
+}
+
+/* The provenance caption. Mandatory under every visualization - a number whose
+   range and exclusions are invisible is not an inspectable number. */
+.chatProvenance {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border, #e3e8ef);
+  font-size: 0.75em;
+  opacity: 0.7;
+}
+
+.chatProvenanceMetric {
+  font-weight: 600;
+}
+
+.chatProvenanceAssumptions {
+  flex-basis: 100%;
+  margin: 2px 0 0;
+  padding-left: 16px;
+}
+
+.chatRankedList {
+  margin: 8px 0 0;
+  padding-left: 20px;
+}
+
+.chatRankedList > li + li {
+  margin-top: 10px;
+}
+
+.chatRankedHead {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.chatRankedLabel {
+  font-weight: 600;
+  text-align: left;
+  border: 0;
+  background: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+button.chatRankedLabel:hover,
+button.chatRankedLabel:focus-visible {
+  text-decoration: underline;
+}
+
+.chatRankedScore {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
+}
+
+.chatRankedReasons {
+  margin: 4px 0 0;
+  padding-left: 16px;
+  font-size: 0.85em;
+  opacity: 0.8;
+}
+
+.chatComparisonScroll {
+  overflow-x: auto;
+  margin-top: 8px;
+}
+
+.chatComparisonTable {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.9em;
+}
+
+.chatComparisonTable th,
+.chatComparisonTable td {
+  border-bottom: 1px solid var(--border, #e3e8ef);
+  padding: 5px 8px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.chatComparisonTable td {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Chat charts (v2 W5). Hand-rolled, no library: the server buckets the data
+   and these draw proportional bars, which is the same shape as the Run Queue's
+   hBarChart - deliberately duplicated rather than shared, so restyling one
+   page never silently restyles the other. */
+.chatChart {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.chatChartRow {
+  display: grid;
+  grid-template-columns: minmax(80px, 30%) 1fr auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.chatChartRow.interactive {
+  cursor: pointer;
+}
+
+.chatChartRow.interactive:hover .chatChartFill,
+.chatChartRow.interactive:focus-visible .chatChartFill {
+  filter: brightness(1.1);
+}
+
+.chatChartLabel {
+  font-size: 0.85em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chatChartTrack {
+  display: block;
+  height: 12px;
+  border-radius: 3px;
+  background: var(--bg-subtle, #eef2f7);
+  overflow: hidden;
+}
+
+.chatChartFill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent, #3b6ea5);
+}
+
+.chatChartValue {
+  font-size: 0.85em;
+  font-variant-numeric: tabular-nums;
+}
+
+.chatChartRate {
+  opacity: 0.65;
+}
+
+.chatChartList {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 0.9em;
+}
+
+.chatChartList li {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.chatDisambiguation {
+  margin: 8px 0;
+  padding: 12px;
+  border: 1px solid var(--border, #d8dee9);
+  border-radius: 8px;
+  background: var(--surface, #fff);
+}
+
+.chatDisambiguationOptions {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.chatDisambiguationOptions button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 8px;
+  border: 1px solid var(--border, #e3e8ef);
+  border-radius: 6px;
+  background: var(--bg-subtle, #f7f9fc);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.chatDisambiguationOptions button:hover,
+.chatDisambiguationOptions button:focus-visible,
+.chatDisambiguationOptions button.chosen {
+  border-color: var(--accent, #3b6ea5);
+}
+
+/* Web citations (v2 W9). Deliberately unlike any internal-data surface: a
+   search result that looks like a stored record is a claim the product did
+   not make. Nothing here reuses .candidateTable. */
+.chatWebResults {
+  margin: 8px 0;
+  padding: 10px 12px;
+  border: 1px dashed var(--border, #c7d0dd);
+  border-radius: 8px;
+  background: var(--bg-subtle, #f7f9fc);
+}
+
+.chatWebLabel {
+  margin: 0 0 6px;
+  font-size: 0.75em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.7;
+}
+
+.chatWebList {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 0.9em;
+}
+
+.chatWebList > li + li {
+  margin-top: 8px;
+}
+
+.chatWebHost {
+  font-size: 0.85em;
+  opacity: 0.65;
+}
+
+.chatWebSnippet {
+  margin: 2px 0 0;
+  font-size: 0.9em;
+  opacity: 0.85;
+}
+
+/* v3 — the confidence badge. Rendered from the payload field, never from the
+   model's prose, so a Possible link described in confident language still
+   carries a Possible badge. Confirmed is deliberately the only filled style:
+   an inference must never be mistakable for a recorded fact at a glance. */
+.chatConfidence {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  font-size: 0.72em;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  vertical-align: middle;
+}
+
+.chatConfidenceConfirmed {
+  background: var(--primary);
+  border-color: var(--primary-strong);
+  color: #ffffff;
+}
+
+.chatConfidenceLikely {
+  background: var(--surface);
+  border-color: var(--line-strong);
+  color: var(--ink);
+}
+
+.chatConfidencePossible {
+  background: var(--surface-soft);
+  border-style: dashed;
+  color: var(--muted);
+}
+
+.chatEvidencePanel {
+  margin-top: 8px;
+}
+
+.chatEvidenceDetails {
+  margin-top: 6px;
+  font-size: 0.8em;
+}
+
+.chatEvidenceDetails > summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.chatEvidenceList {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chatEvidenceRow {
+  display: grid;
+  grid-template-columns: minmax(88px, 1fr) 2fr minmax(96px, 1fr) 40px;
+  gap: 4px 10px;
+  padding: 3px 0;
+  border-top: 1px solid var(--line);
+}
+
+.chatEvidenceSignal {
+  font-weight: 600;
+}
+
+.chatEvidenceValues {
+  overflow-wrap: anywhere;
+}
+
+.chatEvidenceNormalized {
+  opacity: 0.7;
+}
+
+.chatEvidenceMatch,
+.chatEvidenceContribution {
+  color: var(--muted);
+}
+
+.chatEvidenceContribution {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Signals that could not be compared. Shown, never omitted: two claims resting
+   on very different evidence would otherwise look identical. */
+.chatEvidenceAbsent {
+  margin-top: 8px;
+  opacity: 0.75;
+}
+
+.chatEvidenceFooter {
+  margin: 8px 0 0;
+}
+
+/* v3 — an inferred grouping. Deliberately quieter than a candidate table: a
+   claim nobody entered must not look like a record somebody did. */
+.chatRelationship {
+  border-left: 3px solid var(--line-strong);
+  padding-left: 10px;
+}
+
+.chatRelationshipHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.chatRelationshipClaim {
+  margin: 4px 0 8px;
+}
+
+.chatRelationshipMembers {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chatRelationshipMembers > li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 3px 0;
+}
+
+.chatRelationshipInferred {
+  margin: 8px 0 0;
+  font-size: 0.85em;
+  color: var(--muted);
+}
+
+/* Never mistakable for a recorded value at a glance. */
+.chatRelationshipInferredTag {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 6px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 3px;
+  font-size: 0.9em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.chatRelationshipActions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.chatRelationshipSettled {
+  margin: 10px 0 0;
+}
+
+.chatRelationshipError {
+  margin: 8px 0 0;
+  color: var(--danger);
+  font-size: 0.9em;
+}
+
+/* The relationship labelling tool. An internal calibration surface, not a
+   feature: reachable only by ?page=relationship_labeling, and its routes 404
+   unless the feature is switched on. */
+.labelingTool {
+  max-width: 900px;
+}
+
+.labelingProgress {
+  margin: 0 0 8px;
+}
+
+.labelingTable {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 10px 0;
+}
+
+.labelingTable th,
+.labelingTable td {
+  border: 1px solid var(--line);
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.labelingCoverage {
+  font-weight: 400;
+  font-size: 0.85em;
+}
+
+.labelingVerdicts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.labelingVerdicts kbd {
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  padding: 0 4px;
+  font-size: 0.85em;
+}
+
+.labelingReason {
+  width: 100%;
+  min-height: 60px;
+}
+
+.labelingHidden,
+.labelingRevealed {
+  margin-top: 10px;
+}
+
+.labelingError {
+  margin-top: 10px;
+  color: var(--danger);
+}
+
+/* --- v4 scheduling ------------------------------------------------------- */
+
+.scheduling-page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.scheduling-empty,
+.scheduling-notice {
+  color: var(--muted);
+  margin: 0;
+}
+
+.scheduling-error {
+  color: var(--danger);
+  margin: 0;
+}
+
+.scheduling-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.scheduling-task,
+.scheduling-pending {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 12px 14px;
+}
+
+/* A suspended task must look different at a glance: it is not running, and
+   that is the single most important thing about it. */
+.scheduling-task-suspended {
+  border-color: var(--danger);
+}
+
+.scheduling-task-paused {
+  background: var(--surface-soft);
+}
+
+.scheduling-task-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.scheduling-task-title {
+  font-weight: 600;
+  color: var(--ink);
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.scheduling-badge {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+
+.scheduling-badge-suspended {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.scheduling-task-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 4px 16px;
+  margin: 8px 0 0;
+}
+
+.scheduling-task-facts div {
+  display: flex;
+  gap: 6px;
+}
+
+.scheduling-task-facts dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.scheduling-task-facts dd {
+  margin: 0;
+  font-size: 12px;
+  color: var(--ink);
+}
+
+.scheduling-task-error,
+.scheduling-run-error {
+  color: var(--danger);
+  font-size: 12px;
+  margin: 6px 0 0;
+}
+
+.scheduling-task-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.scheduling-task-detail {
+  margin-top: 10px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.scheduling-runs-title {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.scheduling-runs,
+.scheduling-checklist {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.scheduling-run {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.scheduling-run-when {
+  color: var(--muted);
+}
+
+.scheduling-run-expired .scheduling-run-outcome,
+.scheduling-run-reason {
+  color: var(--muted);
+}
+
+.scheduling-run-failed .scheduling-run-outcome {
+  color: var(--danger);
+}
+
+.scheduling-item-done {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+
+.scheduling-prepared {
+  margin-top: 10px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.scheduling-prepared ul {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.scheduling-edit {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin: 4px 0 0 22px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.scheduling-pending-detail {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+/* The chat render kind. */
+.chat-scheduled-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.chat-scheduled-item {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--surface);
+}
+
+.chat-scheduled-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.chat-scheduled-title {
+  font-weight: 600;
+}
+
+.chat-scheduled-status {
+  font-size: 11px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.chat-scheduled-status-suspended {
+  color: var(--danger);
+}
+
+.chat-scheduled-meta {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.chat-scheduled-next,
+.chat-scheduled-permits {
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.chat-scheduled-permits {
+  color: var(--muted);
+}
+
+.chat-scheduled-error {
+  font-size: 12px;
+  color: var(--danger);
+  margin-top: 4px;
+}
+
+.chat-scheduled-note {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 6px 0 0;
+}
+
+.chat-scheduled-empty {
+  color: var(--muted);
+  font-size: 13px;
 }

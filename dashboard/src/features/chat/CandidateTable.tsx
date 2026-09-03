@@ -48,6 +48,9 @@ export default function CandidateTable({ messageId, data }: CandidateTableProps)
   const [sort, setSort] = useState<{ column: string; direction: 'asc' | 'desc' } | null>(null)
   const [selected, setSelected] = useState<number[]>([])
   const [pendingKey, setPendingKey] = useState<string | null>(null)
+  // Which action the pending card is for. 'approve' keeps v1's behaviour
+  // exactly; the rest route through propose_candidate_action.
+  const [pendingAction, setPendingAction] = useState<'approve' | 'reject' | 'track'>('approve')
 
   const rows = useMemo(() => {
     if (!sort) return data.rows
@@ -75,15 +78,38 @@ export default function CandidateTable({ messageId, data }: CandidateTableProps)
   // model's history, so it cannot act on a table it drew earlier - and it does
   // not need to: this routes to the same /candidates/approve-bulk the Needs
   // Review selection bar uses, through the same confirmation card.
-  const proposal = pendingKey ? {
-    handler: PROPOSAL_HANDLERS.propose_bulk_approve_candidates,
-    fields: {
-      action: 'approve_candidates',
-      candidate_ids: selectedApprovable,
-      count: selectedApprovable.length,
-      idempotency_key: pendingKey,
-    },
-  } : null
+  const proposal = pendingKey ? (
+    pendingAction === 'approve'
+      ? {
+        handler: PROPOSAL_HANDLERS.propose_bulk_approve_candidates,
+        fields: {
+          action: 'approve_candidates',
+          candidate_ids: selectedApprovable,
+          count: selectedApprovable.length,
+          idempotency_key: pendingKey,
+        },
+      }
+      : {
+        handler: PROPOSAL_HANDLERS.propose_candidate_action,
+        fields: {
+          action: 'propose_candidate_action',
+          candidate_action: pendingAction,
+          label: pendingAction === 'reject' ? 'Reject' : 'Mark for tracking',
+          candidate_ids: pendingAction === 'reject' ? selectedApprovable : selected,
+          count: pendingAction === 'reject' ? selectedApprovable.length : selected.length,
+          reversible: pendingAction !== 'reject',
+          reversible_detail: pendingAction === 'reject'
+            ? 'Rejected emails leave the review queue; there is no un-reject action.'
+            : 'Reversible - you can stop tracking at any time.',
+          ...(pendingAction === 'track' ? { tracked: true } : {}),
+        },
+      }
+  ) : null
+
+  const start = (action: 'approve' | 'reject' | 'track') => {
+    setPendingAction(action)
+    setPendingKey(crypto.randomUUID())
+  }
 
   if (!data.rows.length) {
     return (
@@ -159,12 +185,24 @@ export default function CandidateTable({ messageId, data }: CandidateTableProps)
           <span>{selected.length} selected</span>
           <button
             type="button"
-            onClick={() => setPendingKey(crypto.randomUUID())}
+            onClick={() => start('approve')}
             disabled={!selectedApprovable.length}
             title={selectedApprovable.length ? undefined : 'Only candidates in Needs Review can be approved'}
           >
             Approve {selectedApprovable.length || ''}
           </button>
+          {/* Same selection, same card, same endpoints the Needs Review bulk
+              bar uses. The client builds the proposal, so this works despite
+              tool results never reaching the model's history. */}
+          <button
+            type="button"
+            onClick={() => start('reject')}
+            disabled={!selectedApprovable.length}
+            title={selectedApprovable.length ? undefined : 'Only candidates in Needs Review can be rejected'}
+          >
+            Reject {selectedApprovable.length || ''}
+          </button>
+          <button type="button" onClick={() => start('track')}>Track {selected.length}</button>
           <button type="button" onClick={() => setSelected([])}>Clear</button>
         </div>
       ) : null}

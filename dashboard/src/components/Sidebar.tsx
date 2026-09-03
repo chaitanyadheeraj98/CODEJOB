@@ -9,7 +9,12 @@ export type SidebarProps = {
   assistantUnseenCount?: number
   resumeTrackingEnabled: boolean
   applicationsEnabled?: boolean
-  activePage: 'assistant' | 'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'inbox' | 'premium_numbers' | 'resume_tracking' | 'application_tracking' | 'settings'
+  // Env-gated and off by default. The rows appear only when scheduling is
+  // actually on, so no user is shown a page that answers "not enabled here".
+  schedulingEnabled?: boolean
+  // relationship_labeling is a member of the page union but has no nav row:
+  // it is an internal calibration tool, not a feature.
+  activePage: 'assistant' | 'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'inbox' | 'premium_numbers' | 'resume_tracking' | 'application_tracking' | 'relationship_labeling' | 'scheduled_tasks' | 'scheduled_review' | 'settings'
   onNavigate: (section: SidebarProps['activePage']) => void
 }
 
@@ -24,6 +29,7 @@ export default function Sidebar({
   assistantUnseenCount = 0,
   resumeTrackingEnabled,
   applicationsEnabled = false,
+  schedulingEnabled = false,
   activePage,
   onNavigate,
 }: SidebarProps) {
@@ -46,6 +52,13 @@ export default function Sidebar({
     { key: 'sent_items', label: 'Sent Items', count: sentCount },
     { key: 'inbox', label: 'Inbox', count: inboxCount },
     { key: 'recent_runs', label: 'Recent Runs', count: runCount },
+    // temp157 §8.1: no scheduled task may exist that the user cannot see.
+    ...(schedulingEnabled
+      ? [
+        { key: 'scheduled_tasks' as const, label: 'Scheduled Tasks' },
+        { key: 'scheduled_review' as const, label: 'Scheduled Review' },
+      ]
+      : []),
   ]
 
   return (

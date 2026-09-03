@@ -4,6 +4,7 @@ import { getChatStatus, listChatAttachments, runProposalAction } from './api'
 import { ChatContext, type ChatContextValue } from './chatContext'
 import type { ProposalResult } from './ProposalCard'
 import { proposalResultDetail, type ProposalFields, type ProposalHandler } from './proposals'
+import type { QueueTarget } from '../../queueNavigation'
 import type { ChatAttachment, ChatStatus } from './types'
 import { useChatSession } from './useChatSession'
 
@@ -11,6 +12,7 @@ import { useChatSession } from './useChatSession'
 type ChatProviderProps = {
   apiBase: string
   onFocusCandidate?: (candidateId: number) => void
+  onNavigateToQueue?: (target: QueueTarget) => void
   children: ReactNode
 }
 
@@ -21,7 +23,7 @@ const MODEL_STORAGE_KEY = 'codejob.chat.model'
 // counters that clear separately, and - the user-visible one - two message
 // lists, so a message sent on one surface would not appear on the other until
 // its own 20s poll fired.
-export default function ChatProvider({ apiBase, onFocusCandidate, children }: ChatProviderProps) {
+export default function ChatProvider({ apiBase, onFocusCandidate, onNavigateToQueue, children }: ChatProviderProps) {
   const [status, setStatus] = useState<ChatStatus | null>(null)
   const [statusError, setStatusError] = useState('')
   const [selectedModel, setSelectedModel] = useState(() => {
@@ -112,7 +114,7 @@ export default function ChatProvider({ apiBase, onFocusCandidate, children }: Ch
       const result = await runProposalAction(apiBase, proposal.handler, proposal.fields)
       setProposalResults((current) => ({
         ...current,
-        [messageId]: { approved: true, detail: proposalResultDetail(result) },
+        [messageId]: { approved: true, detail: proposalResultDetail(result, proposal.fields) },
       }))
     } catch (reason) {
       setProposalResults((current) => ({
@@ -132,6 +134,10 @@ export default function ChatProvider({ apiBase, onFocusCandidate, children }: Ch
     onFocusCandidate?.(candidateId)
   }, [onFocusCandidate])
 
+  const navigateToQueue = useCallback((target: QueueTarget) => {
+    onNavigateToQueue?.(target)
+  }, [onNavigateToQueue])
+
   const value: ChatContextValue = {
     ...chat,
     apiBase,
@@ -146,6 +152,7 @@ export default function ChatProvider({ apiBase, onFocusCandidate, children }: Ch
     approveProposal,
     cancelProposal,
     focusCandidate,
+    navigateToQueue,
     attachments,
     refreshAttachments,
   }

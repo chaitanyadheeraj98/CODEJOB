@@ -2,6 +2,7 @@ import { createContext, useContext } from 'react'
 
 import type { ProposalResult } from './ProposalCard'
 import type { ProposalFields, ProposalHandler } from './proposals'
+import type { QueueTarget } from '../../queueNavigation'
 import type { ChatAttachment, ChatStatus } from './types'
 import type { ChatSessionApi } from './useChatSession'
 
@@ -23,6 +24,10 @@ export type ChatContextValue = ChatSessionApi & {
   // because the navigation state lives there; a no-op when the provider is
   // mounted without it (tests, or any future host that has no such page).
   focusCandidate: (candidateId: number) => void
+  // Opens a work queue with filters pre-applied. Supplied by App for the same
+  // reason focusCandidate is - the filter state lives there - and a no-op when
+  // the provider is mounted without it.
+  navigateToQueue: (target: QueueTarget) => void
   // Every attachment on the open session, so both surfaces can show chips on
   // the messages that carry them. Uploading stays page-only.
   attachments: ChatAttachment[]

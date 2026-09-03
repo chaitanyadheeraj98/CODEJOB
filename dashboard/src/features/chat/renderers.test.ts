@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { renderForMessage } from './renderers'
+import { asInferenceProvenance, asProvenance, renderForMessage } from './renderers'
 import type { ChatMessage } from './types'
 
 const payload = {
@@ -24,9 +24,13 @@ describe('renderForMessage', () => {
   it('parses a well-formed table payload', () => {
     const parsed = renderForMessage(toolMessage(payload))
 
-    expect(parsed?.data.title).toBe('Top matches')
-    expect(parsed?.data.columns).toEqual(['role', 'sender'])
-    expect(parsed?.data.rows[0].candidate_id).toBe(7323)
+    // Narrowing on `kind` is the contract now: the union is what lets a second
+    // visualization share this registry without being drawn as a table.
+    expect(parsed?.kind).toBe('candidate_table')
+    if (parsed?.kind !== 'candidate_table') throw new Error('expected a candidate table payload')
+    expect(parsed.data.title).toBe('Top matches')
+    expect(parsed.data.columns).toEqual(['role', 'sender'])
+    expect(parsed.data.rows[0].candidate_id).toBe(7323)
   })
 
   it('ignores tool messages no handler claims', () => {
@@ -56,7 +60,84 @@ describe('renderForMessage', () => {
   it('tolerates a missing dropped list and truncated flag', () => {
     const parsed = renderForMessage(toolMessage({ ...payload, dropped: undefined, truncated: undefined }))
 
-    expect(parsed?.data.dropped).toEqual([])
-    expect(parsed?.data.truncated).toBe(false)
+    if (parsed?.kind !== 'candidate_table') throw new Error('expected a candidate table payload')
+    expect(parsed.data.dropped).toEqual([])
+    expect(parsed.data.truncated).toBe(false)
+  })
+})
+
+describe('asInferenceProvenance', () => {
+  const evidence = [{
+    signal: 'job_title',
+    left_value: 'Senior Java Developer',
+    right_value: 'Java Developer',
+    normalized_to: 'java developer',
+    match: 'exact',
+    weight: 0.2,
+    sub_score: 1,
+    source: 'canonical_entity_taxonomy',
+  }]
+
+  const block = (overrides: Record<string, unknown> = {}) => ({
+    metric: 'relationship',
+    source: 'relationship_scoring',
+    row_count: 2,
+    date_range: { from: null, to: null },
+    filters: {},
+    assumptions: ['This relationship was inferred from the records listed, not recorded by anyone.'],
+    confidence: 'likely',
+    score: 0.72,
+    evidence,
+    semantic_available: true,
+    ...overrides,
+  })
+
+  it('accepts a well-formed inference block and keeps every base field', () => {
+    const parsed = asInferenceProvenance(block())
+
+    expect(parsed?.metric).toBe('relationship')
+    expect(parsed?.row_count).toBe(2)
+    expect(parsed?.confidence).toBe('likely')
+    expect(parsed?.score).toBe(0.72)
+    expect(parsed?.evidence).toHaveLength(1)
+    expect(parsed?.semantic_available).toBe(true)
+  })
+
+  it('defaults semantic_available to false rather than assuming the richer population', () => {
+    expect(asInferenceProvenance(block({ semantic_available: undefined }))?.semantic_available).toBe(false)
+  })
+
+  // Each of these is a claim arriving without something that makes it
+  // inspectable. A claim that cannot be inspected must not reach the DOM.
+  it.each([
+    ['no confidence', { confidence: undefined }],
+    ['an unknown confidence level', { confidence: 'probable' }],
+    ['the scorer "none" verdict, which must never surface', { confidence: 'none' }],
+    ['empty evidence', { evidence: [] }],
+    ['no evidence key at all', { evidence: undefined }],
+    ['evidence that is not an array', { evidence: 'job title matched' }],
+    ['a score above one', { score: 1.5 }],
+    ['a negative score', { score: -0.2 }],
+    ['a NaN score', { score: Number.NaN }],
+    ['a non-numeric score', { score: '0.72' }],
+    ['an evidence entry with an unknown match kind', { evidence: [{ ...evidence[0], match: 'vibes' }] }],
+    ['an evidence entry with no signal', { evidence: [{ ...evidence[0], signal: '' }] }],
+    ['an evidence entry with a non-numeric weight', { evidence: [{ ...evidence[0], weight: 'high' }] }],
+  ])('returns null for %s', (_label, overrides) => {
+    expect(asInferenceProvenance(block(overrides))).toBeNull()
+  })
+
+  // The inference gate is a superset of the measured-number gate, not a
+  // replacement: a block that fails the base check fails this one too.
+  it('returns null when the underlying provenance block is malformed', () => {
+    expect(asInferenceProvenance(block({ metric: '' }))).toBeNull()
+    expect(asInferenceProvenance(block({ row_count: 'two' }))).toBeNull()
+  })
+
+  it('accepts a plain provenance block through asProvenance but not through asInferenceProvenance', () => {
+    const measured = { metric: 'pipeline_summary', source: 'dashboard_summary', row_count: 12, date_range: {}, filters: {}, assumptions: [] }
+
+    expect(asProvenance(measured)).not.toBeNull()
+    expect(asInferenceProvenance(measured)).toBeNull()
   })
 })

@@ -26,6 +26,18 @@ matching tab.
 
 ## Chat assistant
 
-This chat is read-only: it can look up your candidates, runs, inbox
-conversations, resumes, AI health, and settings, but it cannot upload files,
-send emails, or change settings for you. Those actions require the UI.
+This chat can look up your candidates, runs, inbox conversations, resumes,
+contacts, opportunities, AI health, and settings. It can also prepare actions
+- sending a reply, approving candidates, creating a contact, filing an issue -
+but it never performs them itself: it shows a confirmation card, and only your
+click executes the action. You can attach .pdf, .docx, .txt, and .csv files on
+the Assistant page; the floating widget is read-and-prepare only.
+
+## CodeJob Assistant page
+
+Location: sidebar -> Assistant.
+The full-page workspace for the same conversation the floating widget shows -
+both surfaces share one session, so a thread started in either continues in the
+other. The page adds file attachments (drag a file onto the composer or use the
+attach button), a conversation list grouped by day, and room for tables and
+charts the widget is too narrow to draw.

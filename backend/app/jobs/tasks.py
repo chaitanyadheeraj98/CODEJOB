@@ -42,6 +42,104 @@ def run_generate_embedding_job(*, record_type: str, record_id: int) -> dict[str,
         db.close()
 
 
+def run_scheduled_task_job(*, task_id: int) -> dict[str, Any]:
+    """Execute one scheduled task run.
+
+    The draft-and-hold boundary as a code-level rule: this function and the
+    handler it dispatches to write **only** `scheduled_tasks` and
+    `scheduled_task_runs`. A test snapshots every other table's row count around
+    a run, so an edit that breaks the rule fails CI rather than reaching a user.
+
+    RQ's Retry is used elsewhere in this codebase but not here. A scheduled task
+    that fails should surface, and the next sweep tick is the natural retry.
+    """
+    from app.models import SUPERSEDING_KINDS, ScheduledTask, ScheduledTaskRun, utc_now
+    from app.services.scheduling.handlers import handler_for
+
+    db = SessionLocal()
+    try:
+        task = db.get(ScheduledTask, task_id)
+        if task is None:
+            return {"status": "skipped", "reason": "task_not_found"}
+        if task.status != "active":
+            return {"status": "skipped", "reason": f"task_{task.status}"}
+
+        run = ScheduledTaskRun(
+            owner_id=task.owner_id,
+            task_id=task.id,
+            started_at=utc_now(),
+            outcome="pending",
+        )
+        db.add(run)
+        db.flush()
+
+        # A newer run of a superseding kind makes an older pending batch
+        # redundant. Drafted messages addressed to specific records never
+        # supersede, so this list is deliberately short.
+        if task.kind in SUPERSEDING_KINDS:
+            superseded = (
+                db.query(ScheduledTaskRun)
+                .filter(
+                    ScheduledTaskRun.owner_id == task.owner_id,
+                    ScheduledTaskRun.task_id == task.id,
+                    ScheduledTaskRun.id != run.id,
+                    ScheduledTaskRun.outcome == "pending",
+                )
+                .all()
+            )
+            for older in superseded:
+                older.outcome = "expired"
+                older.expired_at = utc_now()
+                older.expiry_reason = "superseded"
+
+        try:
+            handler_for(task.kind)(db, task, run)
+        except Exception as exc:
+            db.rollback()
+            return _record_scheduled_failure(db, task_id, exc)
+
+        task.last_run_at = run.started_at
+        task.last_error = None
+        task.consecutive_failures = 0
+        db.commit()
+        return {"status": "ok", "run_id": run.id, "outcome": run.outcome, "items": run.item_count}
+    finally:
+        db.close()
+
+
+def _record_scheduled_failure(db, task_id: int, exc: Exception) -> dict[str, Any]:
+    """Record the failure on both the task and a run, then notify."""
+    from app.models import ScheduledTask, ScheduledTaskRun, utc_now
+    from app.services import proactive_notification_service
+
+    logger.exception("scheduled_task_failed task_id=%s", task_id)
+    task = db.get(ScheduledTask, task_id)
+    if task is None:
+        return {"status": "failed", "reason": "task_not_found"}
+    message = f"{type(exc).__name__}: {exc}"[:500]
+    task.last_error = message
+    task.consecutive_failures = (task.consecutive_failures or 0) + 1
+    task.last_run_at = utc_now()
+    db.add(
+        ScheduledTaskRun(
+            owner_id=task.owner_id,
+            task_id=task.id,
+            started_at=utc_now(),
+            finished_at=utc_now(),
+            outcome="failed",
+            error=message,
+        )
+    )
+    db.commit()
+    proactive_notification_service.notify_scheduled(
+        db,
+        title=f"{task.title}: run failed",
+        body=message,
+        kind="failure",
+    )
+    return {"status": "failed", "error": message}
+
+
 def _mark_failed(run_key: str, exc: Exception) -> None:
     db = SessionLocal()
     try:

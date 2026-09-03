@@ -2,6 +2,7 @@ from datetime import datetime
 import json
 import re
 from typing import Any, Literal, cast
+from zoneinfo import available_timezones
 
 from pydantic import AliasChoices, BaseModel, Field, field_validator
 
@@ -192,6 +193,27 @@ class SettingsRequest(BaseModel):
     preferred_employer_cc_email: str = ""
     resume_display_name: str = ""
     policy: PolicyDict | None = None
+    timezone: str = "UTC"
+    feature_scheduling_sweep_interval_minutes: int = 15
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value: str) -> str:
+        name = (value or "").strip() or "UTC"
+        # available_timezones() needs tzdata on Windows and in slim containers.
+        # It is already a declared dependency and, until now, never imported.
+        if name not in available_timezones():
+            raise ValueError("Unknown timezone")
+        return name
+
+    # Deliberately NOT added to validate_reminder_sweep_interval's tuple: that
+    # would loosen two shipped sweeps from a 30-minute floor to 5 as a side
+    # effect. Scheduling needs a 5-minute floor of its own, because a 30-minute
+    # floor makes a reminder set for 09:15 arrive as late as 09:45.
+    @field_validator("feature_scheduling_sweep_interval_minutes")
+    @classmethod
+    def validate_scheduling_sweep_interval(cls, value: int) -> int:
+        return max(5, min(int(value), 1440))
 
     @field_validator("mail_date")
     @classmethod
@@ -544,6 +566,11 @@ class EmbeddedJobIntentSignalResponse(BaseModel):
 class SettingsBootstrapResponse(BaseModel):
     settings: SettingsResponse
     role_manifest_child_creation_enabled: bool = False
+    # An env-only master switch, surfaced the same way as the flag above so
+    # the management view is discoverable exactly when scheduling is on.
+    # Without this the page exists but nothing links to it, and temp157 §8.1
+    # requires the user to be able to see every scheduled task.
+    scheduling_enabled: bool = False
     gmail_requirement_groups: list["GmailRequirementGroupResponse"] = Field(default_factory=list)
     resumes: list[ResumeResponse] = Field(default_factory=list)
     attachments: list[AttachmentAssetResponse] = Field(default_factory=list)
@@ -2159,3 +2186,66 @@ class ProductivityTrendResponse(BaseModel):
     kpi_total_sent: int = 0
     previous_period_total_sent: int = 0
     bars: list[ProductivityBarPoint] = Field(default_factory=list)
+
+
+# --- v3 relationship intelligence -------------------------------------------
+
+
+class RelationshipLabelRequest(BaseModel):
+    left_opportunity_id: int
+    right_opportunity_id: int
+    verdict: str
+    reason: str = ""
+    labeler: str = ""
+    sampler: str = ""
+
+
+class RelationshipJudgmentRequest(BaseModel):
+    verdict: str
+    note: str = ""
+    correct_member_ids: list[int] = Field(default_factory=list)
+
+
+class EntityAliasMergeRequest(BaseModel):
+    entity_type: str
+    keep_id: int
+    alias_id: int
+
+
+class ScheduledTaskCreateRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=255)
+    kind: str = "reminder"
+    # The user's own phrasing. The server parses it; the client never sends a
+    # cron expression it composed itself.
+    when: str = ""
+    note: str = ""
+    subject_type: str = Field(default="", max_length=40)
+    subject_id: str = Field(default="", max_length=64)
+    condition: dict[str, Any] | None = None
+    action: dict[str, Any] | None = None
+    items: list[str] = Field(default_factory=list)
+    retention_hours: int | None = None
+
+
+class ScheduledTaskPatchRequest(BaseModel):
+    # pause | resume | edit
+    operation: str = "edit"
+    title: str | None = Field(default=None, max_length=255)
+    when: str | None = None
+    note: str | None = None
+    condition: dict[str, Any] | None = None
+    action: dict[str, Any] | None = None
+    retention_hours: int | None = None
+
+
+class ScheduledRunApproveRequest(BaseModel):
+    # Empty means "approve everything in this run". Anything else is a subset,
+    # and every id must belong to the run.
+    item_ids: list[str] = Field(default_factory=list)
+    edits: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+
+class ScheduledTaskItemPatchRequest(BaseModel):
+    done: bool | None = None
+    text: str | None = Field(default=None, max_length=500)
+    position: int | None = None

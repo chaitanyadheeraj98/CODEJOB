@@ -575,6 +575,17 @@ class MCPServerToolTests(unittest.TestCase):
         self.assertIn("error", unknown)
         self.assertIn("topics", unknown)
 
+    def test_chat_assistant_help_does_not_claim_the_chat_is_read_only(self) -> None:
+        # The help doc told the model the chat could not send email or upload
+        # files for two phases after both shipped, contradicting the system
+        # prompt. It drifted silently; this is what stops it drifting again.
+        chat = get_app_help("chat assistant")
+
+        self.assertNotIn("read-only", chat["help"].lower())
+        self.assertIn("confirmation card", chat["help"])
+
+        self.assertIn("CodeJob Assistant page", get_app_help("")["topics"])
+
     def test_get_recruiter_replies_groups_by_recruiter_and_flags_urgency(self) -> None:
         with self.SessionLocal() as db:
             urgent_email = RecruiterEmail(

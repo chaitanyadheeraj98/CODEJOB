@@ -9,7 +9,7 @@ from datetime import UTC, date, datetime, timedelta
 from dataclasses import dataclass
 from email.utils import parseaddr
 from pathlib import Path
-from typing import Mapping, TypedDict, TypeVar, cast
+from typing import Annotated, Mapping, TypedDict, TypeVar, cast
 import threading
 from zoneinfo import ZoneInfo
 
@@ -188,6 +188,11 @@ from app.job_intent_learning import (
 )
 from app.services import (
     analytics_service,
+    entity_embedding_job,
+    entity_resolution_service,
+    relationship_clustering_service,
+    relationship_judgment_service,
+    relationship_labeling_service,
     application_intelligence_service,
     application_outreach_service,
     application_service,
@@ -200,6 +205,10 @@ from app.services import (
     recruiter_identity_service,
     role_similarity_service,
 )
+from app.services.scheduling import pending_work
+from app.services.scheduling import schedule as scheduling_schedule
+from app.services.scheduling import sweep as scheduling_sweep
+from app.services.scheduling import task_service
 from app.services.auto_runner_service import AutoRunnerService
 from app.services.candidate_runtime_service import CandidateRuntimeDeps, CandidateRuntimeService, resolve_resume_display_name
 from app.services.phone_intelligence_workflow_service import (
@@ -308,6 +317,13 @@ from app.schemas import (
     GithubIssueCreateRequest,
     CustomSkillTaxonomyEntryResponse,
     CanonicalEntityTaxonomyEntryResponse,
+    EntityAliasMergeRequest,
+    RelationshipJudgmentRequest,
+    ScheduledRunApproveRequest,
+    ScheduledTaskCreateRequest,
+    ScheduledTaskItemPatchRequest,
+    ScheduledTaskPatchRequest,
+    RelationshipLabelRequest,
     DismissJobIntentSignalRequest,
     DismissSkillRequest,
     DismissEntityRequest,
@@ -634,54 +650,6 @@ def _generate_embedding_with_health(text: str) -> tuple[list[float], str]:
     embedding_last_success_at = finished_at
     embedding_last_error = None
     return vector, provider
-
-
-def _default_bucket_for_range(range_key: str) -> str:
-    if range_key == "last_1h":
-        return "five_min"
-    if range_key == "current_day":
-        return "hour"
-    if range_key == "current_week":
-        return "day"
-    if range_key == "current_month":
-        return "day"
-    if range_key == "current_year":
-        return "month"
-    return "quarter"
-
-
-def _bucket_start(ts: datetime, bucket: str) -> datetime:
-    if bucket == "five_min":
-        minute = (ts.minute // 5) * 5
-        return ts.replace(minute=minute, second=0, microsecond=0)
-    if bucket == "hour":
-        return ts.replace(minute=0, second=0, microsecond=0)
-    if bucket == "day":
-        return ts.replace(hour=0, minute=0, second=0, microsecond=0)
-    if bucket == "month":
-        return ts.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    month = ts.month
-    quarter_month = ((month - 1) // 3) * 3 + 1
-    return ts.replace(month=quarter_month, day=1, hour=0, minute=0, second=0, microsecond=0)
-
-
-def _add_months(ts: datetime, months: int) -> datetime:
-    month_index = (ts.month - 1) + months
-    year = ts.year + month_index // 12
-    month = month_index % 12 + 1
-    return datetime(year, month, 1, tzinfo=UTC)
-
-
-def _next_bucket(ts: datetime, bucket: str) -> datetime:
-    if bucket == "five_min":
-        return ts + timedelta(minutes=5)
-    if bucket == "hour":
-        return ts + timedelta(hours=1)
-    if bucket == "day":
-        return ts + timedelta(days=1)
-    if bucket == "month":
-        return _add_months(ts, 1)
-    return _add_months(ts, 3)
 
 
 def _mail_date_utc_window(selected: date) -> tuple[datetime, datetime]:
@@ -1396,6 +1364,26 @@ def _run_resume_tracking_sweep(db: Session) -> None:
     db.commit()
 
 
+def _run_relationship_sweep(db: Session) -> None:
+    """Top up entity embeddings, then run one clustering pass.
+
+    Both halves are idempotent and resumable, and the clustering pass writes
+    shadow rows unless surfacing is explicitly enabled *and* the thresholds have
+    been calibrated. `since` is deliberately left open: the pass is bounded by
+    `max_pairs` and the blocking keys rather than by a watermark, so a record
+    whose neighbours arrive later is still reconsidered.
+    """
+    entity_embedding_job.embed_pending_entities_all_types(db, owner_id=settings.owner_id)
+    result = relationship_clustering_service.run_clustering_pass(db, owner_id=settings.owner_id)
+    logger.info(
+        "Relationship sweep: scored=%s clusters=%s suppressed=%s surfaced=%s",
+        result.scored_pairs,
+        result.clusters_written,
+        result.clusters_suppressed,
+        result.surfaced,
+    )
+
+
 def _get_auto_runner_service() -> AutoRunnerService:
     global auto_runner_service
     if auto_runner_service is None:
@@ -1407,6 +1395,8 @@ def _get_auto_runner_service() -> AutoRunnerService:
             check_live_replies=_check_live_replies,
             run_reminder_sweep=_run_reminder_sweep,
             run_resume_tracking_sweep=_run_resume_tracking_sweep,
+            run_relationship_sweep=_run_relationship_sweep,
+            run_scheduling_sweep=_run_scheduling_sweep,
             action_lock=telegram_action_lock,
             stop_event=auto_runner_stop_event,
         )
@@ -2766,6 +2756,7 @@ def get_settings_bootstrap(
     return SettingsBootstrapResponse(
         settings=_settings_response_from_model(user_settings),
         role_manifest_child_creation_enabled=settings.role_manifest_child_creation_enabled,
+        scheduling_enabled=settings.feature_scheduling_enabled,
         gmail_requirement_groups=[_gmail_requirement_group_response(item) for item in _list_gmail_requirement_groups(db)],
         resumes=[_resume_response(item) for item in _list_resumes(db)],
         attachments=[AttachmentAssetResponse.model_validate(item) for item in _list_attachment_assets(db)],
@@ -3882,68 +3873,37 @@ def list_productivity_events(
 @app.get("/analytics/trend", response_model=ProductivityTrendResponse)
 def productivity_trend(
     range: str = Query("current_day"),
-    bucket: str | None = Query(None),
+    # Annotated rather than `= Query(None)`: the plain default means calling
+    # this function directly in Python (as the timezone tests do) receives
+    # None and resolves the default bucket, instead of receiving a Query
+    # object that then fails validation as an unknown bucket.
+    bucket: Annotated[str | None, Query()] = None,
     db: Session = Depends(get_db),
 ) -> ProductivityTrendResponse:
     if range not in RANGE_OPTIONS:
         raise HTTPException(status_code=400, detail="Invalid range")
-    resolved_bucket = bucket or _default_bucket_for_range(range)
+    resolved_bucket = bucket or analytics_service.default_bucket_for_range(range)
     if resolved_bucket not in BUCKET_OPTIONS:
         raise HTTPException(status_code=400, detail="Invalid bucket")
 
     start, end = _range_bounds(range)
     start = _ensure_utc(start)
     end = _ensure_utc(end)
-    rows = (
-        db.query(ProductivityEvent)
-        .filter(ProductivityEvent.owner_id == settings.owner_id)
-        .filter(ProductivityEvent.occurred_at >= start, ProductivityEvent.occurred_at <= end)
-        .order_by(ProductivityEvent.occurred_at.asc())
-        .all()
-    )
 
-    grouped: dict[datetime, dict[str, int]] = {}
-    for row in rows:
-        ts = _bucket_start(_ensure_utc(row.occurred_at), resolved_bucket)
-        if ts not in grouped:
-            grouped[ts] = {
-                "sent_count": 0,
-                "failed_count": 0,
-                "needs_review_count": 0,
-                "recent_run_count": 0,
-            }
-        if row.event_type == "approved_sent":
-            grouped[ts]["sent_count"] += 1
-        elif row.event_type == "failed_mapping_marked":
-            grouped[ts]["failed_count"] += 1
-        elif row.event_type == "needs_review_marked":
-            grouped[ts]["needs_review_count"] += 1
-        elif row.event_type == "recent_run_recorded":
-            grouped[ts]["recent_run_count"] += 1
-
-    bars: list[ProductivityBarPoint] = []
-    cursor = _bucket_start(start, resolved_bucket)
-    end_bucket = _bucket_start(end, resolved_bucket)
-    while cursor <= end_bucket:
-        payload = grouped.get(
-            cursor,
-            {
-                "sent_count": 0,
-                "failed_count": 0,
-                "needs_review_count": 0,
-                "recent_run_count": 0,
-            },
+    # The bucketing loop lives in analytics_service so this route and the
+    # chat's get_chart tool cannot drift apart.
+    bars = [
+        ProductivityBarPoint(
+            ts=row["ts"],
+            sent_count=row["sent_count"],
+            failed_count=row["failed_count"],
+            needs_review_count=row["needs_review_count"],
+            recent_run_count=row["recent_run_count"],
         )
-        bars.append(
-            ProductivityBarPoint(
-                ts=cursor,
-                sent_count=payload["sent_count"],
-                failed_count=payload["failed_count"],
-                needs_review_count=payload["needs_review_count"],
-                recent_run_count=payload["recent_run_count"],
-            )
+        for row in analytics_service.productivity_trend_bars(
+            db, owner_id=settings.owner_id, start=start, end=end, bucket=resolved_bucket
         )
-        cursor = _next_bucket(cursor, resolved_bucket)
+    ]
 
     current_total_sent = sum(point.sent_count for point in bars)
 
@@ -3961,25 +3921,16 @@ def productivity_trend(
             bars=bars,
         )
 
-    duration = end - start
-    prev_start = start - duration
-    prev_end = start
-    prev_rows = (
-        db.query(ProductivityEvent)
-        .filter(ProductivityEvent.owner_id == settings.owner_id)
-        .filter(ProductivityEvent.event_type == "approved_sent")
-        .filter(ProductivityEvent.occurred_at >= prev_start, ProductivityEvent.occurred_at < prev_end)
-        .all()
+    previous_total_sent = analytics_service.previous_period_sent_count(
+        db, owner_id=settings.owner_id, start=start, end=end
     )
-    previous_total_sent = len(prev_rows)
     delta = current_total_sent - previous_total_sent
     direction = "flat"
     if delta > 0:
         direction = "up"
     elif delta < 0:
         direction = "down"
-    base = float(max(previous_total_sent, 1))
-    delta_pct = round((delta / base) * 100, 2)
+    delta_pct = round((delta / float(max(previous_total_sent, 1))) * 100, 2)
 
     return ProductivityTrendResponse(
         range=range,
@@ -9454,7 +9405,410 @@ def resolve_recipients(
     return _get_orchestration_service().resolve_recipients(email_id, payload, db)
 
 
+# --- v3 relationship intelligence -------------------------------------------
+#
+# Ten routes, all owner-scoped on settings.owner_id. The judgment route is the
+# only write path v3 exposes to the chat surface, and it is reached by a user's
+# click on a rendered control - v3 registers no propose_* tool and no
+# model-callable write.
+
+
+def _require_relationship_intelligence() -> None:
+    if not settings.feature_relationship_intelligence_enabled:
+        raise HTTPException(status_code=404, detail="Not found")
+
+
+@app.post("/taxonomy/entities/embed")
+def embed_canonical_entities(
+    entity_type: Annotated[str | None, Query()] = None,
+    batch_size: Annotated[int, Query(ge=1, le=500)] = 300,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    """Backfill embeddings for approved canonical entities. Idempotent."""
+    _require_relationship_intelligence()
+    if entity_type:
+        return {
+            entity_type: entity_embedding_job.embed_pending_entities(
+                db, owner_id=settings.owner_id, entity_type=entity_type, batch_size=batch_size
+            )
+        }
+    return entity_embedding_job.embed_pending_entities_all_types(
+        db, owner_id=settings.owner_id, batch_size=batch_size
+    )
+
+
+@app.get("/taxonomy/entities/alias-suggestions")
+def list_entity_alias_suggestions(
+    entity_type: Annotated[str, Query()] = "company",
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    """Entries that are probably the same entity. Suggestions only - never applied."""
+    _require_relationship_intelligence()
+    suggestions = entity_resolution_service.suggest_aliases(
+        db, owner_id=settings.owner_id, entity_type=entity_type
+    )
+    rows = {
+        int(row.id): row
+        for row in db.query(CanonicalEntityTaxonomyEntry).filter(
+            CanonicalEntityTaxonomyEntry.owner_id == settings.owner_id,
+            CanonicalEntityTaxonomyEntry.id.in_([item for pair in suggestions for item in pair[:2]] or [0]),
+        )
+    }
+    return {
+        "entity_type": entity_type,
+        "suggestions": [
+            {
+                "keep_id": keep_id,
+                "keep_name": rows[keep_id].canonical_name if keep_id in rows else "",
+                "keep_occurrences": int(rows[keep_id].occurrence_count or 0) if keep_id in rows else 0,
+                "alias_id": alias_id,
+                "alias_name": rows[alias_id].canonical_name if alias_id in rows else "",
+                "alias_occurrences": int(rows[alias_id].occurrence_count or 0) if alias_id in rows else 0,
+                "score": score,
+            }
+            for keep_id, alias_id, score in suggestions
+        ],
+    }
+
+
+@app.post("/taxonomy/entities/aliases/merge")
+def merge_entity_alias(
+    payload: EntityAliasMergeRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    """Apply one reviewed merge. A wrong merge is invisible and permanent, so
+    this is only ever reached from a human decision in the labeling tool."""
+    _require_relationship_intelligence()
+    try:
+        return entity_resolution_service.apply_alias_merge(
+            db,
+            owner_id=settings.owner_id,
+            entity_type=payload.entity_type,
+            keep_id=payload.keep_id,
+            alias_id=payload.alias_id,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/relationships/label-queue")
+def get_relationship_label_queue(
+    limit: Annotated[int, Query(ge=1, le=50)] = 20,
+    hard_negative_ratio: Annotated[float, Query(ge=0.0, le=1.0)] = 0.4,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    """Unlabeled pairs to judge, with exactly the fields the scorer reads."""
+    _require_relationship_intelligence()
+    candidates = relationship_labeling_service.sample_pairs_for_labeling(
+        db, owner_id=settings.owner_id, limit=limit, hard_negative_ratio=hard_negative_ratio
+    )
+    return {
+        "verdicts": list(relationship_labeling_service.VERDICTS),
+        "remaining": relationship_labeling_service.unlabeled_count(db, owner_id=settings.owner_id),
+        "candidates": [candidate.as_dict() for candidate in candidates],
+    }
+
+
+@app.post("/relationships/labels")
+def record_relationship_label(
+    payload: RelationshipLabelRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    _require_relationship_intelligence()
+    try:
+        row = relationship_labeling_service.record_label(
+            db,
+            owner_id=settings.owner_id,
+            left_opportunity_id=payload.left_opportunity_id,
+            right_opportunity_id=payload.right_opportunity_id,
+            verdict=payload.verdict,
+            reason=payload.reason,
+            labeler=payload.labeler,
+            sampler=payload.sampler,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"id": row.id, "verdict": row.verdict, "split": row.split}
+
+
+@app.get("/relationships/labels/summary")
+def get_relationship_label_summary(db: Session = Depends(get_db)) -> dict[str, object]:
+    _require_relationship_intelligence()
+    return relationship_labeling_service.label_summary(db, owner_id=settings.owner_id)
+
+
+@app.post("/relationships/cluster-pass")
+def run_relationship_cluster_pass(
+    dry_run: Annotated[bool, Query()] = False,
+    max_pairs: Annotated[int, Query(ge=1, le=100_000)] = 20_000,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    """Run one clustering pass on demand. Idempotent; shadow unless surfacing
+    is enabled *and* the thresholds have been calibrated."""
+    _require_relationship_intelligence()
+    return relationship_clustering_service.run_clustering_pass(
+        db, owner_id=settings.owner_id, dry_run=dry_run, max_pairs=max_pairs
+    ).as_dict()
+
+
+@app.get("/relationships/clusters/{cluster_id}")
+def get_relationship_cluster(cluster_id: str, db: Session = Depends(get_db)) -> dict[str, object]:
+    _require_relationship_intelligence()
+    try:
+        return relationship_judgment_service.cluster_detail(
+            db, owner_id=settings.owner_id, cluster_id=cluster_id
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/relationships/opportunities/{opportunity_id}/clusters")
+def get_clusters_for_opportunity(opportunity_id: int, db: Session = Depends(get_db)) -> dict[str, object]:
+    _require_relationship_intelligence()
+    return {
+        "clusters": relationship_judgment_service.clusters_for_opportunity(
+            db, owner_id=settings.owner_id, opportunity_id=opportunity_id
+        )
+    }
+
+
+@app.post("/relationships/clusters/{cluster_id}/judgment")
+def record_relationship_judgment(
+    cluster_id: str,
+    payload: RelationshipJudgmentRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    """Confirm, reject, or correct one inferred relationship.
+
+    The only v3 write path. Out-of-scope and nonexistent clusters give the same
+    404, so a response never confirms that another owner's cluster exists.
+    """
+    _require_relationship_intelligence()
+    try:
+        return relationship_judgment_service.record_judgment(
+            db,
+            owner_id=settings.owner_id,
+            cluster_id=cluster_id,
+            verdict=payload.verdict,
+            note=payload.note,
+            correct_member_ids=payload.correct_member_ids,
+        ).as_dict()
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# --- v4 scheduling ----------------------------------------------------------
+#
+# Nine routes, all owner-scoped on settings.owner_id, all 404 when the feature
+# is off. Approval is a user's click on a rendered control - v4 registers no
+# model-callable path that approves, sends, or changes a record.
+#
+# These sit BEFORE the catch-all mount below. Appending them after it would
+# leave every one of them shadowed whenever chat is enabled, and no unit test
+# would catch it because the routes exist in app.routes either way.
+
+
+def _require_scheduling() -> None:
+    if not settings.feature_scheduling_enabled:
+        raise HTTPException(status_code=404, detail="Not found")
+
+
+def _scheduling_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, task_service.TaskNotFound):
+        return HTTPException(status_code=404, detail=str(exc))
+    return HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/scheduled-tasks")
+def list_scheduled_tasks_route(
+    status: Annotated[str, Query()] = "all",
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    """Every task the user owns. No kind or flag may hide one from this list."""
+    _require_scheduling()
+    rows = task_service.list_tasks(db, owner_id=settings.owner_id, status=status)
+    return {
+        "tasks": [task_service.task_payload(db, row) for row in rows],
+        "granularity_note": scheduling_schedule.granularity_note(),
+    }
+
+
+@app.get("/scheduled-tasks/pending-work")
+def scheduled_pending_work(db: Session = Depends(get_db)) -> dict[str, object]:
+    """One review surface: prepared runs and application suggestions together."""
+    _require_scheduling()
+    items = pending_work.pending_work(db, owner_id=settings.owner_id)
+    return {"items": [item.as_dict() for item in items]}
+
+
+@app.post("/scheduled-tasks")
+def create_scheduled_task(
+    payload: ScheduledTaskCreateRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    _require_scheduling()
+    try:
+        task = task_service.create_task(
+            db,
+            owner_id=settings.owner_id,
+            title=payload.title,
+            kind=payload.kind,
+            when=payload.when,
+            note=payload.note,
+            subject_type=payload.subject_type,
+            subject_id=payload.subject_id,
+            condition=payload.condition,
+            action=payload.action,
+            items=payload.items,
+            retention_hours=payload.retention_hours,
+        )
+    except (task_service.TaskInvalid, task_service.TaskNotFound) as exc:
+        raise _scheduling_error(exc) from exc
+    return task_service.task_payload(db, task)
+
+
+@app.patch("/scheduled-tasks/{task_id}")
+def patch_scheduled_task(
+    task_id: int,
+    payload: ScheduledTaskPatchRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    _require_scheduling()
+    try:
+        task = task_service.patch_task(
+            db,
+            owner_id=settings.owner_id,
+            task_id=task_id,
+            operation=payload.operation,
+            title=payload.title,
+            when=payload.when,
+            note=payload.note,
+            condition=payload.condition,
+            action=payload.action,
+            retention_hours=payload.retention_hours,
+        )
+    except (task_service.TaskInvalid, task_service.TaskNotFound) as exc:
+        raise _scheduling_error(exc) from exc
+    return task_service.task_payload(db, task)
+
+
+@app.delete("/scheduled-tasks/{task_id}")
+def delete_scheduled_task(task_id: int, db: Session = Depends(get_db)) -> dict[str, object]:
+    """Soft delete: the task stops running and its history stays readable."""
+    _require_scheduling()
+    try:
+        task = task_service.delete_task(db, owner_id=settings.owner_id, task_id=task_id)
+    except task_service.TaskNotFound as exc:
+        raise _scheduling_error(exc) from exc
+    return {"id": int(task.id), "status": task.status}
+
+
+@app.get("/scheduled-tasks/{task_id}/runs")
+def scheduled_task_runs(task_id: int, db: Session = Depends(get_db)) -> dict[str, object]:
+    _require_scheduling()
+    try:
+        runs = task_service.task_runs(db, owner_id=settings.owner_id, task_id=task_id)
+        items = task_service.task_items(db, owner_id=settings.owner_id, task_id=task_id)
+    except task_service.TaskNotFound as exc:
+        raise _scheduling_error(exc) from exc
+    return {
+        "runs": [task_service.run_payload(run) for run in runs],
+        "items": [
+            {
+                "id": int(item.id),
+                "position": int(item.position or 0),
+                "text": item.text,
+                "done": bool(item.done),
+                "done_at": item.done_at.isoformat() if item.done_at else None,
+            }
+            for item in items
+        ],
+    }
+
+
+@app.post("/scheduled-tasks/runs/{run_id}/approve")
+def approve_scheduled_run(
+    run_id: int,
+    payload: ScheduledRunApproveRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    """Approve a prepared batch, in whole or in part.
+
+    Refuses on a non-pending outcome AND on a fresh clock comparison against
+    expires_at, so a stale open tab cannot approve work that expired an hour
+    ago even if the sweep has not yet marked it.
+    """
+    _require_scheduling()
+    try:
+        result = task_service.approve_run(
+            db,
+            owner_id=settings.owner_id,
+            run_id=run_id,
+            item_ids=payload.item_ids,
+            edits=payload.edits,
+        )
+    except (task_service.TaskInvalid, task_service.TaskNotFound) as exc:
+        raise _scheduling_error(exc) from exc
+    return {
+        "run_id": result.run_id,
+        "approved": result.approved,
+        "failed": result.failed,
+        "outcome": result.outcome,
+        "errors": result.errors,
+    }
+
+
+@app.post("/scheduled-tasks/runs/{run_id}/discard")
+def discard_scheduled_run(run_id: int, db: Session = Depends(get_db)) -> dict[str, object]:
+    _require_scheduling()
+    try:
+        run = task_service.discard_run(db, owner_id=settings.owner_id, run_id=run_id)
+    except (task_service.TaskInvalid, task_service.TaskNotFound) as exc:
+        raise _scheduling_error(exc) from exc
+    return task_service.run_payload(run)
+
+
+@app.patch("/scheduled-tasks/{task_id}/items/{item_id}")
+def patch_scheduled_task_item(
+    task_id: int,
+    item_id: int,
+    payload: ScheduledTaskItemPatchRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    """A checkbox mutates nothing beyond the checklist, so it is a direct write."""
+    _require_scheduling()
+    try:
+        item = task_service.patch_item(
+            db,
+            owner_id=settings.owner_id,
+            task_id=task_id,
+            item_id=item_id,
+            done=payload.done,
+            text=payload.text,
+            position=payload.position,
+        )
+    except (task_service.TaskInvalid, task_service.TaskNotFound) as exc:
+        raise _scheduling_error(exc) from exc
+    return {
+        "id": int(item.id),
+        "position": int(item.position or 0),
+        "text": item.text,
+        "done": bool(item.done),
+        "done_at": item.done_at.isoformat() if item.done_at else None,
+    }
+
+
+def _run_scheduling_sweep(db: Session) -> None:
+    """The auto-runner callback. Enqueues into the worker's scheduled_task queue."""
+    scheduling_sweep.run_scheduling_sweep(db, owner_id=settings.owner_id)
+
+
 # Root mounting preserves FastMCP's exact /mcp endpoint. It must remain last so
 # the existing FastAPI routes keep precedence over the catch-all mount.
 if settings.feature_chat_enabled:
     app.mount("/", chat_mcp_app)
+

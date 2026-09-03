@@ -265,6 +265,12 @@ class UserSettings(Base):
     default_employer_cc_emails: Mapped[str] = mapped_column(Text, default="")
     resume_display_name: Mapped[str] = mapped_column(String(255), default="")
     policy_json: Mapped[str] = mapped_column(Text, default="")
+    # An IANA zone name, not an offset. Offsets do not survive DST, and every
+    # wall-clock schedule in the product ("every weekday at 9am") is meaningless
+    # without one. Records stay naive-UTC via UTCDateTime; this interprets
+    # schedules, it does not change how timestamps are stored.
+    timezone: Mapped[str] = mapped_column(String(64), default="UTC")
+    feature_scheduling_sweep_interval_minutes: Mapped[int] = mapped_column(Integer, default=15)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
 
@@ -1068,7 +1074,14 @@ APPLICATION_SUGGESTION_TYPE_VALUES = (
     'email_positioning',
     'skill_gap_pattern',
 )
-APPLICATION_SUGGESTION_STATUS_VALUES = ("pending", "accepted", "dismissed")
+# "expired" is new in v4. accept_suggestion already refuses anything that is not
+# "pending", so adding the status makes expiry enforceable for free rather than
+# needing a second guard.
+APPLICATION_SUGGESTION_STATUS_VALUES = ("pending", "accepted", "dismissed", "expired")
+# How long an unreviewed suggestion stays actionable. Lives here rather than in
+# one of the two services that create suggestions, because both need it and
+# neither should import the other.
+SUGGESTION_RETENTION_HOURS = 168
 APPLICATION_SUGGESTION_CONFIDENCE_VALUES = ("high", "medium")
 
 
@@ -1090,6 +1103,11 @@ class ApplicationSuggestion(Base):
     payload_json: Mapped[str] = mapped_column(Text, default='{}')
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, index=True)
     resolved_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    # Mirrors ScheduledTaskRun's pair so one review surface can render both
+    # sources without a special case. Indexed because the expiry sweep queries
+    # it; String(20) rather than Text because the reason is a closed vocabulary.
+    expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
+    expiry_reason: Mapped[str] = mapped_column(String(20), default="")
 
 
 class ApplicationSkillGapSnapshot(Base):
@@ -1508,6 +1526,219 @@ class CandidateRecord(Base):
         index=True,
         nullable=True,
     )
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+
+
+class RelationshipLabel(Base):
+    """Ground truth, authored during a deliberate labeling session.
+
+    Kept separate from RelationshipJudgment on purpose. These are training data;
+    judgments are production feedback on claims the scorer already made. Mixing
+    them means calibrating against data the scorer influenced, and the resulting
+    precision figure would measure agreement with itself.
+    """
+
+    __tablename__ = "relationship_labels"
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_id",
+            "left_opportunity_id",
+            "right_opportunity_id",
+            name="ux_relationship_label_owner_pair",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    # Canonical ordering (left < right) is enforced at the service boundary.
+    # Without it the unique constraint permits both orderings, and one pair can
+    # be labeled twice with opposite verdicts.
+    left_opportunity_id: Mapped[int] = mapped_column(
+        ForeignKey("recruiter_opportunities.id", name="fk_relationship_label_left", ondelete="CASCADE"),
+        index=True,
+    )
+    right_opportunity_id: Mapped[int] = mapped_column(
+        ForeignKey("recruiter_opportunities.id", name="fk_relationship_label_right", ondelete="CASCADE"),
+        index=True,
+    )
+    # same_program | related_distinct | unrelated | unsure
+    verdict: Mapped[str] = mapped_column(String(20), index=True)
+    reason: Mapped[str] = mapped_column(Text, default="")
+    # Assigned at insert, never at evaluation time, so the held-out set cannot
+    # drift as labeling continues.
+    split: Mapped[str] = mapped_column(String(10), default="train", index=True)
+    labeler: Mapped[str] = mapped_column(String(100), default="")
+    # Which blocking key produced this pair. Without it, precision measured over
+    # the set cannot be attributed to a block, and a block contributing mostly
+    # false positives stays invisible.
+    sampler: Mapped[str] = mapped_column(String(40), default="", index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+
+
+class OpportunityCluster(Base):
+    """A set of opportunities the scorer believes belong together.
+
+    `status` defaults to "shadow": nothing is proposed until the Likely-band
+    precision bar has been measured. The default has to be the safe state,
+    because a default is what a forgotten code path gets.
+    """
+
+    __tablename__ = "opportunity_clusters"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    label: Mapped[str] = mapped_column(String(255), default="")
+    inferred_end_client: Mapped[str] = mapped_column(String(255), default="")
+    inferred_partner: Mapped[str] = mapped_column(String(255), default="")
+    inferred_domain: Mapped[str] = mapped_column(String(255), default="")
+    confidence: Mapped[str] = mapped_column(String(20), default="possible", index=True)
+    # shadow | proposed | confirmed | rejected
+    status: Mapped[str] = mapped_column(String(20), default="shadow", index=True)
+    # Which scorer produced it. A re-scoring must leave old clusters
+    # identifiable, or a confirmed judgment silently attaches to a new claim.
+    method: Mapped[str] = mapped_column(String(40), default="v3_weighted_v1")
+    # Which calibration population this cluster belongs to. A band derived from
+    # the keyword-only population does not mean the same thing as one derived
+    # from the semantic population, and the two must never be pooled.
+    semantic_available: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    # Hash of the member set, so a rejected set can be suppressed on the next
+    # pass without querying an unindexable Text column.
+    member_key: Mapped[str] = mapped_column(String(64), default="", index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
+
+
+class OpportunityClusterMember(Base):
+    __tablename__ = "opportunity_cluster_members"
+    __table_args__ = (
+        UniqueConstraint("cluster_id", "opportunity_id", name="ux_cluster_member"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    cluster_id: Mapped[str] = mapped_column(
+        ForeignKey("opportunity_clusters.id", name="fk_cluster_member_cluster", ondelete="CASCADE"),
+        index=True,
+    )
+    opportunity_id: Mapped[int] = mapped_column(
+        ForeignKey("recruiter_opportunities.id", name="fk_cluster_member_opportunity", ondelete="CASCADE"),
+        index=True,
+    )
+    confidence: Mapped[str] = mapped_column(String(20), default="possible", index=True)
+    score: Mapped[float] = mapped_column(Float, default=0.0)
+    # Text, and never indexed.
+    evidence_json: Mapped[str] = mapped_column(Text, default="[]")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+
+
+class RelationshipJudgment(Base):
+    """Production feedback on a claim the scorer made. Never training data."""
+
+    __tablename__ = "relationship_judgments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    # cluster | cluster_member
+    subject_type: Mapped[str] = mapped_column(String(40), index=True)
+    subject_id: Mapped[str] = mapped_column(String(64), index=True)
+    # confirmed | rejected | corrected
+    verdict: Mapped[str] = mapped_column(String(20), index=True)
+    correction_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    note: Mapped[str] = mapped_column(Text, default="")
+    # A hash of the rejected member set: fixed width and indexable, unlike a
+    # query over correction_json, which is Text and must never be indexed.
+    suppression_key: Mapped[str] = mapped_column(String(64), default="", index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+
+
+
+SCHEDULED_TASK_KINDS = ("reminder", "digest", "monitor", "workflow", "checklist")
+SCHEDULED_TASK_STATUS_VALUES = ("active", "paused", "suspended", "deleted")
+SCHEDULED_SCHEDULE_KINDS = ("once", "recurring", "condition", "none")
+SCHEDULED_RUN_OUTCOMES = (
+    "pending",
+    "approved",
+    "partially_approved",
+    "discarded",
+    "expired",
+    "failed",
+    "notified",
+)
+# Kinds whose newer run makes an older pending batch redundant. A drafted
+# message addressed to a specific record never supersedes: each one targets
+# different work, so expiring the older would silently drop real work.
+SUPERSEDING_KINDS = ("digest", "monitor")
+# Three consecutive failures suspend a task rather than retrying forever.
+MAX_CONSECUTIVE_FAILURES = 3
+
+
+class ScheduledTask(Base):
+    __tablename__ = "scheduled_tasks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    title: Mapped[str] = mapped_column(String(255))
+    kind: Mapped[str] = mapped_column(String(40), index=True)
+    schedule_kind: Mapped[str] = mapped_column(String(20), default="once")
+    cron_expression: Mapped[str] = mapped_column(String(120), default="")
+    # The zone the schedule was *authored* in. A user who travels should not
+    # have every task shift under them: "9am" meant 9am where they set it.
+    timezone: Mapped[str] = mapped_column(String(64), default="UTC")
+    run_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    condition_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    action_json: Mapped[str] = mapped_column(Text, default="{}")
+    subject_type: Mapped[str] = mapped_column(String(40), default="")
+    subject_id: Mapped[str] = mapped_column(String(64), default="")
+    status: Mapped[str] = mapped_column(String(20), default="active", index=True)
+    next_run_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    consecutive_failures: Mapped[int] = mapped_column(Integer, default=0)
+    retention_hours: Mapped[int] = mapped_column(Integer, default=168)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
+
+
+class ScheduledTaskRun(Base):
+    __tablename__ = "scheduled_task_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    task_id: Mapped[int] = mapped_column(
+        ForeignKey("scheduled_tasks.id", name="fk_scheduled_run_task", ondelete="CASCADE"),
+        index=True,
+    )
+    started_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    outcome: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    prepared_json: Mapped[str] = mapped_column(Text, default="{}")
+    item_count: Mapped[int] = mapped_column(Integer, default=0)
+    approved_count: Mapped[int] = mapped_column(Integer, default=0)
+    approved_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
+    expired_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    expiry_reason: Mapped[str] = mapped_column(String(20), default="")
+    # Stamped when the half-window warning fires, so it fires exactly once
+    # rather than on every sweep past the halfway point.
+    warned_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class ScheduledTaskItem(Base):
+    __tablename__ = "scheduled_task_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    task_id: Mapped[int] = mapped_column(
+        ForeignKey("scheduled_tasks.id", name="fk_scheduled_item_task", ondelete="CASCADE"),
+        index=True,
+    )
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    # String(500), not Text: it stays safely indexable if a search is ever
+    # wanted, and a checklist item longer than 500 characters is a note.
+    text: Mapped[str] = mapped_column(String(500), default="")
+    done: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    done_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
 
 
