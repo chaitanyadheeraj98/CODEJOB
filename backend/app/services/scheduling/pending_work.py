@@ -37,6 +37,10 @@ APPROVE_KEYS = {
 class PendingWorkItem:
     source: str
     source_id: int
+    # The task a scheduled run belongs to, so the review view can fetch its
+    # prepared items. Zero for suggestions, which have no task. Distinct from
+    # subject_id, which is the *record* the work is about.
+    task_id: int
     title: str
     detail: str
     subject_type: str
@@ -50,6 +54,7 @@ class PendingWorkItem:
         return {
             "source": self.source,
             "source_id": self.source_id,
+            "task_id": self.task_id,
             "title": self.title,
             "detail": self.detail,
             "subject_type": self.subject_type,
@@ -78,6 +83,7 @@ def _run_items(db: Session, owner_id: str) -> list[PendingWorkItem]:
             PendingWorkItem(
                 source=SOURCE_SCHEDULED_RUN,
                 source_id=int(row.id),
+                task_id=int(row.task_id),
                 title=task.title if task else f"Run {row.id}",
                 detail=f"{row.item_count} prepared item(s) awaiting review",
                 subject_type=task.subject_type if task else "",
@@ -113,6 +119,7 @@ def _suggestion_items(db: Session, owner_id: str) -> list[PendingWorkItem]:
             PendingWorkItem(
                 source=SOURCE_APPLICATION_SUGGESTION,
                 source_id=int(row.id),
+                task_id=0,
                 title=f"{row.suggestion_type.replace('_', ' ').capitalize()}: {label}",
                 detail=row.reason or "",
                 subject_type="application",

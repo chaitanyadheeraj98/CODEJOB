@@ -32,6 +32,7 @@ from app.services.scheduling.schedule import (
     SUPPORTED_PHRASINGS,
     InvalidSchedule,
     ScheduleSpec,
+    canonical_phrase,
     describe,
     granularity_note,
     next_run_after,
@@ -212,6 +213,9 @@ def propose_scheduled_task(
         "title": label,
         "kind": task_kind,
         "note": (note or "").strip(),
+        # A phrase that re-parses to exactly this schedule, so confirming the
+        # card minutes later creates what the card showed.
+        "when_phrase": canonical_phrase(spec, when),
         "schedule_kind": spec.schedule_kind,
         "cron_expression": spec.cron_expression,
         "run_at": spec.run_at.isoformat() if spec.run_at else None,

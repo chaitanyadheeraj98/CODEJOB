@@ -157,6 +157,26 @@ export type RelationshipClusterData = {
   provenance: InferenceProvenanceData
 }
 
+export type ScheduledTaskRow = {
+  id: number
+  title: string
+  kind: string
+  status: string
+  // Plain language, composed by the server from the schedule and the zone.
+  // The model never writes the sentence describing when something runs.
+  trigger: string
+  next_run_at: string | null
+  permitted_actions: string
+  last_error: string
+}
+
+export type ScheduledTasksData = {
+  tasks: ScheduledTaskRow[]
+  truncated: boolean
+  granularityNote: string
+  provenance: ProvenanceData
+}
+
 export type WebResult = { url: string; title: string; snippet: string }
 
 export type WebResultsData = { query: string; results: WebResult[] }
@@ -171,6 +191,7 @@ export type RenderedPayload =
   | { kind: 'disambiguation'; data: DisambiguationData }
   | { kind: 'web_results'; data: WebResultsData }
   | { kind: 'relationship_cluster'; data: RelationshipClusterData }
+  | { kind: 'scheduled_tasks'; data: ScheduledTasksData }
 
 export type RenderHandler = {
   parse: (message: ChatMessage) => RenderedPayload | null
@@ -401,6 +422,32 @@ function asRelationshipMembers(value: unknown): RelationshipMember[] | null {
   return members
 }
 
+function asScheduledTasks(value: unknown): ScheduledTaskRow[] | null {
+  if (!Array.isArray(value)) return null
+  const tasks: ScheduledTaskRow[] = []
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null
+    const row = entry as Record<string, unknown>
+    if (typeof row.id !== 'number' || typeof row.title !== 'string') return null
+    // A task without a trigger sentence or a permitted-actions line is a task
+    // the user cannot verify, so the whole payload is dropped rather than
+    // rendering a row that says less than it should.
+    if (typeof row.trigger !== 'string' || !row.trigger) return null
+    if (typeof row.permitted_actions !== 'string' || !row.permitted_actions) return null
+    tasks.push({
+      id: row.id,
+      title: row.title,
+      kind: typeof row.kind === 'string' ? row.kind : '',
+      status: typeof row.status === 'string' ? row.status : '',
+      trigger: row.trigger,
+      next_run_at: typeof row.next_run_at === 'string' ? row.next_run_at : null,
+      permitted_actions: row.permitted_actions,
+      last_error: typeof row.last_error === 'string' ? row.last_error : '',
+    })
+  }
+  return tasks
+}
+
 export const RENDER_HANDLERS: Record<string, RenderHandler> = {
   render_candidate_table: {
     parse: (message) => {
@@ -588,6 +635,29 @@ export const RENDER_HANDLERS: Record<string, RenderHandler> = {
         return {
           kind: 'web_results',
           data: { query: typeof payload.query === 'string' ? payload.query : '', results },
+        }
+      } catch {
+        return null
+      }
+    },
+  },
+  list_scheduled_tasks: {
+    parse: (message) => {
+      try {
+        const payload = JSON.parse(message.content) as Record<string, unknown>
+        if (!payload || payload.action !== 'render_scheduled_tasks') return null
+        const tasks = asScheduledTasks(payload.tasks)
+        if (tasks === null) return null
+        const provenance = asProvenance(payload.provenance)
+        if (!provenance) return null
+        return {
+          kind: 'scheduled_tasks',
+          data: {
+            tasks,
+            truncated: payload.truncated === true,
+            granularityNote: typeof payload.granularity_note === 'string' ? payload.granularity_note : '',
+            provenance,
+          },
         }
       } catch {
         return null

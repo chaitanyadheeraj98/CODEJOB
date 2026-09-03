@@ -5582,3 +5582,270 @@ button.chatRankedLabel:focus-visible {
   margin-top: 10px;
   color: var(--danger);
 }
+
+/* --- v4 scheduling ------------------------------------------------------- */
+
+.scheduling-page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.scheduling-empty,
+.scheduling-notice {
+  color: var(--muted);
+  margin: 0;
+}
+
+.scheduling-error {
+  color: var(--danger);
+  margin: 0;
+}
+
+.scheduling-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.scheduling-task,
+.scheduling-pending {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 12px 14px;
+}
+
+/* A suspended task must look different at a glance: it is not running, and
+   that is the single most important thing about it. */
+.scheduling-task-suspended {
+  border-color: var(--danger);
+}
+
+.scheduling-task-paused {
+  background: var(--surface-soft);
+}
+
+.scheduling-task-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.scheduling-task-title {
+  font-weight: 600;
+  color: var(--ink);
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.scheduling-badge {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+
+.scheduling-badge-suspended {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.scheduling-task-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 4px 16px;
+  margin: 8px 0 0;
+}
+
+.scheduling-task-facts div {
+  display: flex;
+  gap: 6px;
+}
+
+.scheduling-task-facts dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.scheduling-task-facts dd {
+  margin: 0;
+  font-size: 12px;
+  color: var(--ink);
+}
+
+.scheduling-task-error,
+.scheduling-run-error {
+  color: var(--danger);
+  font-size: 12px;
+  margin: 6px 0 0;
+}
+
+.scheduling-task-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.scheduling-task-detail {
+  margin-top: 10px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.scheduling-runs-title {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.scheduling-runs,
+.scheduling-checklist {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.scheduling-run {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.scheduling-run-when {
+  color: var(--muted);
+}
+
+.scheduling-run-expired .scheduling-run-outcome,
+.scheduling-run-reason {
+  color: var(--muted);
+}
+
+.scheduling-run-failed .scheduling-run-outcome {
+  color: var(--danger);
+}
+
+.scheduling-item-done {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+
+.scheduling-prepared {
+  margin-top: 10px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.scheduling-prepared ul {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.scheduling-edit {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin: 4px 0 0 22px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.scheduling-pending-detail {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+/* The chat render kind. */
+.chat-scheduled-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.chat-scheduled-item {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--surface);
+}
+
+.chat-scheduled-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.chat-scheduled-title {
+  font-weight: 600;
+}
+
+.chat-scheduled-status {
+  font-size: 11px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.chat-scheduled-status-suspended {
+  color: var(--danger);
+}
+
+.chat-scheduled-meta {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.chat-scheduled-next,
+.chat-scheduled-permits {
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.chat-scheduled-permits {
+  color: var(--muted);
+}
+
+.chat-scheduled-error {
+  font-size: 12px;
+  color: var(--danger);
+  margin-top: 4px;
+}
+
+.chat-scheduled-note {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 6px 0 0;
+}
+
+.chat-scheduled-empty {
+  color: var(--muted);
+  font-size: 13px;
+}

@@ -2,9 +2,14 @@ import type { ChatMessage } from './types'
 
 export type ProposalFields = Record<string, unknown>
 
+export type ProposalMethod = 'POST' | 'PATCH' | 'DELETE'
+
 export type ProposalHandler = {
   endpoint: string | ((fields: ProposalFields) => string)
-  method: 'POST' | 'PATCH'
+  // A function so one family with an operation enum can span verbs. Splitting
+  // create/pause/edit/delete into four handlers to keep this a literal would
+  // be the tool-per-operation mistake one layer down.
+  method: ProposalMethod | ((fields: ProposalFields) => ProposalMethod)
   buildBody: (fields: ProposalFields) => unknown
   confirmLabel: (fields: ProposalFields) => string
   summary: (fields: ProposalFields) => Array<[string, string]>
@@ -33,6 +38,30 @@ const RECORD_UPDATE_ENDPOINTS: Record<string, (id: number) => string> = {
   opportunity: (id) => `/recruiter-opportunities/${id}`,
   application: (id) => `/applications/${id}`,
   contact: (id) => `/recruiter-numbers/${id}`,
+}
+
+const SCHEDULED_TASK_ENDPOINTS: Record<string, (id: number) => string> = {
+  create: () => '/scheduled-tasks',
+  pause: (id) => `/scheduled-tasks/${id}`,
+  resume: (id) => `/scheduled-tasks/${id}`,
+  edit: (id) => `/scheduled-tasks/${id}`,
+  delete: (id) => `/scheduled-tasks/${id}`,
+}
+
+const SCHEDULED_TASK_METHODS: Record<string, ProposalMethod> = {
+  create: 'POST',
+  pause: 'PATCH',
+  resume: 'PATCH',
+  edit: 'PATCH',
+  delete: 'DELETE',
+}
+
+const SCHEDULED_TASK_LABELS: Record<string, string> = {
+  create: 'Create Task',
+  pause: 'Pause Task',
+  resume: 'Resume Task',
+  edit: 'Save Changes',
+  delete: 'Delete Task',
 }
 
 export const PROPOSAL_HANDLERS: Record<string, ProposalHandler> = {
@@ -146,6 +175,43 @@ export const PROPOSAL_HANDLERS: Record<string, ProposalHandler> = {
       ['CC', text(fields.cc)],
       ['Subject', text(fields.subject)],
       ['Body', text(fields.body)],
+    ],
+  },
+  propose_scheduled_task: {
+    // Client-side endpoint table, keyed by the operation the tool chose. The
+    // server sends no URL and the client routes to none.
+    endpoint: (fields) => (
+      SCHEDULED_TASK_ENDPOINTS[String(fields.operation)]?.(Number(fields.task_id ?? 0)) ?? ''
+    ),
+    method: (fields) => SCHEDULED_TASK_METHODS[String(fields.operation)] ?? 'POST',
+    buildBody: (fields) => (
+      String(fields.operation) === 'create'
+        ? {
+          title: fields.title,
+          kind: fields.kind,
+          when: fields.when_phrase ?? '',
+          note: fields.note ?? '',
+          subject_type: fields.subject_type ?? '',
+          subject_id: fields.subject_id ?? '',
+        }
+        : { operation: fields.operation }
+    ),
+    confirmLabel: (fields) => SCHEDULED_TASK_LABELS[String(fields.operation)] ?? 'Confirm',
+    summary: (fields) => [
+      ['Task', text(fields.title)],
+      ['Kind', text(fields.kind)],
+      // The system's own reading of the schedule, in the user's zone. The point
+      // of the card is to confirm what was understood, not what was typed.
+      ['Runs', text(fields.trigger)],
+      ...(text(fields.first_run) ? [['First run', text(fields.first_run)] as [string, string]] : []),
+      ['May do', text(fields.permitted_actions)],
+      ...(text(fields.granularity_note)
+        ? [['Timing', text(fields.granularity_note)] as [string, string]]
+        : []),
+      ['Reversible', fields.reversible === true ? 'Yes' : 'No'],
+      ...(text(fields.reversible_detail)
+        ? [['Detail', text(fields.reversible_detail)] as [string, string]]
+        : []),
     ],
   },
   propose_create_github_issue: {

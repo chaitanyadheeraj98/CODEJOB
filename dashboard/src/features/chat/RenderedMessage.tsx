@@ -6,6 +6,7 @@ import Disambiguation from './Disambiguation'
 import MetricCards from './MetricCards'
 import RankedList from './RankedList'
 import RelationshipCluster from './RelationshipCluster'
+import ScheduledTasks from './ScheduledTasks'
 import QueueLink from './QueueLink'
 import WebCitations from './WebCitations'
 import type { RenderedPayload } from './renderers'
@@ -41,6 +42,8 @@ export default function RenderedMessage({ messageId, payload, surface }: Props) 
       return <Disambiguation data={payload.data} surface={surface} />
     case 'relationship_cluster':
       return <RelationshipCluster data={payload.data} surface={surface} />
+    case 'scheduled_tasks':
+      return <ScheduledTasks data={payload.data} surface={surface} />
     case 'web_results':
       return <WebCitations data={payload.data} surface={surface} />
     case 'queue_link':

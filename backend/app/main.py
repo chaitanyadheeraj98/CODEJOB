@@ -2756,6 +2756,7 @@ def get_settings_bootstrap(
     return SettingsBootstrapResponse(
         settings=_settings_response_from_model(user_settings),
         role_manifest_child_creation_enabled=settings.role_manifest_child_creation_enabled,
+        scheduling_enabled=settings.feature_scheduling_enabled,
         gmail_requirement_groups=[_gmail_requirement_group_response(item) for item in _list_gmail_requirement_groups(db)],
         resumes=[_resume_response(item) for item in _list_resumes(db)],
         attachments=[AttachmentAssetResponse.model_validate(item) for item in _list_attachment_assets(db)],

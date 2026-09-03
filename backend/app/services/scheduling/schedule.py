@@ -302,6 +302,22 @@ def parse_when(text: str, *, timezone: str = "UTC", now: datetime | None = None)
     raise InvalidSchedule(_unparseable(text))
 
 
+def canonical_phrase(spec: ScheduleSpec, original: str) -> str:
+    """A phrase that re-parses to exactly this schedule.
+
+    The preview card is confirmed some seconds or minutes after it is drawn, and
+    the confirm route re-parses the phrase rather than accepting a cron
+    expression from the client. For a relative phrase like "in 2 hours" that
+    would silently mean two hours from the *click*, not from the preview - so
+    one-time schedules are canonicalised to an absolute local phrase and
+    recurring ones, which are time-independent, keep the user's words.
+    """
+    if spec.schedule_kind == "once" and spec.run_at is not None:
+        local = to_user_local(spec.run_at, zone_for(spec.timezone))
+        return f"on {local:%Y-%m-%d} at {local:%H:%M}"
+    return (original or "").strip()
+
+
 def _unparseable(text: str) -> str:
     return (
         f"I could not read {text.strip()!r} as a schedule. "

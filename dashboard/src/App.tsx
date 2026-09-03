@@ -9,6 +9,8 @@ import QueryBucket from './features/query_bucket/QueryBucket'
 import EmailSearch from './features/email_search/EmailSearch'
 import AssistantPage from './features/chat/AssistantPage'
 import LabelingTool from './features/relationships/LabelingTool'
+import ScheduledTasksPage from './features/scheduling/ScheduledTasksPage'
+import ReviewPage from './features/scheduling/ReviewPage'
 import ChatProvider from './features/chat/ChatProvider'
 import { useChat } from './features/chat/chatContext'
 import ChatWidget from './features/chat/ChatWidget'
@@ -67,11 +69,11 @@ const DRAFT_TEXT_SIZE_STYLES: Record<DraftTextSize, { fontSize: string; lineHeig
   huge: { fontSize: '28px', lineHeight: '1.4' },
 }
 
-type ActivePage = 'assistant' | 'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'inbox' | 'premium_numbers' | 'resume_tracking' | 'application_tracking' | 'relationship_labeling' | 'settings'
+type ActivePage = 'assistant' | 'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'inbox' | 'premium_numbers' | 'resume_tracking' | 'application_tracking' | 'relationship_labeling' | 'scheduled_tasks' | 'scheduled_review' | 'settings'
 // relationship_labeling is deliberately absent from the sidebar: it is an
 // internal calibration tool, reachable only by ?page=relationship_labeling, and
 // its routes 404 unless the feature is switched on.
-const ACTIVE_PAGES = new Set<ActivePage>(['assistant', 'run_queue', 'needs_review', 'failed_mapping', 'recent_runs', 'sent_items', 'inbox', 'premium_numbers', 'resume_tracking', 'application_tracking', 'relationship_labeling', 'settings'])
+const ACTIVE_PAGES = new Set<ActivePage>(['assistant', 'run_queue', 'needs_review', 'failed_mapping', 'recent_runs', 'sent_items', 'inbox', 'premium_numbers', 'resume_tracking', 'application_tracking', 'relationship_labeling', 'scheduled_tasks', 'scheduled_review', 'settings'])
 const initialActivePage = (): ActivePage => {
   const page = new URLSearchParams(window.location.search).get('page') as ActivePage | null
   return page && ACTIVE_PAGES.has(page) ? page : 'run_queue'
@@ -89,6 +91,8 @@ const PAGE_TITLES: Record<ActivePage, string> = {
   resume_tracking: 'Resume Tracking',
   application_tracking: 'Application Tracking',
   relationship_labeling: 'Relationship Labelling',
+  scheduled_tasks: 'Scheduled Tasks',
+  scheduled_review: 'Scheduled Review',
   settings: 'Settings',
 }
 
@@ -104,6 +108,8 @@ const PAGE_SUBTITLES: Record<ActivePage, string> = {
   resume_tracking: 'See which resume variants move through the funnel and why others stall.',
   application_tracking: 'Review bookmarked requirements and explicitly tracked applications.',
   relationship_labeling: 'Judge whether two requirements belong to the same hiring programme, so the scorer can be measured.',
+  scheduled_tasks: 'Every scheduled task, when it runs, and exactly what it is allowed to do.',
+  scheduled_review: 'Work prepared for you. Nothing here has happened yet - approve, edit or discard it.',
   settings: 'Manage learning queues, trusted Gmail groups, and resume assets.',
 }
 
@@ -657,6 +663,7 @@ type EmbeddedJobIntentSignal = {
 type SettingsBootstrapPayload = {
   settings: SettingsPayload
   role_manifest_child_creation_enabled: boolean
+  scheduling_enabled?: boolean
   gmail_requirement_groups: TrustedGmailGroup[]
   resumes: ResumeAsset[]
   attachments: AttachmentAsset[]
@@ -3013,6 +3020,7 @@ function App() {
   const [hasLoadedSettingsBootstrap, setHasLoadedSettingsBootstrap] = useState(false)
   const [hasLoadedLearningData, setHasLoadedLearningData] = useState(false)
   const [roleManifestChildCreationEnabled, setRoleManifestChildCreationEnabled] = useState(false)
+  const [schedulingEnabled, setSchedulingEnabled] = useState(false)
   const [skillDraft, setSkillDraft] = useState('')
   const [nvoidsLocationDraft, setNvoidsLocationDraft] = useState('')
   const [acceptedLocationDraft, setAcceptedLocationDraft] = useState('')
@@ -3389,6 +3397,7 @@ function App() {
     const normalized = normalizeSettingsPayload(payload.settings)
     setSettings(normalized)
     setRoleManifestChildCreationEnabled(Boolean(payload.role_manifest_child_creation_enabled))
+    setSchedulingEnabled(Boolean(payload.scheduling_enabled))
     setGmailRequirementGroups(payload.gmail_requirement_groups ?? [])
     setResumeAssets(payload.resumes ?? [])
     setResumeSkillEdits(Object.fromEntries((payload.resumes ?? []).map((resume) => [resume.id, resume.skills_text ?? ''])))
@@ -3988,6 +3997,8 @@ function App() {
       resume_tracking: 'view_premium_numbers',
       application_tracking: 'view_premium_numbers',
       relationship_labeling: 'view_run_queue',
+      scheduled_tasks: 'view_run_queue',
+      scheduled_review: 'view_run_queue',
       settings: 'view_run_queue',
     }
     const eventType = eventMap[page]
@@ -5411,6 +5422,7 @@ function App() {
         premiumCount={premiumPendingCount}
         resumeTrackingEnabled={settings.feature_resume_tracking_enabled}
         applicationsEnabled={settings.feature_applications_enabled}
+        schedulingEnabled={schedulingEnabled}
         activePage={activePage}
         onNavigate={(page) => { window.history.pushState(null, '', `${window.location.pathname}?page=${page}`); setActivePage(page) }}
       />
@@ -5525,6 +5537,8 @@ function App() {
           {activePage === 'assistant' ? <AssistantPage /> : null}
 
           {activePage === 'relationship_labeling' ? <LabelingTool apiBase={apiBase} /> : null}
+          {activePage === 'scheduled_tasks' ? <ScheduledTasksPage apiBase={apiBase} /> : null}
+          {activePage === 'scheduled_review' ? <ReviewPage apiBase={apiBase} /> : null}
 
           {activePage === 'run_queue' ? (
             <section className="liveMonitorCard">
