@@ -25,6 +25,7 @@ from app.mcp_server.tools.premium_numbers import (
 )
 from app.mcp_server.tools.references import resolve_record_reference
 from app.mcp_server.tools.relationships import get_relationships, recommend_recruiter
+from app.mcp_server.tools.scheduling import list_scheduled_tasks, propose_scheduled_task
 from app.mcp_server.tools.resumes import get_resume, list_resumes
 from app.mcp_server.tools.runs import get_recent_runs, get_run_items
 from app.mcp_server.tools.status import get_ai_status, get_settings_summary
@@ -48,6 +49,7 @@ __all__ = [
     "get_run_items",
     "get_settings_summary",
     "list_chat_attachments",
+    "list_scheduled_tasks",
     "list_contact_numbers",
     "list_conversations",
     "list_external_opportunities",
@@ -60,6 +62,7 @@ __all__ = [
     "propose_create_github_issue",
     "propose_create_premium_contact",
     "propose_record_update",
+    "propose_scheduled_task",
     "propose_send_email",
     "rank_opportunities",
     "read_chat_attachment",

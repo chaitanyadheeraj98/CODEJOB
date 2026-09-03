@@ -205,6 +205,10 @@ from app.services import (
     recruiter_identity_service,
     role_similarity_service,
 )
+from app.services.scheduling import pending_work
+from app.services.scheduling import schedule as scheduling_schedule
+from app.services.scheduling import sweep as scheduling_sweep
+from app.services.scheduling import task_service
 from app.services.auto_runner_service import AutoRunnerService
 from app.services.candidate_runtime_service import CandidateRuntimeDeps, CandidateRuntimeService, resolve_resume_display_name
 from app.services.phone_intelligence_workflow_service import (
@@ -315,6 +319,10 @@ from app.schemas import (
     CanonicalEntityTaxonomyEntryResponse,
     EntityAliasMergeRequest,
     RelationshipJudgmentRequest,
+    ScheduledRunApproveRequest,
+    ScheduledTaskCreateRequest,
+    ScheduledTaskItemPatchRequest,
+    ScheduledTaskPatchRequest,
     RelationshipLabelRequest,
     DismissJobIntentSignalRequest,
     DismissSkillRequest,
@@ -1388,6 +1396,7 @@ def _get_auto_runner_service() -> AutoRunnerService:
             run_reminder_sweep=_run_reminder_sweep,
             run_resume_tracking_sweep=_run_resume_tracking_sweep,
             run_relationship_sweep=_run_relationship_sweep,
+            run_scheduling_sweep=_run_scheduling_sweep,
             action_lock=telegram_action_lock,
             stop_event=auto_runner_stop_event,
         )
@@ -9589,6 +9598,212 @@ def record_relationship_judgment(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# --- v4 scheduling ----------------------------------------------------------
+#
+# Nine routes, all owner-scoped on settings.owner_id, all 404 when the feature
+# is off. Approval is a user's click on a rendered control - v4 registers no
+# model-callable path that approves, sends, or changes a record.
+#
+# These sit BEFORE the catch-all mount below. Appending them after it would
+# leave every one of them shadowed whenever chat is enabled, and no unit test
+# would catch it because the routes exist in app.routes either way.
+
+
+def _require_scheduling() -> None:
+    if not settings.feature_scheduling_enabled:
+        raise HTTPException(status_code=404, detail="Not found")
+
+
+def _scheduling_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, task_service.TaskNotFound):
+        return HTTPException(status_code=404, detail=str(exc))
+    return HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/scheduled-tasks")
+def list_scheduled_tasks_route(
+    status: Annotated[str, Query()] = "all",
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    """Every task the user owns. No kind or flag may hide one from this list."""
+    _require_scheduling()
+    rows = task_service.list_tasks(db, owner_id=settings.owner_id, status=status)
+    return {
+        "tasks": [task_service.task_payload(db, row) for row in rows],
+        "granularity_note": scheduling_schedule.granularity_note(),
+    }
+
+
+@app.get("/scheduled-tasks/pending-work")
+def scheduled_pending_work(db: Session = Depends(get_db)) -> dict[str, object]:
+    """One review surface: prepared runs and application suggestions together."""
+    _require_scheduling()
+    items = pending_work.pending_work(db, owner_id=settings.owner_id)
+    return {"items": [item.as_dict() for item in items]}
+
+
+@app.post("/scheduled-tasks")
+def create_scheduled_task(
+    payload: ScheduledTaskCreateRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    _require_scheduling()
+    try:
+        task = task_service.create_task(
+            db,
+            owner_id=settings.owner_id,
+            title=payload.title,
+            kind=payload.kind,
+            when=payload.when,
+            note=payload.note,
+            subject_type=payload.subject_type,
+            subject_id=payload.subject_id,
+            condition=payload.condition,
+            action=payload.action,
+            items=payload.items,
+            retention_hours=payload.retention_hours,
+        )
+    except (task_service.TaskInvalid, task_service.TaskNotFound) as exc:
+        raise _scheduling_error(exc) from exc
+    return task_service.task_payload(db, task)
+
+
+@app.patch("/scheduled-tasks/{task_id}")
+def patch_scheduled_task(
+    task_id: int,
+    payload: ScheduledTaskPatchRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    _require_scheduling()
+    try:
+        task = task_service.patch_task(
+            db,
+            owner_id=settings.owner_id,
+            task_id=task_id,
+            operation=payload.operation,
+            title=payload.title,
+            when=payload.when,
+            note=payload.note,
+            condition=payload.condition,
+            action=payload.action,
+            retention_hours=payload.retention_hours,
+        )
+    except (task_service.TaskInvalid, task_service.TaskNotFound) as exc:
+        raise _scheduling_error(exc) from exc
+    return task_service.task_payload(db, task)
+
+
+@app.delete("/scheduled-tasks/{task_id}")
+def delete_scheduled_task(task_id: int, db: Session = Depends(get_db)) -> dict[str, object]:
+    """Soft delete: the task stops running and its history stays readable."""
+    _require_scheduling()
+    try:
+        task = task_service.delete_task(db, owner_id=settings.owner_id, task_id=task_id)
+    except task_service.TaskNotFound as exc:
+        raise _scheduling_error(exc) from exc
+    return {"id": int(task.id), "status": task.status}
+
+
+@app.get("/scheduled-tasks/{task_id}/runs")
+def scheduled_task_runs(task_id: int, db: Session = Depends(get_db)) -> dict[str, object]:
+    _require_scheduling()
+    try:
+        runs = task_service.task_runs(db, owner_id=settings.owner_id, task_id=task_id)
+        items = task_service.task_items(db, owner_id=settings.owner_id, task_id=task_id)
+    except task_service.TaskNotFound as exc:
+        raise _scheduling_error(exc) from exc
+    return {
+        "runs": [task_service.run_payload(run) for run in runs],
+        "items": [
+            {
+                "id": int(item.id),
+                "position": int(item.position or 0),
+                "text": item.text,
+                "done": bool(item.done),
+                "done_at": item.done_at.isoformat() if item.done_at else None,
+            }
+            for item in items
+        ],
+    }
+
+
+@app.post("/scheduled-tasks/runs/{run_id}/approve")
+def approve_scheduled_run(
+    run_id: int,
+    payload: ScheduledRunApproveRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    """Approve a prepared batch, in whole or in part.
+
+    Refuses on a non-pending outcome AND on a fresh clock comparison against
+    expires_at, so a stale open tab cannot approve work that expired an hour
+    ago even if the sweep has not yet marked it.
+    """
+    _require_scheduling()
+    try:
+        result = task_service.approve_run(
+            db,
+            owner_id=settings.owner_id,
+            run_id=run_id,
+            item_ids=payload.item_ids,
+            edits=payload.edits,
+        )
+    except (task_service.TaskInvalid, task_service.TaskNotFound) as exc:
+        raise _scheduling_error(exc) from exc
+    return {
+        "run_id": result.run_id,
+        "approved": result.approved,
+        "failed": result.failed,
+        "outcome": result.outcome,
+        "errors": result.errors,
+    }
+
+
+@app.post("/scheduled-tasks/runs/{run_id}/discard")
+def discard_scheduled_run(run_id: int, db: Session = Depends(get_db)) -> dict[str, object]:
+    _require_scheduling()
+    try:
+        run = task_service.discard_run(db, owner_id=settings.owner_id, run_id=run_id)
+    except (task_service.TaskInvalid, task_service.TaskNotFound) as exc:
+        raise _scheduling_error(exc) from exc
+    return task_service.run_payload(run)
+
+
+@app.patch("/scheduled-tasks/{task_id}/items/{item_id}")
+def patch_scheduled_task_item(
+    task_id: int,
+    item_id: int,
+    payload: ScheduledTaskItemPatchRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    """A checkbox mutates nothing beyond the checklist, so it is a direct write."""
+    _require_scheduling()
+    try:
+        item = task_service.patch_item(
+            db,
+            owner_id=settings.owner_id,
+            task_id=task_id,
+            item_id=item_id,
+            done=payload.done,
+            text=payload.text,
+            position=payload.position,
+        )
+    except (task_service.TaskInvalid, task_service.TaskNotFound) as exc:
+        raise _scheduling_error(exc) from exc
+    return {
+        "id": int(item.id),
+        "position": int(item.position or 0),
+        "text": item.text,
+        "done": bool(item.done),
+        "done_at": item.done_at.isoformat() if item.done_at else None,
+    }
+
+
+def _run_scheduling_sweep(db: Session) -> None:
+    """The auto-runner callback. Enqueues into the worker's scheduled_task queue."""
+    scheduling_sweep.run_scheduling_sweep(db, owner_id=settings.owner_id)
 
 
 # Root mounting preserves FastMCP's exact /mcp endpoint. It must remain last so

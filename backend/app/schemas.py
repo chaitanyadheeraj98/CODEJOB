@@ -2205,3 +2205,42 @@ class EntityAliasMergeRequest(BaseModel):
     entity_type: str
     keep_id: int
     alias_id: int
+
+
+class ScheduledTaskCreateRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=255)
+    kind: str = "reminder"
+    # The user's own phrasing. The server parses it; the client never sends a
+    # cron expression it composed itself.
+    when: str = ""
+    note: str = ""
+    subject_type: str = Field(default="", max_length=40)
+    subject_id: str = Field(default="", max_length=64)
+    condition: dict[str, Any] | None = None
+    action: dict[str, Any] | None = None
+    items: list[str] = Field(default_factory=list)
+    retention_hours: int | None = None
+
+
+class ScheduledTaskPatchRequest(BaseModel):
+    # pause | resume | edit
+    operation: str = "edit"
+    title: str | None = Field(default=None, max_length=255)
+    when: str | None = None
+    note: str | None = None
+    condition: dict[str, Any] | None = None
+    action: dict[str, Any] | None = None
+    retention_hours: int | None = None
+
+
+class ScheduledRunApproveRequest(BaseModel):
+    # Empty means "approve everything in this run". Anything else is a subset,
+    # and every id must belong to the run.
+    item_ids: list[str] = Field(default_factory=list)
+    edits: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+
+class ScheduledTaskItemPatchRequest(BaseModel):
+    done: bool | None = None
+    text: str | None = Field(default=None, max_length=500)
+    position: int | None = None

@@ -8,8 +8,9 @@ offset that drifts twice a year.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from croniter import CroniterBadCronError, croniter
 
@@ -179,6 +180,133 @@ def _clock(hour: int, minute: int) -> str:
     suffix = "AM" if hour < 12 else "PM"
     display_hour = hour % 12 or 12
     return f"{display_hour}:{minute:02d} {suffix}"
+
+
+_WEEKDAY_NUMBERS = {
+    "monday": 1, "mon": 1, "tuesday": 2, "tue": 2, "tues": 2, "wednesday": 3, "wed": 3,
+    "thursday": 4, "thu": 4, "thurs": 4, "friday": 5, "fri": 5, "saturday": 6, "sat": 6,
+    "sunday": 0, "sun": 0,
+}
+
+# Phrasings that actually work, quoted back on a refusal. A list of examples is
+# the only useful thing to say to someone whose wording was not understood.
+SUPPORTED_PHRASINGS = (
+    "every weekday at 9am",
+    "every day at 6:30pm",
+    "every Monday at 8am",
+    "every 30 minutes",
+    "on 2026-09-10 at 09:00",
+    "tomorrow at 9am",
+    "in 2 hours",
+)
+
+
+def _parse_clock(text: str) -> tuple[int, int] | None:
+    """Read '9am', '9:30 am', '18:00' or 'at 9'. Returns (hour, minute)."""
+    match = re.search(r"(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", text)
+    if not match:
+        return None
+    hour = int(match.group(1))
+    minute = int(match.group(2) or 0)
+    meridiem = match.group(3)
+    if meridiem == "pm" and hour < 12:
+        hour += 12
+    elif meridiem == "am" and hour == 12:
+        hour = 0
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None
+    return hour, minute
+
+
+def parse_when(text: str, *, timezone: str = "UTC", now: datetime | None = None) -> ScheduleSpec:
+    """Turn a natural-language phrase into a schedule this system will obey.
+
+    The server does this, not the model, so the preview card shows the system's
+    *interpretation* rather than the user's words echoed back. An unparseable
+    phrase raises InvalidSchedule and creates nothing - approximating a schedule
+    is how a 9am digest quietly becomes a 10am one.
+    """
+    phrase = " ".join((text or "").strip().lower().split())
+    if not phrase:
+        raise InvalidSchedule("Say when this should run, for example 'every weekday at 9am'.")
+
+    moment = now or datetime.now(UTC)
+    zone = zone_for(timezone)
+
+    # "in 2 hours" / "in 30 minutes" / "in 3 days"
+    relative = re.fullmatch(r"in\s+(\d{1,4})\s+(minute|hour|day|week)s?", phrase)
+    if relative:
+        amount = int(relative.group(1))
+        unit = relative.group(2)
+        delta = {
+            "minute": timedelta(minutes=amount),
+            "hour": timedelta(hours=amount),
+            "day": timedelta(days=amount),
+            "week": timedelta(weeks=amount),
+        }[unit]
+        return ScheduleSpec(schedule_kind="once", run_at=moment + delta, timezone=timezone)
+
+    # "every 30 minutes" / "every 2 hours"
+    interval = re.fullmatch(r"every\s+(\d{1,4})\s+(minute|hour)s?", phrase)
+    if interval:
+        amount = int(interval.group(1))
+        expression = f"*/{amount} * * * *" if interval.group(2) == "minute" else f"0 */{amount} * * *"
+        return ScheduleSpec(
+            schedule_kind="recurring", cron_expression=validate_cron(expression), timezone=timezone
+        )
+
+    if phrase.startswith("every"):
+        clock = _parse_clock(phrase) or (9, 0)
+        hour, minute = clock
+        if "weekday" in phrase or "week day" in phrase:
+            return ScheduleSpec(
+                schedule_kind="recurring",
+                cron_expression=f"{minute} {hour} * * 1-5",
+                timezone=timezone,
+            )
+        for name, number in _WEEKDAY_NUMBERS.items():
+            if re.search(rf"\b{name}\b", phrase):
+                return ScheduleSpec(
+                    schedule_kind="recurring",
+                    cron_expression=f"{minute} {hour} * * {number}",
+                    timezone=timezone,
+                )
+        if "day" in phrase or "morning" in phrase or "evening" in phrase:
+            return ScheduleSpec(
+                schedule_kind="recurring",
+                cron_expression=f"{minute} {hour} * * *",
+                timezone=timezone,
+            )
+        raise InvalidSchedule(_unparseable(text))
+
+    # "on 2026-09-10 at 09:00" / "2026-09-10"
+    dated = re.search(r"(\d{4})-(\d{2})-(\d{2})", phrase)
+    if dated:
+        clock = _parse_clock(phrase.split(dated.group(0), 1)[1]) or (9, 0)
+        local = datetime(
+            int(dated.group(1)), int(dated.group(2)), int(dated.group(3)), clock[0], clock[1]
+        )
+        return ScheduleSpec(
+            schedule_kind="once", run_at=from_user_local(local, zone), timezone=timezone
+        )
+
+    if phrase.startswith(("tomorrow", "today")):
+        clock = _parse_clock(phrase) or (9, 0)
+        local_now = to_user_local(moment, zone)
+        target_date = local_now.date() + (timedelta(days=1) if phrase.startswith("tomorrow") else timedelta())
+        local = datetime(target_date.year, target_date.month, target_date.day, clock[0], clock[1])
+        return ScheduleSpec(
+            schedule_kind="once", run_at=from_user_local(local, zone), timezone=timezone
+        )
+
+    raise InvalidSchedule(_unparseable(text))
+
+
+def _unparseable(text: str) -> str:
+    return (
+        f"I could not read {text.strip()!r} as a schedule. "
+        f"Phrasings that work: {'; '.join(SUPPORTED_PHRASINGS)}."
+    )
 
 
 def granularity_note() -> str:

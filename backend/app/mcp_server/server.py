@@ -23,6 +23,7 @@ from app.mcp_server.tools import (
     list_conversations,
     list_external_opportunities,
     list_recruiter_opportunities,
+    list_scheduled_tasks,
     list_resumes,
     navigate_to_queue,
     propose_add_note,
@@ -31,6 +32,7 @@ from app.mcp_server.tools import (
     propose_create_github_issue,
     propose_create_premium_contact,
     propose_record_update,
+    propose_scheduled_task,
     propose_send_email,
     rank_opportunities,
     read_chat_attachment,
@@ -102,11 +104,23 @@ RELATIONSHIP_TOOLS = (
     recommend_recruiter,
 )
 
+# Same reasoning, one phase later. v1's and v2's routing measurement is still
+# owed at 35 tools; registering v4's pair by default would make any regression
+# unattributable across two unmeasured additions at once.
+SCHEDULING_TOOLS = (
+    list_scheduled_tasks,
+    propose_scheduled_task,
+)
+
 for tool in BASE_TOOLS:
     mcp.tool()(tool)
 
 if settings.feature_relationship_intelligence_enabled:
     for tool in RELATIONSHIP_TOOLS:
+        mcp.tool()(tool)
+
+if settings.feature_scheduling_enabled:
+    for tool in SCHEDULING_TOOLS:
         mcp.tool()(tool)
 
 if settings.feature_chat_actions_enabled:
