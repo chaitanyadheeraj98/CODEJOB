@@ -68,8 +68,12 @@ describe('RenderedMessage', () => {
   // A payload kind this build does not know about has to degrade to nothing,
   // the same contract every parse() already honours. Throwing here would take
   // the whole message list down.
+  //
+  // The kind here must stay one the union will never gain: an earlier version
+  // of this test used 'chart', and it started rendering a real (empty) chart
+  // the moment W5 added that member.
   it('renders nothing and throws nothing for an unknown kind', () => {
-    const unknown = { kind: 'chart', data: {} } as unknown as RenderedPayload
+    const unknown = { kind: 'from_a_future_build', data: {} } as unknown as RenderedPayload
 
     expect(() => render(unknown, 'page')).not.toThrow()
     expect(container!.textContent).toBe('')
