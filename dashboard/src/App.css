@@ -5523,3 +5523,62 @@ button.chatRankedLabel:focus-visible {
   color: var(--danger);
   font-size: 0.9em;
 }
+
+/* The relationship labelling tool. An internal calibration surface, not a
+   feature: reachable only by ?page=relationship_labeling, and its routes 404
+   unless the feature is switched on. */
+.labelingTool {
+  max-width: 900px;
+}
+
+.labelingProgress {
+  margin: 0 0 8px;
+}
+
+.labelingTable {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 10px 0;
+}
+
+.labelingTable th,
+.labelingTable td {
+  border: 1px solid var(--line);
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.labelingCoverage {
+  font-weight: 400;
+  font-size: 0.85em;
+}
+
+.labelingVerdicts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.labelingVerdicts kbd {
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  padding: 0 4px;
+  font-size: 0.85em;
+}
+
+.labelingReason {
+  width: 100%;
+  min-height: 60px;
+}
+
+.labelingHidden,
+.labelingRevealed {
+  margin-top: 10px;
+}
+
+.labelingError {
+  margin-top: 10px;
+  color: var(--danger);
+}

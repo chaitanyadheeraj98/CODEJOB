@@ -57,45 +57,14 @@ def block(
     }
 
 
-CONFIDENCE_LEVELS = ("confirmed", "likely", "possible")
-
-INFERENCE_ASSUMPTION = (
-    "This relationship was inferred from the records listed, not recorded by anyone."
+# Defined in app/services/evidence.py and re-exported here so tools keep one
+# import site. See that module for why it cannot live in this package.
+from app.services.evidence import (  # noqa: E402
+    CONFIDENCE_LEVELS,
+    INFERENCE_ASSUMPTION,
+    MATCH_KINDS,
+    EvidenceEntry,
 )
-
-MATCH_KINDS = ("exact", "alias", "semantic", "overlap", "absent")
-
-
-@dataclass(frozen=True)
-class EvidenceEntry:
-    """One contributing signal, decomposed.
-
-    The UI explanation is generated from a list of these; the model reads them,
-    it never composes them. `match="absent"` is a first-class value and means
-    the signal could not be compared - it is not a mismatch, and it must never
-    be scored as one (see relationship_scoring's renormalization).
-    """
-
-    signal: str
-    left_value: str
-    right_value: str
-    normalized_to: str
-    match: str
-    weight: float
-    sub_score: float
-    source: str
-
-    def as_dict(self) -> dict[str, object]:
-        return {
-            "signal": self.signal,
-            "left_value": self.left_value,
-            "right_value": self.right_value,
-            "normalized_to": self.normalized_to,
-            "match": self.match,
-            "weight": round(float(self.weight), 4),
-            "sub_score": round(float(self.sub_score), 4),
-            "source": self.source,
-        }
 
 
 def inference_block(

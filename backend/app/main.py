@@ -188,6 +188,11 @@ from app.job_intent_learning import (
 )
 from app.services import (
     analytics_service,
+    entity_embedding_job,
+    entity_resolution_service,
+    relationship_clustering_service,
+    relationship_judgment_service,
+    relationship_labeling_service,
     application_intelligence_service,
     application_outreach_service,
     application_service,
@@ -308,6 +313,9 @@ from app.schemas import (
     GithubIssueCreateRequest,
     CustomSkillTaxonomyEntryResponse,
     CanonicalEntityTaxonomyEntryResponse,
+    EntityAliasMergeRequest,
+    RelationshipJudgmentRequest,
+    RelationshipLabelRequest,
     DismissJobIntentSignalRequest,
     DismissSkillRequest,
     DismissEntityRequest,
@@ -1348,6 +1356,26 @@ def _run_resume_tracking_sweep(db: Session) -> None:
     db.commit()
 
 
+def _run_relationship_sweep(db: Session) -> None:
+    """Top up entity embeddings, then run one clustering pass.
+
+    Both halves are idempotent and resumable, and the clustering pass writes
+    shadow rows unless surfacing is explicitly enabled *and* the thresholds have
+    been calibrated. `since` is deliberately left open: the pass is bounded by
+    `max_pairs` and the blocking keys rather than by a watermark, so a record
+    whose neighbours arrive later is still reconsidered.
+    """
+    entity_embedding_job.embed_pending_entities_all_types(db, owner_id=settings.owner_id)
+    result = relationship_clustering_service.run_clustering_pass(db, owner_id=settings.owner_id)
+    logger.info(
+        "Relationship sweep: scored=%s clusters=%s suppressed=%s surfaced=%s",
+        result.scored_pairs,
+        result.clusters_written,
+        result.clusters_suppressed,
+        result.surfaced,
+    )
+
+
 def _get_auto_runner_service() -> AutoRunnerService:
     global auto_runner_service
     if auto_runner_service is None:
@@ -1359,6 +1387,7 @@ def _get_auto_runner_service() -> AutoRunnerService:
             check_live_replies=_check_live_replies,
             run_reminder_sweep=_run_reminder_sweep,
             run_resume_tracking_sweep=_run_resume_tracking_sweep,
+            run_relationship_sweep=_run_relationship_sweep,
             action_lock=telegram_action_lock,
             stop_event=auto_runner_stop_event,
         )
@@ -9366,7 +9395,204 @@ def resolve_recipients(
     return _get_orchestration_service().resolve_recipients(email_id, payload, db)
 
 
+# --- v3 relationship intelligence -------------------------------------------
+#
+# Ten routes, all owner-scoped on settings.owner_id. The judgment route is the
+# only write path v3 exposes to the chat surface, and it is reached by a user's
+# click on a rendered control - v3 registers no propose_* tool and no
+# model-callable write.
+
+
+def _require_relationship_intelligence() -> None:
+    if not settings.feature_relationship_intelligence_enabled:
+        raise HTTPException(status_code=404, detail="Not found")
+
+
+@app.post("/taxonomy/entities/embed")
+def embed_canonical_entities(
+    entity_type: Annotated[str | None, Query()] = None,
+    batch_size: Annotated[int, Query(ge=1, le=500)] = 300,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    """Backfill embeddings for approved canonical entities. Idempotent."""
+    _require_relationship_intelligence()
+    if entity_type:
+        return {
+            entity_type: entity_embedding_job.embed_pending_entities(
+                db, owner_id=settings.owner_id, entity_type=entity_type, batch_size=batch_size
+            )
+        }
+    return entity_embedding_job.embed_pending_entities_all_types(
+        db, owner_id=settings.owner_id, batch_size=batch_size
+    )
+
+
+@app.get("/taxonomy/entities/alias-suggestions")
+def list_entity_alias_suggestions(
+    entity_type: Annotated[str, Query()] = "company",
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    """Entries that are probably the same entity. Suggestions only - never applied."""
+    _require_relationship_intelligence()
+    suggestions = entity_resolution_service.suggest_aliases(
+        db, owner_id=settings.owner_id, entity_type=entity_type
+    )
+    rows = {
+        int(row.id): row
+        for row in db.query(CanonicalEntityTaxonomyEntry).filter(
+            CanonicalEntityTaxonomyEntry.owner_id == settings.owner_id,
+            CanonicalEntityTaxonomyEntry.id.in_([item for pair in suggestions for item in pair[:2]] or [0]),
+        )
+    }
+    return {
+        "entity_type": entity_type,
+        "suggestions": [
+            {
+                "keep_id": keep_id,
+                "keep_name": rows[keep_id].canonical_name if keep_id in rows else "",
+                "keep_occurrences": int(rows[keep_id].occurrence_count or 0) if keep_id in rows else 0,
+                "alias_id": alias_id,
+                "alias_name": rows[alias_id].canonical_name if alias_id in rows else "",
+                "alias_occurrences": int(rows[alias_id].occurrence_count or 0) if alias_id in rows else 0,
+                "score": score,
+            }
+            for keep_id, alias_id, score in suggestions
+        ],
+    }
+
+
+@app.post("/taxonomy/entities/aliases/merge")
+def merge_entity_alias(
+    payload: EntityAliasMergeRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    """Apply one reviewed merge. A wrong merge is invisible and permanent, so
+    this is only ever reached from a human decision in the labeling tool."""
+    _require_relationship_intelligence()
+    try:
+        return entity_resolution_service.apply_alias_merge(
+            db,
+            owner_id=settings.owner_id,
+            entity_type=payload.entity_type,
+            keep_id=payload.keep_id,
+            alias_id=payload.alias_id,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/relationships/label-queue")
+def get_relationship_label_queue(
+    limit: Annotated[int, Query(ge=1, le=50)] = 20,
+    hard_negative_ratio: Annotated[float, Query(ge=0.0, le=1.0)] = 0.4,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    """Unlabeled pairs to judge, with exactly the fields the scorer reads."""
+    _require_relationship_intelligence()
+    candidates = relationship_labeling_service.sample_pairs_for_labeling(
+        db, owner_id=settings.owner_id, limit=limit, hard_negative_ratio=hard_negative_ratio
+    )
+    return {
+        "verdicts": list(relationship_labeling_service.VERDICTS),
+        "remaining": relationship_labeling_service.unlabeled_count(db, owner_id=settings.owner_id),
+        "candidates": [candidate.as_dict() for candidate in candidates],
+    }
+
+
+@app.post("/relationships/labels")
+def record_relationship_label(
+    payload: RelationshipLabelRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    _require_relationship_intelligence()
+    try:
+        row = relationship_labeling_service.record_label(
+            db,
+            owner_id=settings.owner_id,
+            left_opportunity_id=payload.left_opportunity_id,
+            right_opportunity_id=payload.right_opportunity_id,
+            verdict=payload.verdict,
+            reason=payload.reason,
+            labeler=payload.labeler,
+            sampler=payload.sampler,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"id": row.id, "verdict": row.verdict, "split": row.split}
+
+
+@app.get("/relationships/labels/summary")
+def get_relationship_label_summary(db: Session = Depends(get_db)) -> dict[str, object]:
+    _require_relationship_intelligence()
+    return relationship_labeling_service.label_summary(db, owner_id=settings.owner_id)
+
+
+@app.post("/relationships/cluster-pass")
+def run_relationship_cluster_pass(
+    dry_run: Annotated[bool, Query()] = False,
+    max_pairs: Annotated[int, Query(ge=1, le=100_000)] = 20_000,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    """Run one clustering pass on demand. Idempotent; shadow unless surfacing
+    is enabled *and* the thresholds have been calibrated."""
+    _require_relationship_intelligence()
+    return relationship_clustering_service.run_clustering_pass(
+        db, owner_id=settings.owner_id, dry_run=dry_run, max_pairs=max_pairs
+    ).as_dict()
+
+
+@app.get("/relationships/clusters/{cluster_id}")
+def get_relationship_cluster(cluster_id: str, db: Session = Depends(get_db)) -> dict[str, object]:
+    _require_relationship_intelligence()
+    try:
+        return relationship_judgment_service.cluster_detail(
+            db, owner_id=settings.owner_id, cluster_id=cluster_id
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/relationships/opportunities/{opportunity_id}/clusters")
+def get_clusters_for_opportunity(opportunity_id: int, db: Session = Depends(get_db)) -> dict[str, object]:
+    _require_relationship_intelligence()
+    return {
+        "clusters": relationship_judgment_service.clusters_for_opportunity(
+            db, owner_id=settings.owner_id, opportunity_id=opportunity_id
+        )
+    }
+
+
+@app.post("/relationships/clusters/{cluster_id}/judgment")
+def record_relationship_judgment(
+    cluster_id: str,
+    payload: RelationshipJudgmentRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    """Confirm, reject, or correct one inferred relationship.
+
+    The only v3 write path. Out-of-scope and nonexistent clusters give the same
+    404, so a response never confirms that another owner's cluster exists.
+    """
+    _require_relationship_intelligence()
+    try:
+        return relationship_judgment_service.record_judgment(
+            db,
+            owner_id=settings.owner_id,
+            cluster_id=cluster_id,
+            verdict=payload.verdict,
+            note=payload.note,
+            correct_member_ids=payload.correct_member_ids,
+        ).as_dict()
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 # Root mounting preserves FastMCP's exact /mcp endpoint. It must remain last so
 # the existing FastAPI routes keep precedence over the catch-all mount.
 if settings.feature_chat_enabled:
     app.mount("/", chat_mcp_app)
+

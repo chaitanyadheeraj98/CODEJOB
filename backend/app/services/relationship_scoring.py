@@ -49,7 +49,7 @@ from datetime import datetime
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from app.mcp_server.tools.provenance import EvidenceEntry
+from app.services.evidence import EvidenceEntry
 from app.models import RecruiterEmail, RecruiterOpportunity
 from app.semantic.embeddings_service import embedding_from_json
 from app.semantic.similarity import cosine_similarity

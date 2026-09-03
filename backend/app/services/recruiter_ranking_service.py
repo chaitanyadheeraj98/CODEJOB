@@ -30,7 +30,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.orm import Session
 
-from app.mcp_server.tools.provenance import EvidenceEntry
+from app.services.evidence import EvidenceEntry
 from app.models import (
     EmailConversation,
     EmailReplyMessage,

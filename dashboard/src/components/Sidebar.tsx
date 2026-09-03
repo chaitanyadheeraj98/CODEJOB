@@ -9,7 +9,9 @@ export type SidebarProps = {
   assistantUnseenCount?: number
   resumeTrackingEnabled: boolean
   applicationsEnabled?: boolean
-  activePage: 'assistant' | 'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'inbox' | 'premium_numbers' | 'resume_tracking' | 'application_tracking' | 'settings'
+  // relationship_labeling is a member of the page union but has no nav row:
+  // it is an internal calibration tool, not a feature.
+  activePage: 'assistant' | 'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'inbox' | 'premium_numbers' | 'resume_tracking' | 'application_tracking' | 'relationship_labeling' | 'settings'
   onNavigate: (section: SidebarProps['activePage']) => void
 }
 

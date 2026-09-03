@@ -2159,3 +2159,27 @@ class ProductivityTrendResponse(BaseModel):
     kpi_total_sent: int = 0
     previous_period_total_sent: int = 0
     bars: list[ProductivityBarPoint] = Field(default_factory=list)
+
+
+# --- v3 relationship intelligence -------------------------------------------
+
+
+class RelationshipLabelRequest(BaseModel):
+    left_opportunity_id: int
+    right_opportunity_id: int
+    verdict: str
+    reason: str = ""
+    labeler: str = ""
+    sampler: str = ""
+
+
+class RelationshipJudgmentRequest(BaseModel):
+    verdict: str
+    note: str = ""
+    correct_member_ids: list[int] = Field(default_factory=list)
+
+
+class EntityAliasMergeRequest(BaseModel):
+    entity_type: str
+    keep_id: int
+    alias_id: int

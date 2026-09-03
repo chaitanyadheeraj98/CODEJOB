@@ -8,6 +8,7 @@ import { getDraftSourceLabel } from './features/ai/ui'
 import QueryBucket from './features/query_bucket/QueryBucket'
 import EmailSearch from './features/email_search/EmailSearch'
 import AssistantPage from './features/chat/AssistantPage'
+import LabelingTool from './features/relationships/LabelingTool'
 import ChatProvider from './features/chat/ChatProvider'
 import { useChat } from './features/chat/chatContext'
 import ChatWidget from './features/chat/ChatWidget'
@@ -66,8 +67,11 @@ const DRAFT_TEXT_SIZE_STYLES: Record<DraftTextSize, { fontSize: string; lineHeig
   huge: { fontSize: '28px', lineHeight: '1.4' },
 }
 
-type ActivePage = 'assistant' | 'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'inbox' | 'premium_numbers' | 'resume_tracking' | 'application_tracking' | 'settings'
-const ACTIVE_PAGES = new Set<ActivePage>(['assistant', 'run_queue', 'needs_review', 'failed_mapping', 'recent_runs', 'sent_items', 'inbox', 'premium_numbers', 'resume_tracking', 'application_tracking', 'settings'])
+type ActivePage = 'assistant' | 'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'inbox' | 'premium_numbers' | 'resume_tracking' | 'application_tracking' | 'relationship_labeling' | 'settings'
+// relationship_labeling is deliberately absent from the sidebar: it is an
+// internal calibration tool, reachable only by ?page=relationship_labeling, and
+// its routes 404 unless the feature is switched on.
+const ACTIVE_PAGES = new Set<ActivePage>(['assistant', 'run_queue', 'needs_review', 'failed_mapping', 'recent_runs', 'sent_items', 'inbox', 'premium_numbers', 'resume_tracking', 'application_tracking', 'relationship_labeling', 'settings'])
 const initialActivePage = (): ActivePage => {
   const page = new URLSearchParams(window.location.search).get('page') as ActivePage | null
   return page && ACTIVE_PAGES.has(page) ? page : 'run_queue'
@@ -84,6 +88,7 @@ const PAGE_TITLES: Record<ActivePage, string> = {
   premium_numbers: 'Premium Numbers',
   resume_tracking: 'Resume Tracking',
   application_tracking: 'Application Tracking',
+  relationship_labeling: 'Relationship Labelling',
   settings: 'Settings',
 }
 
@@ -98,6 +103,7 @@ const PAGE_SUBTITLES: Record<ActivePage, string> = {
   premium_numbers: 'Manage inventory, assignments, and rescoring operations.',
   resume_tracking: 'See which resume variants move through the funnel and why others stall.',
   application_tracking: 'Review bookmarked requirements and explicitly tracked applications.',
+  relationship_labeling: 'Judge whether two requirements belong to the same hiring programme, so the scorer can be measured.',
   settings: 'Manage learning queues, trusted Gmail groups, and resume assets.',
 }
 
@@ -3981,6 +3987,7 @@ function App() {
       premium_numbers: 'view_premium_numbers',
       resume_tracking: 'view_premium_numbers',
       application_tracking: 'view_premium_numbers',
+      relationship_labeling: 'view_run_queue',
       settings: 'view_run_queue',
     }
     const eventType = eventMap[page]
@@ -5516,6 +5523,8 @@ function App() {
           {activePage !== 'settings' && activePage !== 'assistant' ? renderQueueStatusBar() : null}
 
           {activePage === 'assistant' ? <AssistantPage /> : null}
+
+          {activePage === 'relationship_labeling' ? <LabelingTool apiBase={apiBase} /> : null}
 
           {activePage === 'run_queue' ? (
             <section className="liveMonitorCard">

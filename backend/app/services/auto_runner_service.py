@@ -8,7 +8,9 @@ from threading import Event, Lock
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.models import UserSettings
+
 logger = logging.getLogger(__name__)
 
 LIVE_REPLY_CHECK_INTERVAL_SECONDS = 60
@@ -25,6 +27,9 @@ class AutoRunnerService:
         check_live_replies: Callable[[Session], None],
         run_reminder_sweep: Callable[[Session], None],
         run_resume_tracking_sweep: Callable[[Session], None],
+        # Defaults to a no-op so an existing construction site keeps working;
+        # the feature flag gates the sweep either way.
+        run_relationship_sweep: Callable[[Session], None] = lambda _db: None,
         action_lock: Lock,
         stop_event: Event,
     ) -> None:
@@ -35,6 +40,7 @@ class AutoRunnerService:
         self._check_live_replies = check_live_replies
         self._run_reminder_sweep = run_reminder_sweep
         self._run_resume_tracking_sweep = run_resume_tracking_sweep
+        self._run_relationship_sweep = run_relationship_sweep
         self._action_lock = action_lock
         self._stop_event = stop_event
 
@@ -58,12 +64,20 @@ class AutoRunnerService:
     def resume_tracking_sweep_interval_minutes(user_settings: UserSettings) -> int:
         return max(30, min(int(user_settings.feature_resume_tracking_sweep_interval_minutes or 240), 1440))
 
+    @staticmethod
+    def relationship_sweep_interval_minutes() -> int:
+        # Clamped exactly as its neighbours are. Read from config rather than
+        # UserSettings: the feature's master switch is env-only, so a
+        # runtime-tunable cadence for it would buy nothing.
+        return max(30, min(int(settings.feature_relationship_sweep_interval_minutes or 720), 1440))
+
     def run_loop(self) -> None:
         next_run_at = datetime.now(UTC)
         next_nvoids_run_at = datetime.now(UTC)
         next_live_check_at = datetime.now(UTC)
         next_reminder_sweep_at = datetime.now(UTC)
         next_resume_tracking_sweep_at = datetime.now(UTC)
+        next_relationship_sweep_at = datetime.now(UTC)
         while not self._stop_event.wait(5):
             db = self._session_factory()
             try:
@@ -143,6 +157,26 @@ class AutoRunnerService:
                             logger.exception("Resume tracking sweep crashed")
                     next_resume_tracking_sweep_at = datetime.now(UTC) + timedelta(
                         minutes=resume_tracking_interval_minutes
+                    )
+
+                # Entity embedding top-up, then one clustering pass. Both are
+                # idempotent and resumable, both take the action lock as their
+                # neighbours do, and the clustering pass writes shadow rows
+                # unless surfacing has been explicitly enabled and the
+                # thresholds calibrated.
+                if (
+                    user_settings.enabled
+                    and settings.feature_relationship_intelligence_enabled
+                    and now_utc >= next_relationship_sweep_at
+                ):
+                    relationship_interval_minutes = self.relationship_sweep_interval_minutes()
+                    with self._action_lock:
+                        try:
+                            self._run_relationship_sweep(db)
+                        except Exception:
+                            logger.exception("Relationship sweep crashed")
+                    next_relationship_sweep_at = datetime.now(UTC) + timedelta(
+                        minutes=relationship_interval_minutes
                     )
             except Exception:
                 logger.exception("Auto runner loop error")
