@@ -22,7 +22,10 @@ export const PROPOSAL_HANDLERS: Record<string, ProposalHandler> = {
   propose_bulk_approve_candidates: {
     endpoint: '/candidates/approve-bulk',
     method: 'POST',
-    buildBody: (fields) => ({ ids: fields.candidate_ids }),
+    // idempotency_key is optional and absent from model-generated proposals, which
+    // are one card and one click. A table selection is far easier to double-submit,
+    // so CandidateTable mints a key when it builds the action.
+    buildBody: (fields) => ({ ids: fields.candidate_ids, idempotency_key: fields.idempotency_key }),
     confirmLabel: (fields) => `Approve ${Number(fields.count ?? 0)} Emails`,
     summary: (fields) => [
       ['Action', 'Approve and send candidate emails'],

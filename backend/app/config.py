@@ -94,6 +94,9 @@ class Settings(BaseSettings):
     owner_id: str = "default-owner"
     resume_storage_dir: str = "./data/resumes"
     attachment_storage_dir: str = "./data/attachments"
+    chat_attachment_storage_dir: str = "./data/chat-attachments"
+    chat_attachment_max_bytes: int = 10 * 1024 * 1024
+    chat_attachment_max_extract_chars: int = 20000
     qualification_threshold: float = 0.6
     feature_auto_polling: bool = False
     feature_auto_poll_interval_minutes: int = 10

@@ -906,6 +906,20 @@ class ChatSessionDetailResponse(ChatSessionResponse):
 class ChatMessageRequest(BaseModel):
     text: str
     model: str | None = None
+    attachment_ids: list[int] = Field(default_factory=list)
+
+
+class ChatAttachmentResponse(BaseModel):
+    id: int
+    session_id: int
+    message_id: int | None = None
+    file_name: str
+    mime_type: str
+    byte_size: int
+    extraction_error: str | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
 
 
 class ChatSessionRenameRequest(BaseModel):

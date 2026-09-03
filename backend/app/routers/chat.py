@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 from time import perf_counter
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.ai.chat.agent import chat_models
@@ -13,6 +14,7 @@ from app.config import settings
 from app.db import get_db
 from app.runtime_state import runtime_state
 from app.schemas import (
+    ChatAttachmentResponse,
     ChatDeleteResponse,
     ChatMessageRequest,
     ChatMessageResponse,
@@ -21,6 +23,7 @@ from app.schemas import (
     ChatSessionResponse,
     ChatStatusResponse,
 )
+from app.services.chat_attachment_service import ChatAttachmentService
 from app.services.chat_service import ChatService
 
 
@@ -110,11 +113,12 @@ def list_chat_sessions(
 )
 def get_chat_session(
     session_id: int,
+    since_id: int | None = Query(default=None, ge=1),
     db: Session = Depends(get_db),
     service: ChatService = Depends(get_chat_service),
 ) -> ChatSessionDetailResponse:
     session = service._session_or_404(db, session_id)
-    messages = service.get_session_messages(db, session_id)
+    messages = service.get_session_messages(db, session_id, since_id=since_id)
     return ChatSessionDetailResponse(
         **ChatSessionResponse.model_validate(session).model_dump(),
         messages=[ChatMessageResponse.model_validate(row) for row in messages],
@@ -162,7 +166,66 @@ def send_chat_message(
     text = service.validate_message(payload.text)
     service._session_or_404(db, session_id)
     return StreamingResponse(
-        service.send_message(db, session_id, text, model=payload.model),
+        service.send_message(
+            db, session_id, text, model=payload.model, attachment_ids=payload.attachment_ids
+        ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.post(
+    "/sessions/{session_id}/attachments",
+    response_model=ChatAttachmentResponse,
+    status_code=201,
+    dependencies=[Depends(require_chat_enabled)],
+)
+def upload_chat_attachment(
+    session_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    service: ChatService = Depends(get_chat_service),
+) -> ChatAttachmentResponse:
+    service._session_or_404(db, session_id)
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="File name required")
+    row = ChatAttachmentService.create(db, session_id, file.filename, file.content_type, file.file)
+    return ChatAttachmentResponse.model_validate(row)
+
+
+@router.get(
+    "/sessions/{session_id}/attachments",
+    response_model=list[ChatAttachmentResponse],
+    dependencies=[Depends(require_chat_enabled)],
+)
+def list_chat_attachments_route(
+    session_id: int,
+    db: Session = Depends(get_db),
+    service: ChatService = Depends(get_chat_service),
+) -> list[ChatAttachmentResponse]:
+    service._session_or_404(db, session_id)
+    return [
+        ChatAttachmentResponse.model_validate(row)
+        for row in ChatAttachmentService.list_for_session(db, session_id)
+    ]
+
+
+@router.get(
+    "/attachments/{attachment_id}/download",
+    dependencies=[Depends(require_chat_enabled)],
+)
+def download_chat_attachment(attachment_id: int, db: Session = Depends(get_db)) -> FileResponse:
+    row = ChatAttachmentService.get(db, attachment_id)
+    if not Path(row.file_path).exists():
+        raise HTTPException(status_code=410, detail="Attachment file is no longer on disk")
+    return FileResponse(row.file_path, media_type=row.mime_type, filename=row.file_name)
+
+
+@router.delete(
+    "/attachments/{attachment_id}",
+    response_model=ChatDeleteResponse,
+    dependencies=[Depends(require_chat_enabled)],
+)
+def delete_chat_attachment(attachment_id: int, db: Session = Depends(get_db)) -> ChatDeleteResponse:
+    ChatAttachmentService.delete(db, attachment_id)
+    return ChatDeleteResponse(id=attachment_id, deleted=True)

@@ -10,13 +10,27 @@ import {
 } from './api'
 import type { ChatMessage, ChatSession } from './types'
 import { PROPOSAL_HANDLERS } from './proposals'
+import { RENDER_HANDLERS } from './renderers'
 
 
+// Tool messages are kept only when something knows how to draw them: a
+// confirmation card, or a rendered view. Consulting one registry and not the
+// other silently deletes the other's messages from history on both surfaces.
 function visibleMessages(messages: ChatMessage[]): ChatMessage[] {
   return messages.filter((message) => (
     Boolean(message.content)
-    && (message.role !== 'tool' || Boolean(message.tool_name && PROPOSAL_HANDLERS[message.tool_name]))
+    && (
+      message.role !== 'tool'
+      || Boolean(message.tool_name && (PROPOSAL_HANDLERS[message.tool_name] || RENDER_HANDLERS[message.tool_name]))
+    )
   ))
+}
+
+// Tracked against the *unfiltered* server payload. Using the visible list would
+// re-request any trailing message visibleMessages drops on every poll, and using
+// the rendered list at all would pick up sendMessage's optimistic negative ids.
+function newestMessageId(messages: ChatMessage[]): number {
+  return messages.reduce((newest, message) => (message.id > newest ? message.id : newest), 0)
 }
 
 export function useChatSession(apiBase: string, enabled: boolean) {
@@ -26,10 +40,7 @@ export function useChatSession(apiBase: string, enabled: boolean) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [unseenCount, setUnseenCount] = useState(0)
-  const messagesRef = useRef<ChatMessage[]>([])
-  useEffect(() => {
-    messagesRef.current = messages
-  }, [messages])
+  const newestIdRef = useRef(0)
 
   const markSeen = useCallback(() => setUnseenCount(0), [])
 
@@ -39,13 +50,17 @@ export function useChatSession(apiBase: string, enabled: boolean) {
     if (!enabled || sessionId == null) return
     const interval = window.setInterval(() => {
       if (busy) return
-      getChatSession(apiBase, sessionId).then((detail) => {
-        const next = visibleMessages(detail.messages)
-        const previous = messagesRef.current
-        if (next.length > previous.length) {
-          setUnseenCount((count) => count + (next.length - previous.length))
-          setMessages(next)
-        }
+      const knownUpTo = newestIdRef.current
+      getChatSession(apiBase, sessionId, knownUpTo || undefined).then((detail) => {
+        newestIdRef.current = Math.max(knownUpTo, newestMessageId(detail.messages))
+        // Re-filter rather than appending whatever came back. A server that
+        // ignores since_id - an older backend, a proxy that drops the query
+        // string - returns the whole thread, and appending it duplicates the
+        // conversation on every poll. Seen for real against a stale container.
+        const added = visibleMessages(detail.messages).filter((message) => message.id > knownUpTo)
+        if (!added.length) return
+        setUnseenCount((count) => count + added.length)
+        setMessages((current) => [...current, ...added])
       }, () => {})
     }, 20000)
     return () => window.clearInterval(interval)
@@ -61,6 +76,7 @@ export function useChatSession(apiBase: string, enabled: boolean) {
         getChatSession(apiBase, rows[0].id).then((detail) => {
           if (!active) return
           setSessionId(detail.id)
+          newestIdRef.current = newestMessageId(detail.messages)
           setMessages(visibleMessages(detail.messages))
         }, (reason: unknown) => {
           if (active) setError(reason instanceof Error ? reason.message : 'Failed to load chat')
@@ -78,6 +94,7 @@ export function useChatSession(apiBase: string, enabled: boolean) {
     const session = await createChatSession(apiBase)
     setSessions((current) => [session, ...current])
     setSessionId(session.id)
+    newestIdRef.current = 0
     setMessages([])
     setError('')
     return session
@@ -89,6 +106,7 @@ export function useChatSession(apiBase: string, enabled: boolean) {
     try {
       const detail = await getChatSession(apiBase, nextId)
       setSessionId(detail.id)
+      newestIdRef.current = newestMessageId(detail.messages)
       setMessages(visibleMessages(detail.messages))
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Failed to load chat')
@@ -111,14 +129,16 @@ export function useChatSession(apiBase: string, enabled: boolean) {
     if (rows[0]) {
       const detail = await getChatSession(apiBase, rows[0].id)
       setSessionId(detail.id)
+      newestIdRef.current = newestMessageId(detail.messages)
       setMessages(visibleMessages(detail.messages))
     } else {
       setSessionId(null)
+      newestIdRef.current = 0
       setMessages([])
     }
   }, [apiBase, sessionId])
 
-  const sendMessage = useCallback(async (rawText: string, model?: string) => {
+  const sendMessage = useCallback(async (rawText: string, model?: string, attachmentIds: number[] = []) => {
     const text = rawText.trim()
     if (!text || busy) return
     setBusy(true)
@@ -144,8 +164,9 @@ export function useChatSession(apiBase: string, enabled: boolean) {
             message.id === assistantId ? { ...message, id: data.message_id as number } : message
           )))
         }
-      }, model)
+      }, model, attachmentIds)
       const detail = await getChatSession(apiBase, activeSessionId)
+      newestIdRef.current = newestMessageId(detail.messages)
       setMessages(visibleMessages(detail.messages))
       const rows = await listChatSessions(apiBase)
       setSessions(rows)
@@ -171,3 +192,7 @@ export function useChatSession(apiBase: string, enabled: boolean) {
     sendMessage,
   }
 }
+
+// Named so ChatProvider can widen it without re-listing every member, and so a
+// new field here reaches the context automatically.
+export type ChatSessionApi = ReturnType<typeof useChatSession>

@@ -422,6 +422,31 @@ class ChatMessage(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
 
 
+class ChatAttachment(Base):
+    """A file the user attached to a chat message.
+
+    Distinct from AttachmentAsset, which is a file sent *out* with recruiter
+    email. Different lifecycle, different trust posture: this one is parsed and
+    read back to the model.
+    """
+
+    __tablename__ = "chat_attachments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), default="default-owner", index=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("chat_sessions.id"), index=True)
+    # Null until the message that carries it is created - the upload happens first.
+    message_id: Mapped[int | None] = mapped_column(ForeignKey("chat_messages.id"), nullable=True, index=True)
+    file_path: Mapped[str] = mapped_column(Text)
+    file_name: Mapped[str] = mapped_column(String(255))
+    mime_type: Mapped[str] = mapped_column(String(120))
+    byte_size: Mapped[int] = mapped_column(Integer, default=0)
+    sha256: Mapped[str] = mapped_column(String(64), index=True)
+    content_markdown: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extraction_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+
+
 class CanonicalEntityTaxonomyEntry(Base):
     __tablename__ = "canonical_entity_taxonomy_entries"
     __table_args__ = (

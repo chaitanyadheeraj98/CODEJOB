@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import './App.css'
-import Sidebar from './components/Sidebar'
+import Sidebar, { type SidebarProps } from './components/Sidebar'
 import CandidateCard from './components/CandidateCard'
 import ResumeTrackingPage from './features/resume_tracking/ResumeTrackingPage'
 import TrustedGmailGroupsPanel, { type TrustedGmailGroup } from './features/gmail_groups/TrustedGmailGroupsPanel'
 import { getDraftSourceLabel } from './features/ai/ui'
 import QueryBucket from './features/query_bucket/QueryBucket'
 import EmailSearch from './features/email_search/EmailSearch'
+import AssistantPage from './features/chat/AssistantPage'
+import ChatProvider from './features/chat/ChatProvider'
+import { useChat } from './features/chat/chatContext'
 import ChatWidget from './features/chat/ChatWidget'
 import { getChatStatus } from './features/chat/api'
 import type { ChatStatus } from './features/chat/types'
@@ -20,6 +23,7 @@ import FilterVisibilitySettings from './components/FilterVisibilitySettings'
 import SelectionActionBar from './components/SelectionActionBar'
 import { filterSortRegistry, resolveRegistryEntry } from './filterSortRegistry'
 import { hasActiveTextSearch, narrowValuesToVisible, visibleFieldsFor } from './filterVisibility'
+import { focusedCandidateMissing } from './recordFocus'
 import { buildUrlSearch, parseFilterValuesFromParams } from './useUrlSync'
 import { addCcEmail, removeCcEmail } from './ccEmails'
 import { addEmployerDomain, removeEmployerDomain } from './employerDomains'
@@ -61,14 +65,15 @@ const DRAFT_TEXT_SIZE_STYLES: Record<DraftTextSize, { fontSize: string; lineHeig
   huge: { fontSize: '28px', lineHeight: '1.4' },
 }
 
-type ActivePage = 'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'inbox' | 'premium_numbers' | 'resume_tracking' | 'application_tracking' | 'settings'
-const ACTIVE_PAGES = new Set<ActivePage>(['run_queue', 'needs_review', 'failed_mapping', 'recent_runs', 'sent_items', 'inbox', 'premium_numbers', 'resume_tracking', 'application_tracking', 'settings'])
+type ActivePage = 'assistant' | 'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'inbox' | 'premium_numbers' | 'resume_tracking' | 'application_tracking' | 'settings'
+const ACTIVE_PAGES = new Set<ActivePage>(['assistant', 'run_queue', 'needs_review', 'failed_mapping', 'recent_runs', 'sent_items', 'inbox', 'premium_numbers', 'resume_tracking', 'application_tracking', 'settings'])
 const initialActivePage = (): ActivePage => {
   const page = new URLSearchParams(window.location.search).get('page') as ActivePage | null
   return page && ACTIVE_PAGES.has(page) ? page : 'run_queue'
 }
 
 const PAGE_TITLES: Record<ActivePage, string> = {
+  assistant: 'CodeJob Assistant',
   run_queue: 'Run Queue Dashboard',
   needs_review: 'Needs Review',
   failed_mapping: 'Failed Mapping',
@@ -82,6 +87,7 @@ const PAGE_TITLES: Record<ActivePage, string> = {
 }
 
 const PAGE_SUBTITLES: Record<ActivePage, string> = {
+  assistant: 'Ask about your pipeline, analyse it, and hand off the work.',
   run_queue: 'Manage and monitor your automated recruitment email operations.',
   needs_review: 'Approve, edit, or reject AI-drafted replies before they send.',
   failed_mapping: 'Fix recipient routing for emails the parser could not map.',
@@ -92,6 +98,13 @@ const PAGE_SUBTITLES: Record<ActivePage, string> = {
   resume_tracking: 'See which resume variants move through the funnel and why others stall.',
   application_tracking: 'Review bookmarked requirements and explicitly tracked applications.',
   settings: 'Manage learning queues, trusted Gmail groups, and resume assets.',
+}
+
+// App renders ChatProvider inside its own tree, so App cannot call useChat().
+// This consumer sits below the provider and is the only thing that needs to.
+function SidebarWithAssistantBadge(props: Omit<SidebarProps, 'assistantUnseenCount'>) {
+  const { unseenCount } = useChat()
+  return <Sidebar {...props} assistantUnseenCount={unseenCount} />
 }
 
 export function shouldTrackViewEvent(
@@ -3957,6 +3970,7 @@ function App() {
 
   const trackViewEvent = async (page: typeof activePage) => {
     const eventMap: Record<typeof activePage, string> = {
+      assistant: 'view_assistant',
       run_queue: 'view_run_queue',
       needs_review: 'view_needs_review',
       failed_mapping: 'view_failed_mapping',
@@ -5184,6 +5198,31 @@ function App() {
     emailSearchRelatedId(emailSearchTarget) === String(relatedId)
   )
 
+  const missingFocusedCandidateId = focusedCandidateMissing(
+    emailSearchTarget,
+    queue,
+    bucketMeta.needs_review.hasNext,
+  )
+
+  // Opens one candidate in Needs Review. Deliberately reuses emailSearchTarget
+  // rather than a ?focus= URL param: that machinery already auto-paginates until
+  // the record loads, retries the scroll while the bucket is still fetching,
+  // highlights, and clears on click-away - and a URL param would not survive
+  // buildUrlSearch, which rebuilds the query string from scratch on every render.
+  const focusCandidateRecord = (candidateId: number) => {
+    setEmailSearchTarget({
+      section: 'needs_review',
+      recruiter_email_id: candidateId,
+      sender: '',
+      subject: '',
+      state: '',
+      detail: {},
+      occurred_at: new Date().toISOString(),
+    })
+    window.history.pushState(null, '', `${window.location.pathname}?page=needs_review`)
+    setActivePage('needs_review')
+  }
+
   const navigateFromEmailSearch = (hit: EmailSearchHit) => {
     if (hit.section === 'other') return
     setEmailSearchTarget(hit)
@@ -5320,8 +5359,15 @@ function App() {
   )
 
   return (
+    // Mounted inside App rather than around it in main.tsx: App's own tests
+    // render <App /> directly, so a provider above it would leave every one of
+    // them without context. The trade-off is that App itself cannot call
+    // useChat() - the Assistant sidebar badge reads it from a small consumer
+    // rendered below this point instead. Children are left at their original
+    // indentation to keep this a two-line diff rather than a 2,200-line reflow.
+    <ChatProvider apiBase={apiBase} onFocusCandidate={focusCandidateRecord}>
     <main className="gmailShell">
-      <Sidebar
+      <SidebarWithAssistantBadge
         running={running}
         queueCount={bucketMeta.needs_review.total ?? queue.length}
         failedCount={bucketMeta.failed.total ?? failedQueue.length}
@@ -5440,7 +5486,9 @@ function App() {
             </p>
           </div>
 
-          {activePage !== 'settings' ? renderQueueStatusBar() : null}
+          {activePage !== 'settings' && activePage !== 'assistant' ? renderQueueStatusBar() : null}
+
+          {activePage === 'assistant' ? <AssistantPage /> : null}
 
           {activePage === 'run_queue' ? (
             <section className="liveMonitorCard">
@@ -6854,6 +6902,18 @@ function App() {
           {activePage === 'needs_review' ? (
             <section className="card pageSection">
           <h2>Needs Review (Manual Approval Required)</h2>
+          {missingFocusedCandidateId != null ? (
+            <p className="focusMissNotice" role="status">
+              Record {missingFocusedCandidateId} isn't in the current filter.
+              <button
+                type="button"
+                onClick={() => setPageFilterValues((prev) => ({ ...prev, needs_review: activeFilterSortConfig?.defaultFilterValues ?? {} }))}
+              >
+                Clear filters
+              </button>
+              <button type="button" onClick={() => setEmailSearchTarget(null)}>Dismiss</button>
+            </p>
+          ) : null}
           <label className="selectAllRow"><input type="checkbox" checked={queue.filter((item) => !item.is_source_parent).length > 0 && queue.filter((item) => !item.is_source_parent).every((item) => needsReviewSelected.has(item.id))} onChange={(event) => setNeedsReviewSelected(event.target.checked ? new Set(queue.filter((item) => !item.is_source_parent).map((item) => item.id)) : new Set())} /> Select all visible</label>
           <SelectionActionBar selectedCount={needsReviewSelected.size} busyKey={needsReviewBulkAction} onClearSelection={() => setNeedsReviewSelected(new Set())} actions={[{ key: 'track', label: 'Track Application', onClick: () => void setBulkTracking(true) }, { key: 'untrack', label: 'Untrack selected', onClick: () => void setBulkTracking(false) }, { key: 'approve', label: 'Approve & Send', onClick: () => void runNeedsReviewBulk('approve') }, { key: 'regenerate', label: 'Regenerate', onClick: () => void runNeedsReviewBulk('regenerate') }, { key: 'reject', label: 'Reject', onClick: () => void runNeedsReviewBulk('reject'), variant: 'danger' }, { key: 'send-to-failed-mapping', label: 'Send to Failed Mapping', onClick: () => void runNeedsReviewBulk('send-to-failed-mapping') }]} />
           {queue.filter((item) => !item.is_source_parent).length === 0 ? <p className="subtle">No queued emails match these filters.</p> : null}
@@ -7541,8 +7601,12 @@ function App() {
           ) : null}
         </div>
       </section>
-      <ChatWidget apiBase={apiBase} />
+      {/* Hidden on the workspace itself: the launcher is fixed bottom-right and
+          lands on top of the page's own Send button, and a floating copy of the
+          surface you are already looking at is noise either way. */}
+      {activePage !== 'assistant' ? <ChatWidget /> : null}
     </main>
+    </ChatProvider>
   )
 }
 

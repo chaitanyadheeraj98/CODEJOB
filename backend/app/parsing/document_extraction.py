@@ -170,9 +170,9 @@ def _legacy_docx_text(file_path: Path) -> str:
     return _compact(" ".join(node.text or "" for node in root.findall(".//w:t", namespace)))
 
 
-def _fallback_document(path: Path, file_name: str, max_chars: int) -> ExtractedDocument:
+def _fallback_document(path: Path, file_name: str, max_chars: int, label: str) -> ExtractedDocument:
     if not path.exists():
-        message = f"Resume file '{file_name}' was not found on disk."
+        message = f"{label} '{file_name}' was not found on disk."
         return ExtractedDocument(message, message, [], False)
 
     extracted = _legacy_pdf_text(path) if path.suffix.lower() == ".pdf" else ""
@@ -180,7 +180,7 @@ def _fallback_document(path: Path, file_name: str, max_chars: int) -> ExtractedD
         extracted = _legacy_docx_text(path)
     if not extracted:
         message = (
-            f"Resume available as '{file_name}', but text extraction is limited. "
+            f"{label} available as '{file_name}', but text extraction is limited. "
             "Use only conservative claims and keep the reply concise."
         )
         return ExtractedDocument(message, message, [], False)
@@ -194,10 +194,18 @@ def extract_document_text(
     file_name: str,
     *,
     max_chars: int = 7000,
+    label: str = "Resume file",
 ) -> ExtractedDocument:
+    """Extract a document to markdown.
+
+    `label` names the thing in the fallback messages, which are handed straight
+    to the model. It defaults to the resume wording this function was written
+    for; a chat attachment is often a job description, and telling the model a
+    JD is a resume is worse than telling it nothing.
+    """
     path = Path(file_path)
     if not path.exists():
-        return _fallback_document(path, file_name, max_chars)
+        return _fallback_document(path, file_name, max_chars, label)
 
     try:
         from unstructured.partition.auto import partition
@@ -208,7 +216,7 @@ def extract_document_text(
             return ExtractedDocument(markdown, plain, elements, truncated)
     except Exception:
         pass
-    return _fallback_document(path, file_name, max_chars)
+    return _fallback_document(path, file_name, max_chars, label)
 
 
 def _legacy_strip_html(html: str) -> str:

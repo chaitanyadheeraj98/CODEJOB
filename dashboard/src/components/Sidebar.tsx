@@ -1,4 +1,4 @@
-type SidebarProps = {
+export type SidebarProps = {
   running: boolean
   queueCount: number
   failedCount: number
@@ -6,9 +6,10 @@ type SidebarProps = {
   sentCount: number
   inboxCount?: number
   premiumCount: number
+  assistantUnseenCount?: number
   resumeTrackingEnabled: boolean
   applicationsEnabled?: boolean
-  activePage: 'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'inbox' | 'premium_numbers' | 'resume_tracking' | 'application_tracking' | 'settings'
+  activePage: 'assistant' | 'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'inbox' | 'premium_numbers' | 'resume_tracking' | 'application_tracking' | 'settings'
   onNavigate: (section: SidebarProps['activePage']) => void
 }
 
@@ -20,6 +21,7 @@ export default function Sidebar({
   sentCount,
   inboxCount = 0,
   premiumCount,
+  assistantUnseenCount = 0,
   resumeTrackingEnabled,
   applicationsEnabled = false,
   activePage,
@@ -32,6 +34,9 @@ export default function Sidebar({
     label: string
     count?: number
   }> = [
+    // `|| undefined` rather than the raw count: the row below renders a badge for
+    // any non-null count, so a literal 0 would show an empty pill on every load.
+    { key: 'assistant', label: 'CodeJob Assistant', count: assistantUnseenCount || undefined },
     { key: 'run_queue', label: 'Run Queue' },
     { key: 'needs_review', label: 'Needs Review', count: queueCount },
     { key: 'failed_mapping', label: 'Failed Mapping', count: failedCount },

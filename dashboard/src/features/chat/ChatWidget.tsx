@@ -1,177 +1,23 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 
-import { getChatStatus, runProposalAction } from './api'
-import { proposalForMessage, proposalResultDetail } from './proposals'
-import type { ChatStatus } from './types'
-import { useChatSession } from './useChatSession'
+import { useChat } from './chatContext'
+import { renderMarkdownLite } from './markdown'
+import ProposalCard from './ProposalCard'
+import { proposalForMessage } from './proposals'
+import CandidateTableCompact from './CandidateTableCompact'
+import { renderForMessage } from './renderers'
+import { SentAttachmentChips } from './AttachmentChips'
 
 
-type ChatWidgetProps = {
-  apiBase: string
-}
-
-function renderInline(line: string) {
-  return line.split(/(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)/).map((chunk, i) => {
-    if (chunk.startsWith('`') && chunk.endsWith('`') && chunk.length > 1) return <code key={i}>{chunk.slice(1, -1)}</code>
-    if (chunk.startsWith('**') && chunk.endsWith('**')) return <strong key={i}>{chunk.slice(2, -2)}</strong>
-    if (chunk.startsWith('*') && chunk.endsWith('*') && chunk.length > 1) return <em key={i}>{chunk.slice(1, -1)}</em>
-    return chunk
-  })
-}
-
-const TABLE_SEPARATOR_ROW = /^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?$/
-
-function splitTableRow(line: string): string[] {
-  return line.replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim())
-}
-
-// ponytail: headings/bold/italic/bullets/numbered lists/tables/inline code only, not full markdown. Swap for a real parser if fenced code blocks or links show up.
-function renderMarkdownLite(text: string) {
-  const blocks: ReactNode[] = []
-  let paragraph: string[] = []
-  let list: string[] = []
-  let listOrdered = false
-
-  const flushParagraph = () => {
-    if (!paragraph.length) return
-    blocks.push(
-      <p key={blocks.length}>
-        {paragraph.map((line, i) => (
-          <span key={i}>
-            {renderInline(line)}
-            {i < paragraph.length - 1 ? <br /> : null}
-          </span>
-        ))}
-      </p>,
-    )
-    paragraph = []
-  }
-  const flushList = () => {
-    if (!list.length) return
-    const ListTag = listOrdered ? 'ol' : 'ul'
-    blocks.push(
-      <ListTag key={blocks.length}>
-        {list.map((line, i) => (
-          <li key={i}>{renderInline(line)}</li>
-        ))}
-      </ListTag>,
-    )
-    list = []
-  }
-
-  const lines = text.split('\n')
-  let i = 0
-  while (i < lines.length) {
-    const line = lines[i].trim()
-    if (!line) {
-      flushParagraph()
-      flushList()
-      i += 1
-      continue
-    }
-    const nextLine = (lines[i + 1] ?? '').trim()
-    const isTable = line.startsWith('|') && line.endsWith('|') && TABLE_SEPARATOR_ROW.test(nextLine)
-    if (isTable) {
-      flushParagraph()
-      flushList()
-      const header = splitTableRow(line)
-      const rows: string[][] = []
-      i += 2
-      while (i < lines.length && lines[i].trim().startsWith('|')) {
-        rows.push(splitTableRow(lines[i].trim()))
-        i += 1
-      }
-      blocks.push(
-        <table key={blocks.length}>
-          <thead>
-            <tr>{header.map((cell, c) => <th key={c}>{renderInline(cell)}</th>)}</tr>
-          </thead>
-          <tbody>
-            {rows.map((row, r) => (
-              <tr key={r}>{row.map((cell, c) => <td key={c}>{renderInline(cell)}</td>)}</tr>
-            ))}
-          </tbody>
-        </table>,
-      )
-      continue
-    }
-    const heading = line.match(/^(#{1,6})\s+(.*)/)
-    const orderedItem = line.match(/^\d+\.\s+(.*)/)
-    const bulletItem = line.match(/^[-*]\s+(.*)/)
-    if (heading) {
-      flushParagraph()
-      flushList()
-      const level = Math.min(heading[1].length, 3)
-      const headingContent = renderInline(heading[2])
-      blocks.push(
-        level === 1 ? (
-          <h4 key={blocks.length}>{headingContent}</h4>
-        ) : level === 2 ? (
-          <h5 key={blocks.length}>{headingContent}</h5>
-        ) : (
-          <h6 key={blocks.length}>{headingContent}</h6>
-        ),
-      )
-    } else if (orderedItem || bulletItem) {
-      flushParagraph()
-      const ordered = Boolean(orderedItem)
-      if (list.length && listOrdered !== ordered) flushList()
-      listOrdered = ordered
-      list.push(ordered ? orderedItem![1] : bulletItem![1])
-    } else {
-      flushList()
-      paragraph.push(line)
-    }
-    i += 1
-  }
-  flushParagraph()
-  flushList()
-  return blocks
-}
-
-const MODEL_STORAGE_KEY = 'codejob.chat.model'
-
-export default function ChatWidget({ apiBase }: ChatWidgetProps) {
+// `open` and `draft` stay local: they are genuinely per-surface. Everything
+// else - session, messages, status, model, proposal results - comes from
+// ChatProvider so the workspace page and this widget never diverge.
+export default function ChatWidget() {
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState('')
-  const [status, setStatus] = useState<ChatStatus | null>(null)
-  const [statusError, setStatusError] = useState('')
-  const [selectedModel, setSelectedModel] = useState(() => {
-    try {
-      return window.localStorage.getItem(MODEL_STORAGE_KEY) || 'auto'
-    } catch {
-      return 'auto'
-    }
-  })
-  const [proposalResults, setProposalResults] = useState<Record<number, { approved: boolean; detail: string } | 'cancelled'>>({})
-  const [proposalBusyId, setProposalBusyId] = useState<number | null>(null)
   const messagesEndRef = useRef<HTMLDivElement | null>(null)
-  const ready = Boolean(status?.enabled && status.ollama_running)
-  const chat = useChatSession(apiBase, ready)
-
-  const refreshStatus = useCallback(async () => {
-    setStatusError('')
-    try {
-      setStatus(await getChatStatus(apiBase))
-    } catch (reason) {
-      setStatusError(reason instanceof Error ? reason.message : 'Chat status unavailable')
-    }
-  }, [apiBase])
-
-  useEffect(() => {
-    let active = true
-    getChatStatus(apiBase).then(
-      (nextStatus) => {
-        if (active) setStatus(nextStatus)
-      },
-      (reason: unknown) => {
-        if (active) setStatusError(reason instanceof Error ? reason.message : 'Chat status unavailable')
-      },
-    )
-    return () => {
-      active = false
-    }
-  }, [apiBase])
+  const chat = useChat()
+  const { ready, status, statusError, selectedModel } = chat
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ block: 'nearest' })
@@ -180,22 +26,6 @@ export default function ChatWidget({ apiBase }: ChatWidgetProps) {
   useEffect(() => {
     if (open) chat.markSeen()
   }, [open, chat.markSeen])
-
-  // A model saved from a previous session may no longer be configured -
-  // fall back to Auto rather than silently sending an unknown model name.
-  useEffect(() => {
-    if (!status || selectedModel === 'auto') return
-    if (!(status.available_models ?? []).includes(selectedModel)) setSelectedModel('auto')
-  }, [status, selectedModel])
-
-  const selectModel = (model: string) => {
-    setSelectedModel(model)
-    try {
-      window.localStorage.setItem(MODEL_STORAGE_KEY, model)
-    } catch {
-      // ignore - per-device convenience only
-    }
-  }
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
@@ -211,24 +41,6 @@ export default function ChatWidget({ apiBase }: ChatWidgetProps) {
     const next = window.prompt('Rename chat', currentSession?.title ?? '')
     if (next == null || !next.trim() || next.trim() === currentSession?.title) return
     await chat.renameCurrentSession(next.trim())
-  }
-
-  const approveProposal = async (messageId: number, proposal: NonNullable<ReturnType<typeof proposalForMessage>>) => {
-    setProposalBusyId(messageId)
-    try {
-      const result = await runProposalAction(apiBase, proposal.handler, proposal.fields)
-      setProposalResults((current) => ({
-        ...current,
-        [messageId]: { approved: true, detail: proposalResultDetail(result) },
-      }))
-    } catch (reason) {
-      setProposalResults((current) => ({
-        ...current,
-        [messageId]: { approved: false, detail: reason instanceof Error ? reason.message : 'Action failed' },
-      }))
-    } finally {
-      setProposalBusyId(null)
-    }
   }
 
   return (
@@ -252,7 +64,7 @@ export default function ChatWidget({ apiBase }: ChatWidgetProps) {
           {statusError ? (
             <div className="chatState">
               <p>{statusError}</p>
-              <button type="button" onClick={() => void refreshStatus()}>Retry</button>
+              <button type="button" onClick={() => void chat.refreshStatus()}>Retry</button>
             </div>
           ) : null}
           {status && !status.enabled ? (
@@ -265,7 +77,7 @@ export default function ChatWidget({ apiBase }: ChatWidgetProps) {
             <div className="chatState">
               <strong>Ollama is not connected</strong>
               <p>Start Ollama and make sure {status.model} is available.</p>
-              <button type="button" onClick={() => void refreshStatus()}>Check again</button>
+              <button type="button" onClick={() => void chat.refreshStatus()}>Check again</button>
             </div>
           ) : null}
 
@@ -310,7 +122,7 @@ export default function ChatWidget({ apiBase }: ChatWidgetProps) {
                     <select
                       aria-label="Chat model"
                       value={selectedModel}
-                      onChange={(event) => selectModel(event.target.value)}
+                      onChange={(event) => chat.selectModel(event.target.value)}
                       disabled={chat.busy}
                       title="Auto picks the primary model and falls back automatically if it's unavailable"
                     >
@@ -332,37 +144,26 @@ export default function ChatWidget({ apiBase }: ChatWidgetProps) {
                 {chat.messages.map((message) => {
                   const proposal = proposalForMessage(message)
                   if (proposal) {
-                    const result = proposalResults[message.id]
                     return (
-                      <div key={message.id} className="chatProposal">
-                        <strong>Confirm action</strong>
-                        <dl>
-                          {proposal.handler.summary(proposal.fields).map(([label, value]) => (
-                            <div key={label}><dt>{label}</dt><dd>{value || '-'}</dd></div>
-                          ))}
-                        </dl>
-                        {result === 'cancelled' ? <p>Cancelled. No changes were made.</p> : null}
-                        {result && result !== 'cancelled' ? (
-                          <p className={result.approved ? '' : 'chatError'}>{result.detail}</p>
-                        ) : null}
-                        {!result ? (
-                          <div className="chatProposalActions">
-                            <button
-                              type="button"
-                              onClick={() => void approveProposal(message.id, proposal)}
-                              disabled={proposalBusyId != null}
-                            >
-                              {proposalBusyId === message.id ? 'Working...' : proposal.handler.confirmLabel(proposal.fields)}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setProposalResults((current) => ({ ...current, [message.id]: 'cancelled' }))}
-                              disabled={proposalBusyId != null}
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        ) : null}
+                      <ProposalCard
+                        key={message.id}
+                        handler={proposal.handler}
+                        fields={proposal.fields}
+                        result={chat.proposalResults[message.id]}
+                        busy={chat.proposalBusyId === message.id}
+                        disabled={chat.proposalBusyId != null}
+                        onApprove={() => void chat.approveProposal(message.id, proposal)}
+                        onCancel={() => chat.cancelProposal(message.id)}
+                      />
+                    )
+                  }
+                  // The second filter. visibleMessages keeps render messages;
+                  // without this they still vanish here.
+                  const rendered = renderForMessage(message)
+                  if (rendered) {
+                    return (
+                      <div key={message.id} className="chatBubble assistant">
+                        <CandidateTableCompact data={rendered.data} />
                       </div>
                     )
                   }
@@ -372,6 +173,10 @@ export default function ChatWidget({ apiBase }: ChatWidgetProps) {
                       {message.content
                         ? renderMarkdownLite(message.content)
                         : chat.busy && message.role === 'assistant' ? 'Thinking...' : ''}
+                      <SentAttachmentChips
+                        apiBase={chat.apiBase}
+                        attachments={chat.attachments.filter((item) => item.message_id === message.id)}
+                      />
                     </div>
                   )
                 })}

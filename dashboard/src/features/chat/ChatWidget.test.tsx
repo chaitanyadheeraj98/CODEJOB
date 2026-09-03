@@ -3,8 +3,17 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import ChatProvider from './ChatProvider'
 import ChatWidget from './ChatWidget'
 import { consumeSseStream } from './api'
+
+// ChatWidget reads its session, status, model, and proposal state from
+// ChatProvider, so every mount needs one. The provider issues exactly the
+// requests the widget used to, which is why the fetch stubs below are
+// unchanged from before the hoist.
+const renderWithChat = (node: React.ReactNode) => (
+  <ChatProvider apiBase="http://localhost:8000">{node}</ChatProvider>
+)
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 // jsdom doesn't implement scrollIntoView; ChatWidget calls it when new messages arrive.
@@ -37,7 +46,7 @@ describe('ChatWidget', () => {
     document.body.appendChild(container)
     root = createRoot(container)
     await act(async () => {
-      root?.render(<ChatWidget apiBase="http://localhost:8000" />)
+      root?.render(renderWithChat(<ChatWidget />))
       await new Promise((resolve) => window.setTimeout(resolve, 0))
     })
     await act(async () => {
@@ -80,7 +89,7 @@ describe('ChatWidget', () => {
     document.body.appendChild(container)
     root = createRoot(container)
     await act(async () => {
-      root?.render(<ChatWidget apiBase="http://localhost:8000" />)
+      root?.render(renderWithChat(<ChatWidget />))
       for (let tick = 0; tick < 4; tick += 1) await new Promise((resolve) => window.setTimeout(resolve, 0))
     })
     await act(async () => {
@@ -94,6 +103,62 @@ describe('ChatWidget', () => {
     expect(window.prompt).toHaveBeenCalledWith('Rename chat', 'Old title')
     const options = container.querySelectorAll('option')
     expect(Array.from(options).map((option) => option.textContent)).toContain('Gmail Integration Testing')
+  })
+
+  // The same stored message the Assistant page renders interactively. Both
+  // surfaces must show something, or a shared session has blank spots depending
+  // on where it is opened.
+  it('renders a stored candidate table read-only', async () => {
+    const session = { id: 1, title: 'Matches', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' }
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/chat/status')) {
+        return new Response(JSON.stringify({
+          enabled: true,
+          ollama_running: true,
+          ollama_last_error: null,
+          ollama_last_success_at: null,
+          chat_last_error: null,
+          mcp_status: 'ok',
+          model: 'gemma4:31b-cloud',
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      if (url.endsWith('/chat/sessions')) {
+        return new Response(JSON.stringify([session]), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      return new Response(JSON.stringify({
+        ...session,
+        messages: [{
+          id: 5,
+          role: 'tool',
+          tool_name: 'render_candidate_table',
+          content: JSON.stringify({
+            action: 'render_candidate_table',
+            title: 'Top matches',
+            columns: ['role', 'ats_score', 'state'],
+            rows: [{ candidate_id: 11, record_id: 'a', role: 'Backend Engineer', ats_score: 61.5, state: 'needs_review' }],
+            dropped: [],
+            truncated: false,
+          }),
+          created_at: '2026-01-01T00:00:01Z',
+        }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }))
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+    await act(async () => {
+      root?.render(renderWithChat(<ChatWidget />))
+      for (let tick = 0; tick < 4; tick += 1) await new Promise((resolve) => window.setTimeout(resolve, 0))
+    })
+    await act(async () => {
+      container?.querySelector<HTMLButtonElement>('[aria-label="Open CodeJob assistant"]')?.click()
+    })
+
+    expect(container.textContent).toContain('Top matches')
+    expect(container.textContent).toContain('Backend Engineer')
+    expect(container.querySelectorAll('.chatMessages input[type="checkbox"]')).toHaveLength(0)
+    expect(container.querySelectorAll('.chatMessages table')).toHaveLength(1)
   })
 
   it('parses SSE events split across arbitrary response chunks', async () => {
@@ -191,7 +256,7 @@ describe('ChatWidget', () => {
     document.body.appendChild(container)
     root = createRoot(container)
     await act(async () => {
-      root?.render(<ChatWidget apiBase="http://localhost:8000" />)
+      root?.render(renderWithChat(<ChatWidget />))
       for (let tick = 0; tick < 4; tick += 1) await new Promise((resolve) => window.setTimeout(resolve, 0))
     })
     await act(async () => {
@@ -252,7 +317,7 @@ describe('ChatWidget', () => {
     document.body.appendChild(container)
     root = createRoot(container)
     await act(async () => {
-      root?.render(<ChatWidget apiBase="http://localhost:8000" />)
+      root?.render(renderWithChat(<ChatWidget />))
       for (let tick = 0; tick < 4; tick += 1) await new Promise((resolve) => window.setTimeout(resolve, 0))
     })
     await act(async () => {
@@ -306,7 +371,7 @@ describe('ChatWidget', () => {
     document.body.appendChild(container)
     root = createRoot(container)
     await act(async () => {
-      root?.render(<ChatWidget apiBase="http://localhost:8000" />)
+      root?.render(renderWithChat(<ChatWidget />))
       for (let tick = 0; tick < 4; tick += 1) await new Promise((resolve) => window.setTimeout(resolve, 0))
     })
     await act(async () => {
@@ -322,7 +387,7 @@ describe('ChatWidget', () => {
 
   it('lists the configured models plus Auto, and sends the manually picked model with the message', async () => {
     const session = { id: 1, title: 'Models', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' }
-    const sentBodies: Array<{ text: string; model?: string }> = []
+    const sentBodies: Array<{ text: string; model?: string; attachment_ids?: number[] }> = []
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url.endsWith('/chat/status')) {
@@ -359,7 +424,7 @@ describe('ChatWidget', () => {
     document.body.appendChild(container)
     root = createRoot(container)
     await act(async () => {
-      root?.render(<ChatWidget apiBase="http://localhost:8000" />)
+      root?.render(renderWithChat(<ChatWidget />))
       for (let tick = 0; tick < 4; tick += 1) await new Promise((resolve) => window.setTimeout(resolve, 0))
     })
     await act(async () => {
@@ -389,6 +454,10 @@ describe('ChatWidget', () => {
       for (let tick = 0; tick < 4; tick += 1) await new Promise((resolve) => window.setTimeout(resolve, 0))
     })
 
-    expect(sentBodies).toEqual([{ text: 'Which model is this?', model: 'nemotron-3-nano:30b-cloud' }])
+    // attachment_ids is always present now, empty from the widget, which has no
+    // upload control by design.
+    expect(sentBodies).toEqual([
+      { text: 'Which model is this?', model: 'nemotron-3-nano:30b-cloud', attachment_ids: [] },
+    ])
   })
 })

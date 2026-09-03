@@ -9,6 +9,8 @@ from app.mcp_server.tools.email_actions import propose_send_email
 from app.mcp_server.tools.external_feed import list_external_opportunities
 from app.mcp_server.tools.help import get_app_help
 from app.mcp_server.tools.inbox import get_conversation, get_recruiter_replies, list_conversations
+from app.mcp_server.tools.chat_attachments import list_chat_attachments, read_chat_attachment
+from app.mcp_server.tools.render import render_candidate_table
 from app.mcp_server.tools.premium_numbers import (
     get_record_details,
     list_contact_numbers,
@@ -33,6 +35,7 @@ __all__ = [
     "get_recruiter_replies",
     "get_run_items",
     "get_settings_summary",
+    "list_chat_attachments",
     "list_contact_numbers",
     "list_conversations",
     "list_external_opportunities",
@@ -42,5 +45,7 @@ __all__ = [
     "propose_create_github_issue",
     "propose_create_premium_contact",
     "propose_send_email",
+    "read_chat_attachment",
+    "render_candidate_table",
     "search_candidates",
 ]
