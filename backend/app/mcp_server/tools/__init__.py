@@ -9,6 +9,7 @@ from app.mcp_server.tools.email_actions import propose_send_email
 from app.mcp_server.tools.external_feed import list_external_opportunities
 from app.mcp_server.tools.help import get_app_help
 from app.mcp_server.tools.inbox import get_conversation, get_recruiter_replies, list_conversations
+from app.mcp_server.tools.navigation import navigate_to_queue
 from app.mcp_server.tools.chat_attachments import list_chat_attachments, read_chat_attachment
 from app.mcp_server.tools.render import render_candidate_table
 from app.mcp_server.tools.premium_numbers import (
@@ -41,6 +42,7 @@ __all__ = [
     "list_external_opportunities",
     "list_recruiter_opportunities",
     "list_resumes",
+    "navigate_to_queue",
     "propose_bulk_approve_candidates",
     "propose_create_github_issue",
     "propose_create_premium_contact",

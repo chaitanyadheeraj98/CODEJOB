@@ -1,5 +1,6 @@
 import CandidateTable from './CandidateTable'
 import CandidateTableCompact from './CandidateTableCompact'
+import QueueLink from './QueueLink'
 import type { RenderedPayload } from './renderers'
 
 type Props = {
@@ -21,6 +22,8 @@ export default function RenderedMessage({ messageId, payload, surface }: Props) 
       return surface === 'page'
         ? <CandidateTable messageId={messageId} data={payload.data} />
         : <CandidateTableCompact data={payload.data} />
+    case 'queue_link':
+      return <QueueLink data={payload.data} surface={surface} />
     default:
       // Unreachable while the union is exhaustive, but a payload kind this
       // build does not know about must render nothing rather than throw - the

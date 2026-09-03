@@ -20,6 +20,7 @@ from app.mcp_server.tools import (
     list_external_opportunities,
     list_recruiter_opportunities,
     list_resumes,
+    navigate_to_queue,
     propose_bulk_approve_candidates,
     propose_create_github_issue,
     propose_create_premium_contact,
@@ -62,6 +63,9 @@ BASE_TOOLS = (
     get_resume,
     list_chat_attachments,
     read_chat_attachment,
+    # Read-only: it draws a button, and the user's click navigates. Registered
+    # in BASE_TOOLS so queues stay reachable with chat actions disabled.
+    navigate_to_queue,
 )
 
 CHAT_ACTION_TOOLS = (

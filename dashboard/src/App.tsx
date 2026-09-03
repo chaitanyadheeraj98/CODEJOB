@@ -24,6 +24,7 @@ import SelectionActionBar from './components/SelectionActionBar'
 import { filterSortRegistry, resolveRegistryEntry } from './filterSortRegistry'
 import { hasActiveTextSearch, narrowValuesToVisible, visibleFieldsFor } from './filterVisibility'
 import { focusedCandidateMissing } from './recordFocus'
+import { registryKeyFor, resolveQueueTarget, type QueueTarget } from './queueNavigation'
 import { buildUrlSearch, parseFilterValuesFromParams } from './useUrlSync'
 import { addCcEmail, removeCcEmail } from './ccEmails'
 import { addEmployerDomain, removeEmployerDomain } from './employerDomains'
@@ -5223,6 +5224,32 @@ function App() {
     setActivePage('needs_review')
   }
 
+  // Opens a work queue with filters already applied. Sets the filter state and
+  // then pushes exactly the URL buildUrlSearch would have produced anyway, so a
+  // reload restores the same queue - injecting a query parameter instead would
+  // be stripped within a macrotask, which is why focusCandidateRecord above
+  // works the way it does.
+  const navigateToQueue = (target: QueueTarget) => {
+    const page = target.page as ActivePage
+    if (!ACTIVE_PAGES.has(page)) return
+    const config = resolveRegistryEntry(filterSortRegistry[registryKeyFor(target)], { resumeAssets })
+    const resolved = resolveQueueTarget(target, config)
+    if (!resolved || !config) {
+      // A page with no filter registry (Run Queue) is still a legitimate
+      // destination; it just carries no filter state.
+      window.history.pushState(null, '', `${window.location.pathname}?page=${target.page}`)
+      setActivePage(page)
+      return
+    }
+    if (page === 'premium_numbers' && (target.tab === 'inventory' || target.tab === 'opportunities' || target.tab === 'recycle_bin')) setPremiumTab(target.tab)
+    if (page === 'application_tracking' && (target.tab === 'bookmarked' || target.tab === 'tracked')) setApplicationTrackingTab(target.tab)
+    if (page === 'resume_tracking' && (target.tab === 'resumes' || target.tab === 'submissions')) setResumeTrackingTab(target.tab)
+    setPageFilterValues((current) => ({ ...current, [resolved.registryKey]: resolved.values }))
+    const sort = pageSortValues[resolved.registryKey] ?? config.sortOptions[0]?.value ?? ''
+    window.history.pushState(null, '', `${window.location.pathname}?${buildUrlSearch(target.page, target.tab ?? null, sort, resolved.values, config, 0)}`)
+    setActivePage(page)
+  }
+
   const navigateFromEmailSearch = (hit: EmailSearchHit) => {
     if (hit.section === 'other') return
     setEmailSearchTarget(hit)
@@ -5365,7 +5392,7 @@ function App() {
     // useChat() - the Assistant sidebar badge reads it from a small consumer
     // rendered below this point instead. Children are left at their original
     // indentation to keep this a two-line diff rather than a 2,200-line reflow.
-    <ChatProvider apiBase={apiBase} onFocusCandidate={focusCandidateRecord}>
+    <ChatProvider apiBase={apiBase} onFocusCandidate={focusCandidateRecord} onNavigateToQueue={navigateToQueue}>
     <main className="gmailShell">
       <SidebarWithAssistantBadge
         running={running}

@@ -5021,3 +5021,46 @@ button.emailSearchResult:focus-visible {
   outline: 2px dashed var(--primary);
   outline-offset: -4px;
 }
+
+/* Chat queue links (v2 W2). Navigation is a button, not a proposal card: it
+   changes no data, so the user's click is the whole action. */
+.chatQueueLink {
+  border: 1px solid var(--border, #d8dee9);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 6px 0;
+  background: var(--surface, #fff);
+}
+
+.chatQueueLinkButton {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  font-weight: 600;
+  cursor: pointer;
+  border: 0;
+  background: none;
+  padding: 0;
+  color: inherit;
+}
+
+.chatQueueLinkButton:hover .chatQueueLinkTitle,
+.chatQueueLinkButton:focus-visible .chatQueueLinkTitle {
+  text-decoration: underline;
+}
+
+.chatQueueLinkTitle {
+  font-weight: 400;
+  font-size: 0.85em;
+  opacity: 0.75;
+}
+
+.chatQueueLinkFilters {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 0.85em;
+  opacity: 0.8;
+}

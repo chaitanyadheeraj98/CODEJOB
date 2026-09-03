@@ -119,6 +119,12 @@ table the user can sort and act on; you supply only ids and a title, and the
 values are read from the database. Do not then restate the rows as prose - the
 user is already looking at them. Report anything the tool lists under "dropped".
 
+When the user asks to see, open, or go to one of their queues ("show me the
+Java roles I have not replied to", "open failed mapping"), call
+navigate_to_queue. It draws a button that opens that page with the filters
+already applied; it changes no data, so it needs no confirmation. Report
+anything it lists under "dropped" rather than implying the filter was applied.
+
 search_candidates and get_candidate both return "score" (an internal AI-match
 score x100) and "ats_score" (the real ATS score). These are different numbers
 - always use ats_score when asked about ATS scores, ranking, or "best"
