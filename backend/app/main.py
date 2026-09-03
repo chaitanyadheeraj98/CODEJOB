@@ -9,7 +9,7 @@ from datetime import UTC, date, datetime, timedelta
 from dataclasses import dataclass
 from email.utils import parseaddr
 from pathlib import Path
-from typing import Mapping, TypedDict, TypeVar, cast
+from typing import Annotated, Mapping, TypedDict, TypeVar, cast
 import threading
 from zoneinfo import ZoneInfo
 
@@ -3882,7 +3882,11 @@ def list_productivity_events(
 @app.get("/analytics/trend", response_model=ProductivityTrendResponse)
 def productivity_trend(
     range: str = Query("current_day"),
-    bucket: str | None = Query(None),
+    # Annotated rather than `= Query(None)`: the plain default means calling
+    # this function directly in Python (as the timezone tests do) receives
+    # None and resolves the default bucket, instead of receiving a Query
+    # object that then fails validation as an unknown bucket.
+    bucket: Annotated[str | None, Query()] = None,
     db: Session = Depends(get_db),
 ) -> ProductivityTrendResponse:
     if range not in RANGE_OPTIONS:
