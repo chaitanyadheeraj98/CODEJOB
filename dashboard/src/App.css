@@ -5362,3 +5362,98 @@ button.chatRankedLabel:focus-visible {
   font-size: 0.9em;
   opacity: 0.85;
 }
+
+/* v3 — the confidence badge. Rendered from the payload field, never from the
+   model's prose, so a Possible link described in confident language still
+   carries a Possible badge. Confirmed is deliberately the only filled style:
+   an inference must never be mistakable for a recorded fact at a glance. */
+.chatConfidence {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  font-size: 0.72em;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  vertical-align: middle;
+}
+
+.chatConfidenceConfirmed {
+  background: var(--primary);
+  border-color: var(--primary-strong);
+  color: #ffffff;
+}
+
+.chatConfidenceLikely {
+  background: var(--surface);
+  border-color: var(--line-strong);
+  color: var(--ink);
+}
+
+.chatConfidencePossible {
+  background: var(--surface-soft);
+  border-style: dashed;
+  color: var(--muted);
+}
+
+.chatEvidencePanel {
+  margin-top: 8px;
+}
+
+.chatEvidenceDetails {
+  margin-top: 6px;
+  font-size: 0.8em;
+}
+
+.chatEvidenceDetails > summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.chatEvidenceList {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chatEvidenceRow {
+  display: grid;
+  grid-template-columns: minmax(88px, 1fr) 2fr minmax(96px, 1fr) 40px;
+  gap: 4px 10px;
+  padding: 3px 0;
+  border-top: 1px solid var(--line);
+}
+
+.chatEvidenceSignal {
+  font-weight: 600;
+}
+
+.chatEvidenceValues {
+  overflow-wrap: anywhere;
+}
+
+.chatEvidenceNormalized {
+  opacity: 0.7;
+}
+
+.chatEvidenceMatch,
+.chatEvidenceContribution {
+  color: var(--muted);
+}
+
+.chatEvidenceContribution {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Signals that could not be compared. Shown, never omitted: two claims resting
+   on very different evidence would otherwise look identical. */
+.chatEvidenceAbsent {
+  margin-top: 8px;
+  opacity: 0.75;
+}
+
+.chatEvidenceFooter {
+  margin: 8px 0 0;
+}

@@ -37,6 +37,32 @@ export type ProvenanceData = {
   assumptions: string[]
 }
 
+// One contributing signal behind an inferred claim. `match: 'absent'` means the
+// signal could not be compared on these records - it is not a mismatch, and the
+// evidence panel groups it separately so two claims resting on very different
+// evidence never display identically.
+export type EvidenceEntry = {
+  signal: string
+  left_value: string
+  right_value: string
+  normalized_to: string
+  match: 'exact' | 'alias' | 'semantic' | 'overlap' | 'absent'
+  weight: number
+  sub_score: number
+  source: string
+}
+
+export type ConfidenceLevel = 'confirmed' | 'likely' | 'possible'
+
+// Provenance for a *derived* claim: everything a measured number carries, plus
+// how sure, why, and on which of the two score populations it was calibrated.
+export type InferenceProvenanceData = ProvenanceData & {
+  confidence: ConfidenceLevel
+  score: number
+  evidence: EvidenceEntry[]
+  semantic_available: boolean
+}
+
 export type MetricCard = {
   label: string
   value: number | string
@@ -161,6 +187,57 @@ export function asProvenance(value: unknown): ProvenanceData | null {
     },
     filters: asStringMap(block.filters),
     assumptions: Array.isArray(block.assumptions) ? block.assumptions.filter((item): item is string => typeof item === 'string') : [],
+  }
+}
+
+const CONFIDENCE_LEVELS: readonly string[] = ['confirmed', 'likely', 'possible']
+const MATCH_KINDS: readonly string[] = ['exact', 'alias', 'semantic', 'overlap', 'absent']
+
+function asEvidence(value: unknown): EvidenceEntry[] | null {
+  if (!Array.isArray(value) || !value.length) return null
+  const entries: EvidenceEntry[] = []
+  for (const item of value) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return null
+    const raw = item as Record<string, unknown>
+    if (typeof raw.signal !== 'string' || !raw.signal) return null
+    if (typeof raw.match !== 'string' || !MATCH_KINDS.includes(raw.match)) return null
+    if (typeof raw.weight !== 'number' || !Number.isFinite(raw.weight)) return null
+    if (typeof raw.sub_score !== 'number' || !Number.isFinite(raw.sub_score)) return null
+    entries.push({
+      signal: raw.signal,
+      left_value: typeof raw.left_value === 'string' ? raw.left_value : '',
+      right_value: typeof raw.right_value === 'string' ? raw.right_value : '',
+      normalized_to: typeof raw.normalized_to === 'string' ? raw.normalized_to : '',
+      match: raw.match as EvidenceEntry['match'],
+      weight: raw.weight,
+      sub_score: raw.sub_score,
+      source: typeof raw.source === 'string' ? raw.source : '',
+    })
+  }
+  return entries
+}
+
+/**
+ * The inference gate, and the reason v3 extends the provenance block rather
+ * than sitting a second structure beside it. A claim nobody recorded renders
+ * NOTHING unless it arrives with a confidence level, a server-computed score,
+ * and at least one piece of evidence. A hedged claim is still a claim.
+ */
+export function asInferenceProvenance(value: unknown): InferenceProvenanceData | null {
+  const base = asProvenance(value)
+  if (!base) return null
+  const block = value as Record<string, unknown>
+  if (typeof block.confidence !== 'string' || !CONFIDENCE_LEVELS.includes(block.confidence)) return null
+  if (typeof block.score !== 'number' || !Number.isFinite(block.score)) return null
+  if (block.score < 0 || block.score > 1) return null
+  const evidence = asEvidence(block.evidence)
+  if (!evidence) return null
+  return {
+    ...base,
+    confidence: block.confidence as ConfidenceLevel,
+    score: block.score,
+    evidence,
+    semantic_available: block.semantic_available === true,
   }
 }
 

@@ -55,3 +55,94 @@ def block(
         "filters": dict(filters or {}),
         "assumptions": list(assumptions or []),
     }
+
+
+CONFIDENCE_LEVELS = ("confirmed", "likely", "possible")
+
+INFERENCE_ASSUMPTION = (
+    "This relationship was inferred from the records listed, not recorded by anyone."
+)
+
+MATCH_KINDS = ("exact", "alias", "semantic", "overlap", "absent")
+
+
+@dataclass(frozen=True)
+class EvidenceEntry:
+    """One contributing signal, decomposed.
+
+    The UI explanation is generated from a list of these; the model reads them,
+    it never composes them. `match="absent"` is a first-class value and means
+    the signal could not be compared - it is not a mismatch, and it must never
+    be scored as one (see relationship_scoring's renormalization).
+    """
+
+    signal: str
+    left_value: str
+    right_value: str
+    normalized_to: str
+    match: str
+    weight: float
+    sub_score: float
+    source: str
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "signal": self.signal,
+            "left_value": self.left_value,
+            "right_value": self.right_value,
+            "normalized_to": self.normalized_to,
+            "match": self.match,
+            "weight": round(float(self.weight), 4),
+            "sub_score": round(float(self.sub_score), 4),
+            "source": self.source,
+        }
+
+
+def inference_block(
+    *,
+    metric: str,
+    source: str,
+    row_count: int,
+    confidence: str,
+    score: float,
+    evidence: list[EvidenceEntry],
+    semantic_available: bool,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    filters: dict[str, str] | None = None,
+    assumptions: list[str] | None = None,
+) -> dict[str, object]:
+    """Provenance for a *derived* claim.
+
+    Everything block() carries, plus the three things an inference owes the
+    user: how sure, why, and on what basis. INFERENCE_ASSUMPTION is always the
+    first assumption - the user is told structurally that this is not a
+    recorded fact, rather than being told so in model prose that nothing checks.
+
+    Raises ValueError rather than emitting a claim that cannot be inspected: an
+    inference with no evidence must be impossible to construct, not merely
+    discouraged. The frontend drops such a payload too, but a payload that
+    reaches the client malformed has already been a bug for one hop.
+    """
+    if confidence not in CONFIDENCE_LEVELS:
+        raise ValueError(f"confidence must be one of {CONFIDENCE_LEVELS}, got {confidence!r}")
+    if not evidence:
+        raise ValueError("an inference with no evidence cannot be displayed")
+    numeric_score = float(score)
+    if not 0.0 <= numeric_score <= 1.0:
+        raise ValueError(f"score must be within [0.0, 1.0], got {numeric_score!r}")
+
+    payload = block(
+        metric=metric,
+        source=source,
+        row_count=row_count,
+        start=start,
+        end=end,
+        filters=filters,
+        assumptions=[INFERENCE_ASSUMPTION, *(assumptions or [])],
+    )
+    payload["confidence"] = confidence
+    payload["score"] = round(numeric_score, 4)
+    payload["evidence"] = [entry.as_dict() for entry in evidence]
+    payload["semantic_available"] = bool(semantic_available)
+    return payload
