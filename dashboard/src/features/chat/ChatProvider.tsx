@@ -114,7 +114,7 @@ export default function ChatProvider({ apiBase, onFocusCandidate, onNavigateToQu
       const result = await runProposalAction(apiBase, proposal.handler, proposal.fields)
       setProposalResults((current) => ({
         ...current,
-        [messageId]: { approved: true, detail: proposalResultDetail(result) },
+        [messageId]: { approved: true, detail: proposalResultDetail(result, proposal.fields) },
       }))
     } catch (reason) {
       setProposalResults((current) => ({

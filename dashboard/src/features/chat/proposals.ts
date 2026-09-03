@@ -18,7 +18,43 @@ function text(value: unknown): string {
   return value == null ? '' : String(value)
 }
 
+// Endpoints keyed by the action the tool chose. The server sends its own
+// endpoint too, but the client never routes to a server-supplied URL - that
+// would let a malformed payload aim a POST anywhere.
+const CANDIDATE_ACTION_ENDPOINTS: Record<string, string> = {
+  reject: '/candidates/reject-bulk',
+  track: '/candidates/track-bulk',
+  untrack: '/candidates/track-bulk',
+  regenerate: '/candidates/regenerate-bulk',
+  send_to_failed_mapping: '/candidates/send-to-failed-mapping-bulk',
+}
+
 export const PROPOSAL_HANDLERS: Record<string, ProposalHandler> = {
+  propose_candidate_action: {
+    endpoint: (fields) => CANDIDATE_ACTION_ENDPOINTS[String(fields.candidate_action)] ?? '',
+    method: 'POST',
+    buildBody: (fields) => {
+      const body: Record<string, unknown> = { ids: fields.candidate_ids }
+      if (text(fields.reason)) body.reason = fields.reason
+      if (typeof fields.tracked === 'boolean') body.tracked = fields.tracked
+      return body
+    },
+    confirmLabel: (fields) => `${text(fields.label) || 'Apply'} ${Number(fields.count ?? 0)}`,
+    summary: (fields) => [
+      ['Action', text(fields.label)],
+      ['Affected emails', String(Number(fields.count ?? 0))],
+      // Reversibility comes from a field the tool set, per the endpoint audit -
+      // never from the model's prose. This card is the last thing the user
+      // reads before a write.
+      ['Reversible', fields.reversible === true ? 'Yes' : 'No'],
+      ...(text(fields.reversible_detail) ? [['Detail', text(fields.reversible_detail)] as [string, string]] : []),
+      ...(Array.isArray(fields.roles) && fields.roles.length ? [['Roles', fields.roles.join(', ')] as [string, string]] : []),
+      ...(text(fields.reason) ? [['Reason', text(fields.reason)] as [string, string]] : []),
+      ...(Array.isArray(fields.dropped) && fields.dropped.length
+        ? [['Not included', `${fields.dropped.length} email(s) skipped`] as [string, string]]
+        : []),
+    ],
+  },
   propose_bulk_approve_candidates: {
     endpoint: '/candidates/approve-bulk',
     method: 'POST',
@@ -94,10 +130,14 @@ export function proposalForMessage(message: ChatMessage): { handler: ProposalHan
   }
 }
 
-export function proposalResultDetail(payload: Record<string, unknown>): string {
+export function proposalResultDetail(payload: Record<string, unknown>, fields: ProposalFields = {}): string {
   if (Array.isArray(payload.succeeded_ids)) {
     const failed = Array.isArray(payload.failed) ? payload.failed.length : 0
-    return `${payload.succeeded_ids.length} approved${failed ? `; ${failed} failed` : ''}.`
+    // Every bulk route returns this shape, so the verb has to come from the
+    // proposal rather than being hardcoded - a reject reporting "3 approved"
+    // is a report of the wrong action having happened.
+    const verb = text(fields.label).toLowerCase() || 'approved'
+    return `${payload.succeeded_ids.length} ${verb}${failed ? `; ${failed} failed` : ''}.`
   }
   if (payload.sent) return 'Email sent.'
   if (typeof payload.issue_number === 'number') return `Issue #${payload.issue_number} created.`

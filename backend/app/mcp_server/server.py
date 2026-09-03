@@ -25,6 +25,7 @@ from app.mcp_server.tools import (
     list_resumes,
     navigate_to_queue,
     propose_bulk_approve_candidates,
+    propose_candidate_action,
     propose_create_github_issue,
     propose_create_premium_contact,
     propose_send_email,
@@ -78,6 +79,7 @@ BASE_TOOLS = (
 
 CHAT_ACTION_TOOLS = (
     propose_bulk_approve_candidates,
+    propose_candidate_action,
     propose_create_premium_contact,
     propose_send_email,
 )
