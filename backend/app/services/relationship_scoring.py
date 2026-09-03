@@ -500,6 +500,11 @@ class CandidatePairs:
     pairs: list[tuple[int, int]]
     by_block: dict[str, int]
     capped_blocks: tuple[str, ...]
+    # Which block first produced each pair. The labeling set records it as
+    # `sampler`, so precision can later be attributed to a block - without it,
+    # a block contributing mostly false positives stays invisible in the
+    # metrics it distorts.
+    block_of: dict[tuple[int, int], str] = field(default_factory=dict)
 
     @property
     def assumptions(self) -> list[str]:
@@ -541,7 +546,7 @@ def candidate_pairs(
         )
     rows = query.order_by(RecruiterOpportunity.id.asc()).all()
 
-    seen: set[tuple[int, int]] = set()
+    seen: dict[tuple[int, int], str] = {}
     ordered: list[tuple[int, int]] = []
     by_block: dict[str, int] = {key: 0 for key in BLOCKING_KEYS}
     capped: list[str] = []
@@ -554,7 +559,7 @@ def candidate_pairs(
             return True
         if len(ordered) >= max_pairs:
             return False
-        seen.add(key)
+        seen[key] = block
         ordered.append(key)
         by_block[block] += 1
         return True
@@ -615,4 +620,6 @@ def candidate_pairs(
         if stop:
             break
 
-    return CandidatePairs(pairs=ordered, by_block=by_block, capped_blocks=tuple(capped))
+    return CandidatePairs(
+        pairs=ordered, by_block=by_block, capped_blocks=tuple(capped), block_of=dict(seen)
+    )

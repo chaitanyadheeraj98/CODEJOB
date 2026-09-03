@@ -1511,5 +1511,128 @@ class CandidateRecord(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
 
 
+class RelationshipLabel(Base):
+    """Ground truth, authored during a deliberate labeling session.
+
+    Kept separate from RelationshipJudgment on purpose. These are training data;
+    judgments are production feedback on claims the scorer already made. Mixing
+    them means calibrating against data the scorer influenced, and the resulting
+    precision figure would measure agreement with itself.
+    """
+
+    __tablename__ = "relationship_labels"
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_id",
+            "left_opportunity_id",
+            "right_opportunity_id",
+            name="ux_relationship_label_owner_pair",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    # Canonical ordering (left < right) is enforced at the service boundary.
+    # Without it the unique constraint permits both orderings, and one pair can
+    # be labeled twice with opposite verdicts.
+    left_opportunity_id: Mapped[int] = mapped_column(
+        ForeignKey("recruiter_opportunities.id", name="fk_relationship_label_left", ondelete="CASCADE"),
+        index=True,
+    )
+    right_opportunity_id: Mapped[int] = mapped_column(
+        ForeignKey("recruiter_opportunities.id", name="fk_relationship_label_right", ondelete="CASCADE"),
+        index=True,
+    )
+    # same_program | related_distinct | unrelated | unsure
+    verdict: Mapped[str] = mapped_column(String(20), index=True)
+    reason: Mapped[str] = mapped_column(Text, default="")
+    # Assigned at insert, never at evaluation time, so the held-out set cannot
+    # drift as labeling continues.
+    split: Mapped[str] = mapped_column(String(10), default="train", index=True)
+    labeler: Mapped[str] = mapped_column(String(100), default="")
+    # Which blocking key produced this pair. Without it, precision measured over
+    # the set cannot be attributed to a block, and a block contributing mostly
+    # false positives stays invisible.
+    sampler: Mapped[str] = mapped_column(String(40), default="", index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+
+
+class OpportunityCluster(Base):
+    """A set of opportunities the scorer believes belong together.
+
+    `status` defaults to "shadow": nothing is proposed until the Likely-band
+    precision bar has been measured. The default has to be the safe state,
+    because a default is what a forgotten code path gets.
+    """
+
+    __tablename__ = "opportunity_clusters"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    label: Mapped[str] = mapped_column(String(255), default="")
+    inferred_end_client: Mapped[str] = mapped_column(String(255), default="")
+    inferred_partner: Mapped[str] = mapped_column(String(255), default="")
+    inferred_domain: Mapped[str] = mapped_column(String(255), default="")
+    confidence: Mapped[str] = mapped_column(String(20), default="possible", index=True)
+    # shadow | proposed | confirmed | rejected
+    status: Mapped[str] = mapped_column(String(20), default="shadow", index=True)
+    # Which scorer produced it. A re-scoring must leave old clusters
+    # identifiable, or a confirmed judgment silently attaches to a new claim.
+    method: Mapped[str] = mapped_column(String(40), default="v3_weighted_v1")
+    # Which calibration population this cluster belongs to. A band derived from
+    # the keyword-only population does not mean the same thing as one derived
+    # from the semantic population, and the two must never be pooled.
+    semantic_available: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    # Hash of the member set, so a rejected set can be suppressed on the next
+    # pass without querying an unindexable Text column.
+    member_key: Mapped[str] = mapped_column(String(64), default="", index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
+
+
+class OpportunityClusterMember(Base):
+    __tablename__ = "opportunity_cluster_members"
+    __table_args__ = (
+        UniqueConstraint("cluster_id", "opportunity_id", name="ux_cluster_member"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    cluster_id: Mapped[str] = mapped_column(
+        ForeignKey("opportunity_clusters.id", name="fk_cluster_member_cluster", ondelete="CASCADE"),
+        index=True,
+    )
+    opportunity_id: Mapped[int] = mapped_column(
+        ForeignKey("recruiter_opportunities.id", name="fk_cluster_member_opportunity", ondelete="CASCADE"),
+        index=True,
+    )
+    confidence: Mapped[str] = mapped_column(String(20), default="possible", index=True)
+    score: Mapped[float] = mapped_column(Float, default=0.0)
+    # Text, and never indexed.
+    evidence_json: Mapped[str] = mapped_column(Text, default="[]")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+
+
+class RelationshipJudgment(Base):
+    """Production feedback on a claim the scorer made. Never training data."""
+
+    __tablename__ = "relationship_judgments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    # cluster | cluster_member
+    subject_type: Mapped[str] = mapped_column(String(40), index=True)
+    subject_id: Mapped[str] = mapped_column(String(64), index=True)
+    # confirmed | rejected | corrected
+    verdict: Mapped[str] = mapped_column(String(20), index=True)
+    correction_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    note: Mapped[str] = mapped_column(Text, default="")
+    # A hash of the rejected member set: fixed width and indexable, unlike a
+    # query over correction_json, which is Text and must never be indexed.
+    suppression_key: Mapped[str] = mapped_column(String(64), default="", index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+
+
+
 # Register external feed models on shared Base metadata for test create_all flows.
 from app.external_feeds.models import ExternalFeedSource, ExternalOpportunity, ExternalScrapeRun  # noqa: E402,F401
