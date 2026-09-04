@@ -677,7 +677,14 @@ class MCPServerToolTests(unittest.TestCase):
             no_number_email_id = no_number_email.id
 
         result = list_contact_numbers(email_id=no_number_email_id)
-        self.assertEqual(result, {"count": 0, "numbers": []})
+        self.assertEqual(result["count"], 0)
+        self.assertEqual(result["numbers"], [])
+        # `unavailable_fields` names contact columns no answer may rest on -
+        # distinct from this test's "no number exists", which is an empty result.
+        self.assertEqual(
+            {entry["field"] for entry in result["unavailable_fields"]},
+            {"owner_name", "recruiter_verification_level", "is_favorite"},
+        )
 
     def test_list_contact_numbers_unknown_category_returns_error(self) -> None:
         result = list_contact_numbers(category="bogus")
@@ -697,7 +704,13 @@ class MCPServerToolTests(unittest.TestCase):
         self.assertEqual(by_email["numbers"][0]["name"], "Pat Recruiter")
 
         no_match = list_contact_numbers(category="recruiter", name="Shraddha Patel")
-        self.assertEqual(no_match, {"count": 0, "numbers": []})
+        self.assertEqual(no_match["count"], 0)
+        self.assertEqual(no_match["numbers"], [])
+        # W13: the evidence block travels even when nothing matched. "No
+        # contacts" and "the field that would have matched is empty" look
+        # identical without it.
+        self.assertIn("field_coverage", no_match)
+        self.assertEqual(no_match["population"], "active")
 
     def test_list_recruiter_opportunities_filters_by_status_and_rejects_unknown_status(self) -> None:
         closed = list_recruiter_opportunities(status="Closed")

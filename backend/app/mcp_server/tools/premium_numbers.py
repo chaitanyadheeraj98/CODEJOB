@@ -329,9 +329,75 @@ def list_contact_numbers(category: str = "", email_id: int = 0, name: str = "", 
             rows.extend(loader(db, email_id, recruiter_email_hint, name_search))
         rows.sort(key=lambda row: row["updated_at"], reverse=True)
         capped = max(1, min(limit, 25))
-        return {"count": len(rows), "numbers": rows[:capped]}
+        return {
+            "count": len(rows),
+            "numbers": rows[:capped],
+            **_contact_evidence_block(db),
+        }
     finally:
         db.close()
+
+
+# W13. Contact fields the caller sees a value for, and may therefore describe.
+# Coverage counts live contacts only - the Recycle Bin is a working queue, not
+# an archive of the false, and a binned recruiter must not appear in a
+# recommendation about who to contact now. History is available on request; it
+# is not the default population.
+_CONTACT_REPORTED_FIELDS = [
+    "company",
+    "recruiter_name",
+    "recruiter_email",
+    "normalized_phone_number",
+    "seen_count",
+    "designation",
+]
+
+# Reads as fully populated and is not. See `field_coverage.CONTACT_FIELDS`.
+_CONTACT_WITHHELD_FIELDS = ["owner_name", "recruiter_verification_level", "is_favorite"]
+
+
+def _contact_evidence_block(db) -> dict[str, object]:
+    """Coverage, refusals and alias warnings that travel with contact rows."""
+    block: dict[str, object] = {
+        "field_coverage": field_coverage.contact_coverage_for(
+            db, _CONTACT_REPORTED_FIELDS, owner_id=settings.owner_id
+        ),
+        "population": field_coverage.SCOPE_ACTIVE,
+        "coverage_note": (
+            "Counts active contacts only; Recycle Bin contacts are excluded. Say so "
+            "if the answer implies all-time activity. Percentages are corpus-wide "
+            "over that population, not over these rows, and a placeholder such as "
+            "\"Unknown\" is counted as missing rather than as an answer."
+        ),
+    }
+    refusals = [
+        result
+        for result in (
+            field_coverage.contact_unavailable_result(name)
+            for name in _CONTACT_WITHHELD_FIELDS
+        )
+        if result is not None
+    ]
+    if refusals:
+        block["unavailable_fields"] = refusals
+    aliases = [
+        note
+        for note in (
+            field_coverage.unconfirmed_alias_note(
+                db,
+                name,
+                owner_id=settings.owner_id,
+                policies=field_coverage.CONTACT_FIELDS,
+                model=PremiumNumberContact,
+                active_only=True,
+            )
+            for name in _CONTACT_REPORTED_FIELDS
+        )
+        if note is not None
+    ]
+    if aliases:
+        block["unconfirmed_aliases"] = aliases
+    return block
 
 
 def list_recruiter_opportunities(status: str = "", source_email_id: int = 0, limit: int = 10) -> dict[str, object]:

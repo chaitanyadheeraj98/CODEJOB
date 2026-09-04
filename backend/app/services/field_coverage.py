@@ -26,10 +26,49 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field as dataclass_field
 
-from sqlalchemy import func
+from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
 from app.models import RecruiterOpportunity
+
+# W14. A placeholder is not an answer, and no schema can tell the two apart: a
+# NOT NULL text column with a default is a machine for producing them. Counting
+# them as populated overstated four fields in `premium_number_contacts` alone -
+# `owner_name` reads 100% and is the literal "Unknown" on 434 of 497 rows.
+#
+# This is the fourth appearance of one defect (`temp157.md` §7.5.3), which is why
+# it is fixed in the measure rather than at each call site. Compared lowercased
+# and trimmed, so "Unknown", "unknown" and " N/A " all count as missing.
+PLACEHOLDER_VALUES = frozenset(
+    {"", "unknown", "n/a", "na", "none", "not specified", "unspecified", "tbd", "-", "--"}
+)
+
+
+def is_placeholder(value: str | None) -> bool:
+    """True when a stored string carries no information."""
+    return (value or "").strip().lower() in PLACEHOLDER_VALUES
+
+
+def _is_text(column) -> bool:
+    try:
+        return column.type.python_type is str
+    except (AttributeError, NotImplementedError):
+        return False
+
+
+def populated_filter(column):
+    """The predicate for "this row actually answered".
+
+    Non-text columns keep the plain NOT NULL test - a counter of 0 is a
+    measurement, not a placeholder, and `lower(trim(...))` on an integer is an
+    error rather than a nicety.
+    """
+    if not _is_text(column):
+        return column.isnot(None)
+    return and_(
+        column.isnot(None),
+        func.lower(func.trim(column)).notin_(sorted(PLACEHOLDER_VALUES)),
+    )
 
 # `temp162.md` §12.2. USABLE may carry a claim; NEEDS_NORMALIZATION may, with the
 # caveat that its values are not yet reconciled; UNAVAILABLE may not, at all.
@@ -140,7 +179,7 @@ def coverage(db: Session, field: str, *, owner_id: str) -> Coverage:
         RecruiterOpportunity.owner_id == owner_id
     )
     total = base.scalar() or 0
-    populated = base.filter(column.isnot(None), column != "").scalar() or 0
+    populated = base.filter(populated_filter(column)).scalar() or 0
     return Coverage(
         field=field,
         label=policy.label,
@@ -169,7 +208,7 @@ def subset_coverage(rows: list, field: str) -> dict[str, object]:
     as the reliability of the field.
     """
     policy = OPPORTUNITY_FIELDS[field]
-    populated = sum(1 for row in rows if (getattr(row, policy.column, "") or "").strip())
+    populated = sum(1 for row in rows if not is_placeholder(getattr(row, policy.column, "")))
     total = len(rows)
     return {
         "field": field,
@@ -210,30 +249,45 @@ def unavailable_result(field: str) -> dict[str, object] | None:
     }
 
 
-def unconfirmed_alias_note(db: Session, field: str, *, owner_id: str) -> dict[str, object] | None:
+def unconfirmed_alias_note(
+    db: Session,
+    field: str,
+    *,
+    owner_id: str,
+    policies: dict[str, FieldPolicy] | None = None,
+    model=None,
+    active_only: bool = False,
+) -> dict[str, object] | None:
     """Values that are probably the same entity but have no approved alias.
 
     Reported so the model shows the counts separately and names the link as
     unconfirmed. Merging them here would be the alias table's job, and it does
     not exist yet - guessing at it in a tool response is how a wrong merge
     becomes invisible.
+
+    Defaults to opportunities; pass `policies` and `model` for another table.
+    `active_only` applies the soft-delete filter contacts default to, so a
+    warning about the live population is not counted over the Recycle Bin.
     """
-    policy = OPPORTUNITY_FIELDS.get(field)
+    table = model if model is not None else RecruiterOpportunity
+    lookup = policies if policies is not None else OPPORTUNITY_FIELDS
+    policy = lookup.get(field)
     if policy is None or not policy.unconfirmed_aliases:
         return None
-    column = getattr(RecruiterOpportunity, policy.column)
+    column = getattr(table, policy.column)
     groups: list[dict[str, object]] = []
     for group in policy.unconfirmed_aliases:
-        counts = {
-            value: (
+        def _count(value: str) -> int:
+            query = (
                 db.query(func.count())
-                .select_from(RecruiterOpportunity)
-                .filter(RecruiterOpportunity.owner_id == owner_id, column == value)
-                .scalar()
-                or 0
+                .select_from(table)
+                .filter(table.owner_id == owner_id, column == value)
             )
-            for value in group
-        }
+            if active_only and hasattr(table, "deleted_at"):
+                query = query.filter(table.deleted_at.is_(None))
+            return query.scalar() or 0
+
+        counts = {value: _count(value) for value in group}
         if sum(counts.values()) > 0 and sum(1 for n in counts.values() if n) > 1:
             groups.append({"values": counts, "status": "unconfirmed"})
     if not groups:
@@ -266,7 +320,7 @@ def column_coverage(db: Session, model, column_name: str, *, owner_id: str, labe
     column = getattr(model, column_name)
     base = db.query(func.count()).select_from(model).filter(model.owner_id == owner_id)
     total = base.scalar() or 0
-    populated = base.filter(column.isnot(None), column != "").scalar() or 0
+    populated = base.filter(populated_filter(column)).scalar() or 0
     return {
         "field": f"{model.__tablename__}.{column_name}",
         "label": label or column_name.replace("_", " ").title(),
@@ -308,5 +362,162 @@ def aggregate_refusal(fields: list[str], *, subject: str) -> dict[str, object] |
             + " ".join(policy.reason for policy in policies)
             + " Say the aggregate cannot be built and why. Do not describe the "
             "absence as a finding, and do not silently swap in another field."
+        ),
+    }
+
+
+# --- Contacts (W13) -------------------------------------------------------
+#
+# `premium_number_contacts` was outside the coverage contract entirely, so
+# recruiter answers carried no coverage, no caveats and no alias warnings. The
+# classifications below are the `temp162.md` §15.1 buckets, measured after the
+# W14 placeholder rule rather than before it - which is the whole reason §15.0
+# had to correct an earlier reading of this table.
+
+CONTACT_FIELDS: dict[str, FieldPolicy] = {
+    "company": FieldPolicy(
+        "company",
+        "Company",
+        NEEDS_NORMALIZATION,
+        # Four surface forms of one firm live in this column:
+        # "RPA Technology Inc", "RPA TECHNOLOGY INC", "RPATECHNOLOGY INC",
+        # "Rpatechnologyinc". Case folding alone collapses 336 forms to 321;
+        # "Horizonsoftech" and "Horizons of Tech" are 33 rows and need real
+        # aliasing, which is W1-W3's job and not this module's.
+        unconfirmed_aliases=(
+            ("RPA Technology Inc", "RPA TECHNOLOGY INC", "RPATECHNOLOGY INC", "Rpatechnologyinc"),
+            ("Horizonsoftech", "Horizons of Tech"),
+            ("Vdart Inc", "VDART Inc"),
+        ),
+    ),
+    "recruiter_name": FieldPolicy("recruiter_name", "Recruiter name", USABLE),
+    "recruiter_email": FieldPolicy("recruiter_email", "Recruiter email", USABLE),
+    "recruiter_email_domain": FieldPolicy("recruiter_email_domain", "Email domain", USABLE),
+    "normalized_phone_number": FieldPolicy("normalized_phone_number", "Phone", USABLE),
+    "display_phone_number": FieldPolicy("display_phone_number", "Phone", USABLE),
+    # A counter, not a text field - genuinely 100%, max 77, mean 1.89.
+    "seen_count": FieldPolicy("seen_count", "Times seen", USABLE),
+    "designation": FieldPolicy(
+        "designation",
+        "Designation",
+        NEEDS_NORMALIZATION,
+        # 54.9% once "Unknown" stops counting. The 91 real values collapse to
+        # about a dozen: Recruiter / Technical Recruiter / Sr. Technical
+        # Recruiter / Senior Technical Recruiter are three spellings of one job.
+    ),
+    "owner_name": FieldPolicy(
+        "owner_name",
+        "Phone owner",
+        UNAVAILABLE,
+        reason=(
+            "Recorded as \"Unknown\" on 434 of 497 live contacts. It reads as fully "
+            "populated and carries information on 12.7% of them."
+        ),
+    ),
+    "recruiter_verification_level": FieldPolicy(
+        "recruiter_verification_level",
+        "Verification",
+        UNAVAILABLE,
+        reason=(
+            "Present on every contact, but only 19 of 497 are verified. The field "
+            "is complete; the verification is not, so it cannot separate a trusted "
+            "recruiter from an unchecked one."
+        ),
+    ),
+    "linkedin_url": FieldPolicy(
+        "linkedin_url", "LinkedIn", UNAVAILABLE,
+        reason="Recorded on 11% of contacts - too few to survey.",
+    ),
+    "do_not_work_again": FieldPolicy(
+        "do_not_work_again", "Do not work again", UNAVAILABLE,
+        reason=(
+            "Flagged on one contact, and no reason is recorded on any. The flag "
+            "exists; the practice has not started. Absence is not endorsement."
+        ),
+    ),
+    "is_favorite": FieldPolicy(
+        "is_favorite", "Favourite", UNAVAILABLE,
+        reason="Never used - zero contacts are marked.",
+    ),
+}
+
+# The Recycle Bin is a working queue, not an archive of the false, so deleted
+# contacts are excluded by default and reachable on request rather than dropped.
+# A recruiter who was binned still posted the requirements they posted; what
+# they cannot do is appear in a recommendation about who to contact now.
+SCOPE_ACTIVE = "active"
+SCOPE_ALL_TIME = "all_time"
+CONTACT_SCOPES = (SCOPE_ACTIVE, SCOPE_ALL_TIME)
+
+
+def contact_coverage(
+    db: Session,
+    field: str,
+    *,
+    owner_id: str,
+    scope: str = SCOPE_ACTIVE,
+) -> Coverage:
+    """Corpus coverage for one contact field, placeholder-aware.
+
+    `scope="active"` counts live contacts only - the default population for
+    rankings, recommendations and company counts. `scope="all_time"` includes
+    the 255 soft-deleted rows and exists for questions explicitly about history.
+    """
+    from app.models import PremiumNumberContact
+
+    if scope not in CONTACT_SCOPES:
+        raise ValueError(f"scope must be one of {CONTACT_SCOPES}, got {scope!r}")
+    policy = CONTACT_FIELDS[field]
+    column = getattr(PremiumNumberContact, policy.column)
+    base = db.query(func.count()).select_from(PremiumNumberContact).filter(
+        PremiumNumberContact.owner_id == owner_id
+    )
+    if scope == SCOPE_ACTIVE:
+        base = base.filter(PremiumNumberContact.deleted_at.is_(None))
+    total = base.scalar() or 0
+    populated = base.filter(populated_filter(column)).scalar() or 0
+    return Coverage(
+        field=field,
+        label=policy.label,
+        classification=policy.classification,
+        populated=populated,
+        total=total,
+        reason=policy.reason,
+    )
+
+
+def contact_coverage_for(
+    db: Session,
+    fields: list[str],
+    *,
+    owner_id: str,
+    scope: str = SCOPE_ACTIVE,
+) -> dict[str, dict[str, object]]:
+    """Contact coverage for several fields, each tagged with the scope it counted."""
+    result: dict[str, dict[str, object]] = {}
+    for name in fields:
+        if name not in CONTACT_FIELDS:
+            continue
+        payload = contact_coverage(db, name, owner_id=owner_id, scope=scope).as_dict()
+        payload["population"] = scope
+        result[name] = payload
+    return result
+
+
+def contact_unavailable_result(field: str) -> dict[str, object] | None:
+    """The refusal payload for a contact field no answer may rest on."""
+    policy = CONTACT_FIELDS.get(field)
+    if policy is None or policy.classification != UNAVAILABLE:
+        return None
+    return {
+        "unavailable": True,
+        "field": field,
+        "label": policy.label,
+        "reason": policy.reason,
+        "may_answer_from_this_field": False,
+        "instruction": (
+            f"Decline this question. Say that {policy.label.lower()} is not recorded "
+            "reliably enough to answer from, and say what is missing. Do not report "
+            "the absence as a finding about the world."
         ),
     }

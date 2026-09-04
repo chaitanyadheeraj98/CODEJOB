@@ -225,3 +225,116 @@ def test_provenance_block_carries_coverage() -> None:
     # Absent coverage is an empty list, never a missing key - the frontend
     # validates provenance shape and a missing key would fail the render.
     assert provenance.block(metric="m", source="s", row_count=0)["coverage"] == []
+
+
+# --- W14: placeholders are not values -------------------------------------
+
+
+def test_placeholder_strings_count_as_missing(db: Session) -> None:
+    """The fourth appearance of one defect, fixed in the measure.
+
+    `premium_number_contacts.owner_name` reads 100% populated and is the literal
+    "Unknown" on 434 of 497 live rows. Counting non-empty strings overstated four
+    fields in that table alone.
+    """
+    for value in ("Unknown", "unknown", "  N/A  ", "not specified", "TBD", "-", ""):
+        assert field_coverage.is_placeholder(value)
+    for value in ("Capgemini", "Recruiter", "Unknown Systems Inc", "NA Solutions"):
+        assert not field_coverage.is_placeholder(value)
+
+
+def test_placeholder_is_excluded_from_corpus_coverage(db: Session) -> None:
+    db.add_all([
+        RecruiterOpportunity(
+            owner_id=OWNER_ID, recruiter_number_id=1, gmail_message_id="p1",
+            job_title="A", end_client="Unknown", status="New",
+        ),
+        RecruiterOpportunity(
+            owner_id=OWNER_ID, recruiter_number_id=1, gmail_message_id="p2",
+            job_title="B", end_client="N/A", status="New",
+        ),
+    ])
+    db.commit()
+    # Two more rows, both placeholders: the total grows, the populated count
+    # does not. A field does not become better answered by being filled in with
+    # the word "Unknown".
+    result = field_coverage.coverage(db, "end_client", owner_id=OWNER_ID)
+    assert (result.populated, result.total) == (2, 12)
+
+
+def test_a_counter_of_zero_is_a_measurement_not_a_placeholder(db: Session) -> None:
+    """Non-text columns keep the plain NOT NULL test - `lower(trim(...))` on an
+    integer is an error, and 0 is an answer."""
+    from app.models import PremiumNumberContact
+
+    assert field_coverage.populated_filter(PremiumNumberContact.seen_count) is not None
+    assert not field_coverage._is_text(PremiumNumberContact.seen_count)
+    assert field_coverage._is_text(PremiumNumberContact.company)
+
+
+# --- W13: contacts under the coverage contract ----------------------------
+
+
+def _contact(db: Session, **overrides) -> None:
+    from app.models import PremiumNumberContact
+
+    values = {
+        "owner_id": OWNER_ID, "normalized_phone_number": f"1555000{overrides.pop('n', 0)}",
+        "display_phone_number": "(555) 000-0000", "recruiter_name": "Jane Recruiter",
+        "company": "Acme Staffing", "designation": "Technical Recruiter",
+        "is_recruiter": True, "seen_count": 1,
+    }
+    values.update(overrides)
+    db.add(PremiumNumberContact(**values))
+
+
+def test_contact_coverage_defaults_to_active_contacts(db: Session) -> None:
+    """The Recycle Bin is a working queue, not an archive of the false - but a
+    binned recruiter must not appear in a recommendation about who to contact
+    now, so it is excluded by default."""
+    from datetime import UTC, datetime
+
+    _contact(db, n=1)
+    _contact(db, n=2)
+    _contact(db, n=3, deleted_at=datetime.now(UTC))
+    db.commit()
+
+    active = field_coverage.contact_coverage(db, "company", owner_id=OWNER_ID)
+    assert (active.populated, active.total) == (2, 2)
+
+
+def test_all_time_scope_reaches_the_recycle_bin_when_asked(db: Session) -> None:
+    from datetime import UTC, datetime
+
+    _contact(db, n=1)
+    _contact(db, n=2, deleted_at=datetime.now(UTC))
+    db.commit()
+
+    history = field_coverage.contact_coverage(
+        db, "company", owner_id=OWNER_ID, scope=field_coverage.SCOPE_ALL_TIME
+    )
+    assert history.total == 2
+
+
+def test_an_unknown_designation_does_not_count_as_a_designation(db: Session) -> None:
+    _contact(db, n=1, designation="Technical Recruiter")
+    _contact(db, n=2, designation="Unknown")
+    db.commit()
+
+    result = field_coverage.contact_coverage(db, "designation", owner_id=OWNER_ID)
+    assert (result.populated, result.total) == (1, 2)
+
+
+def test_a_complete_but_uninformative_contact_field_is_refused(db: Session) -> None:
+    """`recruiter_verification_level` is on every contact and 19 of 497 say
+    "verified". The field is complete; the verification is not."""
+    refusal = field_coverage.contact_unavailable_result("recruiter_verification_level")
+    assert refusal is not None
+    assert "the verification is not" in refusal["reason"]
+
+    assert field_coverage.contact_unavailable_result("company") is None
+
+
+def test_unknown_scope_is_refused_rather_than_silently_defaulted(db: Session) -> None:
+    with pytest.raises(ValueError):
+        field_coverage.contact_coverage(db, "company", owner_id=OWNER_ID, scope="everything")
