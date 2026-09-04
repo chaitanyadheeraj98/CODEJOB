@@ -86,6 +86,9 @@ describe('RenderedMessage', () => {
           date_range: { from: null, to: null },
           filters: {},
           assumptions: ['This relationship was inferred from the records listed, not recorded by anyone.'],
+          // Parsed provenance always carries coverage - asCoverage() yields [] for a
+          // payload that declares none, which is what this fixture stands in for.
+          coverage: [],
           confidence: 'likely',
           score: 0.81,
           evidence: [{
