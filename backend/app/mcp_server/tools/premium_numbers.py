@@ -24,17 +24,23 @@ from app.models import (
     PremiumNumberLead,
     RecruiterEmail,
     RecruiterOpportunity,
+    UserSettings,
+    RecentRun,
 )
 from app.services import (
     application_service,
     appts_service,
+    end_client_search,
     field_coverage,
+    nvoids_search_job,
     opportunity_search,
     recruiter_ranking,
     opportunity_lineage_service,
     resume_tracking_service,
 )
+from app.external_feeds import service as external_feeds
 from app.premium_numbers.intelligence import OPPORTUNITY_STATUS_VALUES
+from app.recent_runs import NVOIDS_CLIENT_SEARCH_PREFIX
 from app.premium_numbers.phone_normalization import best_display_phone, canonicalize_phone
 from app.premium_numbers.domain_guard import (
     is_hidden_invalid_employer_number,
@@ -522,6 +528,191 @@ def search_opportunities(
         if unavailable:
             result["unavailable_filters"] = unavailable
         return result
+    finally:
+        db.close()
+
+
+def search_end_client(company: str, limit: int = 15, mode: str = "composed") -> dict[str, object]:
+    """Find what is already stored about one company, and the query that would find more.
+
+    Call this for "requirements from Morgan Stanley", "anything with Citi as the
+    end client", "who is working with Deloitte". One call returns both halves, so
+    you can answer and offer the next step without asking twice.
+
+    **Read `evidence` on every row before describing it.** `end_client_field` and
+    `partner_field` mean a column recorded for the purpose says so.
+    `role_labelled` means the description states the role in words. `described`
+    means only that the text names the company - it is NOT an end-client
+    relationship, and must be reported as "named in the description". A company
+    in a job description can be the client, the implementation partner, the prime
+    vendor, or the firm that posted it.
+
+    `nvoids_query` is what a live search would send. Show it to the user and ask
+    before starting one; the crawl is an outbound request to a third party and it
+    is never launched without confirmation.
+
+    mode: "composed" narrows with the saved role and location; "end_client_only"
+    searches the company alone, which is what discovery needs.
+    """
+    db = SessionLocal()
+    try:
+        result = end_client_search.search(
+            db, company, owner_id=settings.owner_id, limit=limit
+        )
+        if "error" in result:
+            return result
+        user_settings = (
+            db.query(UserSettings).filter(UserSettings.owner_id == settings.owner_id).first()
+            or UserSettings(owner_id=settings.owner_id)
+        )
+        composed = mode == external_feeds.QUERY_MODE_COMPOSED
+        result["nvoids_query"] = external_feeds.compose_nvoids_query(
+            job_role=(user_settings.nvoids_job_role or "") if composed else "",
+            search_location=(user_settings.nvoids_search_location or "") if composed else "",
+            # The saved custom query is deliberately not applied here: this call
+            # is about one company, and a raw override would silently search for
+            # something else entirely.
+            custom_query="",
+            end_client=company,
+            query_mode=(
+                external_feeds.QUERY_MODE_COMPOSED
+                if composed
+                else external_feeds.QUERY_MODE_END_CLIENT_ONLY
+            ),
+        )
+        result["nvoids_search"] = {
+            "mode": mode,
+            "batch_limit": int(getattr(user_settings, "nvoids_batch_limit", 10) or 10),
+            "not_started": True,
+            "instruction": (
+                "Show the query above and ask before starting a live search. Nvoids "
+                "caps its result count at 500 and ranks by relevance rather than "
+                "filtering strictly, so its count is not a yield estimate and every "
+                "posting it returns is re-checked here before anything is claimed."
+            ),
+        }
+        return result
+    finally:
+        db.close()
+
+
+def propose_nvoids_search(
+    company: str,
+    mode: str = "composed",
+    batch_limit: int = 10,
+) -> dict[str, object]:
+    """Prepare a live nvoids search for a company. Does NOT start it.
+
+    Call this when the user asks for *new* results rather than what is already
+    stored - "search nvoids for Morgan Stanley", "find more Citi requirements".
+
+    Returns the exact query and every criterion. **Show them and ask before
+    anything runs.** A crawl is an outbound request to a third party, and it is
+    started only by the user clicking Confirm on the proposal this returns - you
+    cannot start one yourself.
+
+    mode: "composed" keeps the saved role and location; "end_client_only" drops
+    them, which is what discovery needs - composing all three criteria narrows to
+    almost nothing.
+    """
+    company = (company or "").strip()
+    if not company:
+        return {"error": "A company name is required to search nvoids for."}
+    db = SessionLocal()
+    try:
+        user_settings = (
+            db.query(UserSettings).filter(UserSettings.owner_id == settings.owner_id).first()
+            or UserSettings(owner_id=settings.owner_id)
+        )
+        composed = mode == external_feeds.QUERY_MODE_COMPOSED
+        criteria = nvoids_search_job.SearchCriteria(
+            end_client=company,
+            job_role=(user_settings.nvoids_job_role or "") if composed else "",
+            search_location=(user_settings.nvoids_search_location or "") if composed else "",
+            query_mode=(
+                external_feeds.QUERY_MODE_COMPOSED
+                if composed
+                else external_feeds.QUERY_MODE_END_CLIENT_ONLY
+            ),
+            batch_limit=max(1, min(int(batch_limit or 10), 50)),
+        )
+        already = end_client_search.search(
+            db, company, owner_id=settings.owner_id, limit=1
+        )
+        return {
+            "action": "propose_nvoids_search",
+            "company": company,
+            "criteria": criteria.as_dict(),
+            "criteria_summary": criteria.describe(),
+            "already_stored": already.get("count", 0),
+            "started": False,
+            "requires_confirmation": True,
+            "instruction": (
+                "Show the generated query and the criteria, say how many records are "
+                "already stored, and ask the user to confirm. Do not describe the "
+                "search as running or started - it has not been. Nvoids caps its "
+                "result count at 500 and ranks by relevance rather than filtering, "
+                "so its count is not a yield estimate; roughly a quarter of what is "
+                "ingested becomes an opportunity, because a recruiter phone number "
+                "is required before a posting is bridged."
+            ),
+        }
+    finally:
+        db.close()
+
+
+def check_nvoids_search(run_key: str = "") -> dict[str, object]:
+    """Report on an nvoids search the user confirmed - running, or what it did.
+
+    Call this when the user asks whether a search finished, and once after
+    confirming one, so the result is reported rather than left for them to chase.
+
+    Returns `finished: false` while it runs - say so and describe nothing, since
+    no results exist yet. When it finishes, `message` is the sentence to relay
+    and `outcome` distinguishes imported / no_new_results / nothing_found /
+    failed. These are four different facts: a failed search is not an empty one,
+    and importing nothing because everything was already stored is a success.
+
+    Omit `run_key` for the most recent search.
+    """
+    db = SessionLocal()
+    try:
+        query = (
+            db.query(RecentRun)
+            .filter(
+                RecentRun.owner_id == settings.owner_id,
+                RecentRun.run_key.like(f"{NVOIDS_CLIENT_SEARCH_PREFIX}%"),
+            )
+            .order_by(RecentRun.created_at.desc())
+        )
+        row = query.filter(RecentRun.run_key == run_key).first() if run_key else query.first()
+        if row is None:
+            return {
+                "found": False,
+                "message": (
+                    f"No nvoids search matching '{run_key}' has been started."
+                    if run_key
+                    else "No nvoids search has been started."
+                ),
+                "instruction": (
+                    "Say no search has run. Do not treat this as a search that "
+                    "returned nothing - none was started."
+                ),
+            }
+        payload = nvoids_search_job.status_payload(
+            run_key=row.run_key,
+            status=row.status or "",
+            detail=row.detail or "",
+        )
+        payload["found"] = True
+        payload["started_at"] = row.created_at.isoformat() if row.created_at else None
+        if payload.get("finished") and payload.get("outcome") == nvoids_search_job.OUTCOME_IMPORTED:
+            payload["next_step"] = (
+                "Call search_end_client for the company to summarise what arrived, "
+                "and keep newly imported records distinguishable from ones that "
+                "were already stored."
+            )
+        return payload
     finally:
         db.close()
 

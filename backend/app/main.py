@@ -142,6 +142,7 @@ from app.recent_runs import (
     create_recent_run,
     gmail_sync_run_key,
     row_to_recent_run_dict,
+    NVOIDS_CLIENT_SEARCH_PREFIX,
 )
 from app.jobs.queues import (
     AUTOMATION_RUN_QUEUE,
@@ -1313,6 +1314,25 @@ def _enqueue_nvoids_sync(db: Session, *, max_items: int) -> JobEnqueueResponse:
     )
 
 
+def _enqueue_nvoids_client_search(db: Session, *, criteria: dict) -> JobEnqueueResponse:
+    """One nvoids search against supplied criteria, queued like any other job.
+
+    Its own run-key prefix so the assistant can find the run it started rather
+    than the most recent scheduled sync, which may be someone else's.
+    """
+    run_key = f"{NVOIDS_CLIENT_SEARCH_PREFIX}{uuid.uuid4().hex}"
+    max_items = int(criteria.get("batch_limit") or 10)
+    return _enqueue_background_job(
+        db,
+        queue_name=NVOIDS_SYNC_QUEUE,
+        run_source=RUN_SOURCE_NVOIDS_SYNC,
+        run_key=run_key,
+        task=run_nvoids_sync_job,
+        task_kwargs={"run_key": run_key, "max_items": max_items, "criteria": criteria},
+        total_items=max_items,
+    )
+
+
 def _enqueue_automation(payload: AutomationRunRequest | None, db: Session) -> JobEnqueueResponse:
     run_key = automation_run_key(uuid.uuid4().hex)
     return _enqueue_background_job(
@@ -2360,6 +2380,8 @@ def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
         nvoids_job_role=s.nvoids_job_role or "",
         nvoids_search_location=s.nvoids_search_location or "",
         nvoids_custom_query=s.nvoids_custom_query or "",
+        nvoids_end_client=s.nvoids_end_client or "",
+        nvoids_query_mode=s.nvoids_query_mode or "composed",
         feature_auto_send=s.feature_auto_send,
         feature_retry_queue=s.feature_retry_queue,
         feature_ai_enabled=s.feature_ai_enabled,
@@ -2798,6 +2820,8 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
     s.nvoids_job_role = payload.nvoids_job_role
     s.nvoids_search_location = payload.nvoids_search_location
     s.nvoids_custom_query = payload.nvoids_custom_query
+    s.nvoids_end_client = payload.nvoids_end_client
+    s.nvoids_query_mode = payload.nvoids_query_mode
     s.feature_auto_send = payload.feature_auto_send
     s.feature_retry_queue = payload.feature_retry_queue
     s.feature_ai_enabled = payload.feature_ai_enabled
@@ -4057,6 +4081,7 @@ def _run_nvoids_sync(
     run_key_override: str | None = None,
     progress_callback: Callable[[int, int], None] | None = None,
     role_manifest_enabled: bool | None = None,
+    criteria_override=None,
 ):
     if role_manifest_enabled is None:
         role_manifest_enabled = bool(_get_settings(db).feature_role_manifest_enabled)
@@ -4074,6 +4099,7 @@ def _run_nvoids_sync(
         max_items=max_items,
         run_key_override=run_key_override,
         progress_callback=progress_callback,
+        criteria_override=criteria_override,
     )
     if role_manifest_enabled:
         rows = (

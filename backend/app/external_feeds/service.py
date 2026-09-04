@@ -6,7 +6,7 @@ import logging
 import re
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from typing import Any, cast
+from typing import Any, Protocol, cast, runtime_checkable
 
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -81,6 +81,68 @@ class EnqueueResult:
     candidate_email_id: int | None = None
 
 
+
+# §16.6. A company name becomes a conjunction of its own words, never its first
+# word: the bare `morgan` is what matched *Morgan, Utah*.
+QUERY_MODE_COMPOSED = "composed"
+QUERY_MODE_END_CLIENT_ONLY = "end_client_only"
+QUERY_MODES = (QUERY_MODE_COMPOSED, QUERY_MODE_END_CLIENT_ONLY)
+
+
+def build_end_client_clause(end_client: str | None) -> str:
+    """`Morgan Stanley` -> `morgan and stanley`. Empty for no client."""
+    tokens = [token for token in re.split(r"[^A-Za-z0-9&]+", (end_client or "").strip()) if token]
+    return " and ".join(token.lower() for token in tokens)
+
+
+
+
+@runtime_checkable
+class SearchCriteriaLike(Protocol):
+    """Anything that can produce a query string for one run.
+
+    Typed structurally rather than imported: `nvoids_search_job` already imports
+    this module, and naming its class here would close the loop.
+    """
+
+    def build_query(self, *, default_query: str = ...) -> str: ...
+
+
+DEFAULT_NVOIDS_QUERY = "(tx or texas) and java and spring* not(*js)"
+
+
+def compose_nvoids_query(
+    *,
+    job_role: str | None = None,
+    search_location: str | None = None,
+    custom_query: str | None = None,
+    end_client: str | None = None,
+    query_mode: str = QUERY_MODE_COMPOSED,
+    default_query: str = DEFAULT_NVOIDS_QUERY,
+) -> str:
+    """Build the nvoids search string. Module level so a read-only caller can use
+    it without constructing the sync service, which builds a collector and two
+    scoring runtimes it would never touch."""
+    custom = (custom_query or "").strip()
+    if custom:
+        return custom
+    client_clause = build_end_client_clause(end_client)
+    if query_mode == QUERY_MODE_END_CLIENT_ONLY and client_clause:
+        return client_clause
+    role = (job_role or "").strip()
+    location = (search_location or "").strip()
+    if not role and not location and not client_clause:
+        return default_query
+    clauses: list[str] = []
+    if location:
+        clauses.append(f"({location})")
+    if role or not client_clause:
+        clauses.append(role or "java and spring* not(*js)")
+    if client_clause:
+        clauses.append(client_clause)
+    return " and ".join(clauses)
+
+
 class ExternalFeedService:
     def __init__(self) -> None:
         self.collector = NvoidsCollector()
@@ -118,16 +180,19 @@ class ExternalFeedService:
         job_role: str | None = None,
         search_location: str | None = None,
         custom_query: str | None = None,
+        end_client: str | None = None,
+        query_mode: str = QUERY_MODE_COMPOSED,
     ) -> str:
-        custom = (custom_query or "").strip()
-        if custom:
-            return custom
-        role = (job_role or "").strip()
-        location = (search_location or "").strip()
-        if not role and not location:
-            return self.default_query
-        role_clause = role or "java and spring* not(*js)"
-        return f"({location}) and {role_clause}" if location else role_clause
+        """See `compose_nvoids_query`. Kept as a method because every existing
+        caller reaches it through the service."""
+        return compose_nvoids_query(
+            job_role=job_role,
+            search_location=search_location,
+            custom_query=custom_query,
+            end_client=end_client,
+            query_mode=query_mode,
+            default_query=self.default_query,
+        )
 
     def row_matches_locations(self, row_location: str, raw_locations: list[str] | tuple[str, ...] | None) -> bool:
         locations = self._normalize_location_tokens(raw_locations)
@@ -202,7 +267,12 @@ class ExternalFeedService:
         duplicate_stop_threshold: int = 2,
         run_key_override: str | None = None,
         progress_callback: Callable[[int, int], None] | None = None,
+        criteria_override: "SearchCriteriaLike | None" = None,
     ) -> ExternalFeedSyncResult:
+        """`criteria_override` runs one search against supplied criteria instead
+        of the saved settings, without disturbing them - §16.7's assistant flow
+        is a one-off, and a user's configured role and location must survive it.
+        """
         source = self.ensure_nvoids_source(db, owner_id=owner_id)
         user_settings = (
             db.query(UserSettings).filter(UserSettings.owner_id == owner_id).first()
@@ -210,11 +280,16 @@ class ExternalFeedService:
         )
         location_filters = self._normalize_location_tokens((user_settings.nvoids_locations or "").split(","))
         detail_title_mode = self.normalize_nvoids_detail_title_mode(getattr(user_settings, "nvoids_detail_title_mode", None))
-        query = self.build_nvoids_query(
-            job_role=user_settings.nvoids_job_role,
-            search_location=user_settings.nvoids_search_location,
-            custom_query=user_settings.nvoids_custom_query,
-        )
+        if criteria_override is not None:
+            query = criteria_override.build_query(default_query=self.default_query)
+        else:
+            query = self.build_nvoids_query(
+                job_role=user_settings.nvoids_job_role,
+                search_location=user_settings.nvoids_search_location,
+                custom_query=user_settings.nvoids_custom_query,
+                end_client=getattr(user_settings, "nvoids_end_client", "") or "",
+                query_mode=getattr(user_settings, "nvoids_query_mode", "") or QUERY_MODE_COMPOSED,
+            )
         run = ExternalScrapeRun(owner_id=owner_id, source_type="nvoids", started_at=datetime.now(UTC), notes="")
         db.add(run)
         db.commit()

@@ -12,6 +12,11 @@ from app.models import RecentRun, RecentRunSkippedItem
 RUN_SOURCE_AUTOMATION = "automation_run"
 RUN_SOURCE_GMAIL_SYNC = "gmail_sync"
 RUN_SOURCE_NVOIDS_SYNC = "nvoids_sync"
+# One-off nvoids searches the assistant queued for a named company. Same run
+# source and queue as a scheduled sync - it is the same work - but its own key
+# prefix, so "did my search finish" can be answered about the right run rather
+# than about whichever sync happened to be most recent.
+NVOIDS_CLIENT_SEARCH_PREFIX = "nvoids_client_search:"
 
 
 def automation_run_key(raw_key: str) -> str:

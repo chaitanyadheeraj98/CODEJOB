@@ -26,7 +26,10 @@ from app.mcp_server.tools import (
     list_scheduled_tasks,
     list_resumes,
     navigate_to_queue,
+    check_nvoids_search,
+    propose_nvoids_search,
     rank_recruiters,
+    search_end_client,
     search_opportunities,
     propose_add_note,
     propose_bulk_approve_candidates,
@@ -74,7 +77,9 @@ BASE_TOOLS = (
     get_app_help,
     list_contact_numbers,
     list_recruiter_opportunities,
+    check_nvoids_search,
     rank_recruiters,
+    search_end_client,
     search_opportunities,
     get_record_details,
     list_external_opportunities,
@@ -97,6 +102,10 @@ CHAT_ACTION_TOOLS = (
     propose_add_note,
     propose_create_premium_contact,
     propose_send_email,
+    # An outbound crawl of a third party is a side effect, not a read, so it
+    # sits behind the same propose-then-confirm boundary as every other action
+    # rather than inventing a second confirmation mechanism for one feature.
+    propose_nvoids_search,
 )
 
 # Read-only, so they belong in BASE_TOOLS - but they are registered only when

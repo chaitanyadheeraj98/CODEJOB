@@ -231,6 +231,11 @@ class UserSettings(Base):
     nvoids_job_role: Mapped[str] = mapped_column(Text, default="")
     nvoids_search_location: Mapped[str] = mapped_column(Text, default="")
     nvoids_custom_query: Mapped[str] = mapped_column(Text, default="")
+    nvoids_end_client: Mapped[str] = mapped_column(Text, default="")
+    # "composed" narrows an existing search; "end_client_only" is for discovery.
+    # Composing role AND location AND client collapses hard - java 3,406 rows,
+    # java+Texas 894, java+Texas+Citi 2 - so both modes exist (temp162.md §16.5).
+    nvoids_query_mode: Mapped[str] = mapped_column(String(40), default="composed")
     feature_auto_send: Mapped[bool] = mapped_column(default=False)
     feature_retry_queue: Mapped[bool] = mapped_column(default=False)
     feature_ai_enabled: Mapped[bool] = mapped_column(default=False)
