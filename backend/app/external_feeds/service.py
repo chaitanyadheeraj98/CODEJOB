@@ -6,7 +6,7 @@ import logging
 import re
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from typing import Any, cast
+from typing import Any, Protocol, cast, runtime_checkable
 
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -94,6 +94,18 @@ def build_end_client_clause(end_client: str | None) -> str:
     tokens = [token for token in re.split(r"[^A-Za-z0-9&]+", (end_client or "").strip()) if token]
     return " and ".join(token.lower() for token in tokens)
 
+
+
+
+@runtime_checkable
+class SearchCriteriaLike(Protocol):
+    """Anything that can produce a query string for one run.
+
+    Typed structurally rather than imported: `nvoids_search_job` already imports
+    this module, and naming its class here would close the loop.
+    """
+
+    def build_query(self, *, default_query: str = ...) -> str: ...
 
 
 DEFAULT_NVOIDS_QUERY = "(tx or texas) and java and spring* not(*js)"
@@ -255,7 +267,12 @@ class ExternalFeedService:
         duplicate_stop_threshold: int = 2,
         run_key_override: str | None = None,
         progress_callback: Callable[[int, int], None] | None = None,
+        criteria_override: "SearchCriteriaLike | None" = None,
     ) -> ExternalFeedSyncResult:
+        """`criteria_override` runs one search against supplied criteria instead
+        of the saved settings, without disturbing them - §16.7's assistant flow
+        is a one-off, and a user's configured role and location must survive it.
+        """
         source = self.ensure_nvoids_source(db, owner_id=owner_id)
         user_settings = (
             db.query(UserSettings).filter(UserSettings.owner_id == owner_id).first()
@@ -263,13 +280,16 @@ class ExternalFeedService:
         )
         location_filters = self._normalize_location_tokens((user_settings.nvoids_locations or "").split(","))
         detail_title_mode = self.normalize_nvoids_detail_title_mode(getattr(user_settings, "nvoids_detail_title_mode", None))
-        query = self.build_nvoids_query(
-            job_role=user_settings.nvoids_job_role,
-            search_location=user_settings.nvoids_search_location,
-            custom_query=user_settings.nvoids_custom_query,
-            end_client=getattr(user_settings, "nvoids_end_client", "") or "",
-            query_mode=getattr(user_settings, "nvoids_query_mode", "") or QUERY_MODE_COMPOSED,
-        )
+        if criteria_override is not None:
+            query = criteria_override.build_query(default_query=self.default_query)
+        else:
+            query = self.build_nvoids_query(
+                job_role=user_settings.nvoids_job_role,
+                search_location=user_settings.nvoids_search_location,
+                custom_query=user_settings.nvoids_custom_query,
+                end_client=getattr(user_settings, "nvoids_end_client", "") or "",
+                query_mode=getattr(user_settings, "nvoids_query_mode", "") or QUERY_MODE_COMPOSED,
+            )
         run = ExternalScrapeRun(owner_id=owner_id, source_type="nvoids", started_at=datetime.now(UTC), notes="")
         db.add(run)
         db.commit()

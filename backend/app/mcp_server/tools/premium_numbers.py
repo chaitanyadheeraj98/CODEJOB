@@ -31,6 +31,7 @@ from app.services import (
     appts_service,
     end_client_search,
     field_coverage,
+    nvoids_search_job,
     opportunity_search,
     recruiter_ranking,
     opportunity_lineage_service,
@@ -589,6 +590,71 @@ def search_end_client(company: str, limit: int = 15, mode: str = "composed") -> 
             ),
         }
         return result
+    finally:
+        db.close()
+
+
+def propose_nvoids_search(
+    company: str,
+    mode: str = "composed",
+    batch_limit: int = 10,
+) -> dict[str, object]:
+    """Prepare a live nvoids search for a company. Does NOT start it.
+
+    Call this when the user asks for *new* results rather than what is already
+    stored - "search nvoids for Morgan Stanley", "find more Citi requirements".
+
+    Returns the exact query and every criterion. **Show them and ask before
+    anything runs.** A crawl is an outbound request to a third party, and it is
+    started only by the user clicking Confirm on the proposal this returns - you
+    cannot start one yourself.
+
+    mode: "composed" keeps the saved role and location; "end_client_only" drops
+    them, which is what discovery needs - composing all three criteria narrows to
+    almost nothing.
+    """
+    company = (company or "").strip()
+    if not company:
+        return {"error": "A company name is required to search nvoids for."}
+    db = SessionLocal()
+    try:
+        user_settings = (
+            db.query(UserSettings).filter(UserSettings.owner_id == settings.owner_id).first()
+            or UserSettings(owner_id=settings.owner_id)
+        )
+        composed = mode == external_feeds.QUERY_MODE_COMPOSED
+        criteria = nvoids_search_job.SearchCriteria(
+            end_client=company,
+            job_role=(user_settings.nvoids_job_role or "") if composed else "",
+            search_location=(user_settings.nvoids_search_location or "") if composed else "",
+            query_mode=(
+                external_feeds.QUERY_MODE_COMPOSED
+                if composed
+                else external_feeds.QUERY_MODE_END_CLIENT_ONLY
+            ),
+            batch_limit=max(1, min(int(batch_limit or 10), 50)),
+        )
+        already = end_client_search.search(
+            db, company, owner_id=settings.owner_id, limit=1
+        )
+        return {
+            "action": "propose_nvoids_search",
+            "company": company,
+            "criteria": criteria.as_dict(),
+            "criteria_summary": criteria.describe(),
+            "already_stored": already.get("count", 0),
+            "started": False,
+            "requires_confirmation": True,
+            "instruction": (
+                "Show the generated query and the criteria, say how many records are "
+                "already stored, and ask the user to confirm. Do not describe the "
+                "search as running or started - it has not been. Nvoids caps its "
+                "result count at 500 and ranks by relevance rather than filtering, "
+                "so its count is not a yield estimate; roughly a quarter of what is "
+                "ingested becomes an opportunity, because a recruiter phone number "
+                "is required before a posting is bridged."
+            ),
+        }
     finally:
         db.close()
 
