@@ -28,6 +28,9 @@ from app.models import (
 from app.services import (
     application_service,
     appts_service,
+    field_coverage,
+    opportunity_search,
+    recruiter_ranking,
     opportunity_lineage_service,
     resume_tracking_service,
 )
@@ -328,7 +331,197 @@ def list_contact_numbers(category: str = "", email_id: int = 0, name: str = "", 
             rows.extend(loader(db, email_id, recruiter_email_hint, name_search))
         rows.sort(key=lambda row: row["updated_at"], reverse=True)
         capped = max(1, min(limit, 25))
-        return {"count": len(rows), "numbers": rows[:capped]}
+        return {
+            "count": len(rows),
+            "numbers": rows[:capped],
+            **_contact_evidence_block(db),
+        }
+    finally:
+        db.close()
+
+
+# W13. Contact fields the caller sees a value for, and may therefore describe.
+# Coverage counts live contacts only - the Recycle Bin is a working queue, not
+# an archive of the false, and a binned recruiter must not appear in a
+# recommendation about who to contact now. History is available on request; it
+# is not the default population.
+_CONTACT_REPORTED_FIELDS = [
+    "company",
+    "recruiter_name",
+    "recruiter_email",
+    "normalized_phone_number",
+    "seen_count",
+    "designation",
+]
+
+# Reads as fully populated and is not. See `field_coverage.CONTACT_FIELDS`.
+_CONTACT_WITHHELD_FIELDS = ["owner_name", "recruiter_verification_level", "is_favorite"]
+
+
+def _contact_evidence_block(db) -> dict[str, object]:
+    """Coverage, refusals and alias warnings that travel with contact rows."""
+    block: dict[str, object] = {
+        "field_coverage": field_coverage.contact_coverage_for(
+            db, _CONTACT_REPORTED_FIELDS, owner_id=settings.owner_id
+        ),
+        "population": field_coverage.SCOPE_ACTIVE,
+        "coverage_note": (
+            "Counts active contacts only; Recycle Bin contacts are excluded. Say so "
+            "if the answer implies all-time activity. Percentages are corpus-wide "
+            "over that population, not over these rows, and a placeholder such as "
+            "\"Unknown\" is counted as missing rather than as an answer."
+        ),
+    }
+    refusals = [
+        result
+        for result in (
+            field_coverage.contact_unavailable_result(name)
+            for name in _CONTACT_WITHHELD_FIELDS
+        )
+        if result is not None
+    ]
+    if refusals:
+        block["unavailable_fields"] = refusals
+    aliases = [
+        note
+        for note in (
+            field_coverage.unconfirmed_alias_note(
+                db,
+                name,
+                owner_id=settings.owner_id,
+                policies=field_coverage.CONTACT_FIELDS,
+                model=PremiumNumberContact,
+                active_only=True,
+            )
+            for name in _CONTACT_REPORTED_FIELDS
+        )
+        if note is not None
+    ]
+    if aliases:
+        block["unconfirmed_aliases"] = aliases
+    return block
+
+
+def rank_recruiters(rule: str = "volume", limit: int = 10, include_deleted: bool = False) -> dict[str, object]:
+    """Order recruiters by a stated rule - for "who is worth keeping in touch with".
+
+    Call this for any question asking which recruiters or recruiting companies to
+    follow, keep, prioritise or contact first. The answer MUST repeat the returned
+    `rule_statement`: it is the definition the ordering used, and the user is
+    entitled to disagree with a definition they can see. Never present the order
+    as a verdict on who is worth contacting - `other_rules` lists the definitions
+    you can re-rank by if they want a different one.
+
+    rule: volume (requirements sent, default), recent (last heard from),
+    responsive (has replied), recurring (how often they appear).
+    include_deleted: false by default - Recycle Bin contacts are excluded from
+    recommendations about who to contact now. Set true only when the user asks
+    about all-time history.
+    """
+    db = SessionLocal()
+    try:
+        try:
+            result = recruiter_ranking.rank_recruiters(
+                db,
+                owner_id=settings.owner_id,
+                rule=rule,
+                limit=limit,
+                scope=(
+                    field_coverage.SCOPE_ALL_TIME
+                    if include_deleted
+                    else field_coverage.SCOPE_ACTIVE
+                ),
+            )
+        except ValueError as error:
+            return {"error": str(error), "rules": sorted(recruiter_ranking.RULES)}
+        scope = (
+            field_coverage.SCOPE_ALL_TIME if include_deleted else field_coverage.SCOPE_ACTIVE
+        )
+        result["field_coverage"] = field_coverage.contact_coverage_for(
+            db, ["company", "designation", "recruiter_email"], owner_id=settings.owner_id, scope=scope
+        )
+        # Replies are the sparse signal in this ranking. Reported so an absence is
+        # read as "no reply recorded" rather than "this recruiter never answers".
+        with_replies = sum(
+            1 for row in result["recruiters"] if int(row.get("replies_received") or 0) > 0
+        )
+        result["signal_notes"] = [
+            (
+                f"Replies are recorded for {with_replies} of the "
+                f"{len(result['recruiters'])} recruiters shown, and for 19 of 497 live "
+                "contacts overall. A zero means no reply was matched, not that they "
+                "never reply."
+            ),
+            (
+                "Submissions on your behalf are deliberately not part of any rule "
+                "here: the application-to-recruiter link is recorded on 2 of 47 "
+                "tracked applications, too few to rank on."
+            ),
+        ]
+        return result
+    finally:
+        db.close()
+
+
+def search_opportunities(
+    work_mode: str = "",
+    location: str = "",
+    domain: str = "",
+    status: str = "",
+    query: str = "",
+    days: int = 0,
+    limit: int = 15,
+) -> dict[str, object]:
+    """Find opportunities by work mode, place, industry, recency, title or skill.
+
+    Call this for "show me remote roles", "anything in Dallas", "banking roles
+    this month", "Java jobs I have not actioned". Filters run over normalized
+    values, so `location="Dallas"` finds both "Dallas, TX" and "Dallas, Texas,
+    USA", and `domain="banking"` finds "Financial services/payments".
+
+    work_mode: Remote, Onsite or Hybrid. location: a city or a two-letter state
+    code. domain: banking, healthcare, payments, insurance, telecom, airline,
+    government, retail, transportation, energy. days: only rows received in the
+    last N days. query: matches job title or skills.
+
+    Some rows have no work mode recorded and it is read from their location
+    instead; those carry work_mode_source="location". Say so if you report them,
+    and read `field_coverage` before describing what the whole corpus looks like.
+    """
+    db = SessionLocal()
+    try:
+        result = opportunity_search.search(
+            db,
+            owner_id=settings.owner_id,
+            filters=opportunity_search.SearchFilters(
+                work_mode=work_mode, location=location, domain=domain,
+                status=status, query=query, days=int(days or 0),
+            ),
+            limit=limit,
+        )
+        if "error" in result:
+            return result
+        result["field_coverage"] = field_coverage.coverage_for(
+            db, ["work_mode", "location", "domain", "job_title", "extracted_skills"],
+            owner_id=settings.owner_id,
+        )
+        result["coverage_note"] = (
+            "Percentages are corpus-wide over all opportunities, not over these "
+            "results. `location` reads high but roughly half of it holds a work "
+            "mode rather than a place, and rows whose location is not a place are "
+            "never returned by a location filter."
+        )
+        unavailable = [
+            entry
+            for entry in (
+                field_coverage.unavailable_result(name)
+                for name in ("employment_type", "prime_vendor")
+            )
+            if entry is not None
+        ]
+        if unavailable:
+            result["unavailable_filters"] = unavailable
+        return result
     finally:
         db.close()
 
@@ -391,7 +584,13 @@ def list_recruiter_opportunities(status: str = "", source_email_id: int = 0, lim
                     "work_mode": row.work_mode,
                     "visa_restrictions": row.visa_restrictions,
                     "domain": row.domain,
-                    "prime_vendor": row.prime_vendor,
+                    # `prime_vendor` and `employment_type` are omitted, not blank:
+                    # they are empty on every row, so there is no record-level value
+                    # to withhold and returning "" invites the absence to be read as
+                    # a finding. See `field_coverage` below. `implementation_partner`
+                    # is kept because 18 rows genuinely carry one and a lookup on a
+                    # named record is legitimate - what it may not support is a claim
+                    # about which partners are active.
                     "implementation_partner": row.implementation_partner,
                     "resume_file_name": row.resume_file_name,
                     "extracted_skills": row.extracted_skills,
@@ -416,9 +615,75 @@ def list_recruiter_opportunities(status: str = "", source_email_id: int = 0, lim
                 }
                 for row in rows
             ],
+            **_opportunity_evidence_block(db, rows),
         }
     finally:
         db.close()
+
+
+# Fields the caller sees a value for, and may therefore describe. Coverage is
+# measured live against the whole table on every call - never against `rows`,
+# which is self-selected and would read far higher than the field deserves.
+_REPORTED_FIELDS = [
+    "job_title",
+    "extracted_skills",
+    "work_mode",
+    "location",
+    "domain",
+    "end_client",
+    "implementation_partner",
+]
+
+# Empty on every row. Omitted from the payload entirely; the refusal explains why.
+_WITHHELD_FIELDS = ["prime_vendor", "employment_type"]
+
+
+def _opportunity_evidence_block(db, rows: list) -> dict[str, object]:
+    """Coverage, refusals and alias warnings that travel with the rows.
+
+    The model is not asked to remember how sparse a field is; the number arrives
+    beside the data it qualifies. Evidence is harder to argue past than a rule.
+    """
+    block: dict[str, object] = {
+        "field_coverage": field_coverage.coverage_for(
+            db, _REPORTED_FIELDS, owner_id=settings.owner_id
+        ),
+        "coverage_note": (
+            "Percentages are corpus-wide over all opportunities, not over these "
+            "results. Quote the corpus figure when the answer generalises. Any "
+            "count within these rows is a subset figure and must be labelled as "
+            "such - it never replaces the corpus figure."
+        ),
+    }
+    refusals = [
+        result
+        for result in (field_coverage.unavailable_result(name) for name in _WITHHELD_FIELDS)
+        if result is not None
+    ]
+    restricted = [
+        result
+        for result in (
+            field_coverage.unavailable_result(name)
+            for name in _REPORTED_FIELDS
+            if field_coverage.availability(name) == field_coverage.UNAVAILABLE
+        )
+        if result is not None
+    ]
+    if refusals:
+        block["unavailable_fields"] = refusals
+    if restricted:
+        block["restricted_fields"] = restricted
+    aliases = [
+        note
+        for note in (
+            field_coverage.unconfirmed_alias_note(db, name, owner_id=settings.owner_id)
+            for name in _REPORTED_FIELDS
+        )
+        if note is not None
+    ]
+    if aliases:
+        block["unconfirmed_aliases"] = aliases
+    return block
 
 
 def _iso(value) -> str | None:

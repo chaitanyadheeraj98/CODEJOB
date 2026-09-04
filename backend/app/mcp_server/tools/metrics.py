@@ -13,7 +13,12 @@ from app.models import (
     Application,
     RecruiterEmail,
 )
-from app.services import analytics_service, application_service, resume_tracking_service
+from app.services import (
+    analytics_service,
+    application_service,
+    field_coverage,
+    resume_tracking_service,
+)
 
 # The same range vocabulary the dashboard's own selector uses. Sharing
 # range_bounds is deliberate: a metric card and the Run Queue page must not
@@ -197,6 +202,14 @@ METRICS = {
 }
 
 
+
+# Opportunity fields a metric may not be aggregated over. Empty today because
+# every shipped metric counts application status or candidate state, both
+# effectively complete. The guard is wired before it is needed so a metric over
+# a sparse column cannot be added without tripping it.
+_METRIC_BLOCKED_FIELDS: dict[str, list[str]] = {}
+
+
 def get_metrics(metric: str, range: str = "current_month", days: int = 14) -> dict[str, object]:
     """Return KPI figures for one named metric, with the query that produced them.
 
@@ -217,6 +230,11 @@ def get_metrics(metric: str, range: str = "current_month", days: int = 14) -> di
     reader = METRICS.get(metric)
     if reader is None:
         return {"error": f"Unknown metric '{metric}'.", "metrics": sorted(METRICS)}
+    refusal = field_coverage.aggregate_refusal(
+        _METRIC_BLOCKED_FIELDS.get(metric, []), subject=f"the {metric} metric"
+    )
+    if refusal is not None:
+        return refusal
     if range not in RANGE_OPTIONS:
         return {"error": f"Unknown range '{range}'.", "ranges": list(RANGE_OPTIONS)}
     window = max(1, min(int(days), MAX_STALE_DAYS))

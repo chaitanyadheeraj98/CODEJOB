@@ -27,7 +27,7 @@ from app.models import (
     ResumeAsset,
     utc_now,
 )
-from app.services import application_service, resume_tracking_service
+from app.services import application_service, end_client_validation, resume_tracking_service
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +130,7 @@ def create_tracked_application_manual(
     manual_recruiter_name: str,
     manual_recruiter_company: str,
     manual_job_title: str,
-    manual_end_client: str,
+    manual_end_client: str = "",
     manual_recruiter_email: str = "",
     manual_recruiter_phone: str = "",
     manual_recruiter_linkedin_url: str = "",
@@ -149,9 +149,15 @@ def create_tracked_application_manual(
     dedupe_key = dedupe_key.strip()
     if not dedupe_key or len(dedupe_key) > 64:
         raise application_service.ApplicationValidationError("dedupe_key is required and must be at most 64 characters")
-    required = (manual_recruiter_name, manual_recruiter_company, manual_job_title, manual_end_client)
+    required = (manual_recruiter_name, manual_recruiter_company, manual_job_title)
     if any(not value.strip() for value in required):
-        raise application_service.ApplicationValidationError("Recruiter, company, job title, and end client must not be blank")
+        raise application_service.ApplicationValidationError("Recruiter, company, and job title must not be blank")
+    # End client is optional on purpose. It is stated in a minority of postings,
+    # and the three call paths below used to substitute the recruiter or posting
+    # company when it was absent - which is why every tracked application
+    # carried a staffing firm or the literal "Unknown" in an end-client column.
+    # Blank here means *not identified*, never "this job has no end client".
+    manual_end_client = end_client_validation.clean_end_client(manual_end_client)
     opportunity = None
     if recruiter_opportunity_id is not None:
         opportunity = (
@@ -228,7 +234,7 @@ def create_tracked_application_from_email(
         db, owner_id=owner_id, resume_asset_id=email.resume_asset_id, dedupe_key=f"appts_email:{email.id}",
         manual_recruiter_name=recruiter_name.strip() or recruiter_email or "Unknown", manual_recruiter_company=company,
         manual_recruiter_email=recruiter_email, manual_job_title=(email.role or "").strip() or "Not specified",
-        manual_end_client=(email.end_client or "").strip() or company, manual_source_note=f"Tracked from email {email.id}",
+        manual_end_client=(email.end_client or "").strip(), manual_source_note=f"Tracked from email {email.id}",
         resume_submitted_at=email.sent_at, location_snapshot=email.location or "",
         source_recruiter_email_id=email.id,
     )
@@ -260,7 +266,7 @@ def create_tracked_application_from_opportunity(
         db, owner_id=owner_id, resume_asset_id=effective_resume_id, dedupe_key=dedupe_key,
         manual_recruiter_name=recruiter.recruiter_name or "Unknown", manual_recruiter_company=recruiter.company or "Unknown",
         manual_recruiter_email=recruiter.recruiter_email or "", manual_job_title=opportunity.job_title or "Not specified",
-        manual_end_client=opportunity.end_client or recruiter.company or "Unknown", location_snapshot=opportunity.location or "",
+        manual_end_client=opportunity.end_client or "", location_snapshot=opportunity.location or "",
         manual_source_note=f"Tracked from recruiter opportunity {opportunity.id}",
         recruiter_opportunity_id=opportunity.id,
         recruiter_contact_id=recruiter.id,
@@ -294,7 +300,7 @@ def promote_legacy_application(
         manual_recruiter_phone=legacy_application.manual_recruiter_phone,
         manual_recruiter_linkedin_url=legacy_application.manual_recruiter_linkedin_url,
         manual_job_title=legacy_application.manual_job_title or legacy_application.job_title_snapshot or "Not specified",
-        manual_end_client=legacy_application.manual_end_client or legacy_application.end_client_snapshot or "Unknown",
+        manual_end_client=legacy_application.manual_end_client or legacy_application.end_client_snapshot or "",
         manual_jd_text=legacy_application.manual_jd_text,
         manual_source_note=legacy_application.manual_source_note,
         submission_method=legacy_application.submission_method,

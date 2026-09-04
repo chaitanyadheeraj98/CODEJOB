@@ -9,6 +9,16 @@
   --primary: #0f4bcf;
   --primary-strong: #0b3faa;
   --danger: #b60f1f;
+  /* Caution, distinct from danger. A partial-data notice is a qualification,
+     not a failure: red overstates it and the blue of --primary understates it.
+     Ochre, measured at 6.7:1 on its own tint rather than eyeballed. */
+  --caution-ink: #7a4e00;
+  --caution-surface: #fdf6e7;
+  --caution-line: #e8d5a8;
+  /* The refusal state borrows the danger hue at the same tint weights. */
+  --refusal-ink: #8f0c18;
+  --refusal-surface: #fdecee;
+  --refusal-line: #f0c2c7;
   --ok: #0f4bcf;
 
   /* Type scale. The app had a hole between 14px and 32px: a handful of
@@ -5244,8 +5254,104 @@ button.emailSearchResult:focus-visible {
   margin-top: 10px;
   padding-top: 8px;
   border-top: 1px solid var(--border, #e3e8ef);
-  font-size: 0.75em;
-  opacity: 0.7;
+  /* Was `0.75em`, which computed to 9.75px inside a chat bubble - unreadable,
+     and it now carries coverage figures that have to be read rather than
+     sensed. A token floor instead of a ratio that shrinks with its parent. */
+  font-size: var(--text-xs);
+  /* Was `opacity: 0.7`, which rendered muted ink at about 3.1:1 - under the 4.5
+     floor for body text. An explicit muted colour keeps the same quiet register
+     and passes at 5.7:1, and it stops the container fading anything nested in
+     it that needs to be read. */
+  color: var(--muted);
+}
+
+/* Coverage of a source column that is fully populated. Stated rather than
+   implied: a caption that speaks up only when something is wrong teaches the
+   reader that silence means unchecked. */
+.chatCoverageComplete {
+  font-variant-numeric: tabular-nums;
+}
+
+/* An incomplete column is lifted out of the caption entirely. A warning set in
+   11px muted text is not a warning, and this one has to survive being skimmed. */
+.chatCoverageWarning {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--caution-line);
+  border-radius: var(--radius-sm);
+  background: var(--caution-surface);
+  color: var(--caution-ink);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
+.chatCoverageWarning strong {
+  font-weight: 650;
+}
+
+.chatCoverageWarningBody ul {
+  margin: 2px 0 0;
+  padding-left: 0;
+  list-style: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.chatCoverageWarningBody li + li {
+  margin-top: 4px;
+}
+
+/* Tinted from the caution hue rather than greyed - grey on a coloured ground
+   reads as disabled. 88% not 78%: the lighter mix measured 4.05:1, under the
+   floor, and this sentence is the one that says what the shortfall means. */
+.chatCoverageConsequence {
+  color: color-mix(in srgb, var(--caution-ink) 88%, transparent);
+}
+
+.chatCoverageMark,
+.chatUnavailableMark {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-top: 1px;
+}
+
+/* The refusal replaces the chart. Danger rather than caution: caution qualifies
+   a picture that was drawn, this reports that none could be. */
+.chatUnavailable {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--refusal-line);
+  border-radius: var(--radius-sm);
+  background: var(--refusal-surface);
+  color: var(--refusal-ink);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
+.chatUnavailableHead {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin: 0;
+  font-weight: 650;
+}
+
+.chatUnavailableReasons {
+  margin: 6px 0 0;
+  padding-left: 22px;
+  list-style: none;
+}
+
+.chatUnavailableReasons li {
+  color: color-mix(in srgb, var(--refusal-ink) 82%, transparent);
+}
+
+.chatUnavailableReasons strong {
+  color: var(--refusal-ink);
+  font-weight: 650;
 }
 
 .chatProvenanceMetric {
@@ -5963,4 +6069,23 @@ button.chatRankedLabel:focus-visible {
 .chat-scheduled-empty {
   color: var(--muted);
   font-size: 13px;
+}
+
+/* End client is optional: the label says so, and the hint explains that a blank
+   records "not identified" rather than "no end client". Muted so it reads as
+   guidance next to the field name, not as a second label. */
+.field-optional {
+  font-weight: 400;
+  font-size: 0.85em;
+  opacity: 0.7;
+}
+
+/* The only hint in the manual submission form; scoped to the form so it does
+   not restyle <small> elsewhere. */
+.resumeTrackingForm label small {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.8em;
+  line-height: 1.35;
+  opacity: 0.7;
 }

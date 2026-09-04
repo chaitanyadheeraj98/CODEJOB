@@ -22,6 +22,8 @@ from app.mcp_server.tools.premium_numbers import (
     list_contact_numbers,
     list_recruiter_opportunities,
     propose_create_premium_contact,
+    rank_recruiters,
+    search_opportunities,
 )
 from app.mcp_server.tools.references import resolve_record_reference
 from app.mcp_server.tools.relationships import get_relationships, recommend_recruiter

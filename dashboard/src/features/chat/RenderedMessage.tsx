@@ -7,6 +7,7 @@ import MetricCards from './MetricCards'
 import RankedList from './RankedList'
 import RelationshipCluster from './RelationshipCluster'
 import ScheduledTasks from './ScheduledTasks'
+import Unavailable from './Unavailable'
 import QueueLink from './QueueLink'
 import WebCitations from './WebCitations'
 import type { RenderedPayload } from './renderers'
@@ -48,6 +49,11 @@ export default function RenderedMessage({ messageId, payload, surface }: Props) 
       return <WebCitations data={payload.data} surface={surface} />
     case 'queue_link':
       return <QueueLink data={payload.data} surface={surface} />
+    case 'unavailable':
+      // Identical on both surfaces: the reason a chart cannot be drawn is not
+      // less true in the narrow column, and shortening it would leave the bare
+      // refusal without the fact that explains it.
+      return <Unavailable data={payload.data} />
     default:
       // Unreachable while the union is exhaustive, but a payload kind this
       // build does not know about must render nothing rather than throw - the

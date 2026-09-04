@@ -20,6 +20,10 @@ class Provenance:
     date_range: dict[str, str | None] = field(default_factory=dict)
     filters: dict[str, str] = field(default_factory=dict)
     assumptions: list[str] = field(default_factory=list)
+    # Corpus coverage of every column the aggregate reads. A trend line over a
+    # sparse column reads as a trend whatever the caption says, so the number
+    # travels with the chart rather than being left to the caller to recall.
+    coverage: list[dict[str, object]] = field(default_factory=list)
 
 
 def date_range(start: datetime | None, end: datetime | None) -> dict[str, str | None]:
@@ -39,6 +43,7 @@ def block(
     end: datetime | None = None,
     filters: dict[str, str] | None = None,
     assumptions: list[str] | None = None,
+    coverage: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     """Build the provenance block attached to every analysis payload.
 
@@ -46,6 +51,11 @@ def block(
     number displayed. `assumptions` must state every exclusion the query makes:
     if it filters deleted_at IS NULL or a status set, that is an assumption and
     the user cannot see it any other way.
+
+    `coverage` states how populated each source column is, corpus-wide - not over
+    the rows this aggregate selected, which is self-selected and would flatter a
+    sparse column. An aggregate whose source column cannot carry a claim is not
+    drawn at all; see `field_coverage.aggregate_refusal`.
     """
     return {
         "metric": metric,
@@ -54,6 +64,7 @@ def block(
         "date_range": date_range(start, end),
         "filters": dict(filters or {}),
         "assumptions": list(assumptions or []),
+        "coverage": list(coverage or []),
     }
 
 

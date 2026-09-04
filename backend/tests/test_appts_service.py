@@ -72,11 +72,21 @@ class AppTSServiceTests(unittest.TestCase):
                 manual_job_title="Java Developer",
                 manual_end_client="Client Co",
             )
-            for blank_field in ("manual_recruiter_name", "manual_recruiter_company", "manual_job_title", "manual_end_client"):
+            for blank_field in ("manual_recruiter_name", "manual_recruiter_company", "manual_job_title"):
                 kwargs = dict(base_kwargs)
                 kwargs[blank_field] = "   "
                 with self.assertRaises(application_service.ApplicationValidationError):
                     appts_service.create_tracked_application_manual(**kwargs)
+
+            # End client is NOT in that list. Most postings never name one, and
+            # requiring it made every caller substitute the recruiter or posting
+            # company. A blank is accepted and stored as a blank.
+            kwargs = dict(base_kwargs)
+            kwargs["manual_end_client"] = "   "
+            row, created = appts_service.create_tracked_application_manual(**kwargs)
+            self.assertTrue(created)
+            self.assertEqual(row.manual_end_client, "")
+            self.assertEqual(row.end_client_snapshot, "")
 
     def test_manual_missing_resume_raises_reference_not_found(self) -> None:
         with Session(self.engine) as db:
@@ -265,8 +275,12 @@ class AppTSServiceTests(unittest.TestCase):
             self.assertEqual(row.manual_recruiter_name, "Jane Recruiter")
             self.assertEqual(row.manual_recruiter_email, "jane@example.com")
             self.assertEqual(row.recruiter_company_snapshot, "Acme Corp")
-            # end_client blank on the email -> falls back to company.
-            self.assertEqual(row.end_client_snapshot, "Acme Corp")
+            # end_client blank on the email stays blank. It used to fall back to
+            # the recruiter company, which is why every tracked application
+            # carried a staffing firm in an end-client column. Blank means *not
+            # identified*, never "no end client" and never the vendor's name.
+            self.assertEqual(row.end_client_snapshot, "")
+            self.assertEqual(row.manual_end_client, "")
             self.assertEqual(row.job_title_snapshot, "Java Developer")
             self.assertEqual(row.location_snapshot, "Remote")
 
@@ -291,7 +305,8 @@ class AppTSServiceTests(unittest.TestCase):
             self.assertEqual(row.manual_recruiter_email, "onlyemail@example.com")
             # role/end_client blank on the email -> "Not specified" / "Unknown" fallbacks.
             self.assertEqual(row.job_title_snapshot, "Not specified")
-            self.assertEqual(row.end_client_snapshot, "Unknown")
+            # Was "Unknown" - a literal standing in for a fact nobody knows.
+            self.assertEqual(row.end_client_snapshot, "")
 
     # -- create_tracked_application_from_opportunity ------------------------------
 
