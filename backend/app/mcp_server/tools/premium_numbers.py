@@ -24,16 +24,19 @@ from app.models import (
     PremiumNumberLead,
     RecruiterEmail,
     RecruiterOpportunity,
+    UserSettings,
 )
 from app.services import (
     application_service,
     appts_service,
+    end_client_search,
     field_coverage,
     opportunity_search,
     recruiter_ranking,
     opportunity_lineage_service,
     resume_tracking_service,
 )
+from app.external_feeds import service as external_feeds
 from app.premium_numbers.intelligence import OPPORTUNITY_STATUS_VALUES
 from app.premium_numbers.phone_normalization import best_display_phone, canonicalize_phone
 from app.premium_numbers.domain_guard import (
@@ -521,6 +524,70 @@ def search_opportunities(
         ]
         if unavailable:
             result["unavailable_filters"] = unavailable
+        return result
+    finally:
+        db.close()
+
+
+def search_end_client(company: str, limit: int = 15, mode: str = "composed") -> dict[str, object]:
+    """Find what is already stored about one company, and the query that would find more.
+
+    Call this for "requirements from Morgan Stanley", "anything with Citi as the
+    end client", "who is working with Deloitte". One call returns both halves, so
+    you can answer and offer the next step without asking twice.
+
+    **Read `evidence` on every row before describing it.** `end_client_field` and
+    `partner_field` mean a column recorded for the purpose says so.
+    `role_labelled` means the description states the role in words. `described`
+    means only that the text names the company - it is NOT an end-client
+    relationship, and must be reported as "named in the description". A company
+    in a job description can be the client, the implementation partner, the prime
+    vendor, or the firm that posted it.
+
+    `nvoids_query` is what a live search would send. Show it to the user and ask
+    before starting one; the crawl is an outbound request to a third party and it
+    is never launched without confirmation.
+
+    mode: "composed" narrows with the saved role and location; "end_client_only"
+    searches the company alone, which is what discovery needs.
+    """
+    db = SessionLocal()
+    try:
+        result = end_client_search.search(
+            db, company, owner_id=settings.owner_id, limit=limit
+        )
+        if "error" in result:
+            return result
+        user_settings = (
+            db.query(UserSettings).filter(UserSettings.owner_id == settings.owner_id).first()
+            or UserSettings(owner_id=settings.owner_id)
+        )
+        composed = mode == external_feeds.QUERY_MODE_COMPOSED
+        result["nvoids_query"] = external_feeds.compose_nvoids_query(
+            job_role=(user_settings.nvoids_job_role or "") if composed else "",
+            search_location=(user_settings.nvoids_search_location or "") if composed else "",
+            # The saved custom query is deliberately not applied here: this call
+            # is about one company, and a raw override would silently search for
+            # something else entirely.
+            custom_query="",
+            end_client=company,
+            query_mode=(
+                external_feeds.QUERY_MODE_COMPOSED
+                if composed
+                else external_feeds.QUERY_MODE_END_CLIENT_ONLY
+            ),
+        )
+        result["nvoids_search"] = {
+            "mode": mode,
+            "batch_limit": int(getattr(user_settings, "nvoids_batch_limit", 10) or 10),
+            "not_started": True,
+            "instruction": (
+                "Show the query above and ask before starting a live search. Nvoids "
+                "caps its result count at 500 and ranks by relevance rather than "
+                "filtering strictly, so its count is not a yield estimate and every "
+                "posting it returns is re-checked here before anything is claimed."
+            ),
+        }
         return result
     finally:
         db.close()

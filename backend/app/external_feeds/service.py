@@ -95,6 +95,42 @@ def build_end_client_clause(end_client: str | None) -> str:
     return " and ".join(token.lower() for token in tokens)
 
 
+
+DEFAULT_NVOIDS_QUERY = "(tx or texas) and java and spring* not(*js)"
+
+
+def compose_nvoids_query(
+    *,
+    job_role: str | None = None,
+    search_location: str | None = None,
+    custom_query: str | None = None,
+    end_client: str | None = None,
+    query_mode: str = QUERY_MODE_COMPOSED,
+    default_query: str = DEFAULT_NVOIDS_QUERY,
+) -> str:
+    """Build the nvoids search string. Module level so a read-only caller can use
+    it without constructing the sync service, which builds a collector and two
+    scoring runtimes it would never touch."""
+    custom = (custom_query or "").strip()
+    if custom:
+        return custom
+    client_clause = build_end_client_clause(end_client)
+    if query_mode == QUERY_MODE_END_CLIENT_ONLY and client_clause:
+        return client_clause
+    role = (job_role or "").strip()
+    location = (search_location or "").strip()
+    if not role and not location and not client_clause:
+        return default_query
+    clauses: list[str] = []
+    if location:
+        clauses.append(f"({location})")
+    if role or not client_clause:
+        clauses.append(role or "java and spring* not(*js)")
+    if client_clause:
+        clauses.append(client_clause)
+    return " and ".join(clauses)
+
+
 class ExternalFeedService:
     def __init__(self) -> None:
         self.collector = NvoidsCollector()
@@ -135,42 +171,16 @@ class ExternalFeedService:
         end_client: str | None = None,
         query_mode: str = QUERY_MODE_COMPOSED,
     ) -> str:
-        """Compose the nvoids search string from the owner's criteria.
-
-        `custom_query` still wins outright: someone who typed raw nvoids syntax
-        meant it, and second-guessing them would make the field useless.
-
-        `end_client` is split into tokens joined by `and`, so `Morgan Stanley`
-        asks for both words. The bare `morgan` returns a posting located in
-        *Morgan, Utah* - and nvoids will not honour the conjunction strictly
-        anyway (§16.0), which is precisely why the request should not be made
-        looser than it has to be. Precision comes from re-verifying locally.
-
-        `end_client_only` drops role and location. Composing all three collapses
-        to almost nothing - java 3,406 rows, java+Texas 894, java+Texas+Citi 2 -
-        so composition is right for narrowing and useless for discovery.
-        """
-        custom = (custom_query or "").strip()
-        if custom:
-            return custom
-        client_clause = build_end_client_clause(end_client)
-        if query_mode == QUERY_MODE_END_CLIENT_ONLY:
-            # Falls through to the composed path when no client was given, so an
-            # empty mode never silently searches for everything.
-            if client_clause:
-                return client_clause
-        role = (job_role or "").strip()
-        location = (search_location or "").strip()
-        if not role and not location and not client_clause:
-            return self.default_query
-        clauses: list[str] = []
-        if location:
-            clauses.append(f"({location})")
-        if role or not client_clause:
-            clauses.append(role or "java and spring* not(*js)")
-        if client_clause:
-            clauses.append(client_clause)
-        return " and ".join(clauses)
+        """See `compose_nvoids_query`. Kept as a method because every existing
+        caller reaches it through the service."""
+        return compose_nvoids_query(
+            job_role=job_role,
+            search_location=search_location,
+            custom_query=custom_query,
+            end_client=end_client,
+            query_mode=query_mode,
+            default_query=self.default_query,
+        )
 
     def row_matches_locations(self, row_location: str, raw_locations: list[str] | tuple[str, ...] | None) -> bool:
         locations = self._normalize_location_tokens(raw_locations)
