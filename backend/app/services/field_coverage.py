@@ -247,3 +247,61 @@ def unconfirmed_alias_note(db: Session, field: str, *, owner_id: str) -> dict[st
             "entity but unconfirmed. Do not sum them."
         ),
     }
+
+# --- Aggregates -----------------------------------------------------------
+#
+# A chart is a stronger claim than a list. A list of four rows looks like four
+# rows; a trend line over four rows looks like a trend. So an aggregate declares
+# the columns it reads, and the coverage of those columns travels in the
+# provenance block the frontend already validates.
+
+
+def column_coverage(db: Session, model, column_name: str, *, owner_id: str, label: str = "") -> dict[str, object]:
+    """Corpus coverage of any owner-scoped column, for aggregates outside
+    `RecruiterOpportunity`.
+
+    Same rule as `coverage()`: measured over the whole table, never over the
+    rows the aggregate happened to select.
+    """
+    column = getattr(model, column_name)
+    base = db.query(func.count()).select_from(model).filter(model.owner_id == owner_id)
+    total = base.scalar() or 0
+    populated = base.filter(column.isnot(None), column != "").scalar() or 0
+    return {
+        "field": f"{model.__tablename__}.{column_name}",
+        "label": label or column_name.replace("_", " ").title(),
+        "populated": populated,
+        "total": total,
+        "percent": round(100.0 * populated / total, 1) if total else 0.0,
+        "scope": "corpus",
+    }
+
+
+def aggregate_refusal(fields: list[str], *, subject: str) -> dict[str, object] | None:
+    """Refuse to build an aggregate over a field that cannot carry a claim.
+
+    Returned instead of the chart or metric. `provenance` documents that the
+    frontend renders nothing when provenance is missing rather than rendering
+    with a warning, on the grounds that a chart with a caveat is still a chart.
+    The same reasoning applies here: a trend line over a 1.6% column reads as a
+    trend no matter what the caption says, so it is not drawn at all.
+    """
+    blocked = [name for name in fields if availability(name) == UNAVAILABLE]
+    if not blocked:
+        return None
+    policies = [OPPORTUNITY_FIELDS[name] for name in blocked]
+    return {
+        "unavailable": True,
+        "subject": subject,
+        "blocked_fields": [
+            {"field": policy.column, "label": policy.label, "reason": policy.reason}
+            for policy in policies
+        ],
+        "may_answer_from_this_field": False,
+        "instruction": (
+            f"Do not present {subject} as a trend or a total. "
+            + " ".join(policy.reason for policy in policies)
+            + " Say the aggregate cannot be built and why. Do not describe the "
+            "absence as a finding, and do not silently swap in another field."
+        ),
+    }

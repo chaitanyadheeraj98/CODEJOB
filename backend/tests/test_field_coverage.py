@@ -167,3 +167,61 @@ def test_system_prompt_carries_the_policy() -> None:
     assert "unavailable_fields" in prompt
     assert "unconfirmed_aliases" in prompt
     assert "never on a lookup of one record" in prompt
+
+
+# --- Aggregates -----------------------------------------------------------
+
+
+def test_aggregate_refusal_blocks_a_trend_over_an_unusable_field(db: Session) -> None:
+    """A chart is a stronger claim than a list.
+
+    Four rows look like four rows; a trend line over four rows looks like a
+    trend. So an aggregate over a field that cannot carry a claim is not drawn
+    at all - the same reasoning `provenance` already applies to a chart with
+    missing provenance, where the control is "renders nothing" rather than
+    "renders with a warning".
+    """
+    refusal = field_coverage.aggregate_refusal(["prime_vendor"], subject="the vendor chart")
+    assert refusal is not None
+    assert refusal["unavailable"] is True
+    assert refusal["may_answer_from_this_field"] is False
+    assert refusal["blocked_fields"][0]["field"] == "prime_vendor"
+    assert "Do not present the vendor chart as a trend" in refusal["instruction"]
+    assert "do not silently swap in another field" in refusal["instruction"]
+
+
+def test_aggregate_over_usable_fields_is_not_refused(db: Session) -> None:
+    assert field_coverage.aggregate_refusal(["work_mode", "job_title"], subject="x") is None
+    assert field_coverage.aggregate_refusal([], subject="x") is None
+
+
+def test_aggregate_refusal_names_every_blocked_field(db: Session) -> None:
+    refusal = field_coverage.aggregate_refusal(
+        ["prime_vendor", "employment_type", "job_title"], subject="a mixed chart"
+    )
+    blocked = {entry["field"] for entry in refusal["blocked_fields"]}
+    assert blocked == {"prime_vendor", "employment_type"}
+
+
+def test_column_coverage_is_corpus_wide_for_non_opportunity_models(db: Session) -> None:
+    result = field_coverage.column_coverage(
+        db, RecruiterOpportunity, "end_client", owner_id=OWNER_ID, label="End client"
+    )
+    assert (result["populated"], result["total"], result["percent"]) == (2, 10, 20.0)
+    assert result["scope"] == "corpus"
+    assert result["field"] == "recruiter_opportunities.end_client"
+
+
+def test_provenance_block_carries_coverage() -> None:
+    from app.mcp_server.tools import provenance
+
+    block = provenance.block(
+        metric="Approved sends",
+        source="get_chart/activity_trend",
+        row_count=3,
+        coverage=[{"field": "recruiter_emails.state", "percent": 100.0, "scope": "corpus"}],
+    )
+    assert block["coverage"][0]["percent"] == 100.0
+    # Absent coverage is an empty list, never a missing key - the frontend
+    # validates provenance shape and a missing key would fail the render.
+    assert provenance.block(metric="m", source="s", row_count=0)["coverage"] == []

@@ -30,10 +30,26 @@ def entry(**overrides) -> EvidenceEntry:
 class BlockIsUnchangedTests(unittest.TestCase):
     # v2's block() feeds every shipped analysis renderer. W1 adds beside it; a
     # changed key here would silently drop a v2 chart.
-    def test_block_still_returns_exactly_its_six_keys(self) -> None:
+    def test_block_still_returns_exactly_its_seven_keys(self) -> None:
+        """`coverage` was added for W12 - deliberately, which is what this pin is for.
+
+        An aggregate declares how populated the columns it reads are, so a trend
+        line over a sparse column carries that fact instead of leaving it to be
+        recalled. Six keys became seven; the lock stays so the next addition is
+        also a decision rather than a drift.
+        """
         keys = set(block(metric="m", source="s", row_count=1))
 
-        self.assertEqual(keys, {"metric", "source", "row_count", "date_range", "filters", "assumptions"})
+        self.assertEqual(
+            keys,
+            {"metric", "source", "row_count", "date_range", "filters", "assumptions", "coverage"},
+        )
+
+    def test_block_without_coverage_returns_an_empty_list_not_a_missing_key(self) -> None:
+        """The frontend projects provenance key by key; a missing key would read
+        as absent rather than empty. Charts with no declared source columns still
+        carry the key."""
+        self.assertEqual(block(metric="m", source="s", row_count=1)["coverage"], [])
 
     def test_block_does_not_gain_the_inference_assumption(self) -> None:
         self.assertEqual(block(metric="m", source="s", row_count=1)["assumptions"], [])

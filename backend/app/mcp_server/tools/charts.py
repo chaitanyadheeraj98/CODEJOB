@@ -13,7 +13,7 @@ from app.models import (
     Application,
     RecruiterEmail,
 )
-from app.services import analytics_service, resume_tracking_service
+from app.services import analytics_service, field_coverage, resume_tracking_service
 
 BUSINESS_TZ = ZoneInfo("America/Chicago")
 RANGE_OPTIONS = ("last_1h", "current_day", "current_week", "current_month", "current_year", "last_5y")
@@ -201,6 +201,24 @@ CHARTS = {
 _BUCKETED = ("activity_trend",)
 
 
+
+# The columns each aggregate reads, so coverage can travel with the result and a
+# request over a field that cannot carry a claim can be refused before it is
+# drawn. Charts here read status/state enums and productivity events, all of
+# which are effectively complete - the declaration exists so the guard is in
+# place before a chart over a sparse column is added (temp162.md W11 proposes
+# `location` x `work_mode`, and `location` is ~22.6% work-mode text).
+_CHART_SOURCES: dict[str, list[tuple[object, str, str]]] = {
+    "candidate_states": [(RecruiterEmail, "state", "Candidate state")],
+    "application_pipeline": [(Application, "status", "Application status")],
+    "activity_trend": [],
+    "resume_funnel": [],
+}
+
+# Opportunity fields an aggregate may not be built over at all.
+_CHART_BLOCKED_FIELDS: dict[str, list[str]] = {}
+
+
 def get_chart(chart: str, range: str = "current_month", bucket: str = "", subject_id: int = 0) -> dict[str, object]:
     """Draw one of the supported charts from data computed on the server.
 
@@ -220,6 +238,13 @@ def get_chart(chart: str, range: str = "current_month", bucket: str = "", subjec
     reader = CHARTS.get(chart)
     if reader is None:
         return {"error": f"Unknown chart '{chart}'.", "charts": list(CHART_TYPES)}
+    refusal = field_coverage.aggregate_refusal(
+        _CHART_BLOCKED_FIELDS.get(chart, []), subject=f"the {chart} chart"
+    )
+    if refusal is not None:
+        # Not drawn at all. A chart with a caveat is still a chart - the same
+        # reasoning the frontend already applies to missing provenance.
+        return refusal
     if range not in RANGE_OPTIONS:
         return {"error": f"Unknown range '{range}'.", "ranges": list(RANGE_OPTIONS)}
 
@@ -234,6 +259,16 @@ def get_chart(chart: str, range: str = "current_month", bucket: str = "", subjec
     db = SessionLocal()
     try:
         payload = reader(db, range, resolved_bucket, int(subject_id))
+        # Coverage is attached here rather than inside each reader so every
+        # chart carries it whether or not its author remembered to.
+        sources = _CHART_SOURCES.get(chart, [])
+        if sources and isinstance(payload.get("provenance"), dict):
+            payload["provenance"]["coverage"] = [
+                field_coverage.column_coverage(
+                    db, model, column, owner_id=settings.owner_id, label=label
+                )
+                for model, column, label in sources
+            ]
     finally:
         db.close()
 
