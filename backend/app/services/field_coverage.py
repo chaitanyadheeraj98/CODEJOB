@@ -274,6 +274,11 @@ def column_coverage(db: Session, model, column_name: str, *, owner_id: str, labe
         "total": total,
         "percent": round(100.0 * populated / total, 1) if total else 0.0,
         "scope": "corpus",
+        # Whether the chart may be drawn without a partial-data warning. Decided
+        # here so the renderer shows a verdict instead of inventing a threshold:
+        # a UI that picks its own "sparse enough to warn" cutoff is a second
+        # opinion on data quality, and the two drift.
+        "complete": total > 0 and populated == total,
     }
 
 

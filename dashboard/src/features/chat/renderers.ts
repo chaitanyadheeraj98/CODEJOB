@@ -28,6 +28,19 @@ export type QueueLinkData = {
   dropped: Array<{ key: string; reason: string }>
 }
 
+// How populated one source column is, corpus-wide. `complete` is the server's
+// verdict, not a threshold this file invents - a UI that picks its own "sparse
+// enough to warn" cutoff becomes a second opinion on data quality, and the two
+// drift apart silently.
+export type CoverageEntry = {
+  field: string
+  label: string
+  populated: number
+  total: number
+  percent: number
+  complete: boolean
+}
+
 export type ProvenanceData = {
   metric: string
   source: string
@@ -35,6 +48,16 @@ export type ProvenanceData = {
   date_range: { from: string | null; to: string | null }
   filters: Record<string, string>
   assumptions: string[]
+  coverage: CoverageEntry[]
+}
+
+// A chart the server refused to draw. Not an error and not an empty result:
+// the column it would have aggregated is not collected, so there is no honest
+// version of the picture. Rendering it as a chart with a caption would still
+// read as a trend.
+export type UnavailableData = {
+  subject: string
+  blocked: { field: string; label: string; reason: string }[]
 }
 
 // One contributing signal behind an inferred claim. `match: 'absent'` means the
@@ -192,6 +215,7 @@ export type RenderedPayload =
   | { kind: 'web_results'; data: WebResultsData }
   | { kind: 'relationship_cluster'; data: RelationshipClusterData }
   | { kind: 'scheduled_tasks'; data: ScheduledTasksData }
+  | { kind: 'unavailable'; data: UnavailableData }
 
 export type RenderHandler = {
   parse: (message: ChatMessage) => RenderedPayload | null
@@ -215,6 +239,30 @@ function asRows(value: unknown): CandidateTableRow[] | null {
  * important control in the phase: it is what makes a displayed number worth
  * believing, and it is enforced here rather than in the prompt.
  */
+
+// The server refuses an aggregate whose source column cannot carry a claim,
+// returning this instead of a chart. Recognised before the chart shape so the
+// refusal renders rather than falling through to "nothing to draw", which would
+// look identical to an empty range.
+function asUnavailable(payload: Record<string, unknown> | null): { kind: 'unavailable'; data: UnavailableData } | null {
+  if (!payload || payload.unavailable !== true) return null
+  const blockedRaw = Array.isArray(payload.blocked_fields) ? payload.blocked_fields : []
+  const blocked = blockedRaw.flatMap((item) => {
+    if (!item || typeof item !== 'object') return []
+    const entry = item as Record<string, unknown>
+    return [{
+      field: typeof entry.field === 'string' ? entry.field : '',
+      label: typeof entry.label === 'string' && entry.label ? entry.label : 'This field',
+      reason: typeof entry.reason === 'string' ? entry.reason : '',
+    }]
+  })
+  if (!blocked.length) return null
+  return {
+    kind: 'unavailable',
+    data: { subject: typeof payload.subject === 'string' ? payload.subject : 'this chart', blocked },
+  }
+}
+
 export function asProvenance(value: unknown): ProvenanceData | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const block = value as Record<string, unknown>
@@ -233,7 +281,30 @@ export function asProvenance(value: unknown): ProvenanceData | null {
     },
     filters: asStringMap(block.filters),
     assumptions: Array.isArray(block.assumptions) ? block.assumptions.filter((item): item is string => typeof item === 'string') : [],
+    coverage: asCoverage(block.coverage),
   }
+}
+
+function asCoverage(value: unknown): CoverageEntry[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((item) => {
+    if (!item || typeof item !== 'object') return []
+    const entry = item as Record<string, unknown>
+    const populated = typeof entry.populated === 'number' ? entry.populated : null
+    const total = typeof entry.total === 'number' ? entry.total : null
+    if (populated === null || total === null) return []
+    return [{
+      field: typeof entry.field === 'string' ? entry.field : '',
+      label: typeof entry.label === 'string' && entry.label ? entry.label : 'Source column',
+      populated,
+      total,
+      percent: typeof entry.percent === 'number' ? entry.percent : 0,
+      // Absent `complete` is treated as complete so an older payload renders the
+      // way it always did. A warning is a claim; do not manufacture one from a
+      // missing field.
+      complete: entry.complete === undefined ? true : entry.complete === true,
+    }]
+  })
 }
 
 const CONFIDENCE_LEVELS: readonly string[] = ['confirmed', 'likely', 'possible']
@@ -477,6 +548,8 @@ export const RENDER_HANDLERS: Record<string, RenderHandler> = {
     parse: (message) => {
       try {
         const payload = JSON.parse(message.content) as Record<string, unknown>
+        const refused = asUnavailable(payload)
+        if (refused) return refused
         if (!payload || payload.action !== 'render_metric_cards') return null
         const cards = asMetricCards(payload.cards)
         if (cards === null) return null
@@ -554,6 +627,8 @@ export const RENDER_HANDLERS: Record<string, RenderHandler> = {
     parse: (message) => {
       try {
         const payload = JSON.parse(message.content) as Record<string, unknown>
+        const refused = asUnavailable(payload)
+        if (refused) return refused
         if (!payload || payload.action !== 'render_chart') return null
         if (typeof payload.chart_type !== 'string' || !payload.chart_type) return null
         const series = asChartSeries(payload.series)
