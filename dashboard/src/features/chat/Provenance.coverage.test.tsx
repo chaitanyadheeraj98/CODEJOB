@@ -164,3 +164,30 @@ describe('Unavailable', () => {
     expect(el.textContent).toContain('does not mean there are no prime vendors')
   })
 })
+
+
+describe('W11 chart coverage reaches the reader', () => {
+  it('warns with the normalized share, not the populated one', () => {
+    // The real payload from get_chart/location_by_work_mode. `location` is
+    // populated on 98.9% of rows; 50.1% of them name a place. The chart reports
+    // the second, because a map captioned 98.9% would be true and misleading.
+    const el = render(<Provenance data={{
+      ...base,
+      metric: 'Where the roles are (every work mode)',
+      row_count: 560,
+      coverage: [
+        { field: 'recruiter_opportunities.location', label: 'Location (as a place)',
+          populated: 560, total: 1117, percent: 50.1, complete: false },
+        { field: 'recruiter_opportunities.work_mode', label: 'Work mode (incl. derived)',
+          populated: 874, total: 1117, percent: 78.2, complete: false },
+      ],
+    }} />)
+
+    const warning = el.querySelector('.chatCoverageWarning')!
+    expect(warning.textContent).toContain('560 of 1,117 records (50.1%)')
+    expect(warning.textContent).toContain('874 of 1,117 records (78.2%)')
+    // Both shortfalls, each with what it means.
+    expect(warning.querySelectorAll('li')).toHaveLength(2)
+    expect(warning.textContent).toContain('557')
+  })
+})

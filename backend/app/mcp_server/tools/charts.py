@@ -12,14 +12,22 @@ from app.models import (
     APPLICATION_STATUS_VALUES,
     Application,
     RecruiterEmail,
+    RecruiterOpportunity,
 )
-from app.services import analytics_service, field_coverage, resume_tracking_service
+from app.services import analytics_service, field_coverage, normalization, resume_tracking_service
 
 BUSINESS_TZ = ZoneInfo("America/Chicago")
 RANGE_OPTIONS = ("last_1h", "current_day", "current_week", "current_month", "current_year", "last_5y")
 BUCKET_OPTIONS = analytics_service.BUCKET_OPTIONS
 
-CHART_TYPES = ("activity_trend", "candidate_states", "resume_funnel", "application_pipeline")
+CHART_TYPES = (
+    "activity_trend",
+    "candidate_states",
+    "resume_funnel",
+    "application_pipeline",
+    "role_demand",
+    "location_by_work_mode",
+)
 
 _STATE_LABELS = {
     "needs_review": "Needs review",
@@ -189,11 +197,152 @@ def _application_pipeline(db, range_key: str, bucket: str, subject_id: int) -> d
     }
 
 
+def _normalized_coverage(rows: list, field: str, label: str, resolve) -> dict[str, object]:
+    """Coverage of what a column *means*, not of what it contains.
+
+    `location` is populated on 98.9% of rows and roughly half of that is a work
+    mode. Reporting 98.9% beside a map would be true and misleading, so these
+    charts report the count that survived normalization instead - the number of
+    rows the picture was actually drawn from.
+    """
+    usable = sum(1 for row in rows if resolve(row))
+    total = len(rows)
+    return {
+        "field": f"recruiter_opportunities.{field}",
+        "label": label,
+        "populated": usable,
+        "total": total,
+        "percent": round(100.0 * usable / total, 1) if total else 0.0,
+        "scope": "corpus",
+        "complete": total > 0 and usable == total,
+        "note": "Counted after normalization: rows whose value does not resolve are excluded.",
+    }
+
+
+def _role_demand(db, range_key: str, bucket: str, subject_id: int) -> dict[str, object]:
+    start, end = analytics_service.range_bounds(range_key, BUSINESS_TZ)
+    start = analytics_service.ensure_utc(start)
+    end = analytics_service.ensure_utc(end)
+    rows = (
+        db.query(RecruiterOpportunity)
+        .filter(
+            RecruiterOpportunity.owner_id == settings.owner_id,
+            RecruiterOpportunity.received_at >= start,
+            RecruiterOpportunity.received_at <= end,
+        )
+        .all()
+    )
+    counts: dict[str, int] = {}
+    for row in rows:
+        for family in normalization.normalize_role(row.job_title):
+            counts[family] = counts.get(family, 0) + 1
+    ordered = sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))[:12]
+    series = [
+        {
+            "label": _ROLE_LABELS.get(family, family.replace("_", " ").title()),
+            "value": count,
+            "rate_of_previous": None,
+            "drill_to": {"page": "premium_numbers", "tab": "opportunities", "filters": {}},
+        }
+        for family, count in ordered
+    ]
+    return {
+        "title": "Roles recruiters are asking for",
+        "series": series,
+        "provenance": provenance.block(
+            metric="Roles recruiters are asking for",
+            source="get_chart/role_demand",
+            row_count=len(rows),
+            start=start,
+            end=end,
+            filters={"range": range_key},
+            assumptions=[
+                "Job titles are grouped into role families; 645 distinct titles do not chart.",
+                "A title naming two families is counted in both, so the bars sum above the row count.",
+                "Seniority is not a family: 'Senior Java Developer' counts as Java.",
+                "A title matching no family is not counted.",
+            ],
+            coverage=[
+                _normalized_coverage(
+                    rows, "job_title", "Job title", lambda r: normalization.normalize_role(r.job_title)
+                )
+            ],
+        ),
+    }
+
+
+def _location_by_work_mode(db, range_key: str, bucket: str, subject_id: int, work_mode: str = "") -> dict[str, object]:
+    wanted = normalization.normalize_work_mode(work_mode) if work_mode else None
+    rows = (
+        db.query(RecruiterOpportunity)
+        .filter(RecruiterOpportunity.owner_id == settings.owner_id)
+        .all()
+    )
+    counts: dict[str, int] = {}
+    considered = 0
+    for row in rows:
+        mode = normalization.derive_work_mode(row.work_mode, row.location)
+        if wanted and mode.value != wanted:
+            continue
+        place = normalization.normalize_location(row.location)
+        if place is None:
+            continue
+        considered += 1
+        key = place.as_text()
+        counts[key] = counts.get(key, 0) + 1
+    ordered = sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))[:12]
+    scope = wanted or "every work mode"
+    return {
+        "title": f"Where the roles are ({scope})",
+        "series": [
+            {
+                "label": place,
+                "value": count,
+                "rate_of_previous": None,
+                "drill_to": {"page": "premium_numbers", "tab": "opportunities", "filters": {}},
+            }
+            for place, count in ordered
+        ],
+        "provenance": provenance.block(
+            metric=f"Where the roles are ({scope})",
+            source="get_chart/location_by_work_mode",
+            row_count=considered,
+            filters={"work_mode": wanted} if wanted else {},
+            assumptions=[
+                "Rows whose location names a work mode rather than a place are excluded.",
+                "'Dallas, Texas, USA' and 'Dallas, TX' are counted as one place.",
+                "Work mode is read from the location column where its own column is empty.",
+            ],
+            coverage=[
+                _normalized_coverage(
+                    rows, "location", "Location (as a place)", lambda r: normalization.normalize_location(r.location)
+                ),
+                _normalized_coverage(
+                    rows, "work_mode", "Work mode (incl. derived)",
+                    lambda r: normalization.derive_work_mode(r.work_mode, r.location).value,
+                ),
+            ],
+        ),
+    }
+
+
+_ROLE_LABELS = {
+    "java": "Java", "full_stack": "Full stack", "backend": "Backend",
+    "frontend": "Front end", "architect": "Architect", "data": "Data",
+    "devops": "DevOps", "qa": "QA", "business_analyst": "Business analyst",
+    "project_manager": "Project manager", "dotnet": ".NET", "python": "Python",
+    "mobile": "Mobile", "salesforce": "Salesforce", "security": "Security",
+}
+
+
+
 CHARTS = {
     "activity_trend": _activity_trend,
     "candidate_states": _candidate_states,
     "resume_funnel": _resume_funnel,
     "application_pipeline": _application_pipeline,
+    "role_demand": _role_demand,
+    "location_by_work_mode": _location_by_work_mode,
 }
 
 # Only the bucketed chart cares about `bucket`; validating it for the others
@@ -213,13 +362,18 @@ _CHART_SOURCES: dict[str, list[tuple[object, str, str]]] = {
     "application_pipeline": [(Application, "status", "Application status")],
     "activity_trend": [],
     "resume_funnel": [],
+    # These two report coverage of what their columns *mean* rather than what
+    # they contain - `location` is 98.9% populated and about half of that is a
+    # work mode - so they build their own and the generic attach skips them.
+    "role_demand": [],
+    "location_by_work_mode": [],
 }
 
 # Opportunity fields an aggregate may not be built over at all.
 _CHART_BLOCKED_FIELDS: dict[str, list[str]] = {}
 
 
-def get_chart(chart: str, range: str = "current_month", bucket: str = "", subject_id: int = 0) -> dict[str, object]:
+def get_chart(chart: str, range: str = "current_month", bucket: str = "", subject_id: int = 0, work_mode: str = "") -> dict[str, object]:
     """Draw one of the supported charts from data computed on the server.
 
     Call this when the user asks to see something "over time", "by stage", a
@@ -228,7 +382,14 @@ def get_chart(chart: str, range: str = "current_month", bucket: str = "", subjec
     Valid charts: activity_trend (approved sends per bucket), candidate_states
     (candidate emails by state), resume_funnel (submitted through hired for one
     resume - pass its id as subject_id), application_pipeline (applications by
-    stage).
+    stage), role_demand (which roles recruiters are asking for, in `range`),
+    location_by_work_mode (where the roles are - pass work_mode to scope it to
+    Remote, Onsite or Hybrid, e.g. for "which city is most popular for onsite").
+
+    role_demand and location_by_work_mode read normalized values, and their
+    provenance reports coverage *after* normalization - `location` is populated
+    on 98.9% of rows but only about half of that names a place. Quote the
+    coverage figure, not the raw population.
 
     `range` is one of last_1h, current_day, current_week, current_month,
     current_year, last_5y. `bucket` applies only to activity_trend and defaults
@@ -258,7 +419,10 @@ def get_chart(chart: str, range: str = "current_month", bucket: str = "", subjec
 
     db = SessionLocal()
     try:
-        payload = reader(db, range, resolved_bucket, int(subject_id))
+        if chart == "location_by_work_mode":
+            payload = reader(db, range, resolved_bucket, int(subject_id), work_mode)
+        else:
+            payload = reader(db, range, resolved_bucket, int(subject_id))
         # Coverage is attached here rather than inside each reader so every
         # chart carries it whether or not its author remembered to.
         sources = _CHART_SOURCES.get(chart, [])

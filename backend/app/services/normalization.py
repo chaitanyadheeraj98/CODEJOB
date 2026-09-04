@@ -245,3 +245,48 @@ def normalize_interview_type(value: str | None) -> tuple[str, ...]:
         for canonical, needles in _INTERVIEW_VOCABULARY.items()
         if any(needle in text for needle in needles)
     )
+
+
+# --- Role -----------------------------------------------------------------
+# 645 distinct job titles over 1,117 rows - far too many to chart, and mostly
+# one job spelled differently: "Java Developer" 74, "Java Full Stack Developer"
+# 35, "Senior Java Developer" 16, "Sr Java Developer" 13.
+#
+# Seniority is deliberately not a family. "Senior Java Developer" and "Java
+# Developer" are the same role at different levels, and a chart of what
+# recruiters are looking for should count them together; splitting them would
+# answer a question nobody asked.
+ROLE_VOCABULARY: dict[str, tuple[str, ...]] = {
+    "java": ("java", "j2ee", "spring boot"),
+    "full_stack": ("full stack", "fullstack", "full-stack"),
+    "backend": ("backend", "back end", "back-end"),
+    "frontend": ("frontend", "front end", "front-end", "react", "angular", "ui developer"),
+    "architect": ("architect",),
+    "data": ("data engineer", "data scientist", "etl", "big data", "spark", "databricks"),
+    "devops": ("devops", "sre", "platform engineer", "cloud engineer", "kubernetes"),
+    "qa": ("qa ", "quality assurance", "test engineer", "sdet", "automation test"),
+    "business_analyst": ("business analyst", "ba ", "business systems analyst"),
+    "project_manager": ("project manager", "program manager", "scrum master", "delivery manager"),
+    "dotnet": (".net", "dotnet", "c#"),
+    "python": ("python", "django"),
+    "mobile": ("ios developer", "android developer", "mobile developer", "react native"),
+    "salesforce": ("salesforce", "sfdc"),
+    "security": ("security", "cyber", "infosec"),
+}
+
+
+def normalize_role(value: str | None) -> tuple[str, ...]:
+    """Every role family a job title names.
+
+    Multi-label for the same reason `normalize_domain` is: "Java Full Stack
+    Developer" is 35 rows that belong in both the Java count and the full-stack
+    count, and picking one would understate whichever lost.
+    """
+    text = f" {(value or '').strip().lower()} "
+    if not text.strip() or is_placeholder(text.strip()):
+        return ()
+    return tuple(
+        canonical
+        for canonical, needles in ROLE_VOCABULARY.items()
+        if any(needle in text for needle in needles)
+    )
