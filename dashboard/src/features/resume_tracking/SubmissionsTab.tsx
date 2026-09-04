@@ -188,6 +188,7 @@ export default function SubmissionsTab({ apiBase, resumes, resumeAssetId = null,
 
   return (
     <section className="resumeTrackingPanel">
+      <h2 className="visuallyHidden">Submissions</h2>
       <div className="resumeTrackingToolbar">
         <label>Status<select value={status} onChange={(event) => setStatus(event.target.value as ResumeSubmissionStatus | 'all')}><option value="all">All</option><option value="not_submitted">Not submitted</option><option value="submitted">Submitted</option>{STATUS_OPTIONS.map((value) => <option key={value} value={value}>{value.replaceAll('_', ' ')}</option>)}<option value="interview_scheduled">Interview scheduled</option></select></label>
         <button type="button" onClick={() => setManual(blankManual(resumes, resumeAssetId))}>Log submission</button>

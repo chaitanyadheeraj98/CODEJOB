@@ -79,6 +79,14 @@ export function renderMarkdownLite(text: string) {
   }
 
   const lines = text.split('\n')
+  // Headings render relative to the shallowest one in this message, so a body
+  // that starts at "###" still emits <h3> instead of jumping straight to <h6>
+  // and tripping the heading-order audit. Each bubble sits under a visually
+  // hidden <h2>, so h3 is always the correct first step down.
+  const shallowestHeading = lines.reduce((shallowest, raw) => {
+    const match = raw.trim().match(/^(#{1,6})\s+/)
+    return match ? Math.min(shallowest, match[1].length) : shallowest
+  }, 6)
   let i = 0
   while (i < lines.length) {
     const line = lines[i].trim()
@@ -120,17 +128,10 @@ export function renderMarkdownLite(text: string) {
     if (heading) {
       flushParagraph()
       flushList()
-      const level = Math.min(heading[1].length, 3)
+      const depth = Math.min(heading[1].length - shallowestHeading, 2)
+      const HeadingTag = (['h3', 'h4', 'h5'] as const)[depth]
       const headingContent = renderInline(heading[2])
-      blocks.push(
-        level === 1 ? (
-          <h4 key={blocks.length}>{headingContent}</h4>
-        ) : level === 2 ? (
-          <h5 key={blocks.length}>{headingContent}</h5>
-        ) : (
-          <h6 key={blocks.length}>{headingContent}</h6>
-        ),
-      )
+      blocks.push(<HeadingTag key={blocks.length}>{headingContent}</HeadingTag>)
     } else if (orderedItem || bulletItem) {
       flushParagraph()
       const ordered = Boolean(orderedItem)

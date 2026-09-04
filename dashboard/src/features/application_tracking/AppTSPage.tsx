@@ -81,7 +81,9 @@ export default function AppTSPage({ apiBase, refreshToken, activeTab = 'bookmark
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
   const [status, setStatus] = useState<'all' | ApplicationStatus>('all')
-  const [loading, setLoading] = useState(false)
+  // Starts true: a fetch is always scheduled on mount, so the first paint
+  // must not claim the list is empty before anything has been requested.
+  const [loading, setLoading] = useState(true)
   const [busyId, setBusyId] = useState<number | null>(null)
   const [expandedId, setExpandedId] = useState<number | null>(null)
   const [details, setDetails] = useState<Record<number, ApplicationCard>>({})

@@ -46,7 +46,9 @@ export default function OpportunitiesTab({ apiBase, mailDate, refreshToken, high
   const [rows, setRows] = useState<RecruiterOpportunityCard[]>([])
   const [page, setPage] = useState(1)
   const [total,setTotal]=useState(0)
-  const [loading, setLoading] = useState(false)
+  // Starts true: a fetch is always scheduled on mount, so the first paint
+  // must not claim the list is empty before anything has been requested.
+  const [loading, setLoading] = useState(true)
   const [busyId, setBusyId] = useState<number | null>(null)
   const [edits, setEdits] = useState<Record<number, Partial<RecruiterOpportunityCard>>>({})
   const [trackingId, setTrackingId] = useState<number | null>(null)

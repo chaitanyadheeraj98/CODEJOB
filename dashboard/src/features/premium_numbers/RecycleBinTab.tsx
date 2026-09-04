@@ -41,7 +41,9 @@ export default function RecycleBinTab({ apiBase, refreshToken, onToast, filterVa
   const [rows, setRows] = useState<InventoryRow[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
-  const [loading, setLoading] = useState(false)
+  // Starts true: a fetch is always scheduled on mount, so the first paint
+  // must not claim the list is empty before anything has been requested.
+  const [loading, setLoading] = useState(true)
   const [busyId, setBusyId] = useState<number | null>(null)
   const [bulkBusy, setBulkBusy] = useState<'restore' | 'purge' | null>(null)
   const [selected, setSelected] = useState<Set<number>>(new Set())
@@ -150,8 +152,10 @@ export default function RecycleBinTab({ apiBase, refreshToken, onToast, filterVa
           { key: 'purge', label: 'Delete Forever', busyLabel: 'Deleting...', onClick: purgeSelected, variant: 'danger' },
         ]}
       />
-      <p className="inventoryNote">Deleted contacts are hidden from Number Inventory but kept here until restored or permanently deleted.</p>
-      {loading ? <p className="subtle">Loading deleted contacts...</p> : null}
+      <p className="inventoryNote" aria-live="polite">
+        Deleted contacts are hidden from Number Inventory but kept here until restored or permanently deleted.
+        {loading ? <span className="inventoryNoteBusy"> Loading deleted contacts...</span> : null}
+      </p>
       <div className="inventoryTableCard">
         <div className="inventoryTableScroll">
           <table className="inventoryTable">

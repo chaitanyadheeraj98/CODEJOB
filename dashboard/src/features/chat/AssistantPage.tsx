@@ -176,6 +176,7 @@ export default function AssistantPage() {
         >
           + New chat
         </button>
+        <h2 className="visuallyHidden">Conversations</h2>
         <nav className="assistantSessionList" aria-label="Conversations">
           {!chat.sessions.length ? <p className="subtle">No conversations yet.</p> : null}
           {groupSessions(chat.sessions).map((group) => (
@@ -250,6 +251,7 @@ export default function AssistantPage() {
           </div>
         </header>
 
+        <h2 className="visuallyHidden">Conversation messages</h2>
         <div className="chatMessages assistantMessages" aria-live="polite">
           {!chat.messages.length ? (
             <div className="assistantWelcome">
@@ -315,6 +317,7 @@ export default function AssistantPage() {
             ref={fileInputRef}
             type="file"
             className="visuallyHidden"
+            aria-label="Attach files to the conversation"
             multiple
             accept={ACCEPTED_EXTENSIONS.join(',')}
             onChange={(event) => {

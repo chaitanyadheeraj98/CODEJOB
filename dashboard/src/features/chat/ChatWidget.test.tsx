@@ -50,7 +50,7 @@ describe('ChatWidget', () => {
       await new Promise((resolve) => window.setTimeout(resolve, 0))
     })
     await act(async () => {
-      container?.querySelector<HTMLButtonElement>('[aria-label="Open CodeJob assistant"]')?.click()
+      container?.querySelector<HTMLButtonElement>('[aria-label="Open CodeJob assistant chat"]')?.click()
     })
 
     expect(container.textContent).toContain('Chat is disabled')
@@ -93,7 +93,7 @@ describe('ChatWidget', () => {
       for (let tick = 0; tick < 4; tick += 1) await new Promise((resolve) => window.setTimeout(resolve, 0))
     })
     await act(async () => {
-      container?.querySelector<HTMLButtonElement>('[aria-label="Open CodeJob assistant"]')?.click()
+      container?.querySelector<HTMLButtonElement>('[aria-label="Open CodeJob assistant chat"]')?.click()
     })
     await act(async () => {
       container?.querySelector<HTMLButtonElement>('[aria-label="Rename current chat"]')?.click()
@@ -152,7 +152,7 @@ describe('ChatWidget', () => {
       for (let tick = 0; tick < 4; tick += 1) await new Promise((resolve) => window.setTimeout(resolve, 0))
     })
     await act(async () => {
-      container?.querySelector<HTMLButtonElement>('[aria-label="Open CodeJob assistant"]')?.click()
+      container?.querySelector<HTMLButtonElement>('[aria-label="Open CodeJob assistant chat"]')?.click()
     })
 
     expect(container.textContent).toContain('Top matches')
@@ -260,7 +260,7 @@ describe('ChatWidget', () => {
       for (let tick = 0; tick < 4; tick += 1) await new Promise((resolve) => window.setTimeout(resolve, 0))
     })
     await act(async () => {
-      container?.querySelector<HTMLButtonElement>('[aria-label="Open CodeJob assistant"]')?.click()
+      container?.querySelector<HTMLButtonElement>('[aria-label="Open CodeJob assistant chat"]')?.click()
     })
 
     expect(actionCalls).toEqual([])
@@ -321,7 +321,7 @@ describe('ChatWidget', () => {
       for (let tick = 0; tick < 4; tick += 1) await new Promise((resolve) => window.setTimeout(resolve, 0))
     })
     await act(async () => {
-      container?.querySelector<HTMLButtonElement>('[aria-label="Open CodeJob assistant"]')?.click()
+      container?.querySelector<HTMLButtonElement>('[aria-label="Open CodeJob assistant chat"]')?.click()
     })
 
     const table = container.querySelector('.chatBubble.assistant table')
@@ -375,7 +375,7 @@ describe('ChatWidget', () => {
       for (let tick = 0; tick < 4; tick += 1) await new Promise((resolve) => window.setTimeout(resolve, 0))
     })
     await act(async () => {
-      container?.querySelector<HTMLButtonElement>('[aria-label="Open CodeJob assistant"]')?.click()
+      container?.querySelector<HTMLButtonElement>('[aria-label="Open CodeJob assistant chat"]')?.click()
     })
 
     const list = container.querySelector('.chatBubble.assistant ol')
@@ -428,7 +428,7 @@ describe('ChatWidget', () => {
       for (let tick = 0; tick < 4; tick += 1) await new Promise((resolve) => window.setTimeout(resolve, 0))
     })
     await act(async () => {
-      container?.querySelector<HTMLButtonElement>('[aria-label="Open CodeJob assistant"]')?.click()
+      container?.querySelector<HTMLButtonElement>('[aria-label="Open CodeJob assistant chat"]')?.click()
     })
 
     const modelSelect = container.querySelector<HTMLSelectElement>('[aria-label="Chat model"]')!

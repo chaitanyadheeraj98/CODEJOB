@@ -79,6 +79,18 @@ const initialActivePage = (): ActivePage => {
   return page && ACTIVE_PAGES.has(page) ? page : 'run_queue'
 }
 
+// Tab state has to be seeded from the URL for the same reason activePage is.
+// The restore-on-mount effect below also reads ?tab, but it only lands after
+// the first paint - so a link to ?page=premium_numbers&tab=recycle_bin used to
+// render the Inventory tab first and swap a frame later. That flashed the wrong
+// content and collapsed the filter bar from 212px to 89px underneath the rest
+// of the page, which was the largest layout shift on the site.
+const initialTab = <T extends string>(page: ActivePage, allowed: readonly T[], fallback: T): T => {
+  if (initialActivePage() !== page) return fallback
+  const tab = new URLSearchParams(window.location.search).get('tab')
+  return allowed.includes(tab as T) ? (tab as T) : fallback
+}
+
 // A short list of common zones for the datalist, not all 418 the browser knows.
 // The control is a free-text input, so any IANA name can still be typed, and the
 // server validates whatever arrives against zoneinfo - a client-supplied list is
@@ -3016,9 +3028,15 @@ function App() {
   const [fixingId, setFixingId] = useState<number | null>(null)
   const [deletingFailedId, setDeletingFailedId] = useState<number | null>(null)
   const [activePage, setActivePage] = useState<ActivePage>(initialActivePage)
-  const [premiumTab, setPremiumTab] = useState<'inventory' | 'opportunities' | 'recycle_bin'>('inventory')
-  const [applicationTrackingTab, setApplicationTrackingTab] = useState<'bookmarked' | 'tracked'>('bookmarked')
-  const [resumeTrackingTab, setResumeTrackingTab] = useState<'resumes' | 'submissions'>('resumes')
+  const [premiumTab, setPremiumTab] = useState<'inventory' | 'opportunities' | 'recycle_bin'>(
+    () => initialTab('premium_numbers', ['inventory', 'opportunities', 'recycle_bin'] as const, 'inventory'),
+  )
+  const [applicationTrackingTab, setApplicationTrackingTab] = useState<'bookmarked' | 'tracked'>(
+    () => initialTab('application_tracking', ['bookmarked', 'tracked'] as const, 'bookmarked'),
+  )
+  const [resumeTrackingTab, setResumeTrackingTab] = useState<'resumes' | 'submissions'>(
+    () => initialTab('resume_tracking', ['resumes', 'submissions'] as const, 'resumes'),
+  )
   const [pageFilterValues, setPageFilterValues] = useState<Partial<Record<string, FilterValues>>>({})
   const [pageSortValues, setPageSortValues] = useState<Partial<Record<string, string>>>({})
   const [needsReviewSelected, setNeedsReviewSelected] = useState<Set<number>>(new Set())
@@ -5332,8 +5350,10 @@ function App() {
           <strong>{logs.length}</strong>
         </article>
       </section>
-      {isCandidateRefreshing ? <p className="subtle">Refreshing filtered counts...</p> : null}
-      {candidateRefreshError ? <p className="subtle">Counts refresh issue: {candidateRefreshError}</p> : null}
+      <div className="queueStatusNotes" aria-live="polite">
+        {isCandidateRefreshing ? <p className="subtle">Refreshing filtered counts...</p> : null}
+        {candidateRefreshError ? <p className="subtle">Counts refresh issue: {candidateRefreshError}</p> : null}
+      </div>
 
       <section className="actionBar">
         <QueryBucket
@@ -5836,7 +5856,7 @@ function App() {
             </section>
           ) : null}
 
-          {activePage === 'run_queue' && !hasLoadedSettingsBootstrap ? (
+          {(activePage === 'run_queue' || activePage === 'settings') && !hasLoadedSettingsBootstrap ? (
             <section className="card pageSection">
               <h2>Settings Bootstrap</h2>
               <p className="subtle">
@@ -6931,7 +6951,7 @@ function App() {
             </form>
           ) : null}
 
-          {activePage === 'settings' ? (
+          {activePage === 'settings' && hasLoadedSettingsBootstrap ? (
             <div className="configGrid runQueueGrid">
               <SkillUpgradeSection
                 pendingSkills={pendingSkills}
@@ -7496,9 +7516,9 @@ function App() {
                           data-email-search-section="inbox"
                           data-email-search-related-id={conversation.id}
                           onClick={() => void openInboxConversation(conversation.id)}
-                          aria-label={`${isUnread ? 'Unread: ' : ''}${conversation.recruiter}, ${conversation.subject}, ${absoluteTime}`}
                           title={absoluteTime}
                         >
+                          {isUnread ? <span className="visuallyHidden">Unread. </span> : null}
                           <span className="conversationListTopline">
                             <span className="conversationListIdentity">
                               <span className="conversationListSender">{conversation.recruiter}</span>
