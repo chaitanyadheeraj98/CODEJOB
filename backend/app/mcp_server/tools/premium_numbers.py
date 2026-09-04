@@ -29,6 +29,7 @@ from app.services import (
     application_service,
     appts_service,
     field_coverage,
+    opportunity_search,
     recruiter_ranking,
     opportunity_lineage_service,
     resume_tracking_service,
@@ -457,6 +458,69 @@ def rank_recruiters(rule: str = "volume", limit: int = 10, include_deleted: bool
                 "tracked applications, too few to rank on."
             ),
         ]
+        return result
+    finally:
+        db.close()
+
+
+def search_opportunities(
+    work_mode: str = "",
+    location: str = "",
+    domain: str = "",
+    status: str = "",
+    query: str = "",
+    days: int = 0,
+    limit: int = 15,
+) -> dict[str, object]:
+    """Find opportunities by work mode, place, industry, recency, title or skill.
+
+    Call this for "show me remote roles", "anything in Dallas", "banking roles
+    this month", "Java jobs I have not actioned". Filters run over normalized
+    values, so `location="Dallas"` finds both "Dallas, TX" and "Dallas, Texas,
+    USA", and `domain="banking"` finds "Financial services/payments".
+
+    work_mode: Remote, Onsite or Hybrid. location: a city or a two-letter state
+    code. domain: banking, healthcare, payments, insurance, telecom, airline,
+    government, retail, transportation, energy. days: only rows received in the
+    last N days. query: matches job title or skills.
+
+    Some rows have no work mode recorded and it is read from their location
+    instead; those carry work_mode_source="location". Say so if you report them,
+    and read `field_coverage` before describing what the whole corpus looks like.
+    """
+    db = SessionLocal()
+    try:
+        result = opportunity_search.search(
+            db,
+            owner_id=settings.owner_id,
+            filters=opportunity_search.SearchFilters(
+                work_mode=work_mode, location=location, domain=domain,
+                status=status, query=query, days=int(days or 0),
+            ),
+            limit=limit,
+        )
+        if "error" in result:
+            return result
+        result["field_coverage"] = field_coverage.coverage_for(
+            db, ["work_mode", "location", "domain", "job_title", "extracted_skills"],
+            owner_id=settings.owner_id,
+        )
+        result["coverage_note"] = (
+            "Percentages are corpus-wide over all opportunities, not over these "
+            "results. `location` reads high but roughly half of it holds a work "
+            "mode rather than a place, and rows whose location is not a place are "
+            "never returned by a location filter."
+        )
+        unavailable = [
+            entry
+            for entry in (
+                field_coverage.unavailable_result(name)
+                for name in ("employment_type", "prime_vendor")
+            )
+            if entry is not None
+        ]
+        if unavailable:
+            result["unavailable_filters"] = unavailable
         return result
     finally:
         db.close()
