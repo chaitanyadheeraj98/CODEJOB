@@ -15,3 +15,8 @@ wheels/
 # pytest caches
 .pytest_cache/
 .testmondata*
+
+# end_client remediation audit trail. The applied run and PROVENANCE.md are
+# committed - they are the record of rows destroyed in production. Dry runs are
+# reproducible by re-running the script, so they are not.
+var/end_client_remediation/*-dryrun.json

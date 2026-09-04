@@ -1355,12 +1355,19 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
         self.assertEqual(context.end_client, "Major Airline Co")
         self.assertEqual(context.implementation_partner, "Jasvik Solutions")
 
-        # AI blank on a field -> falls back to the regex-derived item field (location/end_client),
-        # or stays blank when there's no regex equivalent (work_mode/visa/domain/implementation_partner).
+        # AI blank on a field -> falls back to the regex-derived item field
+        # (location), or stays blank when there is no regex equivalent
+        # (work_mode/visa/domain/implementation_partner).
+        #
+        # `end_client` is deliberately NOT in the first group. `item.company` is
+        # the posting company, and mapping it here produced every invalid
+        # end_client value in the 2026-09-03 audit - 21 of 29 populated Nvoids
+        # rows, including "facing skills<br />..." scraped from "client-facing".
+        # An unstated end client stays blank: *not identified*.
         blank_ai_context = _context_from_external_opportunity(item, "full jd body", JobMetadataAiExtraction())
         self.assertEqual(blank_ai_context.job_title, "")
         self.assertEqual(blank_ai_context.location, "")
-        self.assertEqual(blank_ai_context.end_client, item.company)
+        self.assertEqual(blank_ai_context.end_client, "")
         self.assertEqual(blank_ai_context.work_mode, "")
         self.assertEqual(blank_ai_context.domain, "")
 
@@ -1481,7 +1488,8 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
         self.assertEqual(context.received_at, item.posted_at)
         self.assertIsNone(context.recruiter_email_row_id)
         self.assertEqual(context.external_opportunity_row_id, item.id)
-        self.assertEqual(context.end_client, item.company)
+        # Not item.company - see the note above on the mapping defect.
+        self.assertEqual(context.end_client, "")
         self.assertEqual(context.skills_text, item.skills_text)
         self.assertEqual(context.location, item.location)
         # No equivalent source for these fields on the nvoids side (§23.1) —

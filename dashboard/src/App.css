@@ -5964,3 +5964,22 @@ button.chatRankedLabel:focus-visible {
   color: var(--muted);
   font-size: 13px;
 }
+
+/* End client is optional: the label says so, and the hint explains that a blank
+   records "not identified" rather than "no end client". Muted so it reads as
+   guidance next to the field name, not as a second label. */
+.field-optional {
+  font-weight: 400;
+  font-size: 0.85em;
+  opacity: 0.7;
+}
+
+/* The only hint in the manual submission form; scoped to the form so it does
+   not restyle <small> elsewhere. */
+.resumeTrackingForm label small {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.8em;
+  line-height: 1.35;
+  opacity: 0.7;
+}

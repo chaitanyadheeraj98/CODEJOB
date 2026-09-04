@@ -199,6 +199,7 @@ from app.services import (
     appts_service,
     resume_tracking_service,
     email_lookup_service,
+    end_client_validation,
     filter_options_service,
     opportunity_lineage_service,
     policy_service,
@@ -5778,7 +5779,10 @@ def _ensure_review_opportunity(
             else (email.gmail_received_at if email else datetime.now(UTC))
         ),
         job_title=(external.role if external else (email.role if email else card.email_subject)),
-        end_client=(external.company if external else (email.end_client if email else "")),
+        # `external.company` is the posting company, not the end client - the same
+        # mapping defect fixed in phone_intelligence_workflow_service. An Nvoids
+        # posting that never names a client leaves this blank: *not identified*.
+        end_client=end_client_validation.clean_end_client(email.end_client if email else ""),
         location=(external.location if external else (email.location if email else "")),
         work_mode=external.work_mode if external else "",
         visa_restrictions=external.visa_hints if external else "",

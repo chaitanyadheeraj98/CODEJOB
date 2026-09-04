@@ -27,7 +27,7 @@ from app.premium_numbers.domain_guard import employer_domains_for_owner, is_deri
 from app.premium_numbers.extraction import EMAIL_RE, ExtractedContactGroup, extract_phone_leads
 from app.premium_numbers.identity_matching import classify_identity_match
 from app.premium_numbers.phone_normalization import canonicalize_phone
-from app.services import opportunity_lineage_service
+from app.services import end_client_validation, opportunity_lineage_service
 
 
 logger = logging.getLogger(__name__)
@@ -201,7 +201,13 @@ def _context_from_recruiter_email(
         received_at=email.gmail_received_at,
         recruiter_email_row_id=email.id,
         external_opportunity_row_id=None,
-        end_client=ai.end_client or email.end_client or "",
+        # Both candidates are genuine end-client fields, so preferring one over
+        # the other is safe - but neither is validated at its own write site, so
+        # a fragment stored earlier must not be promoted here.
+        end_client=(
+            end_client_validation.clean_end_client(ai.end_client)
+            or end_client_validation.clean_end_client(email.end_client)
+        ),
         implementation_partner=ai.implementation_partner or email.implementation_partner or "",
         domain=ai.domain or email.domain or "",
         skills_text=email.skills_text or "",
@@ -234,7 +240,12 @@ def _context_from_external_opportunity(
         received_at=item.posted_at,
         recruiter_email_row_id=None,
         external_opportunity_row_id=item.id,
-        end_client=ai.end_client or item.company or "",
+        # `item.company` is the *posting* company, not the end client, and it is
+        # scraped by a label regex that matches the "client" inside
+        # "client-facing". It was the source of every invalid end_client value in
+        # the 2026-09-03 audit - 21 of 29 populated nvoids rows. There is no
+        # fallback: an unstated end client stays blank, meaning *not identified*.
+        end_client=end_client_validation.clean_end_client(ai.end_client),
         implementation_partner=ai.implementation_partner,
         domain=ai.domain,
         skills_text=item.skills_text or "",

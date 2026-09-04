@@ -1,0 +1,284 @@
+{
+  "generated_at": "2026-09-04T03:00:42.411378+00:00",
+  "git_commit": "unknown",
+  "mode": "apply",
+  "totals": {
+    "populated": 76,
+    "changed": 27,
+    "preserved": 49,
+    "flagged_for_review": 0
+  },
+  "changes": [
+    {
+      "table": "recruiter_opportunities",
+      "row_id": 244,
+      "column": "end_client",
+      "source_type": "nvoids",
+      "before": "side Technologies HTML",
+      "after": "",
+      "reason": "compound_tail_fragment",
+      "length_before": 22
+    },
+    {
+      "table": "recruiter_opportunities",
+      "row_id": 245,
+      "column": "end_client",
+      "source_type": "nvoids",
+      "before": "side Technologies HTML",
+      "after": "",
+      "reason": "compound_tail_fragment",
+      "length_before": 22
+    },
+    {
+      "table": "recruiter_opportunities",
+      "row_id": 414,
+      "column": "end_client",
+      "source_type": "nvoids",
+      "before": "Techspace IT<br /><br />Website<br />: <br />www.techspaceit.com<br /><br />From: C2c requirement &lt",
+      "after": "",
+      "reason": "html_markup",
+      "length_before": 101
+    },
+    {
+      "table": "recruiter_opportunities",
+      "row_id": 683,
+      "column": "end_client",
+      "source_type": "nvoids",
+      "before": "State of WI<br /><br />Description:   <br /><br />Program Related:<br /><br />Please ensure you attach the WI Cover Sheet (attached)",
+      "after": "",
+      "reason": "html_markup",
+      "length_before": 132
+    },
+    {
+      "table": "recruiter_opportunities",
+      "row_id": 688,
+      "column": "end_client",
+      "source_type": "nvoids",
+      "before": "facing skills<br /><br />Preferred:<br /><br />Experience working with large enterprise applications<br /><br />Prior telecom/networking domain experience is a plus<br /><br />Ability to work onsite from Day 1 in San Jose",
+      "after": "",
+      "reason": "html_markup",
+      "length_before": 221
+    },
+    {
+      "table": "recruiter_opportunities",
+      "row_id": 689,
+      "column": "end_client",
+      "source_type": "nvoids",
+      "before": "facing skills<br /><br />Preferred:<br /><br />Experience working with large enterprise applications<br /><br />Prior telecom/networking domain experience is a plus<br /><br />Ability to work onsite from Day 1 in San Jose",
+      "after": "",
+      "reason": "html_markup",
+      "length_before": 221
+    },
+    {
+      "table": "recruiter_opportunities",
+      "row_id": 690,
+      "column": "end_client",
+      "source_type": "nvoids",
+      "before": "facing skills<br /><br />Preferred:<br /><br />Experience working with large enterprise applications<br /><br />Prior telecom/networking domain experience is a plus<br /><br />Ability to work onsite from Day 1 in San Jose",
+      "after": "",
+      "reason": "html_markup",
+      "length_before": 221
+    },
+    {
+      "table": "recruiter_opportunities",
+      "row_id": 737,
+      "column": "end_client",
+      "source_type": "nvoids",
+      "before": "facing",
+      "after": "",
+      "reason": "compound_tail_fragment",
+      "length_before": 6
+    },
+    {
+      "table": "recruiter_opportunities",
+      "row_id": 738,
+      "column": "end_client",
+      "source_type": "nvoids",
+      "before": "facing",
+      "after": "",
+      "reason": "compound_tail_fragment",
+      "length_before": 6
+    },
+    {
+      "table": "recruiter_opportunities",
+      "row_id": 739,
+      "column": "end_client",
+      "source_type": "nvoids",
+      "before": "State of South Carolina (SCDOR)<br /><br /> Duration: 12 Months<br /><br />Must-Have Skills:<br /><br /> SQL Server 2019 / 2022 / 2025<br /><br /> Windows Server 2019 / 2022 / 2025<br /><br /> Database Administration<br /><br /> Database Architecture<br /><br /> Performance Tuning<br /><br /> Backup &amp",
+      "after": "",
+      "reason": "html_markup",
+      "length_before": 305
+    },
+    {
+      "table": "recruiter_opportunities",
+      "row_id": 812,
+      "column": "end_client",
+      "source_type": "gmail",
+      "before": "c2c-requirements+unsubscribe@googlegroups.com.",
+      "after": "",
+      "reason": "email_address",
+      "length_before": 46
+    },
+    {
+      "table": "recruiter_opportunities",
+      "row_id": 813,
+      "column": "end_client",
+      "source_type": "gmail",
+      "before": "c2c-requirements+unsubscribe@googlegroups.com.",
+      "after": "",
+      "reason": "email_address",
+      "length_before": 46
+    },
+    {
+      "table": "recruiter_opportunities",
+      "row_id": 855,
+      "column": "end_client",
+      "source_type": "nvoids",
+      "before": "a leader in its industry. If you are interested in pursuing this opportunity",
+      "after": "",
+      "reason": "prose_marker",
+      "length_before": 76
+    },
+    {
+      "table": "recruiter_opportunities",
+      "row_id": 862,
+      "column": "end_client",
+      "source_type": "nvoids",
+      "before": "Local to Idaho Only - No",
+      "after": "",
+      "reason": "eligibility_constraint",
+      "length_before": 24
+    },
+    {
+      "table": "recruiter_opportunities",
+      "row_id": 874,
+      "column": "end_client",
+      "source_type": "nvoids",
+      "before": "facing skills.",
+      "after": "",
+      "reason": "compound_tail_fragment",
+      "length_before": 14
+    },
+    {
+      "table": "recruiter_opportunities",
+      "row_id": 958,
+      "column": "end_client",
+      "source_type": "nvoids",
+      "before": "facing",
+      "after": "",
+      "reason": "compound_tail_fragment",
+      "length_before": 6
+    },
+    {
+      "table": "recruiter_opportunities",
+      "row_id": 960,
+      "column": "end_client",
+      "source_type": "nvoids",
+      "before": "facing",
+      "after": "",
+      "reason": "compound_tail_fragment",
+      "length_before": 6
+    },
+    {
+      "table": "recruiter_opportunities",
+      "row_id": 1008,
+      "column": "end_client",
+      "source_type": "nvoids",
+      "before": "Server applications using",
+      "after": "",
+      "reason": "trailing_stopword",
+      "length_before": 25
+    },
+    {
+      "table": "recruiter_opportunities",
+      "row_id": 1013,
+      "column": "end_client",
+      "source_type": "nvoids",
+      "before": "facing roles and solution discussions",
+      "after": "",
+      "reason": "compound_tail_fragment",
+      "length_before": 37
+    },
+    {
+      "table": "recruiter_opportunities",
+      "row_id": 1020,
+      "column": "end_client",
+      "source_type": "nvoids",
+      "before": "facing consulting skills.",
+      "after": "",
+      "reason": "compound_tail_fragment",
+      "length_before": 25
+    },
+    {
+      "table": "recruiter_opportunities",
+      "row_id": 1039,
+      "column": "end_client",
+      "source_type": "nvoids",
+      "before": "facing consulting skills.",
+      "after": "",
+      "reason": "compound_tail_fragment",
+      "length_before": 25
+    },
+    {
+      "table": "recruiter_opportunities",
+      "row_id": 1043,
+      "column": "end_client",
+      "source_type": "nvoids",
+      "before": "facing consulting skills.",
+      "after": "",
+      "reason": "compound_tail_fragment",
+      "length_before": 25
+    },
+    {
+      "table": "recruiter_opportunities",
+      "row_id": 1072,
+      "column": "end_client",
+      "source_type": "nvoids",
+      "before": "Local to NC Only - NO",
+      "after": "",
+      "reason": "eligibility_constraint",
+      "length_before": 21
+    },
+    {
+      "table": "recruiter_opportunities",
+      "row_id": 1102,
+      "column": "end_client",
+      "source_type": "nvoids",
+      "before": "side (Client Scripts",
+      "after": "",
+      "reason": "compound_tail_fragment",
+      "length_before": 20
+    },
+    {
+      "table": "recruiter_opportunities",
+      "row_id": 1103,
+      "column": "end_client",
+      "source_type": "nvoids",
+      "before": "facing UIs with backend components.",
+      "after": "",
+      "reason": "compound_tail_fragment",
+      "length_before": 35
+    },
+    {
+      "table": "recruiter_opportunities",
+      "row_id": 1136,
+      "column": "end_client",
+      "source_type": "nvoids",
+      "before": "facing experience",
+      "after": "",
+      "reason": "compound_tail_fragment",
+      "length_before": 17
+    },
+    {
+      "table": "recruiter_opportunities",
+      "row_id": 1151,
+      "column": "end_client",
+      "source_type": "nvoids",
+      "before": "side patterns: safe auth flows",
+      "after": "",
+      "reason": "label_or_clause",
+      "length_before": 30
+    }
+  ],
+  "review_only": []
+}

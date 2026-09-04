@@ -1363,7 +1363,10 @@ class ManualApplicationCreateRequest(BaseModel):
     manual_recruiter_phone: str = Field(default="", max_length=80)
     manual_recruiter_linkedin_url: str = Field(default="", max_length=2000)
     manual_job_title: str = Field(min_length=1)
-    manual_end_client: str = Field(min_length=1)
+    # Optional: most postings never name an end client, and requiring one made
+    # every caller substitute the recruiter or posting company. Blank means
+    # *not identified*.
+    manual_end_client: str = Field(default="", max_length=255)
     manual_jd_text: str = ""
     manual_source_note: str = ""
     submission_method: str = Field(default="email", min_length=1, max_length=20)
