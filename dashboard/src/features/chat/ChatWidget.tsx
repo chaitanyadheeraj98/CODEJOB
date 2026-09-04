@@ -134,6 +134,7 @@ export default function ChatWidget() {
                   </label>
                 </div>
               </div>
+              <h2 className="visuallyHidden">Conversation messages</h2>
               <div className="chatMessages" aria-live="polite">
                 {!chat.messages.length ? (
                   <div className="chatWelcome">
@@ -213,7 +214,7 @@ export default function ChatWidget() {
         className="chatLauncher"
         onClick={() => setOpen((current) => !current)}
         aria-expanded={open}
-        aria-label={open ? 'Close CodeJob assistant' : 'Open CodeJob assistant'}
+        aria-label={open ? 'Close CodeJob assistant chat' : 'Open CodeJob assistant chat'}
       >
         {open ? 'x' : 'Chat'}
         {!open && chat.unseenCount > 0 ? (

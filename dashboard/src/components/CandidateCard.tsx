@@ -270,13 +270,15 @@ export default function CandidateCard({
         {item.draft_ai_error ? <p className="subtle"><strong>AI fallback:</strong> {item.draft_ai_error}</p> : null}
         <p><strong>Draft:</strong></p>
         <div className="draftUnified">
-          <label className="draftPaneLabel">Editable Draft</label>
+          <label className="draftPaneLabel" htmlFor={`draft-${item.id}`}>Editable Draft</label>
           <textarea
+            id={`draft-${item.id}`}
             value={draftValue}
             rows={10}
             onChange={(e) => onDraftChange(e.target.value)}
           />
-          <label className="draftPaneLabel">Live Preview</label>
+          {/* A <label> with no form control is meaningless; the preview is a div. */}
+          <span className="draftPaneLabel">Live Preview</span>
           <div
             className="draftPreview"
             style={draftTextSizeToPreviewStyle(draftTextSize)}

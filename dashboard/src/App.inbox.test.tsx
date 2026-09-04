@@ -190,7 +190,11 @@ describe('Inbox dashboard', () => {
 
     const unreadRow = container.querySelector<HTMLButtonElement>('.conversationListItem.unread')
     expect(unreadRow?.querySelector('.unreadDot')).not.toBeNull()
-    expect(unreadRow?.getAttribute('aria-label')).toContain('Unread: Kim Lee, Platform Engineer')
+    expect(unreadRow?.getAttribute('aria-label')).toBeNull()
+    expect(unreadRow?.querySelector('.visuallyHidden')?.textContent).toBe('Unread. ')
+    expect(unreadRow?.textContent).toContain('Unread. ')
+    expect(unreadRow?.textContent).toContain('Kim Lee')
+    expect(unreadRow?.textContent).toContain('Platform Engineer')
     expect(unreadRow?.title).not.toBe('')
 
     expect(container.querySelector('.conversationStatusBadge')?.textContent).toBe('sent')
