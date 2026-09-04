@@ -158,6 +158,8 @@ class SettingsRequest(BaseModel):
     nvoids_job_role: str = ""
     nvoids_search_location: str = ""
     nvoids_custom_query: str = ""
+    nvoids_end_client: str = ""
+    nvoids_query_mode: str = "composed"
     feature_auto_send: bool = False
     feature_retry_queue: bool = False
     feature_ai_enabled: bool = False

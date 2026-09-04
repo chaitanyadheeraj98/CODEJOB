@@ -2360,6 +2360,8 @@ def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
         nvoids_job_role=s.nvoids_job_role or "",
         nvoids_search_location=s.nvoids_search_location or "",
         nvoids_custom_query=s.nvoids_custom_query or "",
+        nvoids_end_client=s.nvoids_end_client or "",
+        nvoids_query_mode=s.nvoids_query_mode or "composed",
         feature_auto_send=s.feature_auto_send,
         feature_retry_queue=s.feature_retry_queue,
         feature_ai_enabled=s.feature_ai_enabled,
@@ -2798,6 +2800,8 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
     s.nvoids_job_role = payload.nvoids_job_role
     s.nvoids_search_location = payload.nvoids_search_location
     s.nvoids_custom_query = payload.nvoids_custom_query
+    s.nvoids_end_client = payload.nvoids_end_client
+    s.nvoids_query_mode = payload.nvoids_query_mode
     s.feature_auto_send = payload.feature_auto_send
     s.feature_retry_queue = payload.feature_retry_queue
     s.feature_ai_enabled = payload.feature_ai_enabled

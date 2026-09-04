@@ -81,6 +81,20 @@ class EnqueueResult:
     candidate_email_id: int | None = None
 
 
+
+# §16.6. A company name becomes a conjunction of its own words, never its first
+# word: the bare `morgan` is what matched *Morgan, Utah*.
+QUERY_MODE_COMPOSED = "composed"
+QUERY_MODE_END_CLIENT_ONLY = "end_client_only"
+QUERY_MODES = (QUERY_MODE_COMPOSED, QUERY_MODE_END_CLIENT_ONLY)
+
+
+def build_end_client_clause(end_client: str | None) -> str:
+    """`Morgan Stanley` -> `morgan and stanley`. Empty for no client."""
+    tokens = [token for token in re.split(r"[^A-Za-z0-9&]+", (end_client or "").strip()) if token]
+    return " and ".join(token.lower() for token in tokens)
+
+
 class ExternalFeedService:
     def __init__(self) -> None:
         self.collector = NvoidsCollector()
@@ -118,16 +132,45 @@ class ExternalFeedService:
         job_role: str | None = None,
         search_location: str | None = None,
         custom_query: str | None = None,
+        end_client: str | None = None,
+        query_mode: str = QUERY_MODE_COMPOSED,
     ) -> str:
+        """Compose the nvoids search string from the owner's criteria.
+
+        `custom_query` still wins outright: someone who typed raw nvoids syntax
+        meant it, and second-guessing them would make the field useless.
+
+        `end_client` is split into tokens joined by `and`, so `Morgan Stanley`
+        asks for both words. The bare `morgan` returns a posting located in
+        *Morgan, Utah* - and nvoids will not honour the conjunction strictly
+        anyway (§16.0), which is precisely why the request should not be made
+        looser than it has to be. Precision comes from re-verifying locally.
+
+        `end_client_only` drops role and location. Composing all three collapses
+        to almost nothing - java 3,406 rows, java+Texas 894, java+Texas+Citi 2 -
+        so composition is right for narrowing and useless for discovery.
+        """
         custom = (custom_query or "").strip()
         if custom:
             return custom
+        client_clause = build_end_client_clause(end_client)
+        if query_mode == QUERY_MODE_END_CLIENT_ONLY:
+            # Falls through to the composed path when no client was given, so an
+            # empty mode never silently searches for everything.
+            if client_clause:
+                return client_clause
         role = (job_role or "").strip()
         location = (search_location or "").strip()
-        if not role and not location:
+        if not role and not location and not client_clause:
             return self.default_query
-        role_clause = role or "java and spring* not(*js)"
-        return f"({location}) and {role_clause}" if location else role_clause
+        clauses: list[str] = []
+        if location:
+            clauses.append(f"({location})")
+        if role or not client_clause:
+            clauses.append(role or "java and spring* not(*js)")
+        if client_clause:
+            clauses.append(client_clause)
+        return " and ".join(clauses)
 
     def row_matches_locations(self, row_location: str, raw_locations: list[str] | tuple[str, ...] | None) -> bool:
         locations = self._normalize_location_tokens(raw_locations)
@@ -214,6 +257,8 @@ class ExternalFeedService:
             job_role=user_settings.nvoids_job_role,
             search_location=user_settings.nvoids_search_location,
             custom_query=user_settings.nvoids_custom_query,
+            end_client=getattr(user_settings, "nvoids_end_client", "") or "",
+            query_mode=getattr(user_settings, "nvoids_query_mode", "") or QUERY_MODE_COMPOSED,
         )
         run = ExternalScrapeRun(owner_id=owner_id, source_type="nvoids", started_at=datetime.now(UTC), notes="")
         db.add(run)
