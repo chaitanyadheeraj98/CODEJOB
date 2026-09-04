@@ -28,6 +28,7 @@ from app.models import (
 from app.services import (
     application_service,
     appts_service,
+    field_coverage,
     opportunity_lineage_service,
     resume_tracking_service,
 )
@@ -391,7 +392,13 @@ def list_recruiter_opportunities(status: str = "", source_email_id: int = 0, lim
                     "work_mode": row.work_mode,
                     "visa_restrictions": row.visa_restrictions,
                     "domain": row.domain,
-                    "prime_vendor": row.prime_vendor,
+                    # `prime_vendor` and `employment_type` are omitted, not blank:
+                    # they are empty on every row, so there is no record-level value
+                    # to withhold and returning "" invites the absence to be read as
+                    # a finding. See `field_coverage` below. `implementation_partner`
+                    # is kept because 18 rows genuinely carry one and a lookup on a
+                    # named record is legitimate - what it may not support is a claim
+                    # about which partners are active.
                     "implementation_partner": row.implementation_partner,
                     "resume_file_name": row.resume_file_name,
                     "extracted_skills": row.extracted_skills,
@@ -416,9 +423,75 @@ def list_recruiter_opportunities(status: str = "", source_email_id: int = 0, lim
                 }
                 for row in rows
             ],
+            **_opportunity_evidence_block(db, rows),
         }
     finally:
         db.close()
+
+
+# Fields the caller sees a value for, and may therefore describe. Coverage is
+# measured live against the whole table on every call - never against `rows`,
+# which is self-selected and would read far higher than the field deserves.
+_REPORTED_FIELDS = [
+    "job_title",
+    "extracted_skills",
+    "work_mode",
+    "location",
+    "domain",
+    "end_client",
+    "implementation_partner",
+]
+
+# Empty on every row. Omitted from the payload entirely; the refusal explains why.
+_WITHHELD_FIELDS = ["prime_vendor", "employment_type"]
+
+
+def _opportunity_evidence_block(db, rows: list) -> dict[str, object]:
+    """Coverage, refusals and alias warnings that travel with the rows.
+
+    The model is not asked to remember how sparse a field is; the number arrives
+    beside the data it qualifies. Evidence is harder to argue past than a rule.
+    """
+    block: dict[str, object] = {
+        "field_coverage": field_coverage.coverage_for(
+            db, _REPORTED_FIELDS, owner_id=settings.owner_id
+        ),
+        "coverage_note": (
+            "Percentages are corpus-wide over all opportunities, not over these "
+            "results. Quote the corpus figure when the answer generalises. Any "
+            "count within these rows is a subset figure and must be labelled as "
+            "such - it never replaces the corpus figure."
+        ),
+    }
+    refusals = [
+        result
+        for result in (field_coverage.unavailable_result(name) for name in _WITHHELD_FIELDS)
+        if result is not None
+    ]
+    restricted = [
+        result
+        for result in (
+            field_coverage.unavailable_result(name)
+            for name in _REPORTED_FIELDS
+            if field_coverage.availability(name) == field_coverage.UNAVAILABLE
+        )
+        if result is not None
+    ]
+    if refusals:
+        block["unavailable_fields"] = refusals
+    if restricted:
+        block["restricted_fields"] = restricted
+    aliases = [
+        note
+        for note in (
+            field_coverage.unconfirmed_alias_note(db, name, owner_id=settings.owner_id)
+            for name in _REPORTED_FIELDS
+        )
+        if note is not None
+    ]
+    if aliases:
+        block["unconfirmed_aliases"] = aliases
+    return block
 
 
 def _iso(value) -> str | None:

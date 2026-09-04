@@ -1,0 +1,169 @@
+"""W12 — the answering rule, enforced by the tool rather than trusted to the model.
+
+The classification numbers here mirror production on 2026-09-04: 1,117
+opportunities, `end_client` on 49, `implementation_partner` on 18, `prime_vendor`
+and `employment_type` on none.
+"""
+
+from __future__ import annotations
+
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+
+from app.models import Base, RecruiterOpportunity
+from app.services import field_coverage
+
+OWNER_ID = "owner-coverage"
+
+
+@pytest.fixture()
+def db() -> Session:
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        # 10 rows: 2 name an end client, none name a prime vendor. The shape of
+        # production in miniature - a field that answers a little, and one that
+        # cannot answer at all.
+        for index in range(10):
+            session.add(
+                RecruiterOpportunity(
+                    owner_id=OWNER_ID,
+                    recruiter_number_id=1,
+                    gmail_message_id=f"msg-{index}",
+                    job_title=f"Java Developer {index}",
+                    end_client="Capgemini" if index < 2 else "",
+                    work_mode="Remote" if index < 7 else "",
+                    prime_vendor="",
+                    employment_type="",
+                    status="New",
+                )
+            )
+        session.commit()
+        yield session
+
+
+def test_coverage_is_corpus_wide_not_subset(db: Session) -> None:
+    result = field_coverage.coverage(db, "end_client", owner_id=OWNER_ID)
+    assert (result.populated, result.total, result.percent) == (2, 10, 20.0)
+    assert result.as_dict()["scope"] == "corpus"
+
+
+def test_subset_coverage_is_labelled_and_cannot_pass_as_corpus(db: Session) -> None:
+    """The two rows that *do* name a client are 100% populated among themselves.
+
+    That figure is true and useless as a reliability signal, which is why it
+    carries `scope: subset` and a note pointing back at the corpus number.
+    """
+    rows = db.query(RecruiterOpportunity).filter(RecruiterOpportunity.end_client != "").all()
+    subset = field_coverage.subset_coverage(rows, "end_client")
+    assert subset["percent"] == 100.0
+    assert subset["scope"] == "subset"
+    assert "corpus" in subset["note"]
+    assert field_coverage.coverage(db, "end_client", owner_id=OWNER_ID).percent == 20.0
+
+
+def test_zero_coverage_fields_return_a_refusal(db: Session) -> None:
+    for name in ("prime_vendor", "employment_type"):
+        result = field_coverage.unavailable_result(name)
+        assert result is not None
+        assert result["unavailable"] is True
+        assert result["may_answer_from_this_field"] is False
+        assert "Decline" in result["instruction"]
+
+
+def test_refusal_describes_the_system_not_the_world(db: Session) -> None:
+    """An empty column says nothing about whether prime vendors exist."""
+    reason = field_coverage.unavailable_result("prime_vendor")["reason"]
+    assert "nothing has ever written to it" in reason
+    assert "does not mean there are no prime vendors" in reason
+
+
+def test_usable_fields_have_no_refusal(db: Session) -> None:
+    for name in ("job_title", "work_mode", "end_client", "location"):
+        assert field_coverage.unavailable_result(name) is None
+        assert field_coverage.availability(name) != field_coverage.UNAVAILABLE
+
+
+def test_sparse_but_populated_field_is_restricted_not_withheld(db: Session) -> None:
+    """`implementation_partner` has real values on 18 production rows.
+
+    A lookup on a named record is legitimate; a claim about which partners are
+    active is not. So it is classified UNAVAILABLE for population claims while
+    its per-row value still travels in the payload.
+    """
+    assert field_coverage.availability("implementation_partner") == field_coverage.UNAVAILABLE
+    assert field_coverage.unavailable_result("implementation_partner") is not None
+
+
+def test_unconfirmed_aliases_are_reported_separately_never_summed(db: Session) -> None:
+    db.add_all(
+        [
+            RecruiterOpportunity(
+                owner_id=OWNER_ID, recruiter_number_id=1, job_title="A",
+                gmail_message_id="msg-A",
+                end_client="American Express", status="New",
+            ),
+            RecruiterOpportunity(
+                owner_id=OWNER_ID, recruiter_number_id=1, job_title="B",
+                gmail_message_id="msg-B",
+                end_client="American Express", status="New",
+            ),
+            RecruiterOpportunity(
+                owner_id=OWNER_ID, recruiter_number_id=1, job_title="C",
+                gmail_message_id="msg-C",
+                end_client="AMEX", status="New",
+            ),
+        ]
+    )
+    db.commit()
+    note = field_coverage.unconfirmed_alias_note(db, "end_client", owner_id=OWNER_ID)
+    assert note is not None
+    counts = note["groups"][0]["values"]
+    assert counts == {"American Express": 2, "AMEX": 1}
+    assert note["groups"][0]["status"] == "unconfirmed"
+    assert note["field"] == "end_client"
+    assert "Do not sum them." in note["instruction"]
+
+
+def test_no_alias_note_when_only_one_spelling_is_present(db: Session) -> None:
+    """A warning that fires on a single spelling is noise the model learns to skip."""
+    db.add(
+        RecruiterOpportunity(
+            owner_id=OWNER_ID, recruiter_number_id=1, job_title="A",
+                gmail_message_id="msg-A",
+            end_client="American Express", status="New",
+        )
+    )
+    db.commit()
+    assert field_coverage.unconfirmed_alias_note(db, "end_client", owner_id=OWNER_ID) is None
+
+
+def test_coverage_is_scoped_to_the_owner(db: Session) -> None:
+    db.add(
+        RecruiterOpportunity(
+            owner_id="someone-else", recruiter_number_id=1, job_title="X",
+                gmail_message_id="msg-X",
+            end_client="Morgan Stanley", status="New",
+        )
+    )
+    db.commit()
+    assert field_coverage.coverage(db, "end_client", owner_id=OWNER_ID).total == 10
+
+
+def test_empty_table_does_not_divide_by_zero(db: Session) -> None:
+    result = field_coverage.coverage(db, "end_client", owner_id="nobody")
+    assert (result.total, result.percent, result.may_carry_a_claim) == (0, 0.0, False)
+
+
+def test_system_prompt_carries_the_policy() -> None:
+    """Both controls ship together: the payload carries evidence, the prompt
+    carries the rule for reading it. Either alone is weaker."""
+    from app.ai.chat.system_prompt import build_system_prompt
+
+    prompt = build_system_prompt()
+    assert "field_coverage" in prompt
+    assert "corpus-wide" in prompt
+    assert "unavailable_fields" in prompt
+    assert "unconfirmed_aliases" in prompt
+    assert "never on a lookup of one record" in prompt
