@@ -200,8 +200,25 @@ def run_gmail_sync_job(*, run_key: str, sync_batch_id: str) -> dict[str, Any]:
         db.close()
 
 
-def run_nvoids_sync_job(*, run_key: str, max_items: int) -> dict[str, Any]:
+def run_nvoids_sync_job(
+    *, run_key: str, max_items: int, criteria: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """The scheduled sync, and - when `criteria` is given - one search for a
+    named company. Same work either way; only the query differs."""
     from app import main
+    from app.services import nvoids_search_job
+
+    search = (
+        nvoids_search_job.SearchCriteria(
+            end_client=str(criteria.get("end_client") or ""),
+            job_role=str(criteria.get("job_role") or ""),
+            search_location=str(criteria.get("search_location") or ""),
+            query_mode=str(criteria.get("query_mode") or "composed"),
+            batch_limit=int(criteria.get("batch_limit") or max_items),
+        )
+        if criteria
+        else None
+    )
 
     db = SessionLocal()
     try:
@@ -210,12 +227,17 @@ def run_nvoids_sync_job(*, run_key: str, max_items: int) -> dict[str, Any]:
             run_key=run_key,
             total_items=max_items,
             status="running",
-            detail="Nvoids sync worker started.",
+            detail=(
+                f"Searching nvoids for {search.end_client}."
+                if search and search.end_client
+                else "Nvoids sync worker started."
+            ),
         )
         result = main._run_nvoids_sync(
             db,
             max_items=max_items,
             run_key_override=run_key,
+            criteria_override=search,
             progress_callback=lambda processed, total: update_job_progress(
                 db,
                 run_key=run_key,
@@ -224,17 +246,28 @@ def run_nvoids_sync_job(*, run_key: str, max_items: int) -> dict[str, Any]:
                 status="running",
             ),
         )
+        if search is not None:
+            # The §16 outcome in words, written where the completion is read
+            # from. `fetched` is what the crawl returned and `created` what
+            # survived dedupe and the phone gate - reporting only the first
+            # overstates the result about fourfold.
+            outcome = nvoids_search_job.summarize_outcome(
+                found=result.fetched_count, imported=result.created_count
+            )
+            detail = f"{nvoids_search_job.DETAIL_PREFIX}{outcome['outcome']} | {outcome['message']}"
+        else:
+            detail = (
+                "nvoids sync complete: "
+                f"fetched={result.fetched_count} created={result.created_count} "
+                f"deduped={result.deduped_count} skipped_location={result.skipped_location_count} "
+                f"failed={result.failed_count}"
+            )
         row = update_job_progress(
             db,
             run_key=run_key,
             processed_items=max(result.fetched_count, result.created_count + result.deduped_count),
             status="ok",
-            detail=(
-                "nvoids sync complete: "
-                f"fetched={result.fetched_count} created={result.created_count} "
-                f"deduped={result.deduped_count} skipped_location={result.skipped_location_count} "
-                f"failed={result.failed_count}"
-            ),
+            detail=detail,
             complete=True,
         )
         return {"run_key": run_key, "status": row.status}

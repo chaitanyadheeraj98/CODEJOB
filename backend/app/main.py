@@ -142,6 +142,7 @@ from app.recent_runs import (
     create_recent_run,
     gmail_sync_run_key,
     row_to_recent_run_dict,
+    NVOIDS_CLIENT_SEARCH_PREFIX,
 )
 from app.jobs.queues import (
     AUTOMATION_RUN_QUEUE,
@@ -1309,6 +1310,25 @@ def _enqueue_nvoids_sync(db: Session, *, max_items: int) -> JobEnqueueResponse:
         run_key=run_key,
         task=run_nvoids_sync_job,
         task_kwargs={"run_key": run_key, "max_items": max_items},
+        total_items=max_items,
+    )
+
+
+def _enqueue_nvoids_client_search(db: Session, *, criteria: dict) -> JobEnqueueResponse:
+    """One nvoids search against supplied criteria, queued like any other job.
+
+    Its own run-key prefix so the assistant can find the run it started rather
+    than the most recent scheduled sync, which may be someone else's.
+    """
+    run_key = f"{NVOIDS_CLIENT_SEARCH_PREFIX}{uuid.uuid4().hex}"
+    max_items = int(criteria.get("batch_limit") or 10)
+    return _enqueue_background_job(
+        db,
+        queue_name=NVOIDS_SYNC_QUEUE,
+        run_source=RUN_SOURCE_NVOIDS_SYNC,
+        run_key=run_key,
+        task=run_nvoids_sync_job,
+        task_kwargs={"run_key": run_key, "max_items": max_items, "criteria": criteria},
         total_items=max_items,
     )
 
@@ -4061,6 +4081,7 @@ def _run_nvoids_sync(
     run_key_override: str | None = None,
     progress_callback: Callable[[int, int], None] | None = None,
     role_manifest_enabled: bool | None = None,
+    criteria_override=None,
 ):
     if role_manifest_enabled is None:
         role_manifest_enabled = bool(_get_settings(db).feature_role_manifest_enabled)
@@ -4078,6 +4099,7 @@ def _run_nvoids_sync(
         max_items=max_items,
         run_key_override=run_key_override,
         progress_callback=progress_callback,
+        criteria_override=criteria_override,
     )
     if role_manifest_enabled:
         rows = (

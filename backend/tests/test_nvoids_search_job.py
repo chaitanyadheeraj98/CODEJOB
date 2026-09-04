@@ -134,3 +134,59 @@ def test_the_criteria_satisfy_the_service_override_protocol() -> None:
     """No new queue was built. `SearchCriteria` is accepted by the existing sync
     through a structural type, so the module graph stays acyclic."""
     assert isinstance(criteria(end_client="Citi"), external_feeds.SearchCriteriaLike)
+
+
+# --- Completion reporting (§16.9 #6, #15-#16) -----------------------------
+
+
+def test_a_running_search_reports_no_results_because_none_exist() -> None:
+    """§16.9 #15. Describing a job in flight as though it had finished is the
+    async equivalent of quoting a figure nobody measured."""
+    payload = JOB.status_payload(run_key="k", status="running", detail="", company="Citi")
+
+    assert payload["finished"] is False
+    assert payload["state"] == "running"
+    assert "still running" in payload["message"]
+    assert "none exist yet" in payload["instruction"]
+
+
+def test_a_finished_search_reads_its_outcome_back_in_words() -> None:
+    """The counters cannot say which of the four things happened: `found=8
+    created=0` is a successful no-op and `found=0 created=0` is an empty search,
+    and both read identically as numbers. So the worker writes the sentence."""
+    detail = f"{JOB.DETAIL_PREFIX}{JOB.OUTCOME_IMPORTED} | Imported 12 of 50 posting(s) found."
+
+    payload = JOB.status_payload(run_key="k", status="ok", detail=detail, company="Citi")
+
+    assert payload["finished"] is True
+    assert payload["outcome"] == JOB.OUTCOME_IMPORTED
+    assert payload["message"] == "Imported 12 of 50 posting(s) found."
+
+
+def test_a_failed_run_is_reported_as_failed_whatever_its_detail_says() -> None:
+    payload = JOB.status_payload(run_key="k", status="error", detail="connection reset")
+
+    assert payload["outcome"] == JOB.OUTCOME_FAILED
+    assert "connection reset" in payload["message"]
+
+
+def test_a_run_without_a_recorded_outcome_is_not_guessed_at() -> None:
+    """A scheduled sync's counter line, or an older run. Saying "no result
+    available" is honest; inventing one from the numbers is not."""
+    payload = JOB.status_payload(
+        run_key="k", status="ok", detail="nvoids sync complete: fetched=3 created=1"
+    )
+
+    assert payload["outcome"] == "unknown"
+    assert "rather than guessing" in payload["instruction"]
+
+
+def test_the_prompt_tells_the_assistant_to_check_back() -> None:
+    """A result nobody reports is a job that silently finished."""
+    from app.ai.chat.system_prompt import build_system_prompt
+
+    prompt = build_system_prompt()
+
+    assert "check_nvoids_search" in prompt
+    assert "still running and describe nothing" in prompt
+    assert "four different facts" in prompt

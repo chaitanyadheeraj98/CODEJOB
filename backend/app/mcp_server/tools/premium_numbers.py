@@ -25,6 +25,7 @@ from app.models import (
     RecruiterEmail,
     RecruiterOpportunity,
     UserSettings,
+    RecentRun,
 )
 from app.services import (
     application_service,
@@ -39,6 +40,7 @@ from app.services import (
 )
 from app.external_feeds import service as external_feeds
 from app.premium_numbers.intelligence import OPPORTUNITY_STATUS_VALUES
+from app.recent_runs import NVOIDS_CLIENT_SEARCH_PREFIX
 from app.premium_numbers.phone_normalization import best_display_phone, canonicalize_phone
 from app.premium_numbers.domain_guard import (
     is_hidden_invalid_employer_number,
@@ -655,6 +657,62 @@ def propose_nvoids_search(
                 "is required before a posting is bridged."
             ),
         }
+    finally:
+        db.close()
+
+
+def check_nvoids_search(run_key: str = "") -> dict[str, object]:
+    """Report on an nvoids search the user confirmed - running, or what it did.
+
+    Call this when the user asks whether a search finished, and once after
+    confirming one, so the result is reported rather than left for them to chase.
+
+    Returns `finished: false` while it runs - say so and describe nothing, since
+    no results exist yet. When it finishes, `message` is the sentence to relay
+    and `outcome` distinguishes imported / no_new_results / nothing_found /
+    failed. These are four different facts: a failed search is not an empty one,
+    and importing nothing because everything was already stored is a success.
+
+    Omit `run_key` for the most recent search.
+    """
+    db = SessionLocal()
+    try:
+        query = (
+            db.query(RecentRun)
+            .filter(
+                RecentRun.owner_id == settings.owner_id,
+                RecentRun.run_key.like(f"{NVOIDS_CLIENT_SEARCH_PREFIX}%"),
+            )
+            .order_by(RecentRun.created_at.desc())
+        )
+        row = query.filter(RecentRun.run_key == run_key).first() if run_key else query.first()
+        if row is None:
+            return {
+                "found": False,
+                "message": (
+                    f"No nvoids search matching '{run_key}' has been started."
+                    if run_key
+                    else "No nvoids search has been started."
+                ),
+                "instruction": (
+                    "Say no search has run. Do not treat this as a search that "
+                    "returned nothing - none was started."
+                ),
+            }
+        payload = nvoids_search_job.status_payload(
+            run_key=row.run_key,
+            status=row.status or "",
+            detail=row.detail or "",
+        )
+        payload["found"] = True
+        payload["started_at"] = row.created_at.isoformat() if row.created_at else None
+        if payload.get("finished") and payload.get("outcome") == nvoids_search_job.OUTCOME_IMPORTED:
+            payload["next_step"] = (
+                "Call search_end_client for the company to summarise what arrived, "
+                "and keep newly imported records distinguishable from ones that "
+                "were already stored."
+            )
+        return payload
     finally:
         db.close()
 

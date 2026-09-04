@@ -152,3 +152,65 @@ def summarize_outcome(
             "records distinguishable."
         ),
     }
+
+
+# Marks a completion written by an assistant-initiated search, so reading it back
+# never confuses one with a scheduled sync's raw counter line.
+DETAIL_PREFIX = "nvoids client search: "
+
+
+def parse_completion(status: str, detail: str) -> dict[str, object]:
+    """Read a finished run's outcome back out of its stored detail.
+
+    The worker writes the outcome in words at completion, because the numbers
+    alone do not say which of the four things happened - `found=8 created=0` is
+    a successful no-op and `found=0 created=0` is an empty search, and they read
+    identically as counters.
+    """
+    text = detail or ""
+    if status in {"error", "failed"}:
+        return summarize_outcome(found=0, imported=0, failed=True, error=text or "the job failed")
+    if not text.startswith(DETAIL_PREFIX):
+        return {
+            "outcome": "unknown",
+            "message": text or "No completion detail was recorded.",
+            "instruction": (
+                "This run did not record a search outcome. Say the result is not "
+                "available rather than guessing what it found."
+            ),
+        }
+    body = text[len(DETAIL_PREFIX):]
+    outcome, _, message = body.partition(" | ")
+    return {"outcome": outcome.strip(), "message": message.strip() or body.strip()}
+
+
+def status_payload(*, run_key: str, status: str, detail: str, company: str = "") -> dict[str, object]:
+    """What the assistant should say about a search right now.
+
+    A running job is not a result. Reporting one as though it had finished is the
+    async equivalent of quoting a count that was never measured.
+    """
+    if status in {"queued", "pending", "running"}:
+        return {
+            "run_key": run_key,
+            "company": company or None,
+            "state": "running",
+            "finished": False,
+            "message": (
+                f"The nvoids search for {company} is still running."
+                if company
+                else "The nvoids search is still running."
+            ),
+            "instruction": (
+                "Say it is still running and that you will report when it finishes. "
+                "Do not describe any results - none exist yet."
+            ),
+        }
+    completion = parse_completion(status, detail)
+    return {
+        "run_key": run_key,
+        "company": company or None,
+        "state": "finished",
+        "finished": True,
+        **completion,
+    }
