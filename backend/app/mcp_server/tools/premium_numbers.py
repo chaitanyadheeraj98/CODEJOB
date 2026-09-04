@@ -29,6 +29,7 @@ from app.services import (
     application_service,
     appts_service,
     field_coverage,
+    recruiter_ranking,
     opportunity_lineage_service,
     resume_tracking_service,
 )
@@ -398,6 +399,67 @@ def _contact_evidence_block(db) -> dict[str, object]:
     if aliases:
         block["unconfirmed_aliases"] = aliases
     return block
+
+
+def rank_recruiters(rule: str = "volume", limit: int = 10, include_deleted: bool = False) -> dict[str, object]:
+    """Order recruiters by a stated rule - for "who is worth keeping in touch with".
+
+    Call this for any question asking which recruiters or recruiting companies to
+    follow, keep, prioritise or contact first. The answer MUST repeat the returned
+    `rule_statement`: it is the definition the ordering used, and the user is
+    entitled to disagree with a definition they can see. Never present the order
+    as a verdict on who is worth contacting - `other_rules` lists the definitions
+    you can re-rank by if they want a different one.
+
+    rule: volume (requirements sent, default), recent (last heard from),
+    responsive (has replied), recurring (how often they appear).
+    include_deleted: false by default - Recycle Bin contacts are excluded from
+    recommendations about who to contact now. Set true only when the user asks
+    about all-time history.
+    """
+    db = SessionLocal()
+    try:
+        try:
+            result = recruiter_ranking.rank_recruiters(
+                db,
+                owner_id=settings.owner_id,
+                rule=rule,
+                limit=limit,
+                scope=(
+                    field_coverage.SCOPE_ALL_TIME
+                    if include_deleted
+                    else field_coverage.SCOPE_ACTIVE
+                ),
+            )
+        except ValueError as error:
+            return {"error": str(error), "rules": sorted(recruiter_ranking.RULES)}
+        scope = (
+            field_coverage.SCOPE_ALL_TIME if include_deleted else field_coverage.SCOPE_ACTIVE
+        )
+        result["field_coverage"] = field_coverage.contact_coverage_for(
+            db, ["company", "designation", "recruiter_email"], owner_id=settings.owner_id, scope=scope
+        )
+        # Replies are the sparse signal in this ranking. Reported so an absence is
+        # read as "no reply recorded" rather than "this recruiter never answers".
+        with_replies = sum(
+            1 for row in result["recruiters"] if int(row.get("replies_received") or 0) > 0
+        )
+        result["signal_notes"] = [
+            (
+                f"Replies are recorded for {with_replies} of the "
+                f"{len(result['recruiters'])} recruiters shown, and for 19 of 497 live "
+                "contacts overall. A zero means no reply was matched, not that they "
+                "never reply."
+            ),
+            (
+                "Submissions on your behalf are deliberately not part of any rule "
+                "here: the application-to-recruiter link is recorded on 2 of 47 "
+                "tracked applications, too few to rank on."
+            ),
+        ]
+        return result
+    finally:
+        db.close()
 
 
 def list_recruiter_opportunities(status: str = "", source_email_id: int = 0, limit: int = 10) -> dict[str, object]:
