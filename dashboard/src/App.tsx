@@ -292,6 +292,8 @@ type SettingsPayload = {
   nvoids_job_role: string
   nvoids_search_location: string
   nvoids_custom_query: string
+  nvoids_end_client: string
+  nvoids_query_mode: string
   feature_auto_send: boolean
   feature_retry_queue: boolean
   feature_ai_enabled: boolean
@@ -2911,6 +2913,8 @@ function App() {
     nvoids_job_role: '',
     nvoids_search_location: '',
     nvoids_custom_query: '',
+    nvoids_end_client: '',
+    nvoids_query_mode: 'composed',
     feature_auto_send: false,
     feature_retry_queue: false,
     feature_ai_enabled: false,
@@ -3356,6 +3360,8 @@ function App() {
       nvoids_job_role: payload.nvoids_job_role ?? '',
       nvoids_search_location: payload.nvoids_search_location ?? '',
       nvoids_custom_query: payload.nvoids_custom_query ?? '',
+      nvoids_end_client: payload.nvoids_end_client ?? '',
+      nvoids_query_mode: payload.nvoids_query_mode ?? 'composed',
       employer_domains: payload.employer_domains ?? [],
       draft_text_size: normalizeDraftTextSize(payload.draft_text_size),
       preferred_employer_cc_emails:
@@ -5808,6 +5814,8 @@ function App() {
                   {configRow('Preferred Nvoids Locations', summarizeConfigList(activeConfigurationSettings.nvoids_locations))}
                   {configRow('Nvoids Job Role', truncateConfigValue(activeConfigurationSettings.nvoids_job_role))}
                   {configRow('Nvoids Search Location', truncateConfigValue(activeConfigurationSettings.nvoids_search_location))}
+                  {configRow('Nvoids End Client', truncateConfigValue(activeConfigurationSettings.nvoids_end_client))}
+                  {configRow('Nvoids Query Mode', activeConfigurationSettings.nvoids_query_mode === 'end_client_only' ? 'End client only' : 'Composed')}
                   {configRow('Nvoids Custom Query', truncateConfigValue(activeConfigurationSettings.nvoids_custom_query, 80))}
                 </div>
               </section>
@@ -6846,11 +6854,36 @@ function App() {
                     />
                   </label>
                   <label>
+                    Nvoids End Client
+                    <input
+                      value={settings.nvoids_end_client}
+                      onChange={(e) => setSettings({ ...settings, nvoids_end_client: e.target.value })}
+                      placeholder="e.g. Morgan Stanley"
+                    />
+                  </label>
+                  <label>
+                    Nvoids Query Mode
+                    <select
+                      value={settings.nvoids_query_mode}
+                      onChange={(e) => setSettings({ ...settings, nvoids_query_mode: e.target.value })}
+                    >
+                      <option value="composed">Composed — end client, role and location together</option>
+                      <option value="end_client_only">End client only — ignore role and location</option>
+                    </select>
+                  </label>
+                  <p className="subtle">
+                    A company name is searched as all of its words, so Morgan Stanley asks for
+                    both and does not match a job located in Morgan, Utah. Composed narrows an
+                    existing search and can return very little — a role, a state and a client
+                    together match only a handful of postings. Use End client only to find
+                    everything mentioning a company.
+                  </p>
+                  <label>
                     Nvoids Custom Query
                     <input
                       value={settings.nvoids_custom_query}
                       onChange={(e) => setSettings({ ...settings, nvoids_custom_query: e.target.value })}
-                      placeholder="Overrides Job Role and Search Location when set, e.g. python and (aws or gcp)"
+                      placeholder="Overrides Job Role, Search Location and End Client when set, e.g. python and (aws or gcp)"
                     />
                   </label>
                   <label>
