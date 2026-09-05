@@ -80,6 +80,38 @@ class ChatSendReplyRequest(BaseModel):
     document_ids: list[int] = Field(default_factory=list, max_length=20)
 
 
+class ManualRequirementPreviewRequest(BaseModel):
+    # 20,000 characters, matching the candidate-profile cap. Enforced here so an
+    # oversized paste is refused at the boundary, before a job is enqueued and
+    # before any model call.
+    text: str = Field(min_length=1, max_length=20000)
+
+
+class ManualDuplicateSummary(BaseModel):
+    """An existing manual card whose content fingerprint matches, if any.
+
+    Exact identity only: the same requirement pasted twice. It never claims two
+    differently-worded postings are the same job.
+    """
+
+    id: int
+    role: str = ""
+    client: str = ""
+    created_at: datetime
+
+
+class ManualRequirementPreviewResponse(BaseModel):
+    duplicate_of: ManualDuplicateSummary | None = None
+
+
+class ManualRequirementCreateRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=20000)
+    # Sent back by the client after it has shown the warning. Recorded, never
+    # enforced: a recruiter genuinely re-sending an updated requirement is
+    # normal, so a duplicate is surfaced and never blocked.
+    acknowledged_duplicate_of: int | None = None
+
+
 class GithubIssueCreateRequest(BaseModel):
     title: str = Field(min_length=1, max_length=250)
     user_report: str = Field(min_length=1, max_length=4000)

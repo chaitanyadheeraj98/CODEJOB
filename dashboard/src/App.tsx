@@ -10,6 +10,7 @@ import EmailSearch from './features/email_search/EmailSearch'
 import AssistantPage from './features/chat/AssistantPage'
 import LabelingTool from './features/relationships/LabelingTool'
 import ScheduledTasksPage from './features/scheduling/ScheduledTasksPage'
+import ManualIntakePage from './features/manual_intake/ManualIntakePage'
 import ReviewPage from './features/scheduling/ReviewPage'
 import ChatProvider from './features/chat/ChatProvider'
 import { useChat } from './features/chat/chatContext'
@@ -72,11 +73,11 @@ const DRAFT_TEXT_SIZE_STYLES: Record<DraftTextSize, { fontSize: string; lineHeig
   huge: { fontSize: '28px', lineHeight: '1.4' },
 }
 
-type ActivePage = 'assistant' | 'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'inbox' | 'premium_numbers' | 'resume_tracking' | 'application_tracking' | 'relationship_labeling' | 'scheduled_tasks' | 'scheduled_review' | 'settings'
+type ActivePage = 'assistant' | 'run_queue' | 'manual_intake' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'inbox' | 'premium_numbers' | 'resume_tracking' | 'application_tracking' | 'relationship_labeling' | 'scheduled_tasks' | 'scheduled_review' | 'settings'
 // relationship_labeling is deliberately absent from the sidebar: it is an
 // internal calibration tool, reachable only by ?page=relationship_labeling, and
 // its routes 404 unless the feature is switched on.
-const ACTIVE_PAGES = new Set<ActivePage>(['assistant', 'run_queue', 'needs_review', 'failed_mapping', 'recent_runs', 'sent_items', 'inbox', 'premium_numbers', 'resume_tracking', 'application_tracking', 'relationship_labeling', 'scheduled_tasks', 'scheduled_review', 'settings'])
+const ACTIVE_PAGES = new Set<ActivePage>(['assistant', 'run_queue', 'manual_intake', 'needs_review', 'failed_mapping', 'recent_runs', 'sent_items', 'inbox', 'premium_numbers', 'resume_tracking', 'application_tracking', 'relationship_labeling', 'scheduled_tasks', 'scheduled_review', 'settings'])
 const initialActivePage = (): ActivePage => {
   const page = new URLSearchParams(window.location.search).get('page') as ActivePage | null
   return page && ACTIVE_PAGES.has(page) ? page : 'run_queue'
@@ -112,6 +113,7 @@ const TIMEZONE_OPTIONS = COMMON_TIMEZONES.map((zone) => (
 const PAGE_TITLES: Record<ActivePage, string> = {
   assistant: 'CodeJob Assistant',
   run_queue: 'Run Queue Dashboard',
+  manual_intake: 'Manual Intake',
   needs_review: 'Needs Review',
   failed_mapping: 'Failed Mapping',
   recent_runs: 'Recent Runs',
@@ -129,6 +131,7 @@ const PAGE_TITLES: Record<ActivePage, string> = {
 const PAGE_SUBTITLES: Record<ActivePage, string> = {
   assistant: 'Ask about your pipeline, analyse it, and hand off the work.',
   run_queue: 'Manage and monitor your automated recruitment email operations.',
+  manual_intake: 'Paste a requirement you were sent outside Gmail and turn it into a card.',
   needs_review: 'Approve, edit, or reject AI-drafted replies before they send.',
   failed_mapping: 'Fix recipient routing for emails the parser could not map.',
   recent_runs: 'See automation run history and outcomes.',
@@ -4072,6 +4075,7 @@ function App() {
     const eventMap: Record<typeof activePage, string> = {
       assistant: 'view_assistant',
       run_queue: 'view_run_queue',
+      manual_intake: 'view_manual_intake',
       needs_review: 'view_needs_review',
       failed_mapping: 'view_failed_mapping',
       recent_runs: 'view_recent_runs',
@@ -5714,6 +5718,7 @@ function App() {
 
           {activePage === 'relationship_labeling' ? <LabelingTool apiBase={apiBase} /> : null}
           {activePage === 'scheduled_tasks' ? <ScheduledTasksPage apiBase={apiBase} /> : null}
+          {activePage === 'manual_intake' ? <ManualIntakePage apiBase={apiBase} /> : null}
           {activePage === 'scheduled_review' ? <ReviewPage apiBase={apiBase} /> : null}
 
           {activePage === 'run_queue' ? (

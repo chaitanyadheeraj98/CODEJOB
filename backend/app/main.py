@@ -138,11 +138,13 @@ from app.routing import RoutingDecision
 from app.recent_runs import (
     RUN_SOURCE_AUTOMATION,
     RUN_SOURCE_GMAIL_SYNC,
+    RUN_SOURCE_MANUAL_INTAKE,
     RUN_SOURCE_NVOIDS_SYNC,
     automation_run_key,
     build_gmail_message_url,
     create_recent_run,
     gmail_sync_run_key,
+    manual_intake_run_key,
     row_to_recent_run_dict,
     NVOIDS_CLIENT_SEARCH_PREFIX,
 )
@@ -150,13 +152,21 @@ from app.jobs.queues import (
     AUTOMATION_RUN_QUEUE,
     EMBEDDING_QUEUE,
     GMAIL_SYNC_QUEUE,
+    MANUAL_INTAKE_QUEUE,
     NVOIDS_SYNC_QUEUE,
     active_job_id,
     get_queue,
     get_redis_connection,
     redis_is_ready,
 )
-from app.jobs.tasks import run_automation_job, run_generate_embedding_job, run_gmail_sync_job, run_nvoids_sync_job, run_retry_selected_messages_job
+from app.jobs.tasks import (
+    run_automation_job,
+    run_generate_embedding_job,
+    run_gmail_sync_job,
+    run_manual_intake_job,
+    run_nvoids_sync_job,
+    run_retry_selected_messages_job,
+)
 from app.skill_taxonomy import (
     TAXONOMY_PLACEHOLDER_KEYS,
     clear_skill_taxonomy_cache,
@@ -215,6 +225,7 @@ from app.services.scheduling import sweep as scheduling_sweep
 from app.services.scheduling import task_service
 from app.services.auto_runner_service import AutoRunnerService
 from app.services.candidate_runtime_service import CandidateRuntimeDeps, CandidateRuntimeService, resolve_resume_display_name
+from app.services.manual_intake_service import ManualIntakeDeps, ManualIntakeResult, ManualIntakeService
 from app.services.phone_intelligence_workflow_service import (
     apply_contact_version,
     capture_sister_company,
@@ -297,6 +308,10 @@ from app.schemas import (
     CandidateDocumentResponse,
     CandidateDocumentUpdateRequest,
     CandidateProfileResponse,
+    ManualDuplicateSummary,
+    ManualRequirementCreateRequest,
+    ManualRequirementPreviewRequest,
+    ManualRequirementPreviewResponse,
     ContactFieldChange,
     ContactRescoreResponse,
     ContactMergePreviewLead,
@@ -485,6 +500,7 @@ auto_runner_service: AutoRunnerService | None = None
 routing_runtime_service: RoutingRuntimeService | None = None
 candidate_runtime_service: CandidateRuntimeService | None = None
 scoring_runtime_service: ScoringRuntimeService | None = None
+manual_intake_service: ManualIntakeService | None = None
 settings_bootstrap_service = SettingsBootstrapService(session_factory=SessionLocal)
 gmail_labeling_runtime_service = GmailLabelingRuntimeService()
 telegram_action_lock = runtime_state.telegram_action_lock
@@ -587,6 +603,7 @@ EVENT_WEIGHTS: dict[str, float] = {
     "view_recent_runs": 0.2,
     "view_sent_items": 0.2,
     "view_run_queue": 0.1,
+    "view_manual_intake": 0.1,
     "view_premium_numbers": 0.1,
     "view_assistant": 0.1,
 }
@@ -597,6 +614,7 @@ ALLOWED_VIEW_EVENTS = {
     "view_recent_runs",
     "view_sent_items",
     "view_run_queue",
+    "view_manual_intake",
     "view_premium_numbers",
     "view_assistant",
 }
@@ -1290,6 +1308,44 @@ def _enqueue_background_job(
         db.commit()
         raise HTTPException(status_code=503, detail=f"job_enqueue_failed: {exc}") from exc
     return JobEnqueueResponse(run_key=run_key, job_id=job_id, status="queued")
+
+
+def _get_manual_intake_service() -> ManualIntakeService:
+    global manual_intake_service
+    if manual_intake_service is None:
+        manual_intake_service = ManualIntakeService(
+            ManualIntakeDeps(
+                owner_id=settings.owner_id,
+                model_name=settings.deepseek_model_fast,
+                get_settings=_get_settings,
+                active_resume=_active_resume,
+                enabled_resumes=_enabled_resumes,
+                evaluate_routing_policy=lambda db, sender, subject, body, snippet="", routing_confirmed=False, precomputed=None: _get_routing_runtime_service().evaluate_routing_policy(
+                    db, sender, subject, body, snippet, routing_confirmed, precomputed=precomputed
+                ),
+                apply_routing_decision=lambda email, routing: _get_routing_runtime_service().apply_routing_decision(email, routing),
+                capture_premium_numbers=_capture_premium_numbers,
+            )
+        )
+    return manual_intake_service
+
+
+def _run_manual_intake(db: Session, *, text: str) -> ManualIntakeResult:
+    """Called by the worker, never by a request handler - ingestion is queued."""
+    return _get_manual_intake_service().ingest(db, text=text)
+
+
+def _enqueue_manual_intake(db: Session, *, text: str) -> JobEnqueueResponse:
+    run_key = manual_intake_run_key(uuid.uuid4().hex)
+    return _enqueue_background_job(
+        db,
+        queue_name=MANUAL_INTAKE_QUEUE,
+        run_source=RUN_SOURCE_MANUAL_INTAKE,
+        run_key=run_key,
+        task=run_manual_intake_job,
+        task_kwargs={"run_key": run_key, "text": text},
+        total_items=1,
+    )
 
 
 def _enqueue_gmail_sync(db: Session) -> JobEnqueueResponse:
@@ -4849,6 +4905,54 @@ def _application_response(
 @app.post("/automation/run-once", response_model=AutomationRunResponse)
 def automation_run_once(payload: AutomationRunRequest | None = None, db: Session = Depends(get_db)) -> AutomationRunResponse:
     return _run_automation(payload, db)
+
+
+@app.post("/manual-requirements/preview", response_model=ManualRequirementPreviewResponse)
+def preview_manual_requirement(
+    payload: ManualRequirementPreviewRequest,
+    db: Session = Depends(get_db),
+) -> ManualRequirementPreviewResponse:
+    """Has this exact requirement already been pasted? No model calls.
+
+    Runs on blur while the user is still typing, so it stays cheap: contact
+    extraction, a rules parse and one indexed lookup.
+    """
+    duplicate = _get_manual_intake_service().preview(db, text=payload.text)
+    if duplicate is None:
+        return ManualRequirementPreviewResponse()
+    return ManualRequirementPreviewResponse(
+        duplicate_of=ManualDuplicateSummary(
+            id=duplicate.id,
+            role=duplicate.role,
+            client=duplicate.client,
+            created_at=duplicate.created_at,
+        )
+    )
+
+
+@app.post("/manual-requirements", response_model=JobEnqueueResponse)
+def create_manual_requirement(
+    payload: ManualRequirementCreateRequest,
+    db: Session = Depends(get_db),
+) -> JobEnqueueResponse:
+    """Queue a pasted requirement for ingestion.
+
+    Returns a run key, not a card: extraction, scoring and drafting are several
+    model calls. The client polls GET /jobs/{run_key}, the same endpoint the
+    Gmail and Nvoids syncs already report through.
+
+    `acknowledged_duplicate_of` is recorded and never enforced - a recruiter
+    re-sending an updated requirement is normal, and the warning exists to be
+    seen, not to block.
+    """
+    if not payload.text.strip():
+        raise HTTPException(status_code=400, detail="Pasted requirement is empty")
+    if payload.acknowledged_duplicate_of:
+        logger.info(
+            "manual_intake_duplicate_acknowledged existing_email_id=%s",
+            payload.acknowledged_duplicate_of,
+        )
+    return _enqueue_manual_intake(db, text=payload.text)
 
 
 @app.post("/phase0/emails/ingest", response_model=EmailResponse)

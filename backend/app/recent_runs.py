@@ -12,6 +12,10 @@ from app.models import RecentRun, RecentRunSkippedItem
 RUN_SOURCE_AUTOMATION = "automation_run"
 RUN_SOURCE_GMAIL_SYNC = "gmail_sync"
 RUN_SOURCE_NVOIDS_SYNC = "nvoids_sync"
+# One pasted requirement. Its own run source so Recent Runs tells a paste apart
+# from a sync - they are one item and thousands, and only one of them is
+# something the user is standing there waiting for.
+RUN_SOURCE_MANUAL_INTAKE = "manual_intake"
 # One-off nvoids searches the assistant queued for a named company. Same run
 # source and queue as a scheduled sync - it is the same work - but its own key
 # prefix, so "did my search finish" can be answered about the right run rather
@@ -29,6 +33,10 @@ def gmail_sync_run_key(sync_batch_id: str) -> str:
 
 def nvoids_run_key(run_id: int) -> str:
     return f"nvoids_sync:{run_id}"
+
+
+def manual_intake_run_key(paste_id: str) -> str:
+    return f"manual_intake:{paste_id}"
 
 
 def build_gmail_message_url(

@@ -279,6 +279,47 @@ def run_nvoids_sync_job(
         db.close()
 
 
+def run_manual_intake_job(*, run_key: str, text: str) -> dict[str, Any]:
+    """Ingest one pasted requirement.
+
+    One item, not a sweep, so `total_items` is 1 and the user is very likely
+    watching the status line while this runs.
+    """
+    from app import main
+
+    db = SessionLocal()
+    try:
+        update_job_progress(
+            db,
+            run_key=run_key,
+            total_items=1,
+            status="running",
+            detail="Reading the pasted requirement.",
+        )
+        result = main._run_manual_intake(db, text=text)
+        row = update_job_progress(
+            db,
+            run_key=run_key,
+            processed_items=1,
+            total_items=1,
+            status="ok",
+            detail=result.detail,
+            complete=True,
+        )
+        return {
+            "run_key": run_key,
+            "status": row.status,
+            "candidate_email_id": result.email_id,
+            "state": result.state,
+        }
+    except Exception as exc:
+        db.rollback()
+        _mark_failed(run_key, exc)
+        raise
+    finally:
+        db.close()
+
+
 def run_retry_selected_messages_job(*, run_key: str, external_message_ids: list[str]) -> dict[str, Any]:
     from app import main
 

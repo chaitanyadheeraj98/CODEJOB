@@ -1041,6 +1041,39 @@ button.emailSearchResult:focus-visible {
   word-break: break-all;
 }
 
+/* Manual intake is a document, not a settings field: it gets the full column
+   rather than the three-column grid's ~278px. */
+.manualIntakeCard {
+  max-width: 900px;
+}
+
+.manualIntakeField {
+  display: grid;
+  gap: 6px;
+}
+
+.manualIntakeTextarea {
+  min-height: 340px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre;
+  overflow-wrap: normal;
+  /* A requirement is column-aligned text; wrapping it re-flows the layout the
+     recruiter wrote and makes the fields harder to scan. */
+  overflow-x: auto;
+}
+
+.manualIntakeDuplicate {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
 /* The settings grid gives a card ~278px, so the file, its name and the two
    buttons stack rather than compete for a single row. */
 .candidateDocumentRow {

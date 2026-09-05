@@ -121,6 +121,9 @@ class Settings(BaseSettings):
     # Gmail's own limit is 25MB after base64 expansion, so the raw bytes have to
     # stay under roughly three quarters of it.
     candidate_document_max_send_bytes: int = 18 * 1024 * 1024
+    # A pasted requirement longer than this is a document, not a paste. Matches
+    # the candidate-profile cap so the two long-text limits agree.
+    manual_intake_max_chars: int = 20000
     qualification_threshold: float = 0.6
     feature_auto_polling: bool = False
     feature_auto_poll_interval_minutes: int = 10

@@ -104,6 +104,13 @@ class RecruiterEmail(Base):
     approval_status: Mapped[str] = mapped_column(String(50), default="pending")
     sent_status: Mapped[str] = mapped_column(String(50), default="not_sent")
     source: Mapped[str] = mapped_column(String(20), default="manual")
+    # The normalized-content fingerprint of a pasted requirement, so a second
+    # paste of the same text can be recognised. Set on manual-intake rows only;
+    # NULL for gmail and nvoids, which dedupe on their own delivery identity.
+    # Bounded and fixed-width so the index is safe: migration 0051 took prod down
+    # with an index over an unbounded Text column, and `alembic upgrade head`
+    # runs on backend boot.
+    manual_dedupe_hash: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     external_message_id: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True, index=True)
     external_thread_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     external_rfc_message_id: Mapped[str | None] = mapped_column(String(500), nullable=True)

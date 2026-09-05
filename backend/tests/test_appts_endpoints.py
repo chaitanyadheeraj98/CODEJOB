@@ -429,8 +429,14 @@ class TrackBulkTests(AppTSEndpointTestBase):
 class BookmarkedLifecycleTests(AppTSEndpointTestBase):
     def test_bookmark_then_approve_send_moves_card_from_bookmarked_to_tracked(self) -> None:
         original_append_tracking = main.append_tracking_sheet_row
+        original_send = main.send_new_email_with_attachment
         try:
             main.append_tracking_sheet_row = lambda **_kwargs: None
+            # A source="manual" card now takes the new-mail branch and really
+            # sends. It used to match no branch at all and be marked
+            # approved_sent with no message id, which this test passed on
+            # without ever exercising a send.
+            main.send_new_email_with_attachment = lambda *_args, **_kwargs: "gmail-manual-1"
             with Session(self.engine) as db:
                 self._add_resume(db)
                 email = self._add_email(
@@ -470,6 +476,7 @@ class BookmarkedLifecycleTests(AppTSEndpointTestBase):
                 self.assertEqual(db.query(Application).count(), 0)
         finally:
             main.append_tracking_sheet_row = original_append_tracking
+            main.send_new_email_with_attachment = original_send
 
 
 # ---------------------------------------------------------------------------

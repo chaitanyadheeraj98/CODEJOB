@@ -11,8 +11,19 @@ NVOIDS_SYNC_QUEUE = "nvoids_sync"
 AUTOMATION_RUN_QUEUE = "automation_run"
 EMBEDDING_QUEUE = "embedding_generation"
 SCHEDULED_TASK_QUEUE = "scheduled_task"
+# Its own queue rather than a share of automation_run: _enqueue_background_job
+# rejects a job with 409 while any other job is active on the same queue, and a
+# sync running is exactly when a user is most likely to be pasting.
+MANUAL_INTAKE_QUEUE = "manual_intake"
 QUEUE_NAMES = frozenset(
-    {GMAIL_SYNC_QUEUE, NVOIDS_SYNC_QUEUE, AUTOMATION_RUN_QUEUE, EMBEDDING_QUEUE, SCHEDULED_TASK_QUEUE}
+    {
+        GMAIL_SYNC_QUEUE,
+        NVOIDS_SYNC_QUEUE,
+        AUTOMATION_RUN_QUEUE,
+        EMBEDDING_QUEUE,
+        SCHEDULED_TASK_QUEUE,
+        MANUAL_INTAKE_QUEUE,
+    }
 )
 
 
