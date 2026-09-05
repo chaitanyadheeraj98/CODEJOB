@@ -1,0 +1,48 @@
+name: Worker queues
+
+# A queue the application can enqueue to but no worker consumes fails silently:
+# get_queue accepts the name, the endpoint returns 200 and writes a RecentRun,
+# and the job then sits in Redis forever. No error, no log, and no unit test can
+# see it - a fake queue in a test always succeeds.
+#
+# So this workflow compares the two files that have to agree and have no other
+# link: the worker's `command:` in docker-compose.yml, and QUEUE_NAMES in
+# app/jobs/queues.py. It is deliberately its own workflow rather than a job in
+# db-migrations.yml, because it triggers on different paths and answers a
+# different question.
+
+on:
+  pull_request:
+    paths:
+      - "docker-compose.yml"
+      - "backend/app/jobs/queues.py"
+      - "backend/scripts/check_worker_queues.py"
+      - "backend/tests/test_worker_queue_check.py"
+      - ".github/workflows/worker-queues.yml"
+  push:
+    paths:
+      - "docker-compose.yml"
+      - "backend/app/jobs/queues.py"
+      - "backend/scripts/check_worker_queues.py"
+      - "backend/tests/test_worker_queue_check.py"
+      - ".github/workflows/worker-queues.yml"
+
+jobs:
+  queues-are-consumed:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DEBUG: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      # The check itself: every declared queue appears in the worker command.
+      - run: uv run python scripts/check_worker_queues.py
+      # And the checker's own tests, including one proving it fails when the two
+      # files drift. A green check that cannot go red protects nothing.
+      - run: uv run python -m pytest tests/test_worker_queue_check.py
