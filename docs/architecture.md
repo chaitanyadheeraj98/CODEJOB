@@ -15,7 +15,7 @@
 | --- | --- | --- |
 | API composition | `backend/app/main.py` | FastAPI decorators declare candidate, settings, Gmail, queue, analytics, premium-number, and external-feed routes. |
 | Candidate review actions | `app/services/orchestration_service.py` | `approve_and_send()`, `reject_candidate()`, and `resolve_recipients()` delegate through `_get_orchestration_service()`. |
-| Intake and routing | `backend/app/main.py:ingest_email` | `POST /phase0/emails/ingest` parses, filters, screens, scores, and routes an email. |
+| Intake and routing | `app/services/manual_intake_service.py`, `app/services/orchestration_service.py`, `app/external_feeds/service.py` | Three ingestion paths - Gmail sync, Nvoids feed, and pasted requirements - each assemble a row and call the shared engine `app/automation/queue_preparation.py:prepare_candidate_for_queue`, which parses, filters, screens, scores, routes, and drafts. |
 | Automation | `backend/app/main.py:_run_automation` | `POST /automation/run-once` calls `_run_automation()`; queue routes enqueue related background work. |
 | Premium-number operations | `backend/app/main.py` and `app/premium_numbers/*` | Re-extraction, review classification, number buckets, and opportunity endpoints use `PremiumNumberLead`, `NumberReviewQueue`, `RecruiterNumber`, `EmployerNumber`, and `RecruiterOpportunity`. |
 | In-app assistant | `app/routers/chat.py`, `app/ai/chat/*`, and `app/mcp_server/*` | Feature-gated chat sessions stream LangGraph responses from `gemma4:31b-cloud`; the in-process `/mcp` server exposes eight owner-scoped read-only tools. |

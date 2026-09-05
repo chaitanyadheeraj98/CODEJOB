@@ -9,12 +9,6 @@ from pydantic import AliasChoices, BaseModel, Field, field_validator
 from app.ai.draft_formatting import DRAFT_TEXT_SIZE_VALUES, normalize_draft_text_size
 
 
-class IngestEmailRequest(BaseModel):
-    sender: str
-    subject: str
-    body: str
-
-
 class ApproveSendRequest(BaseModel):
     edited_reply: str | None = None
     confirm_same_source_additional_send: bool = False

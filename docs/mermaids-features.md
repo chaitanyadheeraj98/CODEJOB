@@ -14,7 +14,7 @@
 | --- | --- | --- | --- | --- |
 | Gmail OAuth and inbox sync | `dashboard/src/App.tsx` status/oauth actions | `GET /gmail/status`, `POST /gmail/oauth/start`, `GET /gmail/oauth/url`, `POST /gmail/sync` | Live | Yes |
 | Run-once automation | Run button in `App.tsx` | `POST /automation/run-once` | Live | Yes |
-| Candidate scoring, routing, and queue state assignment | queue rendering in `App.tsx` | `POST /phase0/emails/ingest`, routing services | Live | Yes |
+| Candidate scoring, routing, and queue state assignment | queue rendering in `App.tsx` | `prepare_candidate_for_queue` via the Gmail, Nvoids and manual-intake paths; routing services | Live | Yes |
 | Needs Review approval and send gate | approve action in needs-review list | `POST /candidates/{id}/approve-send` | Live | Yes |
 | Reject and bulk reject | reject actions in queue UI | `POST /candidates/{id}/reject`, `POST /candidates/reject-bulk` | Live | Yes |
 | Failed Mapping recovery | failed mapping UI action | `POST /candidates/{id}/resolve-recipients`, `POST /candidates/{id}/retry-role-detection`, `DELETE /candidates/{id}` | Live | Yes |
@@ -100,8 +100,8 @@ flowchart TD
 | Evidence type | Source |
 | --- | --- |
 | Frontend entry | `dashboard/src/App.tsx` queue views |
-| API endpoint | `POST /phase0/emails/ingest`, `GET /candidates` |
-| Backend logic | `backend/app/main.py:ingest_email,_compute_blended_ai_score,_evaluate_routing_for_email` |
+| API endpoint | `POST /manual-requirements`, `POST /gmail/sync`, `GET /candidates` |
+| Backend logic | `app/automation/queue_preparation.py:prepare_candidate_for_queue`, `backend/app/main.py:_compute_blended_ai_score,_evaluate_routing_for_email` |
 | Data touched | recruiter email state fields |
 | Tests | No direct test found |
 | Verification limit | scoring/routing not replayed in runtime this session |

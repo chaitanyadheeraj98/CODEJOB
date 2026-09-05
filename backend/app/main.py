@@ -31,7 +31,6 @@ from app.ai.reply_service import generate_reply_with_ai_or_fallback
 from app.ai.draft_formatting import normalize_draft_text_size
 from app.ai.resume_context_attribution import (
     RESUME_CONTEXT_MISSING,
-    RESUME_CONTEXT_RULES_ONLY,
 )
 from app.ai.resume_context import extract_resume_context
 from app.cold_call import ColdCallContext, find_allowed_cold_call_skills, generate_cold_call_script
@@ -111,7 +110,6 @@ from app.models import (
     utc_now,
 )
 from app.models import RecipientRoutingFeedback
-from app.parsing import build_skills_json_payload
 from app.parsing.document_extraction import prepare_gmail_parse_body
 from app.parsing.skill_audit import analyze_skill_candidate, is_safe_for_bulk_skill_approval
 from app.telegram_bot import TelegramBotService, TelegramReply
@@ -128,7 +126,6 @@ from app.phase0 import (
     greeting_from_to_contact,
     hard_filter_check,
     is_recruiter_like,
-    jd_entity_fields_from_parsed,
     normalize_employer_domains,
     parse_email,
     parse_email_with_details,
@@ -224,7 +221,7 @@ from app.services.scheduling import schedule as scheduling_schedule
 from app.services.scheduling import sweep as scheduling_sweep
 from app.services.scheduling import task_service
 from app.services.auto_runner_service import AutoRunnerService
-from app.services.candidate_runtime_service import CandidateRuntimeDeps, CandidateRuntimeService, resolve_resume_display_name
+from app.services.candidate_runtime_service import CandidateRuntimeDeps, CandidateRuntimeService
 from app.services.manual_intake_service import ManualIntakeDeps, ManualIntakeResult, ManualIntakeService
 from app.services.phone_intelligence_workflow_service import (
     apply_contact_version,
@@ -240,10 +237,6 @@ from app.services.gmail_group_source_service import (
     parse_group_inputs,
 )
 from app.services.gmail_labeling_runtime_service import GmailLabelingRuntimeService
-from app.services.candidate_screening_service import (
-    CandidateScreeningService,
-    apply_screening_decision,
-)
 from app.services.email_inbox_service import TRANSPARENT_PIXEL_PNG, record_open, reply_count_for_email
 from app.services.github_issue_service import GithubIssueServiceError, create_github_issue
 from app.services.orchestration_service import OrchestrationDeps, OrchestrationService
@@ -251,13 +244,12 @@ from app.services.requirement_expansion_service import RequirementExpansionServi
 from app.services.resume_enrichment_service import backfill_role_and_label, enrich_resume
 from app.services.role_manifest_pipeline import extract_and_score_children
 from app.services.role_manifest_service import RoleManifestService
-from app.services.sendability_service import SENDABILITY_BUCKETS, apply_resume_sendability, resolve_sendability_status
+from app.services.sendability_service import SENDABILITY_BUCKETS, resolve_sendability_status
 from app.services.routing_runtime_service import RoutingRuntimeDeps, RoutingRuntimeService
 from app.services.scoring_runtime_service import ScoringRuntimeDeps, ScoringRuntimeService
 from app.services.settings_bootstrap_service import SettingsBootstrapService
 from app.services.startup_service import StartupService
-from app.services.role_provenance import assign_role
-from app.services.role_taxonomy import clear_role_taxonomy_cache, fill_entity_gaps, role_matcher_for
+from app.services.role_taxonomy import clear_role_taxonomy_cache
 from app.services.taxonomy_learning_service import (
     BULK_APPROVAL_MIN_OCCURRENCES,
     ENTITY_TYPES,
@@ -359,7 +351,6 @@ from app.schemas import (
     GmailSyncResponse,
     GmailLabelingPreviewRequest,
     GmailLabelingPreviewResponse,
-    IngestEmailRequest,
     JobIntentTaxonomyEntryResponse,
     JobEnqueueResponse,
     JobQueueSummaryResponse,
@@ -4953,190 +4944,6 @@ def create_manual_requirement(
             payload.acknowledged_duplicate_of,
         )
     return _enqueue_manual_intake(db, text=payload.text)
-
-
-@app.post("/phase0/emails/ingest", response_model=EmailResponse)
-def ingest_email(payload: IngestEmailRequest, db: Session = Depends(get_db)) -> RecruiterEmail:
-    user_settings = _get_settings(db)
-    parsed, parser_details = parse_email_with_details(payload.subject, payload.body, source="manual")
-    effective_policy = policy_service.read_policy_from_settings(user_settings.policy_json)
-    hard_pass, hard_reason = hard_filter_check(parsed, user_settings, effective_policy, parser_details)
-    screening = CandidateScreeningService().evaluate_parser_details(parser_details, user_settings)
-    if hard_pass and not screening.proceed_to_scoring:
-        assigned = assign_role(
-            extracted=str(parsed.get("role") or ""),
-            subject=payload.subject,
-            body=payload.body,
-            matcher=role_matcher_for(db, settings.owner_id),
-        )
-        email = RecruiterEmail(
-            owner_id=settings.owner_id,
-            sender=payload.sender,
-            subject=payload.subject,
-            body=payload.body,
-            role=assigned.role,
-            role_source=assigned.role_source,
-            role_canonical=assigned.role_canonical,
-            salary_text=str(parsed["salary_text"]),
-            skills_text=str(parsed["skills_text"]),
-            skills_json=json.dumps(
-                build_skills_json_payload(parser_details, fallback_skills_text=str(parsed["skills_text"])),
-                separators=(",", ":"),
-            ),
-            **fill_entity_gaps(jd_entity_fields_from_parsed(parsed), db=db, owner_id=settings.owner_id, subject=payload.subject, location=str(parsed["location"]), body=payload.body),
-            decision="Qualified",
-            state="needs_review",
-            decision_reason="strict_candidate_screening",
-            hard_filter_result=hard_reason,
-            approval_status="pending",
-            sent_status="not_sent",
-            source="manual",
-            parser_details_json=json.dumps(parser_details, separators=(",", ":")),
-        )
-        apply_screening_decision(email, screening)
-        db.add(email)
-        candidate_record = opportunity_lineage_service.create_candidate_record(
-            db, owner_id=email.owner_id, origin_type="gmail"
-        )
-        email.record_id = candidate_record.id
-        db.commit()
-        db.refresh(email)
-        if user_settings.feature_role_manifest_enabled:
-            retry_role_detection(email.id, db)
-            db.refresh(email)
-        return email
-    active_resume = _active_resume(db)
-    resume_selection = _select_best_resume_match(
-        subject=payload.subject,
-        body=payload.body,
-        parsed=parsed,
-        parser_details=parser_details,
-        user_settings=user_settings,
-        email_row=None,
-        db=db,
-        owner_id=settings.owner_id,
-        external_thread_id=None,
-    )
-    selected_resume = cast(ResumeAsset | None, getattr(resume_selection, "resume", None)) or active_resume
-    ai_score = cast(float, getattr(resume_selection, "ai_score"))
-    ai_summary = cast(str, getattr(resume_selection, "ai_summary"))
-    ai_score_source = cast(str, getattr(resume_selection, "ai_score_source"))
-    ats_score = cast(float | None, getattr(resume_selection, "ats_score", None))
-    ats_summary = cast(str | None, getattr(resume_selection, "ats_summary", None))
-    ats_score_source = cast(str | None, getattr(resume_selection, "ats_score_source", None))
-    ats_breakdown_json = cast(str | None, getattr(resume_selection, "ats_breakdown_json", None))
-    resume_picker_score = cast(float | None, getattr(resume_selection, "final_resume_score", None))
-    resume_picker_reason = cast(str | None, getattr(resume_selection, "selection_reason", None))
-    resume_picker_candidates_json = cast(str | None, getattr(resume_selection, "candidate_rankings_json", None))
-    resume_picker_breakdown_json = cast(str | None, getattr(resume_selection, "picker_breakdown_json", None))
-    email_embedding_json = cast(str | None, getattr(resume_selection, "email_embedding_json"))
-    resume_embedding_json = cast(str | None, getattr(resume_selection, "resume_embedding_json"))
-    semantic_diag = getattr(resume_selection, "semantic_diag")
-    threshold = policy_service.policy_threshold(user_settings.qualification_threshold, effective_policy)
-    score_mode = policy_service.draft_rule_mode(effective_policy, "score_threshold")
-    score_blocked = score_mode == "block" and ai_score < threshold
-    warnings: list[str] = []
-    if hard_pass and hard_reason.startswith("warnings: "):
-        warnings.append(hard_reason.removeprefix("warnings: ").strip())
-    if score_mode == "warn" and ai_score < threshold:
-        warnings.append(f"score_below_threshold:{ai_score:.2f}<{threshold:.2f}")
-    state = "needs_review" if hard_pass and not score_blocked else "auto_rejected"
-    decision = "Qualified" if state == "needs_review" else "Reject"
-    fallback_draft = _build_user_fallback_draft(
-        db,
-        user_settings,
-        sender=payload.sender,
-        role=str(parsed["role"]),
-        parsed=parsed,
-        greeting_line=greeting_from_to_contact(None, payload.body),
-        resume_file_name=resolve_resume_display_name(user_settings, selected_resume.file_name if selected_resume else None),
-    )
-
-    assigned = assign_role(
-        extracted=str(parsed.get("role") or ""),
-        subject=payload.subject,
-        body=payload.body,
-        matcher=role_matcher_for(db, settings.owner_id),
-    )
-    email = RecruiterEmail(
-        owner_id=settings.owner_id,
-        sender=payload.sender,
-        subject=payload.subject,
-        body=payload.body,
-        role=assigned.role,
-        role_source=assigned.role_source,
-        role_canonical=assigned.role_canonical,
-        salary_text=str(parsed["salary_text"]),
-        skills_text=str(parsed["skills_text"]),
-        skills_json=json.dumps(
-            build_skills_json_payload(parser_details, fallback_skills_text=str(parsed["skills_text"])),
-            separators=(",", ":"),
-        ),
-        **fill_entity_gaps(jd_entity_fields_from_parsed(parsed), db=db, owner_id=settings.owner_id, subject=payload.subject, location=str(parsed["location"]), body=payload.body),
-        score=int(ai_score * 100),
-        decision=decision,
-        state=state,
-        decision_reason="manual_ingest_with_warnings" if state == "needs_review" and warnings else "manual_ingest",
-        hard_filter_result=policy_service.combine_rule_messages(warnings) if state == "needs_review" else hard_reason,
-        auto_reject_reason=None if state == "needs_review" else "manual_ingest_not_qualified",
-        ai_score=ai_score,
-        ai_score_source=ai_score_source,
-        ai_summary=ai_summary,
-        ats_score=ats_score,
-        ats_score_source=ats_score_source,
-        ats_summary=ats_summary,
-        ats_breakdown_json=ats_breakdown_json,
-        resume_picker_score=resume_picker_score,
-        resume_picker_reason=resume_picker_reason,
-        resume_picker_candidates_json=resume_picker_candidates_json,
-        resume_picker_breakdown_json=resume_picker_breakdown_json,
-        semantic_input_source=getattr(semantic_diag, "input_source", None),
-        semantic_input_chars=getattr(semantic_diag, "input_chars", None),
-        semantic_chunks=getattr(semantic_diag, "chunks", None),
-        semantic_fallback_reason=getattr(semantic_diag, "fallback_reason", None),
-        keyword_source=getattr(semantic_diag, "keyword_source", None),
-        thread_snapshot_used=getattr(semantic_diag, "thread_snapshot_used", None),
-        thread_snapshot_email_id=getattr(semantic_diag, "thread_snapshot_email_id", None),
-        semantic_embedding=email_embedding_json,
-        resume_asset_id=selected_resume.id if selected_resume else None,
-        resume_file_name=selected_resume.file_name if selected_resume else None,
-        draft_reply=fallback_draft
-        if state == "needs_review"
-        else "",
-        draft_source="rules_only" if state == "needs_review" else None,
-        draft_model=None,
-        draft_ai_error=None,
-        draft_resume_context_status=RESUME_CONTEXT_RULES_ONLY if state == "needs_review" else None,
-        approval_status="pending",
-        sent_status="not_sent",
-        source="manual",
-        parser_details_json=json.dumps(parser_details, separators=(",", ":")),
-    )
-    apply_screening_decision(email, screening)
-    if email.state == "needs_review":
-        apply_resume_sendability(email)
-    db.add(email)
-    candidate_record = opportunity_lineage_service.create_candidate_record(
-        db, owner_id=email.owner_id, origin_type="gmail"
-    )
-    email.record_id = candidate_record.id
-    if selected_resume and resume_embedding_json and selected_resume.semantic_embedding != resume_embedding_json:
-        selected_resume.semantic_embedding = resume_embedding_json
-    db.commit()
-    db.refresh(email)
-    if user_settings.feature_role_manifest_enabled:
-        retry_role_detection(email.id, db)
-        db.refresh(email)
-    if state == "needs_review":
-        _record_productivity_event(
-            db,
-            event_type="needs_review_marked",
-            event_source="state",
-            entity_id=email.id,
-            entity_type="RecruiterEmail",
-            metadata={"source": "manual_ingest"},
-        )
-    return email
 
 
 @app.get("/filter-options", response_model=FilterOptionsResponse)
