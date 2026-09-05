@@ -210,8 +210,10 @@ describe('ChatWidget', () => {
       fields: { action: 'send_email', candidate_email_id: 44, to: 'to@example.com', cc: '', subject: 'Re: Role', body: 'Thanks' },
       label: 'Send Email',
       endpoint: '/candidates/44/send-chat-reply',
-      body: { body: 'Thanks', subject: 'Re: Role' },
-      response: { sent: true, message_id: 'gmail-1' },
+      // A proposal with no documents still sends the key, so the server sees an
+      // explicit empty list rather than a missing field.
+      body: { body: 'Thanks', subject: 'Re: Role', document_ids: [] },
+      response: { sent: true, message_id: 'gmail-1', attached_documents: [] },
       outcome: 'Email sent.',
     },
   ])('renders and executes the $name proposal only after approval', async ({

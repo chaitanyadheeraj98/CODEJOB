@@ -104,6 +104,13 @@ class RecruiterEmail(Base):
     approval_status: Mapped[str] = mapped_column(String(50), default="pending")
     sent_status: Mapped[str] = mapped_column(String(50), default="not_sent")
     source: Mapped[str] = mapped_column(String(20), default="manual")
+    # The normalized-content fingerprint of a pasted requirement, so a second
+    # paste of the same text can be recognised. Set on manual-intake rows only;
+    # NULL for gmail and nvoids, which dedupe on their own delivery identity.
+    # Bounded and fixed-width so the index is safe: migration 0051 took prod down
+    # with an index over an unbounded Text column, and `alembic upgrade head`
+    # runs on backend boot.
+    manual_dedupe_hash: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     external_message_id: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True, index=True)
     external_thread_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     external_rfc_message_id: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -260,6 +267,18 @@ class UserSettings(Base):
     candidate_total_experience_years: Mapped[float | None] = mapped_column(Float, nullable=True)
     candidate_us_experience_years: Mapped[float | None] = mapped_column(Float, nullable=True)
     candidate_current_location: Mapped[str] = mapped_column(String(255), default="")
+    # The user's own account of themselves, in Markdown, uploaded as a file. The
+    # structured columns above are what the *screening* rules read; this is what
+    # the assistant reads when it has to write **as** the user - visa, notice
+    # period, passport, rate - so it is free text on purpose and never parsed.
+    # The text is stored here rather than on disk: the prompt needs the content
+    # on every chat turn, and a file path would be a second source of truth.
+    candidate_profile_markdown: Mapped[str] = mapped_column(Text, default="")
+    # Both describe the upload rather than the profile, and exist so the panel
+    # can say which file is loaded and how stale it is - a profile is set once
+    # and then forgotten, which is exactly when a visa date goes wrong.
+    candidate_profile_filename: Mapped[str] = mapped_column(String(255), default="")
+    candidate_profile_uploaded_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     draft_text_size: Mapped[str] = mapped_column(String(20), default="normal")
     fallback_draft_template: Mapped[str] = mapped_column(Text, default="")
     signature_name: Mapped[str] = mapped_column(String(255), default="")
@@ -332,6 +351,36 @@ class AttachmentAsset(Base):
     sha256: Mapped[str] = mapped_column(String(64), index=True)
     file_size: Mapped[int] = mapped_column(Integer, default=0)
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
+
+
+class CandidateDocument(Base):
+    """A document the user keeps on file to attach to a mail on request.
+
+    Distinct from AttachmentAsset, which the automatic pipeline sends with
+    *every* draft it approves and which is therefore an all-or-nothing switch.
+    These are chosen one mail at a time - "attach the passport and the W2" - so
+    they carry no enabled flag: nothing is ever sent unless the user names it and
+    then confirms the send.
+
+    The bytes live on disk and only the path is stored, because a passport scan
+    is attached verbatim and never read, summarised, or put in a prompt.
+    """
+
+    __tablename__ = "candidate_documents"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    file_path: Mapped[str] = mapped_column(Text)
+    file_name: Mapped[str] = mapped_column(String(255))
+    # What the user calls it, which is rarely what the file is called. The
+    # assistant matches "attach my passport" against this first, so a scan saved
+    # as `CD_scan_0412.pdf` is still reachable by the name the user would say.
+    label: Mapped[str] = mapped_column(String(120), default="")
+    mime_type: Mapped[str] = mapped_column(String(120), default="application/octet-stream")
+    sha256: Mapped[str] = mapped_column(String(64), index=True)
+    file_size: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
 

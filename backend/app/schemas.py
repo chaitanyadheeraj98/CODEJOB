@@ -9,12 +9,6 @@ from pydantic import AliasChoices, BaseModel, Field, field_validator
 from app.ai.draft_formatting import DRAFT_TEXT_SIZE_VALUES, normalize_draft_text_size
 
 
-class IngestEmailRequest(BaseModel):
-    sender: str
-    subject: str
-    body: str
-
-
 class ApproveSendRequest(BaseModel):
     edited_reply: str | None = None
     confirm_same_source_additional_send: bool = False
@@ -73,6 +67,43 @@ class ManualPremiumContactRequest(BaseModel):
 class ChatSendReplyRequest(BaseModel):
     body: str = Field(min_length=1, max_length=20000)
     subject: str | None = Field(default=None, max_length=998)
+    # Ids of stored candidate documents to attach. Ids rather than names: the
+    # confirmation card shows the user the file names it resolved, and a name
+    # matched twice - once by the model, once by the server - is a name that can
+    # resolve to two different files.
+    document_ids: list[int] = Field(default_factory=list, max_length=20)
+
+
+class ManualRequirementPreviewRequest(BaseModel):
+    # 20,000 characters, matching the candidate-profile cap. Enforced here so an
+    # oversized paste is refused at the boundary, before a job is enqueued and
+    # before any model call.
+    text: str = Field(min_length=1, max_length=20000)
+
+
+class ManualDuplicateSummary(BaseModel):
+    """An existing manual card whose content fingerprint matches, if any.
+
+    Exact identity only: the same requirement pasted twice. It never claims two
+    differently-worded postings are the same job.
+    """
+
+    id: int
+    role: str = ""
+    client: str = ""
+    created_at: datetime
+
+
+class ManualRequirementPreviewResponse(BaseModel):
+    duplicate_of: ManualDuplicateSummary | None = None
+
+
+class ManualRequirementCreateRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=20000)
+    # Sent back by the client after it has shown the warning. Recorded, never
+    # enforced: a recruiter genuinely re-sending an updated requirement is
+    # normal, so a duplicate is surfaced and never blocked.
+    acknowledged_duplicate_of: int | None = None
 
 
 class GithubIssueCreateRequest(BaseModel):
@@ -309,7 +340,26 @@ class VisibleFiltersRequest(BaseModel):
         return _validate_visible_filters(value)
 
 
+class CandidateProfileResponse(BaseModel):
+    """What is currently loaded, never the profile text itself.
+
+    The panel only needs to say which file is in place and how big it is, and
+    this payload may describe a document holding a passport number - so the
+    content stays on the settings response the editor already reads.
+    """
+
+    filename: str = ""
+    uploaded_at: datetime | None = None
+    characters: int = 0
+
+
 class SettingsResponse(SettingsRequest):
+    # Response-only: the profile is written by uploading a file to
+    # /settings/candidate-profile, never by a settings save. Keeping it off
+    # SettingsRequest means one write path rather than two that can disagree.
+    candidate_profile_markdown: str = ""
+    candidate_profile_filename: str = ""
+    candidate_profile_uploaded_at: datetime | None = None
     policy_profile_options: list[str] | None = None
     policy_profile_selected: str | None = None
     owner_id: str
@@ -369,6 +419,29 @@ class AttachmentAssetResponse(BaseModel):
 
 class AttachmentAssetUpdateRequest(BaseModel):
     is_enabled: bool
+
+
+class CandidateDocumentResponse(BaseModel):
+    """A document on file, described - never its bytes.
+
+    There is no download route and no content field: these are attached to a
+    mail verbatim, and one of them is a passport scan.
+    """
+
+    id: int
+    file_name: str
+    label: str = ""
+    mime_type: str
+    file_size: int
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class CandidateDocumentUpdateRequest(BaseModel):
+    # The only editable field. Renaming the file on disk would break the stored
+    # path, and the label is what the assistant matches "my passport" against.
+    label: str = Field(default="", max_length=120)
 
 
 class PendingSkillResponse(BaseModel):
@@ -576,6 +649,7 @@ class SettingsBootstrapResponse(BaseModel):
     gmail_requirement_groups: list["GmailRequirementGroupResponse"] = Field(default_factory=list)
     resumes: list[ResumeResponse] = Field(default_factory=list)
     attachments: list[AttachmentAssetResponse] = Field(default_factory=list)
+    documents: list[CandidateDocumentResponse] = Field(default_factory=list)
     pending_skills: list[PendingSkillResponse] = Field(default_factory=list)
     pending_job_intent_signals: list[JobIntentTaxonomyEntryResponse] = Field(default_factory=list)
     approved_job_intent_signals: list[JobIntentTaxonomyEntryResponse] = Field(default_factory=list)

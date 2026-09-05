@@ -29,7 +29,12 @@ from app.models import (
 
 logger = logging.getLogger(__name__)
 
-SOURCE_TYPES = {"gmail", "nvoids"}
+# The ingestion paths a candidate record can originate from. "manual" is a
+# requirement the user pasted in - a third path beside the Gmail sweep and the
+# Nvoids feed, for requirements that arrive on WhatsApp or anywhere else the
+# application cannot read. A plain String(20) column, so widening the set is
+# additive: existing rows and every check against them are unaffected.
+SOURCE_TYPES = {"gmail", "nvoids", "manual"}
 
 
 def _validation_error(message: str) -> ValueError:

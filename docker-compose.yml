@@ -34,9 +34,12 @@ services:
       - ./backend/.env.postgres
     environment:
       REDIS_URL: redis://redis:6379/0
-    # scheduled_task must stay on this list. A queue nothing consumes accepts
-    # jobs silently and runs none of them, and no test covers this line.
-    command: rq worker gmail_sync nvoids_sync automation_run embedding_generation scheduled_task --url redis://redis:6379/0 --with-scheduler
+    # Every name in QUEUE_NAMES must stay on this list. A queue nothing consumes
+    # accepts jobs silently and runs none of them - no error, no log, jobs sit
+    # queued forever. No unit test can see it, because a fake queue always
+    # succeeds; scripts/check_worker_queues.py compares this line against
+    # app/jobs/queues.py and is the only thing that does.
+    command: rq worker gmail_sync nvoids_sync automation_run embedding_generation scheduled_task manual_intake --url redis://redis:6379/0 --with-scheduler
     volumes:
       - backend_data:/app/data
     depends_on:

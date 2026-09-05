@@ -10,6 +10,7 @@ import EmailSearch from './features/email_search/EmailSearch'
 import AssistantPage from './features/chat/AssistantPage'
 import LabelingTool from './features/relationships/LabelingTool'
 import ScheduledTasksPage from './features/scheduling/ScheduledTasksPage'
+import ManualIntakePage from './features/manual_intake/ManualIntakePage'
 import ReviewPage from './features/scheduling/ReviewPage'
 import ChatProvider from './features/chat/ChatProvider'
 import { useChat } from './features/chat/chatContext'
@@ -38,6 +39,9 @@ const GMAIL_OAUTH_POLL_INTERVAL_MS = 2000
 const GMAIL_OAUTH_POLL_TIMEOUT_MS = 180000
 const VIEW_EVENT_THROTTLE_MS = 60000
 const SETTINGS_REVIEW_BATCH_SIZE = 50
+// Mirrors CANDIDATE_PROFILE_SUFFIXES on the server. Only a hint to the file
+// picker - the server still validates, since the accept attribute is advisory.
+const CANDIDATE_PROFILE_ACCEPT = '.md,.markdown,.txt'
 
 function emailSearchRelatedId(hit: EmailSearchHit): string | null {
   if (hit.section === 'inbox') {
@@ -69,11 +73,11 @@ const DRAFT_TEXT_SIZE_STYLES: Record<DraftTextSize, { fontSize: string; lineHeig
   huge: { fontSize: '28px', lineHeight: '1.4' },
 }
 
-type ActivePage = 'assistant' | 'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'inbox' | 'premium_numbers' | 'resume_tracking' | 'application_tracking' | 'relationship_labeling' | 'scheduled_tasks' | 'scheduled_review' | 'settings'
+type ActivePage = 'assistant' | 'run_queue' | 'manual_intake' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'inbox' | 'premium_numbers' | 'resume_tracking' | 'application_tracking' | 'relationship_labeling' | 'scheduled_tasks' | 'scheduled_review' | 'settings'
 // relationship_labeling is deliberately absent from the sidebar: it is an
 // internal calibration tool, reachable only by ?page=relationship_labeling, and
 // its routes 404 unless the feature is switched on.
-const ACTIVE_PAGES = new Set<ActivePage>(['assistant', 'run_queue', 'needs_review', 'failed_mapping', 'recent_runs', 'sent_items', 'inbox', 'premium_numbers', 'resume_tracking', 'application_tracking', 'relationship_labeling', 'scheduled_tasks', 'scheduled_review', 'settings'])
+const ACTIVE_PAGES = new Set<ActivePage>(['assistant', 'run_queue', 'manual_intake', 'needs_review', 'failed_mapping', 'recent_runs', 'sent_items', 'inbox', 'premium_numbers', 'resume_tracking', 'application_tracking', 'relationship_labeling', 'scheduled_tasks', 'scheduled_review', 'settings'])
 const initialActivePage = (): ActivePage => {
   const page = new URLSearchParams(window.location.search).get('page') as ActivePage | null
   return page && ACTIVE_PAGES.has(page) ? page : 'run_queue'
@@ -109,6 +113,7 @@ const TIMEZONE_OPTIONS = COMMON_TIMEZONES.map((zone) => (
 const PAGE_TITLES: Record<ActivePage, string> = {
   assistant: 'CodeJob Assistant',
   run_queue: 'Run Queue Dashboard',
+  manual_intake: 'Manual Intake',
   needs_review: 'Needs Review',
   failed_mapping: 'Failed Mapping',
   recent_runs: 'Recent Runs',
@@ -126,6 +131,7 @@ const PAGE_TITLES: Record<ActivePage, string> = {
 const PAGE_SUBTITLES: Record<ActivePage, string> = {
   assistant: 'Ask about your pipeline, analyse it, and hand off the work.',
   run_queue: 'Manage and monitor your automated recruitment email operations.',
+  manual_intake: 'Paste a requirement you were sent outside Gmail and turn it into a card.',
   needs_review: 'Approve, edit, or reject AI-drafted replies before they send.',
   failed_mapping: 'Fix recipient routing for emails the parser could not map.',
   recent_runs: 'See automation run history and outcomes.',
@@ -332,6 +338,11 @@ type SettingsPayload = {
   candidate_total_experience_years: number | null
   candidate_us_experience_years: number | null
   candidate_current_location: string
+  // All three are read-only here: the profile is written by uploading a file to
+  // /settings/candidate-profile, never by a settings save.
+  candidate_profile_markdown: string
+  candidate_profile_filename: string
+  candidate_profile_uploaded_at: string | null
   draft_text_size: DraftTextSize
   fallback_draft_template: string
   signature_name: string
@@ -644,6 +655,17 @@ type AttachmentAsset = {
   updated_at: string
 }
 
+// Deliberately has no is_enabled: unlike AttachmentAsset, nothing here is sent
+// until the user names it in chat and confirms the card.
+type CandidateDocument = {
+  id: number
+  file_name: string
+  label: string
+  mime_type: string
+  file_size: number
+  created_at: string
+}
+
 type PendingSkill = {
   skill_name: string
   normalized_name: string
@@ -698,6 +720,7 @@ type SettingsBootstrapPayload = {
   gmail_requirement_groups: TrustedGmailGroup[]
   resumes: ResumeAsset[]
   attachments: AttachmentAsset[]
+  documents?: CandidateDocument[]
   pending_skills: PendingSkill[]
   pending_job_intent_signals: JobIntentLearningSignal[]
   approved_job_intent_signals: JobIntentLearningSignal[]
@@ -2953,6 +2976,9 @@ function App() {
     candidate_total_experience_years: null,
     candidate_us_experience_years: null,
     candidate_current_location: '',
+    candidate_profile_markdown: '',
+    candidate_profile_filename: '',
+    candidate_profile_uploaded_at: null,
     draft_text_size: 'normal',
     fallback_draft_template: '',
     signature_name: '',
@@ -2983,6 +3009,12 @@ function App() {
   const [resumeUploading, setResumeUploading] = useState(false)
   const [focusResumeId, setFocusResumeId] = useState<number | null>(null)
   const [attachmentUploadFiles, setAttachmentUploadFiles] = useState<File[]>([])
+  const [candidateProfileBusy, setCandidateProfileBusy] = useState(false)
+  const [candidateDocuments, setCandidateDocuments] = useState<CandidateDocument[]>([])
+  const [candidateDocumentBusy, setCandidateDocumentBusy] = useState(false)
+  // Keyed by document id: an edit in progress belongs to one row, and a single
+  // string would move the caret to whichever row rendered last.
+  const [candidateDocumentLabels, setCandidateDocumentLabels] = useState<Record<number, string>>({})
   const [gmailRequirementGroups, setGmailRequirementGroups] = useState<TrustedGmailGroup[]>([])
   const [gmailGroupsBusy, setGmailGroupsBusy] = useState(false)
   const [resumeAssets, setResumeAssets] = useState<ResumeAsset[]>([])
@@ -3359,6 +3391,11 @@ function App() {
       feature_resume_tracking_enabled: Boolean(payload.feature_resume_tracking_enabled),
       feature_resume_tracking_sweep_interval_minutes: Math.max(30, Math.min(payload.feature_resume_tracking_sweep_interval_minutes || 240, 1440)),
       candidate_work_authorizations: payload.candidate_work_authorizations ?? [],
+      // Coerced, not trusted: the panel reads .length off this on every render,
+      // so a payload from a backend that predates the column must not be undefined.
+      candidate_profile_markdown: payload.candidate_profile_markdown ?? '',
+      candidate_profile_filename: payload.candidate_profile_filename ?? '',
+      candidate_profile_uploaded_at: payload.candidate_profile_uploaded_at ?? null,
       preferred_employment_types: payload.preferred_employment_types ?? [],
       visible_filters: payload.visible_filters ?? {},
       preferred_minimum_rate: payload.preferred_minimum_rate ?? null,
@@ -3450,6 +3487,9 @@ function App() {
     setResumeSkillEdits(Object.fromEntries((payload.resumes ?? []).map((resume) => [resume.id, resume.skills_text ?? ''])))
     setResumeMetadataEdits(Object.fromEntries((payload.resumes ?? []).map((resume) => [resume.id, { primary_role: resume.primary_role ?? '', structured_skills: (resume.structured_skills ?? []).join(', '), variant_label: resume.variant_label ?? '' }])))
     setAttachmentFiles(payload.attachments ?? [])
+    const documents = payload.documents ?? []
+    setCandidateDocuments(documents)
+    setCandidateDocumentLabels(Object.fromEntries(documents.map((document) => [document.id, document.label ?? ''])))
     setPendingSkills(payload.pending_skills ?? [])
     setPendingJobIntentSignals(payload.pending_job_intent_signals ?? [])
     setApprovedJobIntentSignals(payload.approved_job_intent_signals ?? [])
@@ -4035,6 +4075,7 @@ function App() {
     const eventMap: Record<typeof activePage, string> = {
       assistant: 'view_assistant',
       run_queue: 'view_run_queue',
+      manual_intake: 'view_manual_intake',
       needs_review: 'view_needs_review',
       failed_mapping: 'view_failed_mapping',
       recent_runs: 'view_recent_runs',
@@ -4555,6 +4596,96 @@ function App() {
       await loadSettingsBootstrap()
     } catch (e) {
       setError((e as Error).message)
+    }
+  }
+
+  const uploadCandidateProfile = async (file: File) => {
+    setError('')
+    setCandidateProfileBusy(true)
+    const fd = new FormData()
+    fd.append('file', file)
+    try {
+      const res = await fetch(`${apiBase}/settings/candidate-profile`, { method: 'POST', body: fd })
+      if (!res.ok) {
+        // The server's detail names what is actually wrong - wrong extension,
+        // not UTF-8, over the character limit. A generic message here would
+        // send the user back to re-upload the same file blind.
+        const detail = await res.json().then((body) => body?.detail).catch(() => null)
+        throw new Error(detail || 'Failed to upload the profile')
+      }
+      await loadSettingsBootstrap()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setCandidateProfileBusy(false)
+    }
+  }
+
+  const removeCandidateProfile = async () => {
+    setError('')
+    setCandidateProfileBusy(true)
+    try {
+      const res = await fetch(`${apiBase}/settings/candidate-profile`, { method: 'DELETE' })
+      if (!res.ok) throw new Error('Failed to remove the profile')
+      await loadSettingsBootstrap()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setCandidateProfileBusy(false)
+    }
+  }
+
+  const uploadCandidateDocuments = async (files: File[]) => {
+    if (files.length === 0) return
+    setError('')
+    setCandidateDocumentBusy(true)
+    const fd = new FormData()
+    for (const file of files) fd.append('files', file)
+    try {
+      const res = await fetch(`${apiBase}/settings/documents`, { method: 'POST', body: fd })
+      if (!res.ok) {
+        // Names the file that was too large, which matters on a multi-file pick
+        // where the batch is rejected whole.
+        const detail = await res.json().then((body) => body?.detail).catch(() => null)
+        throw new Error(detail || 'Failed to upload the documents')
+      }
+      await loadSettingsBootstrap()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setCandidateDocumentBusy(false)
+    }
+  }
+
+  const saveCandidateDocumentLabel = async (documentId: number) => {
+    setError('')
+    setCandidateDocumentBusy(true)
+    try {
+      const res = await fetch(`${apiBase}/settings/documents/${documentId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label: candidateDocumentLabels[documentId] ?? '' }),
+      })
+      if (!res.ok) throw new Error('Failed to rename the document')
+      await loadSettingsBootstrap()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setCandidateDocumentBusy(false)
+    }
+  }
+
+  const deleteCandidateDocument = async (documentId: number) => {
+    setError('')
+    setCandidateDocumentBusy(true)
+    try {
+      const res = await fetch(`${apiBase}/settings/documents/${documentId}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error('Failed to delete the document')
+      await loadSettingsBootstrap()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setCandidateDocumentBusy(false)
     }
   }
 
@@ -5587,6 +5718,7 @@ function App() {
 
           {activePage === 'relationship_labeling' ? <LabelingTool apiBase={apiBase} /> : null}
           {activePage === 'scheduled_tasks' ? <ScheduledTasksPage apiBase={apiBase} /> : null}
+          {activePage === 'manual_intake' ? <ManualIntakePage apiBase={apiBase} /> : null}
           {activePage === 'scheduled_review' ? <ReviewPage apiBase={apiBase} /> : null}
 
           {activePage === 'run_queue' ? (
@@ -5807,6 +5939,14 @@ function App() {
                   {configRow('Signature Phone', truncateConfigValue(activeConfigurationSettings.signature_phone))}
                   {configRow('Signature Email', truncateConfigValue(activeConfigurationSettings.signature_email))}
                   {configRow('Resume Name', truncateConfigValue(activeConfigurationSettings.resume_display_name))}
+                  {/* Filename and length, never an excerpt: this summary is a glanceable
+                      panel, and the profile is the one setting that may hold a passport number. */}
+                  {configRow(
+                    'Candidate Profile',
+                    activeConfigurationSettings.candidate_profile_markdown?.trim()
+                      ? `${activeConfigurationSettings.candidate_profile_filename || 'Uploaded'} (${activeConfigurationSettings.candidate_profile_markdown.trim().length.toLocaleString()} characters)`
+                      : '(none)',
+                  )}
                 </div>
               </section>
 
@@ -6468,6 +6608,100 @@ function App() {
                   </label>
                   <p className="subtle">Used as the sent attachment name for resume variants. Review and database cards will still show the real selected variant file name.</p>
                   <p className="subtle">These defaults are shared with Telegram and used by <code>/run</code>. Auto-run settings are also synced to Telegram.</p>
+
+                  <h3>Candidate Profile</h3>
+                  <p className="subtle">
+                    What the CodeJob Assistant knows about you. Without it, asking it to write a mail produces a third-party pitch full of <code>[Insert Visa Status]</code> placeholders, because it has no idea who you are. Upload a <code>profile.md</code> written in the first person holding whatever a recruiter might ask for - visa status, notice period, rate, document numbers - and the assistant fills those into drafts as real values instead of asking you to.
+                  </p>
+                  {settings.candidate_profile_filename || settings.candidate_profile_markdown ? (
+                    <div className="candidateProfileLoaded">
+                      <strong>{settings.candidate_profile_filename || 'Profile loaded'}</strong>
+                      <span className="subtle">
+                        {settings.candidate_profile_markdown.length.toLocaleString()} characters
+                        {settings.candidate_profile_uploaded_at
+                          ? ` - uploaded ${new Date(settings.candidate_profile_uploaded_at).toLocaleDateString()}`
+                          : ''}
+                      </span>
+                    </div>
+                  ) : (
+                    <p className="subtle">No profile uploaded. The Assistant will ask you for details it cannot answer.</p>
+                  )}
+                  <label>
+                    {settings.candidate_profile_markdown ? 'Replace profile' : 'Upload profile'}
+                    <input
+                      type="file"
+                      accept={CANDIDATE_PROFILE_ACCEPT}
+                      aria-label="Upload candidate profile"
+                      disabled={candidateProfileBusy}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0]
+                        // Cleared immediately so re-picking the same file after a
+                        // rejection still fires onChange.
+                        e.target.value = ''
+                        if (file) void uploadCandidateProfile(file)
+                      }}
+                    />
+                  </label>
+                  {settings.candidate_profile_markdown ? (
+                    <button type="button" onClick={removeCandidateProfile} disabled={candidateProfileBusy}>
+                      {candidateProfileBusy ? 'Working...' : 'Remove Profile'}
+                    </button>
+                  ) : null}
+                  <p className="subtle">
+                    Uploading replaces the whole profile, and takes effect on your next message - there is no Save Settings step. The file is stored as text, up to 20,000 characters. All of it is sent to the chat model on every message, so keep it to what you would be willing to put in an email. It is used by the Assistant only - the automatic draft pipeline still uses the Fallback Draft Template and the fields above.
+                  </p>
+
+                  <h3>Candidate Documents</h3>
+                  <p className="subtle">
+                    Documents a recruiter might ask for - passport, work authorization, degree, W2. Any format, up to 15MB each. Once uploaded you can tell the Assistant <em>"draft a reply and attach my passport and the W2"</em>, and it will list the files on the confirmation card before anything is sent.
+                  </p>
+                  <label>
+                    Upload documents
+                    <input
+                      type="file"
+                      multiple
+                      aria-label="Upload candidate documents"
+                      disabled={candidateDocumentBusy}
+                      onChange={(e) => {
+                        const files = Array.from(e.target.files ?? [])
+                        // Cleared first so re-picking the same file after a
+                        // rejection still fires onChange.
+                        e.target.value = ''
+                        void uploadCandidateDocuments(files)
+                      }}
+                    />
+                  </label>
+                  {candidateDocuments.length === 0 ? (
+                    <p className="subtle">No documents on file. The Assistant will say so rather than attach something else.</p>
+                  ) : (
+                    candidateDocuments.map((document) => (
+                      <div key={document.id} className="candidateDocumentRow">
+                        <div className="candidateDocumentFile">
+                          <strong>{document.file_name}</strong>
+                          <span className="subtle">{formatAttachmentSize(document.file_size)}</span>
+                        </div>
+                        <input
+                          value={candidateDocumentLabels[document.id] ?? ''}
+                          aria-label={`Name for ${document.file_name}`}
+                          placeholder="What you call it - passport, W2"
+                          onChange={(e) => setCandidateDocumentLabels({ ...candidateDocumentLabels, [document.id]: e.target.value })}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => saveCandidateDocumentLabel(document.id)}
+                          disabled={candidateDocumentBusy || (candidateDocumentLabels[document.id] ?? '') === document.label}
+                        >
+                          Save Name
+                        </button>
+                        <button type="button" onClick={() => deleteCandidateDocument(document.id)} disabled={candidateDocumentBusy}>
+                          Delete
+                        </button>
+                      </div>
+                    ))
+                  )}
+                  <p className="subtle">
+                    The name is what the Assistant matches when you ask for a document, so a scan saved as <code>CD_scan_0412.pdf</code> is still reachable as "passport". The recruiter receives the real file name. Unlike Attachment Files under Execution Control, nothing here is ever sent automatically - only a mail you confirm, carrying only the documents named on the card.
+                  </p>
                 </div>
               </section>
 

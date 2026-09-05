@@ -1518,7 +1518,10 @@ class OrchestrationService:
                 db.commit()
                 db.refresh(email)
                 raise HTTPException(status_code=502, detail=f"Gmail send failed: {exc}") from exc
-        elif email.source == "nvoids":
+        # A pasted requirement has no thread to reply to, so it sends the same
+        # way an Nvoids listing does: a new message to the recruiter address the
+        # extraction found.
+        elif email.source in {"nvoids", "manual"}:
             try:
                 sent_message_id = self.deps.send_new_email_with_attachment(
                     email.recipient_email,

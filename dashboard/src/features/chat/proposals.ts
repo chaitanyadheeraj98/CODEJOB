@@ -23,6 +23,17 @@ function text(value: unknown): string {
   return value == null ? '' : String(value)
 }
 
+// Strict about the element type on purpose: Number(null) and Number('') are both
+// 0, so coercing first would turn a malformed payload into a request for
+// document id 0 rather than dropping the entry.
+function numbers(value: unknown): number[] {
+  return Array.isArray(value) ? value.filter((item): item is number => typeof item === 'number' && Number.isFinite(item)) : []
+}
+
+function strings(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(text).filter(Boolean) : []
+}
+
 // Endpoints keyed by the action the tool chose. The server sends its own
 // endpoint too, but the client never routes to a server-supplied URL - that
 // would let a malformed payload aim a POST anywhere.
@@ -168,14 +179,27 @@ export const PROPOSAL_HANDLERS: Record<string, ProposalHandler> = {
   propose_send_email: {
     endpoint: (fields) => `/candidates/${Number(fields.candidate_email_id)}/send-chat-reply`,
     method: 'POST',
-    buildBody: (fields) => ({ body: fields.body, subject: fields.subject }),
+    buildBody: (fields) => ({
+      body: fields.body,
+      subject: fields.subject,
+      // Ids, never the names the card displays. The server resolves them again
+      // at send time, so a document deleted between proposal and click fails
+      // the send rather than silently matching a different file.
+      document_ids: numbers(fields.document_ids),
+    }),
     confirmLabel: () => 'Send Email',
-    summary: (fields) => [
-      ['To', text(fields.to)],
-      ['CC', text(fields.cc)],
-      ['Subject', text(fields.subject)],
-      ['Body', text(fields.body)],
-    ],
+    summary: (fields) => {
+      const attached = strings(fields.document_names)
+      return [
+        ['To', text(fields.to)],
+        ['CC', text(fields.cc)],
+        ['Subject', text(fields.subject)],
+        // Above the body, which can run long: the files leaving with the mail
+        // are the part of this card that is worth reading twice.
+        ...(attached.length ? [['Attachments', attached.join(', ')] as [string, string]] : []),
+        ['Body', text(fields.body)],
+      ]
+    },
   },
   propose_scheduled_task: {
     // Client-side endpoint table, keyed by the operation the tool chose. The

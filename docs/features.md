@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | Gmail controls | The dashboard calls status, OAuth bootstrap/URL, sync, and labeling-preview routes. | `GET /gmail/status`, `POST /gmail/oauth/start`, `GET /gmail/oauth/url`, `POST /gmail/sync`, and `POST /gmail/labeling/preview` in `backend/app/main.py`. |
 | Candidate workflow | Candidate lists support review, approve-send, reject, regenerate, bulk reject, recipient resolution, and dismissal. | `GET /candidates` and `/candidates/{email_id}/*` handlers in `backend/app/main.py`; focused approval and routing tests were run. |
-| Intake and routing | Manual email intake parses, filters, screens, scores, and routes a candidate. | `POST /phase0/emails/ingest` in `backend/app/main.py:ingest_email`. |
+| Intake and routing | Three ways in - Gmail sync, the Nvoids feed, and a pasted requirement - all screen, score, route and draft through the same engine. | `POST /gmail/sync`, `POST /jobs/nvoids-sync`, and `POST /manual-requirements` in `backend/app/main.py`; the shared engine is `prepare_candidate_for_queue`. |
 | Premium-number workflow | Re-extraction, review classification, recruiter/employer buckets, opportunity CRUD, and cold-call script generation have routes and UI callers. | `/premium-numbers/*`, `/number-review/*`, `/recruiter-numbers/*`, `/employer-numbers/*`, and `/recruiter-opportunities/*`. |
 | Analytics | The UI records view events and requests event lists and trends. | `POST /analytics/events/view`, `GET /analytics/events`, and `GET /analytics/trend`. |
 | Settings and assets | Settings bootstrap/save plus resume and attachment CRUD routes are implemented. | `GET /settings/bootstrap`, `GET/PUT /settings`, and `/settings/resumes*` and `/settings/attachments*`. |

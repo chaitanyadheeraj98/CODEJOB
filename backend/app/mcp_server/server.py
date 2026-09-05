@@ -18,6 +18,7 @@ from app.mcp_server.tools import (
     get_recruiter_replies,
     get_run_items,
     get_settings_summary,
+    list_candidate_documents,
     list_chat_attachments,
     list_contact_numbers,
     list_conversations,
@@ -96,6 +97,11 @@ BASE_TOOLS = (
 )
 
 CHAT_ACTION_TOOLS = (
+    # Read-only, but registered here rather than in BASE_TOOLS: its only purpose
+    # is turning "attach my passport" into ids for propose_send_email, so with
+    # actions off it can answer a question the user cannot act on while adding to
+    # the 35-tool routing baseline the comments below are protecting.
+    list_candidate_documents,
     propose_bulk_approve_candidates,
     propose_candidate_action,
     propose_record_update,

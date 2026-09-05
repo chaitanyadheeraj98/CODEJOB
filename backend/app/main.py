@@ -31,7 +31,6 @@ from app.ai.reply_service import generate_reply_with_ai_or_fallback
 from app.ai.draft_formatting import normalize_draft_text_size
 from app.ai.resume_context_attribution import (
     RESUME_CONTEXT_MISSING,
-    RESUME_CONTEXT_RULES_ONLY,
 )
 from app.ai.resume_context import extract_resume_context
 from app.cold_call import ColdCallContext, find_allowed_cold_call_skills, generate_cold_call_script
@@ -53,6 +52,7 @@ from app.gmail_client import (
     list_thread_messages,
     list_unread_candidates_by_query,
     list_unread_thread_ids,
+    MailAttachment,
     mark_message_processed,
     mark_reply_processed,
     append_tracking_sheet_row,
@@ -84,6 +84,7 @@ from app.models import (
     AppTSApplicationSkillGapSnapshot,
     AttachmentAsset,
     BulkActionIdempotencyKey,
+    CandidateDocument,
     CandidateRecord,
     CanonicalEntityTaxonomyEntry,
     CustomSkillTaxonomyEntry,
@@ -109,7 +110,6 @@ from app.models import (
     utc_now,
 )
 from app.models import RecipientRoutingFeedback
-from app.parsing import build_skills_json_payload
 from app.parsing.document_extraction import prepare_gmail_parse_body
 from app.parsing.skill_audit import analyze_skill_candidate, is_safe_for_bulk_skill_approval
 from app.telegram_bot import TelegramBotService, TelegramReply
@@ -126,7 +126,6 @@ from app.phase0 import (
     greeting_from_to_contact,
     hard_filter_check,
     is_recruiter_like,
-    jd_entity_fields_from_parsed,
     normalize_employer_domains,
     parse_email,
     parse_email_with_details,
@@ -136,11 +135,13 @@ from app.routing import RoutingDecision
 from app.recent_runs import (
     RUN_SOURCE_AUTOMATION,
     RUN_SOURCE_GMAIL_SYNC,
+    RUN_SOURCE_MANUAL_INTAKE,
     RUN_SOURCE_NVOIDS_SYNC,
     automation_run_key,
     build_gmail_message_url,
     create_recent_run,
     gmail_sync_run_key,
+    manual_intake_run_key,
     row_to_recent_run_dict,
     NVOIDS_CLIENT_SEARCH_PREFIX,
 )
@@ -148,13 +149,21 @@ from app.jobs.queues import (
     AUTOMATION_RUN_QUEUE,
     EMBEDDING_QUEUE,
     GMAIL_SYNC_QUEUE,
+    MANUAL_INTAKE_QUEUE,
     NVOIDS_SYNC_QUEUE,
     active_job_id,
     get_queue,
     get_redis_connection,
     redis_is_ready,
 )
-from app.jobs.tasks import run_automation_job, run_generate_embedding_job, run_gmail_sync_job, run_nvoids_sync_job, run_retry_selected_messages_job
+from app.jobs.tasks import (
+    run_automation_job,
+    run_generate_embedding_job,
+    run_gmail_sync_job,
+    run_manual_intake_job,
+    run_nvoids_sync_job,
+    run_retry_selected_messages_job,
+)
 from app.skill_taxonomy import (
     TAXONOMY_PLACEHOLDER_KEYS,
     clear_skill_taxonomy_cache,
@@ -212,7 +221,8 @@ from app.services.scheduling import schedule as scheduling_schedule
 from app.services.scheduling import sweep as scheduling_sweep
 from app.services.scheduling import task_service
 from app.services.auto_runner_service import AutoRunnerService
-from app.services.candidate_runtime_service import CandidateRuntimeDeps, CandidateRuntimeService, resolve_resume_display_name
+from app.services.candidate_runtime_service import CandidateRuntimeDeps, CandidateRuntimeService
+from app.services.manual_intake_service import ManualIntakeDeps, ManualIntakeResult, ManualIntakeService
 from app.services.phone_intelligence_workflow_service import (
     apply_contact_version,
     capture_sister_company,
@@ -227,10 +237,6 @@ from app.services.gmail_group_source_service import (
     parse_group_inputs,
 )
 from app.services.gmail_labeling_runtime_service import GmailLabelingRuntimeService
-from app.services.candidate_screening_service import (
-    CandidateScreeningService,
-    apply_screening_decision,
-)
 from app.services.email_inbox_service import TRANSPARENT_PIXEL_PNG, record_open, reply_count_for_email
 from app.services.github_issue_service import GithubIssueServiceError, create_github_issue
 from app.services.orchestration_service import OrchestrationDeps, OrchestrationService
@@ -238,13 +244,12 @@ from app.services.requirement_expansion_service import RequirementExpansionServi
 from app.services.resume_enrichment_service import backfill_role_and_label, enrich_resume
 from app.services.role_manifest_pipeline import extract_and_score_children
 from app.services.role_manifest_service import RoleManifestService
-from app.services.sendability_service import SENDABILITY_BUCKETS, apply_resume_sendability, resolve_sendability_status
+from app.services.sendability_service import SENDABILITY_BUCKETS, resolve_sendability_status
 from app.services.routing_runtime_service import RoutingRuntimeDeps, RoutingRuntimeService
 from app.services.scoring_runtime_service import ScoringRuntimeDeps, ScoringRuntimeService
 from app.services.settings_bootstrap_service import SettingsBootstrapService
 from app.services.startup_service import StartupService
-from app.services.role_provenance import assign_role
-from app.services.role_taxonomy import clear_role_taxonomy_cache, fill_entity_gaps, role_matcher_for
+from app.services.role_taxonomy import clear_role_taxonomy_cache
 from app.services.taxonomy_learning_service import (
     BULK_APPROVAL_MIN_OCCURRENCES,
     ENTITY_TYPES,
@@ -292,6 +297,13 @@ from app.schemas import (
     BulkContactActionRequest,
     BulkContactActionResponse,
     BulkContactActionResultItem,
+    CandidateDocumentResponse,
+    CandidateDocumentUpdateRequest,
+    CandidateProfileResponse,
+    ManualDuplicateSummary,
+    ManualRequirementCreateRequest,
+    ManualRequirementPreviewRequest,
+    ManualRequirementPreviewResponse,
     ContactFieldChange,
     ContactRescoreResponse,
     ContactMergePreviewLead,
@@ -339,7 +351,6 @@ from app.schemas import (
     GmailSyncResponse,
     GmailLabelingPreviewRequest,
     GmailLabelingPreviewResponse,
-    IngestEmailRequest,
     JobIntentTaxonomyEntryResponse,
     JobEnqueueResponse,
     JobQueueSummaryResponse,
@@ -480,6 +491,7 @@ auto_runner_service: AutoRunnerService | None = None
 routing_runtime_service: RoutingRuntimeService | None = None
 candidate_runtime_service: CandidateRuntimeService | None = None
 scoring_runtime_service: ScoringRuntimeService | None = None
+manual_intake_service: ManualIntakeService | None = None
 settings_bootstrap_service = SettingsBootstrapService(session_factory=SessionLocal)
 gmail_labeling_runtime_service = GmailLabelingRuntimeService()
 telegram_action_lock = runtime_state.telegram_action_lock
@@ -582,6 +594,7 @@ EVENT_WEIGHTS: dict[str, float] = {
     "view_recent_runs": 0.2,
     "view_sent_items": 0.2,
     "view_run_queue": 0.1,
+    "view_manual_intake": 0.1,
     "view_premium_numbers": 0.1,
     "view_assistant": 0.1,
 }
@@ -592,6 +605,7 @@ ALLOWED_VIEW_EVENTS = {
     "view_recent_runs",
     "view_sent_items",
     "view_run_queue",
+    "view_manual_intake",
     "view_premium_numbers",
     "view_assistant",
 }
@@ -1287,6 +1301,44 @@ def _enqueue_background_job(
     return JobEnqueueResponse(run_key=run_key, job_id=job_id, status="queued")
 
 
+def _get_manual_intake_service() -> ManualIntakeService:
+    global manual_intake_service
+    if manual_intake_service is None:
+        manual_intake_service = ManualIntakeService(
+            ManualIntakeDeps(
+                owner_id=settings.owner_id,
+                model_name=settings.deepseek_model_fast,
+                get_settings=_get_settings,
+                active_resume=_active_resume,
+                enabled_resumes=_enabled_resumes,
+                evaluate_routing_policy=lambda db, sender, subject, body, snippet="", routing_confirmed=False, precomputed=None: _get_routing_runtime_service().evaluate_routing_policy(
+                    db, sender, subject, body, snippet, routing_confirmed, precomputed=precomputed
+                ),
+                apply_routing_decision=lambda email, routing: _get_routing_runtime_service().apply_routing_decision(email, routing),
+                capture_premium_numbers=_capture_premium_numbers,
+            )
+        )
+    return manual_intake_service
+
+
+def _run_manual_intake(db: Session, *, text: str) -> ManualIntakeResult:
+    """Called by the worker, never by a request handler - ingestion is queued."""
+    return _get_manual_intake_service().ingest(db, text=text)
+
+
+def _enqueue_manual_intake(db: Session, *, text: str) -> JobEnqueueResponse:
+    run_key = manual_intake_run_key(uuid.uuid4().hex)
+    return _enqueue_background_job(
+        db,
+        queue_name=MANUAL_INTAKE_QUEUE,
+        run_source=RUN_SOURCE_MANUAL_INTAKE,
+        run_key=run_key,
+        task=run_manual_intake_job,
+        task_kwargs={"run_key": run_key, "text": text},
+        total_items=1,
+    )
+
+
 def _enqueue_gmail_sync(db: Session) -> JobEnqueueResponse:
     sync_batch_id = str(uuid.uuid4())
     run_key = gmail_sync_run_key(sync_batch_id)
@@ -1815,6 +1867,69 @@ def _enabled_attachment_assets(db: Session) -> list[AttachmentAsset]:
 
 def _enabled_attachment_file_names(db: Session) -> list[str]:
     return [item.file_name for item in _enabled_attachment_assets(db)]
+
+
+def _list_candidate_documents(db: Session) -> list[CandidateDocument]:
+    return (
+        db.query(CandidateDocument)
+        .filter(CandidateDocument.owner_id == settings.owner_id)
+        .order_by(CandidateDocument.created_at.desc(), CandidateDocument.id.desc())
+        .all()
+    )
+
+
+def _get_candidate_document(db: Session, document_id: int) -> CandidateDocument:
+    document = (
+        db.query(CandidateDocument)
+        .filter(CandidateDocument.owner_id == settings.owner_id, CandidateDocument.id == document_id)
+        .first()
+    )
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return document
+
+
+def _resolve_candidate_documents(db: Session, document_ids: list[int]) -> list[CandidateDocument]:
+    """Turn requested ids into documents, in the order asked, or refuse.
+
+    A partial send is the wrong failure here: the user confirmed a card listing
+    three files, and a mail that quietly leaves one out is worse than one that
+    is not sent. So an unknown id, a missing file on disk, or a batch over
+    Gmail's ceiling stops the whole send.
+    """
+    if not document_ids:
+        return []
+    wanted = list(dict.fromkeys(int(value) for value in document_ids))
+    found = {
+        row.id: row
+        for row in db.query(CandidateDocument).filter(
+            CandidateDocument.owner_id == settings.owner_id,
+            CandidateDocument.id.in_(wanted),
+        )
+    }
+    missing = [value for value in wanted if value not in found]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown document ids: {', '.join(str(value) for value in missing)}",
+        )
+    documents = [found[value] for value in wanted]
+    absent = [item.file_name for item in documents if not Path(item.file_path).exists()]
+    if absent:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Document file is missing from disk: {', '.join(absent)}. Re-upload it in Settings.",
+        )
+    total = sum(item.file_size for item in documents)
+    if total > settings.candidate_document_max_send_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"Attachments total {total // (1024 * 1024)}MB, over the "
+                f"{settings.candidate_document_max_send_bytes // (1024 * 1024)}MB a single mail can carry"
+            ),
+        )
+    return documents
 
 
 def _clean_custom_skill_name(value: str | None) -> str:
@@ -2412,6 +2527,9 @@ def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
         candidate_total_experience_years=s.candidate_total_experience_years,
         candidate_us_experience_years=s.candidate_us_experience_years,
         candidate_current_location=s.candidate_current_location or "",
+        candidate_profile_markdown=s.candidate_profile_markdown or "",
+        candidate_profile_filename=s.candidate_profile_filename or "",
+        candidate_profile_uploaded_at=s.candidate_profile_uploaded_at,
         draft_text_size=normalize_draft_text_size(s.draft_text_size),
         fallback_draft_template=s.fallback_draft_template or DEFAULT_FALLBACK_DRAFT_TEMPLATE,
         signature_name=(s.signature_name or "").strip() or DEFAULT_SIGNATURE_NAME,
@@ -2783,6 +2901,7 @@ def get_settings_bootstrap(
         gmail_requirement_groups=[_gmail_requirement_group_response(item) for item in _list_gmail_requirement_groups(db)],
         resumes=[_resume_response(item) for item in _list_resumes(db)],
         attachments=[AttachmentAssetResponse.model_validate(item) for item in _list_attachment_assets(db)],
+        documents=[CandidateDocumentResponse.model_validate(item) for item in _list_candidate_documents(db)],
         pending_skills=pending_skills,
         pending_job_intent_signals=pending_job_intent_signals,
         approved_job_intent_signals=approved_job_intent_signals,
@@ -2862,6 +2981,9 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
         s.candidate_us_experience_years = payload.candidate_us_experience_years
     if "candidate_current_location" in provided_fields:
         s.candidate_current_location = (payload.candidate_current_location or "").strip()
+    # candidate_profile_markdown is deliberately absent here: it is written only
+    # by POST/DELETE /settings/candidate-profile, and is response-only on the
+    # schema so a settings save can neither set nor blank it.
     s.draft_text_size = normalize_draft_text_size(payload.draft_text_size)
     s.fallback_draft_template = payload.fallback_draft_template.strip() if payload.fallback_draft_template.strip() else DEFAULT_FALLBACK_DRAFT_TEMPLATE
     s.signature_name = payload.signature_name.strip() if payload.signature_name.strip() else DEFAULT_SIGNATURE_NAME
@@ -2974,6 +3096,85 @@ def delete_gmail_requirement_group(group_id: int, db: Session = Depends(get_db))
     db.delete(row)
     db.commit()
     return response
+
+
+CANDIDATE_PROFILE_MAX_CHARS = 20000
+CANDIDATE_PROFILE_MAX_BYTES = 1_000_000
+CANDIDATE_PROFILE_SUFFIXES = (".md", ".markdown", ".txt")
+
+
+def _candidate_profile_response(s: UserSettings) -> CandidateProfileResponse:
+    return CandidateProfileResponse(
+        filename=s.candidate_profile_filename or "",
+        uploaded_at=s.candidate_profile_uploaded_at,
+        characters=len(s.candidate_profile_markdown or ""),
+    )
+
+
+@app.post("/settings/candidate-profile", response_model=CandidateProfileResponse)
+def upload_candidate_profile(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+) -> CandidateProfileResponse:
+    """Replace the stored profile with the text of an uploaded Markdown file.
+
+    The text is stored, not the file. Every rejection below names the actual
+    value that failed, because the alternative is a user re-uploading the same
+    document repeatedly against a message that does not say what is wrong.
+    """
+    filename = (file.filename or "").strip()
+    if not filename:
+        raise HTTPException(status_code=400, detail="File name required")
+    suffix = Path(filename).suffix.lower()
+    if suffix not in CANDIDATE_PROFILE_SUFFIXES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{filename} is not a Markdown file. Upload a {', '.join(CANDIDATE_PROFILE_SUFFIXES)} file.",
+        )
+
+    # Read bounded: an arbitrarily large upload would otherwise be decoded in
+    # full only to be rejected for length a moment later.
+    raw = file.file.read(CANDIDATE_PROFILE_MAX_BYTES + 1)
+    if not raw:
+        raise HTTPException(status_code=400, detail="That file is empty.")
+    if len(raw) > CANDIDATE_PROFILE_MAX_BYTES:
+        raise HTTPException(status_code=400, detail="That file is too large to be a profile.")
+    try:
+        text = raw.decode("utf-8").strip()
+    except UnicodeDecodeError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{filename} is not UTF-8 text. Save it as a plain Markdown file and try again.",
+        ) from None
+    if not text:
+        raise HTTPException(status_code=400, detail="That file has no text in it.")
+    if len(text) > CANDIDATE_PROFILE_MAX_CHARS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"That profile is {len(text):,} characters; the limit is "
+                f"{CANDIDATE_PROFILE_MAX_CHARS:,}. It is sent to the chat model on every message."
+            ),
+        )
+
+    s = settings_bootstrap_service.get_settings(db)
+    s.candidate_profile_markdown = text
+    s.candidate_profile_filename = filename[:255]
+    s.candidate_profile_uploaded_at = datetime.now(UTC)
+    db.commit()
+    db.refresh(s)
+    return _candidate_profile_response(s)
+
+
+@app.delete("/settings/candidate-profile", response_model=CandidateProfileResponse)
+def delete_candidate_profile(db: Session = Depends(get_db)) -> CandidateProfileResponse:
+    s = settings_bootstrap_service.get_settings(db)
+    s.candidate_profile_markdown = ""
+    s.candidate_profile_filename = ""
+    s.candidate_profile_uploaded_at = None
+    db.commit()
+    db.refresh(s)
+    return _candidate_profile_response(s)
 
 
 @app.post("/settings/resume", response_model=ResumeResponse)
@@ -3250,6 +3451,104 @@ def delete_attachment_file(attachment_id: int, db: Session = Depends(get_db)) ->
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"Attachment deleted from database but not disk: {exc}") from exc
     return {"id": attachment_id, "deleted": True}
+
+
+@app.post("/settings/documents", response_model=list[CandidateDocumentResponse])
+def upload_candidate_documents(
+    files: list[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+) -> list[CandidateDocumentResponse]:
+    """Store documents the assistant can attach to a mail when asked by name.
+
+    Any format is accepted: these are forwarded to the recruiter byte for byte
+    and are never parsed, so there is nothing here that a content type could
+    make safe or unsafe. What is enforced is size, because a file too large to
+    send is better refused now than after a draft is written.
+    """
+    if not files:
+        raise HTTPException(status_code=400, detail="At least one file is required")
+    max_bytes = settings.candidate_document_max_bytes
+    Path(settings.candidate_document_storage_dir).mkdir(parents=True, exist_ok=True)
+    staged: list[tuple[bytes, str, str, str]] = []
+    for file in files:
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="File name required")
+        # One byte past the limit is enough to reject it, and stops a huge
+        # upload being held in memory in full just to be refused.
+        content = file.file.read(max_bytes + 1)
+        if not content:
+            raise HTTPException(status_code=400, detail=f"Empty file not allowed: {file.filename}")
+        if len(content) > max_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"{file.filename} is larger than the "
+                    f"{max_bytes // (1024 * 1024)}MB limit for a single document"
+                ),
+            )
+        staged.append(
+            (
+                content,
+                Path(file.filename).name[:255],
+                file.content_type or "application/octet-stream",
+                hashlib.sha256(content).hexdigest(),
+            )
+        )
+
+    # Nothing is written until every file has passed, so one oversized file in a
+    # multi-file pick does not leave half the batch stored.
+    created: list[CandidateDocument] = []
+    for content, file_name, mime_type, sha256 in staged:
+        target_path = Path(settings.candidate_document_storage_dir) / f"{sha256}_{uuid.uuid4().hex}_{file_name}"
+        target_path.write_bytes(content)
+        created.append(
+            CandidateDocument(
+                owner_id=settings.owner_id,
+                file_path=str(target_path),
+                file_name=file_name,
+                label="",
+                mime_type=mime_type,
+                sha256=sha256,
+                file_size=len(content),
+            )
+        )
+    db.add_all(created)
+    db.commit()
+    for item in created:
+        db.refresh(item)
+    return [CandidateDocumentResponse.model_validate(item) for item in created]
+
+
+@app.get("/settings/documents", response_model=list[CandidateDocumentResponse])
+def list_candidate_document_files(db: Session = Depends(get_db)) -> list[CandidateDocumentResponse]:
+    return [CandidateDocumentResponse.model_validate(item) for item in _list_candidate_documents(db)]
+
+
+@app.patch("/settings/documents/{document_id}", response_model=CandidateDocumentResponse)
+def update_candidate_document(
+    document_id: int,
+    payload: CandidateDocumentUpdateRequest,
+    db: Session = Depends(get_db),
+) -> CandidateDocumentResponse:
+    document = _get_candidate_document(db, document_id)
+    document.label = " ".join(payload.label.split())[:120]
+    db.commit()
+    db.refresh(document)
+    return CandidateDocumentResponse.model_validate(document)
+
+
+@app.delete("/settings/documents/{document_id}")
+def delete_candidate_document(document_id: int, db: Session = Depends(get_db)) -> dict[str, object]:
+    document = _get_candidate_document(db, document_id)
+    file_path = Path(document.file_path)
+    db.delete(document)
+    db.commit()
+    try:
+        if file_path.exists():
+            file_path.unlink()
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Document deleted from database but not disk: {exc}") from exc
+    return {"id": document_id, "deleted": True}
 
 
 @app.get("/settings/skills/pending", response_model=list[PendingSkillResponse])
@@ -4599,188 +4898,52 @@ def automation_run_once(payload: AutomationRunRequest | None = None, db: Session
     return _run_automation(payload, db)
 
 
-@app.post("/phase0/emails/ingest", response_model=EmailResponse)
-def ingest_email(payload: IngestEmailRequest, db: Session = Depends(get_db)) -> RecruiterEmail:
-    user_settings = _get_settings(db)
-    parsed, parser_details = parse_email_with_details(payload.subject, payload.body, source="manual")
-    effective_policy = policy_service.read_policy_from_settings(user_settings.policy_json)
-    hard_pass, hard_reason = hard_filter_check(parsed, user_settings, effective_policy, parser_details)
-    screening = CandidateScreeningService().evaluate_parser_details(parser_details, user_settings)
-    if hard_pass and not screening.proceed_to_scoring:
-        assigned = assign_role(
-            extracted=str(parsed.get("role") or ""),
-            subject=payload.subject,
-            body=payload.body,
-            matcher=role_matcher_for(db, settings.owner_id),
+@app.post("/manual-requirements/preview", response_model=ManualRequirementPreviewResponse)
+def preview_manual_requirement(
+    payload: ManualRequirementPreviewRequest,
+    db: Session = Depends(get_db),
+) -> ManualRequirementPreviewResponse:
+    """Has this exact requirement already been pasted? No model calls.
+
+    Runs on blur while the user is still typing, so it stays cheap: contact
+    extraction, a rules parse and one indexed lookup.
+    """
+    duplicate = _get_manual_intake_service().preview(db, text=payload.text)
+    if duplicate is None:
+        return ManualRequirementPreviewResponse()
+    return ManualRequirementPreviewResponse(
+        duplicate_of=ManualDuplicateSummary(
+            id=duplicate.id,
+            role=duplicate.role,
+            client=duplicate.client,
+            created_at=duplicate.created_at,
         )
-        email = RecruiterEmail(
-            owner_id=settings.owner_id,
-            sender=payload.sender,
-            subject=payload.subject,
-            body=payload.body,
-            role=assigned.role,
-            role_source=assigned.role_source,
-            role_canonical=assigned.role_canonical,
-            salary_text=str(parsed["salary_text"]),
-            skills_text=str(parsed["skills_text"]),
-            skills_json=json.dumps(
-                build_skills_json_payload(parser_details, fallback_skills_text=str(parsed["skills_text"])),
-                separators=(",", ":"),
-            ),
-            **fill_entity_gaps(jd_entity_fields_from_parsed(parsed), db=db, owner_id=settings.owner_id, subject=payload.subject, location=str(parsed["location"]), body=payload.body),
-            decision="Qualified",
-            state="needs_review",
-            decision_reason="strict_candidate_screening",
-            hard_filter_result=hard_reason,
-            approval_status="pending",
-            sent_status="not_sent",
-            source="manual",
-            parser_details_json=json.dumps(parser_details, separators=(",", ":")),
-        )
-        apply_screening_decision(email, screening)
-        db.add(email)
-        candidate_record = opportunity_lineage_service.create_candidate_record(
-            db, owner_id=email.owner_id, origin_type="gmail"
-        )
-        email.record_id = candidate_record.id
-        db.commit()
-        db.refresh(email)
-        if user_settings.feature_role_manifest_enabled:
-            retry_role_detection(email.id, db)
-            db.refresh(email)
-        return email
-    active_resume = _active_resume(db)
-    resume_selection = _select_best_resume_match(
-        subject=payload.subject,
-        body=payload.body,
-        parsed=parsed,
-        parser_details=parser_details,
-        user_settings=user_settings,
-        email_row=None,
-        db=db,
-        owner_id=settings.owner_id,
-        external_thread_id=None,
-    )
-    selected_resume = cast(ResumeAsset | None, getattr(resume_selection, "resume", None)) or active_resume
-    ai_score = cast(float, getattr(resume_selection, "ai_score"))
-    ai_summary = cast(str, getattr(resume_selection, "ai_summary"))
-    ai_score_source = cast(str, getattr(resume_selection, "ai_score_source"))
-    ats_score = cast(float | None, getattr(resume_selection, "ats_score", None))
-    ats_summary = cast(str | None, getattr(resume_selection, "ats_summary", None))
-    ats_score_source = cast(str | None, getattr(resume_selection, "ats_score_source", None))
-    ats_breakdown_json = cast(str | None, getattr(resume_selection, "ats_breakdown_json", None))
-    resume_picker_score = cast(float | None, getattr(resume_selection, "final_resume_score", None))
-    resume_picker_reason = cast(str | None, getattr(resume_selection, "selection_reason", None))
-    resume_picker_candidates_json = cast(str | None, getattr(resume_selection, "candidate_rankings_json", None))
-    resume_picker_breakdown_json = cast(str | None, getattr(resume_selection, "picker_breakdown_json", None))
-    email_embedding_json = cast(str | None, getattr(resume_selection, "email_embedding_json"))
-    resume_embedding_json = cast(str | None, getattr(resume_selection, "resume_embedding_json"))
-    semantic_diag = getattr(resume_selection, "semantic_diag")
-    threshold = policy_service.policy_threshold(user_settings.qualification_threshold, effective_policy)
-    score_mode = policy_service.draft_rule_mode(effective_policy, "score_threshold")
-    score_blocked = score_mode == "block" and ai_score < threshold
-    warnings: list[str] = []
-    if hard_pass and hard_reason.startswith("warnings: "):
-        warnings.append(hard_reason.removeprefix("warnings: ").strip())
-    if score_mode == "warn" and ai_score < threshold:
-        warnings.append(f"score_below_threshold:{ai_score:.2f}<{threshold:.2f}")
-    state = "needs_review" if hard_pass and not score_blocked else "auto_rejected"
-    decision = "Qualified" if state == "needs_review" else "Reject"
-    fallback_draft = _build_user_fallback_draft(
-        db,
-        user_settings,
-        sender=payload.sender,
-        role=str(parsed["role"]),
-        parsed=parsed,
-        greeting_line=greeting_from_to_contact(None, payload.body),
-        resume_file_name=resolve_resume_display_name(user_settings, selected_resume.file_name if selected_resume else None),
     )
 
-    assigned = assign_role(
-        extracted=str(parsed.get("role") or ""),
-        subject=payload.subject,
-        body=payload.body,
-        matcher=role_matcher_for(db, settings.owner_id),
-    )
-    email = RecruiterEmail(
-        owner_id=settings.owner_id,
-        sender=payload.sender,
-        subject=payload.subject,
-        body=payload.body,
-        role=assigned.role,
-        role_source=assigned.role_source,
-        role_canonical=assigned.role_canonical,
-        salary_text=str(parsed["salary_text"]),
-        skills_text=str(parsed["skills_text"]),
-        skills_json=json.dumps(
-            build_skills_json_payload(parser_details, fallback_skills_text=str(parsed["skills_text"])),
-            separators=(",", ":"),
-        ),
-        **fill_entity_gaps(jd_entity_fields_from_parsed(parsed), db=db, owner_id=settings.owner_id, subject=payload.subject, location=str(parsed["location"]), body=payload.body),
-        score=int(ai_score * 100),
-        decision=decision,
-        state=state,
-        decision_reason="manual_ingest_with_warnings" if state == "needs_review" and warnings else "manual_ingest",
-        hard_filter_result=policy_service.combine_rule_messages(warnings) if state == "needs_review" else hard_reason,
-        auto_reject_reason=None if state == "needs_review" else "manual_ingest_not_qualified",
-        ai_score=ai_score,
-        ai_score_source=ai_score_source,
-        ai_summary=ai_summary,
-        ats_score=ats_score,
-        ats_score_source=ats_score_source,
-        ats_summary=ats_summary,
-        ats_breakdown_json=ats_breakdown_json,
-        resume_picker_score=resume_picker_score,
-        resume_picker_reason=resume_picker_reason,
-        resume_picker_candidates_json=resume_picker_candidates_json,
-        resume_picker_breakdown_json=resume_picker_breakdown_json,
-        semantic_input_source=getattr(semantic_diag, "input_source", None),
-        semantic_input_chars=getattr(semantic_diag, "input_chars", None),
-        semantic_chunks=getattr(semantic_diag, "chunks", None),
-        semantic_fallback_reason=getattr(semantic_diag, "fallback_reason", None),
-        keyword_source=getattr(semantic_diag, "keyword_source", None),
-        thread_snapshot_used=getattr(semantic_diag, "thread_snapshot_used", None),
-        thread_snapshot_email_id=getattr(semantic_diag, "thread_snapshot_email_id", None),
-        semantic_embedding=email_embedding_json,
-        resume_asset_id=selected_resume.id if selected_resume else None,
-        resume_file_name=selected_resume.file_name if selected_resume else None,
-        draft_reply=fallback_draft
-        if state == "needs_review"
-        else "",
-        draft_source="rules_only" if state == "needs_review" else None,
-        draft_model=None,
-        draft_ai_error=None,
-        draft_resume_context_status=RESUME_CONTEXT_RULES_ONLY if state == "needs_review" else None,
-        approval_status="pending",
-        sent_status="not_sent",
-        source="manual",
-        parser_details_json=json.dumps(parser_details, separators=(",", ":")),
-    )
-    apply_screening_decision(email, screening)
-    if email.state == "needs_review":
-        apply_resume_sendability(email)
-    db.add(email)
-    candidate_record = opportunity_lineage_service.create_candidate_record(
-        db, owner_id=email.owner_id, origin_type="gmail"
-    )
-    email.record_id = candidate_record.id
-    if selected_resume and resume_embedding_json and selected_resume.semantic_embedding != resume_embedding_json:
-        selected_resume.semantic_embedding = resume_embedding_json
-    db.commit()
-    db.refresh(email)
-    if user_settings.feature_role_manifest_enabled:
-        retry_role_detection(email.id, db)
-        db.refresh(email)
-    if state == "needs_review":
-        _record_productivity_event(
-            db,
-            event_type="needs_review_marked",
-            event_source="state",
-            entity_id=email.id,
-            entity_type="RecruiterEmail",
-            metadata={"source": "manual_ingest"},
+
+@app.post("/manual-requirements", response_model=JobEnqueueResponse)
+def create_manual_requirement(
+    payload: ManualRequirementCreateRequest,
+    db: Session = Depends(get_db),
+) -> JobEnqueueResponse:
+    """Queue a pasted requirement for ingestion.
+
+    Returns a run key, not a card: extraction, scoring and drafting are several
+    model calls. The client polls GET /jobs/{run_key}, the same endpoint the
+    Gmail and Nvoids syncs already report through.
+
+    `acknowledged_duplicate_of` is recorded and never enforced - a recruiter
+    re-sending an updated requirement is normal, and the warning exists to be
+    seen, not to block.
+    """
+    if not payload.text.strip():
+        raise HTTPException(status_code=400, detail="Pasted requirement is empty")
+    if payload.acknowledged_duplicate_of:
+        logger.info(
+            "manual_intake_duplicate_acknowledged existing_email_id=%s",
+            payload.acknowledged_duplicate_of,
         )
-    return email
+    return _enqueue_manual_intake(db, text=payload.text)
 
 
 @app.get("/filter-options", response_model=FilterOptionsResponse)
@@ -9176,12 +9339,26 @@ def send_chat_reply(
         raise HTTPException(status_code=400, detail="Recipient email is missing")
     if not (email.external_thread_id or "").strip():
         raise HTTPException(status_code=400, detail="Gmail thread is missing")
+    # Resolved before the send, so an unknown id or a file gone from disk fails
+    # with nothing delivered rather than delivering the mail without its files.
+    documents = _resolve_candidate_documents(db, payload.document_ids)
     message_id = send_reply_with_attachment(
         thread_id=email.external_thread_id,
         to=email.recipient_email,
         cc=email.cc_email,
         subject=(payload.subject or email.subject or "").strip(),
         body=payload.body.strip(),
+        attachments=[
+            MailAttachment(
+                path=item.file_path,
+                # The label is the user's name for the file, not a file name -
+                # the recruiter gets what was actually uploaded.
+                display_name=item.file_name,
+                mime_type=item.mime_type,
+            )
+            for item in documents
+        ]
+        or None,
     )
     _record_productivity_event(
         db,
@@ -9189,9 +9366,17 @@ def send_chat_reply(
         event_source="chat_assistant",
         entity_id=email.id,
         entity_type="RecruiterEmail",
-        metadata={"gmail_message_id": message_id},
+        metadata={
+            "gmail_message_id": message_id,
+            "attached_documents": [item.file_name for item in documents],
+        },
     )
-    return {"sent": True, "message_id": message_id, "email_id": email.id}
+    return {
+        "sent": True,
+        "message_id": message_id,
+        "email_id": email.id,
+        "attached_documents": [item.file_name for item in documents],
+    }
 
 
 @app.post(

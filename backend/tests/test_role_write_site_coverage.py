@@ -4,9 +4,10 @@ This exists because an audit missed five write sites. The original sweep grepped
 for attribute assignment (`email.role = ...`) and found six, but the primary
 ingest paths build the row in a constructor instead - `RecruiterEmail(role=...)`
 in run_orchestrator._email_row, orchestration_service.sync_gmail (x2) and
-main.ingest_email (x2). Those five wrote `role=str(parsed["role"])` with no
-normalisation, no provenance and no taxonomy lookup, so newly ingested mail
-bypassed the entire mechanism while every behavioural test still passed.
+main.ingest_email (x2, since removed with that endpoint). Those five wrote
+`role=str(parsed["role"])` with no normalisation, no provenance and no taxonomy
+lookup, so newly ingested mail bypassed the entire mechanism while every
+behavioural test still passed.
 
 A source-level check is crude, but it catches the failure a behavioural test
 cannot: a *new* write site added later, in a file nobody thought to look at. If

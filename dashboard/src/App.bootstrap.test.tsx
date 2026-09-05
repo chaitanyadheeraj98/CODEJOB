@@ -72,6 +72,7 @@ function makeBootstrapPayload(overrides?: {
   settings?: Record<string, unknown>
   resumes?: Array<Record<string, unknown>>
   attachments?: Array<Record<string, unknown>>
+  documents?: Array<Record<string, unknown>>
   pending_skills?: Array<Record<string, unknown>>
   pending_job_intent_signals?: Array<Record<string, unknown>>
   approved_job_intent_signals?: Array<Record<string, unknown>>
@@ -81,6 +82,9 @@ function makeBootstrapPayload(overrides?: {
     role_manifest_child_creation_enabled: false,
     resumes: overrides?.resumes ?? [],
     attachments: overrides?.attachments ?? [],
+    // Spread rather than defaulted: omitting the key entirely is the payload a
+    // backend that predates the locker sends, and one test relies on it.
+    ...(overrides?.documents ? { documents: overrides.documents } : {}),
     pending_skills: overrides?.pending_skills ?? [],
     pending_job_intent_signals: overrides?.pending_job_intent_signals ?? [],
     approved_job_intent_signals: overrides?.approved_job_intent_signals ?? [],
@@ -472,6 +476,172 @@ describe('Settings bootstrap flow', () => {
     const profileInputs = Array.from(profile?.querySelectorAll('input') ?? [])
     expect(profileInputs.every((input) => !input.disabled)).toBe(true)
     expect(container.textContent).toContain('Save Settings')
+  })
+
+  it('shows the loaded profile file under Profile Settings, with no editor', async () => {
+    vi.stubGlobal(
+      'fetch',
+      makeAppFetch({
+        bootstrapPayload: makeBootstrapPayload({
+          settings: {
+            candidate_profile_markdown: '# Me\n- Work Authorization: H1B',
+            candidate_profile_filename: 'profile.md',
+            candidate_profile_uploaded_at: '2026-09-04T12:00:00Z',
+          },
+        }),
+      }),
+    )
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+    })
+
+    await act(async () => {
+      root.render(<App />)
+      await flushPromises(6)
+    })
+    await openSettings(container)
+
+    const sections = Array.from(container.querySelectorAll('section'))
+    const profile = sections.find((section) => section.querySelector('h2')?.textContent === 'Profile Settings')
+    expect(profile?.textContent).toContain('Candidate Profile')
+    expect(profile?.textContent).toContain('profile.md')
+    expect(profile?.textContent).toContain('30 characters')
+    expect(profile?.textContent).toContain('Replace profile')
+    expect(profile?.textContent).toContain('Remove Profile')
+
+    // Upload-only: the profile must not be editable in the panel, and the
+    // content must never be rendered - it can hold a passport number.
+    const fileInput = profile?.querySelector('input[type="file"][aria-label="Upload candidate profile"]')
+    expect(fileInput).toBeDefined()
+    expect(fileInput?.getAttribute('accept')).toBe('.md,.markdown,.txt')
+    expect(profile?.textContent).not.toContain('Work Authorization: H1B')
+  })
+
+  it('offers upload and no remove button when no profile is loaded', async () => {
+    vi.stubGlobal('fetch', makeAppFetch())
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+    })
+
+    await act(async () => {
+      root.render(<App />)
+      await flushPromises(6)
+    })
+    await openSettings(container)
+
+    const sections = Array.from(container.querySelectorAll('section'))
+    const profile = sections.find((section) => section.querySelector('h2')?.textContent === 'Profile Settings')
+    expect(profile?.textContent).toContain('No profile uploaded')
+    expect(profile?.textContent).toContain('Upload profile')
+    expect(profile?.textContent).not.toContain('Remove Profile')
+  })
+
+  it('puts the document locker under Profile Settings, separate from Execution Control', async () => {
+    vi.stubGlobal(
+      'fetch',
+      makeAppFetch({
+        bootstrapPayload: makeBootstrapPayload({
+          documents: [
+            { id: 3, file_name: 'CD_scan_0412.pdf', label: 'passport', mime_type: 'application/pdf', file_size: 512000, created_at: '2026-09-04T12:00:00Z' },
+            { id: 7, file_name: '2024_W2.pdf', label: '', mime_type: 'application/pdf', file_size: 90112, created_at: '2026-09-04T12:00:00Z' },
+          ],
+          attachments: [
+            { id: 1, file_name: 'cover.pdf', mime_type: 'application/pdf', sha256: 'a', file_size: 100, is_enabled: true, created_at: '2026-09-04T12:00:00Z', updated_at: '2026-09-04T12:00:00Z' },
+          ],
+        }),
+      }),
+    )
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+    })
+
+    await act(async () => {
+      root.render(<App />)
+      await flushPromises(6)
+    })
+    await openSettings(container)
+
+    const sections = Array.from(container.querySelectorAll('section'))
+    const profile = sections.find((section) => section.querySelector('h2')?.textContent === 'Profile Settings')
+    const execution = sections.find((section) => section.querySelector('h2')?.textContent === 'Execution Control')
+
+    expect(profile?.textContent).toContain('Candidate Documents')
+    expect(profile?.textContent).toContain('CD_scan_0412.pdf')
+    expect(profile?.textContent).toContain('2024_W2.pdf')
+    // The user's own name for the file, which is what the assistant matches.
+    expect(profile?.querySelector<HTMLInputElement>('input[aria-label="Name for CD_scan_0412.pdf"]')?.value).toBe('passport')
+
+    // The two lists are different features: these are picked per mail, the
+    // Execution Control ones go out with every automated draft.
+    expect(execution?.textContent).toContain('cover.pdf')
+    expect(execution?.textContent).not.toContain('CD_scan_0412.pdf')
+    expect(profile?.textContent).not.toContain('cover.pdf')
+
+    // Any format: no accept attribute to narrow the picker.
+    const upload = profile?.querySelector('input[type="file"][aria-label="Upload candidate documents"]')
+    expect(upload).toBeTruthy()
+    expect(upload?.getAttribute('accept')).toBeNull()
+  })
+
+  it('shows an empty locker when the backend sends no documents key at all', async () => {
+    // The panel maps over this array on every render, so an undefined would
+    // white-screen Settings. makeBootstrapPayload omits it by default.
+    expect(makeBootstrapPayload()).not.toHaveProperty('documents')
+    vi.stubGlobal('fetch', makeAppFetch())
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+    })
+
+    await act(async () => {
+      root.render(<App />)
+      await flushPromises(6)
+    })
+    await openSettings(container)
+
+    const sections = Array.from(container.querySelectorAll('section'))
+    const profile = sections.find((section) => section.querySelector('h2')?.textContent === 'Profile Settings')
+    expect(profile?.textContent).toContain('No documents on file')
+  })
+
+  it('survives a settings payload from a backend that predates the profile column', async () => {
+    // Not hypothetical: the panel reads .length off this field on every render,
+    // so an undefined would white-screen the whole Settings page. makeSettings()
+    // omits the field entirely, which is exactly the payload being guarded against.
+    expect(makeSettings()).not.toHaveProperty('candidate_profile_markdown')
+    vi.stubGlobal('fetch', makeAppFetch())
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    cleanups.push(() => {
+      act(() => root.unmount())
+      container.remove()
+    })
+
+    await act(async () => {
+      root.render(<App />)
+      await flushPromises(6)
+    })
+    await openSettings(container)
+
+    const sections = Array.from(container.querySelectorAll('section'))
+    const profile = sections.find((section) => section.querySelector('h2')?.textContent === 'Profile Settings')
+    expect(profile?.textContent).toContain('No profile uploaded')
   })
 
   it.each([

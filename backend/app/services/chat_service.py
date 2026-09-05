@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.ai.chat import agent as chat_agent
 from app.ai.chat.history import db_messages_to_langchain, langchain_message_to_db_row, message_text
 from app.config import settings
-from app.models import ChatMessage, ChatSession
+from app.models import ChatMessage, ChatSession, UserSettings
 from app.services.chat_attachment_service import ChatAttachmentService
 
 
@@ -30,6 +30,21 @@ class ChatService:
         if row is None:
             raise HTTPException(status_code=404, detail="Chat session not found")
         return row
+
+    @staticmethod
+    def _candidate_profile(db: Session) -> str:
+        """The user's own profile Markdown, read fresh on every turn.
+
+        It goes into the system prompt rather than behind a tool: "write this as
+        me" has to work whether or not the model chooses to look the user up, and
+        a model that skips the lookup falls back to inventing the details.
+        """
+        row = (
+            db.query(UserSettings.candidate_profile_markdown)
+            .filter(UserSettings.owner_id == settings.owner_id)
+            .first()
+        )
+        return (row[0] if row else "") or ""
 
     @staticmethod
     def validate_message(text: str) -> str:
@@ -131,7 +146,9 @@ class ChatService:
         history = db_messages_to_langchain(list(reversed(recent)))
         streamed_text = ""
         generated: list[BaseMessage] = []
-        async for kind, payload in chat_agent.stream_chat_agent(history, model=model):
+        async for kind, payload in chat_agent.stream_chat_agent(
+            history, model=model, candidate_profile=self._candidate_profile(db)
+        ):
             if kind == "delta":
                 delta = str(payload)
                 streamed_text += delta

@@ -14,7 +14,7 @@ export type SidebarProps = {
   schedulingEnabled?: boolean
   // relationship_labeling is a member of the page union but has no nav row:
   // it is an internal calibration tool, not a feature.
-  activePage: 'assistant' | 'run_queue' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'inbox' | 'premium_numbers' | 'resume_tracking' | 'application_tracking' | 'relationship_labeling' | 'scheduled_tasks' | 'scheduled_review' | 'settings'
+  activePage: 'assistant' | 'run_queue' | 'manual_intake' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'inbox' | 'premium_numbers' | 'resume_tracking' | 'application_tracking' | 'relationship_labeling' | 'scheduled_tasks' | 'scheduled_review' | 'settings'
   onNavigate: (section: SidebarProps['activePage']) => void
 }
 
@@ -44,6 +44,9 @@ export default function Sidebar({
     // any non-null count, so a literal 0 would show an empty pill on every load.
     { key: 'assistant', label: 'CodeJob Assistant', count: assistantUnseenCount || undefined },
     { key: 'run_queue', label: 'Run Queue' },
+    // Directly under Run Queue: it is an input to the same queue. No count -
+    // there is no backlog here, only a place to paste.
+    { key: 'manual_intake', label: 'Manual Intake' },
     { key: 'needs_review', label: 'Needs Review', count: queueCount },
     { key: 'failed_mapping', label: 'Failed Mapping', count: failedCount },
     { key: 'premium_numbers', label: 'Premium Contacts', count: premiumCount },
