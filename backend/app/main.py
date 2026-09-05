@@ -53,6 +53,7 @@ from app.gmail_client import (
     list_thread_messages,
     list_unread_candidates_by_query,
     list_unread_thread_ids,
+    MailAttachment,
     mark_message_processed,
     mark_reply_processed,
     append_tracking_sheet_row,
@@ -84,6 +85,7 @@ from app.models import (
     AppTSApplicationSkillGapSnapshot,
     AttachmentAsset,
     BulkActionIdempotencyKey,
+    CandidateDocument,
     CandidateRecord,
     CanonicalEntityTaxonomyEntry,
     CustomSkillTaxonomyEntry,
@@ -292,6 +294,9 @@ from app.schemas import (
     BulkContactActionRequest,
     BulkContactActionResponse,
     BulkContactActionResultItem,
+    CandidateDocumentResponse,
+    CandidateDocumentUpdateRequest,
+    CandidateProfileResponse,
     ContactFieldChange,
     ContactRescoreResponse,
     ContactMergePreviewLead,
@@ -1817,6 +1822,69 @@ def _enabled_attachment_file_names(db: Session) -> list[str]:
     return [item.file_name for item in _enabled_attachment_assets(db)]
 
 
+def _list_candidate_documents(db: Session) -> list[CandidateDocument]:
+    return (
+        db.query(CandidateDocument)
+        .filter(CandidateDocument.owner_id == settings.owner_id)
+        .order_by(CandidateDocument.created_at.desc(), CandidateDocument.id.desc())
+        .all()
+    )
+
+
+def _get_candidate_document(db: Session, document_id: int) -> CandidateDocument:
+    document = (
+        db.query(CandidateDocument)
+        .filter(CandidateDocument.owner_id == settings.owner_id, CandidateDocument.id == document_id)
+        .first()
+    )
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return document
+
+
+def _resolve_candidate_documents(db: Session, document_ids: list[int]) -> list[CandidateDocument]:
+    """Turn requested ids into documents, in the order asked, or refuse.
+
+    A partial send is the wrong failure here: the user confirmed a card listing
+    three files, and a mail that quietly leaves one out is worse than one that
+    is not sent. So an unknown id, a missing file on disk, or a batch over
+    Gmail's ceiling stops the whole send.
+    """
+    if not document_ids:
+        return []
+    wanted = list(dict.fromkeys(int(value) for value in document_ids))
+    found = {
+        row.id: row
+        for row in db.query(CandidateDocument).filter(
+            CandidateDocument.owner_id == settings.owner_id,
+            CandidateDocument.id.in_(wanted),
+        )
+    }
+    missing = [value for value in wanted if value not in found]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown document ids: {', '.join(str(value) for value in missing)}",
+        )
+    documents = [found[value] for value in wanted]
+    absent = [item.file_name for item in documents if not Path(item.file_path).exists()]
+    if absent:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Document file is missing from disk: {', '.join(absent)}. Re-upload it in Settings.",
+        )
+    total = sum(item.file_size for item in documents)
+    if total > settings.candidate_document_max_send_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"Attachments total {total // (1024 * 1024)}MB, over the "
+                f"{settings.candidate_document_max_send_bytes // (1024 * 1024)}MB a single mail can carry"
+            ),
+        )
+    return documents
+
+
 def _clean_custom_skill_name(value: str | None) -> str:
     return " ".join(str(value or "").strip().split())
 
@@ -2412,6 +2480,9 @@ def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
         candidate_total_experience_years=s.candidate_total_experience_years,
         candidate_us_experience_years=s.candidate_us_experience_years,
         candidate_current_location=s.candidate_current_location or "",
+        candidate_profile_markdown=s.candidate_profile_markdown or "",
+        candidate_profile_filename=s.candidate_profile_filename or "",
+        candidate_profile_uploaded_at=s.candidate_profile_uploaded_at,
         draft_text_size=normalize_draft_text_size(s.draft_text_size),
         fallback_draft_template=s.fallback_draft_template or DEFAULT_FALLBACK_DRAFT_TEMPLATE,
         signature_name=(s.signature_name or "").strip() or DEFAULT_SIGNATURE_NAME,
@@ -2783,6 +2854,7 @@ def get_settings_bootstrap(
         gmail_requirement_groups=[_gmail_requirement_group_response(item) for item in _list_gmail_requirement_groups(db)],
         resumes=[_resume_response(item) for item in _list_resumes(db)],
         attachments=[AttachmentAssetResponse.model_validate(item) for item in _list_attachment_assets(db)],
+        documents=[CandidateDocumentResponse.model_validate(item) for item in _list_candidate_documents(db)],
         pending_skills=pending_skills,
         pending_job_intent_signals=pending_job_intent_signals,
         approved_job_intent_signals=approved_job_intent_signals,
@@ -2862,6 +2934,9 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
         s.candidate_us_experience_years = payload.candidate_us_experience_years
     if "candidate_current_location" in provided_fields:
         s.candidate_current_location = (payload.candidate_current_location or "").strip()
+    # candidate_profile_markdown is deliberately absent here: it is written only
+    # by POST/DELETE /settings/candidate-profile, and is response-only on the
+    # schema so a settings save can neither set nor blank it.
     s.draft_text_size = normalize_draft_text_size(payload.draft_text_size)
     s.fallback_draft_template = payload.fallback_draft_template.strip() if payload.fallback_draft_template.strip() else DEFAULT_FALLBACK_DRAFT_TEMPLATE
     s.signature_name = payload.signature_name.strip() if payload.signature_name.strip() else DEFAULT_SIGNATURE_NAME
@@ -2974,6 +3049,85 @@ def delete_gmail_requirement_group(group_id: int, db: Session = Depends(get_db))
     db.delete(row)
     db.commit()
     return response
+
+
+CANDIDATE_PROFILE_MAX_CHARS = 20000
+CANDIDATE_PROFILE_MAX_BYTES = 1_000_000
+CANDIDATE_PROFILE_SUFFIXES = (".md", ".markdown", ".txt")
+
+
+def _candidate_profile_response(s: UserSettings) -> CandidateProfileResponse:
+    return CandidateProfileResponse(
+        filename=s.candidate_profile_filename or "",
+        uploaded_at=s.candidate_profile_uploaded_at,
+        characters=len(s.candidate_profile_markdown or ""),
+    )
+
+
+@app.post("/settings/candidate-profile", response_model=CandidateProfileResponse)
+def upload_candidate_profile(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+) -> CandidateProfileResponse:
+    """Replace the stored profile with the text of an uploaded Markdown file.
+
+    The text is stored, not the file. Every rejection below names the actual
+    value that failed, because the alternative is a user re-uploading the same
+    document repeatedly against a message that does not say what is wrong.
+    """
+    filename = (file.filename or "").strip()
+    if not filename:
+        raise HTTPException(status_code=400, detail="File name required")
+    suffix = Path(filename).suffix.lower()
+    if suffix not in CANDIDATE_PROFILE_SUFFIXES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{filename} is not a Markdown file. Upload a {', '.join(CANDIDATE_PROFILE_SUFFIXES)} file.",
+        )
+
+    # Read bounded: an arbitrarily large upload would otherwise be decoded in
+    # full only to be rejected for length a moment later.
+    raw = file.file.read(CANDIDATE_PROFILE_MAX_BYTES + 1)
+    if not raw:
+        raise HTTPException(status_code=400, detail="That file is empty.")
+    if len(raw) > CANDIDATE_PROFILE_MAX_BYTES:
+        raise HTTPException(status_code=400, detail="That file is too large to be a profile.")
+    try:
+        text = raw.decode("utf-8").strip()
+    except UnicodeDecodeError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{filename} is not UTF-8 text. Save it as a plain Markdown file and try again.",
+        ) from None
+    if not text:
+        raise HTTPException(status_code=400, detail="That file has no text in it.")
+    if len(text) > CANDIDATE_PROFILE_MAX_CHARS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"That profile is {len(text):,} characters; the limit is "
+                f"{CANDIDATE_PROFILE_MAX_CHARS:,}. It is sent to the chat model on every message."
+            ),
+        )
+
+    s = settings_bootstrap_service.get_settings(db)
+    s.candidate_profile_markdown = text
+    s.candidate_profile_filename = filename[:255]
+    s.candidate_profile_uploaded_at = datetime.now(UTC)
+    db.commit()
+    db.refresh(s)
+    return _candidate_profile_response(s)
+
+
+@app.delete("/settings/candidate-profile", response_model=CandidateProfileResponse)
+def delete_candidate_profile(db: Session = Depends(get_db)) -> CandidateProfileResponse:
+    s = settings_bootstrap_service.get_settings(db)
+    s.candidate_profile_markdown = ""
+    s.candidate_profile_filename = ""
+    s.candidate_profile_uploaded_at = None
+    db.commit()
+    db.refresh(s)
+    return _candidate_profile_response(s)
 
 
 @app.post("/settings/resume", response_model=ResumeResponse)
@@ -3250,6 +3404,104 @@ def delete_attachment_file(attachment_id: int, db: Session = Depends(get_db)) ->
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"Attachment deleted from database but not disk: {exc}") from exc
     return {"id": attachment_id, "deleted": True}
+
+
+@app.post("/settings/documents", response_model=list[CandidateDocumentResponse])
+def upload_candidate_documents(
+    files: list[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+) -> list[CandidateDocumentResponse]:
+    """Store documents the assistant can attach to a mail when asked by name.
+
+    Any format is accepted: these are forwarded to the recruiter byte for byte
+    and are never parsed, so there is nothing here that a content type could
+    make safe or unsafe. What is enforced is size, because a file too large to
+    send is better refused now than after a draft is written.
+    """
+    if not files:
+        raise HTTPException(status_code=400, detail="At least one file is required")
+    max_bytes = settings.candidate_document_max_bytes
+    Path(settings.candidate_document_storage_dir).mkdir(parents=True, exist_ok=True)
+    staged: list[tuple[bytes, str, str, str]] = []
+    for file in files:
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="File name required")
+        # One byte past the limit is enough to reject it, and stops a huge
+        # upload being held in memory in full just to be refused.
+        content = file.file.read(max_bytes + 1)
+        if not content:
+            raise HTTPException(status_code=400, detail=f"Empty file not allowed: {file.filename}")
+        if len(content) > max_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"{file.filename} is larger than the "
+                    f"{max_bytes // (1024 * 1024)}MB limit for a single document"
+                ),
+            )
+        staged.append(
+            (
+                content,
+                Path(file.filename).name[:255],
+                file.content_type or "application/octet-stream",
+                hashlib.sha256(content).hexdigest(),
+            )
+        )
+
+    # Nothing is written until every file has passed, so one oversized file in a
+    # multi-file pick does not leave half the batch stored.
+    created: list[CandidateDocument] = []
+    for content, file_name, mime_type, sha256 in staged:
+        target_path = Path(settings.candidate_document_storage_dir) / f"{sha256}_{uuid.uuid4().hex}_{file_name}"
+        target_path.write_bytes(content)
+        created.append(
+            CandidateDocument(
+                owner_id=settings.owner_id,
+                file_path=str(target_path),
+                file_name=file_name,
+                label="",
+                mime_type=mime_type,
+                sha256=sha256,
+                file_size=len(content),
+            )
+        )
+    db.add_all(created)
+    db.commit()
+    for item in created:
+        db.refresh(item)
+    return [CandidateDocumentResponse.model_validate(item) for item in created]
+
+
+@app.get("/settings/documents", response_model=list[CandidateDocumentResponse])
+def list_candidate_document_files(db: Session = Depends(get_db)) -> list[CandidateDocumentResponse]:
+    return [CandidateDocumentResponse.model_validate(item) for item in _list_candidate_documents(db)]
+
+
+@app.patch("/settings/documents/{document_id}", response_model=CandidateDocumentResponse)
+def update_candidate_document(
+    document_id: int,
+    payload: CandidateDocumentUpdateRequest,
+    db: Session = Depends(get_db),
+) -> CandidateDocumentResponse:
+    document = _get_candidate_document(db, document_id)
+    document.label = " ".join(payload.label.split())[:120]
+    db.commit()
+    db.refresh(document)
+    return CandidateDocumentResponse.model_validate(document)
+
+
+@app.delete("/settings/documents/{document_id}")
+def delete_candidate_document(document_id: int, db: Session = Depends(get_db)) -> dict[str, object]:
+    document = _get_candidate_document(db, document_id)
+    file_path = Path(document.file_path)
+    db.delete(document)
+    db.commit()
+    try:
+        if file_path.exists():
+            file_path.unlink()
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Document deleted from database but not disk: {exc}") from exc
+    return {"id": document_id, "deleted": True}
 
 
 @app.get("/settings/skills/pending", response_model=list[PendingSkillResponse])
@@ -9176,12 +9428,26 @@ def send_chat_reply(
         raise HTTPException(status_code=400, detail="Recipient email is missing")
     if not (email.external_thread_id or "").strip():
         raise HTTPException(status_code=400, detail="Gmail thread is missing")
+    # Resolved before the send, so an unknown id or a file gone from disk fails
+    # with nothing delivered rather than delivering the mail without its files.
+    documents = _resolve_candidate_documents(db, payload.document_ids)
     message_id = send_reply_with_attachment(
         thread_id=email.external_thread_id,
         to=email.recipient_email,
         cc=email.cc_email,
         subject=(payload.subject or email.subject or "").strip(),
         body=payload.body.strip(),
+        attachments=[
+            MailAttachment(
+                path=item.file_path,
+                # The label is the user's name for the file, not a file name -
+                # the recruiter gets what was actually uploaded.
+                display_name=item.file_name,
+                mime_type=item.mime_type,
+            )
+            for item in documents
+        ]
+        or None,
     )
     _record_productivity_event(
         db,
@@ -9189,9 +9455,17 @@ def send_chat_reply(
         event_source="chat_assistant",
         entity_id=email.id,
         entity_type="RecruiterEmail",
-        metadata={"gmail_message_id": message_id},
+        metadata={
+            "gmail_message_id": message_id,
+            "attached_documents": [item.file_name for item in documents],
+        },
     )
-    return {"sent": True, "message_id": message_id, "email_id": email.id}
+    return {
+        "sent": True,
+        "message_id": message_id,
+        "email_id": email.id,
+        "attached_documents": [item.file_name for item in documents],
+    }
 
 
 @app.post(

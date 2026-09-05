@@ -1025,6 +1025,50 @@ button.emailSearchResult:focus-visible {
   overflow-y: auto;
 }
 
+/* The loaded-file line. Filename over its size and date, so the answer to
+   "which profile is the assistant using" is the first thing read. */
+.candidateProfileLoaded {
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.candidateProfileLoaded strong {
+  font-family: ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace;
+  word-break: break-all;
+}
+
+/* The settings grid gives a card ~278px, so the file, its name and the two
+   buttons stack rather than compete for a single row. */
+.candidateDocumentRow {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.candidateDocumentFile {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.candidateDocumentFile strong {
+  font-family: ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace;
+  /* A 60-character file name must not push the size out of the card. */
+  word-break: break-all;
+}
+
+.candidateDocumentFile .subtle {
+  white-space: nowrap;
+}
+
 .datePickerNative {
   position: absolute;
   inset: 0;

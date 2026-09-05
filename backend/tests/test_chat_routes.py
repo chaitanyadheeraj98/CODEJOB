@@ -192,7 +192,9 @@ class ChatRouteTests(unittest.TestCase):
             )
         self.assertEqual(response.status_code, 200, response.text)
         self.assertIn("temporarily unavailable", response.text)
-        build_mock.assert_awaited_once_with(main.settings.ollama_chat_model_fallback2)
+        # The second argument is the user's candidate profile, empty here because
+        # this fixture's settings row has none.
+        build_mock.assert_awaited_once_with(main.settings.ollama_chat_model_fallback2, "")
 
 
 if __name__ == "__main__":

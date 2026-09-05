@@ -17,7 +17,7 @@ from app.db import Base
 from app.mcp_server.tools import chat_attachments as attachment_tools
 from app.models import ChatAttachment, ChatMessage
 
-async def _fake_stream(messages, model=None):
+async def _fake_stream(messages, model=None, candidate_profile=""):
     yield "delta", "Sure."
     yield "complete", []
 

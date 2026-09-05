@@ -42,14 +42,16 @@ def chat_models(selected: str | None = None) -> list[str]:
     return models
 
 
-async def build_chat_agent(model: str):
+async def build_chat_agent(model: str, candidate_profile: str = ""):
     tools = await get_mcp_tools()
     runtime_state.chat_mcp_status = "ready"
-    return create_react_agent(build_chat_llm(model), tools, prompt=build_system_prompt())
+    return create_react_agent(
+        build_chat_llm(model), tools, prompt=build_system_prompt(candidate_profile)
+    )
 
 
 async def stream_chat_agent(
-    messages: list[BaseMessage], model: str | None = None
+    messages: list[BaseMessage], model: str | None = None, candidate_profile: str = ""
 ) -> AsyncIterator[tuple[str, object]]:
     started = perf_counter()
     runtime_state.chat_last_attempted_at = datetime.now(UTC)
@@ -58,7 +60,7 @@ async def stream_chat_agent(
         for index, model in enumerate(models):
             yielded_any = False
             try:
-                graph = await build_chat_agent(model)
+                graph = await build_chat_agent(model, candidate_profile)
                 latest_messages: list[BaseMessage] = []
                 async for mode, payload in graph.astream(
                     {"messages": messages},

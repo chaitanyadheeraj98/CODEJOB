@@ -113,6 +113,14 @@ class Settings(BaseSettings):
     chat_attachment_storage_dir: str = "./data/chat-attachments"
     chat_attachment_max_bytes: int = 10 * 1024 * 1024
     chat_attachment_max_extract_chars: int = 20000
+    candidate_document_storage_dir: str = "./data/candidate-documents"
+    # Per file, and below the 25MB Gmail rejects a whole message over - a single
+    # document that cannot be sent is worth refusing at upload rather than at
+    # send, when a draft is already written.
+    candidate_document_max_bytes: int = 15 * 1024 * 1024
+    # Gmail's own limit is 25MB after base64 expansion, so the raw bytes have to
+    # stay under roughly three quarters of it.
+    candidate_document_max_send_bytes: int = 18 * 1024 * 1024
     qualification_threshold: float = 0.6
     feature_auto_polling: bool = False
     feature_auto_poll_interval_minutes: int = 10
