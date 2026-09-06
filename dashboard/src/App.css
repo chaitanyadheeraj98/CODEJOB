@@ -3074,9 +3074,12 @@ button.emailSearchResult:focus-visible {
   margin: 8px 0 0;
 }
 
+/* 72px fitted "Action" and "Body" and broke everything longer: "Complete profile
+   after saving" came out one word per line. The label column has to hold the
+   longest label any proposal tool uses, not the shortest. */
 .chatProposal dl div {
   display: grid;
-  grid-template-columns: 72px 1fr;
+  grid-template-columns: 120px 1fr;
   gap: 8px;
   margin-top: 4px;
 }
@@ -3088,6 +3091,101 @@ button.emailSearchResult:focus-visible {
 .chatProposal dd {
   margin: 0;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* A whole document inside one summary row. It scrolls rather than truncating:
+   the point of the card is that every character can be read before the click. */
+.chatProposalDocument {
+  margin: 0;
+  max-height: 20rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+/* The app's own statement of what has not happened yet, next to the model's
+   prose which may claim otherwise. Warning weight, not caption weight. */
+.chatProposalPending {
+  margin: 12px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--caution-line);
+  border-left-width: 3px;
+  border-radius: 8px;
+  background: var(--caution-surface);
+  color: var(--caution-ink);
+  font-weight: 600;
+}
+
+/* A tool that prepared nothing. Quieter than a card - it is a note about the
+   turn, not an action - but it has to be legible next to the assistant's reply,
+   which may be claiming the opposite. */
+.chatProposalRefusal {
+  margin: 4px 0;
+  padding: 8px 10px;
+  border-left: 3px solid var(--caution-line);
+  border-radius: 0 8px 8px 0;
+  background: var(--caution-surface);
+  color: var(--caution-ink);
+  font-size: 13px;
+}
+
+/* A record of what happened, not something anyone said - so it is neither a user
+   bubble nor an assistant one. */
+.chatBubble.event {
+  align-self: stretch;
+  max-width: 100%;
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 2px 4px;
+}
+
+.addProfileEntry {
+  margin: 10px 0;
+}
+
+.addProfileEntryRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.addProfileEntryRow label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 160px;
+}
+
+.addProfileEntryPreview {
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.addProfileEntryPreview dl div {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.addProfileEntryPreview dt {
+  font-weight: 700;
+}
+
+.addProfileEntryPreview dd {
+  margin: 0;
   overflow-wrap: anywhere;
 }
 

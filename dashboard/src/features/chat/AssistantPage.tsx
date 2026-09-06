@@ -6,7 +6,7 @@ import { ACCEPTED_EXTENSIONS, type PendingAttachment } from './attachmentDisplay
 import { useChat } from './chatContext'
 import { renderMarkdownLite } from './markdown'
 import ProposalCard from './ProposalCard'
-import { proposalForMessage } from './proposals'
+import { proposalForMessage, proposalRefusalForMessage, unsupportedProposalNotice } from './proposals'
 import RenderedMessage from './RenderedMessage'
 import { renderForMessage } from './renderers'
 import type { ChatSession } from './types'
@@ -276,12 +276,25 @@ export default function AssistantPage() {
                   busy={chat.proposalBusyId === message.id}
                   disabled={chat.proposalBusyId != null}
                   onApprove={() => void chat.approveProposal(message.id, proposal)}
-                  onCancel={() => chat.cancelProposal(message.id)}
+                  onCancel={() => chat.cancelProposal(message.id, message.tool_name ?? '')}
                 />
               )
             }
             const rendered = renderForMessage(message)
             if (rendered) return <RenderedMessage key={message.id} messageId={message.id} payload={rendered} surface="page" />
+            const refusal = proposalRefusalForMessage(message)
+            if (refusal) {
+              return (
+                <p key={message.id} className="chatProposalRefusal">
+                  No confirmation card was created, so nothing has happened. {refusal}
+                </p>
+              )
+            }
+            // A proposal from a tool this build has no handler for.
+            const unsupported = unsupportedProposalNotice(message)
+            if (unsupported) {
+              return <p key={message.id} className="chatProposalRefusal">{unsupported}</p>
+            }
             if (message.role === 'tool') return null
             return (
               <div key={message.id} className={`chatBubble ${message.role}`}>

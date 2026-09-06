@@ -198,6 +198,7 @@ from app.job_intent_learning import (
 )
 from app.services import (
     analytics_service,
+    candidate_profile_service,
     entity_embedding_job,
     entity_resolution_service,
     relationship_clustering_service,
@@ -211,6 +212,7 @@ from app.services import (
     email_lookup_service,
     end_client_validation,
     filter_options_service,
+    nvoids_search_job,
     opportunity_lineage_service,
     policy_service,
     recruiter_identity_service,
@@ -221,6 +223,7 @@ from app.services.scheduling import schedule as scheduling_schedule
 from app.services.scheduling import sweep as scheduling_sweep
 from app.services.scheduling import task_service
 from app.services.auto_runner_service import AutoRunnerService
+from app.services.chat_attachment_service import ChatAttachmentService
 from app.services.candidate_runtime_service import CandidateRuntimeDeps, CandidateRuntimeService
 from app.services.manual_intake_service import ManualIntakeDeps, ManualIntakeResult, ManualIntakeService
 from app.services.phone_intelligence_workflow_service import (
@@ -300,10 +303,14 @@ from app.schemas import (
     CandidateDocumentResponse,
     CandidateDocumentUpdateRequest,
     CandidateProfileResponse,
+    ProfileAppendRequest,
+    ProfileDeleteRequest,
+    ProfileReplaceFromAttachmentRequest,
     ManualDuplicateSummary,
     ManualRequirementCreateRequest,
     ManualRequirementPreviewRequest,
     ManualRequirementPreviewResponse,
+    NvoidsClientSearchRequest,
     ContactFieldChange,
     ContactRescoreResponse,
     ContactMergePreviewLead,
@@ -1319,6 +1326,33 @@ def _get_manual_intake_service() -> ManualIntakeService:
             )
         )
     return manual_intake_service
+
+
+def _manual_intake_text(text: str) -> str:
+    """The pasted requirement, refused here if it is empty or over the cap.
+
+    One reader for `settings.manual_intake_max_chars`, which until now had none:
+    the number lived as literals in two request models and the dashboard, so the
+    setting could be changed with no effect while the three literals drifted.
+
+    The detail is a sentence rather than a code because it is shown to whoever
+    pasted the text, and "20,431 characters" is the only part of it they can act
+    on. A paste this long is a document - it belongs on the upload path, not in
+    a textarea.
+    """
+    body = text or ""
+    if not body.strip():
+        raise HTTPException(status_code=400, detail="Pasted requirement is empty")
+    limit = settings.manual_intake_max_chars
+    if len(body) > limit:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Pasted requirement is too long: {len(body):,} characters, "
+                f"and the limit is {limit:,}."
+            ),
+        )
+    return body
 
 
 def _run_manual_intake(db: Session, *, text: str) -> ManualIntakeResult:
@@ -3098,9 +3132,11 @@ def delete_gmail_requirement_group(group_id: int, db: Session = Depends(get_db))
     return response
 
 
-CANDIDATE_PROFILE_MAX_CHARS = 20000
-CANDIDATE_PROFILE_MAX_BYTES = 1_000_000
-CANDIDATE_PROFILE_SUFFIXES = (".md", ".markdown", ".txt")
+# Re-exported from the service so there is one definition of each limit rather
+# than two that can drift. Routes and tests still read them from `main`.
+CANDIDATE_PROFILE_MAX_CHARS = candidate_profile_service.CANDIDATE_PROFILE_MAX_CHARS
+CANDIDATE_PROFILE_MAX_BYTES = candidate_profile_service.CANDIDATE_PROFILE_MAX_BYTES
+CANDIDATE_PROFILE_SUFFIXES = candidate_profile_service.CANDIDATE_PROFILE_SUFFIXES
 
 
 def _candidate_profile_response(s: UserSettings) -> CandidateProfileResponse:
@@ -3122,40 +3158,11 @@ def upload_candidate_profile(
     value that failed, because the alternative is a user re-uploading the same
     document repeatedly against a message that does not say what is wrong.
     """
-    filename = (file.filename or "").strip()
-    if not filename:
-        raise HTTPException(status_code=400, detail="File name required")
-    suffix = Path(filename).suffix.lower()
-    if suffix not in CANDIDATE_PROFILE_SUFFIXES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"{filename} is not a Markdown file. Upload a {', '.join(CANDIDATE_PROFILE_SUFFIXES)} file.",
-        )
-
+    filename = candidate_profile_service.validate_profile_filename(file.filename or "")
     # Read bounded: an arbitrarily large upload would otherwise be decoded in
     # full only to be rejected for length a moment later.
-    raw = file.file.read(CANDIDATE_PROFILE_MAX_BYTES + 1)
-    if not raw:
-        raise HTTPException(status_code=400, detail="That file is empty.")
-    if len(raw) > CANDIDATE_PROFILE_MAX_BYTES:
-        raise HTTPException(status_code=400, detail="That file is too large to be a profile.")
-    try:
-        text = raw.decode("utf-8").strip()
-    except UnicodeDecodeError:
-        raise HTTPException(
-            status_code=400,
-            detail=f"{filename} is not UTF-8 text. Save it as a plain Markdown file and try again.",
-        ) from None
-    if not text:
-        raise HTTPException(status_code=400, detail="That file has no text in it.")
-    if len(text) > CANDIDATE_PROFILE_MAX_CHARS:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"That profile is {len(text):,} characters; the limit is "
-                f"{CANDIDATE_PROFILE_MAX_CHARS:,}. It is sent to the chat model on every message."
-            ),
-        )
+    raw = file.file.read(candidate_profile_service.CANDIDATE_PROFILE_MAX_BYTES + 1)
+    text = candidate_profile_service.validate_profile_text(raw, filename)
 
     s = settings_bootstrap_service.get_settings(db)
     s.candidate_profile_markdown = text
@@ -3166,9 +3173,115 @@ def upload_candidate_profile(
     return _candidate_profile_response(s)
 
 
-@app.delete("/settings/candidate-profile", response_model=CandidateProfileResponse)
-def delete_candidate_profile(db: Session = Depends(get_db)) -> CandidateProfileResponse:
+def _profile_fingerprint_or_409(current: str, base_sha256: str | None) -> None:
+    """R7. A card computed against one document, written against another, is a
+    conflict the user has to see - never a silent overwrite."""
+    if base_sha256 is None:
+        return
+    if candidate_profile_service.fingerprint(current) != base_sha256:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "The profile changed since this was prepared. Ask again so the card "
+                "shows what is actually stored."
+            ),
+        )
+
+
+@app.post("/settings/candidate-profile/entries", response_model=CandidateProfileResponse)
+def append_candidate_profile_entry(
+    payload: ProfileAppendRequest,
+    db: Session = Depends(get_db),
+) -> CandidateProfileResponse:
+    """Add one composed line to the profile.
+
+    This one route serves all three paths: the assistant's offer, a user-directed
+    save, and the Add-to-profile control in Settings. The body is identical in
+    every case and the route neither knows nor cares which sent it - every
+    provenance rule was enforced before the entry became an entry, and the
+    fingerprint and empty-profile checks below apply to all three alike.
+
+    Deliberately no `source` parameter: a route that branches on who called it is
+    a route with two behaviours to keep in agreement.
+    """
     s = settings_bootstrap_service.get_settings(db)
+    current = s.candidate_profile_markdown or ""
+    _profile_fingerprint_or_409(current, payload.base_sha256)
+    if not current.strip():
+        # R8. Appending to nothing is creating, and creating a profile is an
+        # upload.
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "There is no profile to add to yet. Upload one in Settings › Profile "
+                "Settings › Candidate Profile first."
+            ),
+        )
+
+    combined = candidate_profile_service.compose_append(current, payload.entry)
+    s.candidate_profile_markdown = combined
+    # The filename still names the document this is an addition to, so it stays.
+    s.candidate_profile_uploaded_at = datetime.now(UTC)
+    db.commit()
+    db.refresh(s)
+    return _candidate_profile_response(s)
+
+
+@app.post("/settings/candidate-profile/from-attachment", response_model=CandidateProfileResponse)
+def replace_candidate_profile_from_attachment(
+    payload: ProfileReplaceFromAttachmentRequest,
+    db: Session = Depends(get_db),
+) -> CandidateProfileResponse:
+    """Replace the profile with the text of a file attached to a chat message.
+
+    The caller supplies an id and the server re-reads the row, the same rule
+    propose_send_email follows for documents: ids, never the text the card
+    displayed.
+    """
+    row = ChatAttachmentService.get(db, payload.attachment_id)
+    if row.content_markdown is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{row.file_name} could not be read: {row.extraction_error or 'extraction_error'}. "
+                "Upload it in Settings instead."
+            ),
+        )
+    # Extraction truncates at exactly the profile's own character limit, so a
+    # too-long document arrives *at* the limit and passes validation. The user
+    # would be told the replace worked and would lose the tail of their profile.
+    if len(row.content_markdown) >= settings.chat_attachment_max_extract_chars:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "That file was too long to read in full, so replacing the profile from "
+                "it would lose the end of it. Upload it in Settings instead."
+            ),
+        )
+
+    text = candidate_profile_service.validate_profile_text(row.content_markdown, row.file_name)
+    s = settings_bootstrap_service.get_settings(db)
+    _profile_fingerprint_or_409(s.candidate_profile_markdown or "", payload.base_sha256)
+    s.candidate_profile_markdown = text
+    s.candidate_profile_filename = row.file_name[:255]
+    s.candidate_profile_uploaded_at = datetime.now(UTC)
+    db.commit()
+    db.refresh(s)
+    return _candidate_profile_response(s)
+
+
+@app.delete("/settings/candidate-profile", response_model=CandidateProfileResponse)
+def delete_candidate_profile(
+    payload: ProfileDeleteRequest | None = None,
+    db: Session = Depends(get_db),
+) -> CandidateProfileResponse:
+    s = settings_bootstrap_service.get_settings(db)
+    # A bodyless DELETE - which is what the Settings panel sends - behaves
+    # exactly as it did before. A card supplies the fingerprint it computed
+    # against, and a stale one is a 409.
+    _profile_fingerprint_or_409(
+        s.candidate_profile_markdown or "", payload.base_sha256 if payload else None
+    )
     s.candidate_profile_markdown = ""
     s.candidate_profile_filename = ""
     s.candidate_profile_uploaded_at = None
@@ -4481,6 +4594,38 @@ def enqueue_nvoids_sync(
     return _enqueue_nvoids_sync(db, max_items=resolved_batch_limit)
 
 
+@app.post("/jobs/nvoids-client-search", response_model=JobEnqueueResponse, status_code=202)
+def enqueue_nvoids_client_search(
+    payload: NvoidsClientSearchRequest,
+    db: Session = Depends(get_db),
+) -> JobEnqueueResponse:
+    """Start the one search a confirmed `propose_nvoids_search` card describes.
+
+    The other half of that tool, which has been proposing searches with nothing
+    to confirm to: `_enqueue_nvoids_client_search` was written and never routed,
+    so the card had no endpoint and the dashboard had no handler. A proposal the
+    user cannot accept is worse than no proposal - the model announces a search
+    is ready, the click does nothing, and the assistant's prose is the only
+    account of the turn.
+
+    The user's click is what starts it. The tool cannot: it returns
+    `started: false` and this is the only caller of the enqueue.
+    """
+    user_settings = _get_settings(db)
+    if not user_settings.feature_nvoids_enabled:
+        raise HTTPException(status_code=400, detail="Nvoids sync is disabled in settings")
+    # Rebuilt from the criteria rather than trusted from the request. The card
+    # showed `generated_query`; what actually runs is composed here.
+    criteria = nvoids_search_job.SearchCriteria(
+        end_client=payload.end_client.strip(),
+        job_role=payload.job_role.strip(),
+        search_location=payload.search_location.strip(),
+        query_mode=payload.query_mode,
+        batch_limit=payload.batch_limit,
+    )
+    return _enqueue_nvoids_client_search(db, criteria=criteria.as_dict())
+
+
 @app.post("/jobs/automation-run", response_model=JobEnqueueResponse, status_code=202)
 def enqueue_automation_run(
     payload: AutomationRunRequest | None = None,
@@ -4908,7 +5053,7 @@ def preview_manual_requirement(
     Runs on blur while the user is still typing, so it stays cheap: contact
     extraction, a rules parse and one indexed lookup.
     """
-    duplicate = _get_manual_intake_service().preview(db, text=payload.text)
+    duplicate = _get_manual_intake_service().preview(db, text=_manual_intake_text(payload.text))
     if duplicate is None:
         return ManualRequirementPreviewResponse()
     return ManualRequirementPreviewResponse(
@@ -4936,14 +5081,13 @@ def create_manual_requirement(
     re-sending an updated requirement is normal, and the warning exists to be
     seen, not to block.
     """
-    if not payload.text.strip():
-        raise HTTPException(status_code=400, detail="Pasted requirement is empty")
+    text = _manual_intake_text(payload.text)
     if payload.acknowledged_duplicate_of:
         logger.info(
             "manual_intake_duplicate_acknowledged existing_email_id=%s",
             payload.acknowledged_duplicate_of,
         )
-    return _enqueue_manual_intake(db, text=payload.text)
+    return _enqueue_manual_intake(db, text=text)
 
 
 @app.get("/filter-options", response_model=FilterOptionsResponse)

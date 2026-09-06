@@ -25,6 +25,10 @@ ALLOWED_TYPES: dict[str, tuple[tuple[str, ...], tuple[bytes, ...]]] = {
     ),
     ".txt": (("text/plain",), ()),
     ".csv": (("text/csv", "text/plain", "application/csv", "application/vnd.ms-excel"), ()),
+    # Markdown, so a user told to "attach your profile.md" is not rejected by a
+    # different allowlist than the profile upload route's own.
+    ".md": (("text/markdown", "text/plain", "text/x-markdown"), ()),
+    ".markdown": (("text/markdown", "text/plain", "text/x-markdown"), ()),
 }
 
 _CHUNK = 64 * 1024
@@ -120,7 +124,7 @@ class ChatAttachmentService:
             # the fallback path has extractors for pdf and docx only, so a
             # failed partition throws the file's own readable text away and
             # returns "extraction is limited" instead.
-            if _extension(file_name) in {".csv", ".txt"}:
+            if _extension(file_name) in {".csv", ".txt", ".md", ".markdown"}:
                 text = path.read_text(encoding="utf-8", errors="replace")
                 return text[:max_chars], None
             return extract_document_text(

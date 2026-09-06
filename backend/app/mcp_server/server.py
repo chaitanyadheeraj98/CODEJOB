@@ -37,6 +37,7 @@ from app.mcp_server.tools import (
     propose_candidate_action,
     propose_create_github_issue,
     propose_create_premium_contact,
+    propose_profile_update,
     propose_record_update,
     propose_scheduled_task,
     propose_send_email,
@@ -107,6 +108,11 @@ CHAT_ACTION_TOOLS = (
     propose_record_update,
     propose_add_note,
     propose_create_premium_contact,
+    # A write into <user_profile> - the one block the prompt tells the model to
+    # believe - so it sits behind the same propose-then-confirm boundary as
+    # every other action. What the model contributes is a registry label; the
+    # value is checked against the user's own messages on the server.
+    propose_profile_update,
     propose_send_email,
     # An outbound crawl of a third party is a side effect, not a read, so it
     # sits behind the same propose-then-confirm boundary as every other action

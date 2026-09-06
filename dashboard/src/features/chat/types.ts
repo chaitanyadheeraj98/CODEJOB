@@ -7,10 +7,15 @@ export type ChatSession = {
 
 export type ChatMessage = {
   id: number
-  role: 'user' | 'assistant' | 'tool'
+  // 'event' is the app's own record of what happened to a proposal card. It is
+  // not something anyone said, which is why it is neither user nor assistant.
+  role: 'user' | 'assistant' | 'tool' | 'event'
   content: string
   tool_name: string | null
   created_at: string
+  // Set only on event rows: which card this outcome belongs to, and what it was.
+  proposal_message_id?: number | null
+  outcome?: 'confirmed' | 'cancelled' | 'failed' | null
 }
 
 export type ChatSessionDetail = ChatSession & {

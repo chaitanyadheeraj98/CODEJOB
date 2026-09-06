@@ -122,3 +122,52 @@ def test_a_settings_save_cannot_write_the_profile() -> None:
         "candidate_profile_uploaded_at",
     ):
         assert field in SettingsResponse.model_fields
+
+
+# --- the write guidance --------------------------------------------------
+
+
+def test_the_prompt_says_the_answer_can_be_kept_not_only_asked_for() -> None:
+    """The loop this feature closes, stated in the prompt.
+
+    Before this, the guidance told the model to ask for a missing detail and
+    stopped there - so the user answered, the draft completed, and the answer
+    was gone by the next session.
+    """
+    prompt = build_system_prompt(PROFILE)
+    assert "propose_profile_update" in prompt
+    assert "user_asked=True" in prompt
+    assert "verbatim=True" in prompt
+
+
+def test_the_prompt_forbids_harvesting_and_names_where_from() -> None:
+    prompt = build_system_prompt(PROFILE)
+    assert "mentioned in passing" in prompt
+    for source in ("recruiter email", "job description", "attachment", "web result"):
+        assert source in prompt
+
+
+def test_the_prompt_lists_exactly_the_fields_the_tool_can_write() -> None:
+    """Generated from the registry, so the two cannot drift apart.
+
+    A prose list beside a registry is two lists, and the failure is silent: the
+    model asks for a field it turns out to be unable to save.
+    """
+    from app.services.candidate_profile_service import PROFILE_FIELDS
+
+    prompt = build_system_prompt(PROFILE)
+    for label in PROFILE_FIELDS:
+        assert label in prompt
+
+
+def test_the_prompt_forbids_claiming_a_save_that_has_not_happened() -> None:
+    prompt = build_system_prompt(PROFILE)
+    assert "Never say a profile change has been saved" in prompt
+    # The note is the only thing that tells it which button was pressed.
+    assert "[System: ...]" in prompt
+
+
+def test_with_no_profile_the_model_is_told_to_upload_first_not_to_offer_a_save() -> None:
+    prompt = build_system_prompt("")
+    assert "propose_profile_update" not in prompt
+    assert "do not offer to save one" in prompt or "uploading" in prompt

@@ -13,6 +13,12 @@ export type ProposalHandler = {
   buildBody: (fields: ProposalFields) => unknown
   confirmLabel: (fields: ProposalFields) => string
   summary: (fields: ProposalFields) => Array<[string, string]>
+  // Shown on the card while it is still unresolved, in the app's own words. It
+  // exists because the model's prose beside the card can claim the write already
+  // happened, and the card is the one thing on screen that knows it has not.
+  // Optional: every proposal tool has the same latent problem with its own verb,
+  // and this is the seam to fix them through when someone wants to.
+  pendingNotice?: string
 }
 
 function record(value: unknown): ProposalFields {
@@ -73,6 +79,31 @@ const SCHEDULED_TASK_LABELS: Record<string, string> = {
   resume: 'Resume Task',
   edit: 'Save Changes',
   delete: 'Delete Task',
+}
+
+const PROFILE_ENDPOINTS: Record<string, string> = {
+  append: '/settings/candidate-profile/entries',
+  replace: '/settings/candidate-profile/from-attachment',
+  delete: '/settings/candidate-profile',
+}
+
+const PROFILE_METHODS: Record<string, ProposalMethod> = {
+  append: 'POST',
+  replace: 'POST',
+  delete: 'DELETE',
+}
+
+const PROFILE_LABELS: Record<string, string> = {
+  append: 'Save to Profile',
+  replace: 'Replace Profile',
+  delete: 'Delete Profile',
+}
+
+// Which of the two ways in produced this card. The user should be able to tell
+// from the card whether they asked for this or the assistant offered it.
+const PROFILE_PROVENANCE: Record<string, string> = {
+  assistant_asked: 'Your own words, from your answer',
+  user_directed: 'Your own words, from what you asked me to save',
 }
 
 export const PROPOSAL_HANDLERS: Record<string, ProposalHandler> = {
@@ -176,6 +207,50 @@ export const PROPOSAL_HANDLERS: Record<string, ProposalHandler> = {
       ]
     },
   },
+  // The tool for this shipped without a handler here, and this registry is what
+  // `visibleMessages` consults: a tool row in neither it nor RENDER_HANDLERS is
+  // filtered out of the session before anything renders. So the payload arrived,
+  // the row was dropped, and the assistant described a search "ready to confirm"
+  // beside an empty space - with no refusal notice either, since that renders
+  // from a row that no longer existed.
+  //
+  // Same failure as the profile card, one layer further out: there the tool
+  // refused and said so, here the tool was fine and the client discarded it.
+  propose_nvoids_search: {
+    endpoint: '/jobs/nvoids-client-search',
+    method: 'POST',
+    // The criteria only. `generated_query` is on the payload and is shown on the
+    // card, but the server composes the query it actually runs - sending the
+    // string back would make a display field into the instruction.
+    buildBody: (fields) => {
+      const criteria = record(fields.criteria)
+      return {
+        end_client: text(criteria.end_client) || text(fields.company),
+        job_role: text(criteria.job_role),
+        search_location: text(criteria.search_location),
+        query_mode: text(criteria.query_mode) || 'composed',
+        batch_limit: Number(criteria.batch_limit ?? 10),
+      }
+    },
+    confirmLabel: (fields) => `Search Nvoids for ${text(fields.company) || 'this company'}`,
+    summary: (fields) => {
+      const criteria = record(fields.criteria)
+      const composed = text(criteria.query_mode) !== 'end_client_only'
+      return [
+        ['End client', text(criteria.end_client) || text(fields.company)],
+        // Role and location are dropped in end_client_only mode, so listing them
+        // regardless would show two criteria that will not be applied.
+        ...(composed && text(criteria.job_role) ? [['Role', text(criteria.job_role)] as [string, string]] : []),
+        ...(composed && text(criteria.search_location) ? [['Location', text(criteria.search_location)] as [string, string]] : []),
+        ['Mode', composed ? 'Composed - role and location applied' : 'End client only'],
+        ['Batch limit', String(Number(criteria.batch_limit ?? 10))],
+        // What will actually be sent to nvoids. Display-only; see buildBody.
+        ['Query', text(criteria.generated_query)],
+        ['Already stored', `${Number(fields.already_stored ?? 0)} record(s) for this company`],
+      ]
+    },
+    pendingNotice: 'Nothing has been searched yet. Nvoids is contacted only when you click Confirm.',
+  },
   propose_send_email: {
     endpoint: (fields) => `/candidates/${Number(fields.candidate_email_id)}/send-chat-reply`,
     method: 'POST',
@@ -238,6 +313,64 @@ export const PROPOSAL_HANDLERS: Record<string, ProposalHandler> = {
         : []),
     ],
   },
+  propose_profile_update: {
+    // One tool, three verbs, one handler - and a client-side endpoint table, so
+    // an unknown operation resolves to '' and runProposalAction refuses it
+    // rather than aiming a request at the API root.
+    endpoint: (fields) => PROFILE_ENDPOINTS[String(fields.operation)] ?? '',
+    method: (fields) => PROFILE_METHODS[String(fields.operation)] ?? 'POST',
+    // base_sha256 travels with every verb: the write is refused with a 409 if
+    // the profile changed between this card being built and the click.
+    buildBody: (fields) => {
+      const operation = String(fields.operation)
+      if (operation === 'append') return { entry: fields.entry, base_sha256: fields.base_sha256 }
+      if (operation === 'replace') return { attachment_id: fields.attachment_id, base_sha256: fields.base_sha256 }
+      return { base_sha256: fields.base_sha256 }
+    },
+    confirmLabel: (fields) => (
+      String(fields.operation) === 'append' && strings(fields.replaces).length
+        ? 'Update Profile'
+        : PROFILE_LABELS[String(fields.operation)] ?? 'Confirm'
+    ),
+    pendingNotice: 'Nothing has been saved yet. Your Candidate Profile changes when you click below.',
+    summary: (fields) => {
+      const operation = String(fields.operation)
+      if (operation === 'delete') {
+        return [
+          ['Characters', Number(fields.characters_before ?? 0).toLocaleString()],
+          // The complete document, because what is being destroyed is the thing
+          // that needs checking.
+          ['Complete profile that will be deleted', text(fields.existing_profile)],
+        ]
+      }
+      if (operation === 'replace') {
+        return [
+          ['From file', text(fields.source_file_name)],
+          ['Characters', `${Number(fields.characters_before ?? 0).toLocaleString()} → ${Number(fields.characters_after ?? 0).toLocaleString()}`],
+          ['Complete profile after replacing', text(fields.resulting_profile)],
+        ]
+      }
+      const replaces = strings(fields.replaces)
+      const conflicts = strings(fields.conflicts)
+      return [
+        ['Field', text(fields.field)],
+        ['Value', text(fields.value)],
+        // The old value, when there is one. A correction that showed only what
+        // it was adding would hide the half the user most needs to check.
+        ...(replaces.length ? [['Replacing', replaces.join('\n')] as [string, string]] : []),
+        [replaces.length ? 'Entry after this change' : 'Entry added', text(fields.entry)],
+        // Cannot be rewritten from here - it is the user's own uploaded text -
+        // so the profile is about to state two things and only they can settle it.
+        ...(conflicts.length
+          ? [['Your uploaded text also says', `${conflicts.join('\n')}\n\nThis is left as it is; only the "Saved from chat" section changes.`] as [string, string]]
+          : []),
+        // Not a diff and not a summary: this becomes text the assistant treats
+        // as authoritative on every future turn, so the card shows all of it.
+        ['Complete profile after saving', text(fields.resulting_profile)],
+        ['Saved as', PROFILE_PROVENANCE[String(fields.provenance)] ?? 'Your own words'],
+      ]
+    },
+  },
   propose_create_github_issue: {
     endpoint: '/support/github-issues',
     method: 'POST',
@@ -270,6 +403,41 @@ export function proposalForMessage(message: ChatMessage): { handler: ProposalHan
   }
 }
 
+// Why a propose_* tool produced no card: it refused, or it wants more first.
+// Read off the payload rather than mapped per tool, because every proposal tool
+// answers in the same four shapes.
+function refusalReason(payload: ProposalFields): string {
+  const missing = strings(payload.missing)
+  if (missing.length) return `More information is needed first: ${missing.join(', ')}.`
+  return text(payload.detail) || text(payload.reason) || text(payload.error) || ''
+}
+
+// A propose_* tool row that carries no proposal. It renders as nothing today,
+// which leaves the model's prose beside it as the only account of the turn -
+// and that is exactly where it claims a card exists that does not. Observed:
+// propose_profile_update returned no_save_request and the reply was "I've
+// prepared a proposal ... click the confirmation card to save it."
+//
+// Same principle as pendingNotice, one step earlier: where the app knows what
+// happened, the app says so. Deliberately not scoped to one tool - the same
+// turn's propose_create_premium_contact returned missing_fields and drew the
+// same false claim.
+export function proposalRefusalForMessage(message: ChatMessage): string | null {
+  if (message.role !== 'tool' || !message.tool_name) return null
+  if (!PROPOSAL_HANDLERS[message.tool_name]) return null
+  let payload: unknown
+  try {
+    payload = JSON.parse(message.content)
+  } catch {
+    return null
+  }
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null
+  const fields = payload as ProposalFields
+  // A real proposal renders as a card; this is only for the rows that do not.
+  if (fields.action) return null
+  return refusalReason(fields) || 'The assistant did not say why.'
+}
+
 export function proposalResultDetail(payload: Record<string, unknown>, fields: ProposalFields = {}): string {
   if (Array.isArray(payload.succeeded_ids)) {
     const failed = Array.isArray(payload.failed) ? payload.failed.length : 0
@@ -285,6 +453,46 @@ export function proposalResultDetail(payload: Record<string, unknown>, fields: P
   // a saved contact from an updated opportunity. The proposal knows which.
   if (fields.action === 'propose_record_update') return `${text(fields.record_label) || 'Record'} updated.`
   if (fields.action === 'propose_add_note') return 'Note added.'
+  // CandidateProfileResponse has no id and no `sent`, so without this every
+  // profile write would report the generic "Action completed."
+  if (fields.action === 'propose_profile_update') {
+    if (String(fields.operation) === 'delete') return 'Profile deleted.'
+    return `Profile updated - ${Number(payload.characters ?? 0).toLocaleString()} characters.`
+  }
   if (typeof payload.id === 'number') return `Saved as contact ${payload.id}.`
+  // A queued job, not a finished one. Every other branch here reports something
+  // that has already happened, so the generic "Action completed." would be the
+  // one sentence on screen claiming results exist - and for a crawl that has
+  // just been enqueued, none do yet.
+  if (typeof payload.run_key === 'string') return 'Queued. It runs in the background - ask me for the result.'
   return 'Action completed.'
+}
+
+// The prefix every proposal tool's name carries. It is the only thing the
+// client can use to recognise a proposal from a version of the backend it does
+// not know about - by definition there is no handler to look the row up in.
+const PROPOSAL_TOOL_PREFIX = 'propose_'
+
+export function isProposalToolName(toolName: string): boolean {
+  return toolName.startsWith(PROPOSAL_TOOL_PREFIX)
+}
+
+// A propose_* row this build has no handler for. Before, the row was filtered
+// out of the session by visibleMessages and vanished, which is how
+// propose_nvoids_search shipped and stayed broken: the assistant announced a
+// search "ready to confirm" and there was nothing on screen to disagree with
+// it. `test_proposal_card_coverage.py` now fails CI when a tool ships without a
+// handler, and this is what the user sees if one ever reaches them anyway -
+// a deployment skew, or a flag enabling a tool the built dashboard predates.
+//
+// It names the tool because the only person who can act on this is whoever
+// reads the message, and "propose_nvoids_search" is the searchable half.
+export function unsupportedProposalNotice(message: ChatMessage): string | null {
+  if (message.role !== 'tool' || !message.tool_name) return null
+  if (!isProposalToolName(message.tool_name)) return null
+  if (PROPOSAL_HANDLERS[message.tool_name]) return null
+  return (
+    `The assistant proposed an action this version of the app cannot show a confirmation `
+    + `card for (${message.tool_name}), so nothing has happened and nothing was sent.`
+  )
 }

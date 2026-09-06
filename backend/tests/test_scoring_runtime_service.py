@@ -606,10 +606,77 @@ class ScoringRuntimeServiceTests(unittest.TestCase):
         )
         breakdown = json.loads(selection.picker_breakdown_json or "{}")
         evidence = breakdown.get("mandatory_evidence", {})
+        # The decision. This half always held: a resume offering Spring WebFlux
+        # and PL/SQL does satisfy a JD asking for Spring Reactive and Procedural
+        # SQL, and the gate has always said so.
         self.assertEqual(breakdown.get("mandatory_gate_status"), "pass")
         self.assertEqual(breakdown.get("mandatory_missing_skills"), [])
-        self.assertEqual(evidence["Spring Reactive"]["matched_alias"], "spring webflux")
+
+        # The explanation. Evidence is keyed by the *canonical* skill, not by
+        # the JD's wording - "Spring Reactive" is canonicalised to "Spring
+        # Framework" by the audit before a rule is ever built. This test used to
+        # assert `evidence["Spring Reactive"]` and fail with a KeyError on a
+        # working gate, which made a correct decision look like a broken one.
+        self.assertEqual(
+            set(evidence),
+            {"Spring Framework", "Java", "Procedural SQL"},
+        )
+
+        # `matched_alias` is which of the rule's own aliases fired. It answers
+        # "how did we look?", never "what did we find?" - so on its own it could
+        # not explain a pick.
+        self.assertEqual(evidence["Spring Framework"]["matched_alias"], "spring")
         self.assertEqual(evidence["Procedural SQL"]["matched_alias"], "pl/sql")
+
+        # `matched_text` is the resume text that fired it, and is the half that
+        # was computed and discarded. This is what makes the trail readable:
+        # Spring Reactive was satisfied by Spring WebFlux, and a reader can now
+        # see that rather than infer it.
+        self.assertEqual(evidence["Spring Framework"]["matched_text"], "Spring WebFlux")
+        self.assertEqual(evidence["Procedural SQL"]["matched_text"], "PL/SQL")
+        self.assertEqual(evidence["Java"]["matched_text"], "Java")
+
+    def test_a_missing_skill_records_no_matched_text(self) -> None:
+        """The trail must not imply evidence for something nothing matched."""
+        service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1, 0.2], "hash")))
+        parsed = {
+            "role": "Java Developer",
+            "skills_text": "Java, Kubernetes",
+            "salary_text": "",
+            "location": "Remote",
+        }
+        body = "Required Skills:\nJava\nKubernetes"
+
+        class Settings:
+            feature_semantic_enabled = False
+            role_keywords = ""
+            free_text_guidance = ""
+
+        class Resume:
+            def __init__(self, rid: int, name: str, skills: str):
+                self.id = rid
+                self.file_name = name
+                self.skills_text = skills
+                self.semantic_embedding = None
+                self.file_path = name
+                self.is_enabled = True
+                self.is_current = False
+
+        java_only = Resume(1, "java_only.docx", "Java, Spring Boot")
+
+        selection = service.select_best_resume_match(
+            subject="",
+            body=body,
+            parsed=parsed,
+            user_settings=Settings(),
+            email_row=None,
+            resumes=[java_only],
+            fallback_resume=java_only,
+        )
+        evidence = json.loads(selection.picker_breakdown_json or "{}").get("mandatory_evidence", {})
+        self.assertEqual(evidence["Java"]["matched_text"], "Java")
+        self.assertFalse(evidence["Kubernetes"]["matched"])
+        self.assertIsNone(evidence["Kubernetes"]["matched_text"])
 
     def test_oracle_db_does_not_satisfy_oci_requirement(self) -> None:
         service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1, 0.2], "hash")))

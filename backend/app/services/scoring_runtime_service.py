@@ -1002,6 +1002,16 @@ class ScoringRuntimeService:
                     "matched": evidence_score > 0.0,
                     "match_type": evidence_type,
                     "matched_alias": matched_alias,
+                    # The half of the trail that was computed and thrown away.
+                    # `matched_alias` is which of the *rule's* aliases fired
+                    # ("spring"); this is the resume text that fired it ("Spring
+                    # WebFlux"). Without it the breakdown could say a rule
+                    # matched but never what in the resume matched it, which is
+                    # the one thing a reader checking a resume pick wants.
+                    #
+                    # `_match_mandatory_rule` has always returned this - the
+                    # version check consumed it and the evidence dict dropped it.
+                    "matched_text": matched_chunk,
                     "evidence_score": round(evidence_score, 3),
                     "group_id": group_id,
                     "group_label": group_label,

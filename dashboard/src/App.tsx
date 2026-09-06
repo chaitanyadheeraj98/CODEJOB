@@ -13,6 +13,7 @@ import ScheduledTasksPage from './features/scheduling/ScheduledTasksPage'
 import ManualIntakePage from './features/manual_intake/ManualIntakePage'
 import ReviewPage from './features/scheduling/ReviewPage'
 import ChatProvider from './features/chat/ChatProvider'
+import AddProfileEntry from './features/settings/AddProfileEntry'
 import { useChat } from './features/chat/chatContext'
 import ChatWidget from './features/chat/ChatWidget'
 import { getChatStatus } from './features/chat/api'
@@ -5590,7 +5591,7 @@ function App() {
     // useChat() - the Assistant sidebar badge reads it from a small consumer
     // rendered below this point instead. Children are left at their original
     // indentation to keep this a two-line diff rather than a 2,200-line reflow.
-    <ChatProvider apiBase={apiBase} onFocusCandidate={focusCandidateRecord} onNavigateToQueue={navigateToQueue}>
+    <ChatProvider apiBase={apiBase} onFocusCandidate={focusCandidateRecord} onNavigateToQueue={navigateToQueue} onProfileChanged={() => void loadSettingsBootstrap()}>
     <main className="gmailShell">
       <SidebarWithAssistantBadge
         running={running}
@@ -6619,7 +6620,7 @@ function App() {
                       <span className="subtle">
                         {settings.candidate_profile_markdown.length.toLocaleString()} characters
                         {settings.candidate_profile_uploaded_at
-                          ? ` - uploaded ${new Date(settings.candidate_profile_uploaded_at).toLocaleDateString()}`
+                          ? ` - updated ${new Date(settings.candidate_profile_uploaded_at).toLocaleDateString()}`
                           : ''}
                       </span>
                     </div>
@@ -6642,6 +6643,11 @@ function App() {
                       }}
                     />
                   </label>
+                  <AddProfileEntry
+                    apiBase={apiBase}
+                    profile={settings.candidate_profile_markdown}
+                    onSaved={() => void loadSettingsBootstrap()}
+                  />
                   {settings.candidate_profile_markdown ? (
                     <button type="button" onClick={removeCandidateProfile} disabled={candidateProfileBusy}>
                       {candidateProfileBusy ? 'Working...' : 'Remove Profile'}

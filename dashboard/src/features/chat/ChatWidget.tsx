@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useChat } from './chatContext'
 import { renderMarkdownLite } from './markdown'
 import ProposalCard from './ProposalCard'
-import { proposalForMessage } from './proposals'
+import { proposalForMessage, proposalRefusalForMessage, unsupportedProposalNotice } from './proposals'
 import RenderedMessage from './RenderedMessage'
 import { renderForMessage } from './renderers'
 import { SentAttachmentChips } from './AttachmentChips'
@@ -154,7 +154,7 @@ export default function ChatWidget() {
                         busy={chat.proposalBusyId === message.id}
                         disabled={chat.proposalBusyId != null}
                         onApprove={() => void chat.approveProposal(message.id, proposal)}
-                        onCancel={() => chat.cancelProposal(message.id)}
+                        onCancel={() => chat.cancelProposal(message.id, message.tool_name ?? '')}
                       />
                     )
                   }
@@ -167,6 +167,21 @@ export default function ChatWidget() {
                         <RenderedMessage messageId={message.id} payload={rendered} surface="compact" />
                       </div>
                     )
+                  }
+                  // A propose_* row with no card. Said by the app, because the
+                  // assistant's own next message may claim one appeared.
+                  const refusal = proposalRefusalForMessage(message)
+                  if (refusal) {
+                    return (
+                      <p key={message.id} className="chatProposalRefusal">
+                        No confirmation card was created, so nothing has happened. {refusal}
+                      </p>
+                    )
+                  }
+                  // A proposal from a tool this build has no handler for.
+                  const unsupported = unsupportedProposalNotice(message)
+                  if (unsupported) {
+                    return <p key={message.id} className="chatProposalRefusal">{unsupported}</p>
                   }
                   if (message.role === 'tool') return null
                   return (

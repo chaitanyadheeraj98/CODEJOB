@@ -24,6 +24,11 @@ Pat Recruiter
 Acme Staffing
 Email: pat@acmestaffing.com / Contact: +1 (555) 123-4567`
 
+// The counter and the disabled Create button only. The cap that decides is
+// `manual_intake_max_chars` on the server, and it answers an over-length paste
+// with a sentence naming both numbers - so this drifting above the server's
+// value shows the user a real message rather than a silent failure, and drifting
+// below stops them early with the count already on screen.
 const MAX_CHARS = 20000
 const POLL_MS = 1500
 // Long enough that it does not fire mid-sentence, short enough that the warning

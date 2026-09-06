@@ -108,6 +108,60 @@ class ChatService:
         db.delete(row)
         db.commit()
 
+    # The client sends an enumerated outcome and a number; every word below is
+    # the server's. These rows are replayed into the model's history, which puts
+    # them closer to trusted framing than to tool output - a free-text field
+    # here would be a way to write into that position from the browser.
+    _OUTCOME_SENTENCES = {
+        "confirmed": "[System: your {tool} card was confirmed by the user.{detail}]",
+        "cancelled": "[System: your {tool} card was cancelled by the user. Nothing was saved.]",
+        "failed": "[System: your {tool} card failed. Nothing was saved.]",
+    }
+
+    def record_proposal_outcome(
+        self,
+        db: Session,
+        session_id: int,
+        *,
+        tool_name: str,
+        outcome: str,
+        proposal_message_id: int,
+        characters: int | None = None,
+    ) -> ChatMessage:
+        """Write what happened to a proposal card into the conversation.
+
+        Without this the model's own transcript contains its claim - "I've saved
+        your notice period" - and nothing that contradicts it, whichever button
+        the user pressed: the proposal payload is a `tool` row and is never
+        replayed, and the click's result is browser state that is never stored.
+        Asking a model to be careful about a fact it has no access to is not a
+        control, so the fact goes into the record.
+        """
+        session = self._session_or_404(db, session_id)
+        template = self._OUTCOME_SENTENCES.get(outcome)
+        if template is None:
+            raise HTTPException(status_code=422, detail=f"Unknown outcome '{outcome}'")
+        detail = ""
+        if outcome == "confirmed" and characters is not None:
+            detail = f" The Candidate Profile was saved and is now {characters:,} characters."
+        row = ChatMessage(
+            session_id=session.id,
+            role="event",
+            content=template.format(tool=tool_name, detail=detail),
+            tool_name=tool_name,
+            # Pairs the outcome back to its card after a reload, which is the
+            # difference between the outcome being recorded and being usable.
+            tool_call_args=json.dumps(
+                {"proposal_message_id": int(proposal_message_id), "outcome": outcome},
+                separators=(",", ":"),
+            ),
+        )
+        db.add(row)
+        session.updated_at = datetime.now(UTC)
+        db.commit()
+        db.refresh(row)
+        return row
+
     async def send_message(
         self,
         db: Session,
