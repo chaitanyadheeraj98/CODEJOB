@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import {
   createChatSession,
@@ -8,22 +8,59 @@ import {
   renameChatSession,
   sendChatMessage,
 } from './api'
+import type { ProposalResult } from './ProposalCard'
 import type { ChatMessage, ChatSession } from './types'
-import { PROPOSAL_HANDLERS } from './proposals'
+import { PROPOSAL_HANDLERS, isProposalToolName } from './proposals'
 import { RENDER_HANDLERS } from './renderers'
 
 
 // Tool messages are kept only when something knows how to draw them: a
 // confirmation card, or a rendered view. Consulting one registry and not the
 // other silently deletes the other's messages from history on both surfaces.
+//
+// The third clause is not a registry. A propose_* row is kept even when nothing
+// here can draw it, because dropping it is what made propose_nvoids_search
+// invisible rather than merely broken - the assistant said a search was ready
+// to confirm and there was no row left to contradict it. Kept, it renders as
+// `unsupportedProposalNotice`: the app saying it cannot show this, which is a
+// worse card and a much better silence.
 function visibleMessages(messages: ChatMessage[]): ChatMessage[] {
   return messages.filter((message) => (
     Boolean(message.content)
     && (
       message.role !== 'tool'
-      || Boolean(message.tool_name && (PROPOSAL_HANDLERS[message.tool_name] || RENDER_HANDLERS[message.tool_name]))
+      || Boolean(message.tool_name && (
+        PROPOSAL_HANDLERS[message.tool_name]
+        || RENDER_HANDLERS[message.tool_name]
+        || isProposalToolName(message.tool_name)
+      ))
     )
   ))
+}
+
+// What actually happened to each proposal card, read back from the persisted
+// event rows. Without this a refresh returns every card to unresolved: its
+// Confirm button goes live again and can submit a second time, and the pending
+// notice would claim nothing has been saved on a card that was confirmed
+// minutes ago. An event row that matches no card is ignored, never guessed at.
+function resultsFromHistory(messages: ChatMessage[]): Record<number, ProposalResult> {
+  const seeded: Record<number, ProposalResult> = {}
+  const proposalIds = new Set(
+    messages
+      .filter((message) => message.role === 'tool' && message.tool_name && PROPOSAL_HANDLERS[message.tool_name])
+      .map((message) => message.id),
+  )
+  for (const message of messages) {
+    if (message.role !== 'event') continue
+    const target = message.proposal_message_id
+    if (typeof target !== 'number' || !proposalIds.has(target)) continue
+    if (message.outcome === 'cancelled') {
+      seeded[target] = 'cancelled'
+    } else if (message.outcome === 'confirmed' || message.outcome === 'failed') {
+      seeded[target] = { approved: message.outcome === 'confirmed', detail: message.content }
+    }
+  }
+  return seeded
 }
 
 // Tracked against the *unfiltered* server payload. Using the visible list would
@@ -43,6 +80,12 @@ export function useChatSession(apiBase: string, enabled: boolean) {
   const newestIdRef = useRef(0)
 
   const markSeen = useCallback(() => setUnseenCount(0), [])
+
+  // Derived from the thread rather than seeded at each load path. The 20s poll
+  // appends a delta that may carry an outcome whose card arrived in an earlier
+  // batch, so pairing has to happen against the whole thread; deriving it also
+  // means switching sessions cannot leave the previous one's results behind.
+  const seededResults = useMemo(() => resultsFromHistory(messages), [messages])
 
   // Picks up notifications a background sync posts into this session (e.g. a
   // recruiter reply worth flagging) without the user having to send a message.
@@ -190,6 +233,7 @@ export function useChatSession(apiBase: string, enabled: boolean) {
     renameCurrentSession,
     removeCurrentSession,
     sendMessage,
+    seededResults,
   }
 }
 

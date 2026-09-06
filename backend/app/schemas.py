@@ -4,7 +4,7 @@ import re
 from typing import Any, Literal, cast
 from zoneinfo import available_timezones
 
-from pydantic import AliasChoices, BaseModel, Field, field_validator
+from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 
 from app.ai.draft_formatting import DRAFT_TEXT_SIZE_VALUES, normalize_draft_text_size
 
@@ -75,10 +75,20 @@ class ChatSendReplyRequest(BaseModel):
 
 
 class ManualRequirementPreviewRequest(BaseModel):
-    # 20,000 characters, matching the candidate-profile cap. Enforced here so an
-    # oversized paste is refused at the boundary, before a job is enqueued and
-    # before any model call.
-    text: str = Field(min_length=1, max_length=20000)
+    # The length cap is deliberately *not* a Field(max_length=...) here.
+    #
+    # It was, and `settings.manual_intake_max_chars` - the setting written to
+    # hold this number - ended up with no reader at all: the 20,000 lived as a
+    # literal here, a second literal in the create model, and a third in the
+    # dashboard, with nothing keeping the three in agreement.
+    #
+    # Moving it into the route buys the other half too. Pydantic answers an
+    # over-length body with a 422 whose `detail` is a list of error objects, and
+    # `readDetail` in the manual-intake client reads a string or a `{code}` - so
+    # the one message the user saw was "Could not queue the requirement", which
+    # names nothing. The route raises a 400 whose detail says how long the paste
+    # is and how long it may be. See `_manual_intake_text` in main.
+    text: str = Field(min_length=1)
 
 
 class ManualDuplicateSummary(BaseModel):
@@ -99,7 +109,9 @@ class ManualRequirementPreviewResponse(BaseModel):
 
 
 class ManualRequirementCreateRequest(BaseModel):
-    text: str = Field(min_length=1, max_length=20000)
+    # Length is checked in the route against the configured cap, not here - see
+    # ManualRequirementPreviewRequest for why.
+    text: str = Field(min_length=1)
     # Sent back by the client after it has shown the warning. Recorded, never
     # enforced: a recruiter genuinely re-sending an updated requirement is
     # normal, so a duplicate is surfaced and never blocked.
@@ -351,6 +363,54 @@ class CandidateProfileResponse(BaseModel):
     filename: str = ""
     uploaded_at: datetime | None = None
     characters: int = 0
+
+
+class ProposalOutcomeRequest(BaseModel):
+    """What happened to a proposal card, in enumerated values and a number.
+
+    Deliberately carries no prose. The row this writes is replayed into the
+    model's history, so a free-text field here would let the browser write
+    directly into the position the model reads as system framing. The sentence
+    is composed server-side from a fixed template.
+    """
+
+    tool_name: str = Field(min_length=1, max_length=120)
+    outcome: Literal["confirmed", "cancelled", "failed"]
+    proposal_message_id: int
+    characters: int | None = None
+
+    # Rejected rather than ignored. Pydantic's default would drop an unexpected
+    # key silently, which is safe but reads as an accident; on the one body in
+    # this app that ends up inside the model's history, the refusal should be
+    # explicit.
+    model_config = {"extra": "forbid"}
+
+
+class ProfileAppendRequest(BaseModel):
+    """One line to add, and the profile it was composed against.
+
+    The entry is composed before it gets here - by the tool on paths A1 and A2,
+    by the Settings control on A3 - because every provenance rule ran while the
+    value was still separable from the label. This route sees a finished line.
+    """
+
+    entry: str = Field(min_length=1, max_length=2000)
+    # R7: the SHA-256 of the profile the card was computed from. A mismatch is a
+    # 409, never an overwrite of a document the user never saw.
+    base_sha256: str = Field(min_length=64, max_length=64)
+
+
+class ProfileReplaceFromAttachmentRequest(BaseModel):
+    """An id, never the text. The server re-reads the attachment row itself."""
+
+    attachment_id: int
+    base_sha256: str = Field(min_length=64, max_length=64)
+
+
+class ProfileDeleteRequest(BaseModel):
+    # Optional so the Settings panel's bodyless DELETE keeps working exactly as
+    # it does today. Present means the caller had a card to check against.
+    base_sha256: str | None = None
 
 
 class SettingsResponse(SettingsRequest):
@@ -998,8 +1058,38 @@ class ChatMessageResponse(BaseModel):
     content: str
     tool_name: str | None = None
     created_at: datetime
+    # Both are set only on role="event" rows, and say which proposal card an
+    # outcome belongs to. Without them a reloaded card has no way to know it was
+    # already confirmed, and would offer Confirm a second time.
+    proposal_message_id: int | None = None
+    outcome: str | None = None
 
     model_config = {"from_attributes": True}
+
+    @model_validator(mode="before")
+    @classmethod
+    def _unpack_event(cls, value: Any) -> Any:
+        """Lift the event pairing out of tool_call_args, and only for events.
+
+        An assistant row's tool_call_args is the model's own call list and has no
+        business on this payload, so it is read for one role and ignored for the
+        rest.
+        """
+        if getattr(value, "role", None) != "event":
+            return value
+        try:
+            stored = json.loads(getattr(value, "tool_call_args", None) or "{}")
+        except (TypeError, ValueError):
+            stored = {}
+        return {
+            "id": value.id,
+            "role": value.role,
+            "content": value.content,
+            "tool_name": value.tool_name,
+            "created_at": value.created_at,
+            "proposal_message_id": stored.get("proposal_message_id"),
+            "outcome": stored.get("outcome"),
+        }
 
 
 class ChatSessionDetailResponse(ChatSessionResponse):
@@ -2135,6 +2225,27 @@ class JobEnqueueResponse(BaseModel):
     run_key: str
     job_id: str
     status: str
+
+
+class NvoidsClientSearchRequest(BaseModel):
+    """The criteria a confirmed `propose_nvoids_search` card sends back.
+
+    Every field is a *criterion*, never the query. `SearchCriteria.as_dict()`
+    also carries `generated_query`, which the card shows so the user can read
+    what will run - but it is display-only and this model has no field for it.
+    The query is recomposed server-side from these criteria, so the string the
+    crawler receives is one the server built, not one that arrived over the
+    wire. A search is an outbound request to a third party; the shape that lets
+    a caller hand it an arbitrary query string is the shape worth not having.
+    """
+
+    end_client: str = Field(min_length=1, max_length=200)
+    job_role: str = Field(default="", max_length=200)
+    search_location: str = Field(default="", max_length=200)
+    query_mode: Literal["composed", "end_client_only"] = "composed"
+    # The same 1-50 clamp `propose_nvoids_search` applies, restated because the
+    # tool's clamp constrains the model and this one constrains the request.
+    batch_limit: int = Field(default=10, ge=1, le=50)
 
 
 class JobStatusResponse(RecentRunResponse):

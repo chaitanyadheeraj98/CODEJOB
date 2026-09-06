@@ -99,6 +99,20 @@ class ChatActionTests(unittest.TestCase):
         with self.SessionLocal() as db:
             self.assertEqual(db.query(PremiumNumberContact).count(), 0)
 
+    def test_the_action_guidance_forbids_claiming_a_write_that_is_still_pending(self) -> None:
+        """R11's first layer, in the turn where the claim is false by construction.
+
+        The write needs a click that has not happened, so a completion claim in
+        the proposing turn is wrong every time - there is no ambiguous case to
+        adjudicate. The second layer is the card, which says so itself whether
+        or not the model complied.
+        """
+        prompt = build_system_prompt("")
+
+        self.assertIn("never claim the action happened", prompt)
+        self.assertIn("waiting on a", prompt)
+        self.assertIn("[System: ...]", prompt)
+
     def test_confirm_endpoints_create_send_and_audit_only_after_click(self) -> None:
         created = self.client.post(
             "/premium-numbers/contacts",

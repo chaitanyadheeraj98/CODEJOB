@@ -26,6 +26,16 @@ def db_messages_to_langchain(messages: list[ChatMessage]) -> list[BaseMessage]:
             history.append(HumanMessage(content=row.content))
         elif row.role == "assistant" and row.content:
             history.append(AIMessage(content=row.content))
+        elif row.role == "event" and row.content:
+            # A bracketed system note inside a HumanMessage, the same shape
+            # ChatAttachmentService.note_for uses to tell the model about
+            # attachment ids. It is what a later turn has to answer "did that
+            # actually save?" from.
+            history.append(HumanMessage(content=row.content))
+    # `tool` rows stay unreplayed on purpose. They carry whole proposal
+    # payloads - a profile card holds the complete 20,000-character document -
+    # and replaying them would quietly make every confirmation card a permanent
+    # cost on every later prompt.
     return history
 
 

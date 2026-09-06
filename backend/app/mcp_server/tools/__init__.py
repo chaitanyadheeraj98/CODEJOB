@@ -9,6 +9,7 @@ from app.mcp_server.tools.email_actions import propose_send_email
 from app.mcp_server.tools.external_feed import list_external_opportunities
 from app.mcp_server.tools.help import get_app_help
 from app.mcp_server.tools.candidate_actions import propose_candidate_action
+from app.mcp_server.tools.candidate_profile import propose_profile_update
 from app.mcp_server.tools.charts import get_chart
 from app.mcp_server.tools.record_actions import propose_add_note, propose_record_update
 from app.mcp_server.tools.analysis import compare_records, rank_opportunities
@@ -68,6 +69,8 @@ __all__ = [
     "propose_candidate_action",
     "propose_create_github_issue",
     "propose_create_premium_contact",
+    "propose_nvoids_search",
+    "propose_profile_update",
     "propose_record_update",
     "propose_scheduled_task",
     "propose_send_email",

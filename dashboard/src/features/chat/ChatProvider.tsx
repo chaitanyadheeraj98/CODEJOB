@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 
-import { getChatStatus, listChatAttachments, runProposalAction } from './api'
+import { getChatStatus, listChatAttachments, recordProposalOutcome, runProposalAction } from './api'
 import { ChatContext, type ChatContextValue } from './chatContext'
 import type { ProposalResult } from './ProposalCard'
 import { proposalResultDetail, type ProposalFields, type ProposalHandler } from './proposals'
@@ -13,6 +13,10 @@ type ChatProviderProps = {
   apiBase: string
   onFocusCandidate?: (candidateId: number) => void
   onNavigateToQueue?: (target: QueueTarget) => void
+  // Called after a confirmed profile write, so the Settings panel stops showing
+  // the pre-write filename and character count. Supplied by App, which owns the
+  // settings state; a no-op without it.
+  onProfileChanged?: () => void
   children: ReactNode
 }
 
@@ -23,7 +27,7 @@ const MODEL_STORAGE_KEY = 'codejob.chat.model'
 // counters that clear separately, and - the user-visible one - two message
 // lists, so a message sent on one surface would not appear on the other until
 // its own 20s poll fired.
-export default function ChatProvider({ apiBase, onFocusCandidate, onNavigateToQueue, children }: ChatProviderProps) {
+export default function ChatProvider({ apiBase, onFocusCandidate, onNavigateToQueue, onProfileChanged, children }: ChatProviderProps) {
   const [status, setStatus] = useState<ChatStatus | null>(null)
   const [statusError, setStatusError] = useState('')
   const [selectedModel, setSelectedModel] = useState(() => {
@@ -38,7 +42,30 @@ export default function ChatProvider({ apiBase, onFocusCandidate, onNavigateToQu
   const [attachments, setAttachments] = useState<ChatAttachment[]>([])
   const ready = Boolean(status?.enabled && status.ollama_running)
   const chat = useChatSession(apiBase, ready)
-  const { sessionId, busy } = chat
+  const { sessionId, busy, seededResults } = chat
+
+  // Posted for every proposal tool, not just profile writes: the gap is nine
+  // tools wide, the row costs nothing, and scoping it to one would mean building
+  // the same mechanism again the next time it is needed. Never blocks the user -
+  // a write that succeeded must not report failure because bookkeeping did.
+  const postOutcome = useCallback(async (
+    messageId: number,
+    toolName: string,
+    outcome: 'confirmed' | 'cancelled' | 'failed',
+    characters?: number,
+  ) => {
+    if (sessionId == null) return
+    try {
+      await recordProposalOutcome(apiBase, sessionId, {
+        tool_name: toolName,
+        outcome,
+        proposal_message_id: messageId,
+        ...(typeof characters === 'number' ? { characters } : {}),
+      })
+    } catch {
+      // Bookkeeping only. The action itself already happened or did not.
+    }
+  }, [apiBase, sessionId])
 
   const refreshAttachments = useCallback(async () => {
     if (!ready || sessionId == null) return
@@ -109,6 +136,7 @@ export default function ChatProvider({ apiBase, onFocusCandidate, onNavigateToQu
     messageId: number,
     proposal: { handler: ProposalHandler; fields: ProposalFields },
   ) => {
+    const toolName = String(proposal.fields.action ?? '')
     setProposalBusyId(messageId)
     try {
       const result = await runProposalAction(apiBase, proposal.handler, proposal.fields)
@@ -116,19 +144,30 @@ export default function ChatProvider({ apiBase, onFocusCandidate, onNavigateToQu
         ...current,
         [messageId]: { approved: true, detail: proposalResultDetail(result, proposal.fields) },
       }))
+      void postOutcome(
+        messageId,
+        toolName,
+        'confirmed',
+        typeof result.characters === 'number' ? result.characters : undefined,
+      )
+      if (proposal.fields.action === 'propose_profile_update') onProfileChanged?.()
     } catch (reason) {
       setProposalResults((current) => ({
         ...current,
         [messageId]: { approved: false, detail: reason instanceof Error ? reason.message : 'Action failed' },
       }))
+      void postOutcome(messageId, toolName, 'failed')
     } finally {
       setProposalBusyId(null)
     }
-  }, [apiBase])
+  }, [apiBase, onProfileChanged, postOutcome])
 
-  const cancelProposal = useCallback((messageId: number) => {
+  const cancelProposal = useCallback((messageId: number, toolName = '') => {
     setProposalResults((current) => ({ ...current, [messageId]: 'cancelled' }))
-  }, [])
+    // Recorded too. A later turn that cannot tell a cancel from a confirm will
+    // repeat whatever it claimed last time.
+    void postOutcome(messageId, toolName, 'cancelled')
+  }, [postOutcome])
 
   const focusCandidate = useCallback((candidateId: number) => {
     onFocusCandidate?.(candidateId)
@@ -147,7 +186,10 @@ export default function ChatProvider({ apiBase, onFocusCandidate, onNavigateToQu
     ready,
     selectedModel,
     selectModel,
-    proposalResults,
+    // History first, this session's clicks over the top: a card confirmed before
+    // a reload keeps its outcome, and one confirmed just now shows the detail
+    // the route actually returned.
+    proposalResults: { ...seededResults, ...proposalResults },
     proposalBusyId,
     approveProposal,
     cancelProposal,

@@ -19,7 +19,9 @@ export type ChatContextValue = ChatSessionApi & {
   proposalResults: Record<number, ProposalResult>
   proposalBusyId: number | null
   approveProposal: (messageId: number, proposal: { handler: ProposalHandler; fields: ProposalFields }) => Promise<void>
-  cancelProposal: (messageId: number) => void
+  // The tool name comes from the card the user cancelled, so the recorded
+  // outcome names the same action the model proposed.
+  cancelProposal: (messageId: number, toolName?: string) => void
   // Opens a candidate in Needs Review and highlights it. Supplied by App,
   // because the navigation state lives there; a no-op when the provider is
   // mounted without it (tests, or any future host that has no such page).

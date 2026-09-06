@@ -2,8 +2,19 @@ import type { ChatAttachment, ChatSession, ChatSessionDetail, ChatStatus } from 
 import type { ProposalFields, ProposalHandler } from './proposals'
 
 async function responseError(response: Response, fallback: string): Promise<Error> {
-  const payload = (await response.json().catch(() => null)) as { detail?: string } | null
-  return new Error(payload?.detail ?? fallback)
+  const payload = (await response.json().catch(() => null)) as { detail?: unknown } | null
+  const detail = payload?.detail
+  if (typeof detail === 'string') return new Error(detail)
+  // Not every detail is a sentence. `_enqueue_background_job` answers a busy
+  // queue with `{code, job_id, run_key}`, and until a proposal could reach a
+  // queued route nothing here had to read one - `new Error(object)` renders as
+  // "[object Object]" on the card. Same shape `manual_intake/api.ts` already
+  // handles, for the same reason.
+  if (detail && typeof detail === 'object' && typeof (detail as { code?: unknown }).code === 'string') {
+    const code = (detail as { code: string }).code
+    return new Error(code === 'another_job_in_progress' ? 'Another job is already running. Try again once it finishes.' : code)
+  }
+  return new Error(fallback)
 }
 
 export async function getChatStatus(apiBase: string): Promise<ChatStatus> {
@@ -138,6 +149,27 @@ export async function sendChatMessage(
   if (!response.ok) throw await responseError(response, 'Failed to send message')
   if (!response.body) throw new Error('Chat response did not include a stream')
   await consumeSseStream(response.body, onEvent)
+}
+
+// Enumerated values and a number, never prose. The server composes the sentence
+// this becomes, because the row is replayed into the model's history and a
+// client-supplied string there would be a write into trusted framing.
+export async function recordProposalOutcome(
+  apiBase: string,
+  sessionId: number,
+  outcome: {
+    tool_name: string
+    outcome: 'confirmed' | 'cancelled' | 'failed'
+    proposal_message_id: number
+    characters?: number
+  },
+): Promise<void> {
+  const response = await fetch(`${apiBase}/chat/sessions/${sessionId}/events`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(outcome),
+  })
+  if (!response.ok) throw await responseError(response, 'Failed to record the outcome')
 }
 
 export async function runProposalAction(

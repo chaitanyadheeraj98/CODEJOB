@@ -22,6 +22,7 @@ from app.schemas import (
     ChatSessionRenameRequest,
     ChatSessionResponse,
     ChatStatusResponse,
+    ProposalOutcomeRequest,
 )
 from app.services.chat_attachment_service import ChatAttachmentService
 from app.services.chat_service import ChatService
@@ -171,6 +172,35 @@ def send_chat_message(
         ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post(
+    "/sessions/{session_id}/events",
+    response_model=ChatMessageResponse,
+    status_code=201,
+    dependencies=[Depends(require_chat_actions_enabled)],
+)
+def record_proposal_outcome_route(
+    session_id: int,
+    payload: ProposalOutcomeRequest,
+    db: Session = Depends(get_db),
+    service: ChatService = Depends(get_chat_service),
+) -> ChatMessageResponse:
+    """Record that a proposal card was confirmed, cancelled or failed.
+
+    Called by the dashboard after the click, never by the model. It is what lets
+    a later turn tell a save that happened from one that did not.
+    """
+    return ChatMessageResponse.model_validate(
+        service.record_proposal_outcome(
+            db,
+            session_id,
+            tool_name=payload.tool_name,
+            outcome=payload.outcome,
+            proposal_message_id=payload.proposal_message_id,
+            characters=payload.characters,
+        )
     )
 
 

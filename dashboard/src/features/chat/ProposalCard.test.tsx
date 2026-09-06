@@ -98,4 +98,66 @@ describe('ProposalCard', () => {
     expect(container?.textContent).toContain('No changes were made.')
     expect(container?.querySelector('.chatProposalActions')).toBeNull()
   })
+
+  // --- a whole document in one row ------------------------------------
+
+  const profileHandler = PROPOSAL_HANDLERS.propose_profile_update
+  const longProfile = `# Chaithanya Dheeraj\n${'- Skill line\n'.repeat(400)}- Notice period: LAST LINE`
+  const profileFields = {
+    action: 'propose_profile_update',
+    operation: 'append',
+    field: 'Notice period',
+    value: '2 weeks',
+    entry: '- Notice period: 2 weeks',
+    existing_profile: '# Chaithanya Dheeraj\n',
+    resulting_profile: longProfile,
+    base_sha256: 'a'.repeat(64),
+    provenance: 'assistant_asked',
+  }
+
+  it('renders a long value in full inside a scrollable block', () => {
+    render(<ProposalCard handler={profileHandler} fields={profileFields} busy={false} disabled={false} onApprove={vi.fn()} onCancel={vi.fn()} />)
+
+    const block = container?.querySelector('pre.chatProposalDocument')
+    expect(block).not.toBeNull()
+    // Every character, not a truncation and not a title attribute: R5 means the
+    // user can read what will be stored before they click.
+    expect(block?.textContent).toContain('LAST LINE')
+    expect(block?.textContent).toBe(longProfile)
+  })
+
+  it('leaves a short single-line value as plain text', () => {
+    render(<ProposalCard handler={profileHandler} fields={profileFields} busy={false} disabled={false} onApprove={vi.fn()} onCancel={vi.fn()} />)
+
+    const first = container?.querySelectorAll('dd')[0]
+    expect(first?.querySelector('pre')).toBeNull()
+    expect(first?.textContent).toBe('Notice period')
+  })
+
+  // --- the app's own statement of pending state -----------------------
+
+  it('says nothing has been saved yet while the card is unresolved', () => {
+    render(<ProposalCard handler={profileHandler} fields={profileFields} busy={false} disabled={false} onApprove={vi.fn()} onCancel={vi.fn()} />)
+
+    expect(container?.querySelector('.chatProposalPending')?.textContent)
+      .toContain('Nothing has been saved yet')
+  })
+
+  it('drops the pending line the moment a result exists', () => {
+    // The negative half is the one that matters: a card showing both an outcome
+    // and "nothing has been saved yet" is a false statement in the other
+    // direction, which is no better than the claim it replaces.
+    for (const result of [{ approved: true, detail: 'Profile updated.' }, 'cancelled'] as const) {
+      render(<ProposalCard handler={profileHandler} fields={profileFields} result={result} busy={false} disabled={false} onApprove={vi.fn()} onCancel={vi.fn()} />)
+      expect(container?.querySelector('.chatProposalPending')).toBeNull()
+      if (root) act(() => root?.unmount())
+      container?.remove()
+    }
+  })
+
+  it('shows no pending line for a handler that declares none', () => {
+    render(<ProposalCard handler={handler} fields={fields} busy={false} disabled={false} onApprove={vi.fn()} onCancel={vi.fn()} />)
+
+    expect(container?.querySelector('.chatProposalPending')).toBeNull()
+  })
 })

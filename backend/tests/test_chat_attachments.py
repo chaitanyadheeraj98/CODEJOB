@@ -166,6 +166,25 @@ class ChatAttachmentTests(unittest.TestCase):
         self.assertEqual(self.client.get(f"/chat/sessions/{self.session_id}/attachments").json(), [])
         self.assertFalse(any(Path(self.storage.name).iterdir()))
 
+    def test_markdown_is_accepted_and_its_text_extracted_whole(self) -> None:
+        """The profile upload route accepts .md; this allowlist did not.
+
+        So a user told to "attach your profile.md" was rejected by a different
+        allowlist than the one the profile itself uses. Both extensions take the
+        same read_text path .txt already takes - partition() would throw the
+        file's own readable text away on a failure.
+        """
+        body = b"# Chaithanya Dheeraj\n- Notice period: 2 weeks\n"
+        for name in ("profile.md", "profile.markdown"):
+            created = self._upload(name, body, "text/markdown")
+            self.assertEqual(created.status_code, 201, name)
+            with self.SessionLocal() as db:
+                row = db.query(ChatAttachment).filter(
+                    ChatAttachment.id == created.json()["id"]
+                ).first()
+            self.assertEqual(row.content_markdown, body.decode())
+            self.assertIsNone(row.extraction_error)
+
     def test_uploading_to_someone_elses_session_is_a_404(self) -> None:
         response = self.client.post(
             "/chat/sessions/999999/attachments",

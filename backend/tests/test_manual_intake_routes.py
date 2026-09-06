@@ -146,9 +146,46 @@ class ManualIntakeRouteTests(unittest.TestCase):
 
     def test_an_oversized_paste_is_refused_at_the_boundary(self) -> None:
         """Refused before a job is enqueued and before any model call."""
-        response, queue = self._create(text="x" * 20001)
-        self.assertEqual(response.status_code, 422)
+        response, queue = self._create(text="x" * (main.settings.manual_intake_max_chars + 1))
+        self.assertEqual(response.status_code, 400)
         self.assertEqual(queue.calls, [])
+
+    def test_the_refusal_says_how_long_the_paste_is_and_how_long_it_may_be(self) -> None:
+        """The client renders `detail` when it is a string, and nothing useful
+        otherwise. Pydantic's 422 detail is a list of error objects, so an
+        over-length paste used to surface as "Could not queue the requirement",
+        which names neither number the user needs."""
+        response, _ = self._create(text="x" * 20_050)
+        detail = response.json()["detail"]
+        self.assertIsInstance(detail, str)
+        self.assertIn("20,050", detail)
+        self.assertIn(f"{main.settings.manual_intake_max_chars:,}", detail)
+
+    def test_the_cap_is_the_configured_one(self) -> None:
+        """The setting is the only reader-visible source of this number.
+
+        It previously had no reader at all: 20,000 was a literal in two request
+        models and a third in the dashboard. Patching the setting here proves the
+        route follows it rather than a constant that happens to match.
+        """
+        with patch.object(main.settings, "manual_intake_max_chars", 50):
+            response, queue = self._create(text="x" * 51)
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("50", response.json()["detail"])
+            self.assertEqual(queue.calls, [])
+
+            accepted, queue = self._create(text="x" * 50)
+            self.assertEqual(accepted.status_code, 200, accepted.text)
+            self.assertEqual(len(queue.calls), 1)
+
+    def test_the_preview_route_applies_the_same_cap(self) -> None:
+        """Preview runs on blur, so it is where an oversized paste is met first."""
+        response = self.client.post(
+            "/manual-requirements/preview",
+            json={"text": "x" * (main.settings.manual_intake_max_chars + 1)},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIsInstance(response.json()["detail"], str)
 
     # --- B. duplicate warnings ---------------------------------------------
 
