@@ -207,6 +207,28 @@ export const PROPOSAL_HANDLERS: Record<string, ProposalHandler> = {
       ]
     },
   },
+  propose_manual_requirement: {
+    endpoint: '/manual-requirements/from-chat',
+    method: 'POST',
+    buildBody: (fields) => ({
+      attachment_id: fields.attachment_id ?? null,
+      message_id: fields.message_id ?? null,
+      acknowledged_duplicate_of: record(fields.duplicate_of).id ?? null,
+    }),
+    confirmLabel: () => 'Add to Needs Review',
+    pendingNotice: 'Nothing has been created yet. This is queued for review only when you click Confirm.',
+    summary: (fields) => {
+      const duplicate = record(fields.duplicate_of)
+      return [
+        ['Source', text(fields.source_label)],
+        ['Characters', Number(fields.characters ?? 0).toLocaleString()],
+        ...(duplicate.id
+          ? [['Possible duplicate', `#${Number(duplicate.id)} - ${text(duplicate.role) || 'role unknown'} at ${text(duplicate.client) || 'client unknown'}, pasted ${text(duplicate.created_at)}. It will still be created.`] as [string, string]]
+          : []),
+        ['Complete requirement that will be ingested', text(fields.jd_text)],
+      ]
+    },
+  },
   // The tool for this shipped without a handler here, and this registry is what
   // `visibleMessages` consults: a tool row in neither it nor RENDER_HANDLERS is
   // filtered out of the session before anything renders. So the payload arrived,
@@ -458,6 +480,9 @@ export function proposalResultDetail(payload: Record<string, unknown>, fields: P
   if (fields.action === 'propose_profile_update') {
     if (String(fields.operation) === 'delete') return 'Profile deleted.'
     return `Profile updated - ${Number(payload.characters ?? 0).toLocaleString()} characters.`
+  }
+  if (fields.action === 'propose_manual_requirement') {
+    return 'Queued. It becomes a Needs Review card once ingestion finishes - ask me to check it.'
   }
   if (typeof payload.id === 'number') return `Saved as contact ${payload.id}.`
   // A queued job, not a finished one. Every other branch here reports something

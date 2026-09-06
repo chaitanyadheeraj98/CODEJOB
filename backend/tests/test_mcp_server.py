@@ -22,6 +22,7 @@ from app.external_feeds.models import ExternalFeedSource, ExternalOpportunity, E
 from app.mcp_server.tools.external_feed import list_external_opportunities
 from app.mcp_server.tools.help import get_app_help
 from app.mcp_server.tools.inbox import get_conversation, get_recruiter_replies, list_conversations
+from app.mcp_server.tools.manual_intake import check_manual_intake
 from app.mcp_server.tools.premium_numbers import (
     get_record_details,
     list_contact_numbers,
@@ -71,6 +72,7 @@ class MCPServerToolTests(unittest.TestCase):
             patch("app.mcp_server.tools.candidates.SessionLocal", self.SessionLocal),
             patch("app.mcp_server.tools.external_feed.SessionLocal", self.SessionLocal),
             patch("app.mcp_server.tools.inbox.SessionLocal", self.SessionLocal),
+            patch("app.mcp_server.tools.manual_intake.SessionLocal", self.SessionLocal),
             patch("app.mcp_server.tools.premium_numbers.SessionLocal", self.SessionLocal),
             patch("app.mcp_server.tools.resumes.SessionLocal", self.SessionLocal),
             patch("app.mcp_server.tools.runs.SessionLocal", self.SessionLocal),
@@ -149,6 +151,16 @@ class MCPServerToolTests(unittest.TestCase):
                 detail="Finished",
             )
             db.add(run)
+            db.add(
+                RecentRun(
+                    owner_id=settings.owner_id,
+                    run_source="manual_intake",
+                    run_key="manual_intake:test",
+                    status="ok",
+                    detail="Created Needs Review card 42.",
+                    created_at=datetime(2025, 1, 1, tzinfo=UTC),
+                )
+            )
             db.add(
                 RecentRunSkippedItem(
                     owner_id=settings.owner_id,
@@ -405,8 +417,11 @@ class MCPServerToolTests(unittest.TestCase):
         self.assertEqual(len(resumes["resumes"]), 1)
         self.assertEqual(resumes["resumes"][0]["file_name"], "chait_resume_v2.pdf")
         self.assertIn("FastAPI", resumes["resumes"][0]["content_summary"])
-        resume_detail = get_resume(resumes["resumes"][0]["id"])
+        resume_detail = get_resume(variant="chait_resume")
         self.assertIn("<untrusted_resume_data>", resume_detail["untrusted_resume_data"])
+        intake = check_manual_intake()
+        self.assertTrue(intake["found"])
+        self.assertEqual(intake["detail"], "Created Needs Review card 42.")
 
         replies = get_recruiter_replies()
         self.assertEqual(replies["count"], 1)

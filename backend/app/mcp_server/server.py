@@ -3,6 +3,7 @@ from mcp.server.fastmcp import FastMCP
 from app.config import settings
 from app.mcp_server.tools import (
     compare_records,
+    check_manual_intake,
     count_received_emails,
     get_ai_status,
     get_app_help,
@@ -37,6 +38,7 @@ from app.mcp_server.tools import (
     propose_candidate_action,
     propose_create_github_issue,
     propose_create_premium_contact,
+    propose_manual_requirement,
     propose_profile_update,
     propose_record_update,
     propose_scheduled_task,
@@ -79,6 +81,7 @@ BASE_TOOLS = (
     get_app_help,
     list_contact_numbers,
     list_recruiter_opportunities,
+    check_manual_intake,
     check_nvoids_search,
     rank_recruiters,
     search_end_client,
@@ -114,6 +117,8 @@ CHAT_ACTION_TOOLS = (
     # value is checked against the user's own messages on the server.
     propose_profile_update,
     propose_send_email,
+    # Previews a stored JD; only the confirmation-card click queues ingestion.
+    propose_manual_requirement,
     # An outbound crawl of a third party is a side effect, not a read, so it
     # sits behind the same propose-then-confirm boundary as every other action
     # rather than inventing a second confirmation mechanism for one feature.

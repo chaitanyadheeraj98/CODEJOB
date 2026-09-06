@@ -224,8 +224,14 @@ from app.services.scheduling import sweep as scheduling_sweep
 from app.services.scheduling import task_service
 from app.services.auto_runner_service import AutoRunnerService
 from app.services.chat_attachment_service import ChatAttachmentService
+from app.services.chat_provenance import user_supplied_document
 from app.services.candidate_runtime_service import CandidateRuntimeDeps, CandidateRuntimeService
-from app.services.manual_intake_service import ManualIntakeDeps, ManualIntakeResult, ManualIntakeService
+from app.services.manual_intake_service import (
+    ManualIntakeDeps,
+    ManualIntakeResult,
+    ManualIntakeService,
+    manual_intake_length_error,
+)
 from app.services.phone_intelligence_workflow_service import (
     apply_contact_version,
     capture_sister_company,
@@ -308,6 +314,7 @@ from app.schemas import (
     ProfileReplaceFromAttachmentRequest,
     ManualDuplicateSummary,
     ManualRequirementCreateRequest,
+    ManualRequirementFromChatRequest,
     ManualRequirementPreviewRequest,
     ManualRequirementPreviewResponse,
     NvoidsClientSearchRequest,
@@ -1340,19 +1347,10 @@ def _manual_intake_text(text: str) -> str:
     on. A paste this long is a document - it belongs on the upload path, not in
     a textarea.
     """
-    body = text or ""
-    if not body.strip():
-        raise HTTPException(status_code=400, detail="Pasted requirement is empty")
-    limit = settings.manual_intake_max_chars
-    if len(body) > limit:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Pasted requirement is too long: {len(body):,} characters, "
-                f"and the limit is {limit:,}."
-            ),
-        )
-    return body
+    error = manual_intake_length_error(text)
+    if error:
+        raise HTTPException(status_code=400, detail=error)
+    return text or ""
 
 
 def _run_manual_intake(db: Session, *, text: str) -> ManualIntakeResult:
@@ -5085,6 +5083,37 @@ def create_manual_requirement(
     if payload.acknowledged_duplicate_of:
         logger.info(
             "manual_intake_duplicate_acknowledged existing_email_id=%s",
+            payload.acknowledged_duplicate_of,
+        )
+    return _enqueue_manual_intake(db, text=text)
+
+
+@app.post("/manual-requirements/from-chat", response_model=JobEnqueueResponse)
+def create_manual_requirement_from_chat(
+    payload: ManualRequirementFromChatRequest,
+    db: Session = Depends(get_db),
+) -> JobEnqueueResponse:
+    """Queue a requirement the user pasted or attached in chat.
+
+    The sibling route takes text. This one takes an id and reads the text back
+    from storage, so what gets ingested is the row the card was built from.
+
+    Exactly one id is guaranteed by the request model. This route must never
+    fall back to the newest message because the card must bind to the row it
+    showed.
+    """
+    document = user_supplied_document(
+        db,
+        settings.owner_id,
+        attachment_id=payload.attachment_id,
+        message_id=payload.message_id,
+    )
+    if document is None:
+        raise HTTPException(status_code=404, detail="That message or file is no longer readable.")
+    text = _manual_intake_text(document.text)
+    if payload.acknowledged_duplicate_of:
+        logger.info(
+            "manual_intake_duplicate_acknowledged existing_email_id=%s source=chat",
             payload.acknowledged_duplicate_of,
         )
     return _enqueue_manual_intake(db, text=text)

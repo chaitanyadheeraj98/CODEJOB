@@ -140,6 +140,7 @@ class SourceDocument:
     # of the message. Whatever it says, the user can recognise what was read.
     label: str
     attachment_id: int | None = None
+    message_id: int | None = None
 
 
 def user_supplied_document(
@@ -147,12 +148,13 @@ def user_supplied_document(
     owner_id: str,
     *,
     attachment_id: int | None = None,
+    message_id: int | None = None,
 ) -> SourceDocument | None:
     """The user's own pasted or uploaded text, read back from storage.
 
-    With `attachment_id`, the extracted text of that attachment; without it, the
-    newest user message. Returns None when there is nothing to read - no rows,
-    an attachment belonging to someone else, or one whose extraction failed.
+    Precedence is attachment id, then message id, then the newest user message.
+    Returns None when there is nothing to read - no rows, a row belonging to
+    someone else, or an attachment whose extraction failed.
 
     The caller passes an id, never text. That is the whole contract: a proposal
     built on this shows the user the bytes that will actually be ingested, and
@@ -178,6 +180,28 @@ def user_supplied_document(
             attachment_id=row.id,
         )
 
+    if message_id is not None:
+        # Addressed, not "the newest": a card may be confirmed after another
+        # user message has already moved what "newest" means.
+        row = (
+            db.query(ChatMessage)
+            .join(ChatSession, ChatMessage.session_id == ChatSession.id)
+            .filter(
+                ChatSession.owner_id == owner_id,
+                ChatMessage.id == message_id,
+                ChatMessage.role == "user",
+            )
+            .first()
+        )
+        if row is None:
+            return None
+        return SourceDocument(
+            text=row.content or "",
+            origin="chat_message",
+            label="the message you sent",
+            message_id=row.id,
+        )
+
     newest = (
         db.query(ChatMessage)
         .join(ChatSession, ChatMessage.session_id == ChatSession.id)
@@ -191,5 +215,5 @@ def user_supplied_document(
         text=newest.content or "",
         origin="chat_message",
         label="the message you sent",
-        attachment_id=None,
+        message_id=newest.id,
     )

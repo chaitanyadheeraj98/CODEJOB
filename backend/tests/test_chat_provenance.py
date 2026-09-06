@@ -234,10 +234,47 @@ class UserSuppliedDocumentTests(unittest.TestCase):
         attachment = self._attach(session, content="Role: Senior Platform Engineer")
 
         with self.SessionLocal() as db:
-            document = user_supplied_document(db, settings.owner_id, attachment_id=attachment)
+            document = user_supplied_document(
+                db,
+                settings.owner_id,
+                attachment_id=attachment,
+                message_id=self._say(session, "user", "This row must lose"),
+            )
 
         assert document is not None
         self.assertEqual(document.text, "Role: Senior Platform Engineer")
+
+    def test_an_addressed_message_wins_over_the_newest_message(self) -> None:
+        session = self._session()
+        addressed = self._say(session, "user", "Role: Original Java Engineer")
+        self._say(session, "user", "wait, one sec")
+
+        with self.SessionLocal() as db:
+            document = user_supplied_document(
+                db, settings.owner_id, message_id=addressed
+            )
+
+        assert document is not None
+        self.assertEqual(document.text, "Role: Original Java Engineer")
+        self.assertEqual(document.message_id, addressed)
+
+    def test_an_addressed_assistant_row_is_refused(self) -> None:
+        session = self._session()
+        assistant = self._say(session, "assistant", "Role: Model-authored guess")
+
+        with self.SessionLocal() as db:
+            self.assertIsNone(
+                user_supplied_document(db, settings.owner_id, message_id=assistant)
+            )
+
+    def test_an_addressed_message_from_another_owner_is_refused(self) -> None:
+        theirs = self._session(OTHER_OWNER)
+        message = self._say(theirs, "user", "Their requirement")
+
+        with self.SessionLocal() as db:
+            self.assertIsNone(
+                user_supplied_document(db, settings.owner_id, message_id=message)
+            )
 
     def test_another_owners_attachment_is_not_readable(self) -> None:
         theirs = self._session(OTHER_OWNER)
