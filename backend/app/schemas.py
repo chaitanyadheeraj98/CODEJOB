@@ -1438,6 +1438,24 @@ class PremiumNumberInventoryListResponse(BaseModel):
     total: int
 
 
+class PremiumCompanyCardResponse(BaseModel):
+    key: str
+    name: str
+    domain: str
+    contact_count: int
+    recruiter_count: int
+    employer_count: int
+    lastCheckedAt: datetime
+    contacts: list[PremiumNumberInventoryItemResponse]
+
+
+class PremiumCompanyListResponse(BaseModel):
+    items: list[PremiumCompanyCardResponse]
+    next_cursor: int | None
+    has_next: bool
+    total: int
+
+
 class RecruiterNumberListResponse(BaseModel):
     items: list[RecruiterNumberResponse]
     next_cursor: int | None

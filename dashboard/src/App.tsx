@@ -3061,8 +3061,8 @@ function App() {
   const [fixingId, setFixingId] = useState<number | null>(null)
   const [deletingFailedId, setDeletingFailedId] = useState<number | null>(null)
   const [activePage, setActivePage] = useState<ActivePage>(initialActivePage)
-  const [premiumTab, setPremiumTab] = useState<'inventory' | 'opportunities' | 'recycle_bin'>(
-    () => initialTab('premium_numbers', ['inventory', 'opportunities', 'recycle_bin'] as const, 'inventory'),
+  const [premiumTab, setPremiumTab] = useState<'inventory' | 'companies' | 'opportunities' | 'recycle_bin'>(
+    () => initialTab('premium_numbers', ['inventory', 'companies', 'opportunities', 'recycle_bin'] as const, 'inventory'),
   )
   const [applicationTrackingTab, setApplicationTrackingTab] = useState<'bookmarked' | 'tracked'>(
     () => initialTab('application_tracking', ['bookmarked', 'tracked'] as const, 'bookmarked'),
@@ -3750,7 +3750,7 @@ function App() {
       const page = params.get('page') as ActivePage | null
       if (!page || !ACTIVE_PAGES.has(page)) return
       const tab = params.get('tab')
-      if (page === 'premium_numbers' && (tab === 'inventory' || tab === 'opportunities' || tab === 'recycle_bin')) setPremiumTab(tab)
+      if (page === 'premium_numbers' && (tab === 'inventory' || tab === 'companies' || tab === 'opportunities' || tab === 'recycle_bin')) setPremiumTab(tab)
       if (page === 'application_tracking' && (tab === 'bookmarked' || tab === 'tracked')) setApplicationTrackingTab(tab)
       if (page === 'resume_tracking' && (tab === 'resumes' || tab === 'submissions')) setResumeTrackingTab(tab)
       const key = tab && ['premium_numbers', 'application_tracking', 'resume_tracking'].includes(page) ? `${page}:${tab}` : page
@@ -5438,7 +5438,7 @@ function App() {
       setActivePage(page)
       return
     }
-    if (page === 'premium_numbers' && (target.tab === 'inventory' || target.tab === 'opportunities' || target.tab === 'recycle_bin')) setPremiumTab(target.tab)
+    if (page === 'premium_numbers' && (target.tab === 'inventory' || target.tab === 'companies' || target.tab === 'opportunities' || target.tab === 'recycle_bin')) setPremiumTab(target.tab)
     if (page === 'application_tracking' && (target.tab === 'bookmarked' || target.tab === 'tracked')) setApplicationTrackingTab(target.tab)
     if (page === 'resume_tracking' && (target.tab === 'resumes' || target.tab === 'submissions')) setResumeTrackingTab(target.tab)
     setPageFilterValues((current) => ({ ...current, [resolved.registryKey]: resolved.values }))
@@ -7703,6 +7703,7 @@ function App() {
               onPendingCountChange={setPremiumPendingCount}
               activeTab={premiumTab}
               onTabChange={setPremiumTab}
+              onNavigateToInventory={(filters) => navigateToQueue({ page: 'premium_numbers', tab: 'inventory', filters })}
               filterValues={activeFilterValues}
               sortValue={activeSortValue}
             />

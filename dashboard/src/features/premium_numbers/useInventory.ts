@@ -17,7 +17,7 @@ import type {
 
 const PAGE_SIZE = 10
 
-export function useInventory(apiBase: string, refreshToken = 0, externalFilterValues?: FilterValues, externalSort?: string) {
+export function useInventory(apiBase: string, refreshToken = 0, externalFilterValues?: FilterValues, externalSort?: string, enabled = true) {
   const [rows, setRows] = useState<InventoryRow[]>([])
   const [filterValues, setFilterValues] = useState<FilterValues>(inventoryDefaultFilterValues)
   const [sort, setSort] = useState('newest')
@@ -55,10 +55,15 @@ export function useInventory(apiBase: string, refreshToken = 0, externalFilterVa
     }
   }, [apiBase, effectiveFilterValues, effectiveSort, page])
 
+  // Only the Number Inventory tab reads this list, and the sibling tabs supply
+  // their own filter and sort vocabularies - Company Inventory's "most_contacts"
+  // is a 422 here. Fetching while another tab is showing was always wasted work;
+  // now it would also raise an error toast over a perfectly healthy page.
   useEffect(() => {
+    if (!enabled) return
     const timer = window.setTimeout(() => { load().catch(() => undefined) }, 150)
     return () => window.clearTimeout(timer)
-  }, [load, refreshToken])
+  }, [enabled, load, refreshToken])
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
   const safePage = Math.min(page, totalPages)

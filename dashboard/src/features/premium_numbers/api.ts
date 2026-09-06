@@ -10,6 +10,7 @@ import type {
   ApplicationStatus,
   ApplicationSuggestion,
   AttachmentAssetOption,
+  CompanyCard,
   ContactMergePreviewResponse,
   ContactRescoreResponse,
   EmployerNumberCard,
@@ -393,6 +394,13 @@ export function listDeletedContacts(
   params: Record<string, string>,
 ): Promise<{ items: InventoryRow[]; next_cursor: number | null; has_next: boolean; total: number }> {
   return requestJson(`${apiBase}/premium-numbers/deleted-contacts?${new URLSearchParams(params)}`)
+}
+
+export function listCompanies(
+  apiBase: string,
+  params: Record<string, string>,
+): Promise<{ items: CompanyCard[]; next_cursor: number | null; has_next: boolean; total: number }> {
+  return requestJson(`${apiBase}/premium-numbers/companies?${new URLSearchParams(params)}`)
 }
 
 export function restoreContact(apiBase: string, contactId: number): Promise<{ id: number; status: string }> {

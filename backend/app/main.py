@@ -175,6 +175,7 @@ from app.skill_taxonomy import (
 )
 from app.premium_numbers.intelligence import OPPORTUNITY_STATUS_VALUES
 from app.premium_numbers.domain_guard import (
+    PERSONAL_EMAIL_DOMAINS,
     employer_domains_for_owner,
     is_derivable_company_domain,
     is_hidden_invalid_employer_number,
@@ -378,6 +379,8 @@ from app.schemas import (
     ExtractionAuditEntryResponse,
     ExtractionAuditListResponse,
     PremiumNumberListResponse,
+    PremiumCompanyCardResponse,
+    PremiumCompanyListResponse,
     PremiumNumberInventoryItemResponse,
     PremiumNumberInventoryListResponse,
     PremiumNumberResponse,
@@ -5507,7 +5510,13 @@ def list_premium_number_inventory(
     flagged = _contact_is_flagged_expr()
     contact_status = sa.case((PremiumNumberContact.normalized_phone_number.is_(None), "Unscored"), (flagged, "Flagged"), else_="Active")
     contact = sa.select(PremiumNumberContact.id.label("id"), sa.literal("contact").label("kind"), PremiumNumberContact.display_phone_number.label("number"), PremiumNumberContact.normalized_phone_number.label("normalized_number"), sa.func.coalesce(sa.case((PremiumNumberContact.is_recruiter, PremiumNumberContact.recruiter_name)), sa.case((PremiumNumberContact.is_employer, PremiumNumberContact.owner_name))).label("owner"), PremiumNumberContact.company.label("company"), PremiumNumberContact.is_recruiter.label("is_recruiter"), PremiumNumberContact.is_employer.label("is_employer"), contact_status.label("status"), active_score.label("score"), PremiumNumberContact.source_type.label("source_type"), PremiumNumberContact.updated_at.label("last_checked_at")).where(PremiumNumberContact.owner_id == owner, PremiumNumberContact.deleted_at.is_(None))
-    if domain and domain.strip(): contact = contact.where(or_(PremiumNumberContact.recruiter_email_domain.ilike(f"%{domain.strip()}%"), PremiumNumberContact.employer_email_domain.ilike(f"%{domain.strip()}%"), PremiumNumberContact.id.in_(db.query(PremiumContactEmail.premium_contact_id).filter(PremiumContactEmail.domain.ilike(f"%{domain.strip()}%")))))
+    if domain and domain.strip():
+        needle = domain.strip()
+        contact = contact.where(or_(PremiumNumberContact.recruiter_email_domain.ilike(f"%{needle}%"), PremiumNumberContact.employer_email_domain.ilike(f"%{needle}%"), PremiumNumberContact.id.in_(db.query(PremiumContactEmail.premium_contact_id).filter(PremiumContactEmail.domain.ilike(f"%{needle}%")))))
+        # The review half of the union needs the same narrowing or every pending
+        # row survives a domain filter and swamps the handful of matching
+        # contacts - a review has no domain column, so match its own addresses.
+        review = review.where(or_(NumberReviewQueue.contact_email.ilike(f"%{needle}%"), NumberReviewQueue.email_sender.ilike(f"%{needle}%")))
     if favorite == "favorites_only": contact = contact.where(PremiumNumberContact.is_favorite.is_(True)); review = review.where(sa.false())
     elif favorite == "non_favorites_only": contact = contact.where(PremiumNumberContact.is_favorite.is_(False)); review = review.where(sa.false())
     if date_filter:
@@ -5546,6 +5555,141 @@ def list_premium_number_inventory(
     recruiter_by_id={row.id:_recruiter_number_response(db,row,employer_domains) for row in contacts if row.is_recruiter}; employer_by_id={row.id:_employer_number_response(db,row) for row in contacts if row.is_employer}
     items=[PremiumNumberInventoryItemResponse(key=f"{row.kind}:{row.id}",kind=row.kind,id=row.id,number=row.number,owner=row.owner or "Unknown",company=row.company or "Unknown",categories=_contact_categories(row),status=row.status,score=row.score,sourceType=row.source_type if row.source_type in {"gmail","nvoids"} else None,lastCheckedAt=row.last_checked_at,review=review_by_id.get(row.id) if row.kind=="review" else None,recruiter=recruiter_by_id.get(row.id),employer=employer_by_id.get(row.id)) for row in visible]
     return PremiumNumberInventoryListResponse(items=items,next_cursor=cursor+limit if len(rows)>limit else None,has_next=len(rows)>limit,total=total)
+
+
+# A company is keyed by the contact's email domain, because that is the only
+# identity in this table an outside source can be joined back to. Contacts with
+# no usable domain still need somewhere to live, so they fall back to grouping on
+# the company name - the two never mix, since the company half of the key is
+# blanked out whenever a domain exists.
+_COMPANY_MEMBER_CAP = 50
+
+
+def _company_domain_expr():
+    domain = sa.func.lower(sa.func.trim(sa.func.coalesce(
+        sa.func.nullif(PremiumNumberContact.recruiter_email_domain, ""),
+        sa.func.nullif(PremiumNumberContact.employer_email_domain, ""),
+        sa.literal(""),
+    )))
+    # A free-mail address names a person, not an employer, so gmail.com must not
+    # collect every unrelated recruiter who used one into a single "company".
+    # Those contacts fall through to the company-name key instead.
+    return sa.case((domain.in_(sorted(PERSONAL_EMAIL_DOMAINS)), sa.literal("")), else_=domain)
+
+
+def _company_name_expr():
+    domain = _company_domain_expr()
+    company = sa.func.lower(sa.func.trim(sa.func.coalesce(PremiumNumberContact.company, sa.literal(""))))
+    return sa.case((domain != "", sa.literal("")), else_=company)
+
+
+def _company_display_name(contacts: list[PremiumNumberContact], fallback: str) -> str:
+    counts: dict[str, int] = {}
+    for contact in contacts:
+        name = str(contact.company or "").strip()
+        if not name or name.lower() == "unknown":
+            continue
+        counts[name] = counts.get(name, 0) + 1
+    if not counts:
+        return fallback
+    # Ties (the same company spelled two ways across rows) resolve toward the
+    # cased spelling, so a sloppy all-lowercase duplicate can't retitle the card.
+    return max(counts.items(), key=lambda item: (item[1], item[0] != item[0].lower(), -len(item[0])))[0]
+
+
+@app.get("/premium-numbers/companies", response_model=PremiumCompanyListResponse)
+def list_premium_number_companies(
+    cursor: int = Query(0, ge=0), limit: int = Query(10, ge=1, le=50), q: str | None = Query(default=None, max_length=255),
+    sort: str = Query("newest"),
+    date_filter: str | None = Query(default=None), date_from: date | None = Query(default=None), date_to: date | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> PremiumCompanyListResponse:
+    if sort not in {"newest", "oldest", "most_contacts", "fewest_contacts", "name"}:
+        raise HTTPException(status_code=422, detail="Invalid sort. Must be one of: newest, oldest, most_contacts, fewest_contacts, name")
+    owner = settings.owner_id
+    domain_expr = _company_domain_expr()
+    name_expr = _company_name_expr()
+    base = sa.select(
+        domain_expr.label("domain"),
+        name_expr.label("company"),
+        sa.func.count().label("contact_count"),
+        sa.func.max(PremiumNumberContact.updated_at).label("last_checked_at"),
+    ).where(PremiumNumberContact.owner_id == owner, PremiumNumberContact.deleted_at.is_(None))
+    if q and q.strip():
+        like = f"%{q.strip()}%"
+        base = base.where(sa.or_(
+            PremiumNumberContact.company.ilike(like),
+            PremiumNumberContact.recruiter_email_domain.ilike(like),
+            PremiumNumberContact.employer_email_domain.ilike(like),
+        ))
+    if date_filter:
+        start, end = _date_range_utc_window(date_filter, date_from, date_to)
+        base = base.where(PremiumNumberContact.created_at >= start, PremiumNumberContact.created_at < end)
+    grouped = base.group_by(domain_expr, name_expr).subquery()
+    total = db.execute(sa.select(sa.func.count()).select_from(grouped)).scalar_one()
+    order = {
+        "oldest": (grouped.c.last_checked_at.asc(),),
+        "most_contacts": (grouped.c.contact_count.desc(), grouped.c.last_checked_at.desc()),
+        "fewest_contacts": (grouped.c.contact_count.asc(), grouped.c.last_checked_at.desc()),
+        "name": (grouped.c.domain.asc(), grouped.c.company.asc()),
+    }.get(sort, (grouped.c.last_checked_at.desc(),))
+    rows = db.execute(
+        sa.select(grouped).order_by(*order, grouped.c.domain.asc(), grouped.c.company.asc()).offset(cursor).limit(limit + 1)
+    ).all()
+    visible = rows[:limit]
+    if not visible:
+        return PremiumCompanyListResponse(items=[], next_cursor=None, has_next=False, total=total)
+
+    # One round trip for every card on the page: the group key is a computed
+    # expression, so it has to be recomputed in the WHERE clause rather than
+    # joined on.
+    members = sa.or_(*[sa.and_(domain_expr == row.domain, name_expr == row.company) for row in visible])
+    contacts = db.query(PremiumNumberContact).filter(
+        PremiumNumberContact.owner_id == owner,
+        PremiumNumberContact.deleted_at.is_(None),
+        members,
+    ).order_by(PremiumNumberContact.updated_at.desc(), PremiumNumberContact.id.desc()).all()
+    employer_domains = employer_domains_for_owner(db, owner) if any(contact.is_recruiter for contact in contacts) else set()
+    by_group: dict[tuple[str, str], list[PremiumNumberContact]] = {}
+    for contact in contacts:
+        contact_domain = (contact.recruiter_email_domain or contact.employer_email_domain or "").strip().lower()
+        if contact_domain in PERSONAL_EMAIL_DOMAINS:
+            contact_domain = ""
+        contact_company = "" if contact_domain else str(contact.company or "").strip().lower()
+        by_group.setdefault((contact_domain, contact_company), []).append(contact)
+
+    items: list[PremiumCompanyCardResponse] = []
+    for row in visible:
+        group = by_group.get((row.domain, row.company), [])
+        capped = group[:_COMPANY_MEMBER_CAP]
+        items.append(PremiumCompanyCardResponse(
+            key=f"domain:{row.domain}" if row.domain else f"company:{row.company}",
+            name=_company_display_name(group, row.domain or "Unknown company"),
+            domain=row.domain,
+            contact_count=row.contact_count,
+            recruiter_count=sum(1 for contact in group if contact.is_recruiter),
+            employer_count=sum(1 for contact in group if contact.is_employer),
+            lastCheckedAt=row.last_checked_at,
+            contacts=[
+                PremiumNumberInventoryItemResponse(
+                    key=f"contact:{contact.id}",
+                    kind="contact",
+                    id=contact.id,
+                    number=contact.display_phone_number,
+                    owner=(contact.recruiter_name if contact.is_recruiter else contact.owner_name) or "Unknown",
+                    company=contact.company or "Unknown",
+                    categories=_contact_categories(contact),
+                    status="Unscored" if contact.normalized_phone_number is None else _contact_status(contact),
+                    score=_contact_source_fields(db, contact, "recruiter" if contact.is_recruiter else "employer")[5],
+                    sourceType=contact.source_type if contact.source_type in {"gmail", "nvoids"} else None,
+                    lastCheckedAt=contact.updated_at,
+                    recruiter=_recruiter_number_response(db, contact, employer_domains) if contact.is_recruiter else None,
+                    employer=_employer_number_response(db, contact) if contact.is_employer else None,
+                )
+                for contact in capped
+            ],
+        ))
+    return PremiumCompanyListResponse(items=items, next_cursor=cursor + limit if len(rows) > limit else None, has_next=len(rows) > limit, total=total)
 
 
 @app.get("/premium-numbers/deleted-contacts", response_model=PremiumNumberInventoryListResponse)

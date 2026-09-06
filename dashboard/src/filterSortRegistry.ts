@@ -5,6 +5,7 @@ import { sentItemsFilterFields as sFields, sentItemsSortOptions as sSort, sentIt
 import { inboxFilterFields as iFields, inboxSortOptions as iSort, inboxDefaultFilterValues as iDefaults, inboxFiltersToParams as iParams } from './inboxFilters'
 import { inventoryDefaultFilterValues, inventoryFilterFields, inventoryFiltersToParams, inventorySortOptions } from './features/premium_numbers/inventoryFilters'
 import { OPPORTUNITY_STATUS_OPTIONS, opportunityDefaultFilterValues, opportunityFilterFields, opportunityFiltersToParams, opportunitySortOptions } from './features/premium_numbers/opportunityFilters'
+import { companyDefaultFilterValues, companyFilterFields, companyFiltersToParams, companySortOptions } from './features/premium_numbers/companyFilters'
 import { recycleBinDefaultFilterValues, recycleBinFilterFields, recycleBinFiltersToParams, recycleBinSortOptions } from './features/premium_numbers/recycleBinFilters'
 import { submissionDefaultFilterValues, submissionFilterFields, submissionFiltersToParams, submissionSortOptions } from './features/resume_tracking/submissionFilters'
 import type { ResumeAssetOption } from './features/premium_numbers/types'
@@ -34,7 +35,8 @@ export const filterSortRegistry: Partial<Record<string, FilterSortRegistryEntry>
   failed_mapping: config('failed', fFields, fSort, fDefaults, fParams),
   sent_items: config('approved_sent', sFields, sSort, sDefaults, sParams),
   inbox: config('inbox_conversations', iFields, iSort, iDefaults, iParams),
-  'premium_numbers:inventory': config('premium_inventory', [...inventoryFilterFields, { key: 'domain', label: 'Domain', type: 'text' }, { key: 'favorite', label: 'Favorite', type: 'select', options: [{ value: 'all', label: 'All' }, { value: 'favorites_only', label: 'Favorites only' }, { value: 'non_favorites_only', label: 'Non-favorites only' }] }], inventorySortOptions, { ...inventoryDefaultFilterValues, domain: '', favorite: 'all' }, (values) => { const params = inventoryFiltersToParams(values); if (String(values.domain || '').trim()) params.domain = String(values.domain).trim(); if (values.favorite !== 'all') params.favorite = String(values.favorite); return params }, 'page'),
+  'premium_numbers:inventory': config('premium_inventory', [...inventoryFilterFields, { key: 'domain', label: 'Domain', type: 'text' }, { key: 'favorite', label: 'Favorite', type: 'select', options: [{ value: 'all', label: 'All' }, { value: 'favorites_only', label: 'Favorites only' }, { value: 'non_favorites_only', label: 'Non-favorites only' }] }], inventorySortOptions, inventoryDefaultFilterValues, inventoryFiltersToParams, 'page'),
+  'premium_numbers:companies': config('premium_companies', companyFilterFields, companySortOptions, companyDefaultFilterValues, companyFiltersToParams, 'page'),
   'premium_numbers:opportunities': (context) => config(
     'recruiter_opportunities',
     [

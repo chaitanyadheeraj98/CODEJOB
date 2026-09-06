@@ -4040,6 +4040,214 @@ class PremiumNumbersApiTests(unittest.TestCase):
         response = self.client.get("/premium-numbers/inventory", params={"q": "770"})
         self.assertEqual(len(response.json()["items"]), 1)
 
+    def test_company_inventory_groups_contacts_by_email_domain(self) -> None:
+        with Session(self.engine) as db:
+            db.add_all([
+                PremiumNumberContact(
+                    owner_id=main.settings.owner_id,
+                    normalized_phone_number="12104856386",
+                    display_phone_number="(210) 485-6386",
+                    is_recruiter=True,
+                    recruiter_name="T Mahesh Royal",
+                    owner_name="T Mahesh Royal",
+                    company="Fusion Global Technologies",
+                    recruiter_email="mahesh@fusiongts.com",
+                    recruiter_email_domain="fusiongts.com",
+                ),
+                PremiumNumberContact(
+                    owner_id=main.settings.owner_id,
+                    normalized_phone_number="12104856387",
+                    display_phone_number="(210) 485-6387",
+                    is_employer=True,
+                    owner_name="Ravi K",
+                    company="Fusion Global Technologies and Solutions",
+                    employer_email="ravi@FusionGTS.com",
+                    employer_email_domain="FusionGTS.com",
+                ),
+                # No domain at all - falls back to grouping on the company name,
+                # case-insensitively, so these two land on one card.
+                PremiumNumberContact(
+                    owner_id=main.settings.owner_id,
+                    normalized_phone_number="14703136209",
+                    display_phone_number="(470) 313-6209",
+                    is_employer=True,
+                    owner_name="Pranay Gondela",
+                    company="Horizon Softech Inc",
+                ),
+                PremiumNumberContact(
+                    owner_id=main.settings.owner_id,
+                    normalized_phone_number="12482476165",
+                    display_phone_number="(248) 247-6165",
+                    is_employer=True,
+                    owner_name="Harshitha Voddepally",
+                    company="horizon softech inc",
+                ),
+                # Deleted contacts never form or join a company card.
+                PremiumNumberContact(
+                    owner_id=main.settings.owner_id,
+                    normalized_phone_number="12015550000",
+                    display_phone_number="(201) 555-0000",
+                    is_recruiter=True,
+                    recruiter_name="Gone",
+                    company="Deleted Corp",
+                    recruiter_email_domain="deletedcorp.com",
+                    deleted_at=datetime.now(UTC),
+                ),
+                # Another owner's contact must not leak into this owner's cards.
+                PremiumNumberContact(
+                    owner_id="someone-else",
+                    normalized_phone_number="12015551111",
+                    display_phone_number="(201) 555-1111",
+                    is_recruiter=True,
+                    recruiter_name="Other Owner",
+                    company="Fusion Global Technologies",
+                    recruiter_email_domain="fusiongts.com",
+                ),
+            ])
+            db.commit()
+
+        response = self.client.get("/premium-numbers/companies", params={"sort": "most_contacts"})
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(payload["total"], 2)
+        by_key = {item["key"]: item for item in payload["items"]}
+        self.assertEqual(set(by_key), {"domain:fusiongts.com", "company:horizon softech inc"})
+
+        fusion = by_key["domain:fusiongts.com"]
+        self.assertEqual(fusion["domain"], "fusiongts.com")
+        self.assertEqual(fusion["contact_count"], 2)
+        self.assertEqual(fusion["recruiter_count"], 1)
+        self.assertEqual(fusion["employer_count"], 1)
+        # The card carries whole inventory rows, so the tab can open the detail
+        # panel without going back to /premium-numbers/inventory for the row.
+        self.assertEqual({contact["key"] for contact in fusion["contacts"]}, {
+            f"contact:{contact['id']}" for contact in fusion["contacts"]
+        })
+        self.assertEqual({contact["owner"] for contact in fusion["contacts"]}, {"T Mahesh Royal", "Ravi K"})
+        self.assertTrue(any(contact["recruiter"] for contact in fusion["contacts"]))
+        self.assertTrue(any(contact["employer"] for contact in fusion["contacts"]))
+
+        horizon = by_key["company:horizon softech inc"]
+        self.assertEqual(horizon["domain"], "")
+        self.assertEqual(horizon["contact_count"], 2)
+        self.assertEqual(horizon["name"], "Horizon Softech Inc")
+
+    def test_inventory_domain_filter_narrows_pending_reviews_too(self) -> None:
+        # A Company Inventory card jumps here with ?domain=<the company>. The
+        # domain clause used to be applied only to the contact half of the union,
+        # so every pending review row survived it and buried the match.
+        with Session(self.engine) as db:
+            db.add_all([
+                PremiumNumberContact(
+                    owner_id=main.settings.owner_id,
+                    normalized_phone_number="12104856386",
+                    display_phone_number="(210) 485-6386",
+                    is_recruiter=True,
+                    recruiter_name="T Mahesh Royal",
+                    company="Fusion Global Technologies",
+                    recruiter_email="mahesh@fusiongts.com",
+                    recruiter_email_domain="fusiongts.com",
+                ),
+                PremiumNumberContact(
+                    owner_id=main.settings.owner_id,
+                    normalized_phone_number="14703136209",
+                    display_phone_number="(470) 313-6209",
+                    is_employer=True,
+                    owner_name="Pranay Gondela",
+                    company="Horizon Softech Inc",
+                    employer_email="pranay@horizonsoftech.net",
+                    employer_email_domain="horizonsoftech.net",
+                ),
+                NumberReviewQueue(
+                    owner_id=main.settings.owner_id,
+                    source_email_id=1,
+                    normalized_phone_number="12102220000",
+                    display_phone_number="(210) 222-0000",
+                    state="pending",
+                    contact_email="hr@fusiongts.com",
+                ),
+                NumberReviewQueue(
+                    owner_id=main.settings.owner_id,
+                    source_email_id=2,
+                    normalized_phone_number="12103330000",
+                    display_phone_number="(210) 333-0000",
+                    state="pending",
+                    contact_email="someone@unrelated.example",
+                ),
+            ])
+            db.commit()
+
+        payload = self.client.get("/premium-numbers/inventory", params={"domain": "fusiongts.com"}).json()
+        self.assertEqual(payload["total"], 2)
+        self.assertEqual(
+            {(item["kind"], item["number"]) for item in payload["items"]},
+            {("contact", "(210) 485-6386"), ("review", "(210) 222-0000")},
+        )
+
+    def test_company_inventory_never_makes_a_company_out_of_a_free_mail_domain(self) -> None:
+        with Session(self.engine) as db:
+            db.add_all([
+                PremiumNumberContact(
+                    owner_id=main.settings.owner_id,
+                    normalized_phone_number="14083317522",
+                    display_phone_number="(408) 331-7522",
+                    is_recruiter=True,
+                    recruiter_name="Shehzad Shaikh",
+                    company="Cygnus Professionals",
+                    recruiter_email="shehzad@gmail.com",
+                    recruiter_email_domain="gmail.com",
+                ),
+                PremiumNumberContact(
+                    owner_id=main.settings.owner_id,
+                    normalized_phone_number="19406296920",
+                    display_phone_number="(940) 629-6920",
+                    is_recruiter=True,
+                    recruiter_name="Someone Else",
+                    company="Unrelated LLC",
+                    recruiter_email="someone@gmail.com",
+                    recruiter_email_domain="gmail.com",
+                ),
+            ])
+            db.commit()
+
+        payload = self.client.get("/premium-numbers/companies").json()
+        keys = {item["key"] for item in payload["items"]}
+        self.assertEqual(keys, {"company:cygnus professionals", "company:unrelated llc"})
+        self.assertTrue(all(item["domain"] == "" for item in payload["items"]))
+
+    def test_company_inventory_search_paginates_and_rejects_bad_sort(self) -> None:
+        with Session(self.engine) as db:
+            db.add_all([
+                PremiumNumberContact(
+                    owner_id=main.settings.owner_id,
+                    normalized_phone_number=f"1201555{index:04d}",
+                    display_phone_number=f"(201) 555-{index:04d}",
+                    is_recruiter=True,
+                    recruiter_name=f"Rep {index}",
+                    company=f"Acme {index}",
+                    recruiter_email_domain=f"acme{index}.com",
+                )
+                for index in range(3)
+            ])
+            db.commit()
+
+        response = self.client.get("/premium-numbers/companies", params={"sort": "name", "limit": 2})
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(payload["total"], 3)
+        self.assertTrue(payload["has_next"])
+        self.assertEqual(payload["next_cursor"], 2)
+        self.assertEqual([item["domain"] for item in payload["items"]], ["acme0.com", "acme1.com"])
+
+        response = self.client.get("/premium-numbers/companies", params={"sort": "name", "limit": 2, "cursor": 2})
+        self.assertEqual([item["domain"] for item in response.json()["items"]], ["acme2.com"])
+        self.assertFalse(response.json()["has_next"])
+
+        response = self.client.get("/premium-numbers/companies", params={"q": "acme1"})
+        self.assertEqual([item["domain"] for item in response.json()["items"]], ["acme1.com"])
+
+        self.assertEqual(self.client.get("/premium-numbers/companies", params={"sort": "sideways"}).status_code, 422)
+
     def test_extraction_audit_is_owner_scoped_and_filterable(self) -> None:
         with Session(self.engine) as db:
             db.add_all([
