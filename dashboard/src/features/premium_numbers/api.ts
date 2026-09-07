@@ -11,6 +11,7 @@ import type {
   ApplicationSuggestion,
   AttachmentAssetOption,
   CompanyCard,
+  CompanyDetail,
   ContactMergePreviewResponse,
   ContactRescoreResponse,
   EmployerNumberCard,
@@ -401,6 +402,13 @@ export function listCompanies(
   params: Record<string, string>,
 ): Promise<{ items: CompanyCard[]; next_cursor: number | null; has_next: boolean; total: number }> {
   return requestJson(`${apiBase}/premium-numbers/companies?${new URLSearchParams(params)}`)
+}
+
+export function getCompanyDetail(apiBase: string, company: CompanyCard): Promise<CompanyDetail> {
+  // The group key carries dots and spaces, so it travels as query parameters
+  // rather than a path segment.
+  const params = company.domain ? { domain: company.domain } : { company: company.key.replace(/^company:/, '') }
+  return requestJson(`${apiBase}/premium-numbers/companies/detail?${new URLSearchParams(params)}`)
 }
 
 export function restoreContact(apiBase: string, contactId: number): Promise<{ id: number; status: string }> {

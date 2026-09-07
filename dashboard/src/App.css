@@ -4173,66 +4173,14 @@ button.emailSearchResult:focus-visible {
   margin: 0;
 }
 
-/* Company Inventory reuses the opportunity card's shell and the inventory
-   table's rows so all four Premium Contacts tabs read as one surface - only the
-   header and the narrower nested table are specific to it. */
-.companyGrid {
-  display: grid;
-  gap: 14px;
-}
-
-.companyCard {
-  display: grid;
-  gap: 14px;
-  padding: 16px;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  background: var(--surface);
-}
-
-.companyCard > header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.companyIdentity {
-  min-width: 0;
-}
-
-.companyIdentity h3 {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
-.companyDomain {
-  margin: 3px 0 0;
-  color: var(--muted);
-  font-size: 12px;
-  overflow-wrap: anywhere;
-}
-
-.companyHeaderMeta {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 8px;
-  flex-shrink: 0;
-}
-
-.companyCard .inventoryTableScroll {
-  border: 1px solid var(--line);
-  border-radius: 8px;
-}
-
-/* Narrower than the six-plus-column Number Inventory table, so a card only
-   scrolls sideways on genuinely small screens. */
+/* Company Inventory rows and panel reuse the inventory table and the shared
+   detail-panel shell, so the only styles it needs of its own are the nested
+   contact table's narrower width and the dash that marks an untracked stat. */
 .companyContactsTable {
   min-width: 620px;
 }
 
-.card .companyContactLink {
+.companyContactLink {
   height: auto;
   min-height: 0;
   border: 0;
@@ -4327,6 +4275,39 @@ button.emailSearchResult:focus-visible {
 .applicationSummary strong {
   color: var(--primary);
   font-size: 24px;
+}
+
+/* A stat that was never recorded is shown as a muted dash rather than a
+   confident zero, so it cannot be misread as a fact about the company. */
+.companyTileUntracked {
+  color: var(--muted) !important;
+}
+
+/* The stat grid was written for full page width; inside a detail panel four
+   fixed columns squeeze every label onto two lines, so let it reflow. */
+.detailPanel .applicationSummary {
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+}
+
+/* Job titles run long enough to wrap into a column of single words against the
+   dl layout, so the opportunity list gives the title its own full-width line. */
+.companyOpportunityList {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.companyOpportunityList li {
+  display: grid;
+  gap: 2px;
+  padding-left: 12px;
+  border-left: 3px solid #c4d4f7;
+}
+
+.companyOpportunityList small {
+  color: var(--muted);
 }
 
 .applicationSummary span,
@@ -4538,14 +4519,9 @@ button.emailSearchResult:focus-visible {
 @media (max-width: 900px) {
   .premiumNumbersHeader,
   .inventoryPaginationFooter,
-  .companyCard > header,
   .opportunityCard > header {
     align-items: stretch;
     flex-direction: column;
-  }
-
-  .companyHeaderMeta {
-    align-items: flex-start;
   }
 
   .premiumTabs,

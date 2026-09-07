@@ -9,6 +9,9 @@ export const companySortOptions: SortOption[] = [
   { value: 'most_contacts', label: 'Most contacts' },
   { value: 'fewest_contacts', label: 'Fewest contacts' },
   { value: 'name', label: 'Domain A-Z' },
+  { value: 'most_opportunities', label: 'Most opportunities' },
+  { value: 'most_applications', label: 'Most applications' },
+  { value: 'most_replies', label: 'Most replies' },
 ]
 
 export const companyDefaultFilterValues: FilterValues = { q: '' }
