@@ -604,6 +604,55 @@ class BulkApproveEntitiesResponse(BaseModel):
     approved_names: list[str] = Field(default_factory=list)
 
 
+BulkReviewScope = Literal["skill", "company", "location", "role"]
+
+
+class BulkReviewRecommendation(BaseModel):
+    # `key` is the record's normalized_name. Pending records are aggregates over
+    # RecruiterEmail rows and have no integer primary key; normalized_name is the
+    # identifier both settings panels already key their rows by.
+    key: str
+    display_name: str
+    occurrence_count: int
+    candidate_ids: list[int] = Field(default_factory=list)
+    bucket: Literal["approve", "dismiss", "review"]
+    reason: str = ""
+    source: Literal["rules", "model"] = "rules"
+    locked: bool = False
+
+
+class BulkReviewClassifyRequest(BaseModel):
+    scope: BulkReviewScope
+    use_model: bool = True
+
+
+class BulkReviewClassifyResponse(BaseModel):
+    scope: str
+    total_pending: int
+    counts: dict[str, int] = Field(default_factory=dict)
+    model_used: str | None = None
+    model_error: str | None = None
+    recommendations: list[BulkReviewRecommendation] = Field(default_factory=list)
+
+
+class BulkReviewApplyRequest(BaseModel):
+    scope: BulkReviewScope
+    action: Literal["approve", "dismiss"]
+    keys: list[str] = Field(default_factory=list)
+    # The count shown on the confirmation screen. The server refuses the request
+    # unless it matches the unique keys submitted, so a preview the user did not
+    # actually see cannot be applied.
+    expected_count: int
+
+
+class BulkReviewApplyResponse(BaseModel):
+    scope: str
+    action: str
+    applied_count: int
+    applied_names: list[str] = Field(default_factory=list)
+    skipped: list[dict[str, str]] = Field(default_factory=list)
+
+
 class TaxonomyMetricsResponse(BaseModel):
     parsed_email_count: int
     emails_with_unknown_skills: int

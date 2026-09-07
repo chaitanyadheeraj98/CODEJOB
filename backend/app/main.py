@@ -261,6 +261,17 @@ from app.services.scoring_runtime_service import ScoringRuntimeDeps, ScoringRunt
 from app.services.settings_bootstrap_service import SettingsBootstrapService
 from app.services.startup_service import StartupService
 from app.services.role_taxonomy import clear_role_taxonomy_cache
+from app.services.taxonomy_bulk_review_service import (
+    MAX_APPLY_KEYS,
+    SKILL_SCOPE,
+    BulkReviewCountMismatch,
+    Recommendation,
+    bucket_counts,
+    classify_entities,
+    classify_skills,
+    refine_with_model,
+    select_applicable,
+)
 from app.services.taxonomy_learning_service import (
     BULK_APPROVAL_MIN_OCCURRENCES,
     ENTITY_TYPES,
@@ -331,6 +342,11 @@ from app.schemas import (
     BulkApproveJobIntentSignalsResponse,
     BulkApproveSkillsResponse,
     BulkApproveEntitiesResponse,
+    BulkReviewApplyRequest,
+    BulkReviewApplyResponse,
+    BulkReviewClassifyRequest,
+    BulkReviewClassifyResponse,
+    BulkReviewRecommendation,
     BulkApproveRequest,
     BulkCandidateActionResponse,
     BulkDeleteCandidatesRequest,
@@ -3902,6 +3918,134 @@ def dismiss_taxonomy_entity(
     # vocabulary must drop the moment the human changes it.
     clear_role_taxonomy_cache()
     return _serialize_canonical_entity(row)
+
+
+def _classify_pending_for_scope(db: Session, scope: str) -> list[Recommendation]:
+    if scope == SKILL_SCOPE:
+        return classify_skills(_list_pending_unknown_skills(db))
+    return classify_entities(list_pending_entities(db, owner_id=settings.owner_id, entity_type=scope))
+
+
+def _serialize_bulk_review_recommendation(item: Recommendation) -> BulkReviewRecommendation:
+    return BulkReviewRecommendation(
+        key=item.key,
+        display_name=item.display_name,
+        occurrence_count=item.occurrence_count,
+        candidate_ids=list(item.candidate_ids),
+        bucket=item.bucket,
+        reason=item.reason,
+        source=item.source,
+        locked=item.locked,
+    )
+
+
+@app.post("/settings/taxonomy/bulk-review/classify", response_model=BulkReviewClassifyResponse)
+def classify_taxonomy_bulk_review(
+    payload: BulkReviewClassifyRequest,
+    db: Session = Depends(get_db),
+) -> BulkReviewClassifyResponse:
+    """Bucket every pending record for one scope. Writes nothing."""
+    recommendations = _classify_pending_for_scope(db, payload.scope)
+    model_used: str | None = None
+    model_error: str | None = None
+    if payload.use_model:
+        if settings.deepseek_api_key:
+            recommendations, model_error = refine_with_model(recommendations, scope=payload.scope)
+            # Reported whenever the model ran, not only on a clean run. Batches fail
+            # independently now, so a partial refinement still has model verdicts in
+            # it and the card must not attribute those to the rules.
+            model_used = settings.deepseek_model_fast
+        else:
+            model_error = "DeepSeek API key is missing; showing rules-only recommendations."
+    return BulkReviewClassifyResponse(
+        scope=payload.scope,
+        total_pending=len(recommendations),
+        counts=bucket_counts(recommendations),
+        model_used=model_used,
+        model_error=model_error,
+        recommendations=[_serialize_bulk_review_recommendation(item) for item in recommendations],
+    )
+
+
+@app.post("/settings/taxonomy/bulk-review/apply", response_model=BulkReviewApplyResponse)
+def apply_taxonomy_bulk_review(
+    payload: BulkReviewApplyRequest,
+    db: Session = Depends(get_db),
+) -> BulkReviewApplyResponse:
+    """Approve or dismiss exactly the confirmed keys, or write nothing at all."""
+    if len(payload.keys) > MAX_APPLY_KEYS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"At most {MAX_APPLY_KEYS} records can be applied in one request",
+        )
+    if not runtime_state.taxonomy_bulk_review_lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="A bulk review apply is already running")
+    try:
+        # Re-derived, never trusted from the request body. The browser's copy can be
+        # minutes old, and this is the only thing standing between a stale preview
+        # and a write.
+        recommendations = _classify_pending_for_scope(db, payload.scope)
+        try:
+            applicable, skipped = select_applicable(
+                recommendations,
+                keys=payload.keys,
+                action=payload.action,
+                expected_count=payload.expected_count,
+            )
+        except BulkReviewCountMismatch as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+        status = "approved" if payload.action == "approve" else "dismissed"
+        applied_names: list[str] = []
+        for item in applicable:
+            try:
+                if payload.scope == SKILL_SCOPE:
+                    _upsert_custom_skill_entry(
+                        db,
+                        skill_name=item.display_name,
+                        canonical_name=item.display_name,
+                        aliases=[],
+                        category="custom",
+                        cluster_hint=None,
+                        occurrence_count=item.occurrence_count,
+                        status=status,
+                        auto_commit=False,
+                    )
+                else:
+                    upsert_entity(
+                        db,
+                        owner_id=settings.owner_id,
+                        entity_type=payload.scope,
+                        display_name=item.display_name,
+                        canonical_name=None,
+                        aliases=[],
+                        occurrence_count=item.occurrence_count,
+                        status=status,
+                        auto_commit=False,
+                    )
+            except (ValueError, HTTPException):
+                # Both writers validate the name before touching the session, so a
+                # rejected record leaves nothing half-written. One unusable name
+                # must not cost the other 1,999 their write.
+                skipped.append({"key": item.key, "reason": "invalid_name"})
+                continue
+            applied_names.append(item.display_name)
+
+        if applied_names:
+            db.commit()
+            if payload.scope == SKILL_SCOPE:
+                clear_skill_taxonomy_cache()
+            else:
+                clear_role_taxonomy_cache()
+        return BulkReviewApplyResponse(
+            scope=payload.scope,
+            action=payload.action,
+            applied_count=len(applied_names),
+            applied_names=applied_names,
+            skipped=skipped,
+        )
+    finally:
+        runtime_state.taxonomy_bulk_review_lock.release()
 
 
 @app.get("/settings/taxonomy/metrics", response_model=TaxonomyMetricsResponse)

@@ -38,6 +38,7 @@ from app.mcp_server.tools.resumes import get_resume, list_resumes
 from app.mcp_server.tools.runs import get_recent_runs, get_run_items
 from app.mcp_server.tools.status import get_ai_status, get_settings_summary
 from app.mcp_server.tools.support import propose_create_github_issue
+from app.mcp_server.tools.taxonomy_review import propose_taxonomy_bulk_review
 
 __all__ = [
     "check_manual_intake",
@@ -77,6 +78,7 @@ __all__ = [
     "propose_record_update",
     "propose_scheduled_task",
     "propose_send_email",
+    "propose_taxonomy_bulk_review",
     "rank_opportunities",
     "read_chat_attachment",
     "recommend_recruiter",

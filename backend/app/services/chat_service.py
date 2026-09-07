@@ -207,6 +207,11 @@ class ChatService:
                 delta = str(payload)
                 streamed_text += delta
                 yield _sse("message", {"delta": delta})
+            elif kind == "tool":
+                # Progress only. Nothing here is persisted or replayed into the
+                # model's history - it exists so the user can tell a working
+                # assistant from a hung one during a long tool call.
+                yield _sse("tool", {"name": str(payload)})
             elif kind == "complete" and isinstance(payload, list):
                 generated = payload
 

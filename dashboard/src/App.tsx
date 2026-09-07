@@ -8,6 +8,8 @@ import { getDraftSourceLabel } from './features/ai/ui'
 import QueryBucket from './features/query_bucket/QueryBucket'
 import EmailSearch from './features/email_search/EmailSearch'
 import AssistantPage from './features/chat/AssistantPage'
+import { BulkReviewOverlay } from './features/taxonomyReview/BulkReviewOverlay'
+import type { BulkReviewScope } from './features/taxonomyReview/types'
 import LabelingTool from './features/relationships/LabelingTool'
 import ScheduledTasksPage from './features/scheduling/ScheduledTasksPage'
 import ManualIntakePage from './features/manual_intake/ManualIntakePage'
@@ -40,6 +42,13 @@ const GMAIL_OAUTH_POLL_INTERVAL_MS = 2000
 const GMAIL_OAUTH_POLL_TIMEOUT_MS = 180000
 const VIEW_EVENT_THROTTLE_MS = 60000
 const SETTINGS_REVIEW_BATCH_SIZE = 50
+
+const BULK_REVIEW_TITLES: Record<BulkReviewScope, string> = {
+  skill: 'Upgrade Skills',
+  company: 'Upgrade Companies',
+  location: 'Upgrade Locations',
+  role: 'Upgrade Job Roles',
+}
 // Mirrors CANDIDATE_PROFILE_SUFFIXES on the server. Only a hint to the file
 // picker - the server still validates, since the accept attribute is advisory.
 const CANDIDATE_PROFILE_ACCEPT = '.md,.markdown,.txt'
@@ -944,6 +953,7 @@ type SkillUpgradeSectionProps = {
   embeddingPendingCount?: number
   embeddingSummary?: string
   embedSkills?: () => void
+  onBulkReview?: () => void
 }
 
 export function SkillUpgradeSection({
@@ -956,6 +966,7 @@ export function SkillUpgradeSection({
   embeddingPendingCount = 0,
   embeddingSummary = '',
   embedSkills = () => {},
+  onBulkReview,
 }: SkillUpgradeSectionProps) {
   const [visibleSkillCount, setVisibleSkillCount] = useState(SETTINGS_REVIEW_BATCH_SIZE)
   const actionablePendingSkills = useMemo(
@@ -980,6 +991,11 @@ export function SkillUpgradeSection({
           <div className="skillUpgradeColumnHeader">
             <h3>Pending Unknown Skills</h3>
             <div className="rowBtns">
+              {!loading && onBulkReview && pendingSkills.length > 0 ? (
+                <button type="button" onClick={onBulkReview} disabled={busySkillKey !== null}>
+                  Bulk review
+                </button>
+              ) : null}
               {!loading && actionablePendingSkills.length > 0 ? (
                 <button
                   type="button"
@@ -1093,6 +1109,7 @@ type EntityUpgradeSectionProps = {
   approveAll: () => void
   approve: (entity: PendingEntity) => void
   dismiss: (entity: PendingEntity) => void
+  onBulkReview?: () => void
 }
 
 export function EntityUpgradeSection({
@@ -1103,6 +1120,7 @@ export function EntityUpgradeSection({
   approveAll,
   approve,
   dismiss,
+  onBulkReview,
 }: EntityUpgradeSectionProps) {
   const [visibleCount, setVisibleCount] = useState(SETTINGS_REVIEW_BATCH_SIZE)
   const visibleEntities = pendingEntities.slice(0, visibleCount)
@@ -1120,6 +1138,11 @@ export function EntityUpgradeSection({
             Review AI-extracted canonical-name candidates. Approve all only includes values seen at least twice.
           </p>
           <div className="rowBtns">
+            {!loading && onBulkReview && pendingEntities.length > 0 ? (
+              <button type="button" onClick={onBulkReview} disabled={busyKey !== null}>
+                Bulk review
+              </button>
+            ) : null}
             {!loading && actionableEntities.length > 0 ? (
               <button type="button" className="primary" onClick={approveAll} disabled={busyKey !== null}>
                 {busyKey === 'approve-all' ? 'Approving all...' : `Approve all (${actionableEntities.length})`}
@@ -3026,6 +3049,7 @@ function App() {
   const [pendingCompanies, setPendingCompanies] = useState<PendingEntity[]>([])
   const [pendingLocations, setPendingLocations] = useState<PendingEntity[]>([])
   const [pendingRoles, setPendingRoles] = useState<PendingEntity[]>([])
+  const [bulkReviewScope, setBulkReviewScope] = useState<BulkReviewScope | null>(null)
   const [embeddingPendingCount, setEmbeddingPendingCount] = useState(0)
   const [embeddingSummary, setEmbeddingSummary] = useState('')
   const [skillsLoading, setSkillsLoading] = useState(false)
@@ -7203,6 +7227,7 @@ function App() {
                 embeddingPendingCount={embeddingPendingCount}
                 embeddingSummary={embeddingSummary}
                 embedSkills={embedPendingSkills}
+                onBulkReview={() => setBulkReviewScope('skill')}
               />
               <FilterVisibilitySettings
                 visibleFilters={settings.visible_filters}
@@ -7227,6 +7252,7 @@ function App() {
                 approveAll={() => runEntityAction('location', 'approve-all')}
                 approve={(entity) => runEntityAction('location', 'approve', entity)}
                 dismiss={(entity) => runEntityAction('location', 'dismiss', entity)}
+                onBulkReview={() => setBulkReviewScope('location')}
               />
               <EntityUpgradeSection
                 title="Upgrade Job Roles"
@@ -7236,6 +7262,7 @@ function App() {
                 approveAll={() => runEntityAction('role', 'approve-all')}
                 approve={(entity) => runEntityAction('role', 'approve', entity)}
                 dismiss={(entity) => runEntityAction('role', 'dismiss', entity)}
+                onBulkReview={() => setBulkReviewScope('role')}
               />
               <JobIntentLearningSection
                 pendingSignals={pendingJobIntentSignals}
@@ -7283,6 +7310,18 @@ function App() {
                 deleteResumeAsset={deleteResumeAsset}
               />
             </div>
+          ) : null}
+
+          {bulkReviewScope ? (
+            <BulkReviewOverlay
+              scope={bulkReviewScope}
+              title={BULK_REVIEW_TITLES[bulkReviewScope]}
+              apiBase={apiBase}
+              onClose={() => setBulkReviewScope(null)}
+              onApplied={() => {
+                loadLearningData().catch((e) => setError((e as Error).message))
+              }}
+            />
           ) : null}
 
           {error ? <p className="errorMessage">{error}</p> : null}

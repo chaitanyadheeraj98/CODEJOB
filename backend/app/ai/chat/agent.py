@@ -62,6 +62,9 @@ async def stream_chat_agent(
             try:
                 graph = await build_chat_agent(model, candidate_profile)
                 latest_messages: list[BaseMessage] = []
+                # How far into the state we have already looked for tool calls, so
+                # each one is announced once. Starts past the history we sent in.
+                announced = len(messages)
                 async for mode, payload in graph.astream(
                     {"messages": messages},
                     config={"recursion_limit": max(2, settings.ollama_max_tool_iterations)},
@@ -76,6 +79,21 @@ async def stream_chat_agent(
                                 yield "delta", delta
                     elif mode == "values" and isinstance(payload, dict):
                         latest_messages = list(payload.get("messages") or [])
+                        # `values` fires after the agent node decides on a tool and
+                        # before the tool node runs it, so this reaches the user at
+                        # the start of the wait rather than after it. It matters for
+                        # propose_taxonomy_bulk_review, which spends 30s+ inside
+                        # DeepSeek with nothing else on the wire.
+                        for message in latest_messages[announced:]:
+                            for call in getattr(message, "tool_calls", None) or []:
+                                name = (
+                                    call.get("name")
+                                    if isinstance(call, dict)
+                                    else getattr(call, "name", None)
+                                )
+                                if name:
+                                    yield "tool", str(name)
+                        announced = len(latest_messages)
 
                 runtime_state.chat_last_error = None
                 runtime_state.chat_last_success_at = datetime.now(UTC)

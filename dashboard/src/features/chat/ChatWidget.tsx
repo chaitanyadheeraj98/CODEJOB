@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 
 import { useChat } from './chatContext'
+import { ToolProgress } from './ToolProgress'
 import { renderMarkdownLite } from './markdown'
 import ProposalCard from './ProposalCard'
 import { proposalForMessage, proposalRefusalForMessage, unsupportedProposalNotice } from './proposals'
@@ -188,7 +189,9 @@ export default function ChatWidget() {
                     <div key={message.id} className={`chatBubble ${message.role}`}>
                       {message.content
                         ? renderMarkdownLite(message.content)
-                        : chat.busy && message.role === 'assistant' ? 'Thinking...' : ''}
+                        : chat.busy && message.role === 'assistant'
+                          ? (chat.activeTool ? <ToolProgress key={chat.activeTool.startedAt} tool={chat.activeTool} /> : 'Thinking...')
+                          : ''}
                       <SentAttachmentChips
                         apiBase={chat.apiBase}
                         attachments={chat.attachments.filter((item) => item.message_id === message.id)}

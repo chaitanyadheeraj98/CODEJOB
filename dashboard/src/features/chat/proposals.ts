@@ -273,6 +273,46 @@ export const PROPOSAL_HANDLERS: Record<string, ProposalHandler> = {
     },
     pendingNotice: 'Nothing has been searched yet. Nvoids is contacted only when you click Confirm.',
   },
+  propose_taxonomy_bulk_review: {
+    endpoint: '/settings/taxonomy/bulk-review/apply',
+    method: 'POST',
+    // expected_count is derived from the keys on the card, not from the tool's own
+    // count field. If those two ever disagree the server answers 409 and writes
+    // nothing, so the number the user reads is the number that gets applied.
+    buildBody: (fields) => {
+      const keys = strings(fields.keys)
+      return {
+        scope: text(fields.scope),
+        action: text(fields.taxonomy_action),
+        keys,
+        expected_count: keys.length,
+      }
+    },
+    confirmLabel: (fields) =>
+      `${text(fields.label) || 'Apply'} ${strings(fields.keys).length} ${text(fields.scope)} value(s)`,
+    summary: (fields) => {
+      const keys = strings(fields.keys)
+      const remaining = Number(fields.remaining_after_batch ?? 0)
+      const needsHuman = Number(fields.needs_human_count ?? 0)
+      return [
+        ['Action', `${text(fields.label)} pending ${text(fields.scope)} values`],
+        ['Values', String(keys.length)],
+        // A sample, not the whole list. The full set is on the card's keys, which
+        // is what the request sends - this line is for recognising the batch.
+        ['For example', strings(fields.sample_names).join(', ')],
+        ['Reversible', fields.reversible === true ? 'Yes' : 'No'],
+        ...(text(fields.reversible_detail) ? [['Detail', text(fields.reversible_detail)] as [string, string]] : []),
+        ...(remaining > 0
+          ? [['Not in this batch', `${remaining} more - ask again to continue`] as [string, string]]
+          : []),
+        ...(needsHuman > 0
+          ? [['Left for you', `${needsHuman} undecided - use Bulk review in Settings`] as [string, string]]
+          : []),
+        ...(text(fields.model_error) ? [['Model', text(fields.model_error)] as [string, string]] : []),
+      ]
+    },
+    pendingNotice: 'Nothing has been approved or dismissed yet. The taxonomy changes only when you click Confirm.',
+  },
   propose_send_email: {
     endpoint: (fields) => `/candidates/${Number(fields.candidate_email_id)}/send-chat-reply`,
     method: 'POST',
