@@ -43,3 +43,11 @@ export type ChatAttachment = {
   extraction_error: string | null
   created_at: string
 }
+
+// The tool the assistant is running right now, for the progress indicator. Held
+// only in memory for the length of one turn - it is never persisted, and never
+// replayed into the model's history.
+export type ActiveTool = {
+  name: string
+  startedAt: number
+}

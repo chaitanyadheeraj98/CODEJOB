@@ -22,6 +22,9 @@ class AppRuntimeState:
     embedding_last_success_at: datetime | None = None
     embedding_last_duration_ms: int | None = None
     taxonomy_embedding_lock: threading.Lock = field(default_factory=threading.Lock)
+    # Separate from the embedding lock: a bulk review apply and an embedding
+    # batch touch the same tables but neither should block on the other.
+    taxonomy_bulk_review_lock: threading.Lock = field(default_factory=threading.Lock)
     groq_last_error: str | None = None
     groq_last_attempted_at: datetime | None = None
     groq_last_success_at: datetime | None = None

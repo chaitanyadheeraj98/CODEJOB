@@ -43,6 +43,7 @@ from app.mcp_server.tools import (
     propose_record_update,
     propose_scheduled_task,
     propose_send_email,
+    propose_taxonomy_bulk_review,
     rank_opportunities,
     read_chat_attachment,
     recommend_recruiter,
@@ -123,6 +124,11 @@ CHAT_ACTION_TOOLS = (
     # sits behind the same propose-then-confirm boundary as every other action
     # rather than inventing a second confirmation mechanism for one feature.
     propose_nvoids_search,
+    # Writes into the trusted vocabulary the parser matches against, so it sits
+    # behind the same propose-then-confirm boundary as every other action. The
+    # keys on the card come from the server's own classifier, never from the
+    # model - what the model contributes is the scope and the verb.
+    propose_taxonomy_bulk_review,
 )
 
 # Read-only, so they belong in BASE_TOOLS - but they are registered only when

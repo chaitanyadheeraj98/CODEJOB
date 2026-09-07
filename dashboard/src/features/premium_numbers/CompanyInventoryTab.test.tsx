@@ -30,7 +30,7 @@ const contactBase = {
   created_at: '2026-09-01T10:00:00Z',
   updated_at: '2026-09-01T10:00:00Z',
   linkedin_url: '',
-  recruiter_verification_level: 'unverified',
+  recruiter_verification_level: 'unverified' as const,
   do_not_work_again: false,
   do_not_work_again_reason: '',
 }

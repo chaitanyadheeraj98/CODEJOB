@@ -407,7 +407,12 @@ export function listCompanies(
 export function getCompanyDetail(apiBase: string, company: CompanyCard): Promise<CompanyDetail> {
   // The group key carries dots and spaces, so it travels as query parameters
   // rather than a path segment.
-  const params = company.domain ? { domain: company.domain } : { company: company.key.replace(/^company:/, '') }
+  // Annotated rather than inferred: the two branches have different keys, so the
+  // inferred union carries each one's key as `undefined` on the other - which
+  // URLSearchParams does not accept.
+  const params: Record<string, string> = company.domain
+    ? { domain: company.domain }
+    : { company: company.key.replace(/^company:/, '') }
   return requestJson(`${apiBase}/premium-numbers/companies/detail?${new URLSearchParams(params)}`)
 }
 

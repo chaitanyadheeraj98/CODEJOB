@@ -8,7 +8,17 @@ import { composeAppend, composeEntry, entryField, planAppend } from './profileEn
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-const flush = () => new Promise((resolve) => { setTimeout(resolve, 0) })
+// The save awaits crypto.subtle.digest before it ever reaches fetch, and that
+// resolves on a macrotask - microtask flushing is not enough. How many macrotasks
+// it takes is not fixed either: under a loaded suite one tick is sometimes short,
+// which failed this file only when run alongside every other one. Waiting on the
+// outcome rather than on a tick count is stable at any load. The cap only bounds
+// a genuine hang - a real failure still reads as the assertion that follows.
+const flushUntil = async (done: () => boolean) => {
+  for (let tick = 0; tick < 50 && !done(); tick += 1) {
+    await new Promise((resolve) => { setTimeout(resolve, 0) })
+  }
+}
 
 const PROFILE = '# Chaithanya Dheeraj\n- Work Authorization: H1B\n'
 
@@ -98,9 +108,7 @@ describe('AddProfileEntry', () => {
     act(() => buttonLabelled('Preview')?.click())
     await act(async () => {
       buttonLabelled('Save to Profile')?.click()
-      // The save awaits crypto.subtle.digest before it ever reaches fetch, and
-      // that resolves on a macrotask - microtask flushing is not enough.
-      await flush()
+      await flushUntil(() => onSaved.mock.calls.length > 0)
     })
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
@@ -123,7 +131,7 @@ describe('AddProfileEntry', () => {
     act(() => buttonLabelled('Preview')?.click())
     await act(async () => {
       buttonLabelled('Save to Profile')?.click()
-      await flush()
+      await flushUntil(() => (container?.textContent ?? '').includes('profile changed'))
     })
 
     expect(container?.textContent).toContain('profile changed')

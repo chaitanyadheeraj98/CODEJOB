@@ -9,7 +9,7 @@ import {
   sendChatMessage,
 } from './api'
 import type { ProposalResult } from './ProposalCard'
-import type { ChatMessage, ChatSession } from './types'
+import type { ActiveTool, ChatMessage, ChatSession } from './types'
 import { PROPOSAL_HANDLERS, isProposalToolName } from './proposals'
 import { RENDER_HANDLERS } from './renderers'
 
@@ -75,6 +75,7 @@ export function useChatSession(apiBase: string, enabled: boolean) {
   const [sessionId, setSessionId] = useState<number | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [busy, setBusy] = useState(false)
+  const [activeTool, setActiveTool] = useState<ActiveTool | null>(null)
   const [error, setError] = useState('')
   const [unseenCount, setUnseenCount] = useState(0)
   const newestIdRef = useRef(0)
@@ -186,6 +187,7 @@ export function useChatSession(apiBase: string, enabled: boolean) {
     if (!text || busy) return
     setBusy(true)
     setError('')
+    setActiveTool(null)
     try {
       const activeSessionId = sessionId ?? (await startSession()).id
       const now = new Date().toISOString()
@@ -197,7 +199,14 @@ export function useChatSession(apiBase: string, enabled: boolean) {
         { id: assistantId, role: 'assistant', content: '', tool_name: null, created_at: now },
       ])
       await sendChatMessage(apiBase, activeSessionId, text, ({ event, data }) => {
+        // Progress for a tool the assistant just started. Replaced when another
+        // tool follows, and cleared the moment prose starts arriving, because
+        // text on screen is its own proof that the turn is still alive.
+        if (event === 'tool' && typeof data.name === 'string') {
+          setActiveTool({ name: data.name, startedAt: Date.now() })
+        }
         if (event === 'message' && typeof data.delta === 'string') {
+          setActiveTool(null)
           setMessages((current) => current.map((message) => (
             message.id === assistantId ? { ...message, content: message.content + data.delta } : message
           )))
@@ -216,6 +225,9 @@ export function useChatSession(apiBase: string, enabled: boolean) {
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Chat failed')
     } finally {
+      // Cleared in `finally` as well as on the first delta: a turn that fails or
+      // times out mid-tool must not leave a progress bar running forever.
+      setActiveTool(null)
       setBusy(false)
     }
   }, [apiBase, busy, sessionId, startSession])
@@ -225,6 +237,7 @@ export function useChatSession(apiBase: string, enabled: boolean) {
     sessionId,
     messages,
     busy,
+    activeTool,
     error,
     unseenCount,
     markSeen,

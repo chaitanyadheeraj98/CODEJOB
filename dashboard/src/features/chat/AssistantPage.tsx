@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type DragEvent, type FormEvent } from 'react'
 
 import { uploadChatAttachment } from './api'
+import { ToolProgress } from './ToolProgress'
 import AttachmentChips, { SentAttachmentChips } from './AttachmentChips'
 import { ACCEPTED_EXTENSIONS, type PendingAttachment } from './attachmentDisplay'
 import { useChat } from './chatContext'
@@ -300,7 +301,9 @@ export default function AssistantPage() {
               <div key={message.id} className={`chatBubble ${message.role}`}>
                 {message.content
                   ? renderMarkdownLite(message.content)
-                  : chat.busy && message.role === 'assistant' ? 'Thinking…' : ''}
+                  : chat.busy && message.role === 'assistant'
+                    ? (chat.activeTool ? <ToolProgress key={chat.activeTool.startedAt} tool={chat.activeTool} /> : 'Thinking…')
+                    : ''}
                 <SentAttachmentChips
                   apiBase={chat.apiBase}
                   attachments={chat.attachments.filter((item) => item.message_id === message.id)}
