@@ -141,3 +141,29 @@ export type WhyThisResume = {
   picker_reason: string | null
   alternatives: WhyThisResumeAlternative[]
 }
+
+/**
+ * A resume as the library manages it, rather than as a picker option: the same
+ * fields the Settings panel edits, plus the timestamps a management view needs.
+ */
+export type ResumeLibraryItem = ResumeAssetOption & {
+  created_at: string
+  updated_at: string
+  content_summary?: string | null
+}
+
+export type ResumeAssetPatch = {
+  skills_text?: string
+  primary_role?: string
+  structured_skills?: string[]
+  variant_label?: string
+  is_enabled?: boolean
+}
+
+export type ResumeUploadInput = {
+  file: File
+  skills_text: string
+  primary_role: string
+  structured_skills_text: string
+  variant_label: string
+}

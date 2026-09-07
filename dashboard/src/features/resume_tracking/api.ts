@@ -5,9 +5,12 @@ import type {
   ApplicationSkillGap,
   ManualApplicationInput,
   RejectionDetailTagInput,
+  ResumeAssetPatch,
   ResumeFunnelMetrics,
+  ResumeLibraryItem,
   ResumePerformanceSummaryItem,
   ResumeSubmissionStatus,
+  ResumeUploadInput,
   RoleGapReport,
   VariantLookupResult,
   WhyThisResume,
@@ -69,4 +72,36 @@ export function lookupVariantToken(apiBase: string, token: string): Promise<Vari
 
 export function getWhyThisResume(apiBase: string, applicationId: number): Promise<WhyThisResume> {
   return requestJson(`${apiBase}/applications/${applicationId}/why-this-resume`)
+}
+
+/*
+ * Resume library.
+ *
+ * These are the same four endpoints the Settings > Resume Database panel calls.
+ * The Manage tab deliberately shares the endpoints rather than the markup: the
+ * two views are laid out differently on purpose, but an upload, edit or delete
+ * in either place must mean exactly the same thing.
+ */
+
+export function listResumeLibrary(apiBase: string): Promise<ResumeLibraryItem[]> {
+  return requestJson(`${apiBase}/settings/resumes`)
+}
+
+export function uploadResumeAsset(apiBase: string, input: ResumeUploadInput): Promise<ResumeLibraryItem> {
+  const form = new FormData()
+  form.append('file', input.file)
+  form.append('skills_text', input.skills_text)
+  form.append('primary_role', input.primary_role)
+  form.append('structured_skills_text', input.structured_skills_text)
+  form.append('variant_label', input.variant_label)
+  // No Content-Type header: the browser has to set the multipart boundary itself.
+  return requestJson(`${apiBase}/settings/resume`, { method: 'POST', body: form })
+}
+
+export function updateResumeAsset(apiBase: string, resumeId: number, patch: ResumeAssetPatch): Promise<ResumeLibraryItem> {
+  return requestJson(`${apiBase}/settings/resumes/${resumeId}`, jsonInit('PATCH', patch))
+}
+
+export function deleteResumeAsset(apiBase: string, resumeId: number): Promise<{ id: number; deleted: boolean }> {
+  return requestJson(`${apiBase}/settings/resumes/${resumeId}`, { method: 'DELETE' })
 }

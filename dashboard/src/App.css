@@ -6634,3 +6634,96 @@ button.chatRankedLabel:focus-visible {
 .settingsHint code { padding: 0 .3rem; border-radius: 4px; background: var(--surface-soft); border: 1px solid var(--line); font-size: var(--text-xs); }
 .resumeDatabaseTitleLine { display: flex; align-items: baseline; gap: 0; min-width: 0; }
 .resumeDatabaseTitleLine .resumeDatabaseFileName { min-width: 0; overflow-wrap: anywhere; }
+
+/* Resume library (Resume Tracking > Manage) ------------------------------- */
+/* Settings renders the same library inside one 278px settings column, which is
+   why it reads as a wall. This view owns the full page width, so identity, role
+   and state each get their own column and the editor opens underneath the row it
+   belongs to instead of inside it. */
+.resumeLibraryPanel { display: grid; gap: 1.1rem; }
+.resumeLibraryIntro { display: flex; gap: 1.5rem; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; }
+.resumeLibraryIntro h2 { margin: 0 0 .3rem; font-size: var(--text-lg); }
+.resumeLibraryIntro p { margin: 0; max-width: 62ch; line-height: 1.55; }
+.resumeLibraryNotice {
+  margin: 0; padding: .55rem .8rem; border-radius: .5rem; font-size: var(--text-base);
+  background: color-mix(in srgb, var(--primary) 7%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--primary) 25%, var(--line));
+  color: var(--primary-strong);
+}
+/* Used across the resume-tracking tabs and never styled - an error read exactly
+   like body copy, so a refused delete looked like a caption. */
+.errorText {
+  margin: 0; padding: .55rem .8rem; border-radius: .5rem; font-size: var(--text-base);
+  background: var(--refusal-surface); border: 1px solid var(--refusal-line); color: var(--refusal-ink);
+}
+
+.resumeLibraryUpload {
+  display: grid; gap: .85rem; padding: 1.1rem 1.25rem;
+  border: 1px solid var(--line); border-radius: .75rem; background: var(--surface-soft);
+}
+.resumeLibraryUpload h3 { margin: 0; font-size: var(--text-md); }
+.resumeLibraryUpload p { margin: 0; max-width: 68ch; line-height: 1.55; }
+.resumeLibraryFile { display: grid; gap: .35rem; }
+.resumeLibraryFile > span { font-size: var(--text-sm); font-weight: 600; }
+.resumeLibraryUploadFoot { display: flex; gap: .9rem; align-items: center; flex-wrap: wrap; }
+
+.resumeFieldGrid { display: grid; gap: .85rem; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); }
+.resumeField { display: grid; gap: .35rem; min-width: 0; }
+.resumeField > span { font-size: var(--text-sm); font-weight: 600; }
+.resumeField small { line-height: 1.45; }
+.resumeField input, .resumeField textarea { width: 100%; }
+.resumeField textarea { resize: vertical; min-height: 4.5rem; }
+
+.resumeLibraryToolbar { display: flex; gap: 1rem; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.resumeLibrarySearch { flex: 1 1 20rem; min-width: 0; }
+.resumeLibrarySearch input { width: 100%; }
+
+.resumeLibraryList { display: grid; gap: .6rem; }
+.resumeLibraryCard {
+  border: 1px solid var(--line); border-radius: .7rem; background: var(--surface); overflow: hidden;
+}
+.resumeLibraryCard.open { border-color: color-mix(in srgb, var(--primary) 35%, var(--line)); }
+.resumeLibraryCard.disabled .resumeLibraryIdentity strong, .resumeLibraryCard.disabled .resumeLibraryRole { opacity: .6; }
+
+.resumeLibraryRow {
+  display: grid; align-items: center; gap: .5rem 1.1rem; padding: .8rem 1rem;
+  grid-template-columns: auto minmax(10rem, 1.4fr) minmax(10rem, 1.6fr) auto auto;
+}
+.resumeLibraryCard.open .resumeLibraryRow { background: var(--surface-soft); }
+.resumeLibraryCode {
+  font-weight: 700; font-variant-numeric: tabular-nums; font-size: var(--text-md);
+  padding: .15rem .45rem; border-radius: 5px; color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+.resumeLibraryIdentity { display: grid; gap: .15rem; min-width: 0; }
+.resumeLibraryIdentity strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.resumeLibraryMeta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-sm); }
+.resumeLibraryRole { display: grid; gap: .3rem; min-width: 0; font-size: var(--text-base); }
+.resumeLibraryRole > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.resumeLibraryRole .skillChips { margin-top: 0; gap: .3rem; }
+.resumeLibraryState { display: flex; gap: .35rem; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.resumeLibraryBadge {
+  padding: .15rem .5rem; border-radius: 999px; font-size: var(--text-xs); font-weight: 600;
+  border: 1px solid var(--line); background: var(--surface-soft); color: var(--muted); white-space: nowrap;
+}
+.resumeLibraryBadge.on { border-color: color-mix(in srgb, var(--primary) 25%, var(--line)); background: color-mix(in srgb, var(--primary) 8%, var(--surface)); color: var(--primary-strong); }
+.resumeLibraryBadge.off { border-color: var(--line-strong); }
+.resumeLibraryBadge.current { border-color: var(--caution-line); background: var(--caution-surface); color: var(--caution-ink); }
+.resumeLibraryEdit { white-space: nowrap; }
+
+.resumeLibraryEditor {
+  display: grid; gap: .9rem; padding: 1rem 1.1rem 1.15rem;
+  border-top: 1px solid var(--line); background: var(--surface);
+}
+.resumeLibraryEditorFoot {
+  display: flex; gap: 1rem; align-items: center; justify-content: space-between; flex-wrap: wrap;
+  padding-top: .25rem;
+}
+.resumeLibraryToggle { display: flex; gap: .6rem; align-items: center; font-size: var(--text-base); color: var(--muted); }
+.resumeLibraryEditorButtons { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+
+@media (max-width: 900px) {
+  .resumeLibraryRow { grid-template-columns: auto 1fr auto; }
+  .resumeLibraryRole { grid-column: 2 / -1; }
+  .resumeLibraryState { justify-content: flex-start; grid-column: 2 / -1; }
+}
