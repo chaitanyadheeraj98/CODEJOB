@@ -165,7 +165,7 @@ describe('PremiumNumbersPage', () => {
     expect(container.textContent).toContain('Rescored')
 
     const tabs = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="tab"]')).map((button) => button.textContent)
-    expect(tabs).toEqual(['Number Inventory', 'Recruiter Opportunities', 'Recycle Bin'])
+    expect(tabs).toEqual(['Number Inventory', 'Company Inventory', 'Recruiter Opportunities', 'Recycle Bin'])
   })
 
   it('previews and merges two selected duplicate contacts', async () => {
@@ -618,7 +618,7 @@ describe('PremiumNumbersPage', () => {
     await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 300)) })
 
     const tabs = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
-    expect(tabs.map((tab) => tab.textContent)).toEqual(['Number Inventory', 'Recruiter Opportunities', 'Recycle Bin'])
+    expect(tabs.map((tab) => tab.textContent)).toEqual(['Number Inventory', 'Company Inventory', 'Recruiter Opportunities', 'Recycle Bin'])
     const recycleBinTab = tabs.find((tab) => tab.textContent === 'Recycle Bin')
     await act(async () => { recycleBinTab?.click() })
     await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 300)) })

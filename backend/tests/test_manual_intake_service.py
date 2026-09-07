@@ -35,6 +35,8 @@ from app.services.manual_intake_service import (
     MISSING_EMAIL_SKIP_REASON,
     ManualIntakeDeps,
     ManualIntakeService,
+    manual_intake_length_error,
+    preview_duplicate,
 )
 
 OWNER = "default-owner"
@@ -348,6 +350,19 @@ class ManualIntakeServiceTests(unittest.TestCase):
             duplicate = self.service.preview(db, text=WHATSAPP_REQUIREMENT)
         self.assertIsNotNone(duplicate)
         self.assertEqual(duplicate.id, first.email_id)
+
+    def test_the_module_level_duplicate_preview_matches_the_service(self) -> None:
+        first = self._ingest()
+        with self.SessionLocal() as db:
+            duplicate = preview_duplicate(db, owner_id=OWNER, text=WHATSAPP_REQUIREMENT)
+        self.assertIsNotNone(duplicate)
+        self.assertEqual(duplicate.id, first.email_id)
+
+    def test_the_shared_length_check_uses_the_configured_boundary(self) -> None:
+        with patch("app.services.manual_intake_service.settings.manual_intake_max_chars", 5):
+            self.assertIsNone(manual_intake_length_error("12345"))
+            self.assertIn("6", manual_intake_length_error("123456"))
+            self.assertEqual(manual_intake_length_error("   "), "Pasted requirement is empty")
 
     def test_a_duplicate_is_never_blocked(self) -> None:
         """A recruiter re-sending an updated requirement is a normal event."""

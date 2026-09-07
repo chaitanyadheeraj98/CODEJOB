@@ -15,6 +15,7 @@ from app.mcp_server.tools.record_actions import propose_add_note, propose_record
 from app.mcp_server.tools.analysis import compare_records, rank_opportunities
 from app.mcp_server.tools.metrics import get_metrics
 from app.mcp_server.tools.inbox import get_conversation, get_recruiter_replies, list_conversations
+from app.mcp_server.tools.manual_intake import check_manual_intake, propose_manual_requirement
 from app.mcp_server.tools.navigation import navigate_to_queue
 from app.mcp_server.tools.candidate_documents import list_candidate_documents
 from app.mcp_server.tools.chat_attachments import list_chat_attachments, read_chat_attachment
@@ -39,6 +40,7 @@ from app.mcp_server.tools.status import get_ai_status, get_settings_summary
 from app.mcp_server.tools.support import propose_create_github_issue
 
 __all__ = [
+    "check_manual_intake",
     "compare_records",
     "count_received_emails",
     "get_ai_status",
@@ -69,6 +71,7 @@ __all__ = [
     "propose_candidate_action",
     "propose_create_github_issue",
     "propose_create_premium_contact",
+    "propose_manual_requirement",
     "propose_nvoids_search",
     "propose_profile_update",
     "propose_record_update",

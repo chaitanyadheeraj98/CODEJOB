@@ -41,7 +41,7 @@ NAVIGABLE_PAGES: dict[str, dict[str, object]] = {
     "premium_numbers": {
         "label": "Premium Numbers",
         "tab": "inventory",
-        "tabs": {"inventory", "opportunities", "recycle_bin"},
+        "tabs": {"inventory", "companies", "opportunities", "recycle_bin"},
         "filters": frozenset({
             "q", "domain", "favorite", "status", "source_type", "resume_asset_id",
             "date_filter", "date_from", "date_to",
@@ -77,7 +77,7 @@ def navigate_to_queue(
 
     Valid pages: needs_review, failed_mapping, sent_items, inbox, recent_runs,
     premium_numbers, application_tracking, resume_tracking. Some take a tab -
-    premium_numbers (inventory, opportunities, recycle_bin),
+    premium_numbers (inventory, companies, opportunities, recycle_bin),
     application_tracking (bookmarked, tracked), resume_tracking (resumes,
     submissions).
 

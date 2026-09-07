@@ -69,7 +69,7 @@ class ProposalCardCoverageTests(unittest.TestCase):
         """Without this the parity test passes by matching nothing at all."""
         self.assertTrue(PROPOSALS_TS.is_file(), f"not found: {PROPOSALS_TS}")
         keys = handler_keys()
-        self.assertGreaterEqual(len(keys), 9)
+        self.assertGreaterEqual(len(keys), 10)
         self.assertIn("propose_send_email", keys)
         self.assertTrue(all(key.startswith("propose_") for key in keys), keys)
 

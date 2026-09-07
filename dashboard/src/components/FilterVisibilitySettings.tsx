@@ -21,6 +21,7 @@ export const REGISTRY_SECTIONS = [
   { key: 'inbox', label: 'Inbox' },
   { key: 'premium_numbers:opportunities', label: 'Premium Contacts · Opportunities' },
   { key: 'premium_numbers:inventory', label: 'Premium Contacts · Number Inventory' },
+  { key: 'premium_numbers:companies', label: 'Premium Contacts · Company Inventory' },
   { key: 'premium_numbers:recycle_bin', label: 'Premium Contacts · Recycle Bin' },
   { key: 'resume_tracking:resumes', label: 'Resume Tracking · Resumes' },
   { key: 'resume_tracking:submissions', label: 'Resume Tracking · Submissions' },

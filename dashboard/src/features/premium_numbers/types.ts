@@ -481,6 +481,17 @@ export type InventoryRow = {
   employer?: EmployerNumberCard
 }
 
+export type CompanyCard = {
+  key: string
+  name: string
+  domain: string
+  contact_count: number
+  recruiter_count: number
+  employer_count: number
+  lastCheckedAt: string
+  contacts: InventoryRow[]
+}
+
 export type ReviewEdits = Partial<Pick<
   NumberReviewCard,
   'owner_name' | 'company' | 'display_phone_number' | 'contact_email' | 'designation' | 'linkedin_url'

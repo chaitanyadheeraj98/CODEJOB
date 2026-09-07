@@ -46,6 +46,7 @@ from app.automation.queue_preparation import (
     QueuePreparationRequest,
     prepare_candidate_for_queue,
 )
+from app.config import settings
 from app.external_feeds.dedupe import build_dedupe_hash
 from app.models import RecruiterEmail, ResumeAsset, UserSettings
 from app.parsing import build_skills_json_payload
@@ -111,6 +112,65 @@ class ManualIntakeResult:
     duplicate_of: int | None = None
 
 
+def manual_intake_length_error(text: str) -> str | None:
+    """None if this paste may be ingested, else the sentence saying why not.
+
+    The one reader of settings.manual_intake_max_chars. Two callers: the route,
+    which turns it into a 400, and the chat tool, which turns it into a refusal
+    the card never gets built from.
+    """
+    body = text or ""
+    if not body.strip():
+        return "Pasted requirement is empty"
+    limit = settings.manual_intake_max_chars
+    if len(body) > limit:
+        return (
+            f"Pasted requirement is too long: {len(body):,} characters, "
+            f"and the limit is {limit:,}."
+        )
+    return None
+
+
+def preview_duplicate(db: Session, *, owner_id: str, text: str) -> ManualDuplicate | None:
+    """Exact-identity duplicate check. No model calls.
+
+    Module level so a chat tool can call it: ManualIntakeDeps is eight callables
+    that live in main, and MCP tools must not import main.
+    """
+    raw_text = text or ""
+    if not raw_text.strip():
+        return None
+    contacts = extract_manual_contacts(
+        raw_text,
+        employer_domains=frozenset(employer_domains_for_owner(db, owner_id)),
+    )
+    jd_text = ManualIntakeService._jd_text(raw_text)
+    parsed = parse_email(ManualIntakeService._subject(jd_text, ""), jd_text)
+    fingerprint = ManualIntakeService._fingerprint(
+        contacts=contacts,
+        role=str(parsed.get("role", "")),
+        location=str(parsed.get("location", "")),
+        raw_text=raw_text,
+    )
+    row = (
+        db.query(RecruiterEmail)
+        .filter(
+            RecruiterEmail.owner_id == owner_id,
+            RecruiterEmail.manual_dedupe_hash == fingerprint,
+        )
+        .order_by(RecruiterEmail.id.desc())
+        .first()
+    )
+    if row is None:
+        return None
+    return ManualDuplicate(
+        id=row.id,
+        role=row.role or "",
+        client=row.end_client or "",
+        created_at=row.created_at,
+    )
+
+
 class ManualIntakeService:
     def __init__(self, deps: ManualIntakeDeps) -> None:
         self.deps = deps
@@ -151,7 +211,8 @@ class ManualIntakeService:
             employer_domains=frozenset(employer_domains_for_owner(db, self.deps.owner_id)),
         )
 
-    def _fingerprint(self, *, contacts: ManualContacts, role: str, location: str, raw_text: str) -> str:
+    @staticmethod
+    def _fingerprint(*, contacts: ManualContacts, role: str, location: str, raw_text: str) -> str:
         """The same hash the Nvoids sync uses, over the same field set.
 
         `posted_at` is the paste date: a paste has no posting date of its own, so
@@ -170,40 +231,7 @@ class ManualIntakeService:
     # --- duplicate preview ------------------------------------------------
 
     def preview(self, db: Session, *, text: str) -> ManualDuplicate | None:
-        """Exact-identity duplicate check. No model calls - this runs on blur.
-
-        Identity, not similarity: it answers "have you already pasted this exact
-        requirement today", never "are these two postings the same job". The
-        second question has no answer the data can support.
-        """
-        raw_text = text or ""
-        if not raw_text.strip():
-            return None
-        contacts = self._contacts(db, raw_text)
-        parsed = parse_email(self._subject(self._jd_text(raw_text), ""), self._jd_text(raw_text))
-        fingerprint = self._fingerprint(
-            contacts=contacts,
-            role=str(parsed.get("role", "")),
-            location=str(parsed.get("location", "")),
-            raw_text=raw_text,
-        )
-        row = (
-            db.query(RecruiterEmail)
-            .filter(
-                RecruiterEmail.owner_id == self.deps.owner_id,
-                RecruiterEmail.manual_dedupe_hash == fingerprint,
-            )
-            .order_by(RecruiterEmail.id.desc())
-            .first()
-        )
-        if row is None:
-            return None
-        return ManualDuplicate(
-            id=row.id,
-            role=row.role or "",
-            client=row.end_client or "",
-            created_at=row.created_at,
-        )
+        return preview_duplicate(db, owner_id=self.deps.owner_id, text=text)
 
     # --- ingestion --------------------------------------------------------
 

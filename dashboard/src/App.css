@@ -3432,6 +3432,7 @@ button.emailSearchResult:focus-visible {
 
 .premiumNumbersHeader {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-end;
   justify-content: space-between;
   gap: 20px;
@@ -3464,6 +3465,7 @@ button.emailSearchResult:focus-visible {
   padding: 9px 14px;
   border-radius: 6px;
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .premiumTabs button.active {
@@ -4171,6 +4173,83 @@ button.emailSearchResult:focus-visible {
   margin: 0;
 }
 
+/* Company Inventory reuses the opportunity card's shell and the inventory
+   table's rows so all four Premium Contacts tabs read as one surface - only the
+   header and the narrower nested table are specific to it. */
+.companyGrid {
+  display: grid;
+  gap: 14px;
+}
+
+.companyCard {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+}
+
+.companyCard > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.companyIdentity {
+  min-width: 0;
+}
+
+.companyIdentity h3 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.companyDomain {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.companyHeaderMeta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.companyCard .inventoryTableScroll {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+/* Narrower than the six-plus-column Number Inventory table, so a card only
+   scrolls sideways on genuinely small screens. */
+.companyContactsTable {
+  min-width: 620px;
+}
+
+.card .companyContactLink {
+  height: auto;
+  min-height: 0;
+  border: 0;
+  padding: 0;
+  background: none;
+  color: #073eaf;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.card .companyContactLink:hover:not(:disabled) {
+  background: none;
+  text-decoration: underline;
+}
+
 .opportunityGrid {
   display: grid;
   gap: 14px;
@@ -4459,9 +4538,14 @@ button.emailSearchResult:focus-visible {
 @media (max-width: 900px) {
   .premiumNumbersHeader,
   .inventoryPaginationFooter,
+  .companyCard > header,
   .opportunityCard > header {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .companyHeaderMeta {
+    align-items: flex-start;
   }
 
   .premiumTabs,

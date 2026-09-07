@@ -118,6 +118,25 @@ class ManualRequirementCreateRequest(BaseModel):
     acknowledged_duplicate_of: int | None = None
 
 
+class ManualRequirementFromChatRequest(BaseModel):
+    """Which stored document a confirmed intake card points at.
+
+    Deliberately has no `text` field. The card displays the complete JD, and the
+    server reads the same bytes back from the row the id names.
+    """
+
+    attachment_id: int | None = Field(default=None, ge=1)
+    message_id: int | None = Field(default=None, ge=1)
+    acknowledged_duplicate_of: int | None = None
+
+    @model_validator(mode="after")
+    def exactly_one_source(self) -> "ManualRequirementFromChatRequest":
+        # Neither must not mean "whatever the newest message is now".
+        if (self.attachment_id is None) == (self.message_id is None):
+            raise ValueError("Exactly one of attachment_id or message_id is required")
+        return self
+
+
 class GithubIssueCreateRequest(BaseModel):
     title: str = Field(min_length=1, max_length=250)
     user_report: str = Field(min_length=1, max_length=4000)
@@ -1414,6 +1433,24 @@ class PremiumNumberInventoryItemResponse(BaseModel):
 
 class PremiumNumberInventoryListResponse(BaseModel):
     items: list[PremiumNumberInventoryItemResponse]
+    next_cursor: int | None
+    has_next: bool
+    total: int
+
+
+class PremiumCompanyCardResponse(BaseModel):
+    key: str
+    name: str
+    domain: str
+    contact_count: int
+    recruiter_count: int
+    employer_count: int
+    lastCheckedAt: datetime
+    contacts: list[PremiumNumberInventoryItemResponse]
+
+
+class PremiumCompanyListResponse(BaseModel):
+    items: list[PremiumCompanyCardResponse]
     next_cursor: int | None
     has_next: bool
     total: int

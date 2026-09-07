@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { EmailSearchHit } from '../../emailSearch'
 import { backfillDuplicateContacts, ContactPhoneConflictError, getEmployerNumber, getRecruiterNumber, IdentityConflictError, pendingReviewCount } from './api'
+import CompanyInventoryTab from './CompanyInventoryTab'
 import CreateContactPanel, { STATUS_MESSAGES } from './CreateContactPanel'
 import DetailPanel from './DetailPanel'
 import InventoryTable from './InventoryTable'
@@ -9,7 +10,7 @@ import MergeContactsModal from './MergeContactsModal'
 import OpportunitiesTab from './OpportunitiesTab'
 import RecycleBinTab from './RecycleBinTab'
 import { ToastHost, useToast } from './Toast'
-import type { InventoryAction, InventoryRow, ReviewEdits } from './types'
+import type { CompanyCard, InventoryAction, InventoryRow, ReviewEdits } from './types'
 import { useInventory } from './useInventory'
 import type { FilterValues } from '../../components/FilterSortBar'
 import SelectionActionBar from '../../components/SelectionActionBar'
@@ -21,7 +22,7 @@ const ACTION_TOAST_LABELS: Record<InventoryAction, string> = {
   delete: 'Deleted',
 }
 
-type PremiumNumbersTab = 'inventory' | 'opportunities' | 'recycle_bin'
+type PremiumNumbersTab = 'inventory' | 'companies' | 'opportunities' | 'recycle_bin'
 
 type PremiumNumbersPageProps = {
   apiBase: string
@@ -32,6 +33,7 @@ type PremiumNumbersPageProps = {
   onPendingCountChange: (count: number) => void
   activeTab?: PremiumNumbersTab
   onTabChange?: (tab: PremiumNumbersTab) => void
+  onNavigateToInventory?: (filters: Record<string, string>) => void
   filterValues?: FilterValues
   sortValue?: string
 }
@@ -60,6 +62,7 @@ export default function PremiumNumbersPage({
   onPendingCountChange,
   activeTab: controlledTab,
   onTabChange,
+  onNavigateToInventory,
   filterValues = {},
   sortValue = 'newest',
 }: PremiumNumbersPageProps) {
@@ -69,13 +72,14 @@ export default function PremiumNumbersPage({
   const activeTab = controlledTab ?? tab
   const setTab = (next: PremiumNumbersTab) => { setLocalTab(next); onTabChange?.(next) }
   const [detailRow, setDetailRow] = useState<InventoryRow | null>(null)
+  const [companyFocusKey, setCompanyFocusKey] = useState<string | null>(null)
   const [mergePair, setMergePair] = useState<{ a: number; b: number } | null>(null)
   const recoveredForRowsRef = useRef<InventoryRow[] | null>(null)
   const [creatingContact, setCreatingContact] = useState(false)
   const [backfillingDuplicates, setBackfillingDuplicates] = useState(false)
   const returnFocusRef = useRef<HTMLElement | null>(null)
   const toast = useToast()
-  const inventory = useInventory(apiBase, refreshToken, filterValues, sortValue)
+  const inventory = useInventory(apiBase, refreshToken, filterValues, sortValue, activeTab === 'inventory')
   const inventoryRows = inventory.rows
   const inventoryPageSize = inventory.pageSize
   const setInventoryPage = inventory.setPage
@@ -101,9 +105,12 @@ export default function PremiumNumbersPage({
     const wantRecruiter = Boolean(detailRow.recruiter)
     const wantEmployer = Boolean(detailRow.employer)
     if (!wantRecruiter && !wantEmployer) return
+    // A failed refetch keeps what the row already carried rather than blanking
+    // the panel - a Company Inventory card opens a contact that is legitimately
+    // absent from the loaded inventory page, so this path is the normal one there.
     Promise.all([
-      wantRecruiter ? getRecruiterNumber(apiBase, detailRow.id).catch(() => undefined) : Promise.resolve(detailRow.recruiter),
-      wantEmployer ? getEmployerNumber(apiBase, detailRow.id).catch(() => undefined) : Promise.resolve(detailRow.employer),
+      wantRecruiter ? getRecruiterNumber(apiBase, detailRow.id).catch(() => detailRow.recruiter) : Promise.resolve(detailRow.recruiter),
+      wantEmployer ? getEmployerNumber(apiBase, detailRow.id).catch(() => detailRow.employer) : Promise.resolve(detailRow.employer),
     ]).then(([recruiter, employer]) => {
       setDetailRow((current) => (current && current.key === key ? { ...current, recruiter, employer } : current))
     })
@@ -185,6 +192,28 @@ export default function PremiumNumbersPage({
   }
 
   const selectedContactRows = inventory.rows.filter((row) => inventory.selected.has(row.key) && row.kind === 'contact')
+  // Number Inventory is paged 10 rows at a time on the server, so a company card
+  // can't jump to a row by hunting the loaded page: it narrows the inventory to
+  // the company first (by domain, or by name for a company with no domain yet)
+  // and opens the contact's own detail panel, which the card already carries in
+  // full - no second fetch, and no dependence on which page the row lands on.
+  const inventoryFiltersFor = (company: CompanyCard): Record<string, string> => (
+    company.domain ? { domain: company.domain } : { q: company.name }
+  )
+
+  const openCompany = (company: CompanyCard) => {
+    setCompanyFocusKey(null)
+    setTab('inventory')
+    onNavigateToInventory?.(inventoryFiltersFor(company))
+  }
+
+  const openCompanyContact = (company: CompanyCard, contact: InventoryRow) => {
+    setCompanyFocusKey(contact.key)
+    setTab('inventory')
+    onNavigateToInventory?.(inventoryFiltersFor(company))
+    setDetailRow(contact)
+  }
+
   const openMergePreview = () => {
     if (selectedContactRows.length !== 2) return
     setMergePair({ a: selectedContactRows[0].id, b: selectedContactRows[1].id })
@@ -211,6 +240,7 @@ export default function PremiumNumbersPage({
         </div>
         <div className="premiumTabs" role="tablist" aria-label="Premium number views">
           <button type="button" role="tab" aria-selected={activeTab === 'inventory'} className={activeTab === 'inventory' ? 'active' : ''} onClick={() => setTab('inventory')}>Number Inventory</button>
+          <button type="button" role="tab" aria-selected={activeTab === 'companies'} className={activeTab === 'companies' ? 'active' : ''} onClick={() => setTab('companies')}>Company Inventory</button>
           <button type="button" role="tab" aria-selected={activeTab === 'opportunities'} className={activeTab === 'opportunities' ? 'active' : ''} onClick={() => setTab('opportunities')}>Recruiter Opportunities</button>
           <button type="button" role="tab" aria-selected={activeTab === 'recycle_bin'} className={activeTab === 'recycle_bin' ? 'active' : ''} onClick={() => setTab('recycle_bin')}>Recycle Bin</button>
         </div>
@@ -247,13 +277,25 @@ export default function PremiumNumbersPage({
             page={inventory.page}
             pageSize={inventory.pageSize}
             totalPages={inventory.totalPages}
-            highlightedKey={targetInventoryKey}
+            highlightedKey={targetInventoryKey ?? companyFocusKey}
             onToggle={inventory.toggle}
             onSelectVisible={inventory.selectVisible}
             onPageChange={inventory.setPage}
             onOpen={openDetail}
             onAction={(row, action) => { runRowAction(row, action).catch(() => undefined) }}
             onToggleFavorite={(row) => { inventory.toggleFavorite(row).catch(() => undefined) }}
+          />
+        </div>
+      ) : activeTab === 'companies' ? (
+        <div role="tabpanel">
+          <CompanyInventoryTab
+            apiBase={apiBase}
+            refreshToken={refreshToken}
+            onToast={toast.show}
+            onOpenContact={openCompanyContact}
+            onOpenCompany={openCompany}
+            filterValues={filterValues}
+            sortValue={sortValue}
           />
         </div>
       ) : activeTab === 'opportunities' ? (
