@@ -1,14 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import type { FilterValues } from '../../components/FilterSortBar'
-import { listCompanies } from './api'
+import { getCompanyDetail, listCompanies } from './api'
 import { companyFiltersToParams } from './companyFilters'
-import { CategoryChip, StatusBadge } from './StatusBadge'
+import CompanyDetailPanel from './CompanyDetailPanel'
 import type { ToastTone } from './Toast'
-import type { CompanyCard, InventoryRow } from './types'
+import type { CompanyCard, CompanyDetail, InventoryRow } from './types'
 
 const PAGE_SIZE = 10
-const NO_NUMBER_PLACEHOLDER = '(XXX) XXX-XXXX'
 
 type CompanyInventoryTabProps = {
   apiBase: string
@@ -20,8 +19,9 @@ type CompanyInventoryTabProps = {
   sortValue?: string
 }
 
-function rowEmail(row: InventoryRow): string {
-  return row.recruiter?.recruiter_email || row.employer?.employer_email || ''
+function formatRelativeDate(value: string): string {
+  const timestamp = new Date(value).getTime()
+  return Number.isFinite(timestamp) ? new Date(value).toLocaleDateString() : '--'
 }
 
 export default function CompanyInventoryTab({
@@ -39,6 +39,10 @@ export default function CompanyInventoryTab({
   // Starts true for the same reason the Recycle Bin's does: a fetch is always
   // scheduled on mount, so the first paint must not claim there are no companies.
   const [loading, setLoading] = useState(true)
+  const [selected, setSelected] = useState<CompanyCard | null>(null)
+  const [detail, setDetail] = useState<CompanyDetail | null>(null)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const returnFocusRef = useRef<HTMLElement | null>(null)
 
   useEffect(() => { setPage(1) }, [filterValues, sortValue])
 
@@ -59,82 +63,87 @@ export default function CompanyInventoryTab({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiBase, filterValues, page, refreshToken, sortValue])
 
+  const openCompany = (company: CompanyCard, trigger: HTMLElement) => {
+    returnFocusRef.current = trigger
+    setSelected(company)
+    setDetail(null)
+    setDetailLoading(true)
+    getCompanyDetail(apiBase, company)
+      .then(setDetail)
+      .catch((reason) => onToast((reason as Error).message, 'error'))
+      .finally(() => setDetailLoading(false))
+  }
+
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
   const pages = Array.from({ length: totalPages }, (_, index) => index + 1)
 
   return (
     <div className="inventoryPanel">
       <p className="inventoryNote" aria-live="polite">
-        One card per email domain, falling back to the company name for contacts that have no email address yet.
-        Opening a name jumps to that contact in Number Inventory.
+        One row per email domain, falling back to the company name for contacts with no email address.
+        Open a company to see what the relationship has produced and whether they write back.
         {loading ? <span className="inventoryNoteBusy"> Loading companies...</span> : null}
       </p>
-      {!loading && rows.length === 0 ? <p className="inventoryEmpty">No companies match these filters.</p> : null}
-      <div className="companyGrid">
-        {rows.map((company) => (
-          <article key={company.key} className="companyCard" data-company-key={company.key}>
-            <header>
-              <div className="companyIdentity">
-                <h3>{company.name}</h3>
-                <p className="companyDomain">{company.domain || 'No email domain'}</p>
-              </div>
-              <div className="companyHeaderMeta">
-                <div className="categoryChips">
-                  <span className="categoryChip">{company.contact_count} contact{company.contact_count === 1 ? '' : 's'}</span>
-                  {company.recruiter_count > 0 ? <CategoryChip category="Recruiter" /> : null}
-                  {company.employer_count > 0 ? <CategoryChip category="Employer" /> : null}
-                </div>
-                <button type="button" onClick={() => onOpenCompany(company)}>View in Number Inventory</button>
-              </div>
-            </header>
-            <div className="inventoryTableScroll">
-              <table className="inventoryTable companyContactsTable">
-                <thead>
-                  <tr>
-                    <th>Owner</th>
-                    <th>Number</th>
-                    <th>Email</th>
-                    <th>Category</th>
-                    <th>Score</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {company.contacts.map((contact) => (
-                    <tr key={contact.key} onClick={() => onOpenContact(company, contact)}>
-                      <td>
-                        <button type="button" className="companyContactLink" onClick={(event) => { event.stopPropagation(); onOpenContact(company, contact) }}>
-                          {contact.owner || 'Unassigned'}
-                        </button>
-                        {contact.company && contact.company !== 'Unknown' && contact.company !== company.name
-                          ? <small>{contact.company}</small>
-                          : null}
-                      </td>
-                      <td className={`inventoryNumber ${contact.number ? '' : 'inventoryNumber--empty'}`}>{contact.number || NO_NUMBER_PLACEHOLDER}</td>
-                      <td>{rowEmail(contact) || '--'}</td>
-                      <td>
-                        <div className="categoryChips">
-                          {contact.categories.map((category) => <CategoryChip key={category} category={category} />)}
-                        </div>
-                      </td>
-                      <td className="inventoryScore">{contact.score == null ? '--' : `${contact.score}/100`}</td>
-                      <td><StatusBadge status={contact.status} reasonCode={contact.review?.reason_code} /></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            {company.contact_count > company.contacts.length ? (
-              <p className="inventoryNote">
-                Showing {company.contacts.length} of {company.contact_count} contacts. Open the company in Number Inventory to see the rest.
-              </p>
-            ) : null}
-          </article>
-        ))}
-      </div>
-      {rows.length > 0 ? (
+      <div className="inventoryTableCard">
+        <div className="inventoryTableScroll">
+          <table className="inventoryTable">
+            <thead>
+              <tr>
+                <th>Company</th>
+                <th>People</th>
+                <th>Status</th>
+                <th>Opportunities</th>
+                <th>Applications</th>
+                <th>Replies</th>
+                <th>Last activity</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((company) => (
+                <tr
+                  key={company.key}
+                  data-company-key={company.key}
+                  // The row is the only way into the panel, so it has to be
+                  // reachable without a mouse - and focusable, or the panel has
+                  // nowhere to hand focus back to on close.
+                  tabIndex={0}
+                  role="button"
+                  aria-label={`Open ${company.name}`}
+                  onClick={(event) => openCompany(company, event.currentTarget)}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Enter' && event.key !== ' ') return
+                    event.preventDefault()
+                    openCompany(company, event.currentTarget)
+                  }}
+                >
+                  <td>
+                    <span>{company.name}</span>
+                    <small>{company.domain || 'No email domain'}</small>
+                  </td>
+                  <td className="inventoryScore">{company.contact_count}</td>
+                  <td>
+                    <div className="categoryChips">
+                      {company.active_count > 0 ? <span className="statusBadge statusBadge--active">{company.active_count} Active</span> : null}
+                      {company.flagged_count > 0 ? <span className="statusBadge statusBadge--flagged">{company.flagged_count} Flagged</span> : null}
+                      {company.unscored_count > 0 ? <span className="statusBadge statusBadge--neutral">{company.unscored_count} Unscored</span> : null}
+                    </div>
+                  </td>
+                  <td className="inventoryScore">{company.opportunity_count}</td>
+                  <td className="inventoryScore">{company.application_count}</td>
+                  <td>
+                    {company.conversation_count === 0
+                      ? <span className="subtle">--</span>
+                      : <span className={company.replied_count > 0 ? 'inventoryScore' : 'subtle'}>{company.replied_count} of {company.conversation_count}</span>}
+                  </td>
+                  <td>{formatRelativeDate(company.lastCheckedAt)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {rows.length === 0 && !loading ? <p className="inventoryEmpty">No companies match these filters.</p> : null}
         <footer className="inventoryPaginationFooter">
-          <span>Showing {(page - 1) * PAGE_SIZE + 1} to {Math.min(page * PAGE_SIZE, total)} of {total} companies</span>
+          <span>Showing {rows.length === 0 ? 0 : (page - 1) * PAGE_SIZE + 1} to {Math.min(page * PAGE_SIZE, total)} of {total} companies</span>
           <nav className="pagination" aria-label="Company pages">
             <button type="button" onClick={() => setPage((current) => current - 1)} disabled={page <= 1}>‹</button>
             {pages.slice(Math.max(0, page - 3), Math.min(totalPages, page + 2)).map((pageNumber) => (
@@ -151,6 +160,19 @@ export default function CompanyInventoryTab({
             <button type="button" onClick={() => setPage((current) => current + 1)} disabled={page >= totalPages}>›</button>
           </nav>
         </footer>
+      </div>
+
+      {selected ? (
+        <CompanyDetailPanel
+          key={selected.key}
+          company={selected}
+          detail={detail}
+          loading={detailLoading}
+          returnFocusRef={returnFocusRef}
+          onClose={() => setSelected(null)}
+          onOpenContact={onOpenContact}
+          onViewInInventory={onOpenCompany}
+        />
       ) : null}
     </div>
   )

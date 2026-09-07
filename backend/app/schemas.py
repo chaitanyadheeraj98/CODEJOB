@@ -1438,6 +1438,18 @@ class PremiumNumberInventoryListResponse(BaseModel):
     total: int
 
 
+class TrackedCount(BaseModel):
+    """A count plus whether the stage behind it has ever been recorded.
+
+    A pipeline stage nobody has filled in yet is not the same claim as a stage
+    that ran and produced nothing, and only one of those is a fact about the
+    company. `tracked=False` lets the panel say so instead of printing a 0.
+    """
+
+    value: int
+    tracked: bool
+
+
 class PremiumCompanyCardResponse(BaseModel):
     key: str
     name: str
@@ -1445,8 +1457,14 @@ class PremiumCompanyCardResponse(BaseModel):
     contact_count: int
     recruiter_count: int
     employer_count: int
+    active_count: int
+    flagged_count: int
+    unscored_count: int
+    opportunity_count: int
+    application_count: int
+    conversation_count: int
+    replied_count: int
     lastCheckedAt: datetime
-    contacts: list[PremiumNumberInventoryItemResponse]
 
 
 class PremiumCompanyListResponse(BaseModel):
@@ -1454,6 +1472,39 @@ class PremiumCompanyListResponse(BaseModel):
     next_cursor: int | None
     has_next: bool
     total: int
+
+
+class PremiumCompanyOpportunityResponse(BaseModel):
+    id: int
+    job_title: str
+    end_client: str
+    status: str
+    created_at: datetime
+
+
+class PremiumCompanyPipelineResponse(BaseModel):
+    applications: TrackedCount
+    submissions: TrackedCount
+    interviews: TrackedCount
+    submitted_to_client: TrackedCount
+    rtrs: TrackedCount
+
+
+class PremiumCompanyResponsivenessResponse(BaseModel):
+    emails_received: int
+    conversations: int
+    replied: int
+    reply_rate: float | None
+    last_inbound_at: datetime | None
+    last_reply_at: datetime | None
+
+
+class PremiumCompanyDetailResponse(BaseModel):
+    company: PremiumCompanyCardResponse
+    contacts: list[PremiumNumberInventoryItemResponse]
+    opportunities: list[PremiumCompanyOpportunityResponse]
+    pipeline: PremiumCompanyPipelineResponse
+    responsiveness: PremiumCompanyResponsivenessResponse
 
 
 class RecruiterNumberListResponse(BaseModel):

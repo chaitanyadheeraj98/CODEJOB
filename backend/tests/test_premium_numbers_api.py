@@ -15,6 +15,9 @@ from sqlalchemy.pool import StaticPool
 from app import main
 from app.db import Base
 from app.models import (
+    Application,
+    ApplicationInterview,
+    EmailConversation,
     NumberReviewQueue,
     OpportunityLifecycleEvent,
     OpportunityLineage,
@@ -4118,14 +4121,27 @@ class PremiumNumbersApiTests(unittest.TestCase):
         self.assertEqual(fusion["contact_count"], 2)
         self.assertEqual(fusion["recruiter_count"], 1)
         self.assertEqual(fusion["employer_count"], 1)
-        # The card carries whole inventory rows, so the tab can open the detail
-        # panel without going back to /premium-numbers/inventory for the row.
-        self.assertEqual({contact["key"] for contact in fusion["contacts"]}, {
-            f"contact:{contact['id']}" for contact in fusion["contacts"]
-        })
-        self.assertEqual({contact["owner"] for contact in fusion["contacts"]}, {"T Mahesh Royal", "Ravi K"})
-        self.assertTrue(any(contact["recruiter"] for contact in fusion["contacts"]))
-        self.assertTrue(any(contact["employer"] for contact in fusion["contacts"]))
+        # The row carries counts only. The people live behind the panel, which is
+        # what stops the tab from being a slower copy of the E-Domain filter.
+        self.assertNotIn("contacts", fusion)
+        self.assertEqual(fusion["active_count"] + fusion["flagged_count"] + fusion["unscored_count"], fusion["contact_count"])
+
+        detail = self.client.get("/premium-numbers/companies/detail", params={"domain": "fusiongts.com"})
+        self.assertEqual(detail.status_code, 200, detail.text)
+        body = detail.json()
+        self.assertEqual(body["company"]["key"], "domain:fusiongts.com")
+        # The panel carries whole inventory rows, so opening a person from it can
+        # show the detail panel without going back to /premium-numbers/inventory.
+        self.assertEqual({contact["owner"] for contact in body["contacts"]}, {"T Mahesh Royal", "Ravi K"})
+        self.assertTrue(any(contact["recruiter"] for contact in body["contacts"]))
+        self.assertTrue(any(contact["employer"] for contact in body["contacts"]))
+
+        # A company keyed on a name has no domain to attribute email or
+        # applications to, so those stages report untracked rather than zero.
+        nameless = self.client.get("/premium-numbers/companies/detail", params={"company": "horizon softech inc"})
+        self.assertEqual(nameless.status_code, 200, nameless.text)
+        self.assertEqual(nameless.json()["pipeline"]["applications"], {"value": 0, "tracked": False})
+        self.assertEqual(self.client.get("/premium-numbers/companies/detail", params={"domain": "nope.example"}).status_code, 404)
 
         horizon = by_key["company:horizon softech inc"]
         self.assertEqual(horizon["domain"], "")
@@ -4183,6 +4199,196 @@ class PremiumNumbersApiTests(unittest.TestCase):
             {(item["kind"], item["number"]) for item in payload["items"]},
             {("contact", "(210) 485-6386"), ("review", "(210) 222-0000")},
         )
+
+    def test_company_detail_counts_the_relationship_and_flags_untracked_stages(self) -> None:
+        now = datetime.now(UTC)
+        with Session(self.engine) as db:
+            contact = RecruiterNumber(
+                owner_id=main.settings.owner_id,
+                normalized_phone_number="18482098361",
+                display_phone_number="(848) 209-8361",
+                recruiter_name="Vinod Kumar",
+                owner_name="Vinod Kumar",
+                company="Synchrony Systems Inc",
+                recruiter_email="vinod.b@synchronycorp.com",
+                recruiter_email_domain="synchronycorp.com",
+            )
+            other = RecruiterNumber(
+                owner_id=main.settings.owner_id,
+                normalized_phone_number="12017818058",
+                display_phone_number="(201) 781-8058",
+                recruiter_name="Balaji S",
+                owner_name="Balaji S",
+                company="Realtek Consulting",
+                recruiter_email="bala@realtekconsulting.net",
+                recruiter_email_domain="realtekconsulting.net",
+            )
+            db.add_all([contact, other])
+            db.commit()
+            db.refresh(contact)
+            db.refresh(other)
+
+            db.add_all([
+                RecruiterOpportunity(
+                    owner_id=main.settings.owner_id,
+                    recruiter_number_id=contact.id,
+                    gmail_message_id="company-opp-1",
+                    source_type="gmail",
+                    email_subject="Java Developer",
+                    email_sender="vinod.b@synchronycorp.com",
+                    job_title="Java Developer",
+                    end_client="Acme",
+                    status="New",
+                ),
+                # Belongs to the other company and must not leak into the counts.
+                RecruiterOpportunity(
+                    owner_id=main.settings.owner_id,
+                    recruiter_number_id=other.id,
+                    gmail_message_id="company-opp-2",
+                    source_type="gmail",
+                    email_subject="Python Developer",
+                    email_sender="bala@realtekconsulting.net",
+                    job_title="Python Developer",
+                    end_client="Globex",
+                    status="New",
+                ),
+            ])
+            # applications.recruiter_contact_id is unfilled in practice, so the
+            # company is reached through the recruiter's own address instead.
+            db.add_all([
+                Application(
+                    owner_id=main.settings.owner_id,
+                    resume_asset_id=1,
+                    resume_version_snapshot=1,
+                    resume_file_name_snapshot="cv.docx",
+                    resume_sha256_snapshot="a" * 64,
+                    manual_recruiter_email="vinod.b@synchronycorp.com",
+                    resume_submission_status="submitted",
+                    status="resume_shared",
+                    dedupe_key="app-sync-1",
+                ),
+                Application(
+                    owner_id=main.settings.owner_id,
+                    resume_asset_id=1,
+                    resume_version_snapshot=1,
+                    resume_file_name_snapshot="cv.docx",
+                    resume_sha256_snapshot="a" * 64,
+                    manual_recruiter_email="Recruiter Two <two@synchronycorp.com>",
+                    resume_submission_status="not_submitted",
+                    status="resume_shared",
+                    dedupe_key="app-sync-2",
+                ),
+                Application(
+                    owner_id=main.settings.owner_id,
+                    resume_asset_id=1,
+                    resume_version_snapshot=1,
+                    resume_file_name_snapshot="cv.docx",
+                    resume_sha256_snapshot="a" * 64,
+                    manual_recruiter_email="bala@realtekconsulting.net",
+                    resume_submission_status="submitted",
+                    status="resume_shared",
+                    dedupe_key="app-realtek-1",
+                ),
+            ])
+            root = RecruiterEmail(
+                owner_id=main.settings.owner_id,
+                sender="Vinod Kumar <vinod.b@synchronycorp.com>",
+                subject="Java role",
+                body="Body",
+                role="Developer",
+                location="Remote",
+                salary_text="",
+                skills_text="Java",
+                score=80,
+                decision="Qualified",
+                state="approved_sent",
+                draft_reply="Thanks",
+                source="gmail",
+                external_message_id="company-mail-1",
+                external_thread_id="company-thread-1",
+                gmail_received_at=now,
+                recipient_email="to@example.com",
+                cc_email="",
+            )
+            db.add(root)
+            db.commit()
+            db.refresh(root)
+            db.add(EmailConversation(
+                owner_id=main.settings.owner_id,
+                root_recruiter_email_id=root.id,
+                external_thread_id="company-thread-1",
+                status="replied",
+                last_message_at=now,
+            ))
+            db.commit()
+
+        row = self.client.get("/premium-numbers/companies", params={"sort": "most_applications"}).json()["items"][0]
+        self.assertEqual(row["domain"], "synchronycorp.com")
+        self.assertEqual(row["opportunity_count"], 1)
+        # Both spellings of the address reach the company; the other one does not.
+        self.assertEqual(row["application_count"], 2)
+        self.assertEqual(row["conversation_count"], 1)
+        self.assertEqual(row["replied_count"], 1)
+
+        body = self.client.get("/premium-numbers/companies/detail", params={"domain": "synchronycorp.com"}).json()
+        self.assertEqual([item["job_title"] for item in body["opportunities"]], ["Java Developer"])
+        pipeline = body["pipeline"]
+        self.assertEqual(pipeline["applications"], {"value": 2, "tracked": True})
+        self.assertEqual(pipeline["submissions"], {"value": 1, "tracked": True})
+        # Nothing in this owner's data has ever reached these stages, so they must
+        # not claim the company produced zero of them.
+        self.assertEqual(pipeline["interviews"], {"value": 0, "tracked": False})
+        self.assertEqual(pipeline["submitted_to_client"], {"value": 0, "tracked": False})
+        self.assertEqual(pipeline["rtrs"], {"value": 0, "tracked": False})
+
+        responsiveness = body["responsiveness"]
+        self.assertEqual(responsiveness["emails_received"], 1)
+        self.assertEqual(responsiveness["conversations"], 1)
+        self.assertEqual(responsiveness["replied"], 1)
+        self.assertEqual(responsiveness["reply_rate"], 1.0)
+        self.assertIsNotNone(responsiveness["last_inbound_at"])
+
+    def test_company_interviews_read_as_a_real_zero_once_the_stage_is_in_use(self) -> None:
+        # The mirror of the case above: an owner who records interviews somewhere
+        # turns "0 interviews" into a fact about this company rather than about
+        # the pipeline, so the tile must stop hedging.
+        with Session(self.engine) as db:
+            contact = RecruiterNumber(
+                owner_id=main.settings.owner_id,
+                normalized_phone_number="18482098361",
+                display_phone_number="(848) 209-8361",
+                recruiter_name="Vinod Kumar",
+                owner_name="Vinod Kumar",
+                company="Synchrony Systems Inc",
+                recruiter_email="vinod.b@synchronycorp.com",
+                recruiter_email_domain="synchronycorp.com",
+            )
+            db.add(contact)
+            application = Application(
+                owner_id=main.settings.owner_id,
+                resume_asset_id=1,
+                resume_version_snapshot=1,
+                resume_file_name_snapshot="cv.docx",
+                resume_sha256_snapshot="a" * 64,
+                manual_recruiter_email="someone@elsewhere.example",
+                resume_submission_status="submitted",
+                status="resume_shared",
+                dedupe_key="app-elsewhere-1",
+            )
+            db.add(application)
+            db.commit()
+            db.refresh(application)
+            db.add(ApplicationInterview(
+                owner_id=main.settings.owner_id,
+                application_id=application.id,
+                round_type="interview_1",
+            ))
+            db.commit()
+
+        pipeline = self.client.get(
+            "/premium-numbers/companies/detail", params={"domain": "synchronycorp.com"}
+        ).json()["pipeline"]
+        self.assertEqual(pipeline["interviews"], {"value": 0, "tracked": True})
 
     def test_company_inventory_never_makes_a_company_out_of_a_free_mail_domain(self) -> None:
         with Session(self.engine) as db:

@@ -89,6 +89,7 @@ from app.models import (
     CanonicalEntityTaxonomyEntry,
     CustomSkillTaxonomyEntry,
     DraftEditFeedback,
+    EmailConversation,
     GmailRequirementGroup,
     JobIntentTaxonomyEntry,
     NumberReviewQueue,
@@ -380,7 +381,12 @@ from app.schemas import (
     ExtractionAuditListResponse,
     PremiumNumberListResponse,
     PremiumCompanyCardResponse,
+    PremiumCompanyDetailResponse,
     PremiumCompanyListResponse,
+    PremiumCompanyOpportunityResponse,
+    PremiumCompanyPipelineResponse,
+    PremiumCompanyResponsivenessResponse,
+    TrackedCount,
     PremiumNumberInventoryItemResponse,
     PremiumNumberInventoryListResponse,
     PremiumNumberResponse,
@@ -5562,7 +5568,9 @@ def list_premium_number_inventory(
 # no usable domain still need somewhere to live, so they fall back to grouping on
 # the company name - the two never mix, since the company half of the key is
 # blanked out whenever a domain exists.
-_COMPANY_MEMBER_CAP = 50
+_COMPANY_OPPORTUNITY_CAP = 25
+
+CompanyGroup = tuple[str, str]
 
 
 def _company_domain_expr():
@@ -5583,6 +5591,14 @@ def _company_name_expr():
     return sa.case((domain != "", sa.literal("")), else_=company)
 
 
+def _company_group_of(contact: PremiumNumberContact) -> CompanyGroup:
+    """The Python-side twin of the two SQL key expressions above."""
+    domain = (contact.recruiter_email_domain or contact.employer_email_domain or "").strip().lower()
+    if domain in PERSONAL_EMAIL_DOMAINS:
+        domain = ""
+    return (domain, "" if domain else str(contact.company or "").strip().lower())
+
+
 def _company_display_name(contacts: list[PremiumNumberContact], fallback: str) -> str:
     counts: dict[str, int] = {}
     for contact in contacts:
@@ -5597,18 +5613,204 @@ def _company_display_name(contacts: list[PremiumNumberContact], fallback: str) -
     return max(counts.items(), key=lambda item: (item[1], item[0] != item[0].lower(), -len(item[0])))[0]
 
 
-@app.get("/premium-numbers/companies", response_model=PremiumCompanyListResponse)
-def list_premium_number_companies(
-    cursor: int = Query(0, ge=0), limit: int = Query(10, ge=1, le=50), q: str | None = Query(default=None, max_length=255),
-    sort: str = Query("newest"),
-    date_filter: str | None = Query(default=None), date_from: date | None = Query(default=None), date_to: date | None = Query(default=None),
-    db: Session = Depends(get_db),
-) -> PremiumCompanyListResponse:
-    if sort not in {"newest", "oldest", "most_contacts", "fewest_contacts", "name"}:
-        raise HTTPException(status_code=422, detail="Invalid sort. Must be one of: newest, oldest, most_contacts, fewest_contacts, name")
-    owner = settings.owner_id
-    domain_expr = _company_domain_expr()
-    name_expr = _company_name_expr()
+def _email_domain_match(column, domain: str):
+    """Match an address column against one domain, portably.
+
+    Postgres split_part and SQLite instr do not overlap, and the tests run on
+    SQLite while production is Postgres, so the domain is matched by suffix
+    instead of parsed out. The three shapes cover a bare address and the two
+    ways a display-name header ends ("Name <a@b.com>", "Name <a@b.com> ").
+    """
+    return sa.or_(
+        column.ilike(f"%@{domain}"),
+        column.ilike(f"%@{domain}>%"),
+        column.ilike(f"%@{domain} %"),
+    )
+
+
+def _company_application_ids(db: Session, owner: str, domains: list[str]) -> dict[str, list[int]]:
+    """Applications belonging to each company domain.
+
+    applications.recruiter_contact_id is the column this should join on, but it
+    is NULL on every row, so the recruiter's own address is matched by domain
+    instead - the same key the company cards are grouped by. Every application
+    lookup in this file goes through here, so swapping this for the real foreign
+    key once it is backfilled is a one-function change.
+    """
+    if not domains:
+        return {}
+    matched = sa.case(
+        *[(_email_domain_match(Application.manual_recruiter_email, domain), sa.literal(domain)) for domain in domains],
+        else_=sa.literal(""),
+    )
+    rows = db.execute(
+        sa.select(matched.label("domain"), Application.id)
+        .where(
+            Application.owner_id == owner,
+            Application.deleted_at.is_(None),
+            sa.or_(*[_email_domain_match(Application.manual_recruiter_email, domain) for domain in domains]),
+        )
+    ).all()
+    by_domain: dict[str, list[int]] = {}
+    for row in rows:
+        if row.domain:
+            by_domain.setdefault(row.domain, []).append(row.id)
+    return by_domain
+
+
+def _company_opportunity_counts(db: Session, owner: str, contact_ids: list[int]) -> dict[int, int]:
+    if not contact_ids:
+        return {}
+    rows = db.execute(
+        sa.select(RecruiterOpportunity.recruiter_number_id, sa.func.count().label("total"))
+        .where(RecruiterOpportunity.owner_id == owner, RecruiterOpportunity.recruiter_number_id.in_(contact_ids))
+        .group_by(RecruiterOpportunity.recruiter_number_id)
+    ).all()
+    return {row.recruiter_number_id: row.total for row in rows}
+
+
+def _company_conversation_stats(db: Session, owner: str, domains: list[str]) -> dict[str, dict[str, object]]:
+    """Threads rooted in an email from this company, and how many answered back.
+
+    email_conversations.status is 'replied' once the company wrote again after
+    the user's send, which is the only direct "do they engage" signal in the
+    schema - the application events that would otherwise carry it are unfilled.
+    """
+    if not domains:
+        return {}
+    matched = sa.case(
+        *[(_email_domain_match(RecruiterEmail.sender, domain), sa.literal(domain)) for domain in domains],
+        else_=sa.literal(""),
+    )
+    rows = db.execute(
+        sa.select(
+            matched.label("domain"),
+            sa.func.count().label("conversations"),
+            sa.func.sum(sa.case((EmailConversation.status == "replied", 1), else_=0)).label("replied"),
+            sa.func.max(EmailConversation.last_message_at).label("last_reply_at"),
+        )
+        .select_from(EmailConversation)
+        .join(RecruiterEmail, RecruiterEmail.id == EmailConversation.root_recruiter_email_id)
+        .where(
+            EmailConversation.owner_id == owner,
+            sa.or_(*[_email_domain_match(RecruiterEmail.sender, domain) for domain in domains]),
+        )
+        .group_by(matched)
+    ).all()
+    return {
+        row.domain: {"conversations": row.conversations, "replied": int(row.replied or 0), "last_reply_at": row.last_reply_at}
+        for row in rows
+        if row.domain
+    }
+
+
+def _company_inbound_email_stats(db: Session, owner: str, domains: list[str]) -> dict[str, dict[str, object]]:
+    if not domains:
+        return {}
+    matched = sa.case(
+        *[(_email_domain_match(RecruiterEmail.sender, domain), sa.literal(domain)) for domain in domains],
+        else_=sa.literal(""),
+    )
+    rows = db.execute(
+        sa.select(
+            matched.label("domain"),
+            sa.func.count().label("received"),
+            sa.func.max(RecruiterEmail.gmail_received_at).label("last_inbound_at"),
+        )
+        .where(
+            RecruiterEmail.owner_id == owner,
+            sa.or_(*[_email_domain_match(RecruiterEmail.sender, domain) for domain in domains]),
+        )
+        .group_by(matched)
+    ).all()
+    return {row.domain: {"received": row.received, "last_inbound_at": row.last_inbound_at} for row in rows if row.domain}
+
+
+def _company_inventory_item(
+    db: Session,
+    contact: PremiumNumberContact,
+    employer_domains: set[str],
+) -> PremiumNumberInventoryItemResponse:
+    return PremiumNumberInventoryItemResponse(
+        key=f"contact:{contact.id}",
+        kind="contact",
+        id=contact.id,
+        number=contact.display_phone_number,
+        owner=(contact.recruiter_name if contact.is_recruiter else contact.owner_name) or "Unknown",
+        company=contact.company or "Unknown",
+        categories=_contact_categories(contact),
+        status="Unscored" if contact.normalized_phone_number is None else _contact_status(contact),
+        score=_contact_source_fields(db, contact, "recruiter" if contact.is_recruiter else "employer")[5],
+        sourceType=contact.source_type if contact.source_type in {"gmail", "nvoids"} else None,
+        lastCheckedAt=contact.updated_at,
+        recruiter=_recruiter_number_response(db, contact, employer_domains) if contact.is_recruiter else None,
+        employer=_employer_number_response(db, contact) if contact.is_employer else None,
+    )
+
+
+def _company_cards(
+    db: Session,
+    owner: str,
+    rows: list,
+) -> tuple[list[PremiumCompanyCardResponse], dict[CompanyGroup, list[PremiumNumberContact]]]:
+    """Build one card per grouped row, with every aggregate done in bulk.
+
+    Four queries cover the whole page regardless of how many companies are on
+    it, rather than one round trip per card.
+    """
+    groups: list[CompanyGroup] = [(row.domain, row.company) for row in rows]
+    domain_expr, name_expr = _company_domain_expr(), _company_name_expr()
+    members = sa.or_(*[sa.and_(domain_expr == domain, name_expr == company) for domain, company in groups])
+    contacts = db.query(PremiumNumberContact).filter(
+        PremiumNumberContact.owner_id == owner,
+        PremiumNumberContact.deleted_at.is_(None),
+        members,
+    ).order_by(PremiumNumberContact.updated_at.desc(), PremiumNumberContact.id.desc()).all()
+
+    by_group: dict[CompanyGroup, list[PremiumNumberContact]] = {}
+    for contact in contacts:
+        by_group.setdefault(_company_group_of(contact), []).append(contact)
+
+    domains = [domain for domain, _company in groups if domain]
+    opportunity_by_contact = _company_opportunity_counts(db, owner, [contact.id for contact in contacts])
+    applications_by_domain = _company_application_ids(db, owner, domains)
+    conversations_by_domain = _company_conversation_stats(db, owner, domains)
+
+    cards: list[PremiumCompanyCardResponse] = []
+    for row in rows:
+        group = by_group.get((row.domain, row.company), [])
+        statuses = [
+            "Unscored" if contact.normalized_phone_number is None else _contact_status(contact)
+            for contact in group
+        ]
+        conversation = conversations_by_domain.get(row.domain, {})
+        cards.append(PremiumCompanyCardResponse(
+            key=f"domain:{row.domain}" if row.domain else f"company:{row.company}",
+            name=_company_display_name(group, row.domain or "Unknown company"),
+            domain=row.domain,
+            contact_count=row.contact_count,
+            recruiter_count=sum(1 for contact in group if contact.is_recruiter),
+            employer_count=sum(1 for contact in group if contact.is_employer),
+            active_count=statuses.count("Active"),
+            flagged_count=statuses.count("Flagged"),
+            unscored_count=statuses.count("Unscored"),
+            opportunity_count=sum(opportunity_by_contact.get(contact.id, 0) for contact in group),
+            application_count=len(applications_by_domain.get(row.domain, [])),
+            conversation_count=int(conversation.get("conversations", 0) or 0),
+            replied_count=int(conversation.get("replied", 0) or 0),
+            lastCheckedAt=row.last_checked_at,
+        ))
+    return cards, by_group
+
+
+def _company_grouped_query(
+    owner: str,
+    q: str | None,
+    date_filter: str | None,
+    date_from: date | None,
+    date_to: date | None,
+):
+    domain_expr, name_expr = _company_domain_expr(), _company_name_expr()
     base = sa.select(
         domain_expr.label("domain"),
         name_expr.label("company"),
@@ -5625,7 +5827,30 @@ def list_premium_number_companies(
     if date_filter:
         start, end = _date_range_utc_window(date_filter, date_from, date_to)
         base = base.where(PremiumNumberContact.created_at >= start, PremiumNumberContact.created_at < end)
-    grouped = base.group_by(domain_expr, name_expr).subquery()
+    return base.group_by(domain_expr, name_expr)
+
+
+_COMPANY_SORTS = {"newest", "oldest", "most_contacts", "fewest_contacts", "name", "most_opportunities", "most_applications", "most_replies"}
+# The three activity sorts are applied after the page is built, because their
+# values come from tables the grouped contact query never touches.
+_COMPANY_POST_SORTS = {
+    "most_opportunities": lambda card: card.opportunity_count,
+    "most_applications": lambda card: card.application_count,
+    "most_replies": lambda card: card.replied_count,
+}
+
+
+@app.get("/premium-numbers/companies", response_model=PremiumCompanyListResponse)
+def list_premium_number_companies(
+    cursor: int = Query(0, ge=0), limit: int = Query(10, ge=1, le=50), q: str | None = Query(default=None, max_length=255),
+    sort: str = Query("newest"),
+    date_filter: str | None = Query(default=None), date_from: date | None = Query(default=None), date_to: date | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> PremiumCompanyListResponse:
+    if sort not in _COMPANY_SORTS:
+        raise HTTPException(status_code=422, detail=f"Invalid sort. Must be one of: {', '.join(sorted(_COMPANY_SORTS))}")
+    owner = settings.owner_id
+    grouped = _company_grouped_query(owner, q, date_filter, date_from, date_to).subquery()
     total = db.execute(sa.select(sa.func.count()).select_from(grouped)).scalar_one()
     order = {
         "oldest": (grouped.c.last_checked_at.asc(),),
@@ -5633,63 +5858,135 @@ def list_premium_number_companies(
         "fewest_contacts": (grouped.c.contact_count.asc(), grouped.c.last_checked_at.desc()),
         "name": (grouped.c.domain.asc(), grouped.c.company.asc()),
     }.get(sort, (grouped.c.last_checked_at.desc(),))
-    rows = db.execute(
-        sa.select(grouped).order_by(*order, grouped.c.domain.asc(), grouped.c.company.asc()).offset(cursor).limit(limit + 1)
-    ).all()
+    query = sa.select(grouped).order_by(*order, grouped.c.domain.asc(), grouped.c.company.asc())
+    if sort in _COMPANY_POST_SORTS:
+        # Ranking by activity has to see every company before it can pick a page,
+        # so the whole grouped set is built and then sliced.
+        rows = db.execute(query).all()
+        cards, _members = _company_cards(db, owner, rows)
+        cards.sort(key=_COMPANY_POST_SORTS[sort], reverse=True)
+        page = cards[cursor:cursor + limit]
+        has_next = cursor + limit < len(cards)
+        return PremiumCompanyListResponse(items=page, next_cursor=cursor + limit if has_next else None, has_next=has_next, total=total)
+    rows = db.execute(query.offset(cursor).limit(limit + 1)).all()
     visible = rows[:limit]
     if not visible:
         return PremiumCompanyListResponse(items=[], next_cursor=None, has_next=False, total=total)
+    cards, _members = _company_cards(db, owner, visible)
+    return PremiumCompanyListResponse(items=cards, next_cursor=cursor + limit if len(rows) > limit else None, has_next=len(rows) > limit, total=total)
 
-    # One round trip for every card on the page: the group key is a computed
-    # expression, so it has to be recomputed in the WHERE clause rather than
-    # joined on.
-    members = sa.or_(*[sa.and_(domain_expr == row.domain, name_expr == row.company) for row in visible])
-    contacts = db.query(PremiumNumberContact).filter(
-        PremiumNumberContact.owner_id == owner,
-        PremiumNumberContact.deleted_at.is_(None),
-        members,
-    ).order_by(PremiumNumberContact.updated_at.desc(), PremiumNumberContact.id.desc()).all()
-    employer_domains = employer_domains_for_owner(db, owner) if any(contact.is_recruiter for contact in contacts) else set()
-    by_group: dict[tuple[str, str], list[PremiumNumberContact]] = {}
-    for contact in contacts:
-        contact_domain = (contact.recruiter_email_domain or contact.employer_email_domain or "").strip().lower()
-        if contact_domain in PERSONAL_EMAIL_DOMAINS:
-            contact_domain = ""
-        contact_company = "" if contact_domain else str(contact.company or "").strip().lower()
-        by_group.setdefault((contact_domain, contact_company), []).append(contact)
 
-    items: list[PremiumCompanyCardResponse] = []
-    for row in visible:
-        group = by_group.get((row.domain, row.company), [])
-        capped = group[:_COMPANY_MEMBER_CAP]
-        items.append(PremiumCompanyCardResponse(
-            key=f"domain:{row.domain}" if row.domain else f"company:{row.company}",
-            name=_company_display_name(group, row.domain or "Unknown company"),
-            domain=row.domain,
-            contact_count=row.contact_count,
-            recruiter_count=sum(1 for contact in group if contact.is_recruiter),
-            employer_count=sum(1 for contact in group if contact.is_employer),
-            lastCheckedAt=row.last_checked_at,
-            contacts=[
-                PremiumNumberInventoryItemResponse(
-                    key=f"contact:{contact.id}",
-                    kind="contact",
-                    id=contact.id,
-                    number=contact.display_phone_number,
-                    owner=(contact.recruiter_name if contact.is_recruiter else contact.owner_name) or "Unknown",
-                    company=contact.company or "Unknown",
-                    categories=_contact_categories(contact),
-                    status="Unscored" if contact.normalized_phone_number is None else _contact_status(contact),
-                    score=_contact_source_fields(db, contact, "recruiter" if contact.is_recruiter else "employer")[5],
-                    sourceType=contact.source_type if contact.source_type in {"gmail", "nvoids"} else None,
-                    lastCheckedAt=contact.updated_at,
-                    recruiter=_recruiter_number_response(db, contact, employer_domains) if contact.is_recruiter else None,
-                    employer=_employer_number_response(db, contact) if contact.is_employer else None,
-                )
-                for contact in capped
-            ],
-        ))
-    return PremiumCompanyListResponse(items=items, next_cursor=cursor + limit if len(rows) > limit else None, has_next=len(rows) > limit, total=total)
+def _tracked_count(value: int, tracked: bool) -> TrackedCount:
+    return TrackedCount(value=value, tracked=tracked)
+
+
+@app.get("/premium-numbers/companies/detail", response_model=PremiumCompanyDetailResponse)
+def get_premium_number_company(
+    domain: str = Query("", max_length=255),
+    company: str = Query("", max_length=255),
+    db: Session = Depends(get_db),
+) -> PremiumCompanyDetailResponse:
+    """One company card, its people, and what the relationship has produced.
+
+    The group key is a domain or a company name, both of which carry dots and
+    spaces, so it arrives as query parameters rather than a path segment.
+    """
+    domain, company = domain.strip().lower(), company.strip().lower()
+    if not domain and not company:
+        raise HTTPException(status_code=422, detail="Pass a domain or a company")
+    if domain:
+        company = ""
+    owner = settings.owner_id
+    grouped = _company_grouped_query(owner, None, None, None, None).subquery()
+    row = db.execute(
+        sa.select(grouped).where(grouped.c.domain == domain, grouped.c.company == company)
+    ).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Company not found")
+
+    cards, members = _company_cards(db, owner, [row])
+    card = cards[0]
+    contacts = members.get((domain, company), [])
+    employer_domains = employer_domains_for_owner(db, owner) if any(c.is_recruiter for c in contacts) else set()
+    contact_ids = [contact.id for contact in contacts]
+
+    opportunities = db.query(RecruiterOpportunity).filter(
+        RecruiterOpportunity.owner_id == owner,
+        RecruiterOpportunity.recruiter_number_id.in_(contact_ids) if contact_ids else sa.false(),
+    ).order_by(RecruiterOpportunity.created_at.desc(), RecruiterOpportunity.id.desc()).limit(_COMPANY_OPPORTUNITY_CAP).all()
+
+    application_ids = _company_application_ids(db, owner, [domain] if domain else []).get(domain, [])
+    submissions = interviews = submitted_to_client = rtrs = 0
+    if application_ids:
+        submissions = db.query(Application).filter(
+            Application.owner_id == owner,
+            Application.id.in_(application_ids),
+            Application.resume_submission_status == "submitted",
+        ).count()
+        submitted_to_client = db.query(Application).filter(
+            Application.owner_id == owner,
+            Application.id.in_(application_ids),
+            Application.submitted_to_client_at.is_not(None),
+        ).count()
+        interviews = db.query(ApplicationInterview).filter(
+            ApplicationInterview.owner_id == owner,
+            ApplicationInterview.application_id.in_(application_ids),
+            ApplicationInterview.deleted_at.is_(None),
+        ).count()
+        rtrs = db.query(ApplicationRTR).filter(
+            ApplicationRTR.owner_id == owner,
+            ApplicationRTR.application_id.in_(application_ids),
+        ).count()
+
+    # A stage nobody has ever recorded reads as "not tracked" everywhere, while a
+    # stage that is in use but empty for this company is a real zero about them.
+    # A company with no email domain cannot be attributed applications at all.
+    attributable = bool(domain)
+    interviews_exist = db.query(ApplicationInterview.id).filter(
+        ApplicationInterview.owner_id == owner, ApplicationInterview.deleted_at.is_(None)
+    ).first() is not None
+    client_stage_exists = db.query(Application.id).filter(
+        Application.owner_id == owner, Application.submitted_to_client_at.is_not(None)
+    ).first() is not None
+    rtr_exists = db.query(ApplicationRTR.id).filter(ApplicationRTR.owner_id == owner).first() is not None
+    submissions_exist = db.query(Application.id).filter(
+        Application.owner_id == owner, Application.resume_submission_status == "submitted"
+    ).first() is not None
+
+    inbound = _company_inbound_email_stats(db, owner, [domain] if domain else []).get(domain, {})
+    conversation = _company_conversation_stats(db, owner, [domain] if domain else []).get(domain, {})
+    conversations = int(conversation.get("conversations", 0) or 0)
+    replied = int(conversation.get("replied", 0) or 0)
+
+    return PremiumCompanyDetailResponse(
+        company=card,
+        contacts=[_company_inventory_item(db, contact, employer_domains) for contact in contacts],
+        opportunities=[
+            PremiumCompanyOpportunityResponse(
+                id=row.id,
+                job_title=row.job_title or "Untitled opportunity",
+                end_client=row.end_client or "",
+                status=row.status,
+                created_at=row.created_at,
+            )
+            for row in opportunities
+        ],
+        pipeline=PremiumCompanyPipelineResponse(
+            applications=_tracked_count(card.application_count, attributable),
+            submissions=_tracked_count(submissions, attributable and submissions_exist),
+            interviews=_tracked_count(interviews, attributable and interviews_exist),
+            submitted_to_client=_tracked_count(submitted_to_client, attributable and client_stage_exists),
+            rtrs=_tracked_count(rtrs, attributable and rtr_exists),
+        ),
+        responsiveness=PremiumCompanyResponsivenessResponse(
+            emails_received=int(inbound.get("received", 0) or 0),
+            conversations=conversations,
+            replied=replied,
+            reply_rate=round(replied / conversations, 3) if conversations else None,
+            last_inbound_at=inbound.get("last_inbound_at"),
+            last_reply_at=conversation.get("last_reply_at"),
+        ),
+    )
 
 
 @app.get("/premium-numbers/deleted-contacts", response_model=PremiumNumberInventoryListResponse)

@@ -488,8 +488,47 @@ export type CompanyCard = {
   contact_count: number
   recruiter_count: number
   employer_count: number
+  active_count: number
+  flagged_count: number
+  unscored_count: number
+  opportunity_count: number
+  application_count: number
+  conversation_count: number
+  replied_count: number
   lastCheckedAt: string
+}
+
+// A stage nobody has recorded yet is not the same claim as a stage that ran and
+// produced nothing, so the tile renders those two differently.
+export type TrackedCount = { value: number; tracked: boolean }
+
+export type CompanyOpportunity = {
+  id: number
+  job_title: string
+  end_client: string
+  status: string
+  created_at: string
+}
+
+export type CompanyDetail = {
+  company: CompanyCard
   contacts: InventoryRow[]
+  opportunities: CompanyOpportunity[]
+  pipeline: {
+    applications: TrackedCount
+    submissions: TrackedCount
+    interviews: TrackedCount
+    submitted_to_client: TrackedCount
+    rtrs: TrackedCount
+  }
+  responsiveness: {
+    emails_received: number
+    conversations: number
+    replied: number
+    reply_rate: number | null
+    last_inbound_at: string | null
+    last_reply_at: string | null
+  }
 }
 
 export type ReviewEdits = Partial<Pick<
