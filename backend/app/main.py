@@ -254,7 +254,11 @@ from app.services.email_inbox_service import TRANSPARENT_PIXEL_PNG, record_open,
 from app.services.github_issue_service import GithubIssueServiceError, create_github_issue
 from app.services.orchestration_service import OrchestrationDeps, OrchestrationService
 from app.services.requirement_expansion_service import RequirementExpansionService
-from app.services.resume_enrichment_service import backfill_role_and_label, enrich_resume
+from app.services.resume_enrichment_service import (
+    backfill_role_and_label,
+    enrich_resume,
+    normalize_variant_label,
+)
 from app.services.role_manifest_pipeline import extract_and_score_children
 from app.services.role_manifest_service import RoleManifestService
 from app.services.sendability_service import SENDABILITY_BUCKETS, resolve_sendability_status
@@ -3374,7 +3378,7 @@ def upload_resume(
             [value for value in _normalize_resume_skills_text(structured_skills_text).split(",") if value],
             separators=(",", ":"),
         ),
-        variant_label=variant_label.strip(),
+        variant_label=normalize_variant_label(variant_label),
         is_enabled=True,
         is_current=True,
     )
@@ -3466,7 +3470,7 @@ def update_resume(resume_id: int, payload: ResumeUpdateRequest, db: Session = De
             separators=(",", ":"),
         )
     if payload.variant_label is not None:
-        resume.variant_label = payload.variant_label.strip()
+        resume.variant_label = normalize_variant_label(payload.variant_label)
 
     if payload.is_enabled is not None:
         resume.is_enabled = payload.is_enabled
