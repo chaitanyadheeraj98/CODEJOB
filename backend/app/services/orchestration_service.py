@@ -45,7 +45,7 @@ from app.recent_runs import (
     update_recent_run,
 )
 from app.routing import RoutingDecision
-from app.schemas import ApproveSendRequest, AutomationRunRequest, AutomationRunResponse, ConversationDetailResponse, ConversationSummaryResponse, GmailSyncResponse, RegenerateCandidateRequest, RejectRequest, ResolveRecipientsRequest
+from app.schemas import ApproveSendRequest, AutomationRunRequest, AutomationRunResponse, ConversationDetailResponse, ConversationSummaryResponse, GmailSyncResponse, RegenerateCandidateRequest, RejectRequest, ResolveRecipientsRequest, resume_variant_token
 from app.config import settings as app_settings
 from app.services.candidate_runtime_service import resolve_resume_display_name
 from app.services.candidate_screening_service import CandidateScreeningService, apply_screening_decision
@@ -1494,6 +1494,13 @@ class OrchestrationService:
         ]
         email.resume_asset_id = resume.id
         email.resume_file_name = resume.file_name
+        # Stamped invisibly into the HTML part so a recruiter who phones about
+        # "the resume you sent" can be traced back to an exact variant and send.
+        variant_token = (
+            resume_variant_token(resume.id, email.id)
+            if user_settings.feature_resume_variant_marker_enabled
+            else None
+        )
 
         source_email = source_parent or email
         if email.source == "gmail":
@@ -1509,6 +1516,7 @@ class OrchestrationService:
                     draft_text_size=user_settings.draft_text_size,
                     attachments=attachments,
                     tracking_pixel_url=pixel_url,
+                    variant_token=variant_token,
                 )
                 sent_thread_id = source_email.external_thread_id
                 if source_email.external_message_id and not source_already_sent:
@@ -1531,6 +1539,7 @@ class OrchestrationService:
                     draft_text_size=user_settings.draft_text_size,
                     attachments=attachments,
                     tracking_pixel_url=pixel_url,
+                    variant_token=variant_token,
                 )
                 if (
                     user_settings.feature_reply_inbox_enabled

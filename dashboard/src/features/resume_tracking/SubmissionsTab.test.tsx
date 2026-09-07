@@ -30,4 +30,51 @@ describe('SubmissionsTab', () => {
     expect(container.querySelector<HTMLInputElement>('input[type="date"]')?.value).toBe(new Date().toISOString().slice(0, 10))
     expect(container.querySelector('.resumeTrackingForm select')?.textContent).toContain('Banking')
   })
+
+  it('resolves a pasted variant marker to the send it came from', async () => {
+    const calls: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      calls.push(url)
+      if (url.includes('/resumes/variant-lookup')) {
+        return new Response(JSON.stringify({
+          email_id: 8919,
+          variant_code: 'R13',
+          variant_label: 'banking, payments',
+          resume_file_name: 'resume.docx',
+          role: 'Java Developer',
+          subject: 'Java Developer',
+          recruiter_email: 'amir@example.com',
+          sent_at: '2026-09-04T22:57:39Z',
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      const body = url.includes('/applications/suggestions') ? { items: [] } : { items: [], next_cursor: null, has_next: false }
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }))
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    cleanups.push(() => { act(() => root.unmount()); container.remove() })
+    await act(async () => {
+      root.render(<SubmissionsTab apiBase="http://localhost:8000" resumes={[]} />)
+      await new Promise((resolve) => setTimeout(resolve, 150))
+    })
+
+    const input = container.querySelector<HTMLInputElement>('#variantLookupInput')!
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
+    await act(async () => {
+      setter.call(input, 'CJ-R13-8919')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => {
+      container.querySelector<HTMLFormElement>('.variantLookup')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    })
+
+    expect(calls.some((url) => url.includes('variant-lookup') && url.includes('CJ-R13-8919'))).toBe(true)
+    const result = container.querySelector('.variantLookupResult')?.textContent ?? ''
+    expect(result).toContain('R13')
+    expect(result).toContain('Java Developer')
+    expect(result).toContain('amir@example.com')
+  })
 })

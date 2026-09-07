@@ -211,6 +211,8 @@ from app.services import (
     application_service,
     appts_service,
     resume_tracking_service,
+    role_gap_service,
+    why_this_resume_service,
     email_lookup_service,
     end_client_validation,
     filter_options_service,
@@ -432,6 +434,12 @@ from app.schemas import (
     ResumePerformanceSummaryResponse,
     ResumeSubmissionStatusUpdateRequest,
     ResumeUpdateRequest,
+    RoleGapReportResponse,
+    VariantLookupResponse,
+    WhyThisResumeResponse,
+    parse_variant_token,
+    resume_variant_code,
+    resume_variant_token,
     SentItemDetailsResponse,
     SettingsBootstrapResponse,
     SettingsRequest,
@@ -1133,6 +1141,8 @@ def _build_sent_item_details(db: Session, email: RecruiterEmail) -> SentItemDeta
         requirement_received_link=_sent_item_requirement_link(email, external),
         sent_gmail_message_link=email.gmail_sent_message_url,
         resume_variant_sent=_clean_optional_text(email.resume_file_name),
+        resume_variant_code=resume_variant_code(email.resume_asset_id) or None,
+        resume_variant_token=resume_variant_token(email.resume_asset_id, email.id) or None,
         attached_files=_json_string_list(email.sent_attachment_file_names_json),
         company=company,
         recruiter_name=(
@@ -2573,6 +2583,7 @@ def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
             min(int(s.feature_reminder_sweep_interval_minutes or 240), 1440),
         ),
         feature_resume_tracking_enabled=s.feature_resume_tracking_enabled,
+        feature_resume_variant_marker_enabled=s.feature_resume_variant_marker_enabled,
         feature_resume_tracking_sweep_interval_minutes=max(
             30,
             min(int(s.feature_resume_tracking_sweep_interval_minutes or 240), 1440),
@@ -3015,6 +3026,7 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
         min(int(payload.feature_reminder_sweep_interval_minutes), 1440),
     )
     s.feature_resume_tracking_enabled = payload.feature_resume_tracking_enabled
+    s.feature_resume_variant_marker_enabled = payload.feature_resume_variant_marker_enabled
     s.feature_resume_tracking_sweep_interval_minutes = max(
         30,
         min(int(payload.feature_resume_tracking_sweep_interval_minutes), 1440),
@@ -9600,6 +9612,71 @@ def resume_performance_summary_route(sort: str = Query("recent"), db: Session = 
     )
 
 
+@app.get("/resumes/role-gaps", response_model=RoleGapReportResponse)
+def resume_role_gaps_route(
+    window_days: int = Query(90, ge=1, le=730),
+    min_jds: int = Query(5, ge=1, le=500),
+    db: Session = Depends(get_db),
+) -> RoleGapReportResponse:
+    """Which roles the resume library keeps failing, and what it would take to win them."""
+    _require_resume_tracking_enabled(db)
+    report = role_gap_service.role_gap_report(
+        db,
+        owner_id=settings.owner_id,
+        window_days=window_days,
+        min_jds=min_jds,
+    )
+    return RoleGapReportResponse.model_validate(report)
+
+
+@app.get("/resumes/variant-lookup", response_model=VariantLookupResponse)
+def resume_variant_lookup_route(
+    token: str = Query(..., min_length=1, max_length=500),
+    db: Session = Depends(get_db),
+) -> VariantLookupResponse:
+    """Resolve a variant marker pasted out of a sent email back to the send it came from."""
+    _require_resume_tracking_enabled(db)
+    parsed = parse_variant_token(token)
+    if parsed is None:
+        raise HTTPException(
+            status_code=422,
+            detail="That does not look like a variant marker. Expected something like CJ-R14-8842.",
+        )
+    variant_code, email_id = parsed
+    email = (
+        db.query(RecruiterEmail)
+        .filter(RecruiterEmail.owner_id == settings.owner_id, RecruiterEmail.id == email_id)
+        .first()
+    )
+    if email is None:
+        raise HTTPException(status_code=404, detail="No sent email matches that marker.")
+    # The email id alone identifies the send; the code is checked so a mistyped or
+    # doctored marker surfaces as a mismatch instead of silently resolving elsewhere.
+    actual_code = resume_variant_code(email.resume_asset_id)
+    if actual_code and variant_code != actual_code:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Marker mismatch: that send used {actual_code}, not {variant_code}.",
+        )
+    resume = (
+        db.query(ResumeAsset)
+        .filter(ResumeAsset.owner_id == settings.owner_id, ResumeAsset.id == email.resume_asset_id)
+        .first()
+        if email.resume_asset_id is not None
+        else None
+    )
+    return VariantLookupResponse(
+        email_id=email.id,
+        variant_code=actual_code or variant_code,
+        variant_label=_clean_optional_text(resume.variant_label if resume else None),
+        resume_file_name=_clean_optional_text(email.resume_file_name),
+        role=_clean_optional_text(email.role),
+        subject=_clean_optional_text(email.subject),
+        recruiter_email=_clean_optional_text(email.recipient_email),
+        sent_at=email.sent_at,
+    )
+
+
 @app.get("/resumes/{resume_asset_id}/funnel", response_model=ResumeFunnelMetricsResponse)
 def resume_funnel_route(
     resume_asset_id: int,
@@ -9647,6 +9724,24 @@ def update_resume_submission_status_route(
     db.commit()
     db.refresh(application)
     return _application_response(db, application, include_events=True)
+
+
+@app.get(
+    "/applications/{application_id}/why-this-resume",
+    response_model=WhyThisResumeResponse,
+)
+def get_why_this_resume(
+    application_id: int,
+    db: Session = Depends(get_db),
+) -> WhyThisResumeResponse:
+    """Why the resume that went out was chosen, read off the email that sent it.
+
+    The application's own skill-gap snapshot cannot answer this: no application
+    carries a linked job description, so that comparison always comes back empty.
+    """
+    _require_resume_tracking_enabled(db)
+    payload = why_this_resume_service.why_this_resume(db, _get_application(db, application_id))
+    return WhyThisResumeResponse.model_validate(payload)
 
 
 @app.get(

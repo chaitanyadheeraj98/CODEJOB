@@ -4,9 +4,57 @@ import re
 from typing import Any, Literal, cast
 from zoneinfo import available_timezones
 
-from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, Field, computed_field, field_validator, model_validator
 
 from app.ai.draft_formatting import DRAFT_TEXT_SIZE_VALUES, normalize_draft_text_size
+
+
+RESUME_VARIANT_CODE_PREFIX = "R"
+
+
+def resume_variant_code(resume_asset_id: int | None) -> str:
+    """Render a resume asset id as its user-facing variant code, e.g. 7 -> "R07".
+
+    The single source of truth for resume identity. Variant labels are free text
+    and in practice collide (a dozen variants all labelled "banking, healthcare"),
+    so the code - not the label - is what the user reads and quotes.
+    """
+    if resume_asset_id is None:
+        return ""
+    return f"{RESUME_VARIANT_CODE_PREFIX}{int(resume_asset_id):02d}"
+
+
+VARIANT_TOKEN_PREFIX = "CJ"
+_VARIANT_TOKEN_RE = re.compile(
+    rf"{VARIANT_TOKEN_PREFIX}-({RESUME_VARIANT_CODE_PREFIX}\d{{2,}})-(\d+)",
+    re.IGNORECASE,
+)
+
+
+def resume_variant_token(resume_asset_id: int | None, email_id: int | None) -> str:
+    """Build the marker embedded invisibly in an outgoing email, e.g. "CJ-R14-8842".
+
+    Carries the resume variant *and* the specific send. The variant alone answers
+    "which resume was this?"; including the email id also answers "which recruiter,
+    which posting?", which is what makes a phoned-in callback resolvable.
+    """
+    if resume_asset_id is None or email_id is None:
+        return ""
+    return f"{VARIANT_TOKEN_PREFIX}-{resume_variant_code(resume_asset_id)}-{int(email_id)}"
+
+
+def parse_variant_token(raw: str | None) -> tuple[str, int] | None:
+    """Pull (variant_code, email_id) out of pasted text.
+
+    Deliberately tolerant: the user is pasting out of a mail client, so the input
+    arrives wrapped in whitespace, quotes, or a whole surrounding sentence.
+    """
+    if not raw:
+        return None
+    match = _VARIANT_TOKEN_RE.search(raw)
+    if match is None:
+        return None
+    return match.group(1).upper(), int(match.group(2))
 
 
 class ApproveSendRequest(BaseModel):
@@ -238,6 +286,7 @@ class SettingsRequest(BaseModel):
     feature_application_outreach_drafts_enabled: bool = False
     feature_reminder_sweep_interval_minutes: int = 240
     feature_resume_tracking_enabled: bool = False
+    feature_resume_variant_marker_enabled: bool = True
     feature_resume_tracking_sweep_interval_minutes: int = 240
     candidate_work_authorizations: list[str] | None = Field(default_factory=list)
     preferred_employment_types: list[Literal["C2C", "W2", "1099", "FT"]] = Field(default_factory=list)
@@ -470,6 +519,17 @@ class ResumeResponse(BaseModel):
     content_summary: str | None = None
     created_at: datetime
     updated_at: datetime
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def variant_code(self) -> str:
+        """Stable display identity for a resume variant.
+
+        Derived from the primary key rather than stored, so it survives deletes
+        without renumbering. Codes therefore have gaps (R01, R03, R07) - that is
+        deliberate: a code always means the same resume, forever.
+        """
+        return resume_variant_code(self.id)
 
     model_config = {"from_attributes": True}
 
@@ -1210,6 +1270,10 @@ class SentItemDetailsResponse(BaseModel):
     requirement_received_link: str | None = None
     sent_gmail_message_link: str | None = None
     resume_variant_sent: str | None = None
+    resume_variant_code: str | None = None
+    # The marker embedded invisibly in the sent mail. Shown here so the code can be
+    # read straight from the app instead of digging through the raw message.
+    resume_variant_token: str | None = None
     attached_files: list[str] = Field(default_factory=list)
     company: str | None = None
     recruiter_name: str | None = None
@@ -2081,6 +2145,86 @@ class ResumePerformanceSummaryItem(BaseModel):
 
 class ResumePerformanceSummaryResponse(BaseModel):
     items: list[ResumePerformanceSummaryItem]
+
+
+class RoleGapSkill(BaseModel):
+    skill: str
+    jd_count: int
+    concentration: float
+    score: float
+
+
+class RoleGapSampleJD(BaseModel):
+    email_id: int
+    role: str
+    missing_skills: list[str] = Field(default_factory=list)
+    created_at: datetime
+
+
+class RoleGapGroup(BaseModel):
+    role_family: str
+    jd_count: int
+    flagged_count: int
+    flagged_share: float
+    median_role_fit: float | None = None
+    median_resume_score: float | None = None
+    closest_variant_code: str = ""
+    closest_variant_label: str = ""
+    closest_variant_uses: int = 0
+    top_titles: list[str] = Field(default_factory=list)
+    missing_skills: list[RoleGapSkill] = Field(default_factory=list)
+    sample_jds: list[RoleGapSampleJD] = Field(default_factory=list)
+
+
+class RoleGapReportResponse(BaseModel):
+    window_days: int
+    analysed_jds: int
+    groups: list[RoleGapGroup] = Field(default_factory=list)
+
+
+class WhyThisResumeAlternative(BaseModel):
+    variant_code: str = ""
+    resume_file_name: str = ""
+    final_resume_score: float | None = None
+    ats_score: float | None = None
+    selection_reason: str | None = None
+    is_selected: bool = False
+
+
+class WhyThisResumeResponse(BaseModel):
+    available: bool
+    reason_unavailable: str | None = None
+    email_id: int | None = None
+    variant_code: str = ""
+    variant_label: str = ""
+    resume_file_name: str = ""
+    jd_role: str = ""
+    selection_status: str = ""
+    selection_warning: str | None = None
+    mandatory_gate_status: str = ""
+    mandatory_coverage: float | None = None
+    matched_required: list[str] = Field(default_factory=list)
+    missing_required: list[str] = Field(default_factory=list)
+    matched_priority: list[str] = Field(default_factory=list)
+    missing_priority: list[str] = Field(default_factory=list)
+    role_family_fit: float | None = None
+    jd_role_family: str = ""
+    final_resume_score: float | None = None
+    ats_score: float | None = None
+    ats_summary: str | None = None
+    picker_reason: str | None = None
+    alternatives: list[WhyThisResumeAlternative] = Field(default_factory=list)
+
+
+class VariantLookupResponse(BaseModel):
+    email_id: int
+    variant_code: str
+    variant_label: str | None = None
+    resume_file_name: str | None = None
+    role: str | None = None
+    subject: str | None = None
+    recruiter_email: str | None = None
+    sent_at: datetime | None = None
 
 
 class ApplicationOutreachMessageResponse(BaseModel):

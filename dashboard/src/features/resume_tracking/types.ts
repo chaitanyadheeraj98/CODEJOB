@@ -61,3 +61,83 @@ export type ManualApplicationInput = {
   submission_method: SubmissionMethod
   resume_submitted_at: string | null
 }
+
+export type RoleGapSkill = {
+  skill: string
+  jd_count: number
+  concentration: number
+  score: number
+}
+
+export type RoleGapSampleJD = {
+  email_id: number
+  role: string
+  missing_skills: string[]
+  created_at: string
+}
+
+export type RoleGapGroup = {
+  role_family: string
+  jd_count: number
+  flagged_count: number
+  flagged_share: number
+  median_role_fit: number | null
+  median_resume_score: number | null
+  closest_variant_code: string
+  closest_variant_label: string
+  closest_variant_uses: number
+  top_titles: string[]
+  missing_skills: RoleGapSkill[]
+  sample_jds: RoleGapSampleJD[]
+}
+
+export type RoleGapReport = {
+  window_days: number
+  analysed_jds: number
+  groups: RoleGapGroup[]
+}
+
+export type VariantLookupResult = {
+  email_id: number
+  variant_code: string
+  variant_label: string | null
+  resume_file_name: string | null
+  role: string | null
+  subject: string | null
+  recruiter_email: string | null
+  sent_at: string | null
+}
+
+export type WhyThisResumeAlternative = {
+  variant_code: string
+  resume_file_name: string
+  final_resume_score: number | null
+  ats_score: number | null
+  selection_reason: string | null
+  is_selected: boolean
+}
+
+export type WhyThisResume = {
+  available: boolean
+  reason_unavailable: string | null
+  email_id: number | null
+  variant_code: string
+  variant_label: string
+  resume_file_name: string
+  jd_role: string
+  selection_status: string
+  selection_warning: string | null
+  mandatory_gate_status: string
+  mandatory_coverage: number | null
+  matched_required: string[]
+  missing_required: string[]
+  matched_priority: string[]
+  missing_priority: string[]
+  role_family_fit: number | null
+  jd_role_family: string
+  final_resume_score: number | null
+  ats_score: number | null
+  ats_summary: string | null
+  picker_reason: string | null
+  alternatives: WhyThisResumeAlternative[]
+}

@@ -441,6 +441,8 @@ export type ResumeAssetOption = {
   primary_role: string
   structured_skills: string[]
   variant_label: string
+  /** Stable display identity, e.g. "R07". Derived server-side from the id. */
+  variant_code?: string
   is_enabled: boolean
   is_current: boolean
 }

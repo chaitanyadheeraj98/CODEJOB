@@ -8,6 +8,9 @@ import type {
   ResumeFunnelMetrics,
   ResumePerformanceSummaryItem,
   ResumeSubmissionStatus,
+  RoleGapReport,
+  VariantLookupResult,
+  WhyThisResume,
 } from './types'
 
 const jsonInit = (method: string, body?: unknown): RequestInit => ({
@@ -54,4 +57,16 @@ export function getOutreachMessage(apiBase: string, applicationId: number, messa
 
 export async function runResumeTrackingSuggestions(apiBase: string): Promise<ApplicationSuggestion[]> {
   return (await requestJson<{ items: ApplicationSuggestion[] }>(`${apiBase}/applications/resume-tracking/suggestions/run`, { method: 'POST' })).items
+}
+
+export function getRoleGaps(apiBase: string, windowDays = 90, minJds = 5): Promise<RoleGapReport> {
+  return requestJson(`${apiBase}/resumes/role-gaps?window_days=${windowDays}&min_jds=${minJds}`)
+}
+
+export function lookupVariantToken(apiBase: string, token: string): Promise<VariantLookupResult> {
+  return requestJson(`${apiBase}/resumes/variant-lookup?token=${encodeURIComponent(token)}`)
+}
+
+export function getWhyThisResume(apiBase: string, applicationId: number): Promise<WhyThisResume> {
+  return requestJson(`${apiBase}/applications/${applicationId}/why-this-resume`)
 }

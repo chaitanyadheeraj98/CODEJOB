@@ -138,6 +138,7 @@ class SettingsBootstrapService:
                 feature_applications_enabled=False,
                 feature_resume_tracking_enabled=False,
                 feature_resume_tracking_sweep_interval_minutes=240,
+                feature_resume_variant_marker_enabled=True,
                 draft_text_size="normal",
                 fallback_draft_template=DEFAULT_FALLBACK_DRAFT_TEMPLATE,
                 signature_name=DEFAULT_SIGNATURE_NAME,

@@ -260,6 +260,10 @@ class UserSettings(Base):
     feature_reminder_sweep_interval_minutes: Mapped[int] = mapped_column(Integer, default=240)
     feature_resume_tracking_enabled: Mapped[bool] = mapped_column(default=False)
     feature_resume_tracking_sweep_interval_minutes: Mapped[int] = mapped_column(Integer, default=240)
+    # Stamps an invisible "CJ-R14-8842" marker into the HTML part of outgoing mail so a
+    # phoned-in callback can be traced to an exact resume variant and send. Defaults on
+    # because it shipped that way; turning it off stops new sends carrying it.
+    feature_resume_variant_marker_enabled: Mapped[bool] = mapped_column(default=True)
     candidate_work_authorizations_json: Mapped[str] = mapped_column(Text, default="[]")
     preferred_employment_types_json: Mapped[str] = mapped_column(Text, default="[]")
     visible_filters_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
