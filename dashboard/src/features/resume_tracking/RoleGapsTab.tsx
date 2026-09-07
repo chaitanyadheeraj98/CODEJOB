@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { getRoleGaps } from './api'
+import { formatVariantLabel } from './resumeDisplay'
 import type { RoleGapGroup, RoleGapReport } from './types'
 
 type Props = { apiBase: string }
@@ -154,7 +155,7 @@ export default function RoleGapsTab({ apiBase }: Props) {
               <footer className="roleGapFoot">
                 <span className="subtle">
                   Closest today: <strong>{group.closest_variant_code || '—'}</strong>
-                  {group.closest_variant_label ? ` · ${group.closest_variant_label}` : ''}
+                  {group.closest_variant_label ? ` · ${formatVariantLabel(group.closest_variant_label)}` : ''}
                 </span>
                 {group.sample_jds.length ? (
                   <button type="button" className="linkButton" onClick={() => setExpanded(isOpen ? null : group.role_family)} aria-expanded={isOpen}>

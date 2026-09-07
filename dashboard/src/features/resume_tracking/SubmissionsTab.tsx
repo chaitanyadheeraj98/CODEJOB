@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { formatVariantLabel } from './resumeDisplay'
 import type { FilterValues } from '../../components/FilterSortBar'
 import { submissionDefaultFilterValues, submissionFiltersToParams } from './submissionFilters'
 import type { FormEvent } from 'react'
@@ -88,7 +89,7 @@ function WhyPanel({ state }: { state: WhyState | undefined }) {
     <div className="whyPanel">
       <div className={`whyVerdict ${failed ? 'fail' : 'pass'}`}>
         <strong>{why.variant_code}</strong> was sent
-        {why.variant_label ? <span className="subtle"> · {why.variant_label}</span> : null}
+        {why.variant_label ? <span className="subtle"> · {formatVariantLabel(why.variant_label)}</span> : null}
         <span className="whyVerdictText">
           {failed
             ? ' — it failed the must-have check and was picked as the closest available, not a match.'
@@ -317,7 +318,7 @@ export default function SubmissionsTab({ apiBase, resumes, resumeAssetId = null,
         {lookupError ? <p className="errorText" id="variantLookupError" role="alert">{lookupError}</p> : null}
         {lookup ? (
           <dl className="variantLookupResult">
-            <div><dt>Resume sent</dt><dd><strong>{lookup.variant_code}</strong>{lookup.variant_label ? ` · ${lookup.variant_label}` : ''}</dd></div>
+            <div><dt>Resume sent</dt><dd><strong>{lookup.variant_code}</strong>{lookup.variant_label ? ` · ${formatVariantLabel(lookup.variant_label)}` : ''}</dd></div>
             <div><dt>Role</dt><dd>{lookup.role || lookup.subject || 'Not recorded'}</dd></div>
             <div><dt>Recruiter</dt><dd>{lookup.recruiter_email || 'Not recorded'}</dd></div>
             <div><dt>Sent</dt><dd>{lookup.sent_at ? new Date(lookup.sent_at).toLocaleDateString() : 'Not recorded'}</dd></div>
@@ -336,7 +337,7 @@ export default function SubmissionsTab({ apiBase, resumes, resumeAssetId = null,
       {manual ? (
         <form className="resumeTrackingForm" onSubmit={submitManual}>
           <h3>Log a submission</h3>
-          <label>Resume<select required value={manual.resume_asset_id} onChange={(event) => setManual({ ...manual, resume_asset_id: Number(event.target.value) })}>{resumes.map((resume) => <option key={resume.id} value={resume.id}>{`${resume.variant_code || `R${String(resume.id).padStart(2, '0')}`} - ${resume.variant_label || resume.file_name}`}</option>)}</select></label>
+          <label>Resume<select required value={manual.resume_asset_id} onChange={(event) => setManual({ ...manual, resume_asset_id: Number(event.target.value) })}>{resumes.map((resume) => <option key={resume.id} value={resume.id}>{`${resume.variant_code || `R${String(resume.id).padStart(2, '0')}`} - ${formatVariantLabel(resume.variant_label) || resume.file_name}`}</option>)}</select></label>
           <label>Recruiter name<input required value={manual.manual_recruiter_name} onChange={(event) => setManual({ ...manual, manual_recruiter_name: event.target.value })} /></label>
           <label>Company<input required value={manual.manual_recruiter_company} onChange={(event) => setManual({ ...manual, manual_recruiter_company: event.target.value })} /></label>
           <label>Email<input type="email" value={manual.manual_recruiter_email} onChange={(event) => setManual({ ...manual, manual_recruiter_email: event.target.value })} /></label>

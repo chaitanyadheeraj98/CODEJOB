@@ -1,14 +1,24 @@
 import { useCallback, useEffect, useState } from 'react'
 import { getResumeFunnel, getResumePerformanceSummary } from './api'
+import { displaySkills, formatVariantLabel } from './resumeDisplay'
 import type { ResumeFunnelMetrics, ResumePerformanceSummaryItem } from './types'
 import SubmissionsTab from './SubmissionsTab'
 import type { FilterValues } from '../../components/FilterSortBar'
 
-type Props = { apiBase: string; onNavigateToSettings?: (resumeId: number) => void; sortValue?: string; filterValues?: FilterValues }
+type Props = {
+  apiBase: string
+  /** Preferred: open the resume in the Manage tab, without leaving the module. */
+  onManageResume?: (resumeId: number) => void
+  /** Fallback for hosts that have no Manage tab, e.g. a deep link into Settings. */
+  onNavigateToSettings?: (resumeId: number) => void
+  sortValue?: string
+  filterValues?: FilterValues
+}
 
 const code = (item: ResumePerformanceSummaryItem) => item.resume.variant_code || `R${String(item.resume.id).padStart(2, '0')}`
 
-export default function ResumesTab({ apiBase, onNavigateToSettings, sortValue = 'recent', filterValues = {} }: Props) {
+export default function ResumesTab({ apiBase, onManageResume, onNavigateToSettings, sortValue = 'recent', filterValues = {} }: Props) {
+  const openResume = onManageResume ?? onNavigateToSettings
   const [items, setItems] = useState<ResumePerformanceSummaryItem[]>([])
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [funnel, setFunnel] = useState<ResumeFunnelMetrics | null>(null)
@@ -63,7 +73,8 @@ export default function ResumesTab({ apiBase, onNavigateToSettings, sortValue = 
             <tbody>
               {items.map((item) => {
                 const isOpen = selectedId === item.resume.id
-                const label = item.resume.variant_label || item.resume.file_name
+                const label = formatVariantLabel(item.resume.variant_label) || item.resume.file_name
+                const skills = displaySkills(item.resume)
                 return (
                   <tr key={item.resume.id} className={isOpen ? 'selected' : ''}>
                     <th scope="row" className="resumeCodeCell">
@@ -74,18 +85,18 @@ export default function ResumesTab({ apiBase, onNavigateToSettings, sortValue = 
                     <td className="resumeLabelCell" title={label}>{label}</td>
                     <td className="subtle">{item.resume.primary_role || 'Role not set'}</td>
                     <td className="resumeSkillsCell">
-                      {item.resume.structured_skills.length ? (
+                      {skills.length ? (
                         <span className="skillChips">
-                          {item.resume.structured_skills.slice(0, 4).map((skill) => <span className="trackingChip" key={skill}>{skill}</span>)}
-                          {item.resume.structured_skills.length > 4 ? <span className="subtle">+{item.resume.structured_skills.length - 4}</span> : null}
+                          {skills.slice(0, 4).map((skill) => <span className="trackingChip" key={skill}>{skill}</span>)}
+                          {skills.length > 4 ? <span className="subtle">+{skills.length - 4}</span> : null}
                         </span>
                       ) : <span className="subtle">—</span>}
                     </td>
                     <td className="numeric">{item.submission_count.toLocaleString()}</td>
                     {anyOutcomes ? <td className="numeric">{Math.round(item.acceptance_rate * 100)}%</td> : null}
                     <td className="resumeRowActions">
-                      {onNavigateToSettings && (!item.resume.primary_role || !item.resume.variant_label) ? (
-                        <button type="button" className="linkButton" onClick={() => onNavigateToSettings(item.resume.id)}>Add role &amp; label</button>
+                      {openResume && (!item.resume.primary_role || !item.resume.variant_label) ? (
+                        <button type="button" className="linkButton" onClick={() => openResume(item.resume.id)}>Add role &amp; label</button>
                       ) : null}
                     </td>
                   </tr>

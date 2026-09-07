@@ -41,7 +41,10 @@ class ResumeEnrichmentServiceTests(unittest.TestCase):
         self.assertEqual(resume.content_summary, "Backend engineer summary.")
         self.assertEqual(json.loads(resume.content_evidence_json)["years_detected"], 6)
         self.assertEqual(resume.primary_role, "Senior Backend Engineer")
-        self.assertEqual(resume.variant_label, "fintech")
+        # The label is normalised on the way in now (normalize_variant_label), so the
+        # stored value is the clean one. The raw model answer is still kept verbatim
+        # in content_evidence_json.
+        self.assertEqual(resume.variant_label, "Fintech")
 
     def test_enrich_resume_does_not_overwrite_existing_role_or_label(self) -> None:
         resume = SimpleNamespace(
@@ -96,7 +99,10 @@ class ResumeEnrichmentServiceTests(unittest.TestCase):
         build_llm.assert_not_called()
         self.assertTrue(changed)
         self.assertEqual(resume.primary_role, "Java Backend Developer")
-        self.assertEqual(resume.variant_label, "fintech")
+        # The label is normalised on the way in now (normalize_variant_label), so the
+        # stored value is the clean one. The raw model answer is still kept verbatim
+        # in content_evidence_json.
+        self.assertEqual(resume.variant_label, "Fintech")
 
     def test_backfill_role_and_label_is_noop_without_usable_evidence(self) -> None:
         resume = SimpleNamespace(primary_role="", variant_label="", content_evidence_json="{}")

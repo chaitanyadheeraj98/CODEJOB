@@ -3103,8 +3103,8 @@ function App() {
   const [applicationTrackingTab, setApplicationTrackingTab] = useState<'bookmarked' | 'tracked'>(
     () => initialTab('application_tracking', ['bookmarked', 'tracked'] as const, 'bookmarked'),
   )
-  const [resumeTrackingTab, setResumeTrackingTab] = useState<'gaps' | 'resumes' | 'submissions'>(
-    () => initialTab('resume_tracking', ['gaps', 'resumes', 'submissions'] as const, 'gaps'),
+  const [resumeTrackingTab, setResumeTrackingTab] = useState<'gaps' | 'resumes' | 'submissions' | 'manage'>(
+    () => initialTab('resume_tracking', ['gaps', 'resumes', 'submissions', 'manage'] as const, 'gaps'),
   )
   const [pageFilterValues, setPageFilterValues] = useState<Partial<Record<string, FilterValues>>>({})
   const [pageSortValues, setPageSortValues] = useState<Partial<Record<string, string>>>({})
@@ -3789,7 +3789,7 @@ function App() {
       const tab = params.get('tab')
       if (page === 'premium_numbers' && (tab === 'inventory' || tab === 'companies' || tab === 'opportunities' || tab === 'recycle_bin')) setPremiumTab(tab)
       if (page === 'application_tracking' && (tab === 'bookmarked' || tab === 'tracked')) setApplicationTrackingTab(tab)
-      if (page === 'resume_tracking' && (tab === 'resumes' || tab === 'submissions')) setResumeTrackingTab(tab)
+      if (page === 'resume_tracking' && (tab === 'gaps' || tab === 'resumes' || tab === 'submissions' || tab === 'manage')) setResumeTrackingTab(tab)
       const key = tab && ['premium_numbers', 'application_tracking', 'resume_tracking'].includes(page) ? `${page}:${tab}` : page
       const entry = resolveRegistryEntry(filterSortRegistry[key], { resumeAssets: resumeAssetsRef.current })
       if (entry) {
@@ -5477,7 +5477,7 @@ function App() {
     }
     if (page === 'premium_numbers' && (target.tab === 'inventory' || target.tab === 'companies' || target.tab === 'opportunities' || target.tab === 'recycle_bin')) setPremiumTab(target.tab)
     if (page === 'application_tracking' && (target.tab === 'bookmarked' || target.tab === 'tracked')) setApplicationTrackingTab(target.tab)
-    if (page === 'resume_tracking' && (target.tab === 'resumes' || target.tab === 'submissions')) setResumeTrackingTab(target.tab)
+    if (page === 'resume_tracking' && (target.tab === 'gaps' || target.tab === 'resumes' || target.tab === 'submissions' || target.tab === 'manage')) setResumeTrackingTab(target.tab)
     setPageFilterValues((current) => ({ ...current, [resolved.registryKey]: resolved.values }))
     const sort = pageSortValues[resolved.registryKey] ?? config.sortOptions[0]?.value ?? ''
     window.history.pushState(null, '', `${window.location.pathname}?${buildUrlSearch(target.page, target.tab ?? null, sort, resolved.values, config, 0)}`)
@@ -7779,7 +7779,7 @@ function App() {
 
           {activePage === 'application_tracking' ? <AppTSPage apiBase={apiBase} refreshToken={premiumRefreshToken} activeTab={applicationTrackingTab} onTabChange={setApplicationTrackingTab} filterValues={activeFilterValues} sortValue={activeSortValue} /> : null}
 
-          {activePage === 'resume_tracking' ? <ResumeTrackingPage apiBase={apiBase} onNavigateToSettings={(resumeId) => { setFocusResumeId(resumeId); setActivePage('settings') }} activeTab={resumeTrackingTab} onTabChange={setResumeTrackingTab} filterValues={activeFilterValues} sortValue={activeSortValue} /> : null}
+          {activePage === 'resume_tracking' ? <ResumeTrackingPage apiBase={apiBase} onNavigateToSettings={(resumeId) => { setFocusResumeId(resumeId); setActivePage('settings') }} onLibraryChanged={() => { void loadSettingsBootstrap().catch(() => undefined) }} activeTab={resumeTrackingTab} onTabChange={setResumeTrackingTab} filterValues={activeFilterValues} sortValue={activeSortValue} /> : null}
 
           {activePage === 'inbox' ? (
             <section className="card pageSection inboxSection">
