@@ -580,6 +580,27 @@ def _append_tracking_pixel(html_body: str, tracking_pixel_url: str | None) -> st
     )
 
 
+def _append_variant_token(html_body: str, variant_token: str | None) -> str:
+    """Stamp the resume variant marker into the HTML part, hidden from the reader.
+
+    Which resume went to which recruiter is already recorded server-side, but that
+    record cannot be reached from the outside: when a recruiter phones about "the
+    resume you sent", the only shared handle is the message itself. The marker
+    gives that message a handle the user can search for or quote back.
+
+    Hidden rather than removed: it rides along with quotes and forwards, so it
+    survives the reply chain. It goes in the HTML alternative only - the plain text
+    part stays clean.
+    """
+    if not variant_token:
+        return html_body
+    token = html.escape(variant_token, quote=True)
+    return (
+        f'{html_body}<span style="display:none;font-size:0;line-height:0;'
+        f'max-height:0;overflow:hidden;opacity:0" aria-hidden="true">{token}</span>'
+    )
+
+
 def send_reply_with_attachment(
     thread_id: str,
     to: str,
@@ -591,6 +612,7 @@ def send_reply_with_attachment(
     draft_text_size: str = "normal",
     attachments: list[MailAttachment] | None = None,
     tracking_pixel_url: str | None = None,
+    variant_token: str | None = None,
 ) -> str:
     service = _gmail_service()
     message = EmailMessage()
@@ -601,9 +623,12 @@ def send_reply_with_attachment(
     plain_body = body or ""
     message.set_content(plain_body)
     try:
-        html_body = _append_tracking_pixel(
-            draft_text_to_html(plain_body, draft_text_size=draft_text_size),
-            tracking_pixel_url,
+        html_body = _append_variant_token(
+            _append_tracking_pixel(
+                draft_text_to_html(plain_body, draft_text_size=draft_text_size),
+                tracking_pixel_url,
+            ),
+            variant_token,
         )
         message.add_alternative(html_body, subtype="html")
     except Exception:
@@ -629,6 +654,7 @@ def send_new_email_with_attachment(
     draft_text_size: str = "normal",
     attachments: list[MailAttachment] | None = None,
     tracking_pixel_url: str | None = None,
+    variant_token: str | None = None,
 ) -> str:
     service = _gmail_service()
     message = EmailMessage()
@@ -639,9 +665,12 @@ def send_new_email_with_attachment(
     plain_body = body or ""
     message.set_content(plain_body)
     try:
-        html_body = _append_tracking_pixel(
-            draft_text_to_html(plain_body, draft_text_size=draft_text_size),
-            tracking_pixel_url,
+        html_body = _append_variant_token(
+            _append_tracking_pixel(
+                draft_text_to_html(plain_body, draft_text_size=draft_text_size),
+                tracking_pixel_url,
+            ),
+            variant_token,
         )
         message.add_alternative(html_body, subtype="html")
     except Exception:

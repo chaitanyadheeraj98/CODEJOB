@@ -148,7 +148,7 @@ const PAGE_SUBTITLES: Record<ActivePage, string> = {
   sent_items: 'Review emails that have already been sent.',
   inbox: 'Review recruiter replies and continue Gmail conversations.',
   premium_numbers: 'Manage inventory, assignments, and rescoring operations.',
-  resume_tracking: 'See which resume variants move through the funnel and why others stall.',
+  resume_tracking: 'See which roles your resumes keep failing, and what a winning variant would need.',
   application_tracking: 'Review bookmarked requirements and explicitly tracked applications.',
   relationship_labeling: 'Judge whether two requirements belong to the same hiring programme, so the scorer can be measured.',
   scheduled_tasks: 'Every scheduled task, when it runs, and exactly what it is allowed to do.',
@@ -340,6 +340,7 @@ type SettingsPayload = {
   timezone: string
   feature_scheduling_sweep_interval_minutes: number
   feature_resume_tracking_enabled: boolean
+  feature_resume_variant_marker_enabled: boolean
   feature_resume_tracking_sweep_interval_minutes: number
   candidate_work_authorizations: string[]
   preferred_employment_types: Array<'C2C' | 'W2' | '1099' | 'FT'>
@@ -648,6 +649,8 @@ type ResumeAsset = {
   primary_role: string
   structured_skills: string[]
   variant_label: string
+  /** Stable display identity, e.g. "R07". Derived server-side from the id. */
+  variant_code?: string
   is_enabled: boolean
   is_current: boolean
   created_at: string
@@ -865,7 +868,10 @@ export function ResumeDatabaseSection({
                 <article key={resume.id} id={`resume-row-${resume.id}`} className={`resumeDatabaseItem pillRow ${resume.id === focusResumeId ? 'focused' : ''}`}>
                   <div className="resumeDatabaseHeader">
                     <div className="resumeDatabaseTitleBlock">
-                      <strong className="resumeDatabaseFileName">{resume.file_name}</strong>
+                      <span className="resumeDatabaseTitleLine">
+                        <span className="resumeVariantCode">{resume.variant_code || `R${String(resume.id).padStart(2, '0')}`}</span>
+                        <strong className="resumeDatabaseFileName">{resume.file_name}</strong>
+                      </span>
                       <div className="resumeDatabaseBadges">
                         <span className="resumeDatabaseVersion">{`v${resume.version}`}</span>
                         {resume.is_current ? <span className="resumeDatabaseBadge">Legacy current fallback</span> : null}
@@ -1533,6 +1539,8 @@ export type SentItemDetails = {
   requirement_received_link: string | null
   sent_gmail_message_link: string | null
   resume_variant_sent: string | null
+  resume_variant_code?: string | null
+  resume_variant_token?: string | null
   attached_files: string[]
   company: string | null
   recruiter_name: string | null
@@ -2289,7 +2297,10 @@ export function renderContactDetailsGrid(details: SentItemDetails, item: Contact
       </ParserDetailsCard>
       <ParserDetailsCard title="Resume / Send Audit" className="parserDetailsSummaryBlock">
         <pre className="parserCardPre">{[
-          `Resume Variant Sent: ${renderTextOrDash(details.resume_variant_sent ?? item.resume_file_name)}`,
+          `Resume Variant Sent: ${renderTextOrDash(details.resume_variant_code ? `${details.resume_variant_code} - ${details.resume_variant_sent ?? item.resume_file_name ?? ''}`.trim().replace(/ -$/, '') : (details.resume_variant_sent ?? item.resume_file_name))}`,
+          // The same marker that is embedded invisibly in the sent mail. Shown here
+          // so it can be read off without opening the raw message.
+          `Variant Marker: ${renderTextOrDash(details.resume_variant_token)}`,
           `Attached Files: ${renderListOrDash(details.attached_files)}`,
           `To: ${renderTextOrDash(details.to_email ?? item.recipient_email)}`,
           `CC: ${renderTextOrDash(details.cc_email ?? item.cc_email)}`,
@@ -2992,6 +3003,7 @@ function App() {
     timezone: 'UTC',
     feature_scheduling_sweep_interval_minutes: 15,
     feature_resume_tracking_enabled: false,
+    feature_resume_variant_marker_enabled: true,
     feature_resume_tracking_sweep_interval_minutes: 240,
     candidate_work_authorizations: [],
     preferred_employment_types: [],
@@ -3091,8 +3103,8 @@ function App() {
   const [applicationTrackingTab, setApplicationTrackingTab] = useState<'bookmarked' | 'tracked'>(
     () => initialTab('application_tracking', ['bookmarked', 'tracked'] as const, 'bookmarked'),
   )
-  const [resumeTrackingTab, setResumeTrackingTab] = useState<'resumes' | 'submissions'>(
-    () => initialTab('resume_tracking', ['resumes', 'submissions'] as const, 'resumes'),
+  const [resumeTrackingTab, setResumeTrackingTab] = useState<'gaps' | 'resumes' | 'submissions'>(
+    () => initialTab('resume_tracking', ['gaps', 'resumes', 'submissions'] as const, 'gaps'),
   )
   const [pageFilterValues, setPageFilterValues] = useState<Partial<Record<string, FilterValues>>>({})
   const [pageSortValues, setPageSortValues] = useState<Partial<Record<string, string>>>({})
@@ -3414,6 +3426,7 @@ function App() {
       // would make a reminder set for 09:15 arrive as late as 09:45.
       feature_scheduling_sweep_interval_minutes: Math.max(5, Math.min(payload.feature_scheduling_sweep_interval_minutes || 15, 1440)),
       feature_resume_tracking_enabled: Boolean(payload.feature_resume_tracking_enabled),
+      feature_resume_variant_marker_enabled: payload.feature_resume_variant_marker_enabled !== false,
       feature_resume_tracking_sweep_interval_minutes: Math.max(30, Math.min(payload.feature_resume_tracking_sweep_interval_minutes || 240, 1440)),
       candidate_work_authorizations: payload.candidate_work_authorizations ?? [],
       // Coerced, not trusted: the panel reads .length off this on every render,
@@ -6827,6 +6840,22 @@ function App() {
                       <span className="toggleTrack" />
                     </span>
                   </label>
+                  <label className="toggleRow pillRow">
+                    <span>Resume variant marker in sent mail</span>
+                    <span className="toggleSwitch">
+                      <input
+                        type="checkbox"
+                        checked={settings.feature_resume_variant_marker_enabled}
+                        onChange={(e) => setSettings({ ...settings, feature_resume_variant_marker_enabled: e.target.checked })}
+                      />
+                      <span className="toggleTrack" />
+                    </span>
+                  </label>
+                  <p className="settingsHint subtle">
+                    Stamps an invisible code (e.g. <code>CJ-R14-8842</code>) into outgoing mail so a recruiter
+                    callback can be traced to the exact resume variant. Hidden from the recruiter; readable in
+                    Sent Items. Turning this off only affects new sends.
+                  </p>
                   <label>
                     Resume suggestion sweep (minutes)
                     <input type="number" min={30} max={1440} value={settings.feature_resume_tracking_sweep_interval_minutes} onChange={(event) => setSettings({ ...settings, feature_resume_tracking_sweep_interval_minutes: Number(event.target.value) })} />
