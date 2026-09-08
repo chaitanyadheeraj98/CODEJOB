@@ -31,6 +31,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from app.parsing.document_extraction import clean_html_if_present
+from app.skill_taxonomy import classify_role_family
 
 # Job titles are short. The longest genuinely-clean role measured across 8,508
 # production rows was 67 characters; the cap leaves generous headroom while still
@@ -214,3 +215,36 @@ def apply_role_assignment(
     if assignment.role_canonical is not None:
         email.role_canonical = assignment.role_canonical
     return assignment
+
+
+def role_family_fields(*, role: str | None, skills_text: str | None) -> dict[str, object]:
+    """The three role-family columns, shaped to be spread into RecruiterEmail(...).
+
+    Returned as a dict rather than set on the row so the write sites can keep using
+    `**` the way they already do for `jd_entity_fields_from_parsed` and
+    `fill_entity_gaps` - one line each, and impossible to add a column at one site
+    and forget it at another.
+
+    Classified here, at row construction, rather than off the resume picker
+    breakdown: the breakdown only exists when a resume was actually selected, so
+    reading the family from there left every unmatched JD with no family at all -
+    exactly the rows a gap report most needs to see.
+    """
+    classification = classify_role_family(role, skills_text)
+    return {
+        "role_family": classification.family,
+        "role_family_confidence": classification.confidence,
+        "role_family_taxonomy_version": classification.taxonomy_version,
+    }
+
+
+def apply_role_family(email: object, *, role: str | None, skills_text: str | None) -> None:
+    """Set the role-family columns on an existing row.
+
+    For the re-process path, where the row is updated rather than constructed.
+    Unlike `apply_role_assignment` this always overwrites: a re-classification is
+    the point, and the taxonomy version records which vocabulary produced it, so
+    nothing is lost by refreshing a stale answer.
+    """
+    for column, value in role_family_fields(role=role, skills_text=skills_text).items():
+        setattr(email, column, value)

@@ -2,6 +2,7 @@ from mcp.server.fastmcp import FastMCP
 
 from app.config import settings
 from app.mcp_server.tools import (
+    analyse_role_target,
     compare_records,
     check_manual_intake,
     count_received_emails,
@@ -90,6 +91,11 @@ BASE_TOOLS = (
     get_record_details,
     list_external_opportunities,
     get_resume,
+    # Read-only, and registered unflagged rather than held back like the two groups
+    # below: it exists to answer "what would it take to apply for X?" in chat, and a
+    # flag defaulting off would ship that answer switched off. It takes the baseline
+    # from 32 tools to 33.
+    analyse_role_target,
     list_chat_attachments,
     read_chat_attachment,
     # Read-only: it draws a button, and the user's click navigates. Registered

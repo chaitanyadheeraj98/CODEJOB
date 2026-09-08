@@ -11,7 +11,7 @@ from app.ai.resume_context_attribution import RESUME_CONTEXT_RULES_ONLY
 from app.models import RecruiterEmail, UserSettings
 from app.phase0 import DEFAULT_FALLBACK_DRAFT_TEMPLATE, DEFAULT_SIGNATURE_EMAIL, DEFAULT_SIGNATURE_NAME, DEFAULT_SIGNATURE_PHONE, draft_reply, greeting_from_to_contact, parse_email, render_fallback_draft_template, requested_details_block, skills_from_text
 from app.routing import RoutingDecision
-from app.services.role_provenance import RoleSource, normalize_role
+from app.services.role_provenance import RoleSource, apply_role_family, normalize_role
 from app.services.phone_intelligence_workflow_service import PhoneIntelligenceWorkflowResult, PhoneIntelligenceWorkflowService
 
 logger = logging.getLogger(__name__)
@@ -107,6 +107,9 @@ class CandidateRuntimeService:
             email.location = str(parsed["location"])
             email.salary_text = str(parsed["salary_text"])
             email.skills_text = str(parsed["skills_text"])
+            # The role just stopped being "Unknown Role", so the family classified
+            # from the old sentinel is now wrong.
+            apply_role_family(email, role=email.role, skills_text=email.skills_text)
             if "Unknown Role" in email.draft_reply:
                 greeting_line = greeting_from_to_contact(email.recipient_email, email.body)
                 email.draft_reply = self.build_user_fallback_draft(

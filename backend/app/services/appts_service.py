@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
-from email.utils import parseaddr
 
 from rq import Retry
 from sqlalchemy.exc import IntegrityError
@@ -27,7 +26,7 @@ from app.models import (
     ResumeAsset,
     utc_now,
 )
-from app.services import application_service, end_client_validation, resume_tracking_service
+from app.services import application_service, end_client_validation, recruiter_identity_service, resume_tracking_service
 
 logger = logging.getLogger(__name__)
 
@@ -228,12 +227,14 @@ def create_tracked_application_from_email(
 ) -> tuple[AppTSApplication, bool] | None:
     if not email.resume_asset_id:
         return None
-    recruiter_name, recruiter_email = parseaddr(email.sender or "")
-    company = (email.company or "").strip() or "Unknown"
+    # Same correction as resume_tracking_service: the sender of a forwarded
+    # requirement is not the recruiter it was sent to, and `email.company` is the
+    # sender's firm by the extractor's own definition.
+    recruiter = recruiter_identity_service.recruiter_identity_for(db, email, owner_id=owner_id)
     return create_tracked_application_manual(
         db, owner_id=owner_id, resume_asset_id=email.resume_asset_id, dedupe_key=f"appts_email:{email.id}",
-        manual_recruiter_name=recruiter_name.strip() or recruiter_email or "Unknown", manual_recruiter_company=company,
-        manual_recruiter_email=recruiter_email, manual_job_title=(email.role or "").strip() or "Not specified",
+        manual_recruiter_name=recruiter.name or "Unknown", manual_recruiter_company=recruiter.company or "Unknown",
+        manual_recruiter_email=recruiter.address, manual_job_title=(email.role or "").strip() or "Not specified",
         manual_end_client=(email.end_client or "").strip(), manual_source_note=f"Tracked from email {email.id}",
         resume_submitted_at=email.sent_at, location_snapshot=email.location or "",
         source_recruiter_email_id=email.id,

@@ -41,6 +41,20 @@ class RecruiterEmail(Base):
     # never Text: this one is indexed, and an unbounded indexed column blew the
     # Postgres btree key limit once already (migration 0051).
     role_canonical: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    # The role family this JD was classified into, plus how sure the classifier was
+    # and which vocabulary decided it. Previously this answer only ever existed
+    # inside resume_picker_breakdown_json, so a JD with no resume selection had no
+    # family at all and reclassifying meant rescoring every email.
+    #
+    # NULL means "never classified" and must NOT be read as "general" - the same
+    # convention role_source establishes above. String(40) and indexed for the same
+    # reason as role_canonical: bounded varchars are safe to index, unbounded Text
+    # is what took the backend down on boot.
+    role_family: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    role_family_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # "<system>:<version>", e.g. "builtin:1". Swapping in an external occupation
+    # standard later is then a value change, not another migration.
+    role_family_taxonomy_version: Mapped[str | None] = mapped_column(String(40), nullable=True)
     location: Mapped[str] = mapped_column(String(255), default="")
     salary_text: Mapped[str] = mapped_column(String(255), default="")
     skills_text: Mapped[str] = mapped_column(Text, default="")

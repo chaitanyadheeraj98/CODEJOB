@@ -97,6 +97,48 @@ export type RoleGapReport = {
   groups: RoleGapGroup[]
 }
 
+export type RoleTargetSkill = {
+  skill: string
+  jd_count: number
+  concentration: number
+  score: number
+  covered_by_closest: boolean
+}
+
+export type RoleTargetVariant = {
+  variant_code: string
+  variant_label: string
+  coverage: number
+  matched_skills: string[]
+  missing_skills: string[]
+  role_alignment_score: number
+  foundation_score: number
+}
+
+export type RoleTargetSampleJD = {
+  email_id: number
+  role: string
+  skills: string
+  match_reason: string
+  match_score: number
+}
+
+/** 'corpus' | 'thin' | 'none' - how much evidence the answer below is standing on. */
+export type RoleTargetReport = {
+  target_role: string
+  window_days: number
+  cohort_size: number
+  evidence_tier: string
+  demanded_skills: RoleTargetSkill[]
+  variants: RoleTargetVariant[]
+  closest_variant_code: string
+  closest_variant_label: string
+  verdict_tone: string
+  verdict: string
+  sample_jds: RoleTargetSampleJD[]
+  narrative: string | null
+}
+
 export type VariantLookupResult = {
   email_id: number
   variant_code: string

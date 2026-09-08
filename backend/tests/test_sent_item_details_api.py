@@ -12,7 +12,12 @@ from sqlalchemy.pool import StaticPool
 from app import main
 from app.db import Base
 from app.external_feeds.models import ExternalFeedSource, ExternalOpportunity
-from app.models import PremiumNumberContact, PremiumNumberLead, RecruiterEmail
+from app.models import (
+    PremiumNumberContact,
+    PremiumNumberLead,
+    RecruiterEmail,
+    RecruiterOpportunity,
+)
 
 
 class SentItemDetailsApiTests(unittest.TestCase):
@@ -204,6 +209,120 @@ class SentItemDetailsApiTests(unittest.TestCase):
         self.assertIsNone(payload["employer_name"])
         self.assertEqual(payload["employer_email"], "hr@horizonsofttech.net")
         self.assertIsNone(payload["employer_phone"])
+
+    def _forwarded_requirement(self, **overrides: object) -> int:
+        """A requirement forwarded by one firm to a recruiter at another.
+
+        `company` is the extractor's word for the firm that *sent* the mail, so it
+        describes the forwarder and says nothing about the recruiter downstream.
+        """
+        defaults = dict(
+            owner_id=main.settings.owner_id,
+            sender="Alekya <alekya@rpatechnologyinc.com>",
+            subject="Jr. Java Full stack Developer",
+            body="Java, Spring Boot",
+            company="RPATECHNOLOGY INC",
+            role="Jr. Java Full stack Developer",
+            recipient_email="lalitha.y@metasisinfo.com",
+            state="approved_sent",
+            sent_status="sent",
+            source="gmail",
+            external_message_id="msg-forwarded-1",
+            gmail_sent_id="sent-forwarded-1",
+            sent_at=datetime(2026, 6, 27, 18, 0, tzinfo=UTC),
+        )
+        defaults.update(overrides)
+        with Session(self.engine) as db:
+            row = RecruiterEmail(**defaults)
+            db.add(row)
+            db.commit()
+            return row.id
+
+    def test_a_contact_made_for_the_recipient_does_not_inherit_the_senders_company(self) -> None:
+        email_id = self._forwarded_requirement()
+
+        response = self.client.get(f"/candidates/{email_id}/sent-details")
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(payload["recruiter_email"], "lalitha.y@metasisinfo.com")
+        # The panel used to read "RPATECHNOLOGY INC" here, and the contact created
+        # behind it was filed under that firm permanently. 150 of the 394 recruiter
+        # contacts carried a company copied across a domain boundary this way.
+        self.assertIsNone(payload["recruiter_company"])
+
+        # The contact the panel creates behind the response is the durable damage:
+        # once filed under the wrong firm it stays there. A GET does not commit, so
+        # resolve in a session of our own to see what it would have written.
+        with Session(self.engine) as db:
+            email = db.query(RecruiterEmail).filter(RecruiterEmail.id == email_id).one()
+            _, contact = main._resolve_recruiter_contact_for_email(db, email)
+            db.commit()
+            assert contact is not None
+            self.assertEqual(contact.recruiter_email, "lalitha.y@metasisinfo.com")
+            self.assertEqual(contact.company, "Unknown")
+
+    def test_a_contact_made_for_the_sender_keeps_the_company_the_mail_stated(self) -> None:
+        email_id = self._forwarded_requirement(recipient_email=None, external_message_id="msg-direct-1")
+
+        response = self.client.get(f"/candidates/{email_id}/sent-details")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["recruiter_company"], "RPATECHNOLOGY INC")
+
+    def _metasis_colleague(self) -> None:
+        """A contact who has named the firm behind metasisinfo.com."""
+        with Session(self.engine) as db:
+            db.add(
+                PremiumNumberContact(
+                    owner_id=main.settings.owner_id,
+                    normalized_phone_number="12485550100",
+                    display_phone_number="+1 248 555 0100",
+                    is_recruiter=True,
+                    recruiter_name="Ravi Kumar",
+                    recruiter_email="ravi@metasisinfo.com",
+                    recruiter_email_domain="metasisinfo.com",
+                    company="Metasis Information Systems LLC",
+                )
+            )
+            db.commit()
+
+    def test_the_requirement_company_is_the_recruiters_never_the_forwarders(self) -> None:
+        self._metasis_colleague()
+        email_id = self._forwarded_requirement(
+            external_message_id="msg-forwarded-2", gmail_sent_id="sent-forwarded-2"
+        )
+
+        payload = self.client.get(f"/candidates/{email_id}/sent-details").json()
+        # The Requirement card's "Company" and the Recruiter card's "Recruiter
+        # Company" are one fact under two labels, and used to disagree: "Company"
+        # ran on past the recruiter to the employer's own lead and printed
+        # RPATECHNOLOGY INC, the firm that forwarded the mail.
+        self.assertEqual(payload["company"], "Metasis Information Systems LLC")
+        self.assertEqual(payload["recruiter_company"], payload["company"])
+        self.assertNotEqual(payload["company"], "RPATECHNOLOGY INC")
+
+    def test_an_opportunity_end_client_is_reported_as_a_client_not_as_a_company(self) -> None:
+        self._metasis_colleague()
+        email_id = self._forwarded_requirement(
+            external_message_id="msg-forwarded-3", gmail_sent_id="sent-forwarded-3"
+        )
+        with Session(self.engine) as db:
+            recruiter = db.query(PremiumNumberContact).first()
+            assert recruiter is not None
+            db.add(
+                RecruiterOpportunity(
+                    owner_id=main.settings.owner_id,
+                    recruiter_number_id=recruiter.id,
+                    gmail_message_id="opportunity-forwarded-3",
+                    source_email_id=email_id,
+                    job_title="Jr. Java Full stack Developer",
+                    end_client="State of New Jersey",
+                )
+            )
+            db.commit()
+
+        payload = self.client.get(f"/candidates/{email_id}/sent-details").json()
+        self.assertEqual(payload["end_client"], "State of New Jersey")
+        self.assertEqual(payload["company"], "Metasis Information Systems LLC")
 
     def test_employer_signature_lead_does_not_leak_into_recruiter_name_or_phone(self) -> None:
         with Session(self.engine) as db:

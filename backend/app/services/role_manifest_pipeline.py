@@ -11,6 +11,7 @@ from app.parsing.jd_requirements import requirements_from_payload, requirements_
 from app.schemas import RegenerateCandidateRequest
 from app.services.candidate_screening_service import CandidateScreeningService, apply_screening_decision
 from app.services.eligibility_service import apply_inherited_constraints
+from app.services.role_provenance import apply_role_family
 
 TERMINAL_STATES = {"approved_sent", "rejected", "auto_rejected"}
 
@@ -56,6 +57,9 @@ def extract_and_score_children(
             child.location = str(parsed.get("location") or "unknown")
             child.salary_text = str(parsed.get("salary_text") or "not_specified")
             child.skills_text = str(parsed.get("skills_text") or "none_detected")
+            # The child was created from a title hint alone; now that its own block
+            # has been parsed it gets classified against real skills.
+            apply_role_family(child, role=child.role, skills_text=child.skills_text)
             child.parser_details_json = json.dumps(parser_details, separators=(",", ":"))
             child.skills_json = json.dumps(
                 build_skills_json_payload(parser_details, fallback_skills_text=child.skills_text),

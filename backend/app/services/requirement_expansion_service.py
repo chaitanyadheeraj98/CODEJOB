@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.models import RecruiterEmail
 from app.services import opportunity_lineage_service
-from app.services.role_provenance import RoleSource, assign_role
+from app.services.role_provenance import RoleSource, assign_role, role_family_fields
 from app.services.role_taxonomy import role_matcher_for
 from app.services.role_manifest_service import RoleManifestResult
 
@@ -123,6 +123,10 @@ class RequirementExpansionService:
                     role=child_role.role,
                     role_source=child_role.role_source,
                     role_canonical=child_role.role_canonical,
+                    # Classified from the title alone: a child requirement block has
+                    # no parsed skills of its own yet, so skills_text below is the
+                    # "none_detected" placeholder rather than a value.
+                    **role_family_fields(role=child_role.role, skills_text=None),
                     location="unknown",
                     # "unknown" is a placeholder, not a value, so it stays
                     # unlabelled - a child never inherits the parent's location.

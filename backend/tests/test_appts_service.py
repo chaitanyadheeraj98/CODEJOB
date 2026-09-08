@@ -284,6 +284,36 @@ class AppTSServiceTests(unittest.TestCase):
             self.assertEqual(row.job_title_snapshot, "Java Developer")
             self.assertEqual(row.location_snapshot, "Remote")
 
+    def test_from_email_names_the_recruiter_the_resume_went_to_not_the_forwarder(self) -> None:
+        # The same correction as resume_tracking_service, mirrored here because this
+        # service carried a byte-identical copy of the defect: the sender of a
+        # forwarded requirement is not the recruiter, and `email.company` is the
+        # sender's firm by the extractor's own definition.
+        with Session(self.engine) as db:
+            resume = self._add_resume(db)
+            email = RecruiterEmail(
+                owner_id=OWNER_ID,
+                sender="Alekya <alekya@rpatechnologyinc.com>",
+                subject="Jr. Java Full stack Developer",
+                body="body",
+                resume_asset_id=resume.id,
+                company="RPATECHNOLOGY INC",
+                role="Jr. Java Full stack Developer",
+                recipient_email="lalitha.y@metasisinfo.com",
+                resolved_recruiter_email="lalitha.y@metasisinfo.com",
+            )
+            db.add(email)
+            db.commit()
+
+            result = appts_service.create_tracked_application_from_email(db, email, owner_id=OWNER_ID)
+            db.commit()
+            assert result is not None
+            row, _ = result
+
+            self.assertEqual(row.manual_recruiter_email, "lalitha.y@metasisinfo.com")
+            self.assertEqual(row.manual_recruiter_name, "lalitha.y@metasisinfo.com")
+            self.assertEqual(row.recruiter_company_snapshot, "Unknown")
+
     def test_from_email_falls_back_to_email_address_when_sender_has_no_display_name(self) -> None:
         with Session(self.engine) as db:
             resume = self._add_resume(db)
