@@ -4,7 +4,6 @@ import json
 import re
 from collections import Counter, defaultdict
 from datetime import UTC, datetime, timedelta
-from email.utils import parseaddr
 from statistics import median
 
 from sqlalchemy.exc import IntegrityError
@@ -27,7 +26,7 @@ from app.models import (
 )
 from app.parsing.jd_requirements import ParsedJDRequirements, requirements_from_payload
 from app.skill_taxonomy import compute_intent_weighted_match, detect_role_family
-from app.services import application_service
+from app.services import application_service, end_client_validation, recruiter_identity_service
 
 
 USER_RESUME_STATUS_VALUES = {
@@ -127,13 +126,19 @@ def create_manual_application(
         'manual_recruiter_name': manual_recruiter_name,
         'manual_recruiter_company': manual_recruiter_company,
         'manual_job_title': manual_job_title,
-        'manual_end_client': manual_end_client,
     }
     missing = [name for name, value in required.items() if not value.strip()]
     if missing:
         raise application_service.ApplicationValidationError(
             f'{", ".join(missing)} must not be blank'
         )
+    # End client is optional on purpose, and this is the same decision already
+    # taken in appts_service. It is stated in a minority of postings, and
+    # requiring it here forced the caller below to substitute the recruiter's
+    # own company - which is why almost every tracked application carries a
+    # staffing firm or the literal "Unknown" in an end-client column.
+    # Blank here means *not identified*, never "this job has no end client".
+    manual_end_client = end_client_validation.clean_end_client(manual_end_client)
     submission_method = submission_method.strip()
     if not submission_method or len(submission_method) > 20:
         raise application_service.ApplicationValidationError(
@@ -244,20 +249,25 @@ def create_application_from_recruiter_email(
     """
     if not email.resume_asset_id:
         return None
-    recruiter_name, recruiter_email = parseaddr(email.sender or '')
-    recruiter_company = (email.company or '').strip() or 'Unknown'
+    # The person the resume was sent *to*, which on a forwarded requirement is not
+    # the sender. This used to snapshot `parseaddr(email.sender)`, so a card could
+    # name whoever passed the posting along instead of the recruiter who has it.
+    recruiter = recruiter_identity_service.recruiter_identity_for(db, email, owner_id=owner_id)
     return create_manual_application(
         db,
         owner_id=owner_id,
         resume_asset_id=email.resume_asset_id,
         dedupe_key=f'recruiter_email:{email.id}',
-        manual_recruiter_name=recruiter_name.strip() or recruiter_email or 'Unknown',
-        manual_recruiter_company=recruiter_company,
-        manual_recruiter_email=recruiter_email,
+        manual_recruiter_name=recruiter.name or 'Unknown',
+        manual_recruiter_company=recruiter.company or 'Unknown',
+        manual_recruiter_email=recruiter.address,
         manual_job_title=(email.role or '').strip() or 'Not specified',
-        manual_end_client=(email.end_client or '').strip() or recruiter_company,
+        manual_end_client=(email.end_client or '').strip(),
         manual_source_note=f'Auto-logged from Run Queue/Needs Review send (email id {email.id})',
         resume_submitted_at=email.sent_at,
+        # Links the row to the live contact record, which is what fills the
+        # `current_recruiter_*` fields the card compares its snapshot against.
+        recruiter_contact_id=recruiter.contact_id,
     )
 
 

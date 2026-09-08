@@ -212,6 +212,7 @@ from app.services import (
     appts_service,
     resume_tracking_service,
     role_gap_service,
+    role_target_service,
     why_this_resume_service,
     email_lookup_service,
     end_client_validation,
@@ -439,6 +440,7 @@ from app.schemas import (
     ResumeSubmissionStatusUpdateRequest,
     ResumeUpdateRequest,
     RoleGapReportResponse,
+    RoleTargetResponse,
     VariantLookupResponse,
     WhyThisResumeResponse,
     parse_variant_token,
@@ -999,7 +1001,12 @@ def _resolve_recruiter_contact_for_email(
             owner_id=email.owner_id,
             normalized_email=normalized,
             name=sender_name or "",
-            company=(email.company or "").strip() or "Unknown",
+            # Not `email.company`: that field names the firm that *sent* the mail,
+            # and this contact is often the recruiter it was forwarded to. Stamping
+            # it across a domain boundary is what filed lalitha.y@metasisinfo.com
+            # under "RPATECHNOLOGY INC". Blank becomes "Unknown" in _create_contact,
+            # which is the honest answer and routes the contact into Needs Review.
+            company=recruiter_identity_service.sender_company_for(email, normalized),
             role="recruiter",
             source_email_id=email.id,
             human_confirmed=False,
@@ -1113,7 +1120,6 @@ def _build_sent_item_details(db: Session, email: RecruiterEmail) -> SentItemDeta
     sender_name, sender_email = _parse_sender_contact(email.sender)
     external = _load_external_opportunity_for_sent_details(db, email) if email.source == "nvoids" else None
     recruiter_opportunity = _load_recruiter_opportunity_for_sent_details(db, email)
-    premium_lead = _load_premium_lead_for_sent_details(db, email)
     recruiter_premium_lead = _load_premium_lead_for_sent_details(db, email, role="recruiter")
 
     employer_domains = employer_domains_for_owner(db, email.owner_id)
@@ -1132,12 +1138,23 @@ def _build_sent_item_details(db: Session, email: RecruiterEmail) -> SentItemDeta
         or _domain_matched_address(sender_email, want_employer_domain=True)
     )
     employer_number = _load_employer_number_for_sent_details(db, email, employer_email_guess)
-    company = (
+    # One company, and it is the recruiter's.
+    #
+    # This used to run on past the recruiter to `recruiter_opportunity.end_client`
+    # - a client, not a firm - and then to the employer's own premium lead, so the
+    # Requirement card printed the forwarder's company under the heading
+    # "Company" while the Recruiter card, reading a stricter chain, printed
+    # nothing. Email 8027 showed RPATECHNOLOGY INC in both "Company" and
+    # "Employer Company", which is the same value wearing two labels.
+    recruiter_company = (
         _clean_optional_text(external.company if external else None)
-        or _clean_optional_text(recruiter_opportunity.end_client if recruiter_opportunity else None)
         or _clean_optional_text(recruiter_number.company if recruiter_number else None)
-        or _clean_optional_text(premium_lead.company if premium_lead else None)
+        or _clean_optional_text(recruiter_premium_lead.company if recruiter_premium_lead else None)
+        or _clean_optional_text(
+            recruiter_identity_service.domain_company_for(db, settings.owner_id, recruiter_email)
+        )
     )
+    company = recruiter_company
     return SentItemDetailsResponse(
         email_id=email.id,
         source_type=email.source,
@@ -1166,10 +1183,7 @@ def _build_sent_item_details(db: Session, email: RecruiterEmail) -> SentItemDeta
             or _clean_optional_text(recruiter_number.display_phone_number if recruiter_number else None)
             or _clean_optional_text(recruiter_premium_lead.phone_number_display if recruiter_premium_lead else None)
         ),
-        recruiter_company=(
-            _clean_optional_text(recruiter_number.company if recruiter_number else None)
-            or _clean_optional_text(recruiter_premium_lead.company if recruiter_premium_lead else None)
-        ),
+        recruiter_company=recruiter_company,
         employer_name=_clean_optional_text(employer_number.owner_name if employer_number else None),
         employer_email=(
             _clean_optional_text(employer_number.employer_email if employer_number else None)
@@ -1181,6 +1195,11 @@ def _build_sent_item_details(db: Session, email: RecruiterEmail) -> SentItemDeta
         end_client=(
             _extract_labeled_value(body_text, "end client", "end-client")
             or _extract_labeled_value(body_text, "client")
+            # Where the opportunity row recorded one. It was being read into
+            # `company` instead, which is how a client came to be labelled as a
+            # firm; 52 of the 1,140 opportunities state one and exactly one of
+            # those repeats the sender's own company, so it is a client.
+            or _clean_optional_text(recruiter_opportunity.end_client if recruiter_opportunity else None)
         ),
         implementation_partner=_extract_labeled_value(body_text, "implementation partner", "implementor"),
         vendor=_extract_labeled_value(body_text, "vendor"),
@@ -5088,6 +5107,30 @@ def _milestones_response(raw: str | None) -> dict[str, datetime]:
     return parsed
 
 
+def _source_recruiter_email_id(row: Application) -> int | None:
+    """Which recruiter email did this application come from?
+
+    `AppTSApplication` stores the answer in a column. `Application` never got
+    one, so for every resume-tracking row the column lookup returns None and the
+    sourcing panel has nothing to open. The id is not missing though, only
+    unindexed: `create_application_from_recruiter_email` writes it into the
+    dedupe key as `recruiter_email:{id}`, and every auto-logged row carries that
+    prefix. Read it back rather than adding a column and backfilling one.
+    """
+    column_value = getattr(row, "source_recruiter_email_id", None)
+    if column_value is not None:
+        return int(column_value)
+    dedupe_key = str(getattr(row, "dedupe_key", "") or "")
+    prefix = "recruiter_email:"
+    if not dedupe_key.startswith(prefix):
+        return None
+    try:
+        return int(dedupe_key[len(prefix):])
+    except ValueError:
+        # A manually keyed row that happens to start with the prefix.
+        return None
+
+
 def _application_response(
     db: Session,
     row: Application,
@@ -5103,7 +5146,7 @@ def _application_response(
         )
         .first()
     )
-    source_email_id = getattr(row, "source_recruiter_email_id", None)
+    source_email_id = _source_recruiter_email_id(row)
     source_email = (
         db.query(RecruiterEmail).filter(RecruiterEmail.owner_id == settings.owner_id, RecruiterEmail.id == source_email_id).first()
         if source_email_id else None
@@ -5180,7 +5223,18 @@ def _application_response(
                 application=row,
             ),
             "current_recruiter_name": recruiter.recruiter_name if recruiter else "",
-            "current_recruiter_company": recruiter.company if recruiter else "",
+            # Past the contact record when it has nothing, because "what do we
+            # know about this recruiter now" is the question the card is asking
+            # and the contact is only one of the places that answer it. The
+            # snapshot stays as it was recorded; this is the live half.
+            "current_recruiter_company": (
+                _clean_optional_text(recruiter.company if recruiter else None)
+                or recruiter_identity_service.domain_company_for(
+                    db,
+                    settings.owner_id,
+                    (recruiter.recruiter_email if recruiter else None) or row.manual_recruiter_email,
+                )
+            ),
             "current_recruiter_phone_display": recruiter.display_phone_number if recruiter else "",
             "current_recruiter_email": recruiter.recruiter_email if recruiter else "",
             "current_recruiter_linkedin_url": recruiter.linkedin_url if recruiter else "",
@@ -9631,6 +9685,27 @@ def resume_role_gaps_route(
         min_jds=min_jds,
     )
     return RoleGapReportResponse.model_validate(report)
+
+
+@app.get("/resumes/role-target", response_model=RoleTargetResponse)
+def resume_role_target_route(
+    role: str = Query(..., min_length=2, max_length=120),
+    window_days: int = Query(365, ge=1, le=730),
+    db: Session = Depends(get_db),
+) -> RoleTargetResponse:
+    """What it would take to apply for one named role, whether or not it has a family.
+
+    The wider default window is deliberate: the roles worth asking about are the ones
+    the corpus sees rarely, and 90 days of them is not a cohort.
+    """
+    _require_resume_tracking_enabled(db)
+    report = role_target_service.analyse_role_target(
+        db,
+        owner_id=settings.owner_id,
+        target_role=role,
+        window_days=window_days,
+    )
+    return RoleTargetResponse.model_validate(report)
 
 
 @app.get("/resumes/variant-lookup", response_model=VariantLookupResponse)

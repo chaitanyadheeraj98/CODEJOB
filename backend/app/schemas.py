@@ -2167,6 +2167,9 @@ class RoleGapGroup(BaseModel):
     flagged_count: int
     flagged_share: float
     median_role_fit: float | None = None
+    # How sure the classifier was that these JDs belong together, as opposed to how
+    # well the resumes scored. None means no JD in the group is classified yet.
+    median_confidence: float | None = None
     median_resume_score: float | None = None
     closest_variant_code: str = ""
     closest_variant_label: str = ""
@@ -2180,6 +2183,55 @@ class RoleGapReportResponse(BaseModel):
     window_days: int
     analysed_jds: int
     groups: list[RoleGapGroup] = Field(default_factory=list)
+
+
+# The role-target analysis answers the prospective question the report above cannot:
+# "what would it take to apply for <role>?" for a role with no family of its own. Every
+# key the service emits has to be declared here - Pydantic drops the ones that are not,
+# silently, which is how median_confidence went missing from the gap report once.
+class RoleTargetSkill(BaseModel):
+    skill: str
+    jd_count: int
+    concentration: float
+    score: float
+    covered_by_closest: bool = False
+
+
+class RoleTargetVariant(BaseModel):
+    variant_code: str = ""
+    variant_label: str = ""
+    coverage: float
+    matched_skills: list[str] = Field(default_factory=list)
+    missing_skills: list[str] = Field(default_factory=list)
+    role_alignment_score: float
+    foundation_score: float
+
+
+class RoleTargetSampleJD(BaseModel):
+    email_id: int
+    role: str = ""
+    skills: str = ""
+    # Which pass admitted this JD to the cohort, so the grouping can be checked rather
+    # than believed.
+    match_reason: str = ""
+    match_score: float = 0.0
+
+
+class RoleTargetResponse(BaseModel):
+    target_role: str
+    window_days: int
+    cohort_size: int
+    # corpus | thin | none. `none` means the corpus has nothing on this role, and the
+    # empty skill list below is the finding rather than a failure to compute one.
+    evidence_tier: str
+    demanded_skills: list[RoleTargetSkill] = Field(default_factory=list)
+    variants: list[RoleTargetVariant] = Field(default_factory=list)
+    closest_variant_code: str = ""
+    closest_variant_label: str = ""
+    verdict_tone: str = "ok"
+    verdict: str = ""
+    sample_jds: list[RoleTargetSampleJD] = Field(default_factory=list)
+    narrative: str | None = None
 
 
 class WhyThisResumeAlternative(BaseModel):

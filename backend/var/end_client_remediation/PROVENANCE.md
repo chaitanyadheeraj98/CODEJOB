@@ -84,3 +84,73 @@ Restoring one would reinstate a value the validator rejects, and the writers
 will not reproduce it. Nothing here is worth restoring: every entry is a
 sentence fragment, markup, an unsubscribe address, or an eligibility constraint.
 The file exists so that claim can be checked rather than taken on trust.
+
+---
+
+# vendor-as-end-client remediation — production run, 2026-09-08
+
+A second, larger write into the same two columns, by a different script and for a
+different reason. `clean_end_client_backfill` above blanks what
+`end_client_validation` refuses - markup, sentences, prose. It cannot help here,
+because `Horizon Softech Inc` is a perfectly well-formed company name that is
+wrong for a reason no syntactic check can see: it names the wrong company.
+
+## The run
+
+| | |
+|---|---|
+| Applied at | `2026-09-08T12:03:52Z` |
+| Repository HEAD | `433fabb` (`feat/nvoids-end-client`), recorded correctly in the JSON this time |
+| Database | `codejob-postgres`, `codejob` |
+| Command | `GIT_COMMIT=$(git rev-parse HEAD) python -m scripts.blank_vendor_as_end_client --apply` |
+| Executed in | the running `codejob-backend` container, script copied in and MD5-matched (`486228ca13490bdf31019f0c1c457b40`) first |
+
+## What it changed and why
+
+`create_manual_application` required a non-blank end client, so
+`create_application_from_recruiter_email` satisfied it the only way it could:
+
+```python
+manual_end_client=(email.end_client or '').strip() or recruiter_company,
+```
+
+Every send whose posting did not name a client therefore recorded the staffing
+firm that sent the mail, or the literal `Unknown` when that was unknown too. The
+column is a search filter and is interpolated into follow-up mail, so a follow-up
+to the user's own employer read "your client Horizon Softech Inc".
+
+The selection rule was changed immediately before this run. It used to require
+`end_client_snapshot == recruiter_company_snapshot` - reading the substitution off
+the row itself, which is only sound while nothing else rewrites that column. The
+recruiter-identity remediation eight hours earlier set it to `Unknown` on 725
+rows and took the signature with it. The rule now compares against the source
+email's own `company`, the value the fallback actually copied, and hand-logged
+rows keep the row-local pair as their trigger and are still only ever reported.
+`tests/test_blank_vendor_as_end_client.py` covers both paths.
+
+## Result
+
+```
+Populated end_client_snapshot rows : 3403
+Cleared                            : 3357   (2,813 "Unknown" + 544 stated names)
+Left for a human decision          :    0
+```
+
+Most frequent cleared values after `Unknown`: `Horizon Softech Inc` (44),
+`Tanisha Systems` (9), `RPA TECHNOLOGY INC` (8), `Vdart Inc` (8), then a long
+tail. A follow-up `--dry-run` reported 46 populated rows and 0 to clear,
+confirming idempotence. Those 46 are the survivors: 43 of them are clients the
+posting itself named, which is now the only kind of end client the database
+asserts.
+
+## The files
+
+| File | What it is |
+|---|---|
+| `20260908T120352Z-vendor-as-end-client-apply.json` | **the applied run.** 3,357 rows, each with `before`, `after`, `reason` and the row's `recruiter_company` |
+| `20260908T120130Z-...-dryrun.json`, `20260908T120400Z-...-dryrun.json` | the approved dry run and the post-apply verification (ignored) |
+| `pre-apply-20260908T120326Z.sql` | data-only dump of `applications` taken immediately before the write (ignored - rollback material, not a record) |
+
+Unlike the September 4 run, some of what was destroyed here *was* worth keeping
+in the sense that it is a real company name. It was simply never this column's
+company. Every string is recoverable from `changes[]` by `application_id`.

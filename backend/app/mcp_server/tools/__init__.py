@@ -34,13 +34,14 @@ from app.mcp_server.tools.premium_numbers import (
 from app.mcp_server.tools.references import resolve_record_reference
 from app.mcp_server.tools.relationships import get_relationships, recommend_recruiter
 from app.mcp_server.tools.scheduling import list_scheduled_tasks, propose_scheduled_task
-from app.mcp_server.tools.resumes import get_resume, list_resumes
+from app.mcp_server.tools.resumes import analyse_role_target, get_resume, list_resumes
 from app.mcp_server.tools.runs import get_recent_runs, get_run_items
 from app.mcp_server.tools.status import get_ai_status, get_settings_summary
 from app.mcp_server.tools.support import propose_create_github_issue
 from app.mcp_server.tools.taxonomy_review import propose_taxonomy_bulk_review
 
 __all__ = [
+    "analyse_role_target",
     "check_manual_intake",
     "compare_records",
     "count_received_emails",

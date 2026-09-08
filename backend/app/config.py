@@ -76,6 +76,10 @@ class Settings(BaseSettings):
     ollama_max_tool_iterations: int = 6
     feature_chat_enabled: bool = False
     feature_chat_actions_enabled: bool = False
+    # Prose over the role-target analysis, nothing more. The skills, counts and verdict
+    # are computed before the model is called and are returned unchanged whether it
+    # answers or not, so this is off by default and safe to leave off.
+    feature_role_target_narrative_enabled: bool = False
     # Two flags, not one. Clustering is designed to run and persist long before
     # it may be shown: the whole point of shadow mode is that the scorer earns
     # the right to surface by being measured first. Collapsing these into one

@@ -62,7 +62,12 @@ from app.services.email_inbox_service import (
 from app.services.gmail_group_source_service import ConfiguredRequirementGroup, resolve_trusted_group_context
 from app.services.requirement_expansion_service import RequirementExpansionService
 from app.services.role_manifest_pipeline import extract_and_score_children
-from app.services.role_provenance import apply_role_assignment, assign_role
+from app.services.role_provenance import (
+    apply_role_assignment,
+    apply_role_family,
+    assign_role,
+    role_family_fields,
+)
 from app.services.role_taxonomy import fill_entity_gaps, role_matcher_for
 from app.services.role_manifest_service import RoleManifestResult, RoleManifestService
 from app.services.sendability_service import apply_resume_sendability, resolve_sendability_status
@@ -651,6 +656,7 @@ class OrchestrationService:
                         role=assigned.role,
                         role_source=assigned.role_source,
                         role_canonical=assigned.role_canonical,
+                        **role_family_fields(role=assigned.role, skills_text=str(parsed["skills_text"])),
                         salary_text=str(parsed["salary_text"]),
                         skills_text=str(parsed["skills_text"]),
                         skills_json=json.dumps(
@@ -807,6 +813,7 @@ class OrchestrationService:
                     role=assigned.role,
                     role_source=assigned.role_source,
                     role_canonical=assigned.role_canonical,
+                    **role_family_fields(role=assigned.role, skills_text=str(parsed["skills_text"])),
                     salary_text=str(parsed["salary_text"]),
                     skills_text=str(parsed["skills_text"]),
                     skills_json=json.dumps(
@@ -1834,6 +1841,7 @@ class OrchestrationService:
             email.location = str(parsed.get("location") or email.location or "")
             email.salary_text = str(parsed.get("salary_text") or email.salary_text or "")
             email.skills_text = str(parsed.get("skills_text") or email.skills_text or "")
+            apply_role_family(email, role=email.role, skills_text=email.skills_text)
             for jd_field, jd_value in jd_entity_fields_from_parsed(parsed).items():
                 setattr(email, jd_field, jd_value if jd_value is not None else getattr(email, jd_field))
             email.parser_details_json = json.dumps(parser_details, separators=(",", ":"))
@@ -1975,6 +1983,9 @@ class OrchestrationService:
         email.location = str(preparation.parsed.get("location", email.location or ""))
         email.salary_text = str(preparation.parsed.get("salary_text", email.salary_text or ""))
         email.skills_text = str(preparation.parsed.get("skills_text", email.skills_text or ""))
+        # After role and skills are both refreshed above, so a re-process reclassifies
+        # against what the row now says rather than what it said when first ingested.
+        apply_role_family(email, role=email.role, skills_text=email.skills_text)
         for jd_field, jd_value in jd_entity_fields_from_parsed(preparation.parsed).items():
             setattr(email, jd_field, jd_value if jd_value is not None else getattr(email, jd_field))
         email.skills_json = json.dumps(
@@ -2209,6 +2220,7 @@ class OrchestrationService:
         email.location = str(parsed["location"])
         email.salary_text = str(parsed["salary_text"])
         email.skills_text = str(parsed["skills_text"])
+        apply_role_family(email, role=email.role, skills_text=email.skills_text)
         email.draft_reply = reply
         email.draft_source = draft_source
         email.draft_model = draft_model

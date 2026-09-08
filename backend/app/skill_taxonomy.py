@@ -245,6 +245,27 @@ class IntentMatchBreakdown:
     resume_role_family: str
 
 
+@dataclass(frozen=True)
+class RoleFamilyClassification:
+    """A role family with the evidence behind it, not just the answer.
+
+    `detect_role_family` returns a bare string, so nothing downstream can tell a
+    confident title match apart from a photo-finish between two families that
+    happened to land one weight apart. Persisting `confidence` alongside `family`
+    is what lets an aggregate hold the uncertain rows out instead of blending them
+    in - see services/role_gap_service.py.
+
+    `taxonomy_version` records which vocabulary produced the answer, so swapping in
+    an external occupation standard later is a value change (`onet:29.1`) rather
+    than another migration.
+    """
+
+    family: str
+    confidence: float
+    method: str
+    taxonomy_version: str
+
+
 class JDSectionLike(Protocol):
     heading: str
     bucket: str
@@ -931,47 +952,38 @@ def extract_skills_text(text: str | None) -> str:
     return ", ".join(entry.canonical_name for entry in entries)
 
 
-def detect_role_family(role_text: str | None, skills_text: str | None = None) -> str:
-    normalized_role = normalize_taxonomy_text(role_text)
-    if normalized_role and _ROLE_FAMILY_AI_RE.search(normalized_role):
-        return "ai"
-    entries = entries_from_skills_text(skills_text)
-    if detect_role_family_from_entries(normalized_role or role_text, entries) == "ai":
-        return "ai"
-    if normalized_role and _ROLE_FAMILY_JAVA_FULLSTACK_RE.search(normalized_role):
-        return "java_fullstack"
-    if normalized_role and _ROLE_FAMILY_FRONTEND_RE.search(normalized_role):
-        return "frontend"
-    if normalized_role and _ROLE_FAMILY_DEVOPS_RE.search(normalized_role):
-        return "devops_cloud"
-    if normalized_role and _ROLE_FAMILY_DATA_RE.search(normalized_role):
-        return "data"
-    if normalized_role and _ROLE_FAMILY_JAVA_BACKEND_RE.search(normalized_role):
-        return "java_backend"
-    detected = detect_role_family_from_entries(normalized_role or role_text, entries)
-    if detected != "general":
-        return detected
-    return "general"
+# Bumped whenever the family vocabulary or the thresholds below change, so the
+# backfill can tell which stored classifications are stale. The `<system>:<version>`
+# shape is deliberate: replacing this classifier with an external occupation
+# standard becomes a value change (`onet:29.1`), not another migration.
+ROLE_FAMILY_TAXONOMY_VERSION = "builtin:1"
+
+# A title regex hit is the strongest signal this classifier has - the recruiter
+# named the role. It is still a keyword match rather than an occupation lookup,
+# which is why it is 0.9 and not 1.0.
+_TITLE_REGEX_CONFIDENCE = 0.9
+_AI_WEIGHT_THRESHOLD = 2.5
+_FAMILY_WEIGHT_THRESHOLD = 2.0
+
+# Ordered, and the order is load-bearing: "Full Stack Java Developer" matches both
+# the fullstack and the backend rule, and fullstack has to win.
+_ROLE_FAMILY_TITLE_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (_ROLE_FAMILY_JAVA_FULLSTACK_RE, "java_fullstack"),
+    (_ROLE_FAMILY_FRONTEND_RE, "frontend"),
+    (_ROLE_FAMILY_DEVOPS_RE, "devops_cloud"),
+    (_ROLE_FAMILY_DATA_RE, "data"),
+    (_ROLE_FAMILY_JAVA_BACKEND_RE, "java_backend"),
+)
 
 
-def detect_role_family_from_entries(
-    role_text: str | None,
+def _score_role_families(
     entries: Iterable[SkillTaxonomyEntry] | Iterable[AggregatedSkill],
-) -> str:
-    normalized_role = normalize_taxonomy_text(role_text)
-    if normalized_role and _ROLE_FAMILY_AI_RE.search(normalized_role):
-        return "ai"
-    if normalized_role and _ROLE_FAMILY_JAVA_FULLSTACK_RE.search(normalized_role):
-        return "java_fullstack"
-    if normalized_role and _ROLE_FAMILY_FRONTEND_RE.search(normalized_role):
-        return "frontend"
-    if normalized_role and _ROLE_FAMILY_DEVOPS_RE.search(normalized_role):
-        return "devops_cloud"
-    if normalized_role and _ROLE_FAMILY_DATA_RE.search(normalized_role):
-        return "data"
-    if normalized_role and _ROLE_FAMILY_JAVA_BACKEND_RE.search(normalized_role):
-        return "java_backend"
+) -> dict[str, float]:
+    """Accumulate per-family weight from the skills alone, ignoring the title.
 
+    Insertion order is load-bearing: `max()` breaks ties on it, so reordering these
+    keys silently reclassifies every JD whose top two families are level.
+    """
     scores = {
         "ai": 0.0,
         "java_fullstack": 0.0,
@@ -1003,11 +1015,93 @@ def detect_role_family_from_entries(
             scores["devops_cloud"] += weight
         if category in {"data", "database"}:
             scores["data"] += weight
-    ai_like = scores["ai"]
-    if ai_like >= 2.5:
+    return scores
+
+
+def _weight_confidence(family: str, scores: dict[str, float]) -> float:
+    """How decisively the chosen family beat the runner-up.
+
+    A landslide reads near 1.0 and a dead heat reads 0.5. The AI branch is the only
+    one that can fall below 0.5, because AI wins on an absolute threshold rather
+    than on being the maximum - so "AI, but java_backend scored higher" is recorded
+    as the weak answer it is instead of being indistinguishable from a clean win.
+    """
+    best = scores.get(family, 0.0)
+    if best <= 0.0:
+        return 0.0
+    runner_up = max((score for name, score in scores.items() if name != family), default=0.0)
+    return round(max(0.0, min(1.0, 0.5 + 0.5 * ((best - runner_up) / best))), 4)
+
+
+def classify_role_family(
+    role_text: str | None, skills_text: str | None = None
+) -> RoleFamilyClassification:
+    """The role family ladder, carrying the evidence it decided on.
+
+    Produces exactly the families `detect_role_family` has always produced - an AI
+    signal outranks the other title rules, then the remaining title regexes in
+    order, then the skill weights. Only the reported confidence and method are new,
+    so this can be swapped in without reclassifying anything.
+
+    Note the AI-by-weights branch sits *below* the title scan but is *checked*
+    before it: the original ladder only consulted the skills for AI when no title
+    rule matched at all, and that precedence is preserved deliberately.
+    """
+    normalized_role = normalize_taxonomy_text(role_text)
+    scores = _score_role_families(entries_from_skills_text(skills_text))
+
+    title_family: str | None = None
+    if normalized_role:
+        if _ROLE_FAMILY_AI_RE.search(normalized_role):
+            return RoleFamilyClassification(
+                "ai", _TITLE_REGEX_CONFIDENCE, "title_regex", ROLE_FAMILY_TAXONOMY_VERSION
+            )
+        for pattern, family in _ROLE_FAMILY_TITLE_RULES:
+            if pattern.search(normalized_role):
+                title_family = family
+                break
+
+    if title_family is None and scores["ai"] >= _AI_WEIGHT_THRESHOLD:
+        return RoleFamilyClassification(
+            "ai", _weight_confidence("ai", scores), "skill_weights", ROLE_FAMILY_TAXONOMY_VERSION
+        )
+    if title_family is not None:
+        return RoleFamilyClassification(
+            title_family, _TITLE_REGEX_CONFIDENCE, "title_regex", ROLE_FAMILY_TAXONOMY_VERSION
+        )
+
+    best_family = max(scores, key=scores.get)
+    if scores[best_family] >= _FAMILY_WEIGHT_THRESHOLD:
+        return RoleFamilyClassification(
+            best_family,
+            _weight_confidence(best_family, scores),
+            "skill_weights",
+            ROLE_FAMILY_TAXONOMY_VERSION,
+        )
+    return RoleFamilyClassification("general", 0.0, "unclassified", ROLE_FAMILY_TAXONOMY_VERSION)
+
+
+def detect_role_family(role_text: str | None, skills_text: str | None = None) -> str:
+    return classify_role_family(role_text, skills_text).family
+
+
+def detect_role_family_from_entries(
+    role_text: str | None,
+    entries: Iterable[SkillTaxonomyEntry] | Iterable[AggregatedSkill],
+) -> str:
+    normalized_role = normalize_taxonomy_text(role_text)
+    if normalized_role and _ROLE_FAMILY_AI_RE.search(normalized_role):
+        return "ai"
+    if normalized_role:
+        for pattern, family in _ROLE_FAMILY_TITLE_RULES:
+            if pattern.search(normalized_role):
+                return family
+
+    scores = _score_role_families(entries)
+    if scores["ai"] >= _AI_WEIGHT_THRESHOLD:
         return "ai"
     best_family = max(scores, key=scores.get)
-    if scores[best_family] >= 2.0:
+    if scores[best_family] >= _FAMILY_WEIGHT_THRESHOLD:
         return best_family
     return "general"
 

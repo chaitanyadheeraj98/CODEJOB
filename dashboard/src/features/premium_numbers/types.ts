@@ -266,6 +266,9 @@ export type ApplicationEventCard = {
   event_source: string
   note: string
   linked_recruiter_email_id: number | null
+  // Raw JSON. Carries `trigger`, which is how a backwards status move records
+  // that it was a user correction rather than a real change of outcome.
+  metadata_json: string
   occurred_at: string
 }
 

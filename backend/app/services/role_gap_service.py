@@ -75,7 +75,11 @@ def _str_list(value: object) -> list[str]:
     return [str(item).strip() for item in value if str(item or '').strip()]
 
 
-def clean_missing_skills(raw_skills: Iterable[str]) -> list[str]:
+def clean_missing_skills(
+    raw_skills: Iterable[str],
+    *,
+    whole_word_fragments: bool = False,
+) -> list[str]:
     """Strip the extractor's fragments out of one JD's missing-skill list.
 
     The parser emits a phrase and its pieces together - "GitHub Actions", "GitHub"
@@ -83,6 +87,12 @@ def clean_missing_skills(raw_skills: Iterable[str]) -> list[str]:
     fills the build list with words like "actions". A token that is a strict
     substring of another token in the same list is always the fragment, so drop it
     and keep the longer phrase.
+
+    `whole_word_fragments` requires that substring to fall on word boundaries, which
+    is what the paragraph above actually describes. Without it, short acronyms are
+    deleted by unrelated longer ones - "IAM" disappears from any JD that also says
+    "CIAM" - and the skill silently never reaches a build list. It defaults off
+    because the family report's output is pinned; role_target_service passes it.
     """
     unique: dict[str, str] = {}
     for skill in raw_skills:
@@ -90,18 +100,26 @@ def clean_missing_skills(raw_skills: Iterable[str]) -> list[str]:
         if key and key not in unique:
             unique[key] = ' '.join(skill.split())
 
+    def _is_fragment_of(key: str, other: str) -> bool:
+        if whole_word_fragments:
+            return f' {key} ' in f' {other} '
+        return key in other
+
     kept: list[str] = []
     for key, label in unique.items():
         if key in _STOP_SKILLS:
             continue
-        if any(other != key and key in other for other in unique):
+        if any(other != key and _is_fragment_of(key, other) for other in unique):
             continue
         kept.append(label)
     return kept
 
 
 class _FamilyBucket:
-    __slots__ = ('jd_count', 'flagged_count', 'role_fits', 'scores', 'variants', 'skills', 'samples', 'titles')
+    __slots__ = (
+        'jd_count', 'flagged_count', 'role_fits', 'scores', 'variants', 'skills',
+        'samples', 'titles', 'confidences',
+    )
 
     def __init__(self) -> None:
         self.jd_count = 0
@@ -112,6 +130,7 @@ class _FamilyBucket:
         self.skills: Counter[str] = Counter()
         self.samples: list[dict[str, Any]] = []
         self.titles: Counter[str] = Counter()
+        self.confidences: list[float] = []
 
 
 def role_gap_report(
@@ -134,6 +153,8 @@ def role_gap_report(
             RecruiterEmail.created_at,
             RecruiterEmail.resume_asset_id,
             RecruiterEmail.resume_picker_breakdown_json,
+            RecruiterEmail.role_family,
+            RecruiterEmail.role_family_confidence,
         )
         .filter(
             RecruiterEmail.owner_id == owner_id,
@@ -157,9 +178,15 @@ def role_gap_report(
             continue
         analysed += 1
 
-        family = str(breakdown.get('jd_role_family') or 'general')
+        # The column is the source of truth; the JSON is the fallback for rows the
+        # backfill has not reached yet. Both hold the same answer for any row written
+        # since the column existed, so this switch is a no-op on a backfilled table -
+        # what it buys is a confidence to group on, which the JSON never carried.
+        family = str(row.role_family or breakdown.get('jd_role_family') or 'general')
         bucket = buckets[family]
         bucket.jd_count += 1
+        if row.role_family_confidence is not None:
+            bucket.confidences.append(float(row.role_family_confidence))
 
         flagged = (
             breakdown.get('selection_status') == 'needs_review'
@@ -217,6 +244,11 @@ def role_gap_report(
                 'flagged_count': bucket.flagged_count,
                 'flagged_share': round(bucket.flagged_count / bucket.jd_count, 4),
                 'median_role_fit': round(median(bucket.role_fits), 4) if bucket.role_fits else None,
+                # How trustworthy the grouping itself is, as opposed to how well the
+                # resumes scored. None means no row in the group is classified yet.
+                'median_confidence': (
+                    round(median(bucket.confidences), 4) if bucket.confidences else None
+                ),
                 'median_resume_score': round(median(bucket.scores), 4) if bucket.scores else None,
                 'closest_variant_code': resume_variant_code(best_variant_id),
                 'closest_variant_label': variant_labels.get(best_variant_id or -1, ''),
@@ -242,6 +274,7 @@ def _rank_skills(
     skill_totals: Counter[str],
     *,
     limit: int,
+    min_occurrences: int = MIN_SKILL_OCCURRENCES,
 ) -> list[dict[str, Any]]:
     """Rank a family's missing skills by demand *concentrated in that family*.
 
@@ -250,10 +283,14 @@ def _rank_skills(
     that sits inside this family promotes the skills that actually distinguish the
     role - the JMeter/Dynatrace/Grafana cluster for performance work, the
     RAG/LangChain/embeddings cluster for GenAI - and demotes the filler.
+
+    `min_occurrences` defaults to the family floor and is only lowered by callers
+    grouping something smaller than a family, where four mentions is a share of the
+    group the family floor never meant to demand. See role_target_service.
     """
     ranked: list[dict[str, Any]] = []
     for skill, count in family_counts.items():
-        if count < MIN_SKILL_OCCURRENCES:
+        if count < min_occurrences:
             continue
         total = skill_totals.get(skill, count) or count
         concentration = count / total

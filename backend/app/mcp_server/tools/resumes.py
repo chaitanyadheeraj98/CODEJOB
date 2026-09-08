@@ -3,6 +3,7 @@ from __future__ import annotations
 from app.config import settings
 from app.db import SessionLocal
 from app.models import ResumeAsset
+from app.services import role_target_service
 
 
 def list_resumes(limit: int = 10) -> dict[str, object]:
@@ -148,3 +149,50 @@ def get_resume(resume_id: int = 0, variant: str = "") -> dict[str, object]:
         }
     finally:
         db.close()
+
+
+def analyse_role_target(role: str = "", window_days: int = 365) -> dict[str, object]:
+    """What it would take to apply for a named role: closest resume, and the missing keywords.
+
+    Use for "can I apply for X?", "what am I missing for X?", "what keywords should I add
+    for X?" - including roles the app has no family for, like security or QA.
+    """
+    if not role.strip():
+        return {"status": "missing_fields", "missing": ["role"]}
+    db = SessionLocal()
+    try:
+        report = role_target_service.analyse_role_target(
+            db,
+            owner_id=settings.owner_id,
+            target_role=role,
+            window_days=max(1, min(window_days, 730)),
+        )
+    finally:
+        db.close()
+    closest = report["variants"][0] if report["variants"] else None
+    return {
+        "target_role": report["target_role"],
+        "window_days": report["window_days"],
+        # How many job descriptions this answer is built on, and whether that is enough
+        # to call it a pattern. Say so rather than presenting a thin cohort as a finding.
+        "matching_jds": report["cohort_size"],
+        "evidence_tier": report["evidence_tier"],
+        "verdict": report["verdict"],
+        "closest_variant": (
+            {
+                "variant_code": closest["variant_code"],
+                "variant_label": closest["variant_label"],
+                "coverage": closest["coverage"],
+                "already_has": closest["matched_skills"],
+                "missing": closest["missing_skills"],
+            }
+            if closest
+            else None
+        ),
+        "add_to_resume": [
+            {"skill": item["skill"], "demanded_by_jds": item["jd_count"]}
+            for item in report["demanded_skills"]
+            if not item["covered_by_closest"]
+        ],
+        "example_jds": report["sample_jds"],
+    }

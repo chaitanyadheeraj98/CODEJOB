@@ -17,7 +17,7 @@ from app.automation.queue_preparation import (
     QueuePreparationRequest,
     prepare_candidate_for_queue,
 )
-from app.services.role_provenance import RoleSource, assign_role
+from app.services.role_provenance import RoleSource, assign_role, role_family_fields
 from app.services.role_taxonomy import fill_entity_gaps, role_matcher_for
 from app.models import NumberReviewQueue, PremiumNumberContact, RecentRun, RecruiterEmail, RecruiterOpportunity, ResumeAsset, UserSettings
 from app.parsing import build_skills_json_payload
@@ -1099,6 +1099,7 @@ class ExternalFeedService:
                 role=nvoids_role.role,
                 role_source=nvoids_role.role_source,
                 role_canonical=nvoids_role.role_canonical,
+                **role_family_fields(role=nvoids_role.role, skills_text=item.skills_text or ""),
                 location=item.location or "",
                 # The feed carries location as its own structured field, so a value
                 # here is an extraction; absent stays NULL rather than guessing.
@@ -1185,6 +1186,10 @@ class ExternalFeedService:
                 role=feed_role.role,
                 role_source=feed_role.role_source,
                 role_canonical=feed_role.role_canonical,
+                **role_family_fields(
+                    role=feed_role.role,
+                    skills_text=str(parsed.get("skills_text", item.skills_text or "")),
+                ),
                 salary_text=str(parsed.get("salary_text", item.rate or "")),
                 skills_text=str(parsed.get("skills_text", item.skills_text or "")),
                 skills_json=json.dumps(
@@ -1331,6 +1336,10 @@ class ExternalFeedService:
             role=feed_role.role,
             role_source=feed_role.role_source,
             role_canonical=feed_role.role_canonical,
+            **role_family_fields(
+                role=feed_role.role,
+                skills_text=str(preparation.parsed.get("skills_text", item.skills_text or "")),
+            ),
             salary_text=str(preparation.parsed.get("salary_text", item.rate or "")),
             skills_text=str(preparation.parsed.get("skills_text", item.skills_text or "")),
             skills_json=json.dumps(

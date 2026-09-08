@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
 from app.config import settings as app_settings
-from app.services.role_provenance import assign_role
+from app.services.role_provenance import assign_role, role_family_fields
 from app.services.role_taxonomy import fill_entity_gaps, role_matcher_for
 from app.models import RecruiterEmail, ResumeAsset, UserSettings
 from app.parsing import build_skills_json_payload
@@ -688,6 +688,7 @@ class RunOrchestrator:
             role=assigned.role,
             role_source=assigned.role_source,
             role_canonical=assigned.role_canonical,
+            **role_family_fields(role=assigned.role, skills_text=str(parsed["skills_text"])),
             salary_text=str(parsed["salary_text"]),
             skills_text=str(parsed["skills_text"]),
             skills_json=skills_json,

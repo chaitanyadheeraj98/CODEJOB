@@ -12,6 +12,7 @@ import type {
   ResumeSubmissionStatus,
   ResumeUploadInput,
   RoleGapReport,
+  RoleTargetReport,
   VariantLookupResult,
   WhyThisResume,
 } from './types'
@@ -66,6 +67,10 @@ export function getRoleGaps(apiBase: string, windowDays = 90, minJds = 5): Promi
   return requestJson(`${apiBase}/resumes/role-gaps?window_days=${windowDays}&min_jds=${minJds}`)
 }
 
+export function getRoleTarget(apiBase: string, role: string, windowDays = 365): Promise<RoleTargetReport> {
+  return requestJson(`${apiBase}/resumes/role-target?role=${encodeURIComponent(role)}&window_days=${windowDays}`)
+}
+
 export function lookupVariantToken(apiBase: string, token: string): Promise<VariantLookupResult> {
   return requestJson(`${apiBase}/resumes/variant-lookup?token=${encodeURIComponent(token)}`)
 }
@@ -73,6 +78,25 @@ export function lookupVariantToken(apiBase: string, token: string): Promise<Vari
 export function getWhyThisResume(apiBase: string, applicationId: number): Promise<WhyThisResume> {
   return requestJson(`${apiBase}/applications/${applicationId}/why-this-resume`)
 }
+
+/*
+ * The full record behind one submission card.
+ *
+ * The list endpoint answers with `include_events=False`, so events, RTRs and
+ * interviews come back empty on every card. This route already sets it True,
+ * which is why the details panel fetches per row on open rather than asking the
+ * list for everything up front and paying for it on page load.
+ */
+export function getApplicationDetail(apiBase: string, applicationId: number): Promise<ApplicationCard> {
+  return requestJson(`${apiBase}/applications/${applicationId}`)
+}
+
+/*
+ * The sourcing audit for the recruiter email a submission came from - the same
+ * record Application Tracking shows, re-exported rather than reimplemented so
+ * both tabs stay on one endpoint and one shape.
+ */
+export { fetchCandidateSentDetails } from '../application_tracking/api'
 
 /*
  * Resume library.

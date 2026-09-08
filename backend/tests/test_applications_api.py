@@ -23,7 +23,7 @@ from app.models import (
     ResumeAsset,
     UserSettings,
 )
-from app.services import application_service
+from app.services import application_service, resume_tracking_service
 
 
 class ApplicationsApiTests(unittest.TestCase):
@@ -760,6 +760,78 @@ class ApplicationsApiTests(unittest.TestCase):
             refreshed_already = db.get(ResumeAsset, already_id)
             self.assertEqual(refreshed_already.content_markdown, f"# Reprocessed {already_id}")
             self.assertEqual(refreshed_already.primary_role, "Manually Set Role")
+
+    def _card_for_recruiter_at(self, address: str, *, suffix: str) -> dict:
+        """An auto-logged card as they were written: a recruiter, no company."""
+        with Session(self.engine) as db:
+            resume = ResumeAsset(
+                owner_id=main.settings.owner_id,
+                file_path=f"missing-{suffix}.pdf",
+                file_name=f"{suffix}-resume.pdf",
+                sha256=suffix[0] * 64,
+                version=2,
+            )
+            db.add(resume)
+            db.flush()
+            application, _ = resume_tracking_service.create_manual_application(
+                db,
+                owner_id=main.settings.owner_id,
+                resume_asset_id=resume.id,
+                manual_job_title="Jr. Java Full stack Developer",
+                manual_end_client="",
+                manual_recruiter_name=address,
+                # What the auto-log path writes when the mail named a firm that
+                # was not this recruiter's to claim.
+                manual_recruiter_company="Unknown",
+                manual_recruiter_email=address,
+                dedupe_key=f"domain-company-{suffix}",
+            )
+            db.commit()
+            application_id = application.id
+
+        response = self.client.get(f"/applications/{application_id}")
+        self.assertEqual(response.status_code, 200, response.text)
+        return response.json()
+
+    def test_a_card_reads_the_company_off_the_recruiters_domain(self) -> None:
+        with Session(self.engine) as db:
+            db.add(
+                PremiumNumberContact(
+                    owner_id=main.settings.owner_id,
+                    normalized_phone_number="12485550100",
+                    display_phone_number="+1 248 555 0100",
+                    is_recruiter=True,
+                    recruiter_name="Ravi Kumar",
+                    recruiter_email="ravi@metasisinfo.com",
+                    recruiter_email_domain="metasisinfo.com",
+                    company="Metasis Information Systems LLC",
+                )
+            )
+            db.commit()
+
+        payload = self._card_for_recruiter_at("lalitha.y@metasisinfo.com", suffix="9001")
+        # The snapshot stays as it was recorded. The live half answers.
+        self.assertEqual(payload["recruiter_company_snapshot"], "Unknown")
+        self.assertEqual(payload["current_recruiter_company"], "Metasis Information Systems LLC")
+
+    def test_a_card_for_a_free_mail_recruiter_claims_no_company(self) -> None:
+        with Session(self.engine) as db:
+            db.add(
+                PremiumNumberContact(
+                    owner_id=main.settings.owner_id,
+                    normalized_phone_number="12485550101",
+                    display_phone_number="+1 248 555 0101",
+                    is_recruiter=True,
+                    recruiter_name="Someone",
+                    recruiter_email="someone@gmail.com",
+                    recruiter_email_domain="gmail.com",
+                    company="Acme Staffing",
+                )
+            )
+            db.commit()
+
+        payload = self._card_for_recruiter_at("recruiter@gmail.com", suffix="9002")
+        self.assertEqual(payload["current_recruiter_company"], "")
 
 
 if __name__ == "__main__":

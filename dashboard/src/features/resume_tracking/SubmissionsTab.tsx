@@ -15,12 +15,16 @@ import {
 import type { ApplicationCard, ApplicationSuggestion, ResumeAssetOption } from '../premium_numbers/types'
 import {
   createManualApplication,
+  fetchCandidateSentDetails,
+  getApplicationDetail,
   getOutreachMessage,
   getWhyThisResume,
   lookupVariantToken,
   updateResumeSubmissionStatus,
 } from './api'
 import type { ApplicationOutreachMessage, ManualApplicationInput, ResumeSubmissionStatus, VariantLookupResult, WhyThisResume } from './types'
+import { renderContactDetailsGrid } from '../../App'
+import type { SentItemDetails } from '../../App'
 
 const STATUS_OPTIONS = ['viewed', 'shortlisted', 'offered', 'hired', 'rejected', 'withdrawn'] as const
 const REJECTION_CATEGORIES = ['missing_skill', 'missing_experience', 'missing_domain_knowledge', 'email_positioning', 'rate_mismatch', 'other']
@@ -61,8 +65,72 @@ const blankManual = (resumes: ResumeAssetOption[], resumeAssetId?: number | null
 })
 
 type WhyState = { loading: boolean; data: WhyThisResume | null; error: string }
+type DetailsState = {
+  loading: boolean
+  detail: ApplicationCard | null
+  sourcing: SentItemDetails | null
+  // Kept apart from `error`: the record loaded fine, only its source trail did.
+  sourcingError: string
+  error: string
+}
 
 const pct = (value: number | null, scale = 100) => value == null ? null : `${Math.round(value * scale)}%`
+const trimmed = (value: string | null | undefined) => (value ?? '').trim()
+const shortDate = (value: string | null) => value ? new Date(value).toLocaleDateString() : ''
+/*
+ * "Unknown" is what the auto-log path writes when it has nothing to write, so it
+ * is the absence of an answer wearing the shape of one. `recordedEndClient`
+ * below already refuses to repeat it; every other labelled field should too.
+ */
+const stated = (value: string | null | undefined) => {
+  const text = trimmed(value)
+  return text.toLowerCase() === 'unknown' ? '' : text
+}
+const variantCode = (resumeAssetId: number) => `R${String(resumeAssetId).padStart(2, '0')}`
+
+/*
+ * What this row actually records as the end client, or '' for "not identified".
+ *
+ * For most rows the honest answer is nothing. Until this change, auto-logging a
+ * send copied the recruiter's own company into the end-client column whenever
+ * the posting did not name one, so a value equal to the company is not a client
+ * at all - it is the absence of one, written down in a shape indistinguishable
+ * from a real answer. Neither that nor the literal "Unknown" is a claim worth
+ * repeating on a card.
+ */
+export function recordedEndClient(row: Pick<ApplicationCard, 'end_client_snapshot' | 'recruiter_company_snapshot'>): string {
+  const value = trimmed(row.end_client_snapshot)
+  if (!value || value.toLowerCase() === 'unknown') return ''
+  if (value.toLowerCase() === trimmed(row.recruiter_company_snapshot).toLowerCase()) return ''
+  return value
+}
+
+/*
+ * One labelled fact, with its snapshot and its live value distinguished.
+ *
+ * The `_snapshot` columns are frozen at submission; the `current_*` fields are
+ * read live off the contact record. The card used to print them in one run-on
+ * line, which is how a company recorded months ago came to sit above today's
+ * email address as though the two described the same moment. Where they
+ * disagree, say so rather than silently picking one.
+ */
+function Field({ label, snapshot, current }: { label: string; snapshot: string; current?: string }) {
+  const frozen = stated(snapshot)
+  const live = stated(current)
+  if (!frozen && !live) return null
+  const moved = Boolean(frozen && live && frozen.toLowerCase() !== live.toLowerCase())
+  return (
+    <span className="submissionField">
+      <span className="submissionFieldLabel">{label}</span>
+      <span>{frozen || live}</span>
+      {moved ? (
+        <span className="submissionFieldNow" title="Recorded at submission. The contact record says something different now.">
+          → now {live}
+        </span>
+      ) : null}
+    </span>
+  )
+}
 
 function SkillRow({ label, skills, tone }: { label: string; skills: string[]; tone: 'have' | 'missing' }) {
   if (!skills.length) return null
@@ -126,6 +194,97 @@ function WhyPanel({ state }: { state: WhyState | undefined }) {
   )
 }
 
+// Why this event exists, when the row itself does not say. A backwards status
+// move is only permitted as a correction, and that is recorded in the metadata
+// rather than the type, so without this a fix reads as a real change of outcome.
+function eventTrigger(metadataJson: string | undefined): string {
+  try {
+    const parsed = JSON.parse(metadataJson || '{}') as { trigger?: unknown }
+    return typeof parsed.trigger === 'string' ? parsed.trigger.replaceAll('_', ' ') : ''
+  } catch {
+    return ''
+  }
+}
+
+function DetailsPanel({ state }: { state: DetailsState | undefined }) {
+  if (!state || state.loading) return <div className="whyPanel"><p className="subtle">Loading the record...</p></div>
+  if (state.error) return <div className="whyPanel"><p className="errorText" role="alert">{state.error}</p></div>
+
+  const detail = state.detail
+  if (!detail) return null
+  const endClient = recordedEndClient(detail)
+  const resumeSent = [
+    variantCode(detail.resume_asset_id),
+    detail.resume_file_name_snapshot,
+    detail.resume_version_snapshot ? `v${detail.resume_version_snapshot}` : '',
+  ].filter(Boolean).join(' · ')
+
+  return (
+    <div className="whyPanel submissionDetails">
+      <div className="whyRow">
+        <h5>Recorded at submission</h5>
+        <dl className="submissionRecord">
+          <div><dt>End client</dt><dd>{endClient || <span className="subtle">Not identified</span>}</dd></div>
+          <div><dt>Location</dt><dd>{trimmed(detail.location_snapshot) || <span className="subtle">Not recorded</span>}</dd></div>
+          <div><dt>Submitted</dt><dd>{shortDate(detail.resume_submitted_at) || <span className="subtle">Not recorded</span>}</dd></div>
+          <div><dt>Method</dt><dd>{detail.submission_method || <span className="subtle">Not recorded</span>}</dd></div>
+          <div><dt>Resume sent</dt><dd>{resumeSent}</dd></div>
+          <div><dt>Record</dt><dd>{detail.record_id || <span className="subtle">None</span>}</dd></div>
+        </dl>
+      </div>
+
+      <div className="whyRow">
+        <h5>Where this came from</h5>
+        {state.sourcing ? renderContactDetailsGrid(state.sourcing, {
+          id: detail.id,
+          role: detail.job_title_snapshot,
+          location: detail.location_snapshot ?? '',
+          resume_file_name: detail.resume_file_name_snapshot,
+          ats_score: detail.ats_score,
+          ats_summary: detail.ats_summary,
+        }) : (
+          // The endpoint refuses an email that never reached needs_review or
+          // approved_sent, which is a handful of rows, not an error state.
+          <p className="subtle">{state.sourcingError || 'The source email is no longer available.'}</p>
+        )}
+      </div>
+
+      <div className="whyRow">
+        <h5>Trail</h5>
+        {detail.events.length ? (
+          <ol className="submissionTrail">
+            {detail.events.map((event) => {
+              const trigger = eventTrigger(event.metadata_json)
+              return (
+                <li key={event.id}>
+                  <span className="submissionTrailWhen">{new Date(event.occurred_at).toLocaleString()}</span>
+                  <span className="submissionTrailWhat">{event.event_type.replaceAll('_', ' ')}</span>
+                  <span className="subtle">by {event.event_source}{trigger ? ` · ${trigger}` : ''}</span>
+                  {event.note ? <span className="submissionTrailNote">{event.note}</span> : null}
+                </li>
+              )
+            })}
+          </ol>
+        ) : <p className="subtle">No events recorded.</p>}
+      </div>
+
+      {detail.rejection_detail_tags.length ? (
+        <div className="whyRow">
+          <h5>Rejection detail</h5>
+          <ul className="submissionTags">
+            {detail.rejection_detail_tags.map((tag) => (
+              <li key={`${tag.category}:${tag.value}`}>
+                {tag.category.replaceAll('_', ' ')}: {tag.value || 'unspecified'}
+                <span className="subtle"> · {tag.source === 'ai' && !tag.confirmed_at ? 'AI, unconfirmed' : tag.source === 'ai' ? 'AI, confirmed' : 'you'}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 export default function SubmissionsTab({ apiBase, resumes, resumeAssetId = null, filterValues = submissionDefaultFilterValues, sortValue = 'newest' }: Props) {
   const [rows, setRows] = useState<ApplicationCard[]>([])
   const [suggestions, setSuggestions] = useState<ApplicationSuggestion[]>([])
@@ -144,6 +303,45 @@ export default function SubmissionsTab({ apiBase, resumes, resumeAssetId = null,
   const [lookupError, setLookupError] = useState('')
   const [lookupBusy, setLookupBusy] = useState(false)
   const [why, setWhy] = useState<Record<number, WhyState>>({})
+  const [expandedDetailsId, setExpandedDetailsId] = useState<number | null>(null)
+  const [details, setDetails] = useState<Record<number, DetailsState>>({})
+
+  // Same lazy shape as toggleWhy: the list endpoint returns no events, and
+  // asking it for them would cost four extra queries per card on every page
+  // load to fill a panel almost no row ever opens.
+  const toggleDetails = (row: ApplicationCard) => {
+    if (expandedDetailsId === row.id) {
+      setExpandedDetailsId(null)
+      return
+    }
+    setExpandedDetailsId(row.id)
+    if (details[row.id]?.detail) return
+    setDetails((current) => ({ ...current, [row.id]: { loading: true, detail: null, sourcing: null, sourcingError: '', error: '' } }))
+    const sourceEmailId = row.source_recruiter_email_id
+    void Promise.all([
+      getApplicationDetail(apiBase, row.id),
+      // A missing source trail is normal - a hand-logged submission has no email,
+      // and the endpoint refuses one that never reached needs_review or
+      // approved_sent. Neither should take the whole panel down with it.
+      sourceEmailId
+        ? fetchCandidateSentDetails(apiBase, sourceEmailId).catch((reason: unknown) => reason as Error)
+        : Promise.resolve(null),
+    ])
+      .then(([detail, sourcing]) => setDetails((current) => ({
+        ...current,
+        [row.id]: {
+          loading: false,
+          detail,
+          sourcing: sourcing instanceof Error ? null : sourcing,
+          sourcingError: sourcing instanceof Error ? sourcing.message : '',
+          error: '',
+        },
+      })))
+      .catch((reason) => setDetails((current) => ({
+        ...current,
+        [row.id]: { loading: false, detail: null, sourcing: null, sourcingError: '', error: (reason as Error).message },
+      })))
+  }
 
   const toggleWhy = (row: ApplicationCard) => {
     if (expandedGapId === row.id) {
@@ -363,8 +561,25 @@ export default function SubmissionsTab({ apiBase, resumes, resumeAssetId = null,
           const phone = row.is_manual_entry ? row.manual_recruiter_phone : row.current_recruiter_phone_display
           const linkedIn = row.is_manual_entry ? row.manual_recruiter_linkedin_url : row.current_recruiter_linkedin_url
           const unconfirmed = row.rejection_detail_tags.filter((tag) => tag.source === 'ai' && !tag.confirmed_at)
+          const endClient = recordedEndClient(row)
           return <article className="submissionCard" key={row.id}>
-            <div><h3>{row.job_title_snapshot || 'Untitled role'}</h3><p>{row.recruiter_name_snapshot} · {row.recruiter_company_snapshot} · {row.end_client_snapshot}</p><p className="subtle">{email || 'No email'}{phone ? ` · ${phone}` : ''}{linkedIn ? <> · <a href={linkedIn} target="_blank" rel="noreferrer">LinkedIn</a></> : null}</p></div>
+            <div>
+              <h3>{row.job_title_snapshot || 'Untitled role'}</h3>
+              <p className="submissionIdentity">
+                <Field label="Recruiter" snapshot={row.recruiter_name_snapshot} current={row.current_recruiter_name} />
+                <Field label="Company" snapshot={row.recruiter_company_snapshot} current={row.current_recruiter_company} />
+                {/* Omitted rather than shown blank. "Not identified" belongs in the
+                    details panel, where there is room to say what it means. */}
+                {endClient ? <Field label="End client" snapshot={endClient} current={row.current_end_client} /> : null}
+              </p>
+              <p className="subtle">{email || 'No email'}{phone ? ` · ${phone}` : ''}{linkedIn ? <> · <a href={linkedIn} target="_blank" rel="noreferrer">LinkedIn</a></> : null}</p>
+              <p className="subtle submissionMeta">{[
+                trimmed(row.location_snapshot),
+                shortDate(row.resume_submitted_at),
+                row.submission_method,
+                `${variantCode(row.resume_asset_id)} · ${row.resume_file_name_snapshot}`,
+              ].filter(Boolean).join(' · ')}</p>
+            </div>
             <span className={`statusBadge statusBadge--${STATUS_TONE[row.resume_submission_status] ?? 'neutral'}`}>{row.resume_submission_status.replaceAll('_', ' ')}</span>
             <div className="submissionActions">
               {row.resume_submission_status === 'not_submitted' ? <span className="subtle">Not yet submitted</span> : (
@@ -388,7 +603,17 @@ export default function SubmissionsTab({ apiBase, resumes, resumeAssetId = null,
                 <input type="checkbox" checked={correcting.has(row.id)} onChange={(event) => setCorrecting((current) => { const next = new Set(current); if (event.target.checked) next.add(row.id); else next.delete(row.id); return next })} />
                 <span>Correcting a mistake</span>
               </label>
-              <button type="button" onClick={() => toggleWhy(row)} aria-expanded={expandedGapId === row.id}>Why this resume</button>
+              <button type="button" onClick={() => toggleWhy(row)} aria-expanded={expandedGapId === row.id}>{expandedGapId === row.id ? 'Hide' : 'Why this resume'}</button>
+              {/* Gated on the source email the same way AppTSPage gates its own
+                  button: without one there is no record to audit, and an empty
+                  panel is a worse answer than a disabled control that says why. */}
+              <button
+                type="button"
+                onClick={() => toggleDetails(row)}
+                aria-expanded={expandedDetailsId === row.id}
+                disabled={!row.source_recruiter_email_id}
+                title={row.source_recruiter_email_id ? undefined : 'Logged by hand, so there is no source email to audit.'}
+              >{expandedDetailsId === row.id ? 'Hide details' : 'View details'}</button>
             </div>
             {pendingRejection?.id === row.id ? (
               <div className="rejectionTagRow">
@@ -400,6 +625,7 @@ export default function SubmissionsTab({ apiBase, resumes, resumeAssetId = null,
             ) : null}
             {unconfirmed.map((tag) => <p key={`${tag.category}:${tag.value}`} className="aiTagPrompt">AI suggests {tag.category.replaceAll('_', ' ')}: {tag.value || 'unspecified'} <button type="button" onClick={() => void updateResumeSubmissionStatus(apiBase, row.id, 'rejected', { force: true, rejection_detail_tags: [{ category: tag.category, value: tag.value }] }).then(replaceRow)}>Confirm</button></p>)}
             {expandedGapId === row.id ? <WhyPanel state={why[row.id]} /> : null}
+            {expandedDetailsId === row.id ? <DetailsPanel state={details[row.id]} /> : null}
           </article>
         })}
         {!loading && !rows.length ? <p className="subtle">No submissions match these filters.</p> : null}

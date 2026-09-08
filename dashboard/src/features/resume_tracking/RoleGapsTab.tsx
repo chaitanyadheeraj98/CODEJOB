@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState } from 'react'
-import { getRoleGaps } from './api'
+import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { getRoleGaps, getRoleTarget } from './api'
 import { formatVariantLabel } from './resumeDisplay'
-import type { RoleGapGroup, RoleGapReport } from './types'
+import type { RoleGapGroup, RoleGapReport, RoleTargetReport } from './types'
 
 type Props = { apiBase: string }
 
@@ -16,6 +16,11 @@ const FAMILY_LABELS: Record<string, string> = {
 }
 
 const WINDOWS = [30, 90, 180, 365]
+
+// The roles worth asking about are the ones the inbox sees rarely, and 90 days of a rare
+// role is not a cohort. The target lookup always reaches back at least this far, whatever
+// window the aggregate below is using.
+const TARGET_MIN_WINDOW = 365
 
 const familyLabel = (family: string) => FAMILY_LABELS[family] ?? family.replaceAll('_', ' ')
 
@@ -55,12 +60,146 @@ function normalise(payload: Partial<RoleGapReport> | null | undefined, fallbackW
   }
 }
 
+function normaliseTarget(payload: Partial<RoleTargetReport> | null | undefined, role: string): RoleTargetReport {
+  return {
+    target_role: payload?.target_role || role,
+    window_days: Number(payload?.window_days) || TARGET_MIN_WINDOW,
+    cohort_size: Number(payload?.cohort_size) || 0,
+    evidence_tier: payload?.evidence_tier || 'none',
+    demanded_skills: Array.isArray(payload?.demanded_skills) ? payload.demanded_skills : [],
+    variants: Array.isArray(payload?.variants) ? payload.variants : [],
+    closest_variant_code: payload?.closest_variant_code || '',
+    closest_variant_label: payload?.closest_variant_label || '',
+    verdict_tone: payload?.verdict_tone || 'ok',
+    verdict: payload?.verdict || '',
+    sample_jds: Array.isArray(payload?.sample_jds) ? payload.sample_jds : [],
+    narrative: payload?.narrative ?? null,
+  }
+}
+
+/** The server picks the tone; this only guarantees it maps onto a class that exists. */
+const toneClass = (tone: string) => (tone === 'close' || tone === 'wrong' ? tone : 'ok')
+
+/**
+ * One role, answered three ways: why the library is not close, what is missing, and
+ * which keywords would close it.
+ *
+ * Everything rendered here came out of the user's own job descriptions with a count
+ * behind it. Nothing is generated, so a role the inbox has never seen shows the verdict
+ * alone rather than a plausible-looking list of skills nobody actually asked for.
+ */
+function RoleTargetCard({ report, open, onToggle }: { report: RoleTargetReport; open: boolean; onToggle: () => void }) {
+  const tone = toneClass(report.verdict_tone)
+  const closest = report.variants[0] ?? null
+  const missing = report.demanded_skills.filter((item) => !item.covered_by_closest)
+  const covered = report.demanded_skills.filter((item) => item.covered_by_closest)
+
+  return (
+    <article className={`roleGapCard roleTargetCard ${tone}`}>
+      <header className="roleGapCardHead">
+        <div className="roleGapCardTitle">
+          <h3>{report.target_role}</h3>
+          <p className="subtle roleGapTitles">
+            {report.evidence_tier === 'none'
+              ? `Nothing like it in the last ${report.window_days} days`
+              : `Matched against ${report.cohort_size.toLocaleString()} job descriptions from the last ${report.window_days} days`}
+          </p>
+        </div>
+        {closest ? (
+          <div className="roleGapCardStat">
+            <span className="roleGapBig">{Math.round(closest.coverage * 100)}%</span>
+            <span className="roleGapStatLabel">covered by your closest resume</span>
+          </div>
+        ) : null}
+      </header>
+
+      <p className={`roleGapVerdict ${tone}`}>{report.verdict}</p>
+      {report.narrative ? <p className="roleTargetNarrative">{report.narrative}</p> : null}
+
+      {missing.length ? (
+        <div className="roleGapBuild">
+          <h4>Add these to your resume</h4>
+          <div className="roleGapChips">
+            {missing.map((item) => (
+              <span className="roleGapChip" key={item.skill} title={`Asked for by ${item.jd_count} of these job descriptions`}>
+                {item.skill}<span className="roleGapChipCount">{item.jd_count}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {covered.length ? (
+        <div className="roleGapBuild">
+          <h4>Already there{report.closest_variant_label ? ` on ${formatVariantLabel(report.closest_variant_label)}` : ''}</h4>
+          <div className="roleGapChips">
+            {covered.map((item) => (
+              <span className="roleGapChip covered" key={item.skill} title={`Asked for by ${item.jd_count} of these job descriptions`}>
+                {item.skill}<span className="roleGapChipCount">{item.jd_count}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      <footer className="roleGapFoot">
+        <span className="subtle">
+          Closest today: <strong>{report.closest_variant_code || '—'}</strong>
+          {report.closest_variant_label ? ` · ${formatVariantLabel(report.closest_variant_label)}` : ''}
+        </span>
+        {report.sample_jds.length ? (
+          <button type="button" className="linkButton" onClick={onToggle} aria-expanded={open}>
+            {open ? 'Hide the postings' : `Show ${report.sample_jds.length} of the postings`}
+          </button>
+        ) : null}
+      </footer>
+
+      {open ? (
+        <ul className="roleGapSamples">
+          {report.sample_jds.map((sample) => (
+            <li key={sample.email_id}>
+              <strong>{sample.role || 'Untitled role'}</strong>
+              {/* Which pass admitted this posting: the recruiter used the words, or the
+                  skills lined up. Without it the cohort is a black box. */}
+              <span className="subtle">
+                {sample.match_reason === 'title' ? ' — matched on title' : ' — matched on skills'}
+                {sample.skills ? ` · ${sample.skills}` : ''}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </article>
+  )
+}
+
 export default function RoleGapsTab({ apiBase }: Props) {
   const [report, setReport] = useState<RoleGapReport | null>(null)
   const [windowDays, setWindowDays] = useState(90)
   const [expanded, setExpanded] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
+  const [target, setTarget] = useState('')
+  const [targetReport, setTargetReport] = useState<RoleTargetReport | null>(null)
+  const [targetError, setTargetError] = useState('')
+  const [targetLoading, setTargetLoading] = useState(false)
+  const [targetSamplesOpen, setTargetSamplesOpen] = useState(false)
+
+  const analyseTarget = (event: FormEvent) => {
+    event.preventDefault()
+    const role = target.trim()
+    if (role.length < 2) return
+    setTargetLoading(true)
+    setTargetError('')
+    setTargetSamplesOpen(false)
+    getRoleTarget(apiBase, role, Math.max(windowDays, TARGET_MIN_WINDOW))
+      .then((payload) => setTargetReport(normaliseTarget(payload, role)))
+      .catch((reason) => {
+        setTargetReport(null)
+        setTargetError((reason as Error).message)
+      })
+      .finally(() => setTargetLoading(false))
+  }
 
   const load = useCallback(() => {
     setLoading(true)
@@ -93,6 +232,33 @@ export default function RoleGapsTab({ apiBase }: Props) {
           </select>
         </label>
       </header>
+
+      <form className="roleTargetAsk" onSubmit={analyseTarget}>
+        <label htmlFor="roleTargetInput">
+          Thinking of applying for a role?
+          <span className="subtle"> Type it — it does not have to be one of the groups below.</span>
+        </label>
+        <div className="roleTargetAskRow">
+          <input
+            id="roleTargetInput"
+            type="text"
+            value={target}
+            placeholder="IT Security Auditor"
+            maxLength={120}
+            onChange={(event) => setTarget(event.target.value)}
+          />
+          <button type="submit" className="primaryButton" disabled={targetLoading || target.trim().length < 2}>
+            {targetLoading ? 'Checking...' : 'Check my resumes'}
+          </button>
+        </div>
+        <p className="subtle roleTargetHint">
+          Answered from the job descriptions already in your inbox, looking back at least a year —
+          rare roles need the history.
+        </p>
+      </form>
+
+      {targetError ? <p className="errorText" role="alert">{targetError}</p> : null}
+      {targetReport ? <RoleTargetCard report={targetReport} open={targetSamplesOpen} onToggle={() => setTargetSamplesOpen((value) => !value)} /> : null}
 
       {error ? <p className="errorText" role="alert">{error}</p> : null}
       {loading ? <p className="subtle">Analysing job descriptions...</p> : null}

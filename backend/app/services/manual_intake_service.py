@@ -66,7 +66,7 @@ from app.semantic.embeddings_service import generate_embedding
 from app.services import opportunity_lineage_service, policy_service, recruiter_identity_service
 from app.services.candidate_runtime_service import CandidateRuntimeDeps, CandidateRuntimeService
 from app.services.candidate_screening_service import CandidateScreeningService, apply_screening_decision
-from app.services.role_provenance import assign_role
+from app.services.role_provenance import assign_role, role_family_fields
 from app.services.role_taxonomy import fill_entity_gaps, role_matcher_for
 from app.services.scoring_runtime_service import ScoringRuntimeDeps, ScoringRuntimeService
 from app.services.sendability_service import apply_resume_sendability
@@ -273,6 +273,9 @@ class ManualIntakeService:
                 role=assigned.role,
                 role_source=assigned.role_source,
                 role_canonical=assigned.role_canonical,
+                **role_family_fields(
+                    role=assigned.role, skills_text=str(parsed.get("skills_text", ""))
+                ),
                 salary_text=str(parsed.get("salary_text", "")),
                 skills_text=str(parsed.get("skills_text", "")),
                 skills_json=json.dumps(
