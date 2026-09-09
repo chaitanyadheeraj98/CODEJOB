@@ -27,6 +27,26 @@ CLOUD_TEXT = "# Chaithanya Dheeraj\n\n## Summary\n\nTerraform, Kubernetes.\n"
 
 
 class ResumeDraftToolTests(unittest.TestCase):
+    def test_from_scratch_proposes_only_a_reviewable_header_and_empty_sections(self) -> None:
+        before = self.snapshot()
+        proposal = propose_resume_draft(from_scratch=True, candidate_name="Alex Rivera", contact_line="alex@example.com")
+        self.assertTrue(proposal["from_scratch"])
+        self.assertIn("# Alex Rivera\nalex@example.com", proposal["initial_content"])
+        self.assertIn("## Experience", proposal["initial_content"])
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(propose_resume_draft(from_scratch=True)["status"], "missing_fields")
+        self.assertEqual(propose_resume_draft(from_scratch=True, source_resume_id=1)["status"], "invalid_source")
+
+    def test_from_scratch_proposes_only_a_reviewable_header_and_empty_sections(self) -> None:
+        before = self.snapshot()
+        proposal = propose_resume_draft(from_scratch=True, candidate_name="Alex Rivera", contact_line="alex@example.com")
+        self.assertTrue(proposal["from_scratch"])
+        self.assertIn("# Alex Rivera\nalex@example.com", proposal["initial_content"])
+        self.assertIn("## Experience", proposal["initial_content"])
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(propose_resume_draft(from_scratch=True)["status"], "missing_fields")
+        self.assertEqual(propose_resume_draft(from_scratch=True, source_resume_id=1)["status"], "invalid_source")
+
     def setUp(self) -> None:
         self.engine = create_engine(
             "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool

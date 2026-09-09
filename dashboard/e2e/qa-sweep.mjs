@@ -25,6 +25,7 @@ const PAGES = [
   { key: 'application_tracking', tab: 'tracked', label: 'Application Tracking / Tracked', registry: true },
   { key: 'resume_tracking', tab: 'resumes', label: 'Resume Tracking / Resumes', registry: true },
   { key: 'resume_tracking', tab: 'submissions', label: 'Resume Tracking / Submissions', registry: true },
+  { key: 'resume_tracking', tab: 'editor', label: 'Resume Tracking / Editor', registry: false },
   { key: 'sent_items', tab: null, label: 'Sent Items', registry: true },
   { key: 'inbox', tab: null, label: 'Inbox', registry: true },
   { key: 'recent_runs', tab: null, label: 'Recent Runs', registry: false },

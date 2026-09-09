@@ -372,6 +372,7 @@ class ResumeDraft(Base):
     owner_id: Mapped[str] = mapped_column(String(100), index=True)
     name: Mapped[str] = mapped_column(String(200), default="")
     source_resume_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    format_profile_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     content_markdown: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)

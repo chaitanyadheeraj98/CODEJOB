@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import { PROPOSAL_HANDLERS, proposalResultDetail } from './proposals'
+import { PROPOSAL_HANDLERS, proposalResultDetail, resumeSequenceProgress } from './proposals'
+import type { ChatMessage } from './types'
 
 const handler = PROPOSAL_HANDLERS.propose_resume_section
 
@@ -18,6 +19,15 @@ const sectionFields = (overrides: Record<string, unknown> = {}) => ({
 })
 
 describe('propose_resume_section handler', () => {
+  it('counts actual sections and restarts when a new sequence starts', () => {
+    const first = sectionFields({ sequence_sections: ['Summary', 'Skills'] })
+    const second = sectionFields({ sequence_sections: ['Summary', 'Skills'], section: 'Skills' })
+    const next = sectionFields({ sequence_sections: ['Summary', 'Skills'], base_sha256: 'b'.repeat(64) })
+    const messages: ChatMessage[] = [first, second, next].map((fields, id) => ({ id, role: 'tool', tool_name: 'propose_resume_section', content: JSON.stringify(fields), created_at: '' }))
+    expect(resumeSequenceProgress(messages, first)).toContain('1 of 2')
+    expect(resumeSequenceProgress(messages, second)).toContain('2 of 2')
+    expect(resumeSequenceProgress(messages, next)).toContain('1 of 2')
+  })
   it('patches the one draft the tool named', () => {
     const endpoint = handler.endpoint as (fields: Record<string, unknown>) => string
 

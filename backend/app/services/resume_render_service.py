@@ -20,7 +20,10 @@ import re
 import shutil
 import subprocess
 import tempfile
+from threading import BoundedSemaphore
+from typing import Literal
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 from docx import Document
@@ -29,15 +32,12 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.opc.constants import RELATIONSHIP_TYPE as RT
 from docx.oxml.ns import qn
-from docx.shared import Inches, Pt
-from pydantic import BaseModel, Field
+from docx.shared import Inches, Pt, RGBColor
+from pydantic import BaseModel, Field, model_validator
 
 logger = logging.getLogger(__name__)
 
-# US Letter. The Apps Script did its arithmetic against this width too - the
-# right margin there was never typed, it was 8.5 minus the left margin minus the
-# right ruler position.
-PAGE_WIDTH_INCHES = 8.5
+_RENDER_SLOTS = BoundedSemaphore(4)
 
 _HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
 
@@ -166,6 +166,101 @@ def replace_section(markdown: str, heading: str, replacement: str) -> str | None
     return "\n".join(rebuilt).strip() + "\n"
 
 
+def section_level(markdown: str) -> int:
+    """The heading depth the resume's own sections are written at.
+
+    The first heading is the candidate's name, whatever depth it uses, so the
+    sections are the shallowest headings *below* it. Depth is not assumed
+    anywhere else in this file and is not assumed here: a resume pasted in from
+    somewhere else uses `#` and `##` where the ones written here use `##` and
+    `###`, and both have to reorder and lay out the same way.
+    """
+    levels = [item.level for item in split_sections(markdown)]
+    return min(levels[1:]) if len(levels) > 1 else 0
+
+
+def _siblings(markdown: str, section: MarkdownSection) -> list[MarkdownSection]:
+    """The sections this one can be reordered against: same depth, same parent.
+
+    Same depth alone is not enough. Two roles written at the same level under
+    different employers are not siblings, and swapping one past the other would
+    move it into the wrong job.
+    """
+    sections = split_sections(markdown)
+    parent_start = -1
+    for item in sections:
+        if item.level < section.level and item.start < section.start <= item.end:
+            parent_start = max(parent_start, item.start)
+    inside = [
+        item for item in sections
+        if item.level == section.level
+        and (parent_start < 0 or (item.start > parent_start and item.start < _end_of(sections, parent_start)))
+    ]
+    return inside
+
+
+def _end_of(sections: list[MarkdownSection], start: int) -> int:
+    for item in sections:
+        if item.start == start:
+            return item.end
+    return 1 << 30
+
+
+def move_section(markdown: str, heading: str, offset: int) -> str | None:
+    """Swap a section with the sibling `offset` places away, subsections and all.
+
+    Returns None when the heading names no single section or when the move would
+    run off either end, so the caller can say which rather than silently doing
+    nothing. Whatever sits between the two blocks - a stray rule, a comment -
+    stays where it is; only the two sections trade places.
+    """
+    section = find_section(markdown, heading)
+    if section is None or not offset:
+        return None
+    siblings = _siblings(markdown, section)
+    try:
+        index = next(i for i, item in enumerate(siblings) if item.start == section.start)
+    except StopIteration:
+        return None
+    target = index + offset
+    if not 0 <= target < len(siblings):
+        return None
+
+    lines = markdown.splitlines()
+    first, second = sorted([section, siblings[target]], key=lambda item: item.start)
+    rebuilt = [
+        *lines[: first.start],
+        *lines[second.start : second.end],
+        *lines[first.end : second.start],
+        *lines[first.start : first.end],
+        *lines[second.end :],
+    ]
+    return "\n".join(rebuilt).strip() + "\n"
+
+
+def split_for_layout(markdown: str, spec: "ResumeFormatSpec") -> tuple[list[str], list[str], list[str]]:
+    """Cut the document into header, main column and sidebar.
+
+    The header is everything above the first section - the name and the contact
+    line - and it spans both columns, because a name in a 2.2in sidebar is not a
+    resume anyone recognises.
+    """
+    lines = markdown.replace("\r\n", "\n").split("\n")
+    level = section_level(markdown)
+    wanted = {name.strip().casefold() for name in spec.sidebar_sections if name.strip()}
+    sections = [item for item in split_sections(markdown) if item.level == level] if level else []
+    if not sections:
+        return lines, [], []
+
+    header = lines[: sections[0].start]
+    main: list[str] = []
+    sidebar: list[str] = []
+    for item in sections:
+        block = lines[item.start : item.end]
+        (sidebar if item.heading.casefold() in wanted else main).extend(block)
+    return header, main, sidebar
+
+
 _BULLET = re.compile(r"^\s*[-*+]\s+(.*)$")
 _RULE = re.compile(r"^\s*(?:-{3,}|\*{3,}|_{3,})\s*$")
 _TABLE_ROW = re.compile(r"^\s*\|(.+)\|\s*$")
@@ -178,6 +273,12 @@ _INLINE = re.compile(r"\[([^\]]+)\]\((https?://[^\s)]+|mailto:[^\s)]+)\)|\*\*(.+
 LINK_COLOR = "0563C1"
 
 
+# Space between the two columns, and the narrowest the main column may become.
+# A resume bullet needs room to be a sentence, not a word per line.
+COLUMN_GUTTER_INCHES = 0.2
+MIN_MAIN_COLUMN_INCHES = 3.0
+
+
 class ResumeFormatSpec(BaseModel):
     """One employer's layout, as numbers.
 
@@ -185,22 +286,28 @@ class ResumeFormatSpec(BaseModel):
     rendered without a profile still comes out the way the Apps Script left it.
     """
 
-    font_family: str = "Arial"
-    body_font_size: float = 10
-    name_font_size: float = 14
-    heading_font_size: float = 10
+    model_config = {"allow_inf_nan": False}
+    page_size: Literal["LETTER", "A4"] = "LETTER"
+    layout: Literal["single", "two-column"] = "single"
+    accent_color: str = Field(default="", pattern=r"^(#[0-9a-fA-F]{6})?$")
+    section_spacing_pt: float = Field(default=0, ge=0, le=48)
+    compact: bool = False
+    font_family: str = Field(default="Arial", min_length=1, max_length=100)
+    body_font_size: float = Field(default=10, ge=6, le=48)
+    name_font_size: float = Field(default=14, ge=6, le=72)
+    heading_font_size: float = Field(default=10, ge=6, le=48)
     heading_bold: bool = True
     heading_uppercase: bool = False
 
-    margin_left_inches: float = 0.25
-    margin_right_inches: float = 0.5
-    margin_top_inches: float = 0.5
-    margin_bottom_inches: float = 0.5
+    margin_left_inches: float = Field(default=0.25, ge=0, le=3)
+    margin_right_inches: float = Field(default=0.5, ge=0, le=3)
+    margin_top_inches: float = Field(default=0.5, ge=0, le=3)
+    margin_bottom_inches: float = Field(default=0.5, ge=0, le=3)
 
-    line_spacing: float = 1.0
+    line_spacing: float = Field(default=1.0, ge=0.8, le=3)
     justify_body: bool = True
-    bullet_indent_inches: float = 0.5
-    bullet_hanging_inches: float = 0.25
+    bullet_indent_inches: float = Field(default=0.5, ge=0, le=3)
+    bullet_hanging_inches: float = Field(default=0.25, ge=0, le=3)
 
     # A rule is drawn above each heading whose text matches one of these. The
     # list is the part of a layout that genuinely differs per employer, which is
@@ -208,21 +315,58 @@ class ResumeFormatSpec(BaseModel):
     rule_before_sections: list[str] = Field(
         default_factory=lambda: ["Summary", "Certifications", "Skills", "Experiences", "Education Details"]
     )
-    heading_space_before_pt: float = 4
-    heading_space_after_pt: float = 2
+    heading_space_before_pt: float = Field(default=4, ge=0, le=72)
+    heading_space_after_pt: float = Field(default=2, ge=0, le=72)
 
     # Ruler position of the divider between the two skills columns, measured
     # from the left margin - the same number the user set in Google Docs.
-    skills_divider_inches: float = 3.0
+    skills_divider_inches: float = Field(default=3.0, gt=0)
     skills_category_bold: bool = True
-    skills_row_gap_pt: float = 6
+    skills_row_gap_pt: float = Field(default=6, ge=0, le=72)
 
     # A blank line after "Environment: ..." so the next role does not run into it.
-    environment_gap_pt: float = 8
+    environment_gap_pt: float = Field(default=8, ge=0, le=72)
+
+    # Which sections move into the sidebar of a two-column layout, by heading.
+    #
+    # Named rather than inferred. A sidebar is a judgement about what is
+    # secondary - Skills and Certifications for one employer, Education for
+    # another - and there is nothing in the markdown that says which. Guessing it
+    # from heading order or section length would be wrong quietly, and this is a
+    # document someone sends to a recruiter. Ignored unless layout is two-column.
+    sidebar_sections: list[str] = Field(default_factory=list)
+    sidebar_width_inches: float = Field(default=2.2, gt=0)
+
+    @property
+    def page_width_inches(self) -> float:
+        return 210 / 25.4 if self.page_size == "A4" else 8.5
+
+    @property
+    def page_height_inches(self) -> float:
+        return 297 / 25.4 if self.page_size == "A4" else 11
+
+    @model_validator(mode="after")
+    def valid_geometry(self):
+        if self.skills_divider_inches >= self.usable_width_inches:
+            raise ValueError("Skills divider must fit between the page margins")
+        # A sidebar that takes the whole page leaves no main column, and Word
+        # renders the result as one unreadable strip rather than failing.
+        if self.layout == "two-column" and self.sidebar_width_inches >= self.usable_width_inches - MIN_MAIN_COLUMN_INCHES:
+            raise ValueError(
+                f"Sidebar must leave at least {MIN_MAIN_COLUMN_INCHES}in for the main column"
+            )
+        return self
+
+    @property
+    def main_width_inches(self) -> float:
+        return self.usable_width_inches - self.sidebar_width_inches - COLUMN_GUTTER_INCHES
+
+    def spacing(self, points: float) -> float:
+        return points * (0.5 if self.compact else 1)
 
     @property
     def usable_width_inches(self) -> float:
-        return PAGE_WIDTH_INCHES - self.margin_left_inches - self.margin_right_inches
+        return self.page_width_inches - self.margin_left_inches - self.margin_right_inches
 
 
 def _style_run(run, spec: ResumeFormatSpec, *, size: float, bold: bool) -> None:
@@ -294,7 +438,7 @@ def _style_paragraph(paragraph, spec: ResumeFormatSpec, *, alignment=None, space
     fmt = paragraph.paragraph_format
     fmt.line_spacing = spec.line_spacing
     fmt.space_before = Pt(0)
-    fmt.space_after = Pt(space_after_pt)
+    fmt.space_after = Pt(spec.spacing(space_after_pt))
     fmt.left_indent = Inches(0)
     fmt.right_indent = Inches(0)
     fmt.first_line_indent = Inches(0)
@@ -325,20 +469,27 @@ def _cells(row: str) -> list[str]:
     return [cell.strip() for cell in row.strip().strip("|").split("|")]
 
 
-def _column_widths(spec: ResumeFormatSpec, column_count: int) -> list[float]:
+def _column_widths(spec: ResumeFormatSpec, column_count: int, available: float | None = None) -> list[float]:
     """Widths in inches, with the divider honoured for the two-column case.
 
     Beyond two columns there is no divider to honour, so the width is shared
     evenly rather than guessed at.
+
+    `available` is the width actually on offer, which is the page between the
+    margins unless this table is inside a column. The divider is a ruler
+    position measured on a full-width page, so in a narrower column it is scaled
+    to the same proportion rather than used as-is and overflowing.
     """
+    usable = spec.usable_width_inches if available is None else available
     if column_count == 2:
-        return [spec.skills_divider_inches, spec.usable_width_inches - spec.skills_divider_inches]
-    return [spec.usable_width_inches / column_count] * column_count
+        divider = spec.skills_divider_inches * (usable / spec.usable_width_inches)
+        return [divider, usable - divider]
+    return [usable / column_count] * column_count
 
 
-def _add_table(document, rows: list[list[str]], spec: ResumeFormatSpec) -> None:
+def _add_table(document, rows: list[list[str]], spec: ResumeFormatSpec, available: float | None = None) -> None:
     column_count = max(len(row) for row in rows)
-    widths = _column_widths(spec, column_count)
+    widths = _column_widths(spec, column_count, available)
     table = document.add_table(rows=len(rows), cols=column_count)
     table.style = "Table Grid"
     table.alignment = WD_TABLE_ALIGNMENT.LEFT
@@ -372,6 +523,128 @@ def _blank_paragraph(document, spec: ResumeFormatSpec, points: float) -> None:
     run.font.size = Pt(points)
 
 
+def _render_lines(container, lines: list[str], spec: ResumeFormatSpec, *, expect_header: bool, available: float | None = None) -> None:
+    """Write markdown lines into a document or a table cell.
+
+    `container` is anything with `add_paragraph` and `add_table`, which covers
+    both - that is what lets the two-column layout reuse this loop per column
+    instead of growing a second renderer that would drift from this one.
+
+    `expect_header` is off for a column: the name and contact line have already
+    been written across the top, so the first heading a column sees is a section
+    heading and must not be centred and set at name size.
+    """
+    rule_sections = {name.strip().lower() for name in spec.rule_before_sections if name.strip()}
+    body_alignment = WD_ALIGN_PARAGRAPH.JUSTIFY if spec.justify_body else WD_ALIGN_PARAGRAPH.LEFT
+
+    seen_heading = not expect_header
+    header_lines = 0 if expect_header else 2
+    pending_table: list[list[str]] = []
+    index = 0
+
+    while index < len(lines):
+        raw = lines[index]
+        index += 1
+        stripped = raw.strip()
+
+        if _TABLE_ROW.match(stripped):
+            if not _TABLE_DIVIDER.match(stripped):
+                pending_table.append(_cells(stripped))
+            continue
+        if pending_table:
+            _add_table(container, pending_table, spec, available=available)
+            pending_table = []
+
+        if not stripped:
+            continue
+
+        if _RULE.match(stripped):
+            _add_horizontal_rule(container)
+            continue
+
+        heading = _HEADING.match(stripped)
+        if heading:
+            text = heading.group(2).strip()
+            if not seen_heading:
+                # The first heading is the candidate's name: centred, large, and
+                # never given a rule above it.
+                seen_heading = True
+                header_lines = 1
+                paragraph = container.add_paragraph()
+                _style_paragraph(paragraph, spec, alignment=WD_ALIGN_PARAGRAPH.CENTER)
+                _add_runs(paragraph, text, spec, size=spec.name_font_size, bold=True)
+                continue
+            if text.lower() in rule_sections:
+                _add_horizontal_rule(container)
+            paragraph = container.add_paragraph()
+            _style_paragraph(
+                paragraph, spec, alignment=WD_ALIGN_PARAGRAPH.LEFT, space_after_pt=spec.heading_space_after_pt
+            )
+            paragraph.paragraph_format.space_before = Pt(spec.spacing(spec.heading_space_before_pt + spec.section_spacing_pt))
+            _add_runs(
+                paragraph,
+                text.upper() if spec.heading_uppercase else text,
+                spec,
+                size=spec.heading_font_size,
+                bold=spec.heading_bold,
+            )
+            if spec.accent_color:
+                for run in paragraph.runs:
+                    run.font.color.rgb = RGBColor.from_string(spec.accent_color.lstrip("#"))
+            continue
+
+        bullet = _BULLET.match(raw)
+        if bullet:
+            paragraph = container.add_paragraph(style="List Bullet")
+            _style_paragraph(paragraph, spec, alignment=body_alignment)
+            paragraph.paragraph_format.left_indent = Inches(spec.bullet_indent_inches)
+            paragraph.paragraph_format.first_line_indent = Inches(-spec.bullet_hanging_inches)
+            _add_runs(paragraph, bullet.group(1).strip(), spec, size=spec.body_font_size)
+            continue
+
+        if seen_heading and header_lines == 1:
+            # The line under the name is the contact line, and is centred with it.
+            header_lines = 2
+            paragraph = container.add_paragraph()
+            _style_paragraph(paragraph, spec, alignment=WD_ALIGN_PARAGRAPH.CENTER)
+            _add_runs(paragraph, stripped, spec, size=spec.body_font_size)
+            continue
+
+        paragraph = container.add_paragraph()
+        _style_paragraph(paragraph, spec, alignment=body_alignment)
+        _add_runs(paragraph, stripped, spec, size=spec.body_font_size)
+        if stripped.lower().startswith("environment:"):
+            _blank_paragraph(container, spec, spec.spacing(spec.environment_gap_pt))
+
+    if pending_table:
+        _add_table(container, pending_table, spec, available=available)
+
+
+def _empty_cell(cell):
+    """A fresh cell ships with one empty paragraph; it would print as a blank line."""
+    for paragraph in list(cell.paragraphs):
+        paragraph._p.getparent().remove(paragraph._p)
+    return cell
+
+
+def _add_columns(document, main: list[str], sidebar: list[str], spec: ResumeFormatSpec) -> None:
+    """Lay the body out as a borderless two-cell table.
+
+    Word has no multi-column flow that survives a round trip through LibreOffice
+    and back into Word, and a section break with `w:cols` reflows the whole page
+    rather than one band of it. A table is what every real two-column resume in
+    .docx is built from, and it keeps the header above it spanning both.
+    """
+    table = document.add_table(rows=1, cols=2)
+    table.alignment = WD_TABLE_ALIGNMENT.LEFT
+    table.autofit = False
+    widths = [spec.main_width_inches, spec.sidebar_width_inches]
+    for index, (cell, lines) in enumerate(((table.cell(0, 0), main), (table.cell(0, 1), sidebar))):
+        cell.width = Inches(widths[index])
+        table.columns[index].width = Inches(widths[index])
+        _render_lines(_empty_cell(cell), lines, spec, expect_header=False, available=widths[index])
+
+
 def build_docx(markdown: str, spec: ResumeFormatSpec, target: Path) -> Path:
     """Render resume markdown to a .docx at `target`.
 
@@ -390,93 +663,21 @@ def build_docx(markdown: str, spec: ResumeFormatSpec, target: Path) -> Path:
     normal.element.rPr.rFonts.set(qn("w:eastAsia"), spec.font_family)
 
     section = document.sections[0]
+    section.page_width = Inches(spec.page_width_inches)
+    section.page_height = Inches(spec.page_height_inches)
     section.left_margin = Inches(spec.margin_left_inches)
     section.right_margin = Inches(spec.margin_right_inches)
     section.top_margin = Inches(spec.margin_top_inches)
     section.bottom_margin = Inches(spec.margin_bottom_inches)
 
-    rule_sections = {name.strip().lower() for name in spec.rule_before_sections if name.strip()}
-    body_alignment = WD_ALIGN_PARAGRAPH.JUSTIFY if spec.justify_body else WD_ALIGN_PARAGRAPH.LEFT
-
-    lines = markdown.replace("\r\n", "\n").split("\n")
-    seen_heading = False
-    header_lines = 0
-    pending_table: list[list[str]] = []
-    index = 0
-
-    while index < len(lines):
-        raw = lines[index]
-        index += 1
-        stripped = raw.strip()
-
-        if _TABLE_ROW.match(stripped):
-            if not _TABLE_DIVIDER.match(stripped):
-                pending_table.append(_cells(stripped))
-            continue
-        if pending_table:
-            _add_table(document, pending_table, spec)
-            pending_table = []
-
-        if not stripped:
-            continue
-
-        if _RULE.match(stripped):
-            _add_horizontal_rule(document)
-            continue
-
-        heading = _HEADING.match(stripped)
-        if heading:
-            text = heading.group(2).strip()
-            if not seen_heading:
-                # The first heading is the candidate's name: centred, large, and
-                # never given a rule above it.
-                seen_heading = True
-                header_lines = 1
-                paragraph = document.add_paragraph()
-                _style_paragraph(paragraph, spec, alignment=WD_ALIGN_PARAGRAPH.CENTER)
-                _add_runs(paragraph, text, spec, size=spec.name_font_size, bold=True)
-                continue
-            if text.lower() in rule_sections:
-                _add_horizontal_rule(document)
-            paragraph = document.add_paragraph()
-            _style_paragraph(
-                paragraph, spec, alignment=WD_ALIGN_PARAGRAPH.LEFT, space_after_pt=spec.heading_space_after_pt
-            )
-            paragraph.paragraph_format.space_before = Pt(spec.heading_space_before_pt)
-            _add_runs(
-                paragraph,
-                text.upper() if spec.heading_uppercase else text,
-                spec,
-                size=spec.heading_font_size,
-                bold=spec.heading_bold,
-            )
-            continue
-
-        bullet = _BULLET.match(raw)
-        if bullet:
-            paragraph = document.add_paragraph(style="List Bullet")
-            _style_paragraph(paragraph, spec, alignment=body_alignment)
-            paragraph.paragraph_format.left_indent = Inches(spec.bullet_indent_inches)
-            paragraph.paragraph_format.first_line_indent = Inches(-spec.bullet_hanging_inches)
-            _add_runs(paragraph, bullet.group(1).strip(), spec, size=spec.body_font_size)
-            continue
-
-        if seen_heading and header_lines == 1:
-            # The line under the name is the contact line, and is centred with it.
-            header_lines = 2
-            paragraph = document.add_paragraph()
-            _style_paragraph(paragraph, spec, alignment=WD_ALIGN_PARAGRAPH.CENTER)
-            _add_runs(paragraph, stripped, spec, size=spec.body_font_size)
-            continue
-
-        paragraph = document.add_paragraph()
-        _style_paragraph(paragraph, spec, alignment=body_alignment)
-        _add_runs(paragraph, stripped, spec, size=spec.body_font_size)
-        if stripped.lower().startswith("environment:"):
-            _blank_paragraph(document, spec, spec.environment_gap_pt)
-
-    if pending_table:
-        _add_table(document, pending_table, spec)
+    header, main, sidebar = split_for_layout(markdown, spec)
+    if spec.layout == "two-column" and sidebar:
+        _render_lines(document, header, spec, expect_header=True)
+        _add_columns(document, main, sidebar, spec)
+    else:
+        # One stream, including two-column with nothing named for the sidebar:
+        # an empty second column is a worse document than a single-column one.
+        _render_lines(document, markdown.replace("\r\n", "\n").split("\n"), spec, expect_header=True)
 
     target.parent.mkdir(parents=True, exist_ok=True)
     document.save(str(target))
@@ -491,35 +692,68 @@ def _soffice() -> str | None:
     return None
 
 
-def build_pdf(markdown: str, spec: ResumeFormatSpec, target: Path) -> Path:
-    """Render to PDF by way of the .docx, using the LibreOffice already in the image.
-
-    Going through Word format rather than straight to PDF is deliberate: the
-    .docx is the artefact an employer asked for, so the PDF is a print of the
-    same document rather than a second rendering that could drift from it.
-    """
+def _convert_document(markdown: str, spec: ResumeFormatSpec, target: Path, fmt: str) -> Path:
     binary = _soffice()
     if binary is None:
-        raise RuntimeError(
-            "PDF export needs LibreOffice, which is not on PATH. Download the .docx instead."
-        )
+        raise RuntimeError("PDF and thumbnail rendering need LibreOffice. Download the .docx instead.")
+    # ponytail: four slots per API process; use shared admission if the API gains multiple workers.
+    if not _RENDER_SLOTS.acquire(blocking=False):
+        raise RuntimeError("Resume rendering is busy. Try again shortly.")
+    try:
+        with tempfile.TemporaryDirectory() as work:
+            source = build_docx(markdown, spec, Path(work) / "resume.docx")
+            profile = (Path(work) / "office-profile").as_uri()
+            try:
+                result = subprocess.run(
+                    [binary, f"-env:UserInstallation={profile}", "--headless", "--convert-to",
+                     fmt, "--outdir", work, str(source)],
+                    capture_output=True, timeout=75, check=False,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError("Resume rendering timed out. Download the .docx instead.") from exc
+            produced = Path(work) / f"resume.{fmt}"
+            if not produced.exists():
+                logger.warning("LibreOffice produced no %s (exit %s): %s", fmt, result.returncode,
+                               result.stderr.decode("utf-8", "replace")[:500])
+                raise RuntimeError(f"Converting the resume to {fmt.upper()} failed. Download the .docx instead.")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(produced, target)
+        return target
+    finally:
+        _RENDER_SLOTS.release()
 
+
+def build_pdf(markdown: str, spec: ResumeFormatSpec, target: Path) -> Path:
+    return _convert_document(markdown, spec, target, "pdf")
+
+
+THUMBNAIL_SAMPLE = """# Alex Rivera
+Dallas, TX | [Portfolio](https://example.com)
+
+## Summary
+Software engineer building reliable services.
+
+## Skills
+| Category | Technologies |
+| --- | --- |
+| Languages | Python, Java |
+| Platforms | Linux, PostgreSQL |
+
+## Experiences
+### Software Engineer
+- Delivered reliable services with the team.
+
+## Education Details
+Computer Science
+"""
+
+
+@lru_cache(maxsize=32)
+def build_thumbnail(spec_json: str) -> bytes:
+    spec = ResumeFormatSpec.model_validate_json(spec_json)
     with tempfile.TemporaryDirectory() as work:
-        source = build_docx(markdown, spec, Path(work) / "resume.docx")
-        result = subprocess.run(
-            [binary, "--headless", "--convert-to", "pdf", "--outdir", work, str(source)],
-            capture_output=True,
-            timeout=120,
-            check=False,
-        )
-        produced = Path(work) / "resume.pdf"
-        if not produced.exists():
-            logger.warning(
-                "LibreOffice produced no PDF (exit %s): %s",
-                result.returncode,
-                result.stderr.decode("utf-8", "replace")[:500],
-            )
-            raise RuntimeError("Converting the resume to PDF failed. Download the .docx instead.")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(produced, target)
-    return target
+        target = _convert_document(THUMBNAIL_SAMPLE, spec, Path(work) / "preview.png", "png")
+        content = target.read_bytes()
+        if not content.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise RuntimeError("LibreOffice returned an invalid preview image.")
+        return content

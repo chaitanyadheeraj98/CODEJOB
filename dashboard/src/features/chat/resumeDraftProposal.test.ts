@@ -16,6 +16,12 @@ const draftFields = (overrides: Record<string, unknown> = {}) => ({
 })
 
 describe('propose_resume_draft handler', () => {
+  it('shows and submits the reviewed initial header for a draft from scratch', () => {
+    const initial_content = '# Alex\nalex@example.com\n\n## Summary'
+    const fields = { action: 'propose_resume_draft', from_scratch: true, name: 'Alex draft', initial_content }
+    expect(handler.buildBody(fields)).toEqual({ name: 'Alex draft', content_markdown: initial_content })
+    expect(Object.fromEntries(handler.summary(fields))['Initial draft']).toBe(initial_content)
+  })
   // Left out, the server copies the variant's own text. Sending a body with a
   // content_markdown key - even an empty one - would create a draft of nothing.
   it('sends no resume text, so the server seeds the draft from the variant', () => {

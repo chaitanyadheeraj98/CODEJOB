@@ -169,7 +169,8 @@ def get_resume(resume_id: int = 0, variant: str = "") -> dict[str, object]:
         db.close()
 
 
-def propose_resume_draft(source_resume_id: int = 0, variant: str = "", name: str = "") -> dict[str, object]:
+def propose_resume_draft(source_resume_id: int = 0, variant: str = "", name: str = "",
+                         from_scratch: bool = False, candidate_name: str = "", contact_line: str = "") -> dict[str, object]:
     """Prepare a resume draft copied from one of the user's variants. Never creates it.
 
     Call this when the user asks you to draft, tailor, or rewrite a resume. Say
@@ -181,6 +182,17 @@ def propose_resume_draft(source_resume_id: int = 0, variant: str = "", name: str
     and the variant itself is only ever read. Only the user's click on the card
     creates the draft; until then nothing exists.
     """
+    if from_scratch:
+        if source_resume_id or variant.strip():
+            return {"status": "invalid_source", "detail": "Choose an existing variant or start from scratch."}
+        if not candidate_name.strip() or not contact_line.strip():
+            return {"status": "missing_fields", "missing": ["candidate_name", "contact_line"]}
+        if len(candidate_name) > 100 or len(contact_line) > 300 or any(c in candidate_name + contact_line for c in "\r\n"):
+            return {"status": "invalid_header", "detail": "Supply only a short name and one contact line."}
+        content = f"# {candidate_name.strip()}\n{contact_line.strip()}\n\n## Summary\n\n## Skills\n\n## Experience\n\n## Education"
+        return {"action": "propose_resume_draft", "from_scratch": True,
+                "name": (name.strip() or f"{candidate_name.strip()} draft")[:200],
+                "initial_content": content, "source_characters": len(content)}
     db = SessionLocal()
     try:
         row, refusal = _resolve_variant(db, source_resume_id, variant)

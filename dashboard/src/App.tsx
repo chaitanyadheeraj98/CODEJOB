@@ -5471,7 +5471,12 @@ function App() {
     if (!resolved || !config) {
       // A page with no filter registry (Run Queue) is still a legitimate
       // destination; it just carries no filter state.
-      window.history.pushState(null, '', `${window.location.pathname}?page=${target.page}`)
+      const query = new URLSearchParams({ page: target.page })
+      if (page === 'resume_tracking' && (target.tab === 'gaps' || target.tab === 'resumes' || target.tab === 'submissions' || target.tab === 'manage' || target.tab === 'editor')) {
+        setResumeTrackingTab(target.tab)
+        query.set('tab', target.tab)
+      }
+      window.history.pushState(null, '', `${window.location.pathname}?${query}`)
       setActivePage(page)
       return
     }

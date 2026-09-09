@@ -225,6 +225,7 @@ export type ResumeDraftSummary = {
   id: number
   name: string
   source_resume_id: number | null
+  format_profile_id?: number | null
   /** Blank once the source variant has been deleted - a draft outlives it. */
   source_variant_code: string
   character_count: number
@@ -234,7 +235,10 @@ export type ResumeDraftSummary = {
 
 export type ResumeDraft = ResumeDraftSummary & {
   content_markdown: string
+  sections: ResumeDraftSection[]
 }
+
+export type ResumeDraftSection = { heading: string; level: number; body: string; start: number; end: number }
 
 /*
  * One employer's layout, as numbers. Every field is something the Google Docs
@@ -242,6 +246,16 @@ export type ResumeDraft = ResumeDraftSummary & {
  * a sample rather than written by hand.
  */
 export type ResumeFormatSpec = {
+  page_size?: 'LETTER' | 'A4'
+  layout?: 'single' | 'two-column'
+  // Which headings move into the sidebar. Named rather than inferred - nothing
+  // in the markdown says which sections are secondary, and for one employer
+  // that is Skills while for another it is Education.
+  sidebar_sections?: string[]
+  sidebar_width_inches?: number
+  accent_color?: string
+  section_spacing_pt?: number
+  compact?: boolean
   font_family: string
   body_font_size: number
   name_font_size: number

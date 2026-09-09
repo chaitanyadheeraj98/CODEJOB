@@ -12,6 +12,7 @@ import type {
   ResumeDraftSummary,
   ResumeExportFormat,
   ResumeFormatProfile,
+  ResumeFormatSpec,
   ResumeFunnelMetrics,
   ResumeLibraryItem,
   ResumePerformanceSummaryItem,
@@ -164,9 +165,24 @@ export function createResumeDraft(
 export function saveResumeDraft(
   apiBase: string,
   draftId: number,
-  patch: { name?: string; content_markdown?: string },
+  patch: { name?: string; content_markdown?: string; format_profile_id?: number | null },
 ): Promise<ResumeDraft> {
   return requestJson(`${apiBase}/resume-editor/drafts/${draftId}`, jsonInit('PUT', patch))
+}
+
+/*
+ * Move a section past its neighbour, subsections and all.
+ *
+ * `base_sha256` is the digest of the whole draft, not of one section: the thing
+ * being changed is the order, and a per-section digest would not notice another
+ * section arriving between the two.
+ */
+export function reorderResumeDraftSection(
+  apiBase: string,
+  draftId: number,
+  input: { section: string; direction: 'up' | 'down'; base_sha256?: string },
+): Promise<ResumeDraft> {
+  return requestJson(`${apiBase}/resume-editor/drafts/${draftId}/sections/reorder`, jsonInit('POST', input))
 }
 
 export function deleteResumeDraft(apiBase: string, draftId: number): Promise<{ id: number; deleted: boolean }> {
@@ -204,7 +220,7 @@ export function createFormatProfile(apiBase: string, file: File, name: string, m
 export function updateFormatProfile(
   apiBase: string,
   profileId: number,
-  patch: { name?: string; is_default?: boolean },
+  patch: { name?: string; is_default?: boolean; spec?: ResumeFormatSpec },
 ): Promise<ResumeFormatProfile> {
   return requestJson(`${apiBase}/resume-editor/profiles/${profileId}`, jsonInit('PATCH', patch))
 }
@@ -230,17 +246,7 @@ export async function downloadResumeDraft(
   format: ResumeExportFormat,
   profileId: number | null,
 ): Promise<string> {
-  const query = new URLSearchParams({ fmt: format })
-  if (profileId != null) query.set('profile_id', String(profileId))
-  const response = await fetch(`${apiBase}/resume-editor/drafts/${draftId}/export?${query}`)
-  if (!response.ok) {
-    const detail = await response.text().catch(() => '')
-    try {
-      throw new Error((JSON.parse(detail) as { detail?: string }).detail || detail)
-    } catch (parsed) {
-      throw parsed instanceof Error && parsed.message ? parsed : new Error(detail || `Export failed (${response.status})`)
-    }
-  }
+  const response = await fetchResumeDraftExport(apiBase, draftId, format, profileId)
   const blob = await response.blob()
   const name = filenameFrom(response.headers.get('content-disposition'), `resume-draft-${draftId}.${format}`)
   const url = URL.createObjectURL(blob)
@@ -252,4 +258,26 @@ export async function downloadResumeDraft(
   link.remove()
   URL.revokeObjectURL(url)
   return name
+}
+
+export function createLayoutProfile(apiBase: string, name: string, spec: ResumeFormatSpec): Promise<ResumeFormatProfile> {
+  const form = new FormData()
+  form.append('name', name)
+  form.append('spec_json', JSON.stringify(spec))
+  return requestJson(`${apiBase}/resume-editor/profiles`, { method: 'POST', body: form })
+}
+
+export async function fetchResumeDraftExport(apiBase: string, draftId: number, format: ResumeExportFormat, profileId: number | null, signal?: AbortSignal): Promise<Response> {
+  const query = new URLSearchParams({ fmt: format })
+  query.set('profile_id', String(profileId ?? 0))
+  const response = await fetch(`${apiBase}/resume-editor/drafts/${draftId}/export?${query}`, { signal })
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '')
+    try {
+      throw new Error((JSON.parse(detail) as { detail?: string }).detail || detail)
+    } catch (parsed) {
+      throw parsed instanceof Error && parsed.message ? parsed : new Error(detail || `Export failed (${response.status})`)
+    }
+  }
+  return response
 }

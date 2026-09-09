@@ -439,10 +439,13 @@ export const PROPOSAL_HANDLERS: Record<string, ProposalHandler> = {
     // No content_markdown on purpose. Left out, the server copies the variant's
     // own text into the draft, so what opens in the Editor is the resume the
     // user actually has rather than a model's recollection of it.
-    buildBody: (fields) => ({ name: fields.name, source_resume_id: fields.source_resume_id }),
+    buildBody: (fields) => fields.from_scratch === true
+      ? { name: fields.name, content_markdown: fields.initial_content }
+      : { name: fields.name, source_resume_id: fields.source_resume_id },
     confirmLabel: () => 'Create Draft',
     summary: (fields) => [
       ['Draft name', text(fields.name)],
+      ...(fields.from_scratch === true ? [['Initial draft', text(fields.initial_content)] as [string, string]] : []),
       ['Copied from', [text(fields.source_variant_code), text(fields.source_file_name)].filter(Boolean).join(' · ')],
       // The size of the copy, not the text. A resume is too long to re-read on a
       // card, and the character count is the part that says which one it is.
@@ -502,6 +505,23 @@ export function proposalForMessage(message: ChatMessage): { handler: ProposalHan
   } catch {
     return null
   }
+}
+
+export function resumeSequenceProgress(messages: ChatMessage[], fields: ProposalFields): string | undefined {
+  if (fields.action !== 'propose_resume_section') return undefined
+  const planned = strings(fields.sequence_sections)
+  if (!planned.length) return undefined
+  const proposed = new Set<string>()
+  for (const message of messages) {
+    const proposal = proposalForMessage(message)
+    if (proposal?.fields.action !== 'propose_resume_section' || proposal.fields.draft_id !== fields.draft_id) continue
+    if (JSON.stringify(proposal.fields.sequence_sections) !== JSON.stringify(planned)) continue
+    const section = text(proposal.fields.section)
+    if (section === planned[0]) proposed.clear()
+    if (planned.includes(section)) proposed.add(section)
+    if (JSON.stringify(proposal.fields) === JSON.stringify(fields)) break
+  }
+  return `${proposed.size} of ${planned.length} sections proposed. Each needs its own approval.`
 }
 
 // Why a propose_* tool produced no card: it refused, or it wants more first.

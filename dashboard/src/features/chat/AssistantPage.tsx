@@ -7,7 +7,7 @@ import { ACCEPTED_EXTENSIONS, type PendingAttachment } from './attachmentDisplay
 import { useChat } from './chatContext'
 import { renderMarkdownLite } from './markdown'
 import ProposalCard from './ProposalCard'
-import { proposalForMessage, proposalRefusalForMessage, unsupportedProposalNotice } from './proposals'
+import { proposalForMessage, proposalRefusalForMessage, resumeSequenceProgress, unsupportedProposalNotice } from './proposals'
 import RenderedMessage from './RenderedMessage'
 import { renderForMessage } from './renderers'
 import type { ChatSession } from './types'
@@ -273,6 +273,7 @@ export default function AssistantPage() {
                   key={message.id}
                   handler={proposal.handler}
                   fields={proposal.fields}
+                  progress={resumeSequenceProgress(chat.messages, proposal.fields)}
                   result={chat.proposalResults[message.id]}
                   busy={chat.proposalBusyId === message.id}
                   disabled={chat.proposalBusyId != null}

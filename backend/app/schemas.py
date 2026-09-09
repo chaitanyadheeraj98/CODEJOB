@@ -554,6 +554,7 @@ class ResumeDraftSummary(BaseModel):
     id: int
     name: str
     source_resume_id: int | None = None
+    format_profile_id: int | None = None
     # The variant the draft was copied from, if it still exists. Blank once that
     # variant has been deleted - the draft outlives it by design.
     source_variant_code: str = ""
@@ -562,8 +563,17 @@ class ResumeDraftSummary(BaseModel):
     updated_at: datetime
 
 
+class ResumeDraftSection(BaseModel):
+    heading: str
+    level: int
+    body: str
+    start: int
+    end: int
+
+
 class ResumeDraftResponse(ResumeDraftSummary):
     content_markdown: str = ""
+    sections: list[ResumeDraftSection] = Field(default_factory=list)
 
 
 class ResumeDraftCreateRequest(BaseModel):
@@ -577,6 +587,7 @@ class ResumeDraftCreateRequest(BaseModel):
 class ResumeDraftUpdateRequest(BaseModel):
     name: str | None = None
     content_markdown: str | None = None
+    format_profile_id: int | None = Field(default=None, gt=0)
 
 
 class ResumeDraftSectionRequest(BaseModel):
@@ -590,6 +601,20 @@ class ResumeDraftSectionRequest(BaseModel):
 
     section: str
     replacement: str
+    base_sha256: str = ""
+
+
+class ResumeDraftSectionMoveRequest(BaseModel):
+    """Move one section past the sibling above or below it.
+
+    `base_sha256` is the digest of the whole draft rather than of one section,
+    because reordering is a change to the document's shape: the thing that must
+    not have moved underneath is the order itself, and a per-section digest
+    would not notice a different section being inserted between the two.
+    """
+
+    section: str
+    direction: Literal["up", "down"]
     base_sha256: str = ""
 
 

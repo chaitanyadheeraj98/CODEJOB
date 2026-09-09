@@ -18,6 +18,7 @@ from __future__ import annotations
 from app.config import settings
 from app.db import SessionLocal
 from app.models import ResumeDraft
+from app.services.resume_grounding_service import check_grounding
 from app.services.resume_render_service import (
     covers_whole_document,
     find_section,
@@ -199,7 +200,8 @@ def get_resume_draft(draft_id: int = 0, name: str = "", section: str = "") -> di
 
 
 def propose_resume_section(
-    draft_id: int = 0, section: str = "", replacement: str = "", name: str = ""
+    draft_id: int = 0, section: str = "", replacement: str = "", name: str = "",
+    sequence_sections: list[str] | None = None,
 ) -> dict[str, object]:
     """Prepare a rewrite of one section of a draft. Never performs it.
 
@@ -273,6 +275,12 @@ def propose_resume_section(
             "current_characters": len(found.body),
             "replacement": text,
             "replacement_characters": len(text),
+            "grounding": check_grounding(content, found.body, text),
+            "sequence_sections": list(dict.fromkeys(
+                item.heading for heading in (sequence_sections or [])[:20]
+                if (item := find_section(content, heading)) is not None
+                and not covers_whole_document(content, item)
+            )),
             # Stamped now, checked at the click. A rewrite composed against text
             # the user has since edited is refused rather than overwriting it.
             "base_sha256": section_digest(found.body),
