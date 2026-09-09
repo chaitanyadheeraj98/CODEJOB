@@ -1,21 +1,29 @@
 from __future__ import annotations
 
+import asyncio
+import json
+
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from time import perf_counter
 
-from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
-from langgraph.prebuilt import create_react_agent
+from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, ToolMessage
+from langgraph.prebuilt import ToolNode, create_react_agent
 
+from app.ai.chat.failures import FAILURE_MESSAGES, FALLBACK_MESSAGE, _RETRYABLE, _TERMINAL, classify_ollama_error, tool_error
 from app.ai.chat.history import message_text
 from app.ai.chat.llm import build_chat_llm
-from app.ai.chat.mcp_client import get_mcp_tools
-from app.ai.chat.system_prompt import build_system_prompt
+from app.ai.chat.mcp_client import get_mcp_tools, tools_cached
+from app.ai.chat.system_prompt import build_system_prompt, prompt_sha256
 from app.config import settings
 from app.runtime_state import runtime_state
 
 
-FALLBACK_MESSAGE = "Chat is temporarily unavailable. Check that Ollama is running, then try again."
+# Everything a finished tool is allowed to say about itself on screen. The
+# repair envelope's own vocabulary plus the two outcomes a tool that returned
+# nothing structured can have. Anything else is reported as "ok", because this
+# string is rendered as the app speaking rather than as tool output.
+TOOL_STATUSES = frozenset({"ok", "error", "success", "missing_fields", "refused"})
 
 
 def chat_models(selected: str | None = None) -> list[str]:
@@ -59,11 +67,12 @@ def tool_call_budget() -> int:
     return 2 * max(1, settings.ollama_max_tool_iterations) + 2
 
 
-async def build_chat_agent(model: str, candidate_profile: str = ""):
-    tools = await get_mcp_tools()
-    runtime_state.chat_mcp_status = "ready"
+async def build_chat_agent(model: str, candidate_profile: str = "", *, tools=None, timeout: float | None = None):
+    if tools is None:
+        tools = await get_mcp_tools()
     return create_react_agent(
-        build_chat_llm(model), tools, prompt=build_system_prompt(candidate_profile)
+        build_chat_llm(model, timeout), ToolNode(tools, handle_tool_errors=tool_error),
+        prompt=build_system_prompt(candidate_profile),
     )
 
 
@@ -71,64 +80,115 @@ async def stream_chat_agent(
     messages: list[BaseMessage], model: str | None = None, candidate_profile: str = ""
 ) -> AsyncIterator[tuple[str, object]]:
     started = perf_counter()
+    deadline = started + settings.chat_turn_budget_seconds
     runtime_state.chat_last_attempted_at = datetime.now(UTC)
-    models = chat_models(model)
+    metrics = {"model": "", "attempts": 0, "failed_over": False, "prompt_tokens": None,
+               "completion_tokens": None, "tool_calls": [], "time_to_first_token_ms": None,
+               "failure_code": None, "budget_exhausted": False, "mcp_cached": tools_cached(),
+               "prompt_sha256": prompt_sha256()}
+    yield "telemetry", metrics
+    streamed = ""
+    latest_messages = []
+    usage = {}
+    pending_tools = {}
+    code = None
     try:
-        for index, model in enumerate(models):
-            yielded_any = False
-            try:
-                graph = await build_chat_agent(model, candidate_profile)
-                latest_messages: list[BaseMessage] = []
-                # How far into the state we have already looked for tool calls, so
-                # each one is announced once. Starts past the history we sent in.
+        try:
+            async with asyncio.timeout(max(0, deadline - perf_counter())):
+                tools = await get_mcp_tools()
+            runtime_state.chat_mcp_status = "ready"
+        except Exception:
+            code = "budget_exhausted" if perf_counter() >= deadline else "mcp_unavailable"
+            runtime_state.chat_mcp_status = f"error: {code}"
+            raise
+        for index, selected in enumerate(chat_models(model)):
+            for attempt in range(settings.chat_model_max_attempts):
+                metrics.update(model=selected, attempts=metrics["attempts"] + 1, failed_over=index > 0)
+                code = None
+                latest_messages = []
                 announced = len(messages)
-                async for mode, payload in graph.astream(
-                    {"messages": messages},
-                    config={"recursion_limit": tool_call_budget()},
-                    stream_mode=["messages", "values"],
-                ):
-                    if mode == "messages":
-                        chunk, _metadata = payload
-                        if isinstance(chunk, AIMessageChunk):
-                            delta = message_text(chunk.content)
-                            if delta:
-                                yielded_any = True
-                                yield "delta", delta
-                    elif mode == "values" and isinstance(payload, dict):
-                        latest_messages = list(payload.get("messages") or [])
-                        # `values` fires after the agent node decides on a tool and
-                        # before the tool node runs it, so this reaches the user at
-                        # the start of the wait rather than after it. It matters for
-                        # propose_taxonomy_bulk_review, which spends 30s+ inside
-                        # DeepSeek with nothing else on the wire.
-                        for message in latest_messages[announced:]:
-                            for call in getattr(message, "tool_calls", None) or []:
-                                name = (
-                                    call.get("name")
-                                    if isinstance(call, dict)
-                                    else getattr(call, "name", None)
-                                )
-                                if name:
-                                    yield "tool", str(name)
-                        announced = len(latest_messages)
-
-                runtime_state.chat_last_error = None
-                runtime_state.chat_last_success_at = datetime.now(UTC)
-                runtime_state.chat_active_model = model
-                yield "complete", latest_messages[len(messages):]
-                return
-            except Exception as exc:
-                # ponytail: only fail over before any tokens reach the user; a break after
-                # partial output falls straight to FALLBACK_MESSAGE instead of risking a
-                # garbled reply stitched from two models.
-                if yielded_any or index == len(models) - 1:
-                    raise
-                runtime_state.chat_last_error = f"{model}: {str(exc)[:500]}"
+                try:
+                    remaining = max(0, deadline - perf_counter())
+                    async with asyncio.timeout(remaining):
+                        graph = await build_chat_agent(selected, candidate_profile, tools=tools, timeout=remaining)
+                        async for mode, payload in graph.astream(
+                            {"messages": messages}, config={"recursion_limit": tool_call_budget()},
+                            stream_mode=["messages", "values"],
+                        ):
+                            if mode == "messages":
+                                chunk, metadata = payload
+                                if isinstance(chunk, AIMessageChunk):
+                                    if chunk.usage_metadata:
+                                        usage[(metrics["attempts"], chunk.id)] = chunk.usage_metadata
+                                    delta = message_text(chunk.content)
+                                    if delta:
+                                        if metrics["time_to_first_token_ms"] is None:
+                                            metrics["time_to_first_token_ms"] = int((perf_counter() - started) * 1000)
+                                        streamed += delta
+                                        yield "delta", delta
+                            elif mode == "values" and isinstance(payload, dict):
+                                latest_messages = list(payload.get("messages") or [])
+                                for position, message in enumerate(latest_messages[announced:], announced):
+                                    if isinstance(message, AIMessage) and message.usage_metadata:
+                                        usage[(metrics["attempts"], message.id or position)] = message.usage_metadata
+                                    for call in getattr(message, "tool_calls", None) or []:
+                                        pending_tools[call["id"]] = (call["name"], perf_counter())
+                                        yield "tool", call["name"]
+                                    if isinstance(message, ToolMessage):
+                                        name, tool_started = pending_tools.pop(message.tool_call_id, (message.name or "tool", perf_counter()))
+                                        try:
+                                            result = json.loads(message_text(message.content))
+                                        except (ValueError, TypeError):
+                                            result = {}
+                                        status = (result.get("status") or ("error" if result.get("error") else message.status)) if isinstance(result, dict) else message.status
+                                        record = {"name": name, "duration_ms": int((perf_counter() - tool_started) * 1000), "status": status}
+                                        metrics["tool_calls"].append(record)
+                                        # `status` is written by our own tools, but it is the one field
+                                        # here that a tool could widen into prose, so it is clamped to
+                                        # the enumerated set before it can reach the user's screen.
+                                        # `name` comes from the registry and `duration_ms` is measured.
+                                        yield "tool_done", {**record, "status": status if status in TOOL_STATUSES else "ok"}
+                                announced = len(latest_messages)
+                                yield "values", latest_messages[len(messages):]
+                                generated = latest_messages[len(messages):]
+                                steps = 2 * sum(isinstance(m, AIMessage) and bool(m.tool_calls) for m in generated) + 1
+                                if (steps >= tool_call_budget() - 1 and generated
+                                        and message_text(generated[-1].content) == "Sorry, need more steps to process this request."):
+                                    code = "tool_budget_exhausted"
+                                    raise RuntimeError(code)
+                    runtime_state.chat_last_error = None
+                    runtime_state.chat_last_failure_code = None
+                    runtime_state.chat_last_success_at = datetime.now(UTC)
+                    runtime_state.chat_active_model = selected
+                    yield "complete", latest_messages[len(messages):]
+                    return
+                except Exception as exc:
+                    code = code or ("budget_exhausted" if perf_counter() >= deadline else classify_ollama_error(exc))
+                    # ponytail: repair only before the first token; after it, preserve and report.
+                    if streamed or code in _TERMINAL:
+                        raise
+                    if code in _RETRYABLE and attempt + 1 < settings.chat_model_max_attempts:
+                        await asyncio.sleep(min(2 ** attempt, max(0, deadline - perf_counter()) / 2))
+                        continue
+                    break
+        if code is None:
+            code = "ollama_unavailable"
     except Exception as exc:
-        runtime_state.chat_last_error = str(exc)[:2000]
-        if runtime_state.chat_mcp_status != "ready":
-            runtime_state.chat_mcp_status = f"error: {str(exc)[:180]}"
-        yield "delta", FALLBACK_MESSAGE
-        yield "complete", [AIMessage(content=FALLBACK_MESSAGE)]
+        code = code or classify_ollama_error(exc)
     finally:
-        runtime_state.chat_last_duration_ms = max(0, int((perf_counter() - started) * 1000))
+        metrics["duration_ms"] = max(0, int((perf_counter() - started) * 1000))
+        metrics["failure_code"] = code
+        metrics["budget_exhausted"] = code == "budget_exhausted"
+        if usage:
+            metrics["prompt_tokens"] = sum(v.get("input_tokens", 0) for v in usage.values())
+            metrics["completion_tokens"] = sum(v.get("output_tokens", 0) for v in usage.values())
+        for name, tool_started in pending_tools.values():
+            metrics["tool_calls"].append({"name": name, "duration_ms": int((perf_counter() - tool_started) * 1000), "status": "interrupted"})
+        runtime_state.chat_last_duration_ms = metrics["duration_ms"]
+    runtime_state.chat_last_error = code
+    runtime_state.chat_last_failure_code = code
+    failure = FAILURE_MESSAGES.get(code, FALLBACK_MESSAGE)
+    yield "error", {"code": code, "message": failure}
+    delta = ("\n\n" if streamed else "") + failure
+    yield "delta", delta
+    yield "complete", [AIMessage(content=streamed + delta)]

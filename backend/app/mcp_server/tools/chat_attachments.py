@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.mcp_server.tools import untrusted
 from app.config import settings
 from app.db import SessionLocal
 from app.models import ChatAttachment
@@ -70,9 +71,8 @@ def read_chat_attachment(attachment_id: int) -> dict[str, object]:
             # An uploaded job description is exactly the attacker-controlled text
             # these delimiters exist for - the user did not write it either.
             "untrusted_document_data": (
-                "<untrusted_document_data>\n"
-                f"{row.content_markdown}\n"
-                "</untrusted_document_data>"
+                untrusted("document",
+                f"{row.content_markdown}")
             ),
         }
     finally:

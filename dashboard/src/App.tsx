@@ -5274,6 +5274,30 @@ function App() {
   const embeddingLastDuration = aiStatus?.embedding_last_duration_ms
     ? `${(aiStatus.embedding_last_duration_ms / 1000).toFixed(1)}s`
     : null
+  // Built once and rendered by both the config list and the AI Access card, so
+  // the two cannot describe the same turns differently. Every line is a count
+  // the server measured; nothing here is derived from another line.
+  const chatTelemetryRows: [string, string][] = (() => {
+    const telemetry = chatStatus?.telemetry
+    if (!telemetry) return []
+    const seconds = (ms: number) => `${(ms / 1000).toFixed(1)}s`
+    const rows: [string, string][] = [
+      ['Chat Turns', `${telemetry.turns} in ${telemetry.window_days}d`],
+      ['Chat Turn Duration', `${seconds(telemetry.median_duration_ms)} median, ${seconds(telemetry.p95_duration_ms)} p95`],
+      ['Chat Tokens', `${telemetry.prompt_tokens.toLocaleString()} in / ${telemetry.completion_tokens.toLocaleString()} out`],
+    ]
+    // Shown only when non-zero. A row of zeroes on a healthy install trains the
+    // reader to skip the block, and these are the lines worth not skipping.
+    if (telemetry.failed) {
+      rows.push(['Chat Failures', telemetry.top_failure_code
+        ? `${telemetry.failed}, mostly ${telemetry.top_failure_code}`
+        : String(telemetry.failed)])
+    }
+    if (telemetry.failed_over) rows.push(['Chat Failovers', String(telemetry.failed_over)])
+    if (telemetry.cancelled) rows.push(['Chat Turns Stopped', String(telemetry.cancelled)])
+    if (telemetry.interrupted) rows.push(['Chat Turns Interrupted', String(telemetry.interrupted)])
+    return rows
+  })()
   const groqLastDuration = aiStatus?.groq_last_duration_ms
     ? `${(aiStatus.groq_last_duration_ms / 1000).toFixed(1)}s`
     : null
@@ -5915,6 +5939,7 @@ function App() {
                   {chatStatus?.mcp_status ? configRow('Ollama MCP Status', chatStatus.mcp_status) : null}
                   {chatStatus?.ollama_last_error ? configRow('Ollama Error', chatStatus.ollama_last_error) : null}
                   {chatStatus?.ollama_last_success_at ? configRow('Ollama Last Success', chatStatus.ollama_last_success_at) : null}
+                  {chatTelemetryRows.map(([label, value]) => configRow(label, value))}
                   {aiStatus?.last_draft_source ? configRow('Draft Source', getDraftSourceLabel(aiStatus.last_draft_source)) : null}
                   {aiLastDuration ? configRow('Last Duration', aiLastDuration) : null}
                 </div>
@@ -6106,6 +6131,9 @@ function App() {
                   {chatStatus?.mcp_status ? <div className="row"><span className="label">Ollama MCP Status</span><span>{chatStatus.mcp_status}</span></div> : null}
                   {chatStatus?.ollama_last_error ? <div className="row"><span className="label">Ollama Error</span><span>{chatStatus.ollama_last_error}</span></div> : null}
                   {chatStatus?.ollama_last_success_at ? <div className="row"><span className="label">Ollama Last Success</span><span>{chatStatus.ollama_last_success_at}</span></div> : null}
+                  {chatTelemetryRows.map(([label, value]) => (
+                    <div className="row" key={label}><span className="label">{label}</span><span>{value}</span></div>
+                  ))}
                   {aiStatus?.last_draft_source ? <div className="row"><span className="label">Draft Source</span><span>{getDraftSourceLabel(aiStatus.last_draft_source)}</span></div> : null}
                   {aiLastDuration ? <div className="row"><span className="label">Last Duration</span><span>{aiLastDuration}</span></div> : null}
                 </div>

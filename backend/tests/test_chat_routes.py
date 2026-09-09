@@ -24,6 +24,9 @@ class FakeGraph:
 
 class ChatRouteTests(unittest.TestCase):
     def setUp(self) -> None:
+        self.tools_patch = patch("app.ai.chat.agent.get_mcp_tools", new=AsyncMock(return_value=[]))
+        self.tools_patch.start()
+        self.addCleanup(self.tools_patch.stop)
         self.engine = create_engine(
             "sqlite://",
             connect_args={"check_same_thread": False},
@@ -194,7 +197,8 @@ class ChatRouteTests(unittest.TestCase):
         self.assertIn("temporarily unavailable", response.text)
         # The second argument is the user's candidate profile, empty here because
         # this fixture's settings row has none.
-        build_mock.assert_awaited_once_with(main.settings.ollama_chat_model_fallback2, "")
+        self.assertEqual(build_mock.await_count, 1)
+        self.assertEqual(build_mock.call_args.args, (main.settings.ollama_chat_model_fallback2, ""))
 
 
 if __name__ == "__main__":

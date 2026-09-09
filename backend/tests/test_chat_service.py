@@ -31,6 +31,9 @@ class FakeGraph:
 
 class ChatServiceTests(unittest.TestCase):
     def setUp(self) -> None:
+        self.tools_patch = patch("app.ai.chat.agent.get_mcp_tools", new=AsyncMock(return_value=[]))
+        self.tools_patch.start()
+        self.addCleanup(self.tools_patch.stop)
         self.engine = create_engine(
             "sqlite://",
             connect_args={"check_same_thread": False},
@@ -56,9 +59,9 @@ class ChatServiceTests(unittest.TestCase):
             self.assertIn('event: message\ndata: {"delta":"There are 3 candidates."}', "".join(chunks))
             self.assertIn("event: done", chunks[-1])
             rows = db.query(ChatMessage).filter(ChatMessage.session_id == session.id).order_by(ChatMessage.id).all()
-            self.assertEqual([row.role for row in rows], ["user", "tool", "assistant"])
-            self.assertEqual(rows[-1].content, "There are 3 candidates.")
-            self.assertEqual(rows[1].tool_name, "search_candidates")
+            self.assertEqual([row.role for row in rows], ["user", "assistant", "tool"])
+            self.assertEqual(rows[1].content, "There are 3 candidates.")
+            self.assertEqual(rows[2].tool_name, "search_candidates")
 
     def test_message_limit_is_enforced_before_model_use(self) -> None:
         previous = settings.chat_message_char_limit

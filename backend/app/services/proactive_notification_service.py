@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.ai.chat.history import message_text
 from app.ai.chat.llm import build_chat_llm
+from app.mcp_server.tools import untrusted
 from app.config import settings
 from app.models import ChatMessage, ChatSession, EmailConversation, EmailReplyMessage, RecruiterEmail, utc_now
 
@@ -25,11 +26,7 @@ job seeker should be proactively notified now, or whether it's routine and can w
 until they check the inbox themselves (e.g. a plain acknowledgment, an auto-reply,
 or a reply with no action implied).
 
-<untrusted_reply_data>
-Recruiter: {sender}
-Original role/subject: {subject}
-Reply excerpt: {body}
-</untrusted_reply_data>
+{reply}
 
 Reply with exactly one of:
 NO_ACTION_NEEDED
@@ -41,7 +38,7 @@ Never invent details not present in the excerpt above."""
 
 async def _classify_reply(*, sender: str, subject: str, body: str) -> str | None:
     llm = build_chat_llm()
-    prompt = _PROMPT.format(sender=sender, subject=subject, body=body[:2000])
+    prompt = _PROMPT.format(reply=untrusted("reply", f"Recruiter: {sender}\nOriginal role/subject: {subject}\nReply excerpt: {body[:2000]}"))
     try:
         response = await llm.ainvoke(prompt)
     except Exception:

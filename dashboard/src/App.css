@@ -3061,6 +3061,35 @@ button.emailSearchResult:focus-visible {
   color: var(--ink);
 }
 
+/* A record ID the thread can back, made clickable in place. Styled as the text
+   it already was plus an underline, not as a button: the ID is part of the
+   sentence, and a pill here would break the line it sits in. Dotted rather than
+   solid so it reads as "this resolves to something" rather than as a hyperlink
+   leaving the app. */
+.chatRecordCitation {
+  border: 0;
+  padding: 0;
+  background: none;
+  font: inherit;
+  color: var(--primary);
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.chatRecordCitation:hover {
+  text-decoration: underline solid;
+}
+
+/* A footnote, not a status: --muted at --text-xs sits below the answer without
+   competing with it, which is right for a line that appears on a small minority
+   of messages and qualifies rather than warns. Measured 5.9:1 on --surface. */
+.chatAnsweredBy {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
 .chatProposal {
   align-self: stretch;
   border: 1px solid var(--primary);
@@ -3365,6 +3394,20 @@ button.emailSearchResult:focus-visible {
   background: var(--primary);
   color: #fff;
   font-weight: 700;
+}
+
+/* Stop takes Send's slot, so it inherits the pill. It must not inherit the
+   primary fill: this is an interrupt, not a submit, and the two would be
+   indistinguishable at a glance in the one moment where pressing the wrong
+   thing matters. Ink on the soft surface, at 13.9:1. */
+.chatComposer button.chatStop {
+  background: var(--surface-soft);
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+}
+
+.chatComposer button.chatStop:hover {
+  background: var(--surface);
 }
 
 .chatComposer button:disabled,
@@ -6539,6 +6582,31 @@ button.chatRankedLabel:focus-visible {
   margin: 0;
   color: var(--muted);
   font-size: 12px;
+}
+
+/* Finished steps sit above the running one, oldest first, so the turn reads top
+   to bottom in the order it happened. Quieter than the active bar on purpose:
+   these are done, and the one still running is the one worth looking at. */
+.toolProgressDone {
+  margin: 0 0 6px;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.toolProgressDone li {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.toolProgressDoneMeta {
+  flex: none;
+  font-variant-numeric: tabular-nums;
 }
 
 @media (prefers-reduced-motion: reduce) {

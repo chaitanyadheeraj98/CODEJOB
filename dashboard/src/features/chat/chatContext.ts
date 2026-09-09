@@ -26,6 +26,10 @@ export type ChatContextValue = ChatSessionApi & {
   // because the navigation state lives there; a no-op when the provider is
   // mounted without it (tests, or any future host that has no such page).
   focusCandidate: (candidateId: number) => void
+  // Record IDs this thread has actually fetched, mapped to the numeric id
+  // focusCandidate takes. Only these become clickable in the assistant's prose,
+  // so a citation always leads to evidence that is on the transcript.
+  recordIndex: Map<string, number>
   // Opens a work queue with filters pre-applied. Supplied by App for the same
   // reason focusCandidate is - the filter state lives there - and a no-op when
   // the provider is mounted without it.

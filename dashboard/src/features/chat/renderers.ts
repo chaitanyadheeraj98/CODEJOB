@@ -836,3 +836,26 @@ export function renderForMessage(message: ChatMessage): RenderedPayload | null {
   if (!handler) return null
   return handler.parse(message)
 }
+
+// Record IDs the thread can actually back with evidence, mapped to the numeric
+// id the dashboard navigates by.
+//
+// Built from the candidate tables already on screen rather than from a new
+// per-turn identifier, because `record_id` is the permanent user-facing ID the
+// tools already return and the system prompt already asks the assistant to
+// quote. A second ID space would compete with it.
+//
+// The consequence worth keeping: an ID the assistant produced without a tool
+// behind it is not in here, so it stays plain text. A citation can only be
+// followed to evidence that is genuinely on the transcript.
+export function recordIndexFromMessages(messages: ChatMessage[]): Map<string, number> {
+  const index = new Map<string, number>()
+  for (const message of messages) {
+    const payload = renderForMessage(message)
+    if (payload?.kind !== 'candidate_table') continue
+    for (const row of payload.data.rows) {
+      if (row.record_id) index.set(row.record_id, row.candidate_id)
+    }
+  }
+  return index
+}

@@ -1306,6 +1306,9 @@ class ChatMessageResponse(BaseModel):
     # already confirmed, and would offer Confirm a second time.
     proposal_message_id: int | None = None
     outcome: str | None = None
+    # Set only where the turn failed over, so it names the fallback that actually
+    # answered. Absent on every other row, which is what makes it worth reading.
+    answered_by: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -1367,15 +1370,39 @@ class ChatDeleteResponse(BaseModel):
     deleted: bool
 
 
+class ChatTelemetryResponse(BaseModel):
+    """The recent-turn summary shown on the AI Access card.
+
+    Defined above ChatStatusResponse because it is referenced by it and this
+    module does not use postponed annotations.
+    """
+
+    window_days: int
+    turns: int
+    failed: int
+    cancelled: int
+    interrupted: int
+    failed_over: int
+    prompt_tokens: int
+    completion_tokens: int
+    median_duration_ms: int
+    p95_duration_ms: int
+    top_failure_code: str | None = None
+
+
 class ChatStatusResponse(BaseModel):
     enabled: bool
     ollama_running: bool
     ollama_last_error: str | None = None
     ollama_last_success_at: datetime | None = None
     chat_last_error: str | None = None
+    chat_last_failure_code: str | None = None
     mcp_status: str
     model: str
     available_models: list[str]
+    # None when no turn has run inside the window. An absent summary and a
+    # summary of zero turns are different facts, and the card says so.
+    telemetry: ChatTelemetryResponse | None = None
 
 
 class SentItemDetailsResponse(BaseModel):

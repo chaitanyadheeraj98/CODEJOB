@@ -111,6 +111,8 @@ BASE_TOOLS = (
     resolve_record_reference,
 )
 
+# MCP shares the API's trusted-host exposure. Tools only read or propose;
+# authentication is required before any tool can execute a write or send mail.
 CHAT_ACTION_TOOLS = (
     # Read-only, but registered here rather than in BASE_TOOLS: its only purpose
     # is turning "attach my passport" into ids for propose_send_email, so with

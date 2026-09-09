@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import httpx
 
+from app.mcp_server.tools import needs, untrusted
 from app.config import settings
 
 MAX_TITLE_CHARS = 200
@@ -12,7 +13,7 @@ def search_web(query: str, max_results: int = 5) -> dict[str, object]:
     """Search the current web via a self-hosted SearXNG instance and return snippets explicitly marked as untrusted data."""
     cleaned_query = query.strip()
     if not cleaned_query:
-        return {"error": "Search query is required"}
+        return {**needs(["query"], hint="Ask the user what to search for."), "error": "Search query is required"}
     capped = max(1, min(max_results, settings.chat_web_search_max_results))
     response = httpx.get(
         f"{settings.searxng_url.rstrip('/')}/search",
@@ -37,10 +38,9 @@ def search_web(query: str, max_results: int = 5) -> dict[str, object]:
                 "title": str(row.get("title") or "")[:MAX_TITLE_CHARS],
                 "snippet": str(row.get("content") or "")[:MAX_SNIPPET_CHARS],
                 "untrusted_web_data": (
-                    "<untrusted_web_data>\n"
+                    untrusted("web",
                     f"Title: {row.get('title') or ''}\n"
-                    f"Snippet: {row.get('content') or ''}\n"
-                    "</untrusted_web_data>"
+                    f"Snippet: {row.get('content') or ''}")
                 ),
             }
             for row in rows[:capped]

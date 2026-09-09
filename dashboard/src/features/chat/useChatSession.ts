@@ -7,9 +7,10 @@ import {
   listChatSessions,
   renameChatSession,
   sendChatMessage,
+  stopChatTurn,
 } from './api'
 import type { ProposalResult } from './ProposalCard'
-import type { ActiveTool, ChatMessage, ChatSession } from './types'
+import type { ActiveTool, ChatMessage, ChatSession, CompletedTool } from './types'
 import { PROPOSAL_HANDLERS, isProposalToolName } from './proposals'
 import { RENDER_HANDLERS } from './renderers'
 
@@ -76,8 +77,17 @@ export function useChatSession(apiBase: string, enabled: boolean) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [busy, setBusy] = useState(false)
   const [activeTool, setActiveTool] = useState<ActiveTool | null>(null)
+  // What has already finished this turn. Cleared when the next turn starts,
+  // never accumulated across turns: it is progress, not history.
+  const [completedTools, setCompletedTools] = useState<CompletedTool[]>([])
   const [error, setError] = useState('')
+  const [lastMessage, setLastMessage] = useState<{ text: string; model?: string } | null>(null)
   const [unseenCount, setUnseenCount] = useState(0)
+  // A ref, not state: the SSE callback closes over this and must read the id the
+  // stream just issued, not the one that existed when the callback was created.
+  // `stoppable` is the render-visible half, kept in step with it.
+  const [stoppable, setStoppable] = useState(false)
+  const activeTurnRef = useRef<{ sessionId: number; turnId: string } | null>(null)
   const newestIdRef = useRef(0)
 
   const markSeen = useCallback(() => setUnseenCount(0), [])
@@ -141,12 +151,14 @@ export function useChatSession(apiBase: string, enabled: boolean) {
     newestIdRef.current = 0
     setMessages([])
     setError('')
+    setLastMessage(null)
     return session
   }, [apiBase])
 
   const selectSession = useCallback(async (nextId: number) => {
     setBusy(true)
     setError('')
+    setLastMessage(null)
     try {
       const detail = await getChatSession(apiBase, nextId)
       setSessionId(detail.id)
@@ -167,6 +179,8 @@ export function useChatSession(apiBase: string, enabled: boolean) {
 
   const removeCurrentSession = useCallback(async () => {
     if (sessionId == null) return
+    setLastMessage(null)
+    setError('')
     await deleteChatSession(apiBase, sessionId)
     const rows = await listChatSessions(apiBase)
     setSessions(rows)
@@ -188,8 +202,10 @@ export function useChatSession(apiBase: string, enabled: boolean) {
     setBusy(true)
     setError('')
     setActiveTool(null)
+    setCompletedTools([])
     try {
       const activeSessionId = sessionId ?? (await startSession()).id
+      setLastMessage({ text, model })
       const now = new Date().toISOString()
       const userId = -Date.now()
       const assistantId = userId - 1
@@ -199,11 +215,28 @@ export function useChatSession(apiBase: string, enabled: boolean) {
         { id: assistantId, role: 'assistant', content: '', tool_name: null, created_at: now },
       ])
       await sendChatMessage(apiBase, activeSessionId, text, ({ event, data }) => {
+        // The turn id arrives before any token, so Stop is live for the whole
+        // wait rather than only once the model starts talking - which is the
+        // half of the turn a user actually wants to be able to end.
+        if (event === 'start' && typeof data.turn_id === 'string') {
+          activeTurnRef.current = { sessionId: activeSessionId, turnId: data.turn_id }
+          setStoppable(true)
+        }
+        if (event === 'error' && typeof data.message === 'string') setError(data.message)
         // Progress for a tool the assistant just started. Replaced when another
         // tool follows, and cleared the moment prose starts arriving, because
         // text on screen is its own proof that the turn is still alive.
         if (event === 'tool' && typeof data.name === 'string') {
           setActiveTool({ name: data.name, startedAt: Date.now() })
+        }
+        // Keeps the finished call on screen once the bar for it disappears, so a
+        // turn that ran four lookups does not read as one long unexplained wait.
+        if (event === 'tool_done' && typeof data.name === 'string') {
+          setCompletedTools((current) => [...current, {
+            name: data.name as string,
+            duration_ms: typeof data.duration_ms === 'number' ? data.duration_ms : 0,
+            status: typeof data.status === 'string' ? data.status : 'ok',
+          }])
         }
         if (event === 'message' && typeof data.delta === 'string') {
           setActiveTool(null)
@@ -229,8 +262,26 @@ export function useChatSession(apiBase: string, enabled: boolean) {
       // times out mid-tool must not leave a progress bar running forever.
       setActiveTool(null)
       setBusy(false)
+      activeTurnRef.current = null
+      setStoppable(false)
     }
   }, [apiBase, busy, sessionId, startSession])
+
+  // Asks the server to cancel and then stops - it does not touch `messages`.
+  // The stream is still open, the server still has the partial answer to write,
+  // and the reload at the end of sendMessage is what brings back the transcript
+  // including the "[System: the user stopped..." row. Clearing anything here
+  // would show the user less than was actually saved.
+  const stop = useCallback(async () => {
+    const active = activeTurnRef.current
+    if (!active) return
+    setStoppable(false)
+    try {
+      await stopChatTurn(apiBase, active.sessionId, active.turnId)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Failed to stop the assistant')
+    }
+  }, [apiBase])
 
   return {
     sessions,
@@ -238,6 +289,7 @@ export function useChatSession(apiBase: string, enabled: boolean) {
     messages,
     busy,
     activeTool,
+    completedTools,
     error,
     unseenCount,
     markSeen,
@@ -246,6 +298,11 @@ export function useChatSession(apiBase: string, enabled: boolean) {
     renameCurrentSession,
     removeCurrentSession,
     sendMessage,
+    // Safe while tools only read or propose; writes still require a card click.
+    retry: error && lastMessage ? () => sendMessage(lastMessage.text, lastMessage.model) : null,
+    // Null rather than a disabled control until the server has issued a turn id,
+    // so Stop is never offered for a turn nothing can cancel.
+    stop: stoppable ? stop : null,
     seededResults,
   }
 }

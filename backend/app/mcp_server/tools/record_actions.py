@@ -101,7 +101,7 @@ def propose_record_update(record_kind: str, record_id: int, fields: dict[str, ob
 
     accepted = {key: value for key, value in requested.items() if key in allowed}
     if not accepted:
-        return {"status": "missing_fields", "missing": ["fields"], "allowed_fields": sorted(allowed)}
+        return {"hint": 'Ask the user for fields. Do not guess.', "status": "missing_fields", "missing": ["fields"], "allowed_fields": sorted(allowed)}
 
     statuses = spec.get("statuses")
     if "status" in accepted and statuses is not None and accepted["status"] not in statuses:
@@ -150,7 +150,7 @@ def propose_add_note(record_kind: str, record_id: int, note: str) -> dict[str, o
 
     text = (note or "").strip()[:MAX_NOTE_CHARS]
     if not text:
-        return {"status": "missing_fields", "missing": ["note"]}
+        return {"hint": 'Ask the user for note. Do not guess.', "status": "missing_fields", "missing": ["note"]}
 
     db = SessionLocal()
     try:

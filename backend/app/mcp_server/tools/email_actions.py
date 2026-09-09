@@ -35,13 +35,13 @@ def propose_send_email(
         if row is None:
             return {"error": "Candidate not found"}
         if not (row.recipient_email or "").strip():
-            return {
+            return {"hint": 'Ask the user for recipient_email. Do not guess.', 
                 "status": "missing_fields",
                 "missing": ["recipient_email"],
                 "note": "No recipient on file for this email - resolve it in the app first.",
             }
         if not body.strip():
-            return {"status": "missing_fields", "missing": ["body"]}
+            return {"hint": 'Ask the user for body. Do not guess.', "status": "missing_fields", "missing": ["body"]}
 
         requested = list(dict.fromkeys(int(value) for value in (document_ids or [])))[
             :MAX_DOCUMENT_IDS

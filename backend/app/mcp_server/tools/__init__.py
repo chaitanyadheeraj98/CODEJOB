@@ -1,3 +1,25 @@
+import logging
+import re
+
+_TAG = re.compile(r"</?untrusted_[a-z_]+>", re.I)
+
+
+def untrusted(kind: str, body: str) -> str:
+    tag = kind if kind.startswith("untrusted_") else f"untrusted_{kind}_data"
+    body, count = _TAG.subn("", body)
+    if count:
+        logging.getLogger(__name__).warning("Removed %s untrusted delimiters from %s payload", count, tag)
+    return f"<{tag}>\n{body}\n</{tag}>"
+
+
+def needs(fields: list[str], *, hint: str) -> dict[str, object]:
+    return {"status": "missing_fields", "fields": fields, "hint": hint}
+
+
+def refused(reason: str, *, hint: str) -> dict[str, object]:
+    return {"status": "refused", "reason": reason, "hint": hint}
+
+
 from app.mcp_server.tools.candidates import (
     count_received_emails,
     get_candidate,

@@ -94,7 +94,7 @@ def resolve_record_reference(kind: str, query: str, limit: int = 5) -> dict[str,
 
     text = (query or "").strip()
     if not text:
-        return {"status": "missing_fields", "missing": ["query"]}
+        return {"hint": 'Ask the user for query. Do not guess.', "status": "missing_fields", "missing": ["query"]}
 
     capped = max(1, min(int(limit), MAX_OPTIONS))
     needle = text.lower()

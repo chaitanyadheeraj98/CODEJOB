@@ -415,7 +415,7 @@ def get_chart(chart: str, range: str = "current_month", bucket: str = "", subjec
         return {"error": f"Unknown bucket '{bucket}'.", "buckets": list(BUCKET_OPTIONS)}
 
     if chart == "resume_funnel" and int(subject_id) <= 0:
-        return {"status": "missing_fields", "missing": ["subject_id"], "detail": "resume_funnel needs a resume id."}
+        return {"hint": 'Ask the user for subject_id. Do not guess.', "status": "missing_fields", "missing": ["subject_id"], "detail": "resume_funnel needs a resume id."}
 
     db = SessionLocal()
     try:

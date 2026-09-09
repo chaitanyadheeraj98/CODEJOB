@@ -13,9 +13,9 @@ def propose_create_github_issue(user_report: str, ai_summary: str, context: str 
     IDs, expected vs actual values, tool error text) to help reproduce it.
     """
     if not user_report.strip():
-        return {"status": "missing_fields", "missing": ["user_report"]}
+        return {"hint": 'Ask the user for user_report. Do not guess.', "status": "missing_fields", "missing": ["user_report"]}
     if not ai_summary.strip():
-        return {"status": "missing_fields", "missing": ["ai_summary"]}
+        return {"hint": 'Ask the user for ai_summary. Do not guess.', "status": "missing_fields", "missing": ["ai_summary"]}
     return {
         "action": "create_github_issue",
         "title": ai_summary.strip().splitlines()[0][:120],

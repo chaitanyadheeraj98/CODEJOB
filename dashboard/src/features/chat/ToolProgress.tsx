@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 
-import type { ActiveTool } from './types'
+import type { ActiveTool, CompletedTool } from './types'
 
 // What each tool is actually doing, in the user's terms. A tool with no entry
 // falls back to its own name rather than a vague "working..." - if a new tool
@@ -33,7 +33,50 @@ const TOOL_EXPECTED_SECONDS: Record<string, number> = {
 }
 const DEFAULT_EXPECTED_SECONDS = 8
 
-export function ToolProgress({ tool }: { tool: ActiveTool }) {
+// What a finished tool's status means, in the user's terms. The server clamps
+// `status` to this vocabulary before it is sent, so an unknown value here is a
+// new enum member rather than tool prose - it falls back to nothing rather than
+// printing a raw token at the user.
+const STATUS_NOTES: Record<string, string> = {
+  error: 'failed',
+  missing_fields: 'needs more detail',
+  refused: 'declined',
+}
+
+// Kept for the length of the turn, so a turn that ran four lookups reads as four
+// steps rather than one long unexplained wait. Cleared when the next turn starts.
+function CompletedTools({ completed }: { completed: CompletedTool[] }) {
+  if (!completed.length) return null
+  return (
+    <ul className="toolProgressDone">
+      {completed.map((item, index) => {
+        const note = STATUS_NOTES[item.status]
+        return (
+          <li key={`${item.name}:${index}`}>
+            <span>{TOOL_LABELS[item.name] ?? item.name}</span>
+            <span className="toolProgressDoneMeta">
+              {note ? `${note} · ` : ''}{(item.duration_ms / 1000).toFixed(1)}s
+            </span>
+          </li>
+        )
+      })}
+    </ul>
+  )
+}
+
+export function ToolProgress({ tool, completed = [] }: { tool: ActiveTool | null; completed?: CompletedTool[] }) {
+  if (!tool) {
+    return (
+      <div className="toolProgress" role="status" aria-live="polite">
+        <CompletedTools completed={completed} />
+        <span className="toolProgressLabel">Thinking…</span>
+      </div>
+    )
+  }
+  return <RunningTool tool={tool} completed={completed} />
+}
+
+function RunningTool({ tool, completed }: { tool: ActiveTool; completed: CompletedTool[] }) {
   const [elapsedMs, setElapsedMs] = useState(() => Date.now() - tool.startedAt)
 
   // No synchronous reset here: callers pass key={tool.startedAt}, so a new tool
@@ -52,6 +95,7 @@ export function ToolProgress({ tool }: { tool: ActiveTool }) {
 
   return (
     <div className="toolProgress" role="status" aria-live="polite">
+      <CompletedTools completed={completed} />
       <div className="toolProgressHead">
         <span className="toolProgressLabel">{label}</span>
         <span className="toolProgressElapsed">{seconds}s</span>

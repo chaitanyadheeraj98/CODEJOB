@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 
+from app.mcp_server.tools import untrusted
 from app.config import settings
 from app.db import SessionLocal
 from app.models import EmailConversation, EmailReplyMessage, RecruiterEmail, RecruiterOpportunity
@@ -45,13 +46,12 @@ def _safe_summary(payload: dict[str, object]) -> dict[str, object]:
         "last_message_at": payload["last_message_at"],
         "unread_reply_count": payload["unread_reply_count"],
         "untrusted_inbox_data": (
-            "<untrusted_inbox_data>\n"
+            untrusted("inbox",
             f"Recruiter: {payload.get('recruiter')}\n"
             f"Recruiter email: {payload.get('recruiter_email')}\n"
             f"Subject: {payload.get('subject')}\n"
             f"Latest preview: {payload.get('last_message_preview')}\n"
-            f"To: {payload.get('to_email')}\nCC: {payload.get('cc_email')}\n"
-            "</untrusted_inbox_data>"
+            f"To: {payload.get('to_email')}\nCC: {payload.get('cc_email')}")
         ),
     }
 
@@ -87,9 +87,8 @@ def get_conversation(conversation_id: int) -> dict[str, object]:
                 "sender": message["sender"],
                 "occurred_at": message["occurred_at"],
                 "untrusted_message_data": (
-                    "<untrusted_inbox_data>\n"
-                    f"{message['body']}\n"
-                    "</untrusted_inbox_data>"
+                    untrusted("inbox",
+                    f"{message['body']}")
                 ),
             }
             for message in raw["messages"]
@@ -171,11 +170,10 @@ def get_recruiter_replies(urgent_only: bool = False, limit: int = 25) -> dict[st
                     "is_urgent": is_urgent,
                     "urgency_reason": reason,
                     "untrusted_reply_data": (
-                        "<untrusted_inbox_data>\n"
+                        untrusted("inbox",
                         f"Recruiter sender: {latest.sender}\n"
                         f"Original role/subject: {root.subject if root else ''}\n"
-                        f"Latest reply excerpt: {latest.body[:2000]}\n"
-                        "</untrusted_inbox_data>"
+                        f"Latest reply excerpt: {latest.body[:2000]}")
                     ),
                 }
             )

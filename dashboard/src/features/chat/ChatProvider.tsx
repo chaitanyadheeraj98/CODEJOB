@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 
 import { getChatStatus, listChatAttachments, recordProposalOutcome, runProposalAction } from './api'
 import { ChatContext, type ChatContextValue } from './chatContext'
@@ -6,6 +6,7 @@ import type { ProposalResult } from './ProposalCard'
 import { proposalResultDetail, type ProposalFields, type ProposalHandler } from './proposals'
 import type { QueueTarget } from '../../queueNavigation'
 import type { ChatAttachment, ChatStatus } from './types'
+import { recordIndexFromMessages } from './renderers'
 import { useChatSession } from './useChatSession'
 
 
@@ -173,6 +174,10 @@ export default function ChatProvider({ apiBase, onFocusCandidate, onNavigateToQu
     onFocusCandidate?.(candidateId)
   }, [onFocusCandidate])
 
+  // Rebuilt from the thread rather than accumulated, so switching sessions
+  // cannot leave the previous conversation's records citable in this one.
+  const recordIndex = useMemo(() => recordIndexFromMessages(chat.messages), [chat.messages])
+
   const navigateToQueue = useCallback((target: QueueTarget) => {
     onNavigateToQueue?.(target)
   }, [onNavigateToQueue])
@@ -194,6 +199,7 @@ export default function ChatProvider({ apiBase, onFocusCandidate, onNavigateToQu
     approveProposal,
     cancelProposal,
     focusCandidate,
+    recordIndex,
     navigateToQueue,
     attachments,
     refreshAttachments,

@@ -148,7 +148,30 @@ export async function sendChatMessage(
   })
   if (!response.ok) throw await responseError(response, 'Failed to send message')
   if (!response.body) throw new Error('Chat response did not include a stream')
-  await consumeSseStream(response.body, onEvent)
+  let completed = false
+  await consumeSseStream(response.body, (event) => {
+    if (event.event === 'done') completed = true
+    onEvent(event)
+  })
+  if (!completed) throw new Error('The connection ended before the reply finished. Try again.')
+}
+
+// Cancels the running turn server-side. The stream itself is left to end on its
+// own: the server closes it after writing the partial transcript, so racing it
+// from here would be the one thing that could lose that write.
+export async function stopChatTurn(
+  apiBase: string,
+  sessionId: number,
+  turnId: string,
+): Promise<void> {
+  const response = await fetch(`${apiBase}/chat/sessions/${sessionId}/turns/${turnId}`, {
+    method: 'DELETE',
+  })
+  // 404 means the turn already finished between the click and the request. That
+  // is the same outcome the user asked for, so it is not an error to report.
+  if (!response.ok && response.status !== 404) {
+    throw await responseError(response, 'Failed to stop the assistant')
+  }
 }
 
 // Enumerated values and a number, never prose. The server composes the sentence

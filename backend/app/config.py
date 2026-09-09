@@ -74,6 +74,12 @@ class Settings(BaseSettings):
     ollama_chat_model_fallback2: str = "nemotron-3-nano:30b-cloud"
     ollama_timeout_seconds: float = 60.0
     ollama_max_tool_iterations: int = 6
+    chat_turn_budget_seconds: float = Field(default=240.0, gt=0)
+    chat_tool_timeout_seconds: float = Field(default=180.0, ge=180)
+    chat_model_max_attempts: int = Field(default=2, ge=1, le=5)
+    chat_max_concurrent_turns: int = Field(default=3, ge=1)
+    ollama_task_model: str = ""
+    feature_chat_title_generation: bool = False
     feature_chat_enabled: bool = False
     feature_chat_actions_enabled: bool = False
     # Prose over the role-target analysis, nothing more. The skills, counts and verdict
