@@ -3094,6 +3094,16 @@ button.emailSearchResult:focus-visible {
   overflow-wrap: anywhere;
 }
 
+/* Where this card sits in a tailoring sequence. Counted from the proposals
+   actually on the transcript, never from the assistant's prose - so it stays
+   caption weight: it orients, it does not warn. */
+.chatProposalProgress {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
 /* A whole document inside one summary row. It scrolls rather than truncating:
    the point of the card is that every character can be read before the click. */
 .chatProposalDocument {
@@ -3109,6 +3119,26 @@ button.emailSearchResult:focus-visible {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface-soft);
+}
+
+/* Deterministic checks the server ran against the draft: figures and employers
+   in the rewrite that the draft does not already contain. Ochre for the same
+   reason the pending notice is ochre - this is a qualification, not a failure.
+   Red would say the model lied, and a metric the user supplied in chat trips
+   this honestly. It carries a full border rather than the pending notice's
+   single left rule because it is the rarer of the two and the one to read. */
+.chatGroundingCaution {
+  margin: 12px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--caution-line);
+  border-radius: 8px;
+  background: var(--caution-surface);
+  color: var(--caution-ink);
+  font-size: 13px;
+}
+
+.chatGroundingCaution p {
+  margin: 4px 0 0;
 }
 
 /* The app's own statement of what has not happened yet, next to the model's
@@ -4550,9 +4580,18 @@ button.emailSearchResult:focus-visible {
 .resumeTrackingPage { display: grid; gap: 1.25rem; }
 .resumeTrackingHeader, .buttonRow, .funnelStrip { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; }
 .resumeTrackingToolbar, .submissionActions { display: flex; gap: .75rem; align-items: flex-end; flex-wrap: wrap; }
-.resumeTrackingHeader { justify-content: space-between; }
+/* Also a grid item, so it needs the same escape from min-content sizing as the
+   panel below it - otherwise the scrollable tab strip inside it never gets the
+   chance to scroll, because its parent has already grown to fit it. */
+.resumeTrackingHeader { justify-content: space-between; min-width: 0; }
+.resumeTrackingHeader > * { min-width: 0; }
 .resumeTrackingHeader h2 { margin: 0; }
-.tabBar { display: flex; gap: .25rem; }
+/* Five tabs in a row have a min-content width of ~466px, and as a non-shrinking
+   flex item that was the number setting the page width on a phone - the whole
+   tab scrolled sideways to fit its own tab bar. The strip scrolls instead, which
+   is the familiar answer and keeps every tab reachable. */
+.tabBar { display: flex; gap: .25rem; min-width: 0; overflow-x: auto; scrollbar-width: thin; }
+.tabBar button { flex: none; }
 .tabBar button.active { background: var(--primary); color: white; }
 .resumeTrackingPanel { display: grid; gap: 1.25rem; }
 .resumeTrackingToolbar { padding: .8rem 1rem; background: var(--surface-soft); border: 1px solid var(--line); border-radius: .75rem; }
@@ -6760,10 +6799,181 @@ button.chatRankedLabel:focus-visible {
   .resumeLibraryState { justify-content: flex-start; grid-column: 2 / -1; }
 }
 
-/* Resume editor: a variant list beside the text, so switching between variants
-   to compare their wording never leaves the editor. */
-.resumeEditorPanel { display: grid; gap: 1.1rem; }
-.resumeEditorBody { display: grid; grid-template-columns: minmax(14rem, 20rem) minmax(0, 1fr); gap: 1.1rem; align-items: start; }
+/* Resume editor: drafts beside the text, layout beside both.
+   Three zones with one job each - choose the draft, write it, shape how it
+   prints. The middle column is the widest because it is the one being worked
+   in; it used to be the narrowest of the three. */
+/* min-width:0, because this is a grid item and the default is min-content. A
+   select is as wide as its longest option, so one variant called "R21 Banking,
+   Healthcare, Telecom, EdTech" was setting the width of the whole tab on a
+   phone and pushing the page into a horizontal scroll. */
+.resumeEditorPanel { display: grid; gap: .9rem; min-width: 0; }
+.resumeEditorPanel select, .resumeEditorPanel input, .resumeEditorPanel textarea { min-width: 0; max-width: 100%; }
+.resumeEditorBody { display: grid; grid-template-columns: 15rem minmax(0, 1fr) 21rem; gap: 1rem; align-items: start; }
+
+/* The flanking panels are a second neutral layer, so the three zones read apart
+   without a rule between them. They scroll on their own and stay put: the
+   markdown is the long thing here, and losing the layout controls off the top
+   of the page while editing is what made this feel like a form, not a tool. */
+.resumeBuilderSidebar, .resumeBuilderPreview {
+  display: grid; gap: .8rem; min-width: 0; align-content: start;
+  padding: .8rem; border: 1px solid var(--line); border-radius: var(--radius-lg);
+  background: var(--surface-soft);
+  position: sticky; top: .75rem; max-height: calc(100vh - 4.5rem); overflow-y: auto;
+}
+
+.resumeSectionOutline { display: grid; gap: .35rem; min-width: 0; }
+.resumeSectionOutlineHead { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.resumeCount { font-size: var(--text-xs); color: var(--muted); background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 0 .45rem; }
+.resumeSectionOutlineList { display: grid; gap: 1px; max-height: 15rem; overflow-y: auto; min-width: 0; }
+.resumeSectionRow { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; border-radius: .35rem; }
+.resumeSectionRow:hover { background: color-mix(in srgb, var(--primary) 9%, transparent); }
+.resumeSectionJump {
+  text-align: left; font-size: var(--text-sm); padding: .3rem .45rem; width: 100%;
+  border: 0; background: none; border-radius: .35rem; color: var(--ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  transition: color 150ms ease;
+}
+.resumeSectionRow:hover .resumeSectionJump { color: var(--primary-strong); }
+.resumeSectionJump:disabled { color: var(--muted); }
+/* The move buttons stay out of the way until the row is pointed at, so the
+   outline still reads as a list of headings rather than a toolbar per line.
+   They return on focus, so the keyboard path never loses them. */
+.resumeSectionMove { display: flex; gap: 1px; opacity: 0; transition: opacity 150ms ease; }
+.resumeSectionRow:hover .resumeSectionMove, .resumeSectionMove:focus-within { opacity: 1; }
+.resumeSectionMove button { border: 0; background: none; padding: .25rem .3rem; border-radius: .3rem; line-height: 0; }
+.resumeSectionMove button:hover:not(:disabled) { background: var(--surface); }
+.resumeSectionMove button:disabled { opacity: .3; }
+/* Drawn from borders rather than a glyph, so it matches the disclosure carets. */
+.resumeCaret { display: inline-block; width: .34rem; height: .34rem; border-left: 1.5px solid var(--muted); border-top: 1.5px solid var(--muted); }
+.resumeCaret.up { transform: rotate(45deg) translate(1px, 1px); }
+.resumeCaret.down { transform: rotate(-135deg) translate(1px, 1px); }
+
+.resumeFormatting, .resumeTemplateGallery { border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); }
+.resumeFormatting > summary, .resumeTemplateGallery > summary {
+  display: flex; align-items: center; justify-content: space-between; gap: .5rem;
+  padding: .55rem .7rem; cursor: pointer; font-weight: 600; font-size: var(--text-sm); list-style: none;
+}
+.resumeFormatting > summary::-webkit-details-marker, .resumeTemplateGallery > summary::-webkit-details-marker { display: none; }
+/* Drawn, not a glyph: a text arrow inherits the body face and sits off-centre. */
+.resumeFormatting > summary::after, .resumeTemplateGallery > summary::after {
+  content: ''; flex: none; width: .4rem; height: .4rem; margin-right: .15rem;
+  border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted);
+  transform: rotate(45deg); transition: transform 160ms ease;
+}
+.resumeFormatting[open] > summary::after, .resumeTemplateGallery[open] > summary::after { transform: rotate(-135deg); }
+
+.resumeFormatGroup { display: grid; gap: .45rem; padding: .6rem .7rem; border-top: 1px solid var(--line); }
+.resumeFormatGroup h4 { margin: 0; font-size: var(--text-sm); font-weight: 600; color: var(--ink); display: flex; gap: .35rem; align-items: baseline; }
+.resumeFormatUnit { font-weight: 400; font-size: var(--text-xs); color: var(--muted); }
+.resumeFormatRow { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .45rem .55rem; }
+.resumeFormatField { display: grid; gap: .2rem; min-width: 0; }
+/* 12px, not 11: these are the labels that say what every number means, and at
+   the smaller step they were the first thing to become unreadable in the panel. */
+.resumeFormatField > span { font-size: var(--text-sm); color: var(--muted); }
+.resumeFormatField input, .resumeFormatField select { width: 100%; min-width: 0; }
+.resumeFormatField input[type=color] { height: 2rem; padding: 2px; }
+
+/* A native checkbox wearing a switch, so the label, focus ring and keyboard
+   behaviour stay the browser's and only the paint is ours. */
+.resumeFormatSwitch { display: flex; align-items: center; gap: .55rem; cursor: pointer; font-size: var(--text-sm); }
+.resumeFormatSwitch input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.resumeSwitchTrack { flex: none; display: flex; width: 2rem; padding: 2px; border-radius: 999px; background: var(--line-strong); transition: background 160ms ease; }
+.resumeSwitchThumb { width: .9rem; height: .9rem; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(17, 24, 39, .3); transition: transform 160ms ease; }
+.resumeFormatSwitch input:checked + .resumeSwitchTrack { background: var(--primary); }
+.resumeFormatSwitch input:checked + .resumeSwitchTrack .resumeSwitchThumb { transform: translateX(.85rem); }
+.resumeFormatSwitch input:focus-visible + .resumeSwitchTrack { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* Widen: the preview drops to its own full-width row under the editor, which is
+   the only place in a builder this narrow where a letter page is readable at
+   full size. Nothing is hidden - the rail and the editor keep their columns. */
+.resumeEditorBody.previewWide { grid-template-columns: 15rem minmax(0, 1fr); }
+.resumeEditorBody.previewWide .resumeBuilderPreview { grid-column: 1 / -1; position: static; max-height: none; }
+/* The preview row spans column 1 too, so a sticky rail would sit on top of it
+   rather than beside it. Stickiness is worth less here than not overlapping. */
+.resumeEditorBody.previewWide .resumeBuilderSidebar { position: static; max-height: none; }
+.resumeEditorBody.previewWide .resumeTemplateCards { grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr)); }
+.resumeEditorBody.previewWide .resumeFormatRow { grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); }
+/* The page goes directly under the editor. Templates and formatting are things
+   you set, the preview is the thing you watch, so the watched thing is the one
+   that keeps the position nearest the text being typed. */
+.resumeEditorBody.previewWide .resumePreview { order: -1; }
+
+.resumePreview { display: grid; gap: .4rem; min-width: 0; }
+.resumePreviewHead { display: flex; align-items: center; justify-content: space-between; gap: .6rem; flex-wrap: wrap; }
+.resumePreviewTools { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.resumeZoom { display: flex; border: 1px solid var(--line); border-radius: var(--radius-sm); overflow: hidden; }
+.resumeZoom button { border: 0; border-radius: 0; padding: .2rem .5rem; font-size: var(--text-sm); background: var(--surface); color: var(--muted); }
+.resumeZoom button + button { border-left: 1px solid var(--line); }
+.resumeZoom button[aria-pressed=true] { background: var(--primary); color: #fff; }
+.resumePreviewWiden { padding: .2rem .6rem; font-size: var(--text-sm); }
+/* Scaled to the column, so a fixed 8.5in page cannot set the width of the grid
+   track it sits in. Overflow stays on the vertical axis, which is the one a
+   document actually continues along. */
+.resumePreviewScroll { position: relative; overflow-x: hidden; overflow-y: auto; max-height: 78vh; min-width: 0; padding: .8rem; background: #e6e8eb; border-radius: var(--radius-md); }
+/* At 100% the page is deliberately wider than the column, so this is the one
+   place sideways scrolling is the right answer rather than a layout bug. */
+.resumePreviewScroll.zoomed { overflow-x: auto; }
+.resumePreviewStage { transform-origin: top left; }
+.resumeMeasure { position: absolute; visibility: hidden; pointer-events: none; top: 0; left: 0; }
+.resumePage { position: relative; box-sizing: border-box; background: white; color: #171717; margin: 0 0 1rem; box-shadow: 0 2px 8px #0002; overflow: hidden; }
+.resumePreviewContent { display: flow-root; color: #171717; overflow-wrap: anywhere; }
+/* Widths come from the spec inline, in inches, so the split on screen is the
+   split the .docx table is built with. */
+.resumeColumns { display: grid; align-items: start; }
+.resumeColumns > div { min-width: 0; }
+.resumePreviewContent p { margin: 0; }
+.resumePreviewContent hr { margin: 0; border: 0; border-top: 1px solid currentColor; }
+.resumePreviewContent a { color: #0563c1; }
+.resumeSkillsRow { display: grid; border: 1px solid #888; }
+/* `anywhere` is inherited from the page so a long URL cannot overflow it, but in
+   a narrow sidebar cell it splits ordinary words - "Developmen t". Word breaks
+   at word boundaries and only then, so these cells do too. */
+.resumeSkillsRow span { min-width: 0; padding: 0 .06in; overflow-wrap: break-word; }
+.resumeSkillsRow span + span { border-left: 1px solid #888; }
+.resumePageNumber { position: absolute; bottom: .12in; right: .2in; font: 10px Arial, sans-serif; color: #555; }
+.resumeTemplateCards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; padding: .6rem .7rem; border-top: 1px solid var(--line); }
+/* A profile thumbnail is a render of a whole page, so its intrinsic width is
+   ~800px. Grid items default to min-width:auto, which is min-content, so
+   without this the images set the track width and push the panel off screen. */
+.resumeTemplateCards button { display: grid; gap: .35rem; align-content: start; text-align: left; font-size: var(--text-sm); padding: .3rem; min-width: 0; }
+.resumeTemplateCards button > strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.resumeTemplateCards button[aria-pressed=true] { outline: 2px solid var(--primary); outline-offset: -1px; }
+.resumeTemplateCards img, .resumeTemplateSwatch { width: 100%; height: 5.25rem; object-fit: contain; background: white; border-radius: .25rem; }
+/* A miniature page, so the type is set at miniature scale rather than at body
+   scale inside a 5rem box - at inherited size the sample overran its own tile
+   and printed over the card below it. Legibility is not the job here; the shape
+   of the layout is, and the card's real name sits underneath. */
+.resumeTemplateSwatch {
+  display: grid; gap: 2px; padding: .5rem .55rem; box-sizing: border-box;
+  border: 1px solid var(--line); overflow: hidden; align-content: start;
+}
+.resumeTemplateSwatch strong { font-size: 9px; line-height: 1.2; text-align: center; }
+.resumeTemplateSwatch span { font-size: 6px; line-height: 1.2; letter-spacing: .06em; font-weight: 700; }
+.resumeTemplateSwatch i { border-top: 2px solid #ccd0d4; }
+/* 65/35, the proportion the two-column presets actually render at. */
+.resumeTemplateSplit { display: grid; grid-template-columns: 1.85fr 1fr; gap: 3px; }
+.resumeTemplateSplit > span { display: grid; gap: 2px; align-content: start; }
+.resumeExactPreview { display: grid; gap: .5rem; }
+.resumeExactPreview iframe { width: 100%; height: 60vh; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); }
+.resumeLayoutSave { display: grid; gap: .4rem; padding: .6rem .7rem; border: 1px solid var(--caution-line); border-radius: var(--radius-md); background: var(--caution-surface); }
+.resumeLayoutSave .subtle { color: var(--caution-ink); }
+
+/* The inspector is the first thing to lose its own column: the draft list is
+   navigation and the editor is the work, so those two hold the split longest. */
+/* These carry `.previewWide` in the selector as well, because that class is a
+   layout choice for wide viewports and must not outrank the breakpoint that
+   collapses the builder to one column on a phone. */
+@media (max-width: 1360px) {
+  .resumeEditorBody, .resumeEditorBody.previewWide { grid-template-columns: 14rem minmax(0, 1fr); }
+  .resumeBuilderPreview { grid-column: 1 / -1; position: static; max-height: none; }
+  .resumeTemplateCards { grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr)); }
+  .resumeFormatGroup { break-inside: avoid; }
+}
+@media (max-width: 860px) {
+  .resumeEditorBody, .resumeEditorBody.previewWide { grid-template-columns: minmax(0, 1fr); }
+  .resumeBuilderSidebar { position: static; max-height: none; }
+}
 .resumeEditorList { display: grid; gap: .4rem; align-content: start; }
 .resumeEditorListItem {
   display: grid; grid-template-columns: 1fr auto; gap: .6rem; align-items: center;
@@ -6780,12 +6990,16 @@ button.chatRankedLabel:focus-visible {
 .resumeEditorDirtyDot { color: var(--primary-strong); font-size: var(--text-xs); }
 
 /* The one rule the tab exists to enforce, stated where it cannot be missed:
-   a draft is not a variant until it is downloaded and uploaded back. */
+   a draft is not a variant until it is downloaded and uploaded back. The
+   sentence stays open; the mechanism behind it folds, because five permanent
+   lines of prose above a tool is where a paragraph stops being read at all. */
 .resumeEditorRule {
-  margin: 0; padding: .65rem .85rem; border-radius: .5rem; line-height: 1.55; max-width: 92ch;
+  margin: 0; padding: .55rem .8rem; border-radius: var(--radius-md); line-height: 1.55;
   background: var(--caution-surface); border: 1px solid var(--caution-line); color: var(--caution-ink);
   font-size: var(--text-base);
 }
+.resumeEditorRule > summary { cursor: pointer; font-weight: 600; font-size: var(--text-sm); }
+.resumeEditorRule > p { margin: .5rem 0 0; font-size: var(--text-sm); max-width: 88ch; }
 
 .resumeEditorStart {
   display: grid; gap: .6rem; padding: .7rem; margin-bottom: .3rem;

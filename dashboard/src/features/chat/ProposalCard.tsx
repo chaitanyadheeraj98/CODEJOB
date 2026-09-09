@@ -5,6 +5,7 @@ export type ProposalResult = { approved: boolean; detail: string } | 'cancelled'
 type ProposalCardProps = {
   handler: ProposalHandler
   fields: ProposalFields
+  progress?: string
   result?: ProposalResult
   // `busy` is this card's own in-flight state; `disabled` is any card's, so a
   // second confirmation can't be fired while one is running. They are separate
@@ -25,10 +26,18 @@ function isDocument(value: string): boolean {
   return value.length > DOCUMENT_THRESHOLD || value.includes('\n')
 }
 
-export default function ProposalCard({ handler, fields, result, busy, disabled, onApprove, onCancel }: ProposalCardProps) {
+export default function ProposalCard({ handler, fields, progress, result, busy, disabled, onApprove, onCancel }: ProposalCardProps) {
+  const grounding = fields.action === 'propose_resume_section' && fields.grounding && typeof fields.grounding === 'object'
+    ? fields.grounding as Record<string, unknown> : null
+  const numbers = Array.isArray(grounding?.novel_numbers) ? grounding.novel_numbers.filter((value): value is string => typeof value === 'string') : []
+  const organisations = Array.isArray(grounding?.novel_organisations) ? grounding.novel_organisations.filter((value): value is string => typeof value === 'string') : []
+  // Read, not recomputed: the server owns the threshold, so the caution shown
+  // here is the same judgement the tool made when it built the card.
+  const lowSimilarity = grounding?.low_similarity === true
   return (
     <div className="chatProposal">
       <strong>Confirm action</strong>
+      {progress ? <p className="chatProposalProgress">{progress}</p> : null}
       <dl>
         {handler.summary(fields).map(([label, value]) => (
           <div key={label}>
@@ -37,6 +46,13 @@ export default function ProposalCard({ handler, fields, result, busy, disabled, 
           </div>
         ))}
       </dl>
+      {numbers.length || organisations.length || lowSimilarity ? <div className="chatGroundingCaution" role="note">
+        <strong>Check the supporting facts</strong>
+        {numbers.length ? <p>Numbers absent from the draft: {numbers.join(', ')}</p> : null}
+        {organisations.length ? <p>Possible new organizations: {organisations.join(', ')}</p> : null}
+        {lowSimilarity ? <p>This wording differs substantially from the current section.</p> : null}
+        <p>These are review cautions. Apply only if the new details are accurate.</p>
+      </div> : null}
       {result === 'cancelled' ? <p>Cancelled. No changes were made.</p> : null}
       {result && result !== 'cancelled' ? (
         <p className={result.approved ? '' : 'chatError'}>{result.detail}</p>

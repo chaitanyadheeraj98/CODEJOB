@@ -34,6 +34,20 @@ describe('ProposalCard', () => {
     container?.querySelectorAll<HTMLButtonElement>('button') ?? [],
   ).find((button) => button.textContent?.includes(text))
 
+  it('shows grounding cautions without blocking the section digest approval', () => {
+    const section = { action: 'propose_resume_section', draft_id: 4, section: 'Summary', current: 'Built APIs.', replacement: 'Saved 40%.', base_sha256: 'digest',
+      grounding: { novel_numbers: ['40%'], novel_organisations: ['Acme Corp'], similarity: 0.3, low_similarity: true } }
+    const handler = PROPOSAL_HANDLERS.propose_resume_section
+    const onApprove = vi.fn()
+    render(<ProposalCard handler={handler} fields={section} progress="1 of 2 sections proposed." busy={false} disabled={false} onApprove={onApprove} onCancel={vi.fn()} />)
+    expect(container?.querySelector('.chatGroundingCaution')?.textContent).toContain('40%')
+    expect(container?.textContent).toContain('Acme Corp')
+    expect(container?.textContent).toContain('1 of 2')
+    act(() => buttonLabelled('Apply Rewrite')?.click())
+    expect(onApprove).toHaveBeenCalledOnce()
+    expect(handler.buildBody(section)).toEqual({ section: 'Summary', replacement: 'Saved 40%.', base_sha256: 'digest' })
+  })
+
   afterEach(() => {
     if (root) act(() => root?.unmount())
     container?.remove()
@@ -45,6 +59,7 @@ describe('ProposalCard', () => {
     render(<ProposalCard handler={handler} fields={fields} busy={false} disabled={false} onApprove={vi.fn()} onCancel={vi.fn()} />)
 
     expect(container?.textContent).toContain('Confirm action')
+    expect(container?.querySelector('.chatGroundingCaution')).toBeNull()
     expect(container?.textContent).toContain('sarah@acme-staffing.com')
     expect(container?.textContent).toContain('Re: Senior Backend Engineer')
     // Empty values render as a dash rather than collapsing the row away.
