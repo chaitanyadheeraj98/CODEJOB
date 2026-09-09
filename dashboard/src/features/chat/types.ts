@@ -16,6 +16,8 @@ export type ChatMessage = {
   // Set only on event rows: which card this outcome belongs to, and what it was.
   proposal_message_id?: number | null
   outcome?: 'confirmed' | 'cancelled' | 'failed' | null
+  // Present only where the turn failed over, naming the fallback that answered.
+  answered_by?: string | null
 }
 
 export type ChatSessionDetail = ChatSession & {
@@ -28,9 +30,25 @@ export type ChatStatus = {
   ollama_last_error: string | null
   ollama_last_success_at: string | null
   chat_last_error: string | null
+  chat_last_failure_code?: string | null
   mcp_status: string
   model: string
   available_models: string[]
+  telemetry?: ChatTelemetry | null
+}
+
+export type ChatTelemetry = {
+  window_days: number
+  turns: number
+  failed: number
+  cancelled: number
+  interrupted: number
+  failed_over: number
+  prompt_tokens: number
+  completion_tokens: number
+  median_duration_ms: number
+  p95_duration_ms: number
+  top_failure_code?: string | null
 }
 
 export type ChatAttachment = {
@@ -50,4 +68,12 @@ export type ChatAttachment = {
 export type ActiveTool = {
   name: string
   startedAt: number
+}
+
+// Every field is server-measured or server-enumerated. Nothing a tool returned
+// as free text reaches this type, because it renders as the app's own chrome.
+export type CompletedTool = {
+  name: string
+  duration_ms: number
+  status: string
 }

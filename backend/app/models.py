@@ -560,6 +560,30 @@ class ChatMessage(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
 
 
+class ChatTurn(Base):
+    __tablename__ = "chat_turn"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("chat_sessions.id"), index=True)
+    message_id: Mapped[int | None] = mapped_column(ForeignKey("chat_messages.id"), nullable=True)
+    model: Mapped[str] = mapped_column(String(200), default="")
+    requested_model: Mapped[str] = mapped_column(String(200), default="auto")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    failed_over: Mapped[bool] = mapped_column(Boolean, default=False)
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tool_calls: Mapped[str] = mapped_column(Text, default="[]")
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    time_to_first_token_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    failure_code: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    interrupted: Mapped[bool] = mapped_column(Boolean, default=False)
+    cancelled: Mapped[bool] = mapped_column(Boolean, default=False)
+    budget_exhausted: Mapped[bool] = mapped_column(Boolean, default=False)
+    mcp_cached: Mapped[bool] = mapped_column(Boolean, default=False)
+    prompt_sha256: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, index=True)
+
+
 class ChatAttachment(Base):
     """A file the user attached to a chat message.
 

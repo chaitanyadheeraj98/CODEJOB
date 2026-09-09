@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.mcp_server.tools import untrusted
 from app.config import settings
 from app.db import SessionLocal
 from app.external_feeds.models import ExternalFeedSource, ExternalOpportunity, ExternalScrapeRun
@@ -50,9 +51,8 @@ def list_external_opportunities(limit: int = 10) -> dict[str, object]:
                     "posted_at": row.posted_at.isoformat() if row.posted_at else None,
                     "bridge_status": row.bridge_status,
                     "untrusted_listing_data": (
-                        "<untrusted_run_item_data>\n"
-                        f"{row.raw_body[:4000]}\n"
-                        "</untrusted_run_item_data>"
+                        untrusted("run_item",
+                        f"{row.raw_body[:4000]}")
                     ),
                 }
                 for row in rows

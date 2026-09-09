@@ -81,3 +81,51 @@ describe('renderMarkdownLite links', () => {
     expect(hrefs).toEqual(['https://example.com/a', 'https://example.com/b'])
   })
 })
+
+it('links only the record ids this thread actually fetched', () => {
+  const selected: number[] = []
+  const citations = {
+    ids: new Map([['record-1', 41], ['record-2', 42]]),
+    onSelect: (id: number) => selected.push(id),
+  }
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+  try {
+    act(() => {
+      root.render(
+        <div>
+          {renderMarkdownLite(
+            'record-1 replied, record-2 did not, and record-9 is not on file. See `record-1` too.',
+            citations,
+          )}
+        </div>,
+      )
+    })
+    const buttons = Array.from(container.querySelectorAll('button.chatRecordCitation'))
+    expect(buttons.map((node) => node.textContent)).toEqual(['record-1', 'record-2'])
+    // An id the assistant produced with no tool behind it stays plain text -
+    // that is the whole point of indexing off the transcript.
+    expect(container.textContent).toContain('record-9 is not on file')
+    expect(container.querySelector('code')?.textContent).toBe('record-1')
+    act(() => { (buttons[1] as HTMLButtonElement).click() })
+    expect(selected).toEqual([42])
+  } finally {
+    act(() => root.unmount())
+    container.remove()
+  }
+})
+
+it('renders unchanged when no citations are supplied', () => {
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+  try {
+    act(() => { root.render(<div>{renderMarkdownLite('record-1 replied.')}</div>) })
+    expect(container.querySelector('button')).toBeNull()
+    expect(container.textContent).toBe('record-1 replied.')
+  } finally {
+    act(() => root.unmount())
+    container.remove()
+  }
+})

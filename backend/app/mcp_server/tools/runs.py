@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.mcp_server.tools import untrusted
 from app.config import settings
 from app.db import SessionLocal
 from app.models import RecentRun, RecentRunSkippedItem
@@ -53,9 +54,8 @@ def get_run_items(run_key: str, limit: int = 25) -> dict[str, object]:
                     "candidate_email_id": row.candidate_email_id,
                     "created_at": row.created_at.isoformat(),
                     "untrusted_run_item_data": (
-                        "<untrusted_run_item_data>\n"
-                        f"Title: {row.title_or_subject}\nReason: {row.reason_detail}\n"
-                        "</untrusted_run_item_data>"
+                        untrusted("run_item",
+                        f"Title: {row.title_or_subject}\nReason: {row.reason_detail}")
                     ),
                 }
                 for row in rows

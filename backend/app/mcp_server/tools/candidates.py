@@ -7,6 +7,7 @@ from datetime import date, datetime, time, timedelta
 
 from sqlalchemy import func, or_
 
+from app.mcp_server.tools import untrusted
 from app.config import settings
 from app.db import SessionLocal
 from app.models import RecruiterEmail
@@ -63,10 +64,9 @@ def _summary(row: RecruiterEmail) -> dict[str, object]:
         "decision": row.decision,
         "created_at": row.created_at.isoformat(),
         "untrusted_candidate_data": (
-            "<untrusted_candidate_data>\n"
+            untrusted("candidate",
             f"Role: {row.role}\nLocation: {row.location}\n"
-            f"Sender: {row.sender}\nSubject: {row.subject}\n"
-            "</untrusted_candidate_data>"
+            f"Sender: {row.sender}\nSubject: {row.subject}")
         ),
     }
 
@@ -174,13 +174,12 @@ def get_candidate(email_id: int) -> dict[str, object]:
                 "auto_reject_reason": row.auto_reject_reason,
                 "hard_filter_result": row.hard_filter_result,
                 "untrusted_source_data": (
-                    "<untrusted_candidate_data>\n"
+                    untrusted("candidate",
                     f"Role: {row.role}\nLocation: {row.location}\n"
                     f"Sender: {row.sender}\nSubject: {row.subject}\n"
                     f"Salary: {row.salary_text}\nSkills: {row.skills_text}\n"
                     f"AI summary: {row.ai_summary}\nATS summary: {row.ats_summary}\n"
-                    f"Body: {row.body[:8000]}\n"
-                    "</untrusted_candidate_data>"
+                    f"Body: {row.body[:8000]}")
                 ),
             }
         )

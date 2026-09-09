@@ -161,7 +161,7 @@ def _propose_append(field: str, value: str, verbatim: bool, user_asked: bool) ->
 
     text = (value or "").strip()
     if not text:
-        return {"status": "missing_fields", "missing": ["value"]}
+        return {"hint": 'Ask the user for value. Do not guess.', "status": "missing_fields", "missing": ["value"]}
 
     db = SessionLocal()
     try:
@@ -263,7 +263,7 @@ def _propose_append(field: str, value: str, verbatim: bool, user_asked: bool) ->
 
 def _propose_replace(attachment_id: int) -> dict[str, object]:
     if attachment_id <= 0:
-        return {"status": "missing_fields", "missing": ["attachment_id"]}
+        return {"hint": 'Ask the user for attachment_id. Do not guess.', "status": "missing_fields", "missing": ["attachment_id"]}
 
     db = SessionLocal()
     try:

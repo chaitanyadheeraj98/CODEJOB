@@ -447,11 +447,11 @@ when available.
 """
 
 
-def build_system_prompt(candidate_profile: str = "") -> str:
+def build_system_prompt(candidate_profile: str = "", *, _version: bool = False) -> str:
     actions_enabled = settings.feature_chat_actions_enabled
     profile = (candidate_profile or "").strip()
     return _SYSTEM_PROMPT_TEMPLATE.format(
-        today=datetime.now(UTC).date().isoformat(),
+        today="" if _version else datetime.now(UTC).date().isoformat(),
         action_guidance=_ACTION_GUIDANCE if actions_enabled else _READ_ONLY_ACTION_GUIDANCE,
         web_guidance=_WEB_GUIDANCE if actions_enabled and settings.searxng_url else "",
         manual_intake_guidance=_MANUAL_INTAKE_GUIDANCE if actions_enabled else "",
@@ -465,9 +465,15 @@ def build_system_prompt(candidate_profile: str = "") -> str:
         # a stray brace in the user's Markdown cannot break prompt assembly.
         profile_guidance=(
             _PROFILE_GUIDANCE.replace("{profile_fields}", _PROFILE_FIELD_LIST).replace(
-                "{profile}", profile
+                "{profile}", "" if _version else profile
             )
-            if profile
+            if profile or _version
             else _NO_PROFILE_GUIDANCE
         ),
     )
+
+
+def prompt_sha256() -> str:
+    from hashlib import sha256
+
+    return sha256(build_system_prompt(_version=True).encode()).hexdigest()

@@ -106,7 +106,7 @@ def propose_candidate_action(action: str, candidate_ids: list[int], reason: str 
         db.close()
 
     if not eligible:
-        return {
+        return {"hint": 'Ask the user for candidate_ids. Do not guess.', 
             "status": "missing_fields",
             "missing": ["candidate_ids"],
             "action": "propose_candidate_action",

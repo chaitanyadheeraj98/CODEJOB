@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from contextlib import aclosing
 from pathlib import Path
 from time import perf_counter
 
@@ -10,6 +11,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.ai.chat.agent import chat_models
+from app.ai.chat import turns
 from app.config import settings
 from app.db import get_db
 from app.runtime_state import runtime_state
@@ -69,14 +71,22 @@ async def _ollama_running() -> bool:
 
 
 @router.get("/status", response_model=ChatStatusResponse)
-async def chat_status() -> ChatStatusResponse:
+async def chat_status(
+    db: Session = Depends(get_db),
+    service: ChatService = Depends(get_chat_service),
+) -> ChatStatusResponse:
     running = await _ollama_running() if settings.feature_chat_enabled else False
+    # Read here rather than from a second endpoint: this is what the AI Access
+    # card already fetches, and the summary belongs beside the health it explains.
+    telemetry = service.telemetry_summary(db) if settings.feature_chat_enabled else None
     return ChatStatusResponse(
+        telemetry=telemetry,
         enabled=settings.feature_chat_enabled,
         ollama_running=running,
         ollama_last_error=runtime_state.ollama_last_error,
         ollama_last_success_at=runtime_state.ollama_last_success_at,
         chat_last_error=runtime_state.chat_last_error,
+        chat_last_failure_code=runtime_state.chat_last_failure_code,
         mcp_status=runtime_state.chat_mcp_status,
         model=runtime_state.chat_active_model or settings.ollama_chat_model,
         available_models=chat_models(),
@@ -158,7 +168,7 @@ def delete_chat_session(
     "/sessions/{session_id}/messages",
     dependencies=[Depends(require_chat_enabled)],
 )
-def send_chat_message(
+async def send_chat_message(
     session_id: int,
     payload: ChatMessageRequest,
     db: Session = Depends(get_db),
@@ -166,13 +176,29 @@ def send_chat_message(
 ) -> StreamingResponse:
     text = service.validate_message(payload.text)
     service._session_or_404(db, session_id)
+    stream = service.send_message(db, session_id, text, model=payload.model, attachment_ids=payload.attachment_ids)
+    first = await anext(stream)
+
+    async def response_events():
+        async with aclosing(stream):
+            yield first
+            async for event in stream:
+                yield event
+
     return StreamingResponse(
-        service.send_message(
-            db, session_id, text, model=payload.model, attachment_ids=payload.attachment_ids
-        ),
+        response_events(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.delete("/sessions/{session_id}/turns/{turn_id}", dependencies=[Depends(require_chat_enabled)])
+async def stop_chat_turn(session_id: int, turn_id: str, db: Session = Depends(get_db),
+                   service: ChatService = Depends(get_chat_service)) -> dict[str, bool]:
+    service._session_or_404(db, session_id)
+    if not turns.cancel(session_id, turn_id):
+        raise HTTPException(status_code=404, detail="Active turn not found")
+    return {"cancelled": True}
 
 
 @router.post(

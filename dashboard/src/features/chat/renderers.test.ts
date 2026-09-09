@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { asInferenceProvenance, asProvenance, renderForMessage } from './renderers'
+import { asInferenceProvenance, asProvenance, recordIndexFromMessages, renderForMessage } from './renderers'
 import type { ChatMessage } from './types'
 
 const payload = {
@@ -139,5 +139,29 @@ describe('asInferenceProvenance', () => {
 
     expect(asProvenance(measured)).not.toBeNull()
     expect(asInferenceProvenance(measured)).toBeNull()
+  })
+})
+
+describe('recordIndexFromMessages', () => {
+  it('indexes record ids from the candidate tables on the transcript', () => {
+    const index = recordIndexFromMessages([toolMessage(payload)])
+
+    expect(index.get('abc')).toBe(7323)
+    expect(index.size).toBe(1)
+  })
+
+  it('ignores rows with no record id and messages nothing can render', () => {
+    const withoutRecord = {
+      ...payload,
+      rows: [{ candidate_id: 11, record_id: null, role: 'Backend', sender: 'x@example.com' }],
+    }
+    const assistant: ChatMessage = {
+      id: 2, role: 'assistant', tool_name: null,
+      content: 'record-abc is the one', created_at: '2026-01-01T00:00:00Z',
+    }
+
+    // Nothing here can be cited: one row has no permanent id, and prose is not
+    // evidence. An empty index is what keeps the assistant's own text inert.
+    expect(recordIndexFromMessages([toolMessage(withoutRecord), assistant]).size).toBe(0)
   })
 })

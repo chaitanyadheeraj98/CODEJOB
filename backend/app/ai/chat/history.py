@@ -25,6 +25,8 @@ def db_messages_to_langchain(messages: list[ChatMessage]) -> list[BaseMessage]:
         if row.role == "user":
             history.append(HumanMessage(content=row.content))
         elif row.role == "assistant" and row.content:
+            if row.tool_call_args == '{"interrupted":true}':
+                continue
             history.append(AIMessage(content=row.content))
         elif row.role == "event" and row.content:
             # A bracketed system note inside a HumanMessage, the same shape

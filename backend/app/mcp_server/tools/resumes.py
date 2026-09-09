@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from app.mcp_server.tools import untrusted
 from app.config import settings
 from app.db import SessionLocal
 from app.models import ResumeAsset
 from app.schemas import resume_variant_code
 from app.services import role_target_service
+from app.services.resume_render_service import find_section, split_sections
 
 
 def list_resumes(limit: int = 10) -> dict[str, object]:
@@ -59,7 +61,7 @@ def _resolve_variant(
         return (row, None) if row is not None else (None, {"error": "Resume not found"})
 
     if not variant.strip():
-        return None, {"status": "missing_fields", "missing": ["resume_id or variant"]}
+        return None, {"hint": 'Ask the user for resume_id or variant. Do not guess.', "status": "missing_fields", "missing": ["resume_id or variant"]}
 
     query = variant.strip()
     matched_field = ""
@@ -126,8 +128,8 @@ def _resolve_variant(
     return row, None
 
 
-def get_resume(resume_id: int = 0, variant: str = "") -> dict[str, object]:
-    """Get the full text of one resume, by id or by variant name."""
+def get_resume(resume_id: int = 0, variant: str = "", section: str = "") -> dict[str, object]:
+    """Read one resume by id or variant name, optionally returning only a named section."""
     db = SessionLocal()
     try:
         row, refusal = _resolve_variant(db, resume_id, variant)
@@ -140,6 +142,15 @@ def get_resume(resume_id: int = 0, variant: str = "") -> dict[str, object]:
                 "file_name": row.file_name,
                 "error": "No text could be extracted from this resume file.",
             }
+        if section.strip():
+            headings = [item.heading for item in split_sections(row.content_markdown)]
+            found = find_section(row.content_markdown, section)
+            if found is None:
+                return {"status": "section_not_found", "status_code": 404, "id": row.id,
+                        "sections": headings, "hint": "Use one of the returned headings exactly."}
+            return {"id": row.id, "file_name": row.file_name, "section": found.heading,
+                    "sections": headings, "characters": len(found.body),
+                    "untrusted_resume_data": untrusted("resume", found.body)}
         other_versions = (
             db.query(ResumeAsset)
             .filter(ResumeAsset.owner_id == settings.owner_id)
@@ -159,10 +170,9 @@ def get_resume(resume_id: int = 0, variant: str = "") -> dict[str, object]:
                 if item.file_name.casefold() == row.file_name.casefold() and item.version < row.version
             ),
             "untrusted_resume_data": (
-                "<untrusted_resume_data>\n"
+                untrusted("resume",
                 f"Content:\n{row.content_markdown}\n"
-                f"Evidence JSON:\n{row.content_evidence_json or '{}'}\n"
-                "</untrusted_resume_data>"
+                f"Evidence JSON:\n{row.content_evidence_json or '{}'}")
             ),
         }
     finally:
@@ -186,7 +196,7 @@ def propose_resume_draft(source_resume_id: int = 0, variant: str = "", name: str
         if source_resume_id or variant.strip():
             return {"status": "invalid_source", "detail": "Choose an existing variant or start from scratch."}
         if not candidate_name.strip() or not contact_line.strip():
-            return {"status": "missing_fields", "missing": ["candidate_name", "contact_line"]}
+            return {"hint": 'Ask the user for candidate_name, contact_line. Do not guess.', "status": "missing_fields", "missing": ["candidate_name", "contact_line"]}
         if len(candidate_name) > 100 or len(contact_line) > 300 or any(c in candidate_name + contact_line for c in "\r\n"):
             return {"status": "invalid_header", "detail": "Supply only a short name and one contact line."}
         content = f"# {candidate_name.strip()}\n{contact_line.strip()}\n\n## Summary\n\n## Skills\n\n## Experience\n\n## Education"
@@ -236,7 +246,7 @@ def analyse_role_target(role: str = "", window_days: int = 365) -> dict[str, obj
     for X?" - including roles the app has no family for, like security or QA.
     """
     if not role.strip():
-        return {"status": "missing_fields", "missing": ["role"]}
+        return {"hint": 'Ask the user for role. Do not guess.', "status": "missing_fields", "missing": ["role"]}
     db = SessionLocal()
     try:
         report = role_target_service.analyse_role_target(

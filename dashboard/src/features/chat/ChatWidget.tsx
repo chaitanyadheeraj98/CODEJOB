@@ -8,6 +8,7 @@ import { proposalForMessage, proposalRefusalForMessage, resumeSequenceProgress, 
 import RenderedMessage from './RenderedMessage'
 import { renderForMessage } from './renderers'
 import { SentAttachmentChips } from './AttachmentChips'
+import { AnsweredBy } from './AnsweredBy'
 
 
 // `open` and `draft` stay local: they are genuinely per-surface. Everything
@@ -35,6 +36,10 @@ export default function ChatWidget() {
     setDraft('')
     await chat.sendMessage(text, selectedModel)
   }
+
+  // Only IDs this thread fetched are clickable; anything the assistant wrote
+  // without a tool behind it stays plain text.
+  const citations = { ids: chat.recordIndex, onSelect: chat.focusCandidate }
 
   const currentSession = chat.sessions.find((session) => session.id === chat.sessionId)
 
@@ -189,20 +194,21 @@ export default function ChatWidget() {
                   return (
                     <div key={message.id} className={`chatBubble ${message.role}`}>
                       {message.content
-                        ? renderMarkdownLite(message.content)
+                        ? renderMarkdownLite(message.content, citations)
                         : chat.busy && message.role === 'assistant'
-                          ? (chat.activeTool ? <ToolProgress key={chat.activeTool.startedAt} tool={chat.activeTool} /> : 'Thinking...')
+                          ? <ToolProgress key={chat.activeTool?.startedAt ?? 'idle'} tool={chat.activeTool} completed={chat.completedTools} />
                           : ''}
                       <SentAttachmentChips
                         apiBase={chat.apiBase}
                         attachments={chat.attachments.filter((item) => item.message_id === message.id)}
                       />
+                      <AnsweredBy message={message} />
                     </div>
                   )
                 })}
                 <div ref={messagesEndRef} />
               </div>
-              {chat.error ? <p className="chatError" role="alert">{chat.error}</p> : null}
+        {chat.error ? <p className="chatError" role="alert">{chat.error} {chat.retry ? <button type="button" disabled={chat.busy} onClick={() => void chat.retry?.()}>Retry</button> : null}</p> : null}
               <form className="chatComposer" onSubmit={(event) => void submit(event)}>
                 <label className="visuallyHidden" htmlFor="chat-message">Message CodeJob Assistant</label>
                 <textarea
@@ -220,9 +226,18 @@ export default function ChatWidget() {
                     }
                   }}
                 />
-                <button type="submit" disabled={chat.busy || !draft.trim()}>
-                  {chat.busy ? 'Working...' : 'Send'}
-                </button>
+                {chat.stop ? (
+                  // Takes the Send slot rather than sitting beside it: the two are
+                  // never both actionable, and a second button here would be
+                  // disabled for the whole of every turn that cannot be stopped.
+                  <button type="button" className="chatStop" onClick={() => void chat.stop?.()}>
+                    Stop
+                  </button>
+                ) : (
+                  <button type="submit" disabled={chat.busy || !draft.trim()}>
+                    {chat.busy ? 'Working...' : 'Send'}
+                  </button>
+                )}
               </form>
             </>
           ) : null}

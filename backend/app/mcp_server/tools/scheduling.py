@@ -167,7 +167,7 @@ def propose_scheduled_task(
 
     label = (title or "").strip()
     if not label:
-        return {"status": "missing_fields", "missing": ["title"]}
+        return {"hint": 'Ask the user for title. Do not guess.', "status": "missing_fields", "missing": ["title"]}
 
     db = SessionLocal()
     try:
@@ -235,7 +235,7 @@ def propose_scheduled_task(
 
 def _lifecycle_preview(action: str, task_id: int) -> dict[str, object]:
     if task_id <= 0:
-        return {"status": "missing_fields", "missing": ["task_id"]}
+        return {"hint": 'Ask the user for task_id. Do not guess.', "status": "missing_fields", "missing": ["task_id"]}
     db = SessionLocal()
     try:
         task = (

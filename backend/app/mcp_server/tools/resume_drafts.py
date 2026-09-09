@@ -15,6 +15,7 @@ beside its new text, which is a thing a person can actually check.
 
 from __future__ import annotations
 
+from app.mcp_server.tools import untrusted
 from app.config import settings
 from app.db import SessionLocal
 from app.models import ResumeDraft
@@ -56,7 +57,7 @@ def _resolve_draft(db, draft_id: int = 0, name: str = ""):
 
     query = name.strip()
     if not query:
-        return None, {"status": "missing_fields", "missing": ["draft_id or name"]}
+        return None, {"hint": 'Ask the user for draft_id or name. Do not guess.', "status": "missing_fields", "missing": ["draft_id or name"]}
 
     rows = (
         db.query(ResumeDraft)
@@ -171,6 +172,7 @@ def get_resume_draft(draft_id: int = 0, name: str = "", section: str = "") -> di
             if found is None:
                 return {
                     "status": "section_not_found",
+                    "status_code": 404,
                     "draft_id": draft.id,
                     "section": section,
                     "sections": headings,
@@ -180,9 +182,10 @@ def get_resume_draft(draft_id: int = 0, name: str = "", section: str = "") -> di
                 "draft_id": draft.id,
                 "draft_name": draft.name,
                 "section": found.heading,
+                "sections": headings,
                 "characters": len(found.body),
                 "untrusted_resume_data": (
-                    f"<untrusted_resume_data>\n{found.body}\n</untrusted_resume_data>"
+                    untrusted("resume", found.body)
                 ),
             }
 
@@ -192,7 +195,7 @@ def get_resume_draft(draft_id: int = 0, name: str = "", section: str = "") -> di
             "characters": len(content),
             "sections": headings,
             "untrusted_resume_data": (
-                f"<untrusted_resume_data>\n{content}\n</untrusted_resume_data>"
+                untrusted("resume", content)
             ),
         }
     finally:
@@ -219,7 +222,7 @@ def propose_resume_section(
     """
     text = (replacement or "").replace("\r\n", "\n").strip()
     if not section.strip() or not text:
-        return {
+        return {"hint": 'Ask the user for the missing fields; do not guess.', 
             "status": "missing_fields",
             "missing": [name for name, value in (("section", section.strip()), ("replacement", text)) if not value],
         }

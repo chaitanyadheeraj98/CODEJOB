@@ -8,6 +8,8 @@ reached a user; extend it the same way for the next data-shape gap.
 """
 
 import unittest
+import ast
+from pathlib import Path
 from unittest.mock import patch
 
 from sqlalchemy import create_engine
@@ -19,6 +21,19 @@ from app.db import Base
 from app.mcp_server.tools.candidates import get_candidate, search_candidates
 from app.mcp_server.tools.support import propose_create_github_issue
 from app.models import RecruiterEmail
+
+
+def test_tool_repair_envelopes_always_supply_a_hint():
+    for path in (Path(__file__).parents[1] / "app/mcp_server/tools").glob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not isinstance(node, ast.Dict):
+                continue
+            fields = {key.value: value for key, value in zip(node.keys, node.values) if isinstance(key, ast.Constant)}
+            status = fields.get("status")
+            if isinstance(status, ast.Constant) and status.value in {"missing_fields", "refused"}:
+                assert "hint" in fields, (path.name, node.lineno)
+                hint = fields["hint"]
+                assert not isinstance(hint, ast.Constant) or hint.value, (path.name, node.lineno)
 
 
 class ToolEvalHarnessTests(unittest.TestCase):

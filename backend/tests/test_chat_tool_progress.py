@@ -21,7 +21,7 @@ class FakeGraph:
 def drain(events, messages):
     async def run():
         collected = []
-        with mock.patch.object(chat_agent, "build_chat_agent", return_value=FakeGraph(events)):
+        with mock.patch.object(chat_agent, "get_mcp_tools", return_value=[]), mock.patch.object(chat_agent, "build_chat_agent", return_value=FakeGraph(events)):
             async for kind, payload in chat_agent.stream_chat_agent(messages, model="test-model"):
                 collected.append((kind, payload))
         return collected

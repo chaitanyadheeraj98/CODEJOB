@@ -5,6 +5,7 @@ from email.utils import parseaddr
 
 from sqlalchemy import func, or_
 
+from app.mcp_server.tools import untrusted
 from app.config import settings
 from app.db import SessionLocal
 from app.external_feeds.models import ExternalOpportunity
@@ -52,7 +53,7 @@ _VALID_CATEGORIES = ("recruiter", "employer", "review", "lead")
 
 def _fenced(tag: str, value: object) -> str:
     text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
-    return f"<{tag}>\n{text}\n</{tag}>"
+    return untrusted(tag, text)
 
 
 def _source_reference_payload(db, reference: OpportunitySourceReference) -> dict[str, object]:
@@ -128,7 +129,7 @@ def propose_create_premium_contact(
     if normalized_role not in {"recruiter", "employer"}:
         missing.append("role")
     if missing:
-        return {"status": "missing_fields", "missing": missing}
+        return {"hint": 'Ask the user for the missing fields; do not guess.', "status": "missing_fields", "missing": missing}
 
     db = SessionLocal()
     try:
@@ -798,10 +799,9 @@ def list_recruiter_opportunities(status: str = "", source_email_id: int = 0, lim
                     if row.recruiter_number_id in recruiters
                     else "",
                     "untrusted_opportunity_data": (
-                        "<untrusted_opportunity_data>\n"
+                        untrusted("opportunity",
                         f"Email subject: {row.email_subject}\nEmail sender: {row.email_sender}\n"
-                        f"Evidence: {row.evidence}\nNotes: {row.notes}\n"
-                        "</untrusted_opportunity_data>"
+                        f"Evidence: {row.evidence}\nNotes: {row.notes}")
                     ),
                 }
                 for row in rows

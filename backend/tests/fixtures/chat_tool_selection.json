@@ -1,0 +1,282 @@
+[
+  {
+    "id": "replies",
+    "question": "Who replied to me today?",
+    "expected": [
+      "get_recruiter_replies"
+    ]
+  },
+  {
+    "id": "urgent",
+    "question": "Which recruiter replies are urgent?",
+    "expected": [
+      "get_recruiter_replies"
+    ]
+  },
+  {
+    "id": "reply_count",
+    "question": "How many recruiters have replied?",
+    "expected": [
+      "get_recruiter_replies"
+    ]
+  },
+  {
+    "id": "phone",
+    "question": "What phone number do we have for candidate email 1?",
+    "expected": [
+      "list_contact_numbers"
+    ]
+  },
+  {
+    "id": "company_phone",
+    "question": "Give me the recruiter contact details for Example Staffing.",
+    "expected": [
+      "list_contact_numbers"
+    ]
+  },
+  {
+    "id": "card",
+    "question": "Show the opportunity details for Email ID 1.",
+    "expected": [
+      "list_recruiter_opportunities"
+    ]
+  },
+  {
+    "id": "feed",
+    "question": "What is new in the raw Nvoids feed?",
+    "expected": [
+      "list_external_opportunities"
+    ]
+  },
+  {
+    "id": "record",
+    "question": "Show the details of record fixture-1.",
+    "expected": [
+      "get_record_details"
+    ]
+  },
+  {
+    "id": "sent",
+    "question": "Who was record fixture-1 sent to, and did they reply?",
+    "expected": [
+      "get_record_details"
+    ]
+  },
+  {
+    "id": "model",
+    "question": "Which AI model and provider are you using?",
+    "expected": [
+      "get_ai_status"
+    ]
+  },
+  {
+    "id": "help",
+    "question": "How do I upload a resume in CodeJob?",
+    "expected": [
+      "get_app_help"
+    ]
+  },
+  {
+    "id": "attachment",
+    "question": "Read my attached document, attachment id 1.",
+    "expected": [
+      "read_chat_attachment"
+    ]
+  },
+  {
+    "id": "attachments",
+    "question": "List the files I attached in chat session 1.",
+    "expected": [
+      "list_chat_attachments"
+    ]
+  },
+  {
+    "id": "intake",
+    "question": "Track the job description stored in chat message 1.",
+    "expected": [
+      "propose_manual_requirement"
+    ]
+  },
+  {
+    "id": "intake_status",
+    "question": "Check the manual intake job with run key fixture-1.",
+    "expected": [
+      "check_manual_intake"
+    ]
+  },
+  {
+    "id": "table",
+    "question": "Show a sortable candidate table for candidate ids 1 and 2.",
+    "expected": [
+      "render_candidate_table"
+    ]
+  },
+  {
+    "id": "metrics",
+    "question": "How many applications have I sent this month?",
+    "expected": [
+      "get_metrics"
+    ]
+  },
+  {
+    "id": "resolve",
+    "question": "Find the Java role from Example Staffing so I can update its status.",
+    "expected": [
+      "resolve_record_reference"
+    ]
+  },
+  {
+    "id": "update",
+    "question": "Propose setting opportunity 1 status to Closed.",
+    "expected": [
+      "propose_record_update"
+    ]
+  },
+  {
+    "id": "note",
+    "question": "Add a note to opportunity 1 saying I am interested.",
+    "expected": [
+      "propose_add_note"
+    ]
+  },
+  {
+    "id": "reject",
+    "question": "Reject candidate email 1.",
+    "expected": [
+      "propose_candidate_action"
+    ]
+  },
+  {
+    "id": "track",
+    "question": "Track candidate email 1.",
+    "expected": [
+      "propose_candidate_action"
+    ]
+  },
+  {
+    "id": "taxonomy",
+    "question": "Clean up the pending skills and approve the good ones.",
+    "expected": [
+      "propose_taxonomy_bulk_review"
+    ]
+  },
+  {
+    "id": "chart",
+    "question": "Show candidate states as a breakdown chart.",
+    "expected": [
+      "get_chart"
+    ]
+  },
+  {
+    "id": "funnel",
+    "question": "Show the resume funnel chart for resume id 1.",
+    "expected": [
+      "get_chart"
+    ]
+  },
+  {
+    "id": "rank",
+    "question": "Which opportunities best match resume id 1, and why?",
+    "expected": [
+      "rank_opportunities"
+    ]
+  },
+  {
+    "id": "compare",
+    "question": "Compare recruiter contact ids 1 and 2.",
+    "expected": [
+      "compare_records"
+    ]
+  },
+  {
+    "id": "relationships",
+    "question": "What else is connected to requirement 1?",
+    "expected": [
+      "get_relationships"
+    ]
+  },
+  {
+    "id": "recommend",
+    "question": "Who should I contact about requirement 1?",
+    "expected": [
+      "recommend_recruiter"
+    ]
+  },
+  {
+    "id": "scheduled",
+    "question": "What have you got scheduled?",
+    "expected": [
+      "list_scheduled_tasks"
+    ]
+  },
+  {
+    "id": "reminder",
+    "question": "Remind me tomorrow to review recruiter replies.",
+    "expected": [
+      "propose_scheduled_task"
+    ]
+  },
+  {
+    "id": "navigate",
+    "question": "Open failed mapping.",
+    "expected": [
+      "navigate_to_queue"
+    ]
+  },
+  {
+    "id": "resume",
+    "question": "Read the exact wording in my Java resume.",
+    "expected": [
+      "get_resume"
+    ]
+  },
+  {
+    "id": "resumes",
+    "question": "Which resume variants do I have?",
+    "expected": [
+      "list_resumes"
+    ]
+  },
+  {
+    "id": "draft",
+    "question": "Tailor the Summary section of the draft named Java.",
+    "expected": [
+      "get_resume_draft"
+    ]
+  },
+  {
+    "id": "drafts",
+    "question": "What resume drafts exist?",
+    "expected": [
+      "list_resume_drafts"
+    ]
+  },
+  {
+    "id": "client",
+    "question": "Do we have requirements from Morgan Stanley?",
+    "expected": [
+      "search_end_client"
+    ]
+  },
+  {
+    "id": "live_search",
+    "question": "Propose a new live Nvoids search for Morgan Stanley Java roles.",
+    "expected": [
+      "propose_nvoids_search"
+    ]
+  },
+  {
+    "id": "search_status",
+    "question": "Has the confirmed Nvoids search with run key fixture-1 finished?",
+    "expected": [
+      "check_nvoids_search"
+    ]
+  },
+  {
+    "id": "runs",
+    "question": "Show the most recent automation runs.",
+    "expected": [
+      "get_recent_runs"
+    ]
+  }
+]

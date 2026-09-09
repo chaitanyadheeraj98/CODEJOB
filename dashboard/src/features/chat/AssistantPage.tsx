@@ -10,6 +10,7 @@ import ProposalCard from './ProposalCard'
 import { proposalForMessage, proposalRefusalForMessage, resumeSequenceProgress, unsupportedProposalNotice } from './proposals'
 import RenderedMessage from './RenderedMessage'
 import { renderForMessage } from './renderers'
+import { AnsweredBy } from './AnsweredBy'
 import type { ChatSession } from './types'
 
 
@@ -64,6 +65,10 @@ export default function AssistantPage() {
   const [dragging, setDragging] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+
+  // Only IDs this thread fetched are clickable; anything the assistant wrote
+  // without a tool behind it stays plain text.
+  const citations = { ids: chat.recordIndex, onSelect: chat.focusCandidate }
 
   const currentSession = chat.sessions.find((session) => session.id === chat.sessionId)
 
@@ -301,21 +306,22 @@ export default function AssistantPage() {
             return (
               <div key={message.id} className={`chatBubble ${message.role}`}>
                 {message.content
-                  ? renderMarkdownLite(message.content)
+                  ? renderMarkdownLite(message.content, citations)
                   : chat.busy && message.role === 'assistant'
-                    ? (chat.activeTool ? <ToolProgress key={chat.activeTool.startedAt} tool={chat.activeTool} /> : 'Thinking…')
+                    ? <ToolProgress key={chat.activeTool?.startedAt ?? 'idle'} tool={chat.activeTool} completed={chat.completedTools} />
                     : ''}
                 <SentAttachmentChips
                   apiBase={chat.apiBase}
                   attachments={chat.attachments.filter((item) => item.message_id === message.id)}
                 />
+                <AnsweredBy message={message} />
               </div>
             )
           })}
           <div ref={messagesEndRef} />
         </div>
 
-        {chat.error ? <p className="chatError" role="alert">{chat.error}</p> : null}
+        {chat.error ? <p className="chatError" role="alert">{chat.error} {chat.retry ? <button type="button" disabled={chat.busy} onClick={() => void chat.retry?.()}>Retry</button> : null}</p> : null}
 
         <AttachmentChips
           pending={pending}
@@ -368,9 +374,16 @@ export default function AssistantPage() {
               }
             }}
           />
-          <button type="submit" disabled={chat.busy || !draft.trim()}>
-            {chat.busy ? 'Working...' : 'Send'}
-          </button>
+          {chat.stop ? (
+            // Same slot as Send - see the note in ChatWidget.
+            <button type="button" className="chatStop" onClick={() => void chat.stop?.()}>
+              Stop
+            </button>
+          ) : (
+            <button type="submit" disabled={chat.busy || !draft.trim()}>
+              {chat.busy ? 'Working...' : 'Send'}
+            </button>
+          )}
         </form>
       </div>
     </section>

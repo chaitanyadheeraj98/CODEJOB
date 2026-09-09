@@ -18,7 +18,48 @@ export function safeHref(raw: string): string | null {
   return value
 }
 
-function renderInline(line: string) {
+// The record IDs this thread can back with evidence, and what to do with one.
+// Optional throughout: with no citations the renderer behaves exactly as before,
+// which is what keeps every other caller and every existing test unchanged.
+export type Citations = {
+  ids: Map<string, number>
+  onSelect: (candidateId: number) => void
+}
+
+function escapeForRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+// Matched against the known IDs rather than against an ID *shape*. A UUID
+// pattern would go stale the day the format changes and would also light up
+// identifiers this thread never fetched; splitting on the actual keys cannot do
+// either, and it is what makes an unbacked ID render as plain text.
+function linkRecordIds(chunk: string, citations: Citations | undefined, keyPrefix: number) {
+  if (!citations?.ids.size) return chunk
+  const known = [...citations.ids.keys()]
+    .filter((id) => chunk.includes(id))
+    // Longest first, so an ID that contains a shorter one is not split by it.
+    .sort((left, right) => right.length - left.length)
+  if (!known.length) return chunk
+  const pattern = new RegExp(`(${known.map(escapeForRegex).join('|')})`, 'g')
+  return chunk.split(pattern).map((part, index) => {
+    const candidateId = citations.ids.get(part)
+    if (candidateId === undefined) return part
+    return (
+      <button
+        key={`${keyPrefix}:${index}`}
+        type="button"
+        className="chatRecordCitation"
+        onClick={() => citations.onSelect(candidateId)}
+        title="Open this record"
+      >
+        {part}
+      </button>
+    )
+  })
+}
+
+function renderInline(line: string, citations?: Citations) {
   return line.split(/(\[[^\]]+\]\([^)\s]*\)|`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)/).map((chunk, i) => {
     const link = chunk.match(LINK)
     if (link) {
@@ -31,10 +72,12 @@ function renderInline(line: string) {
         </a>
       )
     }
+    // Inline code is left alone: `record-1` inside backticks is being shown as a
+    // literal, and turning it into a control would contradict that.
     if (chunk.startsWith('`') && chunk.endsWith('`') && chunk.length > 1) return <code key={i}>{chunk.slice(1, -1)}</code>
     if (chunk.startsWith('**') && chunk.endsWith('**')) return <strong key={i}>{chunk.slice(2, -2)}</strong>
     if (chunk.startsWith('*') && chunk.endsWith('*') && chunk.length > 1) return <em key={i}>{chunk.slice(1, -1)}</em>
-    return chunk
+    return <span key={i}>{linkRecordIds(chunk, citations, i)}</span>
   })
 }
 
@@ -45,7 +88,7 @@ function splitTableRow(line: string): string[] {
 }
 
 // ponytail: headings/bold/italic/bullets/numbered lists/tables/inline code/links only, not full markdown. Swap for a real parser if fenced code blocks show up.
-export function renderMarkdownLite(text: string) {
+export function renderMarkdownLite(text: string, citations?: Citations) {
   const blocks: ReactNode[] = []
   let paragraph: string[] = []
   let list: string[] = []
@@ -57,7 +100,7 @@ export function renderMarkdownLite(text: string) {
       <p key={blocks.length}>
         {paragraph.map((line, i) => (
           <span key={i}>
-            {renderInline(line)}
+            {renderInline(line, citations)}
             {i < paragraph.length - 1 ? <br /> : null}
           </span>
         ))}
@@ -71,7 +114,7 @@ export function renderMarkdownLite(text: string) {
     blocks.push(
       <ListTag key={blocks.length}>
         {list.map((line, i) => (
-          <li key={i}>{renderInline(line)}</li>
+          <li key={i}>{renderInline(line, citations)}</li>
         ))}
       </ListTag>,
     )
@@ -111,11 +154,11 @@ export function renderMarkdownLite(text: string) {
       blocks.push(
         <table key={blocks.length}>
           <thead>
-            <tr>{header.map((cell, c) => <th key={c}>{renderInline(cell)}</th>)}</tr>
+            <tr>{header.map((cell, c) => <th key={c}>{renderInline(cell, citations)}</th>)}</tr>
           </thead>
           <tbody>
             {rows.map((row, r) => (
-              <tr key={r}>{row.map((cell, c) => <td key={c}>{renderInline(cell)}</td>)}</tr>
+              <tr key={r}>{row.map((cell, c) => <td key={c}>{renderInline(cell, citations)}</td>)}</tr>
             ))}
           </tbody>
         </table>,
@@ -130,7 +173,7 @@ export function renderMarkdownLite(text: string) {
       flushList()
       const depth = Math.min(heading[1].length - shallowestHeading, 2)
       const HeadingTag = (['h3', 'h4', 'h5'] as const)[depth]
-      const headingContent = renderInline(heading[2])
+      const headingContent = renderInline(heading[2], citations)
       blocks.push(<HeadingTag key={blocks.length}>{headingContent}</HeadingTag>)
     } else if (orderedItem || bulletItem) {
       flushParagraph()

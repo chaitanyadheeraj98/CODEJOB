@@ -47,6 +47,7 @@ class AppRuntimeState:
     ollama_last_success_at: datetime | None = None
     ollama_last_duration_ms: int | None = None
     chat_last_error: str | None = None
+    chat_last_failure_code: str | None = None
     chat_last_attempted_at: datetime | None = None
     chat_last_success_at: datetime | None = None
     chat_last_duration_ms: int | None = None
