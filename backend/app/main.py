@@ -191,6 +191,7 @@ from app.routers.chat import (
     require_chat_actions_enabled,
     router as chat_router,
 )
+from app.routers.resume_editor import router as resume_editor_router
 from app.job_intent_learning import (
     NEGATIVE_NEWSLETTER,
     POSITIVE_RECRUITER_JD,
@@ -514,6 +515,7 @@ if settings.feature_chat_enabled:
 else:
     chat_mcp = None
 app.include_router(chat_router)
+app.include_router(resume_editor_router)
 logger = logging.getLogger(__name__)
 last_gmail_sync_at: datetime | None = None
 ai_running: bool = False
@@ -3348,24 +3350,28 @@ def delete_candidate_profile(
     return _candidate_profile_response(s)
 
 
-@app.post("/settings/resume", response_model=ResumeResponse)
-def upload_resume(
-    file: UploadFile = File(...),
-    skills_text: str = Form(""),
-    primary_role: str = Form(""),
-    structured_skills_text: str = Form(""),
-    variant_label: str = Form(""),
-    db: Session = Depends(get_db),
-) -> ResumeResponse:
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="File name required")
-    content = file.file.read()
-    if not content:
-        raise HTTPException(status_code=400, detail="Empty file not allowed")
+def store_resume_asset(
+    db: Session,
+    *,
+    content: bytes,
+    file_name: str,
+    mime_type: str,
+    skills_text: str = "",
+    primary_role: str = "",
+    structured_skills_text: str = "",
+    variant_label: str = "",
+) -> ResumeAsset:
+    """Store bytes as a new resume variant: file, extraction, embedding.
 
+    Extracted from the upload endpoint so that a variant created any other way -
+    the Editor publishing a draft it rendered - goes through this exact path.
+    The text on a variant has to be what `enrich_resume` read out of the very
+    file that will be attached to a draft email, and a second implementation of
+    that is a second chance for the two to disagree.
+    """
     sha256 = hashlib.sha256(content).hexdigest()
     Path(settings.resume_storage_dir).mkdir(parents=True, exist_ok=True)
-    target_path = Path(settings.resume_storage_dir) / f"{sha256}_{file.filename}"
+    target_path = Path(settings.resume_storage_dir) / f"{sha256}_{file_name}"
     target_path.write_bytes(content)
 
     current = (
@@ -3387,8 +3393,8 @@ def upload_resume(
     resume = ResumeAsset(
         owner_id=settings.owner_id,
         file_path=str(target_path),
-        file_name=file.filename,
-        mime_type=file.content_type or "application/pdf",
+        file_name=file_name,
+        mime_type=mime_type,
         sha256=sha256,
         version=next_version,
         skills_text=_normalize_resume_skills_text(skills_text),
@@ -3409,6 +3415,34 @@ def upload_resume(
     db.add(resume)
     db.commit()
     db.refresh(resume)
+    return resume
+
+
+@app.post("/settings/resume", response_model=ResumeResponse)
+def upload_resume(
+    file: UploadFile = File(...),
+    skills_text: str = Form(""),
+    primary_role: str = Form(""),
+    structured_skills_text: str = Form(""),
+    variant_label: str = Form(""),
+    db: Session = Depends(get_db),
+) -> ResumeResponse:
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="File name required")
+    content = file.file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty file not allowed")
+
+    resume = store_resume_asset(
+        db,
+        content=content,
+        file_name=file.filename,
+        mime_type=file.content_type or "application/pdf",
+        skills_text=skills_text,
+        primary_role=primary_role,
+        structured_skills_text=structured_skills_text,
+        variant_label=variant_label,
+    )
     return _resume_response(resume)
 
 

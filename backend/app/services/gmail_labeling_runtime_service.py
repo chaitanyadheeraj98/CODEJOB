@@ -4,6 +4,7 @@ import logging
 from datetime import UTC, datetime
 from typing import cast
 
+from app.config import settings
 from app.gmail_client import GmailMessageCandidate
 from app.gmail_labeling import GmailLabelingService, LabelRuleInput
 from app.models import RecruiterEmail
@@ -33,6 +34,8 @@ class GmailLabelingRuntimeService:
         )
 
     def apply_for_email(self, *, email: RecruiterEmail, candidate_item: GmailMessageCandidate | dict[str, object]) -> None:
+        if not settings.feature_gmail_labeling_enabled:
+            return
         if email.source != "gmail" or not email.external_message_id:
             return
         service = self.ensure_service()

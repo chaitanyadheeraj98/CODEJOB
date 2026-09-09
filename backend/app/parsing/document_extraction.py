@@ -77,10 +77,47 @@ def _table_to_markdown(element: Element) -> str:
     return "\n".join(rendered)
 
 
+def _with_links(text: str, element: Element) -> str:
+    """Put the element's hyperlinks back into its text as markdown links.
+
+    `unstructured` reads the targets out of the .docx and hands them over in
+    `metadata.links`, but the element's own `text` is the anchor words alone. A
+    resume whose contact line says "LinkedIn" and nothing else has lost the only
+    thing that line was for, and nothing downstream can invent the address back.
+
+    Anchors are rewritten from the end so each `start_index` still points where
+    it did. A link whose recorded position no longer holds its own text is
+    matched by the first occurrence of that text instead, and one that matches
+    nowhere is left alone rather than guessed at.
+    """
+    links = getattr(element.metadata, "links", None) or []
+    usable = [
+        (str(link.get("text") or "").strip(), str(link.get("url") or "").strip(), link.get("start_index"))
+        for link in links
+        if isinstance(link, dict)
+    ]
+    # Bare anchors like "http://..." already read as their own address, and
+    # wrapping them would only add punctuation for a reader to trip over.
+    usable = [
+        (anchor, url, start)
+        for anchor, url, start in usable
+        if anchor and url and anchor != url and f"]({url})" not in text
+    ]
+    if not usable:
+        return text
+
+    for anchor, url, start in sorted(usable, key=lambda item: -(item[2] if isinstance(item[2], int) else -1)):
+        index = start if isinstance(start, int) and text[start:start + len(anchor)] == anchor else text.find(anchor)
+        if index < 0:
+            continue
+        text = f"{text[:index]}[{anchor}]({url}){text[index + len(anchor):]}"
+    return text
+
+
 def elements_to_markdown(elements: list[Element]) -> str:
     blocks: list[str] = []
     for element in _content_elements(elements):
-        text = element.text.strip()
+        text = _with_links(element.text.strip(), element)
         category = element.category
         if category == "Title":
             depth = max(0, int(getattr(element.metadata, "category_depth", 0) or 0))

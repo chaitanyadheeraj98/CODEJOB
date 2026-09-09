@@ -434,3 +434,32 @@ def requirements_from_payload(payload: Mapping[str, Any] | None) -> ParsedJDRequ
         preferred_domains=tuple(str(value) for value in raw.get("preferred_domains", []) if str(value).strip()),
         excluded_skills=tuple(str(value) for value in raw.get("excluded_skills", []) if str(value).strip()),
     )
+
+
+def has_job_description_content(*, skills_text: str, structured_requirements: ParsedJDRequirements) -> bool:
+    """True when the parser found any real requirement content - a skill, an
+    experience floor, a location, or a work mode - as opposed to a bare
+    apply-link email whose only text is boilerplate field prompts (Visa
+    Status:, Rate per Hour:, etc.) with nothing behind them.
+
+    Field-label prompts alone hit `JOB_STRUCTURE_TERMS`/`RECRUITER_ACTION_TERMS`
+    keyword matching just as readily as a real requirement does - "visa status"
+    is "visa status" whether or not it has an answer - so this checks what the
+    parser actually extracted, not what the raw text merely mentions.
+    """
+    if skills_text.strip().casefold() not in {"", "none_detected"}:
+        return True
+    if any(
+        group.skills
+        for group in (
+            *structured_requirements.required_groups,
+            *structured_requirements.preferred_groups,
+            *structured_requirements.informational_groups,
+        )
+    ):
+        return True
+    return bool(
+        structured_requirements.experience_years_min is not None
+        or structured_requirements.locations
+        or structured_requirements.work_mode
+    )

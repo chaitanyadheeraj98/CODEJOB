@@ -12,6 +12,7 @@ STRUCTURAL_BLOCKING_STATUSES = frozenset(
         "score_review",
         "superseded_multi_role",
         "source_parent",
+        "content_insufficient",
     }
 )
 ELIGIBILITY_BLOCKING_STATUSES = frozenset({"blocked_ineligible", "eligibility_review"})

@@ -131,6 +131,7 @@ export default function CandidateCard({
     'manifest_review',
     'extraction_review',
     'score_review',
+    'content_insufficient',
   ].includes(item.sendability_status ?? '')
   const historicalSafetyBlock =
     item.screening_mode == null &&

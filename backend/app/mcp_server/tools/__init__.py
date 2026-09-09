@@ -34,7 +34,17 @@ from app.mcp_server.tools.premium_numbers import (
 from app.mcp_server.tools.references import resolve_record_reference
 from app.mcp_server.tools.relationships import get_relationships, recommend_recruiter
 from app.mcp_server.tools.scheduling import list_scheduled_tasks, propose_scheduled_task
-from app.mcp_server.tools.resumes import analyse_role_target, get_resume, list_resumes
+from app.mcp_server.tools.resume_drafts import (
+    get_resume_draft,
+    list_resume_drafts,
+    propose_resume_section,
+)
+from app.mcp_server.tools.resumes import (
+    analyse_role_target,
+    get_resume,
+    list_resumes,
+    propose_resume_draft,
+)
 from app.mcp_server.tools.runs import get_recent_runs, get_run_items
 from app.mcp_server.tools.status import get_ai_status, get_settings_summary
 from app.mcp_server.tools.support import propose_create_github_issue
@@ -56,6 +66,7 @@ __all__ = [
     "get_relationships",
     "get_record_details",
     "get_resume",
+    "get_resume_draft",
     "get_recruiter_replies",
     "get_run_items",
     "get_settings_summary",
@@ -66,6 +77,7 @@ __all__ = [
     "list_conversations",
     "list_external_opportunities",
     "list_recruiter_opportunities",
+    "list_resume_drafts",
     "list_resumes",
     "navigate_to_queue",
     "propose_bulk_approve_candidates",
@@ -77,6 +89,8 @@ __all__ = [
     "propose_nvoids_search",
     "propose_profile_update",
     "propose_record_update",
+    "propose_resume_draft",
+    "propose_resume_section",
     "propose_scheduled_task",
     "propose_send_email",
     "propose_taxonomy_bulk_review",

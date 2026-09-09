@@ -42,6 +42,23 @@ def chat_models(selected: str | None = None) -> list[str]:
     return models
 
 
+def tool_call_budget() -> int:
+    """LangGraph's recursion limit for `ollama_max_tool_iterations` tool calls.
+
+    A limit is counted in graph steps, not tool calls, and one tool call costs
+    two of them - the model node that asks and the tool node that answers - plus
+    one more step for the model to write the reply afterwards. Under that, the
+    prebuilt agent silently swaps the answer for "Sorry, need more steps to
+    process this request."
+
+    Passing the setting straight through, as this did, made
+    `ollama_max_tool_iterations = 6` mean two tool calls. Any flow that had to
+    look something up, read it, and then propose a change could never finish,
+    and the failure looked like the model giving up rather than a budget.
+    """
+    return 2 * max(1, settings.ollama_max_tool_iterations) + 2
+
+
 async def build_chat_agent(model: str, candidate_profile: str = ""):
     tools = await get_mcp_tools()
     runtime_state.chat_mcp_status = "ready"
@@ -67,7 +84,7 @@ async def stream_chat_agent(
                 announced = len(messages)
                 async for mode, payload in graph.astream(
                     {"messages": messages},
-                    config={"recursion_limit": max(2, settings.ollama_max_tool_iterations)},
+                    config={"recursion_limit": tool_call_budget()},
                     stream_mode=["messages", "values"],
                 ):
                     if mode == "messages":

@@ -433,6 +433,45 @@ export const PROPOSAL_HANDLERS: Record<string, ProposalHandler> = {
       ]
     },
   },
+  propose_resume_draft: {
+    endpoint: '/resume-editor/drafts',
+    method: 'POST',
+    // No content_markdown on purpose. Left out, the server copies the variant's
+    // own text into the draft, so what opens in the Editor is the resume the
+    // user actually has rather than a model's recollection of it.
+    buildBody: (fields) => ({ name: fields.name, source_resume_id: fields.source_resume_id }),
+    confirmLabel: () => 'Create Draft',
+    summary: (fields) => [
+      ['Draft name', text(fields.name)],
+      ['Copied from', [text(fields.source_variant_code), text(fields.source_file_name)].filter(Boolean).join(' · ')],
+      // The size of the copy, not the text. A resume is too long to re-read on a
+      // card, and the character count is the part that says which one it is.
+      ['Text', `${Number(fields.source_characters ?? 0).toLocaleString()} characters`],
+    ],
+    pendingNotice: 'No draft exists until you click. Your stored resumes are never changed.',
+  },
+  propose_resume_section: {
+    endpoint: (fields) => `/resume-editor/drafts/${Number(fields.draft_id)}/section`,
+    method: 'PATCH',
+    // base_sha256 travels with the write: the server refuses with a 409 if the
+    // section changed between this card being built and the click, so a rewrite
+    // never silently discards an edit made in the Editor meanwhile.
+    buildBody: (fields) => ({
+      section: fields.section,
+      replacement: fields.replacement,
+      base_sha256: fields.base_sha256,
+    }),
+    confirmLabel: () => 'Apply Rewrite',
+    summary: (fields) => [
+      ['Draft', text(fields.draft_name)],
+      ['Section', text(fields.section)],
+      // Old above new. Both render as scrolling documents, which is the whole
+      // reason this is one section and not the entire resume.
+      ['Now', text(fields.current)],
+      ['Becomes', text(fields.replacement)],
+    ],
+    pendingNotice: 'Nothing is rewritten until you click. Only this section changes.',
+  },
   propose_create_github_issue: {
     endpoint: '/support/github-issues',
     method: 'POST',
@@ -523,6 +562,14 @@ export function proposalResultDetail(payload: Record<string, unknown>, fields: P
   }
   if (fields.action === 'propose_manual_requirement') {
     return 'Queued. It becomes a Needs Review card once ingestion finishes - ask me to check it.'
+  }
+  if (fields.action === 'propose_resume_section') {
+    return `"${text(fields.section)}" rewritten in ${text(fields.draft_name)} - the draft is now ${Number(payload.character_count ?? 0).toLocaleString()} characters.`
+  }
+  // Above the generic `id` branch below: a draft response carries an id too, and
+  // falling through would report a new resume draft as a saved contact.
+  if (fields.action === 'propose_resume_draft') {
+    return `Draft "${text(payload.name)}" created - open the Editor tab in Resume Tracking to write it.`
   }
   if (typeof payload.id === 'number') return `Saved as contact ${payload.id}.`
   // A queued job, not a finished one. Every other branch here reports something
