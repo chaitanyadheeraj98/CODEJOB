@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field, ValidationError
 from app.ai.chat.history import message_text
 from app.ai.chat.llm import build_chat_llm
 from app.parsing.document_extraction import extract_document_text
-from app.services.resume_render_service import PAGE_WIDTH_INCHES, ResumeFormatSpec
+from app.services.resume_render_service import ResumeFormatSpec
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +74,9 @@ def measure_docx(path: Path, spec: ResumeFormatSpec) -> ResumeFormatSpec:
     updates: dict[str, object] = {}
 
     section = document.sections[0]
+    width = _emu_to_inches(section.page_width, spec.page_width_inches)
+    height = _emu_to_inches(section.page_height, spec.page_height_inches)
+    updates["page_size"] = "A4" if abs(width - 210 / 25.4) < 0.05 and abs(height - 297 / 25.4) < 0.05 else "LETTER"
     updates["margin_left_inches"] = _emu_to_inches(section.left_margin, spec.margin_left_inches)
     updates["margin_right_inches"] = _emu_to_inches(section.right_margin, spec.margin_right_inches)
     updates["margin_top_inches"] = _emu_to_inches(section.top_margin, spec.margin_top_inches)
@@ -100,7 +103,7 @@ def measure_docx(path: Path, spec: ResumeFormatSpec) -> ResumeFormatSpec:
     if document.tables:
         first_column = document.tables[0].columns[0]
         divider = _emu_to_inches(first_column.width, spec.skills_divider_inches)
-        usable = PAGE_WIDTH_INCHES - float(updates["margin_left_inches"]) - float(updates["margin_right_inches"])
+        usable = (210 / 25.4 if updates["page_size"] == "A4" else 8.5) - float(updates["margin_left_inches"]) - float(updates["margin_right_inches"])
         # A width wider than the page means the sample never set one and Word
         # reported its own default; the current divider is the better answer.
         if 0 < divider < usable:

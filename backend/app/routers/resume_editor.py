@@ -23,10 +23,12 @@ import logging
 import re
 import shutil
 import tempfile
+from dataclasses import asdict
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 from starlette.background import BackgroundTask
 
@@ -38,6 +40,7 @@ from app.schemas import (
     ResumeDraftPublishRequest,
     ResumeDraftPublishResponse,
     ResumeDraftResponse,
+    ResumeDraftSectionMoveRequest,
     ResumeDraftSectionRequest,
     ResumeDraftSummary,
     ResumeDraftUpdateRequest,
@@ -50,8 +53,10 @@ from app.services.resume_render_service import (
     ResumeFormatSpec,
     build_docx,
     build_pdf,
+    build_thumbnail,
     covers_whole_document,
     find_section,
+    move_section,
     nested_headings,
     replace_section,
     section_digest,
@@ -117,6 +122,7 @@ def _summary(draft: ResumeDraft, codes: dict[int, str]) -> ResumeDraftSummary:
         id=draft.id,
         name=draft.name,
         source_resume_id=draft.source_resume_id,
+        format_profile_id=draft.format_profile_id,
         source_variant_code=codes.get(draft.source_resume_id or -1, ""),
         character_count=len(draft.content_markdown or ""),
         created_at=draft.created_at,
@@ -129,6 +135,7 @@ def _response(db: Session, draft: ResumeDraft) -> ResumeDraftResponse:
     return ResumeDraftResponse(
         **_summary(draft, codes).model_dump(),
         content_markdown=draft.content_markdown or "",
+        sections=[asdict(section) for section in split_sections(draft.content_markdown or "")],
     )
 
 
@@ -265,6 +272,10 @@ def save_draft(
         draft.name = (payload.name.strip() or "Untitled draft")[:200]
     if payload.content_markdown is not None:
         draft.content_markdown = _checked_content(payload.content_markdown)
+    if "format_profile_id" in payload.model_fields_set:
+        if payload.format_profile_id is not None:
+            _profile_or_404(db, payload.format_profile_id)
+        draft.format_profile_id = payload.format_profile_id
     db.commit()
     db.refresh(draft)
     return _response(db, draft)
@@ -324,6 +335,52 @@ def replace_draft_section(
     return _response(db, draft)
 
 
+@router.post("/drafts/{draft_id}/sections/reorder", response_model=ResumeDraftResponse)
+def reorder_draft_section(
+    draft_id: int,
+    payload: ResumeDraftSectionMoveRequest,
+    db: Session = Depends(get_db),
+) -> ResumeDraftResponse:
+    """Move a section above or below its neighbour, subsections and all.
+
+    Reordering is done here rather than by the user cutting and pasting in the
+    textarea, because a section is a heading plus everything under it and the
+    line where that ends is exactly what is easy to get wrong by hand - a
+    mis-selected paste is how the last two bullets of a role end up under the
+    next one.
+    """
+    draft = _draft_or_404(db, draft_id)
+    current = draft.content_markdown or ""
+    section = find_section(current, payload.section)
+    if section is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No single section called “{payload.section}” in this draft. "
+                f"It has: {', '.join(item.heading for item in split_sections(current)) or 'no headings'}."
+            ),
+        )
+    # The digest covers the whole draft: see ResumeDraftSectionMoveRequest.
+    if payload.base_sha256 and payload.base_sha256 != section_digest(current):
+        raise HTTPException(
+            status_code=409,
+            detail="This draft has changed since the outline was read. Reopen it and move the section again.",
+        )
+
+    moved = move_section(current, payload.section, -1 if payload.direction == "up" else 1)
+    if moved is None:
+        edge = "first" if payload.direction == "up" else "last"
+        raise HTTPException(
+            status_code=400,
+            detail=f"“{section.heading}” is already the {edge} section at its level.",
+        )
+
+    draft.content_markdown = _checked_content(moved)
+    db.commit()
+    db.refresh(draft)
+    return _response(db, draft)
+
+
 @router.delete("/drafts/{draft_id}")
 def delete_draft(draft_id: int, db: Session = Depends(get_db)) -> dict[str, object]:
     draft = _draft_or_404(db, draft_id)
@@ -350,7 +407,7 @@ def export_draft(
     if not content:
         raise HTTPException(status_code=400, detail="This draft is empty. Write something to download it.")
 
-    spec = _spec_of(_profile_or_404(db, profile_id)) if profile_id is not None else _default_spec(db)
+    spec = _export_spec(db, draft, profile_id)
 
     work = Path(tempfile.mkdtemp(prefix="resume-export-"))
     # The directory outlives this function - the response streams from it - so
@@ -442,7 +499,7 @@ def publish_draft(
             detail=f"{resume_variant_code(clash.id)} is already called {file_name}. Pick another name.",
         )
 
-    spec = _spec_of(_profile_or_404(db, payload.profile_id)) if payload.profile_id is not None else _default_spec(db)
+    spec = _export_spec(db, draft, payload.profile_id)
     try:
         rendered = _rendered_bytes(content, spec, payload.fmt)
     except RuntimeError as exc:
@@ -485,13 +542,30 @@ def list_format_profiles(db: Session = Depends(get_db)) -> list[ResumeFormatProf
 
 @router.post("/profiles", response_model=ResumeFormatProfileResponse)
 def create_format_profile(
-    file: UploadFile = File(...),
+    file: UploadFile | None = File(None),
     name: str = Form(""),
     make_default: bool = Form(False),
+    spec_json: str | None = Form(None),
     db: Session = Depends(get_db),
 ) -> ResumeFormatProfileResponse:
     """Measure an employer's sample resume and store its layout as a profile."""
-    if not file.filename:
+    if spec_json is not None:
+        try:
+            spec = ResumeFormatSpec.model_validate_json(spec_json)
+        except ValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if not name.strip():
+            raise HTTPException(status_code=400, detail="A profile needs a name")
+        profile = ResumeFormatProfile(owner_id=settings.owner_id, name=name.strip()[:120],
+                                      source_file_name="", spec_json=spec.model_dump_json(), is_default=bool(make_default))
+        db.add(profile)
+        db.flush()
+        if profile.is_default:
+            _clear_other_defaults(db, profile.id)
+        db.commit()
+        db.refresh(profile)
+        return _profile_response(profile)
+    if file is None or not file.filename:
         raise HTTPException(status_code=400, detail="File name required")
     suffix = Path(file.filename).suffix.lower()
     if suffix not in SAMPLE_SUFFIXES:
@@ -562,3 +636,29 @@ def delete_format_profile(profile_id: int, db: Session = Depends(get_db)) -> dic
     # Drafts are not affected: a profile describes how to render text, and
     # deleting one only means the next download uses the built-in layout.
     return {"id": profile_id, "deleted": True}
+
+
+def _export_spec(db: Session, draft: ResumeDraft, profile_id: int | None) -> ResumeFormatSpec:
+    if profile_id is not None:
+        return ResumeFormatSpec() if profile_id == 0 else _spec_of(_profile_or_404(db, profile_id))
+    if draft.format_profile_id is not None:
+        profile = db.query(ResumeFormatProfile).filter(
+            ResumeFormatProfile.id == draft.format_profile_id,
+            ResumeFormatProfile.owner_id == settings.owner_id,
+        ).first()
+        if profile is not None:
+            return _spec_of(profile)
+    return _default_spec(db)
+
+
+@router.get("/profiles/{profile_id}/preview.png")
+def preview_profile(profile_id: int, db: Session = Depends(get_db)) -> Response:
+    spec_json = _spec_of(_profile_or_404(db, profile_id)).model_dump_json()
+    try:
+        content = build_thumbnail(spec_json)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return Response(content, media_type="image/png", headers={
+        "ETag": f'"{hashlib.sha256(spec_json.encode()).hexdigest()}"',
+        "Cache-Control": "private, no-cache",
+    })

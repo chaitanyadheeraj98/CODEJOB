@@ -34,7 +34,7 @@ from app.models import ResumeAsset, ResumeDraft, ResumeFormatProfile
 from app.routers import resume_editor
 from app.schemas import resume_variant_code
 from app.services import resume_format_profile_service
-from app.services.resume_render_service import ResumeFormatSpec, build_docx
+from app.services.resume_render_service import ResumeFormatSpec, build_docx, split_sections
 
 WORDPROCESSING_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 
@@ -68,6 +68,25 @@ def rule_count(document: Document) -> int:
 
 
 class ResumeRenderTests(unittest.TestCase):
+    def test_a4_accent_spacing_and_compact_reach_the_word_document(self) -> None:
+        spec = ResumeFormatSpec(page_size="A4", accent_color="#245b78", section_spacing_pt=8, compact=True)
+        document = self._render(spec=spec)
+        self.assertAlmostEqual(document.sections[0].page_width.inches, 210 / 25.4, places=2)
+        self.assertAlmostEqual(document.sections[0].page_height.inches, 297 / 25.4, places=2)
+        self.assertAlmostEqual(sum(c.width.inches for c in document.tables[0].columns), spec.usable_width_inches, places=2)
+        heading = next(p for p in document.paragraphs if p.text == "Summary")
+        self.assertEqual(str(heading.runs[0].font.color.rgb), "245B78")
+        self.assertEqual(heading.paragraph_format.space_before.pt, 6)
+        self.assertEqual(heading.paragraph_format.space_after.pt, 1)
+        self.assertEqual(document.tables[0].cell(1, 0).paragraphs[0].paragraph_format.space_after.pt, 3)
+        measured = resume_format_profile_service.measure_docx(self.work / "out.docx", ResumeFormatSpec())
+        self.assertEqual(measured.page_size, "A4")
+        self.assertAlmostEqual(measured.usable_width_inches, spec.usable_width_inches, places=2)
+
+    def test_preview_fixture_uses_the_same_headings_as_the_server_splitter(self) -> None:
+        fixture = json.loads((Path(__file__).parents[2] / "dashboard/src/features/resume_tracking/editor/resumePreview.fixture.json").read_text(encoding="utf-8"))
+        self.assertEqual([section.heading for section in split_sections(fixture["markdown"])], fixture["headings"])
+
     def setUp(self) -> None:
         self.work = Path(tempfile.mkdtemp(prefix="render-test-"))
 
@@ -188,6 +207,45 @@ class ResumeFormatProfileServiceTests(unittest.TestCase):
 
 
 class ResumeEditorApiTests(unittest.TestCase):
+    def test_a_draft_remembers_its_profile_and_survives_profile_deletion(self) -> None:
+        draft = self._draft_from_variant()
+        spec = ResumeFormatSpec(page_size="A4", accent_color="#245b78", compact=True, section_spacing_pt=4)
+        profile = self.client.post("/resume-editor/profiles", data={"name": "A4 custom", "spec_json": spec.model_dump_json()})
+        self.assertEqual(profile.status_code, 200)
+        self.assertEqual(profile.json()["spec"], spec.model_dump())
+        profile_id = profile.json()["id"]
+        saved = self.client.put(f'/resume-editor/drafts/{draft["id"]}', json={"format_profile_id": profile_id}).json()
+        self.assertEqual(saved["format_profile_id"], profile_id)
+        self.assertEqual([s["heading"] for s in saved["sections"]], [s.heading for s in split_sections(draft["content_markdown"])])
+        import io
+        exported = self.client.get(f'/resume-editor/drafts/{draft["id"]}/export?fmt=docx')
+        self.assertEqual(exported.status_code, 200)
+        self.assertAlmostEqual(Document(io.BytesIO(exported.content)).sections[0].page_width.inches, 210 / 25.4, places=2)
+        self.client.delete(f"/resume-editor/profiles/{profile_id}")
+        self.assertEqual(self.client.get(f'/resume-editor/drafts/{draft["id"]}/export?fmt=docx').status_code, 200)
+        cleared = self.client.put(f'/resume-editor/drafts/{draft["id"]}', json={"format_profile_id": None}).json()
+        self.assertIsNone(cleared["format_profile_id"])
+
+    def test_profile_binding_and_thumbnails_are_owner_scoped_and_geometry_is_validated(self) -> None:
+        draft = self._draft_from_variant()
+        with self.SessionLocal() as db:
+            profile = ResumeFormatProfile(owner_id="someone-else", name="Private", spec_json="{}")
+            db.add(profile)
+            db.commit()
+            profile_id = profile.id
+        self.assertEqual(self.client.put(f'/resume-editor/drafts/{draft["id"]}', json={"format_profile_id": profile_id}).status_code, 404)
+        self.assertEqual(self.client.get(f"/resume-editor/profiles/{profile_id}/preview.png").status_code, 404)
+        # "two-column" is a supported layout since the sidebar family landed; what
+        # is still refused is a sidebar that leaves no main column to write in.
+        for invalid in (
+            {"accent_color": "url(javascript:bad)"},
+            {"skills_divider_inches": 20},
+            {"line_spacing": 0},
+            {"layout": "three-column"},
+            {"layout": "two-column", "sidebar_width_inches": 7},
+        ):
+            self.assertEqual(self.client.post("/resume-editor/profiles", data={"name": "Invalid", "spec_json": json.dumps(invalid)}).status_code, 422)
+
     def setUp(self) -> None:
         self.engine = create_engine(
             "sqlite://",
@@ -240,6 +298,45 @@ class ResumeEditorApiTests(unittest.TestCase):
         response = self.client.post("/resume-editor/drafts", json={"source_resume_id": self.resume_id})
         self.assertEqual(response.status_code, 200)
         return response.json()
+
+    def _reorder(self, draft_id: int, section: str, direction: str, digest: str = ""):
+        return self.client.post(
+            f"/resume-editor/drafts/{draft_id}/sections/reorder",
+            json={"section": section, "direction": direction, "base_sha256": digest},
+        )
+
+    def test_reordering_moves_a_section_and_reports_the_new_order(self) -> None:
+        draft = self._draft_from_variant()
+        response = self._reorder(draft["id"], "Skills", "up")
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        headings = [item["heading"] for item in body["sections"]]
+        self.assertLess(headings.index("Skills"), headings.index("Summary"))
+        # The table under the heading travelled with it.
+        self.assertLess(body["content_markdown"].index("| Languages"), body["content_markdown"].index("## Summary"))
+
+    def test_reordering_never_reaches_the_variant_the_draft_came_from(self) -> None:
+        draft = self._draft_from_variant()
+        self._reorder(draft["id"], "Skills", "up")
+        self.assertEqual(self._stored_resume().content_markdown, RESUME_MARKDOWN)
+
+    def test_a_section_at_the_end_of_its_level_says_so_rather_than_doing_nothing(self) -> None:
+        draft = self._draft_from_variant()
+        response = self._reorder(draft["id"], "Summary", "up")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("already the first", response.json()["detail"])
+
+    def test_reordering_a_section_that_is_not_there_lists_the_ones_that_are(self) -> None:
+        draft = self._draft_from_variant()
+        response = self._reorder(draft["id"], "Publications", "down")
+        self.assertEqual(response.status_code, 404)
+        self.assertIn("Summary", response.json()["detail"])
+
+    def test_a_reorder_written_against_stale_text_is_refused(self) -> None:
+        draft = self._draft_from_variant()
+        response = self._reorder(draft["id"], "Skills", "up", digest="b" * 64)
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("changed since", response.json()["detail"])
 
     def test_a_draft_from_a_variant_copies_its_text_and_names_where_it_came_from(self) -> None:
         draft = self._draft_from_variant()
