@@ -12,10 +12,12 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
 from app.config import settings as app_settings
+from app.external_feeds.dedupe import build_email_content_hash
 from app.services.role_provenance import assign_role, role_family_fields
 from app.services.role_taxonomy import fill_entity_gaps, role_matcher_for
 from app.models import RecruiterEmail, ResumeAsset, UserSettings
 from app.parsing import build_skills_json_payload
+from app.parsing.jd_requirements import has_job_description_content, requirements_from_payload
 from app.phase0 import jd_entity_fields_from_parsed
 from app.parsing.document_extraction import prepare_gmail_parse_body
 from app.recent_runs import SkippedItemRecord
@@ -164,6 +166,34 @@ class RunOrchestrator:
                     request.deps.mark_message_processed(external_message_id)
                 continue
 
+            if existing is None:
+                content_hash = build_email_content_hash(
+                    sender=str(item["sender"]), subject=str(item["subject"]), body=str(item["body"])
+                )
+                content_duplicate = (
+                    request.db.query(RecruiterEmail)
+                    .filter(RecruiterEmail.owner_id == request.owner_id)
+                    .filter(RecruiterEmail.content_dedupe_hash == content_hash)
+                    .first()
+                )
+                if content_duplicate:
+                    skipped_count += 1
+                    self._record_skipped_item(
+                        request=request,
+                        item=item,
+                        reason_code="duplicate_candidate_content_hash",
+                        reason_detail="Skipped because a Gmail message with the same sender, subject, and body already exists in the candidate database, sent under a different message id.",
+                        candidate_email_id=content_duplicate.id,
+                        gmail_message_url=content_duplicate.gmail_message_url,
+                    )
+                    last_email = content_duplicate
+                    if not request.dry_run:
+                        request.deps.apply_gmail_label(request.db, content_duplicate, item)
+                        request.db.commit()
+                        request.db.refresh(content_duplicate)
+                        request.deps.mark_message_processed(external_message_id)
+                    continue
+
             subject = str(item["subject"])
             body = str(item["body"])
             sender = str(item["sender"])
@@ -280,6 +310,73 @@ class RunOrchestrator:
                 if manifest_result is not None:
                     self._expand_and_extract_children(request, email, manifest_result)
                 continue
+
+            content_insufficient = (
+                intent_decision.intent_type == "application_link_only"
+                or not has_job_description_content(
+                    skills_text=str(parsed_for_selection.get("skills_text", "")),
+                    structured_requirements=requirements_from_payload(parser_details.get("structured_requirements")),
+                )
+            )
+            if content_insufficient:
+                if request.dry_run:
+                    queued_count += 1
+                    continue
+                email = self._email_row(existing, request, item, parsed_for_selection, parser_details_json, skills_json)
+
+                def apply_content_insufficient_state(target: RecruiterEmail) -> None:
+                    target.external_rfc_message_id = target.external_rfc_message_id or item.get("external_rfc_message_id")
+                    target.gmail_received_at = target.gmail_received_at or item.get("gmail_received_at")
+                    target.parser_details_json = parser_details_json
+                    target.skills_json = skills_json
+                    target.state = "needs_review"
+                    target.decision = "Qualified"
+                    target.decision_reason = "No job description content - only an application link/form was found."
+                    target.approval_status = "pending"
+                    target.sent_status = "not_sent"
+                    target.qualification_result = "qualified"
+                    target.blocking_rule = "no_job_description_content"
+                    target.qualification_detail = "The email points to an application portal/link with no described role content, so no draft was generated."
+                    target.sendability_status = "content_insufficient"
+                    target.intent_type = intent_decision.intent_type
+                    target.intent_confidence = intent_decision.confidence
+                    target.intent_reason = intent_decision.reason
+                    target.intent_evidence_json = json.dumps(intent_decision.evidence, separators=(",", ":"))
+                    target.intent_negative_evidence_json = json.dumps(intent_decision.negative_evidence, separators=(",", ":"))
+                    target.gate_action = intent_decision.action
+                    target.gate_provider = intent_decision.provider
+                    target.gate_error = intent_decision.error
+                    target.source_group_name = trusted_group_context.group_name
+                    target.source_group_email = trusted_group_context.group_email
+                    target.source_group_match_method = trusted_group_context.match_method
+                    target.source_group_trusted = trusted_group_context.trusted if trusted_group_context.matched else False
+                    target.draft_reply = ""
+                    target.draft_source = None
+                    target.draft_model = None
+                    target.draft_ai_error = None
+                    target.draft_resume_context_status = None
+                    target.resume_asset_id = None
+                    target.resume_file_name = None
+
+                apply_content_insufficient_state(email)
+                email = self._commit_email_phase(
+                    request=request,
+                    email=email,
+                    existing=existing,
+                    external_message_id=external_message_id,
+                    branch_name="content_insufficient",
+                    reapply_state=apply_content_insufficient_state,
+                )
+                request.db.refresh(email)
+                request.deps.apply_gmail_label(request.db, email, item)
+                request.db.commit()
+                request.db.refresh(email)
+                request.deps.mark_message_processed(external_message_id)
+                queued_count += 1
+                queued_email_ids.append(email.id)
+                last_email = email
+                continue
+
             resume_selection = request.deps.select_best_resume_match(
                 subject=subject,
                 body=body,
@@ -694,6 +791,9 @@ class RunOrchestrator:
             skills_json=skills_json,
             **fill_entity_gaps(jd_entity_fields_from_parsed(parsed), db=request.db, owner_id=request.owner_id, subject=str(item["subject"]), location=str(parsed["location"]), body=str(item["body"])),
             source="gmail",
+            content_dedupe_hash=build_email_content_hash(
+                sender=str(item["sender"]), subject=str(item["subject"]), body=str(item["body"])
+            ),
             external_message_id=str(item["external_message_id"]),
             external_thread_id=item.get("external_thread_id"),
             external_rfc_message_id=item.get("external_rfc_message_id"),

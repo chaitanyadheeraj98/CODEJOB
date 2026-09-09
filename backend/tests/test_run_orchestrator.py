@@ -2,6 +2,7 @@ import unittest
 from dataclasses import replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -1095,6 +1096,96 @@ class RunOrchestratorTests(unittest.TestCase):
             self.assertEqual(len(child_calls), 2)
             self.assertTrue(all(c["ai_extractor_enabled"] for c in child_calls))
             self.assertEqual(sorted(regenerate_calls), sorted(child.id for child in children))
+
+    def test_application_link_only_intent_queues_without_scoring_or_drafting(self) -> None:
+        with Session(self.engine) as db:
+            user_settings = self._seed_user_settings(db, feature_ai_enabled=False)
+            resume = self._seed_resume(db)
+            deps, marked, events = self._deps(
+                intent_decision=EmailIntentDecision(
+                    intent_type="application_link_only",
+                    action="needs_review",
+                    confidence=0.9,
+                    reason="Only an application-portal link and blank field prompts.",
+                    evidence=["application link"],
+                    negative_evidence=[],
+                    provider="deepseek",
+                )
+            )
+            tracked_resume_match = Mock(wraps=deps.select_best_resume_match)
+            deps = replace(deps, select_best_resume_match=tracked_resume_match)
+
+            result = RunOrchestrator().execute(
+                RunOrchestratorRequest(
+                    db=db,
+                    owner_id="default-owner",
+                    items=[self._item("m-link-only")],
+                    user_settings=user_settings,
+                    resume=resume,
+                    active_resume=resume,
+                    enabled_resumes=[resume],
+                    effective_policy={},
+                    threshold=0.6,
+                    dry_run=False,
+                    model_name="deepseek-chat",
+                    run_source="automation_run",
+                    run_key="automation_run:link-only-1",
+                    deps=deps,
+                )
+            )
+
+            row = db.query(RecruiterEmail).filter(RecruiterEmail.external_message_id == "m-link-only").first()
+            self.assertIsNotNone(row)
+            assert row is not None
+            self.assertEqual(row.state, "needs_review")
+            self.assertEqual(row.sendability_status, "content_insufficient")
+            self.assertEqual(row.blocking_rule, "no_job_description_content")
+            self.assertEqual(row.draft_reply, "")
+            self.assertIsNone(row.draft_source)
+            self.assertEqual(row.intent_type, "application_link_only")
+            self.assertEqual(result.queued_count, 1)
+            self.assertEqual(marked, ["m-link-only"])
+            tracked_resume_match.assert_not_called()
+
+    def test_gmail_duplicate_with_a_new_message_id_is_skipped_by_content_hash(self) -> None:
+        with Session(self.engine) as db:
+            user_settings = self._seed_user_settings(db, feature_ai_enabled=False)
+            resume = self._seed_resume(db)
+            deps, marked, events = self._deps()
+
+            # _item() returns the same sender/subject/body for every message id -
+            # exactly the shape of a recruiter's system resending the identical
+            # email under a new external_message_id.
+            result = RunOrchestrator().execute(
+                RunOrchestratorRequest(
+                    db=db,
+                    owner_id="default-owner",
+                    items=[self._item("m-resend-a"), self._item("m-resend-b")],
+                    user_settings=user_settings,
+                    resume=resume,
+                    active_resume=resume,
+                    enabled_resumes=[resume],
+                    effective_policy={},
+                    threshold=0.6,
+                    dry_run=False,
+                    model_name="deepseek-chat",
+                    run_source="automation_run",
+                    run_key="automation_run:resend-1",
+                    deps=deps,
+                )
+            )
+
+            rows = db.query(RecruiterEmail).filter(RecruiterEmail.owner_id == "default-owner").all()
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0].external_message_id, "m-resend-a")
+            self.assertEqual(result.queued_count, 1)
+            self.assertEqual(result.skipped_count, 1)
+            skipped = (
+                db.query(RecentRunSkippedItem)
+                .filter(RecentRunSkippedItem.external_message_id == "m-resend-b")
+                .one()
+            )
+            self.assertEqual(skipped.reason_code, "duplicate_candidate_content_hash")
 
 
 if __name__ == "__main__":

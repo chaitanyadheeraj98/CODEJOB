@@ -17,6 +17,7 @@ from app.mcp_server.tools import (
     get_record_details,
     get_relationships,
     get_resume,
+    get_resume_draft,
     get_recruiter_replies,
     get_run_items,
     get_settings_summary,
@@ -27,6 +28,7 @@ from app.mcp_server.tools import (
     list_external_opportunities,
     list_recruiter_opportunities,
     list_scheduled_tasks,
+    list_resume_drafts,
     list_resumes,
     navigate_to_queue,
     check_nvoids_search,
@@ -42,6 +44,8 @@ from app.mcp_server.tools import (
     propose_manual_requirement,
     propose_profile_update,
     propose_record_update,
+    propose_resume_draft,
+    propose_resume_section,
     propose_scheduled_task,
     propose_send_email,
     propose_taxonomy_bulk_review,
@@ -124,6 +128,16 @@ CHAT_ACTION_TOOLS = (
     # value is checked against the user's own messages on the server.
     propose_profile_update,
     propose_send_email,
+    # Copies a stored variant's text into a draft. The variant is opened
+    # read-only: what the click creates is a working copy beside it, never an
+    # edit to the file a recruiter was already sent.
+    propose_resume_draft,
+    # The three that make the assistant write the resume rather than describe
+    # one. The reads are here rather than in BASE_TOOLS because a draft is
+    # only worth listing to something that can then edit it.
+    list_resume_drafts,
+    get_resume_draft,
+    propose_resume_section,
     # Previews a stored JD; only the confirmation-card click queues ingestion.
     propose_manual_requirement,
     # An outbound crawl of a third party is a side effect, not a read, so it

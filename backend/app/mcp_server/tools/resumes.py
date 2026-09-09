@@ -3,6 +3,7 @@ from __future__ import annotations
 from app.config import settings
 from app.db import SessionLocal
 from app.models import ResumeAsset
+from app.schemas import resume_variant_code
 from app.services import role_target_service
 
 
@@ -39,83 +40,100 @@ def list_resumes(limit: int = 10) -> dict[str, object]:
         db.close()
 
 
+def _resolve_variant(
+    db, resume_id: int = 0, variant: str = ""
+) -> tuple[ResumeAsset | None, dict[str, object] | None]:
+    """Find the one resume the user meant, by id or by name.
+
+    Shared by every tool that has to turn "my Java resume" into a row, so naming
+    a resume badly fails the same way whether the user is reading one or drafting
+    from it. Returns the row or the envelope to hand back - never both, and never
+    a guess: an ambiguous name comes back as a question, not a pick.
+    """
+    if resume_id > 0:
+        row = (
+            db.query(ResumeAsset)
+            .filter(ResumeAsset.owner_id == settings.owner_id, ResumeAsset.id == resume_id)
+            .first()
+        )
+        return (row, None) if row is not None else (None, {"error": "Resume not found"})
+
+    if not variant.strip():
+        return None, {"status": "missing_fields", "missing": ["resume_id or variant"]}
+
+    query = variant.strip()
+    matched_field = ""
+    rows: list[ResumeAsset] = []
+    for field in ("variant_label", "primary_role", "file_name"):
+        column = getattr(ResumeAsset, field)
+        rows = (
+            db.query(ResumeAsset)
+            .filter(ResumeAsset.owner_id == settings.owner_id, column.ilike(f"%{query}%"))
+            .all()
+        )
+        if rows:
+            matched_field = field
+            break
+    if not rows:
+        all_rows = db.query(ResumeAsset).filter(ResumeAsset.owner_id == settings.owner_id).all()
+        return None, {
+            "status": "not_found",
+            "variant": variant,
+            "known": sorted(
+                {
+                    name
+                    for item in all_rows
+                    for name in (item.variant_label, item.primary_role, item.file_name)
+                    if name
+                },
+                key=str.casefold,
+            ),
+        }
+    by_name: dict[str, list[ResumeAsset]] = {}
+    for item in rows:
+        by_name.setdefault(str(getattr(item, matched_field) or "").casefold(), []).append(item)
+    if len(by_name) > 1:
+        matches = [max(items, key=lambda item: (item.version, item.id)) for items in by_name.values()]
+        return None, {
+            "status": "ambiguous",
+            "matches": [
+                {
+                    "id": item.id,
+                    "file_name": item.file_name,
+                    "variant_label": item.variant_label,
+                    "primary_role": item.primary_role,
+                    "version": item.version,
+                    "updated_at": item.updated_at.isoformat(),
+                }
+                for item in sorted(matches, key=lambda item: str(getattr(item, matched_field)).casefold())
+            ],
+            "instruction": "Ask which one. Do not pick.",
+        }
+    row = max(rows, key=lambda item: (item.version, item.id))
+    same_file_rows = (
+        db.query(ResumeAsset)
+        .filter(ResumeAsset.owner_id == settings.owner_id)
+        .all()
+    )
+    row = max(
+        (
+            item
+            for item in same_file_rows
+            if item.file_name.casefold() == row.file_name.casefold()
+        ),
+        key=lambda item: (item.version, item.id),
+    )
+    return row, None
+
+
 def get_resume(resume_id: int = 0, variant: str = "") -> dict[str, object]:
     """Get the full text of one resume, by id or by variant name."""
     db = SessionLocal()
     try:
-        matched_field = ""
-        if resume_id > 0:
-            row = (
-                db.query(ResumeAsset)
-                .filter(ResumeAsset.owner_id == settings.owner_id, ResumeAsset.id == resume_id)
-                .first()
-            )
-        elif variant.strip():
-            query = variant.strip()
-            rows = []
-            for field in ("variant_label", "primary_role", "file_name"):
-                column = getattr(ResumeAsset, field)
-                rows = (
-                    db.query(ResumeAsset)
-                    .filter(ResumeAsset.owner_id == settings.owner_id, column.ilike(f"%{query}%"))
-                    .all()
-                )
-                if rows:
-                    matched_field = field
-                    break
-            if not rows:
-                all_rows = db.query(ResumeAsset).filter(ResumeAsset.owner_id == settings.owner_id).all()
-                return {
-                    "status": "not_found",
-                    "variant": variant,
-                    "known": sorted(
-                        {
-                            name
-                            for item in all_rows
-                            for name in (item.variant_label, item.primary_role, item.file_name)
-                            if name
-                        },
-                        key=str.casefold,
-                    ),
-                }
-            by_name: dict[str, list[ResumeAsset]] = {}
-            for item in rows:
-                by_name.setdefault(str(getattr(item, matched_field) or "").casefold(), []).append(item)
-            if len(by_name) > 1:
-                matches = [max(items, key=lambda item: (item.version, item.id)) for items in by_name.values()]
-                return {
-                    "status": "ambiguous",
-                    "matches": [
-                        {
-                            "id": item.id,
-                            "file_name": item.file_name,
-                            "variant_label": item.variant_label,
-                            "primary_role": item.primary_role,
-                            "version": item.version,
-                            "updated_at": item.updated_at.isoformat(),
-                        }
-                        for item in sorted(matches, key=lambda item: str(getattr(item, matched_field)).casefold())
-                    ],
-                    "instruction": "Ask which one. Do not pick.",
-                }
-            row = max(rows, key=lambda item: (item.version, item.id))
-            same_file_rows = (
-                db.query(ResumeAsset)
-                .filter(ResumeAsset.owner_id == settings.owner_id)
-                .all()
-            )
-            row = max(
-                (
-                    item
-                    for item in same_file_rows
-                    if item.file_name.casefold() == row.file_name.casefold()
-                ),
-                key=lambda item: (item.version, item.id),
-            )
-        else:
-            return {"status": "missing_fields", "missing": ["resume_id or variant"]}
-        if row is None:
-            return {"error": "Resume not found"}
+        row, refusal = _resolve_variant(db, resume_id, variant)
+        if refusal is not None:
+            return refusal
+        assert row is not None
         if row.content_markdown is None:
             return {
                 "id": row.id,
@@ -146,6 +164,54 @@ def get_resume(resume_id: int = 0, variant: str = "") -> dict[str, object]:
                 f"Evidence JSON:\n{row.content_evidence_json or '{}'}\n"
                 "</untrusted_resume_data>"
             ),
+        }
+    finally:
+        db.close()
+
+
+def propose_resume_draft(source_resume_id: int = 0, variant: str = "", name: str = "") -> dict[str, object]:
+    """Prepare a resume draft copied from one of the user's variants. Never creates it.
+
+    Call this when the user asks you to draft, tailor, or rewrite a resume. Say
+    which variant to start from by id, or by name for "my Java resume" - the
+    same names get_resume accepts.
+
+    Do not pass the resume text. The server copies it from the variant, so the
+    draft opens in the user's own wording rather than your recollection of it,
+    and the variant itself is only ever read. Only the user's click on the card
+    creates the draft; until then nothing exists.
+    """
+    db = SessionLocal()
+    try:
+        row, refusal = _resolve_variant(db, source_resume_id, variant)
+        if refusal is not None:
+            return refusal
+        assert row is not None
+        if row.content_markdown is None:
+            # Seeding from a file nothing could be read out of makes an empty
+            # draft, which looks like the tool worked. Say why it did not.
+            return {
+                "id": row.id,
+                "file_name": row.file_name,
+                "error": (
+                    "No text could be extracted from this resume file, so a draft "
+                    "copied from it would be empty."
+                ),
+            }
+        code = resume_variant_code(row.id)
+        return {
+            "action": "propose_resume_draft",
+            "source_resume_id": row.id,
+            "source_variant_code": code,
+            "source_file_name": row.file_name,
+            "source_variant_label": row.variant_label or "",
+            # The size of what will be copied, not the text itself: the card is a
+            # confirmation that the right resume was picked, and the draft's own
+            # editor is where the words get read.
+            "source_characters": len(row.content_markdown),
+            # Named the way create_draft would name it for a blank field, so the
+            # card shows the name that will actually be stored.
+            "name": (name.strip() or (f"{code} {row.variant_label}" if row.variant_label else f"{code} copy"))[:200],
         }
     finally:
         db.close()

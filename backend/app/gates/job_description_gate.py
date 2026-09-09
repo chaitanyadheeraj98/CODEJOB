@@ -57,6 +57,7 @@ GROQ_SCHEMA: dict[str, object] = {
             "type": "string",
             "enum": [
                 "recruiter_job_requirement",
+                "application_link_only",
                 "candidate_marketing_or_hotlist",
                 "job_board_alert",
                 "linkedin_platform_notification",
@@ -197,6 +198,12 @@ GATE_SYSTEM_PROMPT = (
     "Do not require exact recruiter, staffing, or hiring words. "
     "Treat job-description structure, rate/location terms, visa/work authorization, "
     "C2C/W2/vendor/client language, implementation partner language, and resume-submission requests as strong positive evidence. "
+    "That positive evidence assumes the terms describe the role. If instead they are blank field prompts the candidate is "
+    "asked to fill in (for example 'Visa Status:', 'Rate per Hour:', 'Current Location:' with nothing after the colon) and the "
+    "email's only actual content is a link to an external application portal with no responsibilities, skills, or scope "
+    "described in the body itself, classify it as application_link_only instead of recruiter_job_requirement -- a request "
+    "for the candidate's own information is not a description of the job. If the body also describes real requirements "
+    "(skills, responsibilities, technology, scope) alongside the link and fields, it is still recruiter_job_requirement. "
     "Treat a trusted requirement group as positive source context, not as an automatic pass. "
     "Treat unsubscribe text, Google Groups footers, and reply prefixes as weak evidence only unless the rest of the email is clearly non-job. "
     "If a trusted group message is clearly a hotlist or candidate marketing, still classify it as candidate_marketing_or_hotlist. "

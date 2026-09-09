@@ -47,7 +47,7 @@ class StartupService:
             # and background automation - TestClient triggers this on every test's first
             # request, and these have no timeout, so they'd hang or spam real services.
             return
-        if is_gmail_configured():
+        if settings.feature_gmail_labeling_enabled and is_gmail_configured():
             try:
                 runtime_state.gmail_labeling_service.ensure_target_labels()
             except Exception as exc:

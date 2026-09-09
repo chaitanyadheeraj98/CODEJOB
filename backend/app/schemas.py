@@ -7,6 +7,7 @@ from zoneinfo import available_timezones
 from pydantic import AliasChoices, BaseModel, Field, computed_field, field_validator, model_validator
 
 from app.ai.draft_formatting import DRAFT_TEXT_SIZE_VALUES, normalize_draft_text_size
+from app.services.resume_render_service import ResumeFormatSpec
 
 
 RESUME_VARIANT_CODE_PREFIX = "R"
@@ -540,6 +541,95 @@ class ResumeUpdateRequest(BaseModel):
     primary_role: str | None = None
     structured_skills: list[str] | None = None
     variant_label: str | None = None
+
+
+class ResumeDraftSummary(BaseModel):
+    """A draft in the list.
+
+    The text itself is deliberately absent: the list returns every draft, and
+    carrying tens of thousands of characters per row would make opening the
+    Editor pay for text only the open draft needs.
+    """
+
+    id: int
+    name: str
+    source_resume_id: int | None = None
+    # The variant the draft was copied from, if it still exists. Blank once that
+    # variant has been deleted - the draft outlives it by design.
+    source_variant_code: str = ""
+    character_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
+class ResumeDraftResponse(ResumeDraftSummary):
+    content_markdown: str = ""
+
+
+class ResumeDraftCreateRequest(BaseModel):
+    name: str = ""
+    # Copies that variant's extracted text into the draft. The variant itself is
+    # never modified - that is the whole point of drafts existing.
+    source_resume_id: int | None = None
+    content_markdown: str = ""
+
+
+class ResumeDraftUpdateRequest(BaseModel):
+    name: str | None = None
+    content_markdown: str | None = None
+
+
+class ResumeDraftSectionRequest(BaseModel):
+    """Replace one section's body, leaving the rest of the draft alone.
+
+    `base_sha256` is the digest of the body being replaced, taken when the
+    proposal was built. The write is refused if it no longer matches, so a
+    rewrite composed against text the user has since edited is rejected rather
+    than silently discarding that edit.
+    """
+
+    section: str
+    replacement: str
+    base_sha256: str = ""
+
+
+class ResumeDraftPublishRequest(BaseModel):
+    """Turn a draft into a real variant.
+
+    `file_name` is required and has to be new. A variant carrying the draft's own
+    name reads as the same thing in two places, and the whole point of drafts
+    being separate is that they are not the same thing.
+    """
+
+    file_name: str
+    variant_label: str = ""
+    primary_role: str = ""
+    structured_skills_text: str = ""
+    fmt: Literal["docx", "pdf"] = "docx"
+    profile_id: int | None = None
+
+
+class ResumeDraftPublishResponse(BaseModel):
+    resume_id: int
+    variant_code: str
+    file_name: str
+    version: int
+
+
+class ResumeFormatProfileResponse(BaseModel):
+    id: int
+    name: str
+    source_file_name: str = ""
+    is_default: bool = False
+    spec: ResumeFormatSpec
+    created_at: datetime
+    updated_at: datetime
+
+
+class ResumeFormatProfileUpdateRequest(BaseModel):
+    name: str | None = None
+    is_default: bool | None = None
+    spec: ResumeFormatSpec | None = None
 
 
 class AttachmentAssetResponse(BaseModel):

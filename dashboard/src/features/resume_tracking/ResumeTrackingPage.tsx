@@ -2,13 +2,14 @@ import { useState } from 'react'
 
 import { listResumeOptions } from '../premium_numbers/api'
 import type { ResumeAssetOption } from '../premium_numbers/types'
+import EditorTab from './EditorTab'
 import ManageResumesTab from './ManageResumesTab'
 import ResumesTab from './ResumesTab'
 import RoleGapsTab from './RoleGapsTab'
 import SubmissionsTab from './SubmissionsTab'
 import type { FilterValues } from '../../components/FilterSortBar'
 
-type TrackingTab = 'gaps' | 'resumes' | 'submissions' | 'manage'
+type TrackingTab = 'gaps' | 'resumes' | 'submissions' | 'manage' | 'editor'
 
 type Props = {
   apiBase: string
@@ -46,12 +47,14 @@ export default function ResumeTrackingPage({ apiBase, onNavigateToSettings, onLi
           <button type="button" role="tab" aria-selected={tab === 'resumes'} className={tab === 'resumes' ? 'active' : ''} onClick={() => setTab('resumes')}>Resumes</button>
           <button type="button" role="tab" aria-selected={tab === 'submissions'} className={tab === 'submissions' ? 'active' : ''} onClick={openSubmissions}>Submissions</button>
           <button type="button" role="tab" aria-selected={tab === 'manage'} className={tab === 'manage' ? 'active' : ''} onClick={() => setTab('manage')}>Manage</button>
+          <button type="button" role="tab" aria-selected={tab === 'editor'} className={tab === 'editor' ? 'active' : ''} onClick={() => setTab('editor')}>Editor</button>
         </div>
       </div>
       {tab === 'gaps' ? <RoleGapsTab apiBase={apiBase} /> : null}
       {tab === 'resumes' ? <ResumesTab apiBase={apiBase} onManageResume={openManage} onNavigateToSettings={onNavigateToSettings} sortValue={sortValue} filterValues={filterValues} /> : null}
       {tab === 'submissions' ? <SubmissionsTab apiBase={apiBase} resumes={resumes} filterValues={filterValues} sortValue={sortValue} /> : null}
       {tab === 'manage' ? <ManageResumesTab apiBase={apiBase} focusResumeId={manageResumeId} onLibraryChanged={onLibraryChanged} /> : null}
+      {tab === 'editor' ? <EditorTab apiBase={apiBase} /> : null}
     </section>
   )
 }

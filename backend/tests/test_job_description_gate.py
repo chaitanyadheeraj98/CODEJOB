@@ -263,6 +263,57 @@ class JobDescriptionGateTests(unittest.TestCase):
     @patch(
         "app.gates.job_description_gate.classify_job_description_taxonomy",
         return_value=SimpleNamespace(
+            intent_type="recruiter_job_requirement",
+            action="process_for_queue",
+            confidence=0.70,
+            reason="Fallback taxonomy matched job-description structure and field-prompt keywords.",
+            evidence=["job description", "visa status"],
+            negative_evidence=[],
+        ),
+    )
+    @patch(
+        "app.gates.job_description_gate.intent_chat_json",
+        return_value=(
+            {
+                "intent_type": "application_link_only",
+                "action": "needs_review",
+                "confidence": 0.9,
+                "reason": "Only an application-portal link and blank field prompts; no described role content.",
+                "evidence": ["application link", "blank visa status field"],
+                "negative_evidence": [],
+                "learning_signals": [],
+            },
+            None,
+            None,
+        ),
+    )
+    def test_llm_gate_recognizes_application_link_only(self, _mock_provider, _mock_taxonomy) -> None:
+        """The fallback taxonomy has no notion of this distinction (it matches the same
+
+        keywords whether or not they have a value), so it reads this body as a real
+        requirement - the LLM gate is what's meant to catch it instead.
+        """
+        decision = classify_email_intent(
+            sender="navya.p@kloudhire.com",
+            subject="Request to complete your application - Mid-Level Full Stack Java Developer",
+            body=(
+                "Please review the job description and submit your application using the link below.\n"
+                "Application Link: https://www.kloudhire.com/jobs/view/14899\n"
+                "Kindly include the following details along with your updated resume:\n"
+                "* Visa Status:\n* Rate per Hour:\n* Current Location:\n"
+            ),
+            groq_enabled=True,
+        )
+
+        self.assertEqual(decision.intent_type, "application_link_only")
+        # application_link_only is not in _SKIP_INTENT_TYPES, so the model's own
+        # action survives instead of being forced to "skip" - the row should still
+        # reach a human, just without a fabricated draft.
+        self.assertEqual(decision.action, "needs_review")
+
+    @patch(
+        "app.gates.job_description_gate.classify_job_description_taxonomy",
+        return_value=SimpleNamespace(
             intent_type="unknown",
             action="needs_review",
             confidence=0.62,

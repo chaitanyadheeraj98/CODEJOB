@@ -120,11 +120,20 @@ class RecruiterEmail(Base):
     source: Mapped[str] = mapped_column(String(20), default="manual")
     # The normalized-content fingerprint of a pasted requirement, so a second
     # paste of the same text can be recognised. Set on manual-intake rows only;
-    # NULL for gmail and nvoids, which dedupe on their own delivery identity.
+    # NULL for gmail and nvoids, which dedupe on their own delivery identity via
+    # external_message_id below - except delivery identity isn't a reliable dedupe
+    # key by itself: content_dedupe_hash exists because a recruiter's system can
+    # (and did) send the identical email twice under two distinct message ids.
     # Bounded and fixed-width so the index is safe: migration 0051 took prod down
     # with an index over an unbounded Text column, and `alembic upgrade head`
     # runs on backend boot.
     manual_dedupe_hash: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    # sender+subject+body fingerprint for gmail rows, checked alongside
+    # external_message_id so a re-sent duplicate is caught even when the transport
+    # assigns it a new message id. NULL for nvoids, which dedupes on the listing
+    # URL - a stable identifier, unlike a Gmail message id, so it isn't exposed to
+    # this failure mode. See build_email_content_hash().
+    content_dedupe_hash: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     external_message_id: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True, index=True)
     external_thread_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     external_rfc_message_id: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -337,6 +346,56 @@ class ResumeAsset(Base):
     content_markdown: Mapped[str | None] = mapped_column(Text, nullable=True)
     content_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     content_evidence_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
+
+
+class ResumeDraft(Base):
+    """Resume text being worked on, kept away from any stored variant.
+
+    A variant is a file plus the text extracted from it, and the two have to
+    agree: the text is what the matcher and the chatbot reason about, the file
+    is what the recruiter actually receives. Editing a variant's text in place
+    would break that agreement silently - the app would argue for a resume the
+    recruiter never got - so edits land here instead. A draft becomes a variant
+    only by being downloaded and uploaded back, where the file and the text are
+    read from the same document.
+
+    `source_resume_id` records what the draft was copied from and carries no
+    foreign key on purpose: the draft is the user's own work and has to outlive
+    the variant that seeded it.
+    """
+
+    __tablename__ = "resume_drafts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    name: Mapped[str] = mapped_column(String(200), default="")
+    source_resume_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    content_markdown: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
+
+
+class ResumeFormatProfile(Base):
+    """How one employer wants a resume laid out.
+
+    The layout is data, not code. Every field here is something the Google Docs
+    script the user was running by hand used to set - font, margins, the ruler
+    position of the skills-table divider, which headings get a rule above them -
+    so a profile replaces that script rather than generating one.
+    """
+
+    __tablename__ = "resume_format_profiles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    name: Mapped[str] = mapped_column(String(120), default="")
+    # The sample the profile was measured from, kept only so the user can tell
+    # two profiles apart a month later. Nothing reads the file again.
+    source_file_name: Mapped[str] = mapped_column(String(255), default="")
+    spec_json: Mapped[str] = mapped_column(Text, default="{}")
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
 

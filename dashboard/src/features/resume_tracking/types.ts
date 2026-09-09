@@ -209,3 +209,88 @@ export type ResumeUploadInput = {
   structured_skills_text: string
   variant_label: string
 }
+
+/*
+ * The Editor tab.
+ *
+ * A draft is worked on instead of a variant. A variant is a file plus the text
+ * extracted from it and the two have to agree - the text is what the matcher and
+ * the chatbot argue from, the file is what the recruiter receives - so editing
+ * happens here and becomes a variant only by being downloaded and uploaded back.
+ *
+ * The summary carries a size rather than the text: the list returns every draft,
+ * and only the open one needs its content.
+ */
+export type ResumeDraftSummary = {
+  id: number
+  name: string
+  source_resume_id: number | null
+  /** Blank once the source variant has been deleted - a draft outlives it. */
+  source_variant_code: string
+  character_count: number
+  created_at: string
+  updated_at: string
+}
+
+export type ResumeDraft = ResumeDraftSummary & {
+  content_markdown: string
+}
+
+/*
+ * One employer's layout, as numbers. Every field is something the Google Docs
+ * script this replaces used to set, which is why a profile can be measured off
+ * a sample rather than written by hand.
+ */
+export type ResumeFormatSpec = {
+  font_family: string
+  body_font_size: number
+  name_font_size: number
+  heading_font_size: number
+  heading_bold: boolean
+  heading_uppercase: boolean
+  margin_left_inches: number
+  margin_right_inches: number
+  margin_top_inches: number
+  margin_bottom_inches: number
+  line_spacing: number
+  justify_body: boolean
+  bullet_indent_inches: number
+  bullet_hanging_inches: number
+  rule_before_sections: string[]
+  heading_space_before_pt: number
+  heading_space_after_pt: number
+  skills_divider_inches: number
+  skills_category_bold: boolean
+  skills_row_gap_pt: number
+  environment_gap_pt: number
+}
+
+export type ResumeFormatProfile = {
+  id: number
+  name: string
+  source_file_name: string
+  is_default: boolean
+  spec: ResumeFormatSpec
+  created_at: string
+  updated_at: string
+}
+
+export type ResumeExportFormat = 'md' | 'docx' | 'pdf'
+/** Markdown is not a document you would send, so a variant is only ever one of these. */
+export type ResumeVariantFormat = 'docx' | 'pdf'
+
+export type ResumeDraftPublishInput = {
+  file_name: string
+  variant_label: string
+  primary_role: string
+  structured_skills_text: string
+  fmt: ResumeVariantFormat
+  profile_id: number | null
+}
+
+export type ResumeDraftPublishResult = {
+  resume_id: number
+  variant_code: string
+  file_name: string
+  version: number
+}

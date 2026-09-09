@@ -30,3 +30,16 @@ def build_dedupe_hash(*, recruiter_phone: str, recruiter_email: str, role: str, 
         ]
     )
     return hashlib.sha1(key.encode("utf-8", errors="ignore")).hexdigest()
+
+
+def build_email_content_hash(*, sender: str, subject: str, body: str) -> str:
+    """Fingerprint for gmail/nvoids rows, so a recruiter's system re-sending the exact
+    same message under a new external_message_id (a real, observed failure mode -
+    not a hypothetical) is recognised even though its delivery identity differs.
+
+    No date bucket, unlike build_dedupe_hash: a resend next month is still the same
+    requirement worth catching, and there's no re-paste-by-hand case here to protect
+    against as there is for manual intake.
+    """
+    key = "|".join([_norm(sender), _norm(subject), _norm(body)])
+    return hashlib.sha1(key.encode("utf-8", errors="ignore")).hexdigest()

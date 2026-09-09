@@ -96,6 +96,12 @@ class Settings(BaseSettings):
     # unchanged and W1's routing measurement stays attributable: turning
     # scheduling on is the same moment measuring it becomes worth doing.
     feature_scheduling_enabled: bool = False
+    # Off: ensure_target_labels recreates the six classification labels on the
+    # next processed email, so this switch is what makes deleting them in Gmail
+    # stick. Rules, classifier and the preview endpoint stay intact, so turning
+    # labeling back on is env-only. CodeJob/Replied is a separate path and is
+    # unaffected either way.
+    feature_gmail_labeling_enabled: bool = False
     chat_history_max_messages: int = 20
     chat_message_char_limit: int = 4000
     searxng_url: str = Field(default="", validation_alias=AliasChoices("SEARXNG_URL"))
