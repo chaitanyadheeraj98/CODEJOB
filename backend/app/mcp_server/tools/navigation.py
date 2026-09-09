@@ -56,7 +56,7 @@ NAVIGABLE_PAGES: dict[str, dict[str, object]] = {
     "resume_tracking": {
         "label": "Resume Tracking",
         "tab": "submissions",
-        "tabs": {"resumes", "submissions"},
+        "tabs": {"gaps", "resumes", "submissions", "manage", "editor"},
         "filters": frozenset({"status", "resume_asset_id", "date_filter", "date_from", "date_to"}),
     },
 }

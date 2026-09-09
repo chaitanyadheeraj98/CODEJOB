@@ -216,6 +216,9 @@ class ResumeDraftToolTests(unittest.TestCase):
         self.assertIn("7+ years", payload["current"])
         self.assertEqual(payload["replacement"], "- Rewritten for Cigna.")
         self.assertEqual(payload["base_sha256"], section_digest(find_section(RESUME, "Summary").body))
+        warning = propose_resume_section(1, "Summary", "Saved $2M and cut latency 40%.", sequence_sections=["Summary", "Skills", "Invented"])
+        self.assertEqual(warning["grounding"]["novel_numbers"], ["$2M", "40%"])
+        self.assertEqual(warning["sequence_sections"], ["Summary", "Skills"])
 
     def test_a_rewrite_the_size_of_a_resume_is_refused_as_too_many_sections(self) -> None:
         payload = propose_resume_section(1, "Summary", "- x" * MAX_SECTION_CHARS)

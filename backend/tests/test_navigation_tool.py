@@ -4,6 +4,12 @@ from app.mcp_server.tools.navigation import NAVIGABLE_PAGES, navigate_to_queue
 
 
 class NavigateToQueueTests(unittest.TestCase):
+    def test_every_resume_tracking_tab_is_navigable(self) -> None:
+        for tab in ("gaps", "resumes", "submissions", "manage", "editor"):
+            result = navigate_to_queue("resume_tracking", tab=tab)
+            self.assertEqual(result["tab"], tab)
+            self.assertEqual(result["dropped"], [])
+
     def test_returns_a_navigable_payload_for_a_known_page(self) -> None:
         payload = navigate_to_queue(
             "needs_review",
