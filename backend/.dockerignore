@@ -1,5 +1,9 @@
 .venv/
 .pytest_cache/
+# pytest --basetemp roots. Nothing in them belongs in an image, and on Windows
+# their subdirectories can end up unreadable even to the owner, which fails the
+# build at "load build context" rather than at anything to do with the image.
+.pytest-temp-*
 **/__pycache__/
 *.py[cod]
 data/

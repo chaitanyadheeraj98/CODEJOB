@@ -15,6 +15,10 @@ wheels/
 # pytest caches
 .pytest_cache/
 .testmondata*
+# --basetemp roots and their logs. Kept out of the tree for the same reason they
+# are kept out of the build context: they are per-run scratch, and a `git add -A`
+# would otherwise sweep them in.
+.pytest-temp-*
 
 # Remediation audit trails. The applied run and PROVENANCE.md are committed -
 # they are the record of rows destroyed in production. Dry runs are reproducible
