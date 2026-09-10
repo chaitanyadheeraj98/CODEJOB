@@ -144,6 +144,19 @@ const choose = async (select: Element | null, value: string) => {
 const buttonNamed = (container: HTMLElement, text: string) =>
   Array.from(container.querySelectorAll('button')).find((item) => item.textContent === text)
 
+const file = (name: string, body = 'PK sample') => new File([body], name)
+
+// jsdom has no DragEvent, and the drop path is the one `accept` cannot police, so
+// the event is assembled by hand rather than routed through the file input.
+const drop = async (zone: Element | null, dropped: File) => {
+  await act(async () => {
+    const event = new Event('drop', { bubbles: true })
+    Object.defineProperty(event, 'dataTransfer', { value: { files: [dropped] } })
+    zone?.dispatchEvent(event)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  })
+}
+
 describe('EditorTab', () => {
   const cleanups: Array<() => void> = []
   afterEach(() => { vi.unstubAllGlobals(); while (cleanups.length) cleanups.pop()?.() })
@@ -288,6 +301,52 @@ describe('EditorTab', () => {
     expect(listed).toContain('Arial 10pt')
     expect(listed).toContain('divider 3"')
     expect(listed).toContain('Rules above: Summary, Skills')
+  })
+
+  it('takes a dropped sample and names the file it is about to measure', async () => {
+    const fetchMock = routes()
+    vi.stubGlobal('fetch', fetchMock)
+    const { container, cleanup } = await mount(<EditorTab apiBase="http://localhost:8000" />)
+    cleanups.push(cleanup)
+
+    await click(buttonNamed(container, 'Format profiles (0)'))
+    const measure = () => buttonNamed(container, 'Measure and save') as HTMLButtonElement
+    expect(measure().disabled).toBe(true)
+    expect(container.querySelector('.resumeFormatProfileFoot')?.textContent).toContain('Add a sample resume to measure')
+
+    await drop(container.querySelector('.resumeFileDrop'), file('Vendor A layout.docx'))
+
+    expect(container.querySelector('.resumeFileDrop')?.className).toContain('loaded')
+    expect(container.querySelector('.resumeFileDropText')?.textContent).toContain('Vendor A layout.docx')
+    expect(measure().disabled).toBe(false)
+    // The name is optional, so the panel says what the profile will be called.
+    expect(container.querySelector('.resumeFormatProfileFoot')?.textContent).toContain('saved as “Vendor A layout”')
+
+    await click(measure())
+    const post = fetchMock.mock.calls.find((call) => String(call[0]).includes('/profiles') && (call[1] as RequestInit | undefined)?.method === 'POST')
+    expect((post?.[1] as RequestInit).body).toBeInstanceOf(FormData)
+    expect(((post?.[1] as RequestInit).body as FormData).get('file')).toBeInstanceOf(File)
+  })
+
+  // A dropped file bypasses `accept` entirely, so without this the only feedback
+  // is a 400 after the upload.
+  it('refuses a sample the server would reject, before uploading it', async () => {
+    const fetchMock = routes()
+    vi.stubGlobal('fetch', fetchMock)
+    const { container, cleanup } = await mount(<EditorTab apiBase="http://localhost:8000" />)
+    cleanups.push(cleanup)
+
+    await click(buttonNamed(container, 'Format profiles (0)'))
+    await drop(container.querySelector('.resumeFileDrop'), file('screenshot.png'))
+
+    expect(container.querySelector('.resumeFileDrop')?.className).toContain('invalid')
+    expect(container.querySelector('.resumeFileDropError')?.textContent).toContain('screenshot.png is not a .docx, .doc, .pdf, .md, .txt file')
+    expect((buttonNamed(container, 'Measure and save') as HTMLButtonElement).disabled).toBe(true)
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('/profiles') && (call[1] as RequestInit | undefined)?.method === 'POST')).toBe(false)
+
+    // An empty file has nothing to measure either, and the server says so too.
+    await drop(container.querySelector('.resumeFileDrop'), file('blank.docx', ''))
+    expect(container.querySelector('.resumeFileDropError')?.textContent).toContain('blank.docx is empty')
   })
 
   it('keeps an unsaved edit when the user switches drafts to compare them', async () => {

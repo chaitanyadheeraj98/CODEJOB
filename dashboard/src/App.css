@@ -7209,10 +7209,70 @@ button.chatRankedLabel:focus-visible {
   display: grid; gap: .9rem; padding: 1rem 1.1rem;
   border: 1px solid var(--line); border-radius: .7rem; background: var(--surface-soft);
 }
-.resumeFormatProfiles > p { margin: 0; max-width: 78ch; line-height: 1.55; }
-.resumeFormatProfileForm { display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap; }
-.resumeFormatProfileForm .resumeField { min-width: 14rem; }
-.resumeFormatProfileDefault { display: flex; gap: .5rem; align-items: center; font-size: var(--text-base); color: var(--muted); }
+.resumeFormatProfiles h3 { margin: 0; font-size: var(--text-md); }
+.resumeFormatProfiles > p { margin: 0; max-width: 68ch; line-height: 1.55; }
+.resumeFormatProfileForm { display: grid; gap: .85rem; }
+
+/* The sample field was a native "Choose File" widget sitting in the text-input
+   chrome `.card input` hands every field - the one piece of OS paint left on the
+   page, on a panel whose entire job is receiving one document. It is a drop
+   target now, sized like the job. The <input> still does the work: it covers the
+   zone at zero opacity rather than being fought over, so the picker, the keyboard
+   and the change event stay the browser's and only the paint is ours. */
+.resumeFileDrop {
+  position: relative;
+  display: flex; gap: .75rem; align-items: center;
+  padding: .85rem 1rem;
+  border: 1px dashed var(--line-strong); border-radius: var(--radius-md);
+  background: var(--surface); cursor: pointer;
+  transition: border-color 160ms ease, background-color 160ms ease;
+}
+.resumeFileDrop input {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  box-sizing: border-box; margin: 0; opacity: 0; cursor: inherit;
+}
+.resumeFileDrop:hover { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 4%, var(--surface)); }
+.resumeFileDrop:has(input:focus-visible) { outline: 2px solid var(--focus); outline-offset: 2px; }
+.resumeFileDrop:has(input:disabled) { cursor: progress; }
+.resumeFileDropIcon { flex: none; color: var(--muted); transition: color 160ms ease; }
+.resumeFileDropText { display: grid; gap: .1rem; min-width: 0; }
+.resumeFileDropText strong { font-size: var(--text-md); overflow-wrap: anywhere; }
+.resumeFileDropText small { font-size: var(--text-sm); line-height: 1.45; }
+.resumeFileDropError { color: var(--refusal-ink); font-weight: 600; }
+
+/* Dragging over the zone and holding a file are the two states it has to show;
+   without them a drop lands with nothing acknowledging it. */
+.resumeFileDrop.dragging {
+  border-style: solid; border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 8%, var(--surface));
+}
+.resumeFileDrop.loaded {
+  border-style: solid; border-color: color-mix(in srgb, var(--primary) 40%, var(--line));
+  background: color-mix(in srgb, var(--primary) 4%, var(--surface));
+}
+.resumeFileDrop.dragging .resumeFileDropIcon,
+.resumeFileDrop.loaded .resumeFileDropIcon { color: var(--primary); }
+.resumeFileDrop.invalid { border-color: var(--refusal-line); background: var(--refusal-surface); }
+.resumeFileDrop.invalid .resumeFileDropIcon { color: var(--refusal-ink); }
+
+/* The name and the default toggle share a row and a centre line: the switch is
+   given the input's height and bottom-aligned to it, so the two line up on their
+   middles rather than each sitting wherever its own box ended. */
+.resumeFormatProfileMeta {
+  display: grid; grid-template-columns: minmax(0, 22rem) auto;
+  gap: .5rem 1.5rem; align-items: end;
+}
+/* `justify-self` matters: the column is `auto`, so without it the label keeps the
+   whole remaining track and 400px of empty panel toggles the default. */
+.resumeFormatProfileMeta .resumeFormatSwitch { align-self: end; justify-self: start; min-height: 45px; }
+
+/* Same shape as the publish and export feet: what the action is waiting on, then
+   the action. A disabled primary button that names no condition reads as broken. */
+.resumeFormatProfileFoot {
+  display: flex; gap: 1rem; align-items: center; justify-content: space-between; flex-wrap: wrap;
+}
+.resumeFormatProfileFoot .subtle { max-width: 62ch; line-height: 1.45; font-size: var(--text-base); }
+
 .resumeFormatProfileList { display: grid; gap: .5rem; margin: 0; padding: 0; list-style: none; }
 .resumeFormatProfileList li {
   display: flex; gap: 1rem; align-items: center; justify-content: space-between; flex-wrap: wrap;
