@@ -11,6 +11,11 @@ dependencies = [
     # computation. Declared so an rq upgrade that drops or replaces it fails
     # resolution instead of silently breaking every schedule in the product.
     "croniter>=6.2.2",
+    # Already present transitively via google-auth, and now used directly to
+    # encrypt stored Gmail refresh tokens. Declared for the same reason
+    # croniter is: a transitive upgrade that drops it must fail resolution
+    # rather than break credential storage at runtime.
+    "cryptography>=44.0.0",
     "fastapi>=0.136.1",
     "google-api-python-client>=2.181.0",
     "google-auth-oauthlib>=1.2.2",

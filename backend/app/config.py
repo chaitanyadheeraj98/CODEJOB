@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -144,6 +144,15 @@ class Settings(BaseSettings):
     google_client_secret: str = ""
     google_redirect_uri: str = "http://localhost:8080/"
     google_token_path: str = "./data/google_token.json"
+    # Per-user credential storage (temp174 step 1). Off by default: with the
+    # flag clear, Gmail credentials keep coming from google_token_path exactly
+    # as before, so this can land without touching a working install.
+    feature_db_credentials_enabled: bool = False
+    # Fernet key, urlsafe-base64 32 bytes. Generate with:
+    #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    # Required once feature_db_credentials_enabled is on - see the validator
+    # below. Never stored in the database; lives only in backend/.env.
+    credential_encryption_key: str = ""
     gmail_label_filter: str = ""
     google_login_hint: str = ""
     public_base_url: str = ""
@@ -224,6 +233,40 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         populate_by_name=True,
     )
+
+    @model_validator(mode="after")
+    def _require_encryption_key_for_db_credentials(self) -> "Settings":
+        """Refuse to start with DB credentials on and no usable key.
+
+        Validated at import rather than in the lifespan hook, so alembic, the
+        worker and any script fail the same way the API does. The alternative -
+        discovering the key is missing at the moment a token needs storing -
+        ends with either a crash mid-OAuth or, far worse, a silent fallback that
+        writes refresh tokens to Postgres in plaintext. There is no safe
+        degraded mode here, so this is deliberately fatal.
+        """
+        # Normalised whether or not the feature is on, so the stored value is
+        # never the whitespace-padded copy-paste that validation accepted.
+        key = (self.credential_encryption_key or "").strip()
+        self.credential_encryption_key = key
+        if not self.feature_db_credentials_enabled:
+            return self
+        if not key:
+            raise ValueError(
+                "FEATURE_DB_CREDENTIALS_ENABLED is on but CREDENTIAL_ENCRYPTION_KEY is empty. "
+                "Generate one with: python -c \"from cryptography.fernet import Fernet; "
+                'print(Fernet.generate_key().decode())"'
+            )
+        from cryptography.fernet import Fernet
+
+        try:
+            Fernet(key.encode())
+        except Exception as exc:
+            raise ValueError(
+                "CREDENTIAL_ENCRYPTION_KEY is not a valid Fernet key "
+                "(expected urlsafe-base64, 32 bytes)."
+            ) from exc
+        return self
 
     def _normalize_runtime_embedding_provider(self, provider: str | None) -> str | None:
         normalized = (provider or "").strip().lower()
