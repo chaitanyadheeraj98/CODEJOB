@@ -266,6 +266,37 @@ def _legacy_strip_html(html: str) -> str:
 
 _BR_TAG_PATTERN = re.compile(r"(?is)<br\s*/?>")
 
+# RFC 2392 content-id URIs, the address of an image *inside* the same message.
+# Outlook signature blocks are built from them, so a logo arrives as
+# `<img src="cid:image001.jpg@01DB6B23.6E1B1E60">` and both the HTML-to-text
+# conversion and the text/plain alternative leave the raw reference behind,
+# usually bracketed and usually alone on a line between the sender's name and
+# their company. It is machine addressing, never prose, and it reads as
+# corruption wherever a body is displayed - 23 stored messages carried one.
+#
+# Matched with the surrounding brackets so the common `[cid:...]` form does not
+# leave empty ones behind.
+_INLINE_IMAGE_REF_PATTERN = re.compile(
+    r"""[\[(<]?\s*cid:[^\s\]\)>"']+\s*[\]\)>]?""",
+    re.IGNORECASE,
+)
+
+
+def strip_inline_image_refs(text: str) -> str:
+    """Drop `cid:` image references and any line they leave empty.
+
+    Deliberately not folded into the tag stripper: the text/plain alternative
+    of a multipart message never sees an HTML pass, and it carries the same
+    references. Idempotent, so applying it at more than one layer is safe.
+    """
+    if "cid:" not in text.casefold():
+        return text
+    cleaned = _INLINE_IMAGE_REF_PATTERN.sub("", text)
+    # A reference alone on its line leaves whitespace behind that would
+    # otherwise turn into a stray blank paragraph in the middle of a signature.
+    cleaned = re.sub(r"(?m)^[ \t]+$", "", cleaned)
+    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
 
 def _normalize_line_breaks_for_partitioning(html: str) -> str:
     # unstructured's partition_html only splits into separate elements at block-container
@@ -285,10 +316,10 @@ def clean_html_text(html: str, *, max_chars: int | None = None) -> str:
         elements = list(partition_html(text=_normalize_line_breaks_for_partitioning(html)))
         markdown, _plain, _truncated = _render_with_limit(elements, max_chars)
         if markdown:
-            return markdown
+            return strip_inline_image_refs(markdown)
     except Exception:
         logger.warning("clean_html_text partition_html failed, using legacy fallback", exc_info=True)
-    fallback = _legacy_strip_html(html)
+    fallback = strip_inline_image_refs(_legacy_strip_html(html))
     return _clip_text(fallback, max_chars) if max_chars is not None else fallback
 
 
@@ -384,7 +415,10 @@ def extract_gmail_reply_body(text: str, *, strip_signature: bool = True) -> str:
     strip_signature=False keeps the sender's own trailing signature block - a phone
     number extractor needs it, since that's exactly where a recruiter's number lives.
     """
-    source = clean_html_if_present(text)
+    # Applied here as well as inside clean_html_text, because a plain-text
+    # alternative reaches this function without an HTML pass and carries the
+    # same `cid:` references. The helper is idempotent.
+    source = strip_inline_image_refs(clean_html_if_present(text))
     lines = source.replace("\r\n", "\n").replace("\r", "\n").splitlines()
     marker_start = next(
         (index for index in range(len(lines)) if _gmail_quote_header_length(lines, index)),
