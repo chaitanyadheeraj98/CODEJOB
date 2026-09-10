@@ -2727,6 +2727,18 @@ class JobStatusResponse(RecentRunResponse):
     job_id: str | None = None
 
 
+class JobListResponse(BaseModel):
+    """Every job worth showing, newest first, with the active ones counted.
+
+    `active_count` is computed after the queue backend has corrected each row,
+    so a badge built from it counts jobs that are really still running rather
+    than rows a dead worker left saying "running" forever.
+    """
+
+    items: list[JobStatusResponse]
+    active_count: int
+
+
 class JobQueueSummaryResponse(BaseModel):
     queued: int
     processing: int

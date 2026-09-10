@@ -9,7 +9,7 @@ from datetime import UTC, date, datetime, timedelta
 from dataclasses import dataclass
 from email.utils import parseaddr
 from pathlib import Path
-from typing import Annotated, Mapping, TypedDict, TypeVar, cast
+from typing import Annotated, Any, Mapping, TypedDict, TypeVar, cast
 import threading
 from zoneinfo import ZoneInfo
 
@@ -394,6 +394,7 @@ from app.schemas import (
     JobIntentTaxonomyEntryResponse,
     JobEnqueueResponse,
     JobQueueSummaryResponse,
+    JobListResponse,
     LiveReplyStatusResponse,
     JobStatusResponse,
     OAuthStartResponse,
@@ -4854,6 +4855,92 @@ def enqueue_automation_run(
     return _enqueue_automation(payload, db)
 
 
+# The statuses a job can still be stopped from, and the only ones worth asking
+# Redis about: everything else is terminal in the database and the queue cannot
+# revise it. Keeping the set here means the list route and the badge agree with
+# the cancel route about what "still going" means.
+ACTIVE_JOB_STATUSES = {"queued", "running"}
+
+
+def _job_status_payload(row: RecentRun, connection: object | None = None) -> dict[str, Any]:
+    """The stored run row, corrected against the queue that actually holds it.
+
+    A row says "running" from the moment it is enqueued until a worker writes
+    over it, so a job no worker ever picked up - or one whose worker died mid
+    run - reads as running forever. RQ is the only thing that knows, so it gets
+    the last word on `status` and nothing else: counts and progress stay as the
+    worker recorded them.
+
+    `connection` is threaded through so a list of rows costs one Redis
+    connection rather than one per row.
+    """
+    payload = row_to_recent_run_dict(row)
+    if not row.job_backend_id:
+        return payload
+    try:
+        job = Job.fetch(
+            row.job_backend_id,
+            connection=connection if connection is not None else get_redis_connection(),
+        )
+        backend_status = job.get_status(refresh=True)
+    except NoSuchJobError:
+        logger.warning("job_status_backend_record_missing run_key=%r job_id=%r", row.run_key, row.job_backend_id)
+        return payload
+    except Exception:
+        logger.exception("job_status_backend_lookup_failed run_key=%r job_id=%r", row.run_key, row.job_backend_id)
+        return payload
+    if backend_status == JobStatus.STARTED:
+        payload["status"] = "running"
+    elif backend_status in {JobStatus.QUEUED, JobStatus.DEFERRED, JobStatus.SCHEDULED}:
+        payload["status"] = "queued"
+    elif backend_status in {JobStatus.CANCELED, JobStatus.STOPPED}:
+        payload["status"] = "canceled"
+    elif backend_status == JobStatus.FAILED:
+        payload["status"] = "failed"
+    return payload
+
+
+@app.get("/jobs", response_model=JobListResponse)
+def list_jobs(limit: int = Query(20, ge=1, le=50), db: Session = Depends(get_db)) -> JobListResponse:
+    """What is running in the background right now, and what just finished.
+
+    Both in one response because the panel that reads this shows both, and two
+    routes would mean two polls to keep one list honest.
+
+    Only rows the database still calls active are re-checked against Redis.
+    A finished row is terminal - the queue has nothing to add - and its RQ
+    record expires long before the row does, so refreshing the whole page would
+    buy nothing but a log line per expired job.
+    """
+    rows = (
+        db.query(RecentRun)
+        .filter(RecentRun.owner_id == settings.owner_id)
+        .order_by(RecentRun.created_at.desc(), RecentRun.id.desc())
+        .limit(limit)
+        .all()
+    )
+    connection = None
+    if any(row.status in ACTIVE_JOB_STATUSES for row in rows):
+        try:
+            connection = get_redis_connection()
+        except Exception:
+            # The list still renders from stored state. A panel that 503s when
+            # Redis blinks is worse than one that shows the last known status.
+            logger.exception("job_list_redis_unavailable")
+    items: list[JobStatusResponse] = []
+    active = 0
+    for row in rows:
+        payload = (
+            _job_status_payload(row, connection)
+            if row.status in ACTIVE_JOB_STATUSES
+            else row_to_recent_run_dict(row)
+        )
+        if payload["status"] in ACTIVE_JOB_STATUSES:
+            active += 1
+        items.append(JobStatusResponse(**payload, job_id=row.job_backend_id))
+    return JobListResponse(items=items, active_count=active)
+
+
 @app.get("/jobs/{run_key}", response_model=JobStatusResponse)
 def job_status(run_key: str, db: Session = Depends(get_db)) -> JobStatusResponse:
     row = (
@@ -4863,30 +4950,7 @@ def job_status(run_key: str, db: Session = Depends(get_db)) -> JobStatusResponse
     )
     if row is None:
         raise HTTPException(status_code=404, detail="job_not_found")
-    payload = row_to_recent_run_dict(row)
-    if row.job_backend_id:
-        try:
-            backend_status = Job.fetch(
-                row.job_backend_id,
-                connection=get_redis_connection(),
-            ).get_status(refresh=True)
-            if backend_status == JobStatus.STARTED:
-                payload["status"] = "running"
-            elif backend_status in {
-                JobStatus.QUEUED,
-                JobStatus.DEFERRED,
-                JobStatus.SCHEDULED,
-            }:
-                payload["status"] = "queued"
-            elif backend_status in {JobStatus.CANCELED, JobStatus.STOPPED}:
-                payload["status"] = "canceled"
-            elif backend_status == JobStatus.FAILED:
-                payload["status"] = "failed"
-        except NoSuchJobError:
-            logger.warning("job_status_backend_record_missing run_key=%r job_id=%r", run_key, row.job_backend_id)
-        except Exception:
-            logger.exception("job_status_backend_lookup_failed run_key=%r job_id=%r", run_key, row.job_backend_id)
-    return JobStatusResponse(**payload, job_id=row.job_backend_id)
+    return JobStatusResponse(**_job_status_payload(row), job_id=row.job_backend_id)
 
 
 @app.post("/jobs/{run_key}/cancel", response_model=JobStatusResponse)

@@ -1,3 +1,5 @@
+import { useEffect, useState } from 'react'
+
 export type SidebarProps = {
   running: boolean
   queueCount: number
@@ -33,6 +35,13 @@ export default function Sidebar({
   activePage,
   onNavigate,
 }: SidebarProps) {
+  // Remembered: someone who works with the rail closed should not reopen it on
+  // every reload, and someone who never touches it never sees this state.
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem('codejob.rail.collapsed') === '1')
+  useEffect(() => {
+    localStorage.setItem('codejob.rail.collapsed', collapsed ? '1' : '0')
+  }, [collapsed])
+
   const queueLabel = running ? 'Running now' : 'Ready'
 
   const navItems: Array<{
@@ -65,13 +74,35 @@ export default function Sidebar({
   ]
 
   return (
-    <aside className="leftRail">
+    <>
+      {collapsed ? (
+        <button
+          type="button"
+          className="railReopen"
+          onClick={() => setCollapsed(false)}
+          aria-label="Show navigation"
+          aria-expanded={false}
+        >
+          <PanelIcon />
+        </button>
+      ) : null}
+      <aside className={`leftRail ${collapsed ? 'collapsed' : ''}`} aria-hidden={collapsed}>
       <div className="brandWrap">
         <div className="brandIcon" aria-hidden="true">CJ</div>
         <div className="brandBlock">
           <div className="brand">CodeJob MailOps</div>
           <p className="brandSub">Recruitment Ops</p>
         </div>
+        <button
+          type="button"
+          className="railToggle"
+          onClick={() => setCollapsed(true)}
+          aria-label="Hide navigation"
+          aria-expanded
+          tabIndex={collapsed ? -1 : 0}
+        >
+          <PanelIcon />
+        </button>
       </div>
       <button className="composeBtn" type="button">
         New Campaign
@@ -100,6 +131,18 @@ export default function Sidebar({
         </button>
         <button className="navItem" type="button">Help Center</button>
       </nav>
-    </aside>
+      </aside>
+    </>
+  )
+}
+
+// Drawn rather than a glyph: a bracket for the rail plus a chevron for the
+// direction it moves. One 1.6 stroke, matching the rest of the chrome.
+function PanelIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" focusable="false">
+      <rect x="1.6" y="2.4" width="12.8" height="11.2" rx="2.2" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M6.2 2.4v11.2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
   )
 }

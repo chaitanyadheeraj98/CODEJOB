@@ -209,6 +209,77 @@ class BackgroundJobTests(unittest.TestCase):
         self.assertEqual(canceled.json()["status"], "canceled")
         stop_job.assert_called_once_with(job.connection, "race-job")
 
+    def test_jobs_list_returns_newest_first_and_counts_only_the_active(self) -> None:
+        with self.SessionLocal() as db:
+            create_recent_run(
+                db, owner_id=main.settings.owner_id, run_source="nvoids_sync",
+                run_key="nvoids_sync:list-done", status="ok", detail="done",
+            )
+            create_recent_run(
+                db, owner_id=main.settings.owner_id, run_source="gmail_sync",
+                run_key="gmail_sync:list-running", status="running", detail="working",
+                job_backend_id="list-running-job", total_items=10, processed_items=4,
+                progress_pct=40.0, queue_name="gmail_sync",
+            )
+            db.commit()
+
+        job = SimpleNamespace(id="list-running-job", get_status=lambda refresh=True: JobStatus.STARTED)
+        with (
+            patch.object(main.Job, "fetch", return_value=job),
+            patch.object(main, "get_redis_connection", return_value=SimpleNamespace()),
+        ):
+            response = self.client.get("/jobs")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual([item["run_key"] for item in payload["items"]],
+                         ["gmail_sync:list-running", "nvoids_sync:list-done"])
+        self.assertEqual(payload["active_count"], 1)
+        self.assertEqual(payload["items"][0]["progress_pct"], 40.0)
+
+    def test_jobs_list_drops_a_row_from_the_count_once_rq_says_it_finished(self) -> None:
+        """The reason the list asks RQ at all.
+
+        A worker that dies mid-run leaves the row saying "running" forever, and
+        a badge built from stored state alone would show a task the user can
+        neither watch nor stop.
+        """
+        with self.SessionLocal() as db:
+            create_recent_run(
+                db, owner_id=main.settings.owner_id, run_source="nvoids_sync",
+                run_key="nvoids_sync:stale", status="running", detail="working",
+                job_backend_id="stale-job", queue_name="nvoids_sync",
+            )
+            db.commit()
+
+        job = SimpleNamespace(id="stale-job", get_status=lambda refresh=True: JobStatus.FAILED)
+        with (
+            patch.object(main.Job, "fetch", return_value=job),
+            patch.object(main, "get_redis_connection", return_value=SimpleNamespace()),
+        ):
+            payload = self.client.get("/jobs").json()
+
+        self.assertEqual(payload["items"][0]["status"], "failed")
+        self.assertEqual(payload["active_count"], 0)
+
+    def test_jobs_list_still_renders_when_redis_is_down(self) -> None:
+        """A panel that 503s when Redis blinks is worse than a stale one."""
+        with self.SessionLocal() as db:
+            create_recent_run(
+                db, owner_id=main.settings.owner_id, run_source="nvoids_sync",
+                run_key="nvoids_sync:outage", status="running", detail="working",
+                job_backend_id="outage-job", queue_name="nvoids_sync",
+            )
+            db.commit()
+
+        with patch.object(main, "get_redis_connection", side_effect=ConnectionError("redis down")):
+            response = self.client.get("/jobs")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["items"][0]["status"], "running")
+        self.assertEqual(payload["active_count"], 1)
+
     def test_unknown_queue_name_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "Unknown queue"):
             get_queue("not-a-real-queue", connection=SimpleNamespace())

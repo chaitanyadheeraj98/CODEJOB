@@ -72,6 +72,25 @@ class Settings(BaseSettings):
     ollama_chat_model: str = "gemma4:31b-cloud"
     ollama_chat_model_fallback: str = "minimax-m3:cloud"
     ollama_chat_model_fallback2: str = "nemotron-3-nano:30b-cloud"
+    # Everything the model picker offers, beyond the automatic ladder above.
+    # These are the models covered by the account's included cloud usage.
+    #
+    # Ollama Cloud names a model by appending the cloud tag to the local one, so
+    # `gemma4:31b` is reached as `gemma4:31b-cloud` and a model with no size tag
+    # takes `:cloud`. The first and fourth entries are confirmed by the ladder
+    # above, which has been answering turns; the rest follow the same rule and
+    # are unverified, which is why this is a setting rather than a literal. A
+    # wrong tag is not silent - it classifies as `ollama_model_not_found`, shows
+    # the user that model does not exist, and lands in chat_turn telemetry.
+    ollama_selectable_models: str = (
+        "gemma4:31b-cloud,"
+        "gpt-oss:120b-cloud,"
+        "gpt-oss:20b-cloud,"
+        "nemotron-3-nano:30b-cloud,"
+        "nemotron-3-super:cloud,"
+        "nemotron-3-ultra:cloud,"
+        "minimax-m3:cloud"
+    )
     ollama_timeout_seconds: float = 60.0
     ollama_max_tool_iterations: int = 6
     chat_turn_budget_seconds: float = Field(default=240.0, gt=0)
