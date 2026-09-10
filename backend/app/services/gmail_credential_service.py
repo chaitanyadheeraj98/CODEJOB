@@ -1,0 +1,234 @@
+"""Storage and encryption for per-owner Gmail OAuth credentials.
+
+Deliberately a service rather than more code in `gmail_client.py`: that module
+is ~900 lines and already mixes OAuth, MIME construction and Gmail API calls.
+Persistence and cryptography do not belong in it.
+
+The import direction is one-way and matters. `gmail_client` imports this
+module; this module must never import `gmail_client`, or the two form a cycle.
+That is why `save_credentials` takes `google_email` as an argument instead of
+calling `users.getProfile` itself - the Gmail call lives on the other side of
+the boundary and passes its result in.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from dataclasses import dataclass
+from datetime import UTC, datetime
+
+from cryptography.fernet import Fernet, InvalidToken
+from google.oauth2.credentials import Credentials
+from sqlalchemy.orm import Session
+
+from app.config import settings
+from app.models import GmailCredential
+
+logger = logging.getLogger(__name__)
+
+
+class CredentialEncryptionUnavailable(RuntimeError):
+    """Raised when the Fernet key is missing or unusable at call time.
+
+    Config validation makes this unreachable in a correctly started process;
+    it exists so that a mis-wired test or a settings object built by hand
+    fails loudly rather than storing plaintext.
+    """
+
+
+@dataclass(frozen=True)
+class GmailConnectionStatus:
+    """What the UI and the renewal cron are allowed to know.
+
+    No token material, encrypted or otherwise. Keeping that out of the type
+    means no future edit can leak one through a response model by accident.
+    """
+
+    owner_id: str
+    connected: bool
+    google_email: str = ""
+    expires_at: datetime | None = None
+    connected_at: datetime | None = None
+    last_refreshed_at: datetime | None = None
+    revoked: bool = False
+    last_error: str = ""
+    scopes: tuple[str, ...] = ()
+
+
+def _fernet() -> Fernet:
+    key = (settings.credential_encryption_key or "").strip()
+    if not key:
+        raise CredentialEncryptionUnavailable(
+            "CREDENTIAL_ENCRYPTION_KEY is not set; refusing to handle Gmail credentials."
+        )
+    try:
+        return Fernet(key.encode())
+    except Exception as exc:
+        raise CredentialEncryptionUnavailable("CREDENTIAL_ENCRYPTION_KEY is not a valid Fernet key.") from exc
+
+
+def encrypt(value: str) -> str:
+    return _fernet().encrypt(value.encode()).decode() if value else ""
+
+
+def decrypt(value: str | None) -> str:
+    """Return "" for absent ciphertext, but raise on ciphertext we cannot read.
+
+    The distinction is the point. An empty column means "no token stored",
+    which is an ordinary state. Ciphertext that will not decrypt means the key
+    changed or the row is corrupt, and silently treating that as "no token"
+    would send the user through a reconnect while the real cause went unlogged.
+    """
+    if not value:
+        return ""
+    try:
+        return _fernet().decrypt(value.encode()).decode()
+    except InvalidToken as exc:
+        raise CredentialEncryptionUnavailable(
+            "Stored Gmail credential could not be decrypted with the current "
+            "CREDENTIAL_ENCRYPTION_KEY. The key has changed, or the row is corrupt."
+        ) from exc
+
+
+def get_row(db: Session, owner_id: str) -> GmailCredential | None:
+    return db.query(GmailCredential).filter(GmailCredential.owner_id == owner_id).first()
+
+
+def get_credentials(db: Session, owner_id: str) -> Credentials | None:
+    """Reassemble a usable `Credentials`, or None when there is nothing to use.
+
+    Does not refresh. The caller decides, because only the caller knows whether
+    it is in a position to handle a refresh failure.
+
+    A revoked row returns None rather than a credential, so no code path can
+    use one by forgetting to check `revoked_at`.
+    """
+    row = get_row(db, owner_id)
+    if row is None or row.revoked_at is not None:
+        return None
+    refresh_token = decrypt(row.refresh_token_encrypted)
+    access_token = decrypt(row.access_token_encrypted)
+    if not (refresh_token or access_token):
+        return None
+    credentials = Credentials(
+        token=access_token or None,
+        refresh_token=refresh_token or None,
+        token_uri=row.token_uri,
+        client_id=settings.google_client_id,
+        client_secret=settings.google_client_secret,
+        scopes=json.loads(row.scopes_json or "[]"),
+    )
+    # google-auth compares `expiry` against a naive UTC now, so handing it an
+    # aware datetime raises "can't compare offset-naive and offset-aware".
+    if row.expires_at is not None:
+        expiry = row.expires_at
+        credentials.expiry = expiry.replace(tzinfo=None) if expiry.tzinfo else expiry
+    return credentials
+
+
+def save_credentials(
+    db: Session,
+    owner_id: str,
+    credentials: Credentials,
+    *,
+    google_email: str = "",
+    google_subject: str | None = None,
+) -> GmailCredential:
+    """Upsert one owner's connection.
+
+    The refresh-token branch below is the most important line in this file.
+    Google returns `refresh_token` only on the first consent, or when
+    `prompt=consent` forces it. Every subsequent re-consent - which, in
+    Testing publishing status, is every seven days - comes back without one.
+    Persisting `credentials.refresh_token` unconditionally would therefore
+    write a null over a working token and silently kill silent refresh. The
+    breakage would not show for another week, which is exactly what makes it
+    dangerous, so it has its own regression test.
+    """
+    row = get_row(db, owner_id)
+    if row is None:
+        row = GmailCredential(owner_id=owner_id)
+        db.add(row)
+
+    row.access_token_encrypted = encrypt(credentials.token or "")
+    if credentials.refresh_token:
+        row.refresh_token_encrypted = encrypt(credentials.refresh_token)
+    # else: keep whatever is stored. See the docstring.
+
+    if credentials.token_uri:
+        row.token_uri = credentials.token_uri
+    if credentials.scopes:
+        row.scopes_json = json.dumps(sorted(credentials.scopes))
+    row.expires_at = _as_utc(credentials.expiry)
+    if google_email:
+        row.google_email = google_email[:320]
+    if google_subject:
+        row.google_subject = google_subject[:64]
+    # A successful save is a working connection by definition.
+    row.revoked_at = None
+    row.last_error = ""
+    db.flush()
+    logger.info("gmail_credentials_saved owner_id=%s email=%s", owner_id, row.google_email or "unknown")
+    return row
+
+
+def mark_refreshed(db: Session, owner_id: str, credentials: Credentials) -> None:
+    row = get_row(db, owner_id)
+    if row is None:
+        return
+    row.access_token_encrypted = encrypt(credentials.token or "")
+    row.expires_at = _as_utc(credentials.expiry)
+    row.last_refreshed_at = datetime.now(UTC)
+    row.last_error = ""
+    db.flush()
+
+
+def mark_revoked(db: Session, owner_id: str, reason: str) -> None:
+    """Retire a connection and clear the token material.
+
+    Clearing the ciphertext is not housekeeping. A row flagged revoked while
+    still holding a usable refresh token is a credential nobody is watching -
+    the flag stops this application using it and stops nothing else.
+    """
+    row = get_row(db, owner_id)
+    if row is None:
+        return
+    row.revoked_at = row.revoked_at or datetime.now(UTC)
+    row.access_token_encrypted = ""
+    row.refresh_token_encrypted = None
+    row.last_error = (reason or "")[:2000]
+    db.flush()
+    logger.warning("gmail_credentials_revoked owner_id=%s reason=%s", owner_id, row.last_error)
+
+
+def connection_status(db: Session, owner_id: str) -> GmailConnectionStatus:
+    row = get_row(db, owner_id)
+    if row is None:
+        return GmailConnectionStatus(owner_id=owner_id, connected=False)
+    return GmailConnectionStatus(
+        owner_id=owner_id,
+        connected=row.revoked_at is None and bool(row.refresh_token_encrypted or row.access_token_encrypted),
+        google_email=row.google_email or "",
+        expires_at=row.expires_at,
+        connected_at=row.connected_at,
+        last_refreshed_at=row.last_refreshed_at,
+        revoked=row.revoked_at is not None,
+        last_error=row.last_error or "",
+        scopes=tuple(json.loads(row.scopes_json or "[]")),
+    )
+
+
+def list_connections(db: Session) -> list[GmailConnectionStatus]:
+    """Every stored connection. The renewal cron (capability 5) needs this."""
+    return [
+        connection_status(db, row.owner_id)
+        for row in db.query(GmailCredential).order_by(GmailCredential.owner_id)
+    ]
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    """google-auth hands back a naive UTC expiry; the column is timezone-aware."""
+    if value is None:
+        return None
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
