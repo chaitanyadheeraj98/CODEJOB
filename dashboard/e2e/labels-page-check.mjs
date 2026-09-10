@@ -58,6 +58,10 @@ const inbound = await page.locator('.labelMessage:not(.outbound)').count()
 const outbound = await page.locator('.labelMessage.outbound').count()
 check('both directions are present', inbound > 0 && outbound > 0, `${inbound} received / ${outbound} sent`)
 
+// Outlook signature logos used to leak their cid: reference into the body.
+const streamText = await page.locator('.labelMessageStream').innerText()
+check('no cid: image references in the conversation', !streamText.toLowerCase().includes('cid:'))
+
 const recruiterChips = await page.locator('.labelContactChip.recruiter').count()
 check('recruiters are named on the dossier', recruiterChips > 0, `${recruiterChips} tracked contacts`)
 

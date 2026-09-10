@@ -73,6 +73,26 @@ def _is_employer(domain: str, employers: set[str]) -> bool:
     return bool(domain) and any(domain == d or domain.endswith("." + d) for d in employers)
 
 
+def _is_infrastructure(domain: str) -> bool:
+    """True when nothing at this domain is ever a person worth following.
+
+    The distinction this draws against `_freemail` is the whole reason it
+    exists. A freemail *domain* is unwatchable but a freemail *address* is
+    fine - plenty of recruiters correspond from a personal Gmail, and
+    charanteja4267@gmail.com is a real contact on a live tracked thread.
+
+    A list server or ESP return path is different in kind: `hstjava@
+    googlegroups.com` is not a person, it is a firehose. Watching it as an
+    address subscribes the dossier to every message the group ever relays,
+    which is exactly the noise a hand-applied label is meant to cut through.
+    So infrastructure is refused at both levels, freemail only at the domain.
+    """
+    blocked = SHARED_INFRASTRUCTURE_DOMAINS | {
+        d.strip().lower() for d in settings.label_watch_extra_infrastructure_domains.split(",") if d.strip()
+    }
+    return bool(domain) and any(domain == d or domain.endswith("." + d) for d in blocked)
+
+
 def derive_watches(db: Session, owner_id: str, *, thread: TrackedThread, owner_email: str) -> list[RecruiterWatch]:
     if thread.owner_id != owner_id or thread.untracked_at or not json.loads(thread.label_external_ids_json):
         return []
@@ -85,8 +105,9 @@ def derive_watches(db: Session, owner_id: str, *, thread: TrackedThread, owner_e
             continue
         domain = domain_of(address)
         # Employer participants are dropped whole, address included: the point of
-        # the dossier is the recruiter side of the conversation.
-        if _is_employer(domain, employers):
+        # the dossier is the recruiter side of the conversation. Group and relay
+        # addresses go the same way, for the reason in `_is_infrastructure`.
+        if _is_employer(domain, employers) or _is_infrastructure(domain):
             continue
         values = [("address", address)] + ([] if _freemail(domain) else [("domain", domain)])
         for kind, value in values:
@@ -118,7 +139,10 @@ def build_watch_query(watches) -> str:
             valid = _ADDRESS.fullmatch(value)
         else:
             valid = re.fullmatch(r"[a-z0-9]+(?:[.-][a-z0-9]+)*\.[a-z]{2,}", value) and not _freemail(value)
-        if not valid:
+        # Last line of defence, and the one that matters most: this builds the
+        # Gmail query. A stored watch that predates a blocklist change must not
+        # reach the network even if reconcile has not run yet.
+        if not valid or _is_infrastructure(domain_of(value) if watch.watch_type == "address" else value):
             continue
         terms.extend(f'{field}:"{value}"' for field in ("from", "to", "cc", "bcc"))
     return f'({" OR ".join(terms)}) newer_than:{settings.label_tracking_watch_lookback_days}d' if terms else ""
@@ -244,7 +268,9 @@ def sync_watch_matches(db: Session, owner_id: str, *, deps, owner_email: str = "
             if result.messages >= limit:
                 break
             addresses = {p["address"] for p in participants_for(item)} - {normalize_address(owner_email)}
-            watch = next((w for w in chunk if (w.value in addresses if w.watch_type == "address" else
+            watch = next((w for w in chunk if not _is_infrastructure(
+                domain_of(w.value) if w.watch_type == "address" else w.value,
+            ) and (w.value in addresses if w.watch_type == "address" else
                 not _freemail(w.value) and any(domain_of(a) == w.value or domain_of(a).endswith("." + w.value) for a in addresses))), None)
             thread_id = item.get("external_thread_id")
             if watch is None or not thread_id:
@@ -284,8 +310,19 @@ def reconcile_watches(db: Session, owner_id: str) -> int:
         # Employer domains run through the same release path for a second
         # reason: the setting is editable, so adding a domain in Settings has to
         # retire the watches that domain already produced.
-        employer_hit = _is_employer(watch.value if watch.watch_type == "domain" else domain_of(watch.value), employers)
-        if not sources or employer_hit or (watch.watch_type == "domain" and _freemail(watch.value)):
+        #
+        # Infrastructure is checked here at both watch types, matching
+        # derivation: hstjava@googlegroups.com was stored as an *address* watch
+        # while the blocklist still only gated domains, and survived every
+        # earlier reconcile because of it.
+        watch_domain = watch.value if watch.watch_type == "domain" else domain_of(watch.value)
+        employer_hit = _is_employer(watch_domain, employers)
+        if (
+            not sources
+            or employer_hit
+            or _is_infrastructure(watch_domain)
+            or (watch.watch_type == "domain" and _freemail(watch.value))
+        ):
             watch.released_at = datetime.now(UTC)
             released += 1
     return released

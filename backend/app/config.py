@@ -133,6 +133,9 @@ class Settings(BaseSettings):
     label_tracking_max_watches: int = Field(default=200, ge=1)
     label_tracking_watch_lookback_days: int = Field(default=45, ge=1)
     label_watch_extra_freemail_domains: str = ""
+    # Refused as an address *and* a domain, unlike the freemail list above:
+    # these are list servers and relays where no individual correspondent lives.
+    label_watch_extra_infrastructure_domains: str = ""
     chat_history_max_messages: int = 20
     chat_message_char_limit: int = 4000
     searxng_url: str = Field(default="", validation_alias=AliasChoices("SEARXNG_URL"))
