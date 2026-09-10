@@ -227,6 +227,74 @@ def list_connections(db: Session) -> list[GmailConnectionStatus]:
     ]
 
 
+def import_legacy_token_file(db: Session, owner_id: str, *, google_email: str = "") -> bool:
+    """Adopt an existing `google_token.json` into the table, once.
+
+    Runs in the service rather than in migration 0076 for two reasons: a
+    migration executes in containers that may not carry the encryption key,
+    and decryption logic inside a migration is neither testable nor replayable.
+
+    Returns True only when a row was created, so the caller can re-read.
+    Idempotent by construction - an existing row short-circuits it.
+    """
+    if get_row(db, owner_id) is not None:
+        return False
+
+    from pathlib import Path
+
+    token_path = Path(settings.google_token_path)
+    if not token_path.exists():
+        return False
+
+    try:
+        payload = json.loads(token_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        logger.warning("gmail_credentials_import_unreadable path=%s", token_path, exc_info=True)
+        return False
+
+    refresh_token = (payload.get("refresh_token") or "").strip()
+    access_token = (payload.get("token") or "").strip()
+    if not (refresh_token or access_token):
+        logger.warning("gmail_credentials_import_empty path=%s", token_path)
+        return False
+
+    row = GmailCredential(
+        owner_id=owner_id,
+        access_token_encrypted=encrypt(access_token),
+        refresh_token_encrypted=encrypt(refresh_token) if refresh_token else None,
+        token_uri=payload.get("token_uri") or "https://oauth2.googleapis.com/token",
+        scopes_json=json.dumps(sorted(payload.get("scopes") or [])),
+        expires_at=_parse_expiry(payload.get("expiry")),
+        # Empty when the caller could not resolve it. Deliberately not fatal:
+        # a getProfile hiccup must not cost the owner their stored token, and
+        # the address is backfilled on the next successful save.
+        google_email=(google_email or payload.get("account") or "")[:320],
+    )
+    db.add(row)
+    db.flush()
+
+    # Renamed, never deleted. If this import turns out to be wrong the
+    # credential is still on disk and recoverable.
+    try:
+        token_path.rename(token_path.with_suffix(token_path.suffix + ".imported"))
+    except OSError:
+        logger.warning("gmail_credentials_import_rename_failed path=%s", token_path, exc_info=True)
+
+    logger.info("gmail_credentials_imported owner_id=%s email=%s", owner_id, row.google_email or "unknown")
+    return True
+
+
+def _parse_expiry(value: object) -> datetime | None:
+    """google-auth writes expiry as a naive UTC ISO string, sometimes with Z."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return _as_utc(parsed)
+
+
 def _as_utc(value: datetime | None) -> datetime | None:
     """google-auth hands back a naive UTC expiry; the column is timezone-aware."""
     if value is None:
