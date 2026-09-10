@@ -50,6 +50,25 @@ def chat_models(selected: str | None = None) -> list[str]:
     return models
 
 
+def selectable_models() -> list[str]:
+    """Every model the picker offers, deduped, ladder first.
+
+    Kept separate from `chat_models()` on purpose. That function answers "what
+    will this turn try", and pinning the picker to it meant the user could only
+    choose one of the three rungs. This answers "what may the user choose", and
+    a model listed here that is not on the ladder is selectable but never
+    automatic - which is the right default for a model nobody has measured yet.
+    """
+    seen: set[str] = set()
+    models: list[str] = []
+    for model in [*chat_models(), *settings.ollama_selectable_models.split(",")]:
+        model = (model or "").strip()
+        if model and model not in seen:
+            seen.add(model)
+            models.append(model)
+    return models
+
+
 def tool_call_budget() -> int:
     """LangGraph's recursion limit for `ollama_max_tool_iterations` tool calls.
 

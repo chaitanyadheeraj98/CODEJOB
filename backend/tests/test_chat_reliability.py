@@ -166,7 +166,10 @@ def test_partial_transcript_and_telemetry_survive_failure(failure):
     async def run(db):
         service = ChatService()
         session = service.create_session(db)
-        graph = Graph(partial=True, delay=0.1 if failure == "budget" else 0,
+        # 0.6s against a 0.03s budget. The margin was 0.1s, which is inside the
+        # scheduling noise of a loaded run and made this fail intermittently in
+        # the full file while passing every time on its own.
+        graph = Graph(partial=True, delay=0.6 if failure == "budget" else 0,
                       error=RuntimeError("private") if failure == "raises" else None)
         original_add = db.add
         def add(row):

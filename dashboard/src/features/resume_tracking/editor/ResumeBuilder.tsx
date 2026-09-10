@@ -47,6 +47,25 @@ const code = (resume: ResumeLibraryItem) => resume.variant_code || `R${String(re
 
 const words = (text: string) => text.trim().split(/\s+/).filter(Boolean).length
 
+// Mirrors SAMPLE_SUFFIXES in backend/app/routers/resume_editor.py. `accept` only
+// filters the picker, so a dropped file has to be checked against the same list
+// here - otherwise the only feedback is a 400 after the upload round-trip.
+const SAMPLE_SUFFIXES = ['.docx', '.doc', '.pdf', '.md', '.txt']
+
+const stem = (name: string) => name.replace(/\.[^.]+$/, '')
+
+const fileSize = (bytes: number) => (bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`)
+
+function DocumentIcon() {
+  return (
+    <svg className="resumeFileDropIcon" width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true" focusable="false">
+      <path d="M11.5 2.5H5.5a1.5 1.5 0 0 0-1.5 1.5v12a1.5 1.5 0 0 0 1.5 1.5h9a1.5 1.5 0 0 0 1.5-1.5V7z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+      <path d="M11.5 2.5V7H16" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+      <path d="M7.25 11.25h5.5M7.25 14h3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  )
+}
+
 /**
  * Write a resume, then download it in the shape an employer asked for.
  *
@@ -104,6 +123,8 @@ export default function ResumeBuilder({ apiBase }: Props) {
 
   const [profilesOpen, setProfilesOpen] = useState(false)
   const [sample, setSample] = useState<File | null>(null)
+  const [sampleError, setSampleError] = useState('')
+  const [dragging, setDragging] = useState(false)
   const [profileName, setProfileName] = useState('')
   const [makeDefault, setMakeDefault] = useState(false)
   const [creatingProfile, setCreatingProfile] = useState(false)
@@ -255,6 +276,25 @@ export default function ResumeBuilder({ apiBase }: Props) {
     }
   }
 
+  // Named rather than rejected silently: a dropped .png used to be accepted by the
+  // field and refused by the server, so the panel looked fine until it failed.
+  const chooseSample = (file: File | null) => {
+    if (!file) return
+    const suffix = file.name.slice(file.name.lastIndexOf('.')).toLowerCase()
+    if (!SAMPLE_SUFFIXES.includes(suffix)) {
+      setSample(null)
+      setSampleError(`${file.name} is not a ${SAMPLE_SUFFIXES.join(', ')} file. Pick a sample in one of those formats.`)
+      return
+    }
+    if (!file.size) {
+      setSample(null)
+      setSampleError(`${file.name} is empty — there is nothing to measure.`)
+      return
+    }
+    setSampleError('')
+    setSample(file)
+  }
+
   const addProfile = async () => {
     if (!sample) return
     setCreatingProfile(true)
@@ -263,6 +303,7 @@ export default function ResumeBuilder({ apiBase }: Props) {
       await refreshProfiles()
       setProfileId(created.id)
       setSample(null)
+      setSampleError('')
       setProfileName('')
       setMakeDefault(false)
       announce(`Measured ${created.source_file_name} — saved as “${created.name}”.`)
@@ -388,38 +429,83 @@ export default function ResumeBuilder({ apiBase }: Props) {
 
       {profilesOpen ? (
         <section className="resumeFormatProfiles" aria-label="Format profiles">
+          <h3>Employer layouts</h3>
           <p className="subtle">
             Upload a resume laid out the way an employer wants it. Margins, fonts and the skills-table
             divider are measured from the file itself; the section headings that get a rule above them are
             read from its text and checked against the document before they are stored.
           </p>
           <div className="resumeFormatProfileForm">
-            <label className="resumeLibraryFile">
-              <span>Sample resume</span>
+            {/* A drop target, not a "Choose File" button: the panel's whole job is
+                receiving one document, and the native widget was the only piece of
+                OS chrome left on the page. The input stays a real <input type=file>
+                inside its <label>, so the picker, keyboard and focus ring are still
+                the browser's - only the paint is ours. */}
+            <label
+              className={`resumeFileDrop${dragging ? ' dragging' : ''}${sample ? ' loaded' : ''}${sampleError ? ' invalid' : ''}`}
+              onDragOver={(event) => { event.preventDefault(); if (!creatingProfile) setDragging(true) }}
+              onDragLeave={() => setDragging(false)}
+              onDrop={(event) => {
+                event.preventDefault()
+                setDragging(false)
+                if (!creatingProfile) chooseSample(event.dataTransfer.files?.[0] ?? null)
+              }}
+            >
               <input
                 type="file"
-                accept=".docx,.doc,.pdf,.md,.txt"
+                accept={SAMPLE_SUFFIXES.join(',')}
                 disabled={creatingProfile}
-                onChange={(event) => setSample(event.target.files?.[0] ?? null)}
+                // Cleared on the way in, so picking the same file twice still
+                // fires. Saving a profile empties the panel but not the input,
+                // and re-picking that file was doing nothing at all.
+                onClick={(event) => { (event.target as HTMLInputElement).value = '' }}
+                onChange={(event) => chooseSample(event.target.files?.[0] ?? null)}
               />
-              <small className="subtle">A .docx is measured most accurately — other formats use the built-in geometry.</small>
+              <DocumentIcon />
+              <span className="resumeFileDropText">
+                <strong>{sample ? sample.name : 'Drop a sample resume, or click to browse'}</strong>
+                <small className={sampleError ? 'resumeFileDropError' : 'subtle'} aria-live="polite">
+                  {sampleError
+                    || (sample
+                      ? `${fileSize(sample.size)} · drop another to replace it`
+                      : `${SAMPLE_SUFFIXES.join(', ')} — a .docx is measured most accurately, other formats use the built-in geometry.`)}
+                </small>
+              </span>
             </label>
-            <label className="resumeField">
-              <span>Profile name</span>
-              <input
-                value={profileName}
-                placeholder="Vendor A layout"
-                onChange={(event) => setProfileName(event.target.value)}
-              />
-            </label>
-            <label className="resumeFormatProfileDefault">
-              <input
-                type="checkbox"
-                checked={makeDefault}
-                onChange={(event) => setMakeDefault(event.target.checked)}
-              />
-              <span>Use for downloads by default</span>
-            </label>
+
+            <div className="resumeFormatProfileMeta">
+              <label className="resumeField">
+                <span>Profile name</span>
+                <input
+                  value={profileName}
+                  placeholder={sample ? stem(sample.name) : 'Vendor A layout'}
+                  onChange={(event) => setProfileName(event.target.value)}
+                />
+              </label>
+              {/* The app's own switch, the one the Formatting panel below uses. The
+                  bare checkbox here was a 19px hit target on its own baseline. */}
+              <label className="resumeFormatSwitch">
+                <input
+                  type="checkbox"
+                  checked={makeDefault}
+                  onChange={(event) => setMakeDefault(event.target.checked)}
+                />
+                <span className="resumeSwitchTrack" aria-hidden="true"><span className="resumeSwitchThumb" /></span>
+                <span className="resumeSwitchLabel">Use for downloads by default</span>
+              </label>
+            </div>
+          </div>
+
+          <div className="resumeFormatProfileFoot">
+            {/* A disabled primary button that does not say what it is waiting for
+                reads as broken. */}
+            <span className="subtle" aria-live="polite">
+              {creatingProfile
+                ? `Reading ${sample?.name ?? 'the sample'} — measuring margins, fonts and section rules.`
+                : sample
+                  ? `Ready to measure ${sample.name}${profileName.trim() ? '' : `, saved as “${stem(sample.name)}”`}.`
+                  : 'Add a sample resume to measure.'}
+            </span>
             <button type="button" className="primaryButton" onClick={addProfile} disabled={!sample || creatingProfile}>
               {creatingProfile ? 'Measuring...' : 'Measure and save'}
             </button>

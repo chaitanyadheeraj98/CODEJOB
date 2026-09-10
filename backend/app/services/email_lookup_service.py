@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.models import (
     EmailConversation,
+    EmailReplyMessage,
     NumberReviewQueue,
     PremiumNumberContact,
     PremiumNumberLead,
@@ -91,6 +92,8 @@ def search_email(
     phone_like = f"%{digits}%" if digits else None
 
     anchor_conditions = [
+        RecruiterEmail.external_message_id == normalized,
+        RecruiterEmail.external_rfc_message_id.ilike(like),
         RecruiterEmail.sender.ilike(like),
         RecruiterEmail.recipient_email.ilike(like),
         RecruiterEmail.cc_email.ilike(like),
@@ -356,6 +359,27 @@ def search_email(
                     occurred_at=conversation.last_message_at,
                 )
             )
+
+    matched_conversations = (
+        db.query(EmailConversation, RecruiterEmail)
+        .outerjoin(RecruiterEmail, and_(RecruiterEmail.id == EmailConversation.root_recruiter_email_id, RecruiterEmail.owner_id == owner_id))
+        .filter(EmailConversation.owner_id == owner_id, or_(
+            EmailConversation.external_thread_id == normalized,
+            EmailConversation.id.in_(db.query(EmailReplyMessage.conversation_id).filter(
+                EmailReplyMessage.owner_id == owner_id,
+                or_(EmailReplyMessage.external_message_id == normalized, EmailReplyMessage.external_rfc_message_id.ilike(like)),
+            )),
+        )).limit(_query_limit()).all()
+    )
+    seen_conversations = {hit.detail.get("conversation_id") for hit in hits if hit.section == SECTION_INBOX}
+    for conversation, root in matched_conversations:
+        if conversation.id in seen_conversations:
+            continue
+        hits.append(EmailSearchHit(section=SECTION_INBOX, recruiter_email_id=root.id if root else None,
+            sender=root.sender if root else conversation.recruiter_snapshot, subject=root.subject if root else conversation.subject_snapshot,
+            state=root.state if root else conversation.status, detail={"conversation_id": conversation.id,
+                "status": conversation.status, "unread_reply_count": conversation.unread_reply_count, "origin": conversation.origin},
+            occurred_at=conversation.last_message_at))
 
     skipped_conditions = [
         RecentRunSkippedItem.sender.ilike(like),

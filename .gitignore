@@ -19,3 +19,4 @@ raw/
 .codex/hooks/pre_tool_use_enforce_rules.ps1
 dashboard/scratch/
 .impeccable/
+.serena/

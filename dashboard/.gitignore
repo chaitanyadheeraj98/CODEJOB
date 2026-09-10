@@ -15,6 +15,7 @@ dist-ssr
 # QA sweep run artifacts (screenshots, results.json) — the script itself (qa-sweep.mjs) stays tracked
 e2e/qa-report/
 e2e/editor-report/
+e2e/chat-report/
 
 # Editor directories and files
 .vscode/*
@@ -26,3 +27,6 @@ e2e/editor-report/
 *.njsproj
 *.sln
 *.sw?
+e2e/out/
+e2e/out*/
+e2e/label-report/

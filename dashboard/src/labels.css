@@ -1,0 +1,677 @@
+/* Labels workspace.
+ *
+ * Inherits the Reply Inbox palette rather than inventing one: this is the same
+ * mail, filed instead of arriving, and two mail surfaces in one product that do
+ * not look related is the failure mode worth avoiding here.
+ *
+ * Three columns because there is one more level than the Inbox has - label,
+ * thread, conversation. The rail is fixed and narrow so the reading column
+ * keeps the width; below 1100px the rail becomes a horizontal strip and below
+ * 820px the whole thing stacks.
+ */
+
+.labelsSection {
+  --inbox-surface: #ffffff;
+  --inbox-canvas: #f7f8fc;
+  --inbox-border: #e6e9f2;
+  --inbox-border-strong: #d7dcec;
+  --inbox-unread-dot: #2563eb;
+  --inbox-selected-bg: #eff4ff;
+  --inbox-selected-border: #2563eb;
+  --inbox-muted: #5b6478;
+  --label-recruiter: #1f4dbd;
+  --label-recruiter-bg: #eef3ff;
+  --label-employer: #92400e;
+  --label-employer-bg: #fef6e7;
+}
+
+.labelsToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.labelsToolbarText {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+/* The search and the sync button are one control group and wrapped onto two
+   rows once the description line grew. The text column yields instead. */
+.labelsToolbar .rowBtns {
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+}
+
+.labelsToolbarCount {
+  margin: 0 0 2px;
+  color: #172033;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.labelsToolbar .subtle {
+  margin: 0;
+}
+
+.labelsSearch {
+  width: 260px;
+  max-width: 100%;
+  height: 36px;
+  border: 1px solid var(--inbox-border-strong);
+  border-radius: 999px;
+  padding: 0 14px;
+  background: var(--inbox-surface);
+  color: #172033;
+  font: inherit;
+}
+
+.labelsSearch::placeholder {
+  color: var(--inbox-muted);
+}
+
+.labelsSearch:focus {
+  border-color: var(--inbox-selected-border);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14);
+}
+
+.labelsLayout {
+  display: grid;
+  grid-template-columns: 208px minmax(240px, 0.9fr) minmax(0, 1.9fr);
+  gap: 16px;
+  align-items: start;
+  min-height: 540px;
+}
+
+/* Rail ------------------------------------------------------------------- */
+
+.labelRail {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  position: sticky;
+  top: 12px;
+}
+
+.labelsSection .labelRailItem {
+  display: grid;
+  grid-template-columns: 8px 1fr auto auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: auto;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 9px 10px;
+  background: transparent;
+  color: #334155;
+  font-size: 13px;
+  text-align: left;
+  transition: background 160ms ease, color 160ms ease;
+}
+
+.labelsSection .labelRailItem:hover {
+  background: #eef1f8;
+}
+
+.labelsSection .labelRailItem:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2);
+}
+
+.labelsSection .labelRailItem.active {
+  border-color: var(--inbox-border-strong);
+  background: var(--inbox-selected-bg);
+  color: #14306e;
+  font-weight: 700;
+}
+
+.labelRailDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #94a3b8;
+}
+
+.labelsSection .labelRailItem.active .labelRailDot {
+  background: var(--inbox-selected-border);
+}
+
+.labelRailName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.labelRailUnread {
+  border-radius: 999px;
+  padding: 1px 7px;
+  background: var(--inbox-unread-dot);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.labelRailCount {
+  color: var(--inbox-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.labelRailSkeleton {
+  display: block;
+  height: 34px;
+  border-radius: 10px;
+  background: linear-gradient(90deg, #eef1f8 25%, #e2e7f3 37%, #eef1f8 63%);
+  background-size: 400% 100%;
+  animation: labelRailShimmer 1.4s ease infinite;
+}
+
+@keyframes labelRailShimmer {
+  from { background-position: 100% 50%; }
+  to { background-position: 0 50%; }
+}
+
+/* Thread list ------------------------------------------------------------ */
+
+.labelThreadList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 760px;
+  overflow-y: auto;
+  border: 1px solid var(--inbox-border);
+  border-radius: 14px;
+  padding: 10px;
+  background: var(--inbox-surface);
+  scrollbar-color: #cdd5e5 transparent;
+  scrollbar-width: thin;
+}
+
+.labelThreadList::-webkit-scrollbar {
+  width: 10px;
+}
+
+.labelThreadList::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: #cdd5e5;
+  background-clip: content-box;
+}
+
+.labelsSection .labelThreadItem {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  height: auto;
+  border: 1px solid transparent;
+  border-radius: 11px;
+  padding: 10px 11px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.labelsSection .labelThreadItem:hover {
+  background: #f4f6fc;
+}
+
+.labelsSection .labelThreadItem:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2);
+}
+
+.labelsSection .labelThreadItem.active {
+  border-color: var(--inbox-selected-border);
+  background: var(--inbox-selected-bg);
+}
+
+.labelThreadTop {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.labelThreadRecruiter {
+  min-width: 0;
+  overflow: hidden;
+  color: #172033;
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.labelsSection .labelThreadItem.unread .labelThreadRecruiter {
+  font-weight: 800;
+}
+
+.labelThreadTime {
+  flex: 0 0 auto;
+  color: var(--inbox-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.labelThreadSubject {
+  overflow: hidden;
+  color: #334155;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.labelThreadMeta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--inbox-muted);
+  font-size: 11.5px;
+}
+
+.labelThreadTracked {
+  border: 1px solid #b8dec3;
+  border-radius: 999px;
+  padding: 1px 7px;
+  background: #eaf8ee;
+  color: #137333;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.labelThreadPager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: auto;
+  border-top: 1px solid var(--inbox-border);
+  padding-top: 10px;
+}
+
+.labelThreadPager .subtle {
+  margin: 0;
+  font-size: 12px;
+}
+
+/* Dossier ---------------------------------------------------------------- */
+
+.labelDossier {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  max-height: 760px;
+  overflow-y: auto;
+  border: 1px solid var(--inbox-border);
+  border-radius: 14px;
+  padding: 18px;
+  background: var(--inbox-surface);
+  scrollbar-color: #cdd5e5 transparent;
+  scrollbar-width: thin;
+}
+
+.labelDossier::-webkit-scrollbar {
+  width: 10px;
+}
+
+.labelDossier::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: #cdd5e5;
+  background-clip: content-box;
+}
+
+.labelDossierHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  border-bottom: 1px solid var(--inbox-border);
+  padding-bottom: 14px;
+}
+
+.labelDossierTitle {
+  min-width: 0;
+}
+
+.labelDossierHeader h3 {
+  margin: 0 0 4px;
+  color: #172033;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.3;
+  text-wrap: balance;
+}
+
+.labelDossierTitle .subtle {
+  margin: 0 0 8px;
+  font-size: 12.5px;
+}
+
+.labelChipRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.labelParticipants {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid var(--inbox-border);
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: #fbfcff;
+}
+
+.labelParticipantsHeading {
+  margin: 0;
+  color: var(--inbox-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.labelParticipantsHeading + .labelChipRow {
+  margin-bottom: 4px;
+}
+
+.labelContactChip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 7px;
+  max-width: 100%;
+  border: 1px solid var(--inbox-border-strong);
+  border-radius: 999px;
+  padding: 4px 11px;
+  background: var(--inbox-surface);
+  font-size: 12px;
+}
+
+.labelContactChip.recruiter {
+  border-color: #c3d3f7;
+  background: var(--label-recruiter-bg);
+  color: var(--label-recruiter);
+}
+
+.labelContactChip.employer {
+  border-color: #f0d9b0;
+  background: var(--label-employer-bg);
+  color: var(--label-employer);
+}
+
+.labelContactName {
+  overflow: hidden;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.labelContactAddress {
+  overflow: hidden;
+  opacity: 0.72;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.labelContactCount {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.6;
+}
+
+/* Message stream --------------------------------------------------------- */
+
+.labelMessageStream {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.labelMessage {
+  max-width: 86%;
+  border: 1px solid var(--inbox-border);
+  border-radius: 14px;
+  padding: 11px 14px;
+  background: #f6f8fd;
+}
+
+.labelMessage.outbound {
+  align-self: flex-end;
+  border-color: #c7dbff;
+  background: #e8f0ff;
+}
+
+.labelMessageMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  color: var(--inbox-muted);
+  font-size: 11.5px;
+}
+
+.labelMessageSender {
+  color: #172033;
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.labelMessageOrigin {
+  border: 1px solid #d7dcec;
+  border-radius: 999px;
+  padding: 0 7px;
+  background: #fff;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.labelMessageBody {
+  margin: 6px 0 0;
+  overflow-wrap: anywhere;
+  color: #1f2937;
+  font-size: 13.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.labelMessageLink {
+  display: inline-block;
+  margin-top: 8px;
+  color: var(--label-recruiter);
+  font-size: 12px;
+  text-underline-offset: 3px;
+}
+
+/* The one piece of chrome that has to interrupt the reading column: a message
+   under a different Gmail thread id is a different conversation, and quietly
+   interleaving it is how a page starts lying. */
+.labelThreadBreak {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 6px 0;
+  color: var(--inbox-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.labelThreadBreak::before,
+.labelThreadBreak::after {
+  height: 1px;
+  flex: 1;
+  background: var(--inbox-border-strong);
+  content: '';
+}
+
+.labelThreadBreak span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Empty state ------------------------------------------------------------ */
+
+.labelsEmpty {
+  max-width: 62ch;
+  margin: 40px auto;
+  text-align: center;
+}
+
+.labelsEmpty h3 {
+  margin: 0 0 8px;
+  color: #172033;
+  font-size: 20px;
+  font-weight: 700;
+  text-wrap: balance;
+}
+
+.labelsEmpty p {
+  margin: 0 0 18px;
+  color: var(--inbox-muted);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.labelsEmpty .rowBtns {
+  justify-content: center;
+}
+
+@media (max-width: 1100px) {
+  .labelsLayout {
+    grid-template-columns: minmax(230px, 0.9fr) minmax(0, 1.8fr);
+    grid-template-areas:
+      'rail rail'
+      'threads dossier';
+  }
+
+  .labelRail {
+    position: static;
+    min-width: 0;
+    flex-direction: row;
+    overflow-x: auto;
+    grid-area: rail;
+    padding-bottom: 4px;
+    scrollbar-width: thin;
+  }
+
+  .labelsSection .labelRailItem {
+    width: auto;
+    max-width: 220px;
+    flex: 0 0 auto;
+  }
+
+  .labelThreadList {
+    min-width: 0;
+    grid-area: threads;
+  }
+
+  .labelDossier { grid-area: dossier; }
+}
+
+@media (max-width: 820px) {
+  /* nowrap is a desktop affordance only; at phone widths the search and the
+     button genuinely do not fit on one line, and forcing it overflowed by 52px. */
+  .labelsToolbar .rowBtns {
+    min-width: 0;
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+  }
+
+  .labelsSearch {
+    min-width: 0;
+    width: auto;
+    flex: 1 1 160px;
+  }
+
+  .labelsLayout {
+    grid-template-columns: 1fr;
+    grid-template-areas: 'rail' 'threads' 'dossier';
+  }
+
+  .labelThreadList {
+    max-height: 320px;
+  }
+
+  /* Side by side, the two actions squeezed the subject into a six-word-tall
+     column. The title gets the full width and the actions sit under it. */
+  .labelDossierHeader {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .labelDossierHeader .rowBtns {
+    flex-wrap: wrap;
+  }
+
+  .labelMessage {
+    max-width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .labelRailSkeleton {
+    animation: none;
+  }
+}
+
+/* Inline rather than a modal: choosing a resume version does not need protected
+   focus, and the thread it applies to should stay on screen while you choose. */
+.labelDossier .resumeLockPicker {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid var(--inbox-selected-border);
+  border-radius: 12px;
+  padding: 14px;
+  background: var(--inbox-selected-bg);
+}
+
+.labelDossier .resumeLockPicker label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: #172033;
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.labelDossier .resumeLockPicker select {
+  height: 38px;
+  border: 1px solid var(--inbox-border-strong);
+  border-radius: 9px;
+  padding: 0 10px;
+  background: var(--inbox-surface);
+  font: inherit;
+  font-weight: 400;
+}
+
+.labelDossier .resumeLockPicker select:focus {
+  border-color: var(--inbox-selected-border);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14);
+}
+
+.labelDossier .resumeLockPicker .subtle {
+  margin: 0;
+  font-size: 12px;
+}

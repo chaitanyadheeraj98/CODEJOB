@@ -1,16 +1,16 @@
 import { useEffect, useRef, useState, type DragEvent, type FormEvent } from 'react'
 
 import { uploadChatAttachment } from './api'
-import { ToolProgress } from './ToolProgress'
-import AttachmentChips, { SentAttachmentChips } from './AttachmentChips'
+import AttachmentChips from './AttachmentChips'
 import { ACCEPTED_EXTENSIONS, type PendingAttachment } from './attachmentDisplay'
+import { BackgroundTasks } from './BackgroundTasks'
 import { useChat } from './chatContext'
-import { renderMarkdownLite } from './markdown'
+import MessageBubble from './MessageBubble'
+import { ExportMenu } from './ExportMenu'
 import ProposalCard from './ProposalCard'
 import { proposalForMessage, proposalRefusalForMessage, resumeSequenceProgress, unsupportedProposalNotice } from './proposals'
 import RenderedMessage from './RenderedMessage'
 import { renderForMessage } from './renderers'
-import { AnsweredBy } from './AnsweredBy'
 import type { ChatSession } from './types'
 
 
@@ -59,6 +59,8 @@ export default function AssistantPage() {
   const chat = useChat()
   const { ready, status, statusError } = chat
   const [draft, setDraft] = useState('')
+  const [editNotice, setEditNotice] = useState(false)
+  const composerRef = useRef<HTMLTextAreaElement | null>(null)
   const [renaming, setRenaming] = useState(false)
   const [renameDraft, setRenameDraft] = useState('')
   const [pending, setPending] = useState<PendingAttachment[]>([])
@@ -69,6 +71,16 @@ export default function AssistantPage() {
   // Only IDs this thread fetched are clickable; anything the assistant wrote
   // without a tool behind it stays plain text.
   const citations = { ids: chat.recordIndex, onSelect: chat.focusCandidate }
+
+  // Edit loads the old prompt back into the composer as a new turn rather than
+  // rewriting the original. The transcript keeps every proposal card and
+  // approval event exactly where they happened, which is what this app treats
+  // as the authority for anything that changed a record.
+  const startEdit = (message: { content: string }) => {
+    setDraft(message.content)
+    setEditNotice(true)
+    composerRef.current?.focus()
+  }
 
   const currentSession = chat.sessions.find((session) => session.id === chat.sessionId)
 
@@ -122,6 +134,7 @@ export default function AssistantPage() {
     // belong to, so the send waits for them rather than losing them.
     if (pending.some((item) => item.status === 'uploading')) return
     setDraft('')
+    setEditNotice(false)
     setPending([])
     await chat.sendMessage(text, chat.selectedModel, ready.map((item) => item.attachment.id))
   }
@@ -232,6 +245,8 @@ export default function AssistantPage() {
             </button>
           )}
           <div className="assistantThreadActions">
+            <BackgroundTasks apiBase={chat.apiBase} />
+            <ExportMenu apiBase={chat.apiBase} sessionId={chat.sessionId} />
             <label className="chatModelPicker">
               <span>Model</span>
               <select
@@ -303,20 +318,7 @@ export default function AssistantPage() {
               return <p key={message.id} className="chatProposalRefusal">{unsupported}</p>
             }
             if (message.role === 'tool') return null
-            return (
-              <div key={message.id} className={`chatBubble ${message.role}`}>
-                {message.content
-                  ? renderMarkdownLite(message.content, citations)
-                  : chat.busy && message.role === 'assistant'
-                    ? <ToolProgress key={chat.activeTool?.startedAt ?? 'idle'} tool={chat.activeTool} completed={chat.completedTools} />
-                    : ''}
-                <SentAttachmentChips
-                  apiBase={chat.apiBase}
-                  attachments={chat.attachments.filter((item) => item.message_id === message.id)}
-                />
-                <AnsweredBy message={message} />
-              </div>
-            )
+            return <MessageBubble key={message.id} message={message} citations={citations} onEdit={startEdit} />
           })}
           <div ref={messagesEndRef} />
         </div>
@@ -327,6 +329,12 @@ export default function AssistantPage() {
           pending={pending}
           onRemove={(localId) => setPending((current) => current.filter((item) => item.localId !== localId))}
         />
+
+        {editNotice ? (
+          <p className="chatEditNotice">
+            Editing sends this as a new message. Everything above it stays as it happened.
+          </p>
+        ) : null}
 
         <form
           className={`chatComposer assistantComposer ${dragging ? 'dragging' : ''}`}
@@ -360,6 +368,7 @@ export default function AssistantPage() {
             +
           </button>
           <textarea
+            ref={composerRef}
             id="assistant-message"
             value={draft}
             onChange={(event) => setDraft(event.target.value)}

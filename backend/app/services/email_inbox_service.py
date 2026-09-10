@@ -3,17 +3,18 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import json
 import uuid
 from datetime import UTC, datetime
 from email.utils import parseaddr
 from typing import Callable
 
 from fastapi import HTTPException
-from sqlalchemy import func
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from app.gmail_client import GmailMessageCandidate
-from app.models import EmailConversation, EmailOpenEvent, EmailReplyMessage, RecruiterEmail
+from app.models import EmailConversation, EmailOpenEvent, EmailReplyMessage, RecruiterEmail, TrackedThread, GmailLabel
 from app.parsing.document_extraction import extract_gmail_reply_body
 from app.recent_runs import build_gmail_message_url
 from app.schemas import ConversationDetailResponse, ConversationMessageResponse, ConversationSummaryResponse
@@ -106,6 +107,82 @@ def ensure_sent_conversation(
     return conversation
 
 
+def ensure_label_conversation(db: Session, *, owner_id: str, thread_id: str, label_external_id: str | None, first_item) -> EmailConversation:
+    conversation = db.query(EmailConversation).filter(
+        EmailConversation.owner_id == owner_id, EmailConversation.external_thread_id == thread_id,
+    ).first()
+    if conversation is None:
+        root = _sent_thread_root(db, owner_id, thread_id)
+        if root is not None:
+            return ensure_sent_conversation(db, owner_id=owner_id, root_email=root, thread_id=thread_id)
+        name, address = parseaddr(first_item.get("sender", ""))
+        conversation = EmailConversation(
+            owner_id=owner_id, external_thread_id=thread_id, root_recruiter_email_id=None,
+            origin="label", source_label_external_id=label_external_id,
+            subject_snapshot=first_item.get("subject", "")[:500],
+            recruiter_snapshot=(name or address)[:255], recruiter_email_snapshot=address[:255],
+            status="replied", last_message_at=first_item.get("gmail_received_at") or datetime.now(UTC),
+            unread_reply_count=0,
+        )
+        db.add(conversation)
+        db.flush()
+    elif conversation.origin == "watch":
+        conversation.origin = "label"
+        conversation.source_label_external_id = label_external_id
+    return conversation
+
+
+def ensure_watch_conversation(db: Session, *, owner_id: str, thread_id: str, watch, first_item) -> EmailConversation:
+    existing = db.query(EmailConversation).filter(
+        EmailConversation.owner_id == owner_id, EmailConversation.external_thread_id == thread_id,
+    ).first()
+    if existing is not None:
+        return existing
+    conversation = ensure_label_conversation(db, owner_id=owner_id, thread_id=thread_id,
+        label_external_id=watch.origin_label_external_id, first_item=first_item)
+    if conversation.root_recruiter_email_id is None:
+        conversation.origin = "watch"
+    return conversation
+
+
+def capture_labeled_message(db: Session, *, owner_id: str, item, owner_email: str, conversation: EmailConversation, matched_watch_id=None) -> bool:
+    message_id = item.get("external_message_id")
+    if not message_id or conversation.owner_id != owner_id:
+        return False
+    db.flush()
+    if db.query(EmailReplyMessage.id).filter(EmailReplyMessage.owner_id == owner_id, EmailReplyMessage.external_message_id == message_id).first():
+        return False
+    outbound = parseaddr(item.get("sender", ""))[1].lower() == parseaddr(owner_email)[1].lower()
+    labels = item.get("label_ids", [])
+    unread = not outbound and "UNREAD" in labels
+    received_at = item.get("gmail_received_at") or datetime.now(UTC)
+    body = extract_gmail_reply_body(item.get("body", ""))
+    db.add(EmailReplyMessage(
+        owner_id=owner_id, conversation_id=conversation.id, direction="outbound" if outbound else "inbound",
+        external_message_id=message_id, external_rfc_message_id=item.get("external_rfc_message_id"),
+        in_reply_to_header=item.get("in_reply_to_header"), references_header=item.get("references_header"),
+        sender=item.get("sender", ""), body=body, snippet=(item.get("snippet") or body)[:240],
+        received_at=received_at, read_at=None if unread else received_at,
+        label_ids_json=json.dumps(labels), to_header=item.get("to_header"), cc_header=item.get("cc_header"),
+        matched_watch_id=matched_watch_id,
+    ))
+    conversation.last_message_at = max(conversation.last_message_at, received_at)
+    conversation.unread_reply_count += int(unread)
+    if not outbound:
+        conversation.status = "replied"
+    return True
+
+
+def conversation_label_names(db: Session, conversation: EmailConversation) -> list[str]:
+    thread = db.query(TrackedThread).filter(TrackedThread.owner_id == conversation.owner_id,
+        TrackedThread.conversation_id == conversation.id, TrackedThread.untracked_at.is_(None)).first()
+    if thread is None:
+        return []
+    return [row.name for row in db.query(GmailLabel).filter(GmailLabel.owner_id == conversation.owner_id,
+        GmailLabel.external_label_id.in_(json.loads(thread.label_external_ids_json)),
+        GmailLabel.is_tracked.is_(True), GmailLabel.deleted_at.is_(None)).order_by(GmailLabel.name)]
+
+
 def capture_inbound_reply(
     db: Session,
     *,
@@ -149,7 +226,7 @@ def capture_inbound_reply(
         outbound = (
             db.query(EmailReplyMessage, EmailConversation, RecruiterEmail)
             .join(EmailConversation, EmailConversation.id == EmailReplyMessage.conversation_id)
-            .join(RecruiterEmail, RecruiterEmail.id == EmailConversation.root_recruiter_email_id)
+            .outerjoin(RecruiterEmail, and_(RecruiterEmail.id == EmailConversation.root_recruiter_email_id, RecruiterEmail.owner_id == owner_id))
             .filter(
                 EmailReplyMessage.owner_id == owner_id,
                 EmailReplyMessage.direction == "outbound",
@@ -259,7 +336,7 @@ def record_open(
     db.commit()
 
 
-def _conversation_or_404(db: Session, owner_id: str, conversation_id: int) -> tuple[EmailConversation, RecruiterEmail]:
+def _conversation_or_404(db: Session, owner_id: str, conversation_id: int) -> tuple[EmailConversation, RecruiterEmail | None]:
     conversation = (
         db.query(EmailConversation)
         .filter(EmailConversation.owner_id == owner_id, EmailConversation.id == conversation_id)
@@ -275,12 +352,12 @@ def _conversation_or_404(db: Session, owner_id: str, conversation_id: int) -> tu
         )
         .first()
     )
-    if root_email is None:
+    if root_email is None and conversation.root_recruiter_email_id is not None:
         raise HTTPException(status_code=404, detail="Conversation source email not found")
     return conversation, root_email
 
 
-def _summary(db: Session, conversation: EmailConversation, root_email: RecruiterEmail) -> ConversationSummaryResponse:
+def _summary(db: Session, conversation: EmailConversation, root_email: RecruiterEmail | None) -> ConversationSummaryResponse:
     latest = (
         db.query(EmailReplyMessage)
         .filter(
@@ -290,26 +367,27 @@ def _summary(db: Session, conversation: EmailConversation, root_email: Recruiter
         .order_by(EmailReplyMessage.received_at.desc(), EmailReplyMessage.id.desc())
         .first()
     )
-    recruiter_name, _ = parseaddr(root_email.sender or "")
+    recruiter_name, _ = parseaddr(root_email.sender or "" if root_email else conversation.recruiter_snapshot)
     return ConversationSummaryResponse(
         id=conversation.id,
-        root_recruiter_email_id=root_email.id,
-        recruiter=recruiter_name or (root_email.recipient_email or root_email.sender or "Unknown"),
-        recruiter_email=root_email.recipient_email,
-        subject=root_email.subject,
+        root_recruiter_email_id=root_email.id if root_email else None,
+        origin=conversation.origin, labels=conversation_label_names(db, conversation),
+        recruiter=(recruiter_name or (root_email.recipient_email or root_email.sender or "Unknown")) if root_email else (conversation.recruiter_snapshot or "Unknown"),
+        recruiter_email=root_email.recipient_email if root_email else conversation.recruiter_email_snapshot,
+        subject=root_email.subject if root_email else conversation.subject_snapshot,
         status=conversation.status,
-        last_message_preview=((latest.snippet or latest.body)[:240] if latest else (root_email.draft_reply or "")[:240]),
+        last_message_preview=((latest.snippet or latest.body)[:240] if latest else ((root_email.draft_reply or "")[:240] if root_email else "")),
         last_message_at=conversation.last_message_at,
         unread_reply_count=conversation.unread_reply_count,
         gmail_thread_link=build_gmail_message_url(
-            external_message_id=root_email.external_message_id,
+            external_message_id=root_email.external_message_id if root_email else None,
             external_thread_id=conversation.external_thread_id,
-            external_rfc_message_id=root_email.external_rfc_message_id,
+            external_rfc_message_id=root_email.external_rfc_message_id if root_email else None,
         ),
     )
 
 
-def list_conversations(db: Session, owner_id: str, *, recruiter: str | None = None, subject: str | None = None, status: str | None = None, unread_only: bool | None = None, role: str | None = None, location: str | None = None, interview_type: str | None = None, sort: str = "newest", date_from: datetime | None = None, date_to: datetime | None = None) -> list[ConversationSummaryResponse]:
+def list_conversations(db: Session, owner_id: str, *, label: str | None = None, origin: str | None = None, recruiter: str | None = None, subject: str | None = None, status: str | None = None, unread_only: bool | None = None, role: str | None = None, location: str | None = None, interview_type: str | None = None, sort: str = "newest", date_from: datetime | None = None, date_to: datetime | None = None) -> list[ConversationSummaryResponse]:
     if sort not in {"newest", "oldest", "unread_first"}:
         raise HTTPException(status_code=422, detail="Invalid sort. Must be one of: newest, oldest, unread_first")
 
@@ -326,14 +404,25 @@ def list_conversations(db: Session, owner_id: str, *, recruiter: str | None = No
     )
     query = (
         db.query(EmailConversation, RecruiterEmail, last_inbound.c.last_inbound_at)
-        .join(RecruiterEmail, RecruiterEmail.id == EmailConversation.root_recruiter_email_id)
+        .outerjoin(RecruiterEmail, and_(RecruiterEmail.id == EmailConversation.root_recruiter_email_id, RecruiterEmail.owner_id == owner_id))
         .outerjoin(last_inbound, last_inbound.c.conversation_id == EmailConversation.id)
-        .filter(EmailConversation.owner_id == owner_id, RecruiterEmail.owner_id == owner_id)
+        .filter(EmailConversation.owner_id == owner_id)
     )
-    if recruiter and recruiter.strip(): query = query.filter(RecruiterEmail.sender.ilike(f"%{recruiter.strip()}%"))
-    if subject and subject.strip(): query = query.filter(RecruiterEmail.subject.ilike(f"%{subject.strip()}%"))
+    if recruiter and recruiter.strip(): query = query.filter(or_(RecruiterEmail.sender.ilike(f"%{recruiter.strip()}%"), EmailConversation.recruiter_snapshot.ilike(f"%{recruiter.strip()}%"), EmailConversation.recruiter_email_snapshot.ilike(f"%{recruiter.strip()}%")))
+    if subject and subject.strip(): query = query.filter(or_(RecruiterEmail.subject.ilike(f"%{subject.strip()}%"), EmailConversation.subject_snapshot.ilike(f"%{subject.strip()}%")))
     for value, column in ((role, RecruiterEmail.role), (location, RecruiterEmail.location), (interview_type, RecruiterEmail.interview_type)):
-        if value and value.strip(): query = query.filter(column.ilike(f"%{value.strip()}%"))
+        if value and value.strip(): query = query.filter(EmailConversation.origin == "sent", column.ilike(f"%{value.strip()}%"))
+    if origin:
+        if origin not in {"sent", "label", "watch"}:
+            raise HTTPException(422, "Invalid conversation origin")
+        query = query.filter(EmailConversation.origin == origin)
+    if label:
+        from app.services.gmail_label_service import resolve_label_ids
+        label_ids = set(resolve_label_ids(db, owner_id, [label]))
+        conversation_ids = [t.conversation_id for t in db.query(TrackedThread).filter(
+            TrackedThread.owner_id == owner_id, TrackedThread.untracked_at.is_(None),
+        ) if label_ids.intersection(json.loads(t.label_external_ids_json))]
+        query = query.filter(EmailConversation.id.in_(conversation_ids))
     if status:
         values = [value.strip() for value in status.split(",") if value.strip()]
         if values: query = query.filter(EmailConversation.status.in_(values))
@@ -364,8 +453,8 @@ def conversation_detail(db: Session, owner_id: str, conversation_id: int) -> Con
     )
     return ConversationDetailResponse(
         **summary.model_dump(),
-        to_email=root_email.recipient_email,
-        cc_email=root_email.cc_email,
+        to_email=root_email.recipient_email if root_email else conversation.recruiter_email_snapshot,
+        cc_email=root_email.cc_email if root_email else None,
         messages=[
             ConversationMessageResponse(
                 id=row.id,
@@ -411,15 +500,15 @@ def send_conversation_reply(
     send_reply: Callable[..., str],
 ) -> ConversationDetailResponse:
     conversation, root_email = _conversation_or_404(db, owner_id, conversation_id)
-    recipient = (root_email.recipient_email or "").strip()
+    recipient = (root_email.recipient_email or "" if root_email else conversation.recruiter_email_snapshot).strip()
     if not recipient:
         raise HTTPException(status_code=400, detail="Conversation recipient is missing")
     try:
         message_id = send_reply(
             conversation.external_thread_id,
             recipient,
-            root_email.cc_email,
-            root_email.subject,
+            root_email.cc_email if root_email else None,
+            root_email.subject if root_email else conversation.subject_snapshot,
             body.strip(),
             draft_text_size=draft_text_size,
             tracking_pixel_url=tracking_url,

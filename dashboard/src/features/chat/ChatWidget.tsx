@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 
+import { BackgroundTasks } from './BackgroundTasks'
 import { useChat } from './chatContext'
-import { ToolProgress } from './ToolProgress'
-import { renderMarkdownLite } from './markdown'
+import { useResizablePanel } from './useResizablePanel'
+import MessageBubble from './MessageBubble'
+import { ExportMenu } from './ExportMenu'
 import ProposalCard from './ProposalCard'
 import { proposalForMessage, proposalRefusalForMessage, resumeSequenceProgress, unsupportedProposalNotice } from './proposals'
 import RenderedMessage from './RenderedMessage'
 import { renderForMessage } from './renderers'
-import { SentAttachmentChips } from './AttachmentChips'
-import { AnsweredBy } from './AnsweredBy'
 
 
 // `open` and `draft` stay local: they are genuinely per-surface. Everything
@@ -17,8 +17,11 @@ import { AnsweredBy } from './AnsweredBy'
 export default function ChatWidget() {
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState('')
+  const [editNotice, setEditNotice] = useState(false)
+  const composerRef = useRef<HTMLTextAreaElement | null>(null)
   const messagesEndRef = useRef<HTMLDivElement | null>(null)
   const chat = useChat()
+  const { size, handleProps } = useResizablePanel('codejob.chat.panelSize')
   const { ready, status, statusError, selectedModel } = chat
 
   useEffect(() => {
@@ -34,12 +37,23 @@ export default function ChatWidget() {
     const text = draft.trim()
     if (!text || chat.busy) return
     setDraft('')
+    setEditNotice(false)
     await chat.sendMessage(text, selectedModel)
   }
 
   // Only IDs this thread fetched are clickable; anything the assistant wrote
   // without a tool behind it stays plain text.
   const citations = { ids: chat.recordIndex, onSelect: chat.focusCandidate }
+
+  // Edit loads the old prompt back into the composer as a new turn rather than
+  // rewriting the original. The transcript keeps every proposal card and
+  // approval event exactly where they happened, which is what this app treats
+  // as the authority for anything that changed a record.
+  const startEdit = (message: { content: string }) => {
+    setDraft(message.content)
+    setEditNotice(true)
+    composerRef.current?.focus()
+  }
 
   const currentSession = chat.sessions.find((session) => session.id === chat.sessionId)
 
@@ -52,7 +66,20 @@ export default function ChatWidget() {
   return (
     <aside className="chatWidget" aria-label="CodeJob assistant">
       {open ? (
-        <section className="chatPanel" role="dialog" aria-label="CodeJob assistant chat">
+        <section
+          className="chatPanel"
+          role="dialog"
+          aria-label="CodeJob assistant chat"
+          style={{ width: size.width, height: size.height }}
+        >
+          <div
+            className="chatResizeHandle"
+            role="separator"
+            tabIndex={0}
+            aria-label="Resize the assistant panel. Use the arrow keys."
+            aria-orientation="vertical"
+            {...handleProps}
+          />
           <header className="chatHeader">
             <div>
               <strong>CodeJob Assistant</strong>
@@ -61,6 +88,8 @@ export default function ChatWidget() {
               </small>
             </div>
             <div className="chatHeaderActions">
+              <BackgroundTasks apiBase={chat.apiBase} />
+              <ExportMenu apiBase={chat.apiBase} sessionId={chat.sessionId} />
               <button type="button" onClick={() => void chat.startSession()} disabled={!ready || chat.busy} aria-label="New chat">+</button>
               <button type="button" onClick={() => setOpen(false)} aria-label="Close chat">x</button>
             </div>
@@ -191,27 +220,20 @@ export default function ChatWidget() {
                     return <p key={message.id} className="chatProposalRefusal">{unsupported}</p>
                   }
                   if (message.role === 'tool') return null
-                  return (
-                    <div key={message.id} className={`chatBubble ${message.role}`}>
-                      {message.content
-                        ? renderMarkdownLite(message.content, citations)
-                        : chat.busy && message.role === 'assistant'
-                          ? <ToolProgress key={chat.activeTool?.startedAt ?? 'idle'} tool={chat.activeTool} completed={chat.completedTools} />
-                          : ''}
-                      <SentAttachmentChips
-                        apiBase={chat.apiBase}
-                        attachments={chat.attachments.filter((item) => item.message_id === message.id)}
-                      />
-                      <AnsweredBy message={message} />
-                    </div>
-                  )
+                  return <MessageBubble key={message.id} message={message} citations={citations} onEdit={startEdit} />
                 })}
                 <div ref={messagesEndRef} />
               </div>
         {chat.error ? <p className="chatError" role="alert">{chat.error} {chat.retry ? <button type="button" disabled={chat.busy} onClick={() => void chat.retry?.()}>Retry</button> : null}</p> : null}
+        {editNotice ? (
+          <p className="chatEditNotice">
+            Editing sends this as a new message. Everything above it stays as it happened.
+          </p>
+        ) : null}
               <form className="chatComposer" onSubmit={(event) => void submit(event)}>
                 <label className="visuallyHidden" htmlFor="chat-message">Message CodeJob Assistant</label>
                 <textarea
+                  ref={composerRef}
                   id="chat-message"
                   value={draft}
                   onChange={(event) => setDraft(event.target.value)}

@@ -3,6 +3,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { inboxFilterFields, inboxDefaultFilterValues } from '../inboxFilters'
 import FilterSortBar, { type FilterFieldConfig, type FilterValues, type SortOption } from './FilterSortBar'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -145,6 +146,13 @@ describe('FilterSortBar', () => {
 
     act(() => { vi.advanceTimersByTime(300) })
     expect(onFieldChange).not.toHaveBeenCalled()
+  })
+
+  it('keeps Gmail labels primary and moves interview type into More filters', () => {
+    renderBar({ fields: inboxFilterFields, values: inboxDefaultFilterValues })
+    const label = Array.from(container!.querySelectorAll('label')).find((el) => el.textContent?.includes('Gmail label'))!
+    expect(label.closest('.filterSortMoreToggle')).toBeNull()
+    expect(container!.querySelector('.filterSortMoreToggle')?.textContent).toContain('Interview type')
   })
 
   it('calls onClear when Clear filters is clicked', () => {

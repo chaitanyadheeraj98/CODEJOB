@@ -277,6 +277,7 @@ class UserSettings(Base):
     feature_strict_candidate_screening_enabled: Mapped[bool] = mapped_column(default=False)
     feature_email_tracking_enabled: Mapped[bool] = mapped_column(default=False)
     feature_reply_inbox_enabled: Mapped[bool] = mapped_column(default=False)
+    feature_label_tracking_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     feature_applications_enabled: Mapped[bool] = mapped_column(default=False)
     feature_application_automation_enabled: Mapped[bool] = mapped_column(default=False)
     feature_application_outreach_drafts_enabled: Mapped[bool] = mapped_column(default=False)
@@ -495,6 +496,56 @@ class EmailOpenEvent(Base):
     is_likely_proxy: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
+class GmailLabel(Base):
+    __tablename__ = "gmail_labels"
+    __table_args__ = (UniqueConstraint("owner_id", "external_label_id", name="ux_gmail_labels_owner_external"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    external_label_id: Mapped[str] = mapped_column(String(120))
+    name: Mapped[str] = mapped_column(String(255))
+    label_type: Mapped[str] = mapped_column(String(20), default="user", index=True)
+    is_tracked: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    color_background: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    color_text: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    message_count_snapshot: Mapped[int] = mapped_column(Integer, default=0)
+    last_synced_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    deleted_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+
+class TrackedThread(Base):
+    __tablename__ = "tracked_threads"
+    __table_args__ = (UniqueConstraint("owner_id", "external_thread_id", name="ux_tracked_threads_owner_thread"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    external_thread_id: Mapped[str] = mapped_column(String(255), index=True)
+    conversation_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    label_external_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    subject_snapshot: Mapped[str] = mapped_column(String(500), default="")
+    participants_json: Mapped[str] = mapped_column(Text, default="[]")
+    first_seen_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    last_seen_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    last_message_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, index=True)
+    untracked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
+
+
+class RecruiterWatch(Base):
+    __tablename__ = "recruiter_watches"
+    __table_args__ = (UniqueConstraint("owner_id", "watch_type", "value", name="ux_recruiter_watches_owner_value"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    watch_type: Mapped[str] = mapped_column(String(10), index=True)
+    value: Mapped[str] = mapped_column(String(255), index=True)
+    source_thread_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    origin_label_external_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    match_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    last_matched_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    released_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
+
+
 class EmailConversation(Base):
     __tablename__ = "email_conversations"
     __table_args__ = (
@@ -503,11 +554,17 @@ class EmailConversation(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     owner_id: Mapped[str] = mapped_column(String(100), default="default-owner", index=True)
-    root_recruiter_email_id: Mapped[int] = mapped_column(
+    root_recruiter_email_id: Mapped[int | None] = mapped_column(
         Integer,
         ForeignKey("recruiter_emails.id", name="fk_email_conversations_root_recruiter_email", ondelete="RESTRICT"),
+        nullable=True,
         index=True,
     )
+    origin: Mapped[str] = mapped_column(String(20), default="sent", server_default="sent", index=True)
+    source_label_external_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    subject_snapshot: Mapped[str] = mapped_column(String(500), default="")
+    recruiter_snapshot: Mapped[str] = mapped_column(String(255), default="")
+    recruiter_email_snapshot: Mapped[str] = mapped_column(String(255), default="")
     external_thread_id: Mapped[str] = mapped_column(String(255), index=True)
     status: Mapped[str] = mapped_column(String(40), default="sent", index=True)
     last_message_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, index=True)
@@ -530,6 +587,10 @@ class EmailReplyMessage(Base):
     external_rfc_message_id: Mapped[str | None] = mapped_column(String(500), nullable=True)
     in_reply_to_header: Mapped[str | None] = mapped_column(Text, nullable=True)
     references_header: Mapped[str | None] = mapped_column(Text, nullable=True)
+    label_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    to_header: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cc_header: Mapped[str | None] = mapped_column(Text, nullable=True)
+    matched_watch_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     sender: Mapped[str] = mapped_column(String(500), default="")
     body: Mapped[str] = mapped_column(Text, default="")
     snippet: Mapped[str] = mapped_column(Text, default="")
@@ -1303,6 +1364,9 @@ class AppTSApplication(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     owner_id: Mapped[str] = mapped_column(String(100), default="default-owner", index=True)
+    tracking_origin: Mapped[str] = mapped_column(String(20), default="manual", server_default="manual", index=True)
+    source_thread_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    source_label_external_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     resume_asset_id: Mapped[int] = mapped_column(Integer, index=True)
     resume_version_snapshot: Mapped[int] = mapped_column(Integer)
     resume_file_name_snapshot: Mapped[str] = mapped_column(String(255))

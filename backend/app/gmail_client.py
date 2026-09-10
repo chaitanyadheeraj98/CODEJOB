@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.message import EmailMessage
 from pathlib import Path
-from typing import Any, TypedDict, cast
+from typing import Any, NotRequired, TypedDict, cast
 
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -53,6 +53,7 @@ class GmailMessageCandidate(TypedDict):
     label_ids: list[str]
     to_header: str
     cc_header: str
+    bcc_header: NotRequired[str]
     list_id: str
     list_post: str
     list_unsubscribe: str
@@ -391,6 +392,7 @@ def _message_details_to_candidate(details: dict[str, Any]) -> GmailMessageCandid
         "label_ids": [str(label) for label in details.get("labelIds", []) if isinstance(label, str)],
         "to_header": to_header,
         "cc_header": cc_header,
+        "bcc_header": _get_header(headers, "Bcc"),
         "list_id": list_id,
         "list_post": list_post,
         "list_unsubscribe": list_unsubscribe,
@@ -402,10 +404,23 @@ def _message_details_to_candidate(details: dict[str, Any]) -> GmailMessageCandid
 def list_unread_candidates_by_query(
     query: str, max_results_per_page: int = 100, max_total_results: int | None = None
 ) -> list[GmailMessageCandidate]:
+    return _list_candidates(query=query, max_results_per_page=max_results_per_page, max_total_results=max_total_results)
+
+
+def list_candidates_by_label_ids(label_ids: list[str], *, unread_only=False, max_total_results=None, skip_message_ids=None) -> list[GmailMessageCandidate]:
+    return _list_candidates(query="is:unread" if unread_only else "", label_ids=label_ids,
+        max_total_results=max_total_results, skip_message_ids=skip_message_ids)
+
+
+def list_candidates_by_query(query: str, *, max_total_results=None, skip_message_ids=None) -> list[GmailMessageCandidate]:
+    return _list_candidates(query=query, max_total_results=max_total_results, skip_message_ids=skip_message_ids)
+
+
+def _list_candidates(*, query: str, label_ids=None, max_results_per_page=100, max_total_results=None, skip_message_ids=None) -> list[GmailMessageCandidate]:
     service = _gmail_service()
     page_token: str | None = None
     results: list[GmailMessageCandidate] = []
-
+    skip_message_ids = skip_message_ids or set()
     while True:
         if max_total_results is not None and len(results) >= max_total_results:
             break
@@ -414,6 +429,7 @@ def list_unread_candidates_by_query(
             q=query,
             maxResults=max_results_per_page,
             pageToken=page_token,
+            **({"labelIds": label_ids} if label_ids is not None else {}),
         )
         response = _as_dict(req.execute())
         messages = _as_list_of_dicts(response.get("messages"))
@@ -422,6 +438,8 @@ def list_unread_candidates_by_query(
                 break
             message_id = message.get("id")
             if not isinstance(message_id, str) or not message_id:
+                continue
+            if message_id in skip_message_ids:
                 continue
             try:
                 details = _as_dict(
@@ -465,6 +483,15 @@ def get_candidates_by_message_ids(message_ids: list[str]) -> list[GmailMessageCa
         if candidate is not None:
             results.append(candidate)
     return results
+
+
+def list_thread_ids_by_label(label_id: str, max_results: int = 500) -> set[str]:
+    response = _as_dict(_gmail_service().users().messages().list(
+        userId="me", labelIds=[label_id], maxResults=min(max_results, 500),
+    ).execute())
+    if response.get("nextPageToken"):
+        raise RuntimeError("Label membership scan incomplete; retaining existing tracking until a complete scan succeeds")
+    return {str(m["threadId"]) for m in _as_list_of_dicts(response.get("messages")) if m.get("threadId")}
 
 
 def list_unread_thread_ids(max_results: int = 500) -> set[str]:

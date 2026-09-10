@@ -1,16 +1,21 @@
 from __future__ import annotations
 
+import logging
+import shutil
+import tempfile
 from datetime import UTC, datetime
 from contextlib import aclosing
 from pathlib import Path
 from time import perf_counter
+from typing import Literal
 
 import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
+from starlette.background import BackgroundTask
 from sqlalchemy.orm import Session
 
-from app.ai.chat.agent import chat_models
+from app.ai.chat.agent import chat_models, selectable_models
 from app.ai.chat import turns
 from app.config import settings
 from app.db import get_db
@@ -27,9 +32,12 @@ from app.schemas import (
     ProposalOutcomeRequest,
 )
 from app.services.chat_attachment_service import ChatAttachmentService
+from app.services.chat_export_service import TRANSCRIPT_SPEC, download_name, transcript_markdown
+from app.services.resume_render_service import build_docx, build_pdf
 from app.services.chat_service import ChatService
 
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/chat", tags=["chat"])
 _chat_service: ChatService | None = None
 
@@ -89,7 +97,7 @@ async def chat_status(
         chat_last_failure_code=runtime_state.chat_last_failure_code,
         mcp_status=runtime_state.chat_mcp_status,
         model=runtime_state.chat_active_model or settings.ollama_chat_model,
-        available_models=chat_models(),
+        available_models=selectable_models(),
     )
 
 
@@ -189,6 +197,59 @@ async def send_chat_message(
         response_events(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+EXPORT_MEDIA_TYPES = {
+    "md": "text/markdown",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "pdf": "application/pdf",
+}
+
+
+@router.get("/sessions/{session_id}/export", dependencies=[Depends(require_chat_enabled)])
+def export_chat_session(
+    session_id: int,
+    fmt: Literal["md", "docx", "pdf"] = Query(default="pdf"),
+    db: Session = Depends(get_db),
+    service: ChatService = Depends(get_chat_service),
+) -> FileResponse:
+    """Download the conversation as Markdown, Word or PDF.
+
+    Nothing is stored: the transcript is built from the rows that already exist,
+    rendered, streamed, and the working directory removed once the bytes are on
+    the wire. Same shape as the resume draft export, and the same reason - a
+    downloaded file the user chose to keep is not app state.
+    """
+    session = service._session_or_404(db, session_id)
+    messages = service.get_session_messages(db, session_id)
+    content = transcript_markdown(session, messages)
+
+    work = Path(tempfile.mkdtemp(prefix="chat-export-"))
+    cleanup = BackgroundTask(shutil.rmtree, work, ignore_errors=True)
+    target = work / f"transcript.{fmt}"
+    try:
+        if fmt == "md":
+            target.write_text(content, encoding="utf-8")
+        elif fmt == "docx":
+            build_docx(content, TRANSCRIPT_SPEC, target)
+        else:
+            build_pdf(content, TRANSCRIPT_SPEC, target)
+    except RuntimeError as exc:
+        # LibreOffice missing or every render slot busy. Both are "try again or
+        # take the .docx", not a defect in the transcript.
+        shutil.rmtree(work, ignore_errors=True)
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        shutil.rmtree(work, ignore_errors=True)
+        logger.exception("Chat export failed for session %s as %s", session_id, fmt)
+        raise HTTPException(status_code=500, detail=f"Could not build the {fmt.upper()}: {exc}") from exc
+
+    return FileResponse(
+        target,
+        media_type=EXPORT_MEDIA_TYPES[fmt],
+        filename=download_name(session, fmt),
+        background=cleanup,
     )
 
 

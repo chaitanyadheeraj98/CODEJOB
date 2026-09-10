@@ -172,16 +172,25 @@ class ChatRouteTests(unittest.TestCase):
         self.assertEqual(status.json()["model"], main.settings.ollama_chat_model_fallback)
 
     def test_status_lists_all_configured_models(self) -> None:
+        """The picker offers the ladder *and* everything else configured.
+
+        This used to assert the list was exactly the three ladder rungs, which
+        made the picker unable to offer a model nobody had promoted to a
+        fallback yet. The ladder still leads, because those are the models the
+        turn will actually try on "auto".
+        """
         main.settings.feature_chat_enabled = True
-        status = self.client.get("/chat/status")
-        self.assertEqual(
-            status.json()["available_models"],
-            [
-                main.settings.ollama_chat_model,
-                main.settings.ollama_chat_model_fallback,
-                main.settings.ollama_chat_model_fallback2,
-            ],
-        )
+        offered = self.client.get("/chat/status").json()["available_models"]
+        ladder = [
+            main.settings.ollama_chat_model,
+            main.settings.ollama_chat_model_fallback,
+            main.settings.ollama_chat_model_fallback2,
+        ]
+        self.assertEqual(offered[: len(ladder)], ladder)
+        for model in main.settings.ollama_selectable_models.split(","):
+            self.assertIn(model.strip(), offered)
+        # Deduped: a ladder model also named in the selectable list appears once.
+        self.assertEqual(len(offered), len(set(offered)))
 
     def test_manual_model_selection_does_not_fail_over_on_error(self) -> None:
         main.settings.feature_chat_enabled = True
