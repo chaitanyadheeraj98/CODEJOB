@@ -496,6 +496,51 @@ class EmailOpenEvent(Base):
     is_likely_proxy: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
+class GmailCredential(Base):
+    """One owner's Gmail OAuth connection, refresh token encrypted at rest.
+
+    Replaces a single JSON file on a Docker volume that the backend and worker
+    both wrote with no locking. A row is not just tidier: refresh tokens are
+    credentials, so they need encryption and an audit trail, and the weekly
+    reconnect that Testing-status OAuth forces makes "list every connection and
+    its state" an operational query a directory listing cannot answer.
+
+    No foreign key to `user_settings` despite the shared `owner_id`:
+    settings rows are created lazily, so a credential can legitimately be
+    written before one exists and an FK would turn that ordering into a crash.
+    The relationship is enforced in the service layer instead.
+    """
+
+    __tablename__ = "gmail_credentials"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    # The address that actually consented, read from users.getProfile after the
+    # token exchange. Indexed because a Pub/Sub notification identifies the
+    # mailbox by `emailAddress` and nothing else - capability 4 looks up rows
+    # by exactly this column. 320 is the RFC 5321 maximum.
+    google_email: Mapped[str] = mapped_column(String(320), default="", index=True)
+    # Google's stable `sub` claim, which survives the user changing their email
+    # address. Nullable because reading it needs the openid scope, and widening
+    # the scope set would force every existing user to re-consent.
+    google_subject: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    access_token_encrypted: Mapped[str] = mapped_column(Text, default="")
+    # Nullable because Google omits the refresh token on re-consent unless
+    # prompt=consent is forced. See gmail_credential_service.save_credentials,
+    # which preserves the stored one rather than writing this null.
+    refresh_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    token_uri: Mapped[str] = mapped_column(String(255), default="https://oauth2.googleapis.com/token")
+    # What Google actually granted, which can be narrower than what was asked.
+    scopes_json: Mapped[str] = mapped_column(Text, default="[]")
+    expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    connected_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    last_refreshed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    last_error: Mapped[str] = mapped_column(Text, default="")
+    # Non-null means "needs reconnect". Indexed because get_credentials filters
+    # on it on every single Gmail call.
+    revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
+
+
 class GmailLabel(Base):
     __tablename__ = "gmail_labels"
     __table_args__ = (UniqueConstraint("owner_id", "external_label_id", name="ux_gmail_labels_owner_external"),)
