@@ -218,6 +218,8 @@ from app.services import (
     email_lookup_service,
     end_client_validation,
     filter_options_service,
+    label_dossier_service,
+    email_inbox_service,
     nvoids_search_job,
     opportunity_lineage_service,
     policy_service,
@@ -254,6 +256,9 @@ from app.services.gmail_group_source_service import (
 from app.services.gmail_labeling_runtime_service import GmailLabelingRuntimeService
 from app.services.email_inbox_service import TRANSPARENT_PIXEL_PNG, record_open, reply_count_for_email
 from app.services.github_issue_service import GithubIssueServiceError, create_github_issue
+from app.services import gmail_label_service
+from app.models import RecruiterWatch, TrackedThread
+from app import gmail_client
 from app.services.orchestration_service import OrchestrationDeps, OrchestrationService
 from app.services.requirement_expansion_service import RequirementExpansionService
 from app.services.resume_enrichment_service import (
@@ -292,6 +297,7 @@ from app.services.telegram_runtime_service import TelegramRuntime, TelegramRunti
 from app.schemas import (
     AIStatusResponse,
     ApplicationCreateRequest,
+    AppTSApplicationCreateRequest,
     ApplicationDashboardSummaryResponse,
     ApplicationDraftMessageRequest,
     ApplicationDraftMessageResponse,
@@ -367,6 +373,9 @@ from app.schemas import (
     ConversationDetailResponse,
     ConversationReplyRequest,
     ConversationSummaryResponse,
+    GmailLabelResponse, GmailLabelListResponse, TrackedLabelsRequest,
+    LabelThreadListResponse, LabelThreadPromoteRequest, RecordLookupResponse,
+    LabelOverviewResponse, ThreadDossierResponse,
     ChatSendReplyRequest,
     GithubIssueCreateRequest,
     CustomSkillTaxonomyEntryResponse,
@@ -2601,6 +2610,7 @@ def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
         feature_strict_candidate_screening_enabled=s.feature_strict_candidate_screening_enabled,
         feature_email_tracking_enabled=s.feature_email_tracking_enabled,
         feature_reply_inbox_enabled=s.feature_reply_inbox_enabled,
+        feature_label_tracking_enabled=s.feature_label_tracking_enabled,
         feature_applications_enabled=s.feature_applications_enabled,
         feature_application_automation_enabled=s.feature_application_automation_enabled,
         feature_application_outreach_drafts_enabled=s.feature_application_outreach_drafts_enabled,
@@ -3044,6 +3054,7 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
     s.feature_gmail_requirement_groups_enabled = payload.feature_gmail_requirement_groups_enabled
     s.feature_email_tracking_enabled = payload.feature_email_tracking_enabled
     s.feature_reply_inbox_enabled = payload.feature_reply_inbox_enabled
+    s.feature_label_tracking_enabled = payload.feature_label_tracking_enabled
     s.feature_applications_enabled = payload.feature_applications_enabled
     s.feature_application_automation_enabled = payload.feature_application_automation_enabled
     s.feature_application_outreach_drafts_enabled = payload.feature_application_outreach_drafts_enabled
@@ -5016,6 +5027,42 @@ def gmail_oauth_start() -> OAuthStartResponse:
 @app.get("/gmail/oauth/url", response_model=OAuthUrlResponse)
 def gmail_oauth_url() -> OAuthUrlResponse:
     return OAuthUrlResponse(authorization_url=oauth_authorization_url())
+
+
+def _gmail_label_catalog(db: Session, *, tracked_only=False, include_deleted=False) -> GmailLabelListResponse:
+    rows = gmail_label_service.list_labels(db, settings.owner_id, tracked_only=tracked_only, include_deleted=include_deleted)
+    watch_count = db.query(RecruiterWatch).filter(RecruiterWatch.owner_id == settings.owner_id, RecruiterWatch.released_at.is_(None)).count()
+    return GmailLabelListResponse(
+        items=[GmailLabelResponse(external_label_id=r.external_label_id, name=r.name, label_type=r.label_type,
+            is_tracked=r.is_tracked, color_background=r.color_background, color_text=r.color_text,
+            thread_count=r.message_count_snapshot, last_synced_at=r.last_synced_at) for r in rows],
+        synced_at=max((r.last_synced_at for r in rows), default=None),
+        tracking_available=settings.feature_label_tracking_enabled,
+        watch_limit_reached=watch_count >= settings.label_tracking_max_watches,
+    )
+
+
+@app.get("/gmail/labels", response_model=GmailLabelListResponse)
+def gmail_labels(tracked_only: bool = False, include_deleted: bool = False, db: Session = Depends(get_db)):
+    return _gmail_label_catalog(db, tracked_only=tracked_only, include_deleted=include_deleted)
+
+
+@app.post("/gmail/labels/sync", response_model=GmailLabelListResponse)
+def sync_gmail_labels(db: Session = Depends(get_db)):
+    try:
+        _get_orchestration_service().sync_gmail_labels(db)
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(502, "Gmail label sync failed") from exc
+    db.commit()
+    return _gmail_label_catalog(db)
+
+
+@app.patch("/gmail/labels/tracked", response_model=GmailLabelListResponse)
+def set_tracked_gmail_labels(payload: TrackedLabelsRequest, db: Session = Depends(get_db)):
+    _get_orchestration_service().set_tracked_labels(db, payload.external_label_ids)
+    db.commit()
+    return _gmail_label_catalog(db)
 
 
 @app.post("/gmail/labeling/preview", response_model=GmailLabelingPreviewResponse)
@@ -9264,6 +9311,86 @@ def list_appts_bookmarked_requirements(
     return CandidateListResponse(items=items, next_cursor=next_cursor, has_next=has_next, total=total)
 
 
+@app.get("/records/by-message/{message_id:path}", response_model=RecordLookupResponse)
+def get_record_by_message(message_id: str, db: Session = Depends(get_db)):
+    from app.mcp_server.tools.records import lookup_record
+    result = lookup_record(db, settings.owner_id, message_id)
+    if result is None:
+        raise HTTPException(404, "No record for that message id")
+    return result
+
+
+@app.get("/appts/label-threads", response_model=LabelThreadListResponse)
+def list_appts_label_threads(label: str | None = Query(default=None, max_length=255), q: str | None = Query(default=None, max_length=500),
+    status: str = "all", sort: str = "newest", page: int = Query(1, ge=1), limit: int = Query(25, ge=1, le=100),
+    date_filter: str | None = None, date_from: date | None = None, date_to: date | None = None, db: Session = Depends(get_db)):
+    _require_applications_enabled(db)
+    start, end = _date_range_utc_window(date_filter, date_from, date_to) if date_filter else (None, None)
+    return _get_orchestration_service().list_label_threads(db, owner_id=settings.owner_id, label=label, q=q, status=status, sort=sort, page=page, limit=limit, date_from=start, date_to=end)
+
+
+def _require_label_tracking_enabled(db: Session) -> None:
+    if not _get_settings(db).feature_label_tracking_enabled:
+        raise HTTPException(404, "Gmail label tracking is turned off in Settings")
+
+
+@app.get("/labels/overview", response_model=LabelOverviewResponse)
+def labels_overview(db: Session = Depends(get_db)):
+    _require_label_tracking_enabled(db)
+    return label_dossier_service.label_overview(db, settings.owner_id)
+
+
+@app.get("/labels/threads/{thread_id}/dossier", response_model=ThreadDossierResponse)
+def label_thread_dossier(thread_id: str, db: Session = Depends(get_db)):
+    """Everything one labeled thread is responsible for, in one chronology.
+
+    Read-only and Gmail-free: it joins rows the sync already captured, so it is
+    safe to call on every selection change without touching the per-minute
+    quota that the sync endpoints share.
+    """
+    _require_label_tracking_enabled(db)
+    user_settings = _get_settings(db)
+    owner_email = (user_settings.signature_email or "").strip() or DEFAULT_SIGNATURE_EMAIL
+    return label_dossier_service.thread_dossier(db, settings.owner_id, thread_id, owner_email=owner_email)
+
+
+@app.post("/labels/threads/{thread_id}/read", response_model=ThreadDossierResponse)
+def mark_label_thread_read(thread_id: str, db: Session = Depends(get_db)):
+    """Clear unread across every conversation in the dossier, not just one.
+
+    The unread badge on the rail counts the whole relationship, so reading it
+    has to clear the whole relationship or the badge never reaches zero.
+    """
+    _require_label_tracking_enabled(db)
+    user_settings = _get_settings(db)
+    owner_email = (user_settings.signature_email or "").strip() or DEFAULT_SIGNATURE_EMAIL
+    dossier = label_dossier_service.thread_dossier(db, settings.owner_id, thread_id, owner_email=owner_email)
+    for conversation_id in sorted({message.conversation_id for message in dossier.messages}):
+        email_inbox_service.mark_conversation_read(db, settings.owner_id, conversation_id)
+    db.commit()
+    return label_dossier_service.thread_dossier(db, settings.owner_id, thread_id, owner_email=owner_email)
+
+
+@app.post("/appts/label-threads/{thread_id}/promote", response_model=ApplicationResponse, status_code=201)
+def promote_appts_label_thread(thread_id: str, payload: LabelThreadPromoteRequest, response: Response, db: Session = Depends(get_db)):
+    _require_applications_enabled(db)
+    thread = db.query(TrackedThread).filter(TrackedThread.owner_id == settings.owner_id, TrackedThread.external_thread_id == thread_id).first()
+    if thread is None:
+        raise HTTPException(404, "Label thread not found")
+    try:
+        row, created = appts_service.create_tracked_application_from_label_thread(db, owner_id=settings.owner_id, thread=thread, resume_asset_id=payload.resume_asset_id)
+    except application_service.ApplicationReferenceNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except application_service.ApplicationValidationError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    db.commit()
+    db.refresh(row)
+    if created:
+        appts_service.enqueue_embedding_generation(row.id)
+    response.status_code = 201 if created else 200
+    return _application_response(db, row, models=appts_service.APPTS_MODELS)
+
+
 @app.post("/appts/applications/manual", response_model=ApplicationResponse, status_code=201)
 def create_appts_manual(payload: ManualApplicationCreateRequest, response: Response, db: Session = Depends(get_db)) -> ApplicationResponse:
     _require_applications_enabled(db)
@@ -9280,10 +9407,13 @@ def create_appts_manual(payload: ManualApplicationCreateRequest, response: Respo
 
 
 @app.post("/appts/applications", response_model=ApplicationResponse, status_code=201)
-def create_appts_from_opportunity(payload: ApplicationCreateRequest, response: Response, db: Session = Depends(get_db)) -> ApplicationResponse:
+def create_appts_from_opportunity(payload: AppTSApplicationCreateRequest, response: Response, db: Session = Depends(get_db)) -> ApplicationResponse:
     _require_applications_enabled(db)
     try:
-        row, created = appts_service.create_tracked_application_from_opportunity(db, owner_id=settings.owner_id, **payload.model_dump())
+        if payload.recruiter_email_id is not None:
+            row, created = appts_service.create_tracked_application_from_record(db, owner_id=settings.owner_id, **payload.model_dump(exclude={"recruiter_opportunity_id"}))
+        else:
+            row, created = appts_service.create_tracked_application_from_opportunity(db, owner_id=settings.owner_id, **payload.model_dump(exclude={"recruiter_email_id"}))
     except application_service.ApplicationReferenceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     db.commit(); db.refresh(row)
@@ -10288,6 +10418,8 @@ def get_sent_item_details(email_id: int, db: Session = Depends(get_db)) -> SentI
 
 @app.get("/inbox/conversations", response_model=list[ConversationSummaryResponse])
 def get_inbox_conversations(
+    label: str | None = Query(default=None, max_length=255),
+    origin: str | None = Query(default=None),
     recruiter: str | None = Query(default=None, max_length=255),
     subject: str | None = Query(default=None, max_length=500),
     role: str | None = Query(default=None, max_length=255),
@@ -10302,11 +10434,13 @@ def get_inbox_conversations(
     db: Session = Depends(get_db),
 ) -> list[ConversationSummaryResponse]:
     start, end = _date_range_utc_window(date_filter, date_from, date_to) if date_filter else (None, None)
-    return _get_orchestration_service().list_inbox_conversations(db, recruiter=recruiter, subject=subject, role=role, location=location, interview_type=interview_type, status=status, unread_only=unread_only, sort=sort, date_from=start, date_to=end)
+    return _get_orchestration_service().list_inbox_conversations(db, label=label, origin=origin, recruiter=recruiter, subject=subject, role=role, location=location, interview_type=interview_type, status=status, unread_only=unread_only, sort=sort, date_from=start, date_to=end)
 
 
 @app.post("/inbox/conversations/refresh", response_model=list[ConversationSummaryResponse])
 def refresh_inbox_conversations(
+    label: str | None = Query(default=None, max_length=255),
+    origin: str | None = Query(default=None),
     recruiter: str | None = Query(default=None, max_length=255),
     subject: str | None = Query(default=None, max_length=500),
     role: str | None = Query(default=None, max_length=255),
@@ -10321,7 +10455,7 @@ def refresh_inbox_conversations(
     db: Session = Depends(get_db),
 ) -> list[ConversationSummaryResponse]:
     start, end = _date_range_utc_window(date_filter, date_from, date_to) if date_filter else (None, None)
-    return _get_orchestration_service().refresh_inbox_replies(db, recruiter=recruiter, subject=subject, role=role, location=location, interview_type=interview_type, status=status, unread_only=unread_only, sort=sort, date_from=start, date_to=end)
+    return _get_orchestration_service().refresh_inbox_replies(db, label=label, origin=origin, recruiter=recruiter, subject=subject, role=role, location=location, interview_type=interview_type, status=status, unread_only=unread_only, sort=sort, date_from=start, date_to=end)
 
 
 @app.get("/inbox/conversations/{conversation_id}", response_model=ConversationDetailResponse)

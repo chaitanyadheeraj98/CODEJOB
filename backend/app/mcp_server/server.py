@@ -44,6 +44,8 @@ from app.mcp_server.tools import (
     propose_manual_requirement,
     propose_profile_update,
     propose_record_update,
+    propose_track_record,
+    resolve_record_by_message_id,
     propose_resume_draft,
     propose_resume_section,
     propose_scheduled_task,
@@ -170,6 +172,23 @@ SCHEDULING_TOOLS = (
     propose_scheduled_task,
 )
 
+# Same reasoning, one feature later. Label tracking ships dark
+# (feature_label_tracking_enabled defaults False), and until a tracked label has
+# been synced there is nothing for a message id to resolve to that
+# search_candidates cannot already reach. Registering the pair by default would
+# put two more tools on the same unmeasured 35-tool baseline the two groups
+# above are protecting - and offer to track a thread the app cannot see.
+LABEL_TRACKING_TOOLS = (
+    resolve_record_by_message_id,
+)
+
+# Split from the pair above because proposing a write is gated twice: the
+# feature has to be on *and* chat actions have to be enabled, the same double
+# gate every other propose_* tool sits behind.
+LABEL_TRACKING_ACTION_TOOLS = (
+    propose_track_record,
+)
+
 for tool in BASE_TOOLS:
     mcp.tool()(tool)
 
@@ -181,9 +200,16 @@ if settings.feature_scheduling_enabled:
     for tool in SCHEDULING_TOOLS:
         mcp.tool()(tool)
 
+if settings.feature_label_tracking_enabled:
+    for tool in LABEL_TRACKING_TOOLS:
+        mcp.tool()(tool)
+
 if settings.feature_chat_actions_enabled:
     for tool in CHAT_ACTION_TOOLS:
         mcp.tool()(tool)
+    if settings.feature_label_tracking_enabled:
+        for tool in LABEL_TRACKING_ACTION_TOOLS:
+            mcp.tool()(tool)
     if settings.searxng_url:
         from app.mcp_server.tools.web_search import search_web
 

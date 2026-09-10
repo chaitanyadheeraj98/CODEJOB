@@ -127,6 +127,12 @@ class Settings(BaseSettings):
     # labeling back on is env-only. CodeJob/Replied is a separate path and is
     # unaffected either way.
     feature_gmail_labeling_enabled: bool = False
+    feature_label_tracking_enabled: bool = False
+    label_tracking_max_threads_per_sync: int = Field(default=200, ge=1)
+    label_tracking_max_messages_per_sync: int = Field(default=500, ge=1)
+    label_tracking_max_watches: int = Field(default=200, ge=1)
+    label_tracking_watch_lookback_days: int = Field(default=45, ge=1)
+    label_watch_extra_freemail_domains: str = ""
     chat_history_max_messages: int = 20
     chat_message_char_limit: int = 4000
     searxng_url: str = Field(default="", validation_alias=AliasChoices("SEARXNG_URL"))

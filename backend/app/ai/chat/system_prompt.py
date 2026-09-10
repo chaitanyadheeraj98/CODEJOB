@@ -356,6 +356,8 @@ user as a chooser - do not pick for them and do not restate the options as
 prose. No match names the fields that were searched; say so rather than
 guessing.
 
+For a Gmail message id (hex, FMfcgz-prefixed, or an RFC <...@...> id) or thread id, call resolve_record_by_message_id; to track the resolved record, use propose_track_record with the user's chosen resume_asset_id and wait for their confirmation click.
+
 To change a field on an opportunity, application, or contact, call
 propose_record_update. Its card shows the current value beside the new one for
 every field. To add a note, call propose_add_note instead - never send `notes`

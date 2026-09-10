@@ -282,6 +282,7 @@ class SettingsRequest(BaseModel):
     feature_strict_candidate_screening_enabled: bool = False
     feature_email_tracking_enabled: bool = False
     feature_reply_inbox_enabled: bool = False
+    feature_label_tracking_enabled: bool = False
     feature_applications_enabled: bool = False
     feature_application_automation_enabled: bool = False
     feature_application_outreach_drafts_enabled: bool = False
@@ -1445,9 +1446,131 @@ class SentItemDetailsResponse(BaseModel):
     reply_count: int = 0
 
 
+class GmailLabelResponse(BaseModel):
+    external_label_id: str
+    name: str
+    label_type: str
+    is_tracked: bool
+    color_background: str | None = None
+    color_text: str | None = None
+    thread_count: int = 0
+    last_synced_at: datetime
+
+
+class GmailLabelListResponse(BaseModel):
+    items: list[GmailLabelResponse]
+    synced_at: datetime | None = None
+    tracking_available: bool = False
+    watch_limit_reached: bool = False
+
+
+class TrackedLabelsRequest(BaseModel):
+    external_label_ids: list[str] = Field(max_length=50)
+
+
+class LabelThreadResponse(BaseModel):
+    thread_id: str
+    subject: str
+    recruiter: str
+    recruiter_email: str | None = None
+    labels: list[str] = Field(default_factory=list)
+    last_message_at: datetime
+    message_count: int
+    unread_count: int
+    conversation_id: int | None
+    gmail_thread_link: str | None = None
+    appts_application_id: int | None = None
+    record_id: str | None = None
+
+
+class LabelThreadListResponse(BaseModel):
+    items: list[LabelThreadResponse]
+    total: int
+    next_cursor: int | None = None
+    has_next: bool = False
+
+
+class LabelThreadPromoteRequest(BaseModel):
+    resume_asset_id: int = Field(gt=0)
+
+
+class LabelOverviewItem(BaseModel):
+    external_label_id: str
+    name: str
+    color_background: str | None = None
+    color_text: str | None = None
+    thread_count: int = 0
+    unread_count: int = 0
+    last_message_at: datetime | None = None
+
+
+class LabelOverviewResponse(BaseModel):
+    items: list[LabelOverviewItem] = Field(default_factory=list)
+    tracked_thread_total: int = 0
+    # Drives the empty state's copy: "no labels tracked" and "no labels exist in
+    # Gmail" need different instructions, and only the server knows which it is.
+    untracked_label_count: int = 0
+
+
+class ThreadDossierContact(BaseModel):
+    address: str
+    name: str
+    domain: str
+    kind: str
+    message_count: int = 0
+    watched: bool = False
+
+
+class ThreadDossierMessage(BaseModel):
+    id: int
+    conversation_id: int
+    external_thread_id: str
+    direction: str
+    sender: str
+    sender_address: str
+    to_header: str | None = None
+    cc_header: str | None = None
+    subject: str = ""
+    snippet: str = ""
+    body: str = ""
+    occurred_at: datetime
+    read_at: datetime | None = None
+    origin: str = "label"
+    gmail_link: str | None = None
+
+
+class ThreadDossierResponse(BaseModel):
+    thread_id: str
+    subject: str = ""
+    labels: list[str] = Field(default_factory=list)
+    last_message_at: datetime
+    conversation_id: int | None = None
+    thread_count: int = 0
+    unread_count: int = 0
+    gmail_thread_link: str | None = None
+    appts_application_id: int | None = None
+    record_id: str | None = None
+    watches: list[str] = Field(default_factory=list)
+    contacts: list[ThreadDossierContact] = Field(default_factory=list)
+    messages: list[ThreadDossierMessage] = Field(default_factory=list)
+
+
+class RecordLookupResponse(BaseModel):
+    record_id: str | None = None
+    origin: str
+    recruiter_email_id: int | None = None
+    conversation_id: int | None = None
+    thread_id: str | None = None
+    subject: str
+    tracked: bool
+    appts_application_id: int | None = None
+
+
 class ConversationSummaryResponse(BaseModel):
     id: int
-    root_recruiter_email_id: int
+    root_recruiter_email_id: int | None
+    origin: str = "sent"
+    labels: list[str] = Field(default_factory=list)
     recruiter: str
     recruiter_email: str | None = None
     subject: str
@@ -1862,6 +1985,21 @@ class ApplicationCreateRequest(BaseModel):
     dedupe_key: str = Field(min_length=1, max_length=64)
 
 
+class AppTSApplicationCreateRequest(BaseModel):
+    resume_asset_id: int | None = Field(default=None, gt=0)
+    recruiter_opportunity_id: int | None = Field(default=None, gt=0)
+    recruiter_email_id: int | None = Field(default=None, gt=0)
+    dedupe_key: str = Field(min_length=1, max_length=64)
+
+    @model_validator(mode="after")
+    def exactly_one_source(self):
+        if (self.recruiter_opportunity_id is None) == (self.recruiter_email_id is None):
+            raise ValueError("Provide exactly one opportunity or recruiter email id")
+        if self.recruiter_email_id is not None and self.resume_asset_id is None:
+            raise ValueError("Choose a resume for the requirement")
+        return self
+
+
 class ManualApplicationCreateRequest(BaseModel):
     resume_asset_id: int = Field(gt=0)
     recruiter_opportunity_id: int | None = Field(default=None, gt=0)
@@ -2055,6 +2193,9 @@ class ApplicationSkillGapResponse(BaseModel):
 
 
 class ApplicationResponse(BaseModel):
+    tracking_origin: str = "manual"
+    source_thread_id: str | None = None
+    source_label_external_id: str | None = None
     id: int
     owner_id: str
     resume_asset_id: int

@@ -138,11 +138,61 @@ class OrchestrationDeps:
     get_message_rfc_message_id: Callable[[str], str] | None = None
     list_thread_messages: Callable[[str], list[GmailMessageCandidate]] | None = None
     list_unread_thread_ids: Callable[[], set[str]] | None = None
+    list_gmail_labels: Callable | None = None
+    list_candidates_by_label_ids: Callable | None = None
+    list_thread_ids_by_label: Callable | None = None
+    list_candidates_by_query: Callable | None = None
 
 
 class OrchestrationService:
     def __init__(self, deps: OrchestrationDeps):
         self.deps = deps
+
+    def _sync_label_tracking(self, db: Session, user_settings: UserSettings) -> tuple[int, int, int]:
+        if not (app_settings.feature_label_tracking_enabled and user_settings.feature_label_tracking_enabled):
+            return 0, 0, 0
+        from types import SimpleNamespace
+        from app import gmail_client
+        from app.services import label_tracking_service
+        deps = SimpleNamespace(
+            list_candidates_by_label_ids=self.deps.list_candidates_by_label_ids or gmail_client.list_candidates_by_label_ids,
+            list_thread_ids_by_label=self.deps.list_thread_ids_by_label or gmail_client.list_thread_ids_by_label,
+            list_candidates_by_query=self.deps.list_candidates_by_query or gmail_client.list_candidates_by_query,
+        )
+        owner_email = user_settings.signature_email or DEFAULT_SIGNATURE_EMAIL
+        messages = threads = 0
+        errors = 0
+        for index, step in enumerate((
+            lambda: self.sync_gmail_labels(db),
+            lambda: label_tracking_service.reconcile_untracked(db, self.deps.owner_id, deps=deps),
+            lambda: label_tracking_service.sync_tracked_labels(db, self.deps.owner_id, deps=deps, owner_email=owner_email),
+            lambda: label_tracking_service.sync_watch_matches(db, self.deps.owner_id, deps=deps, owner_email=owner_email, max_messages=max(0, app_settings.label_tracking_max_messages_per_sync - messages)),
+        )):
+            if index == 3 and errors:
+                continue
+            try:
+                with db.begin_nested():
+                    result = step()
+                db.commit()
+                messages += getattr(result, "messages", 0)
+                threads += getattr(result, "threads", 0)
+            except Exception:
+                errors += 1
+                logger.warning("label_tracking_sync_step_failed", exc_info=False)
+        return threads, messages, errors
+
+    def sync_gmail_labels(self, db: Session):
+        from app.services import gmail_label_service
+        from app import gmail_client
+        return gmail_label_service.sync_labels(db, self.deps.owner_id, list_labels=self.deps.list_gmail_labels or gmail_client.list_gmail_labels)
+
+    def list_label_threads(self, db: Session, *, owner_id: str | None = None, **filters):
+        from app.services.label_tracking_service import list_label_threads
+        return list_label_threads(db, owner_id or self.deps.owner_id, **filters)
+
+    def set_tracked_labels(self, db: Session, external_label_ids: list[str]):
+        from app.services import gmail_label_service
+        return gmail_label_service.set_tracked(db, self.deps.owner_id, external_label_ids)
 
     @staticmethod
     def _extract_external_post_id(external_message_id: str | None) -> str | None:
@@ -328,6 +378,7 @@ class OrchestrationService:
                 .filter(
                     EmailConversation.owner_id == self.deps.owner_id,
                     EmailConversation.last_message_at >= recency_cutoff,
+                    EmailConversation.root_recruiter_email_id.is_not(None),
                 )
                 .all()
                 if row[0]
@@ -461,6 +512,7 @@ class OrchestrationService:
             trusted_groups = self._load_enabled_requirement_groups(db) if user_settings.feature_gmail_requirement_groups_enabled else []
             candidates = self.deps.list_unread_candidates_by_query(effective_query)
             reply_matched_count, reply_created_count = self._capture_inbound_replies(db, user_settings)
+            self._sync_label_tracking(db, user_settings)
             imported_count += reply_created_count
             skipped_count += reply_matched_count - reply_created_count
             processed_items = 0
@@ -1107,6 +1159,7 @@ class OrchestrationService:
             self._capture_inbound_replies(db, user_settings)
         except Exception:
             logger.exception("reply_capture_failed_during_automation_run")
+        self._sync_label_tracking(db, user_settings)
 
         resume = self.deps.active_resume(db)
         if not resume:
@@ -1749,7 +1802,26 @@ class OrchestrationService:
         user_settings = self.deps.get_settings(db)
         if not user_settings.enabled:
             raise HTTPException(status_code=400, detail="Pipeline is disabled in settings")
-        self._capture_inbound_replies(db, user_settings)
+        # Guarded the same way the automation run guards it, and for a sharper
+        # reason: label tracking is a second, independent source of threads, and
+        # letting the reply scan's failure return before it runs means one Gmail
+        # rate limit silently costs the user every labeled thread too. Gmail
+        # answers this account's reply scan with 403 rateLimitExceeded often
+        # enough that the label half never ran at all.
+        reply_error: Exception | None = None
+        try:
+            self._capture_inbound_replies(db, user_settings)
+        except Exception as exc:
+            db.rollback()
+            reply_error = exc
+            logger.exception("reply_capture_failed_during_inbox_refresh")
+        self._sync_label_tracking(db, user_settings)
+        # Raised after label tracking, never instead of it: the labeled threads
+        # are captured and committed by the time this fires, so the retry the
+        # user makes is only for the half that actually failed. Silence here is
+        # what let a systematic Gmail failure look like an empty inbox.
+        if reply_error is not None:
+            raise HTTPException(status_code=502, detail="Gmail rejected the reply scan; labeled threads were still refreshed") from reply_error
         return list_conversations(db, self.deps.owner_id, **filters)
 
     def get_inbox_conversation(self, conversation_id: int, db: Session) -> ConversationDetailResponse:
@@ -1766,9 +1838,9 @@ class OrchestrationService:
     ) -> ConversationDetailResponse:
         user_settings = self.deps.get_settings(db)
         detail = conversation_detail(db, self.deps.owner_id, conversation_id)
-        root_email = self._get_email_or_raise(db, detail.root_recruiter_email_id)
+        root_email = self._get_email_or_raise(db, detail.root_recruiter_email_id) if detail.root_recruiter_email_id is not None else None
         pixel_url = None
-        if user_settings.feature_email_tracking_enabled:
+        if user_settings.feature_email_tracking_enabled and root_email is not None:
             pixel_url = tracking_pixel_url(app_settings.public_base_url, root_email.tracking_token)
         return send_conversation_reply(
             db,

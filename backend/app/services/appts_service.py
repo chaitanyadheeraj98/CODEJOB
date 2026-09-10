@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 from datetime import datetime
 
@@ -24,6 +25,8 @@ from app.models import (
     RecruiterEmail,
     RecruiterOpportunity,
     ResumeAsset,
+    TrackedThread,
+    EmailConversation,
     utc_now,
 )
 from app.services import application_service, end_client_validation, recruiter_identity_service, resume_tracking_service
@@ -217,6 +220,56 @@ def create_tracked_application_manual(
     if result[1]:
         resume_tracking_service.compute_skill_gap(db, row, models=APPTS_MODELS)
     return result
+
+
+def create_tracked_application_from_label_thread(db: Session, *, owner_id: str, thread: TrackedThread, resume_asset_id: int) -> tuple[AppTSApplication, bool]:
+    if thread.owner_id != owner_id:
+        raise application_service.ApplicationReferenceNotFoundError("Thread not found")
+    dedupe_key = hashlib.sha256(f"label:{owner_id}:{thread.external_thread_id}".encode()).hexdigest()
+    existing = db.query(AppTSApplication).filter(AppTSApplication.owner_id == owner_id, AppTSApplication.dedupe_key == dedupe_key).first()
+    if existing is not None:
+        return existing, False
+    if thread.untracked_at is not None:
+        raise application_service.ApplicationValidationError("Thread is no longer label tracked")
+    conversation = db.query(EmailConversation).filter(EmailConversation.owner_id == owner_id, EmailConversation.id == thread.conversation_id).first()
+    if conversation is None:
+        raise application_service.ApplicationReferenceNotFoundError("Conversation not found")
+    from app.services.email_inbox_service import conversation_detail
+    detail = conversation_detail(db, owner_id, conversation.id)
+    row, created = create_tracked_application_manual(db, owner_id=owner_id, resume_asset_id=resume_asset_id,
+        dedupe_key=dedupe_key, manual_recruiter_name=detail.recruiter or "Unknown",
+        manual_recruiter_company="Unknown", manual_recruiter_email=detail.recruiter_email or "",
+        manual_job_title=thread.subject_snapshot or "Not specified",
+        manual_source_note=f"Tracked from Gmail thread {thread.external_thread_id}",
+        source_recruiter_email_id=conversation.root_recruiter_email_id)
+    if created:
+        row.tracking_origin = "label"
+        row.source_thread_id = thread.external_thread_id
+        row.source_label_external_id = next(iter(json.loads(thread.label_external_ids_json)), None)
+        row.status = "matched"
+        row.resume_submission_status = "not_submitted"
+        row.resume_submitted_at = row.resume_shared_at = None
+        db.flush()
+    return row, created
+
+
+def create_tracked_application_from_record(db: Session, *, owner_id: str, recruiter_email_id: int, resume_asset_id: int, dedupe_key: str) -> tuple[AppTSApplication, bool]:
+    email = db.query(RecruiterEmail).filter(RecruiterEmail.owner_id == owner_id, RecruiterEmail.id == recruiter_email_id).first()
+    if email is None:
+        raise application_service.ApplicationReferenceNotFoundError("Recruiter email not found")
+    recruiter = recruiter_identity_service.recruiter_identity_for(db, email, owner_id=owner_id)
+    row, created = create_tracked_application_manual(db, owner_id=owner_id, resume_asset_id=resume_asset_id,
+        dedupe_key=dedupe_key, manual_recruiter_name=recruiter.name or "Unknown",
+        manual_recruiter_company=recruiter.company or "Unknown", manual_recruiter_email=recruiter.address,
+        manual_job_title=email.role or email.subject or "Not specified", manual_end_client=email.end_client or "",
+        location_snapshot=email.location or "", source_recruiter_email_id=email.id)
+    if created:
+        row.tracking_origin = "email"
+        row.status = "matched"
+        row.resume_submission_status = "not_submitted"
+        row.resume_submitted_at = row.resume_shared_at = None
+        db.flush()
+    return row, created
 
 
 def create_tracked_application_from_email(

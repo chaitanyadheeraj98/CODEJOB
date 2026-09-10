@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from sqlalchemy import case, func, literal
+from sqlalchemy import case, func
 from sqlalchemy.orm import Query, Session
 
 from app.models import (
     Application,
     AppTSApplication,
     EmailConversation,
+    GmailLabel,
     RecruiterEmail,
     RecruiterOpportunity,
 )
@@ -106,6 +107,11 @@ def _appts_applications() -> BaseQuery:
 
 
 FILTER_OPTION_COLUMNS: dict[str, dict[str, tuple[object, BaseQuery]]] = {
+    "gmail_labels": {
+        "label": (GmailLabel.name, lambda db, owner: db.query(GmailLabel).filter(
+            GmailLabel.owner_id == owner, GmailLabel.is_tracked.is_(True), GmailLabel.deleted_at.is_(None),
+        )),
+    },
     "needs_review": {
         "role": (RecruiterEmail.role, _emails("needs_review")),
         "location": (RecruiterEmail.location, _emails("needs_review")),
@@ -215,19 +221,26 @@ def distinct_values(
     # Rank 0 = value starts with the query, 1 = query starts a later word,
     # 2 = matches anywhere. ILIKE patterns (not regex) so the one escaping
     # scheme below covers every comparison.
-    rank: object = literal(0)
+    #
+    # Only ordered by when there is a query. With no needle every row ranks the
+    # same, and the constant this used to sort by rendered as `ORDER BY 0` -
+    # which Postgres reads as an ordinal, not a value, and rejects with "ORDER BY
+    # position 0 is not in select list". Every combobox 500'd the moment it was
+    # opened without typing. SQLite evaluates it as a constant and sorts fine,
+    # so the tests could not see it; only a Postgres request could.
+    ordering: list[object] = [hits.desc(), func.length(column).asc(), column.asc()]
     if q and q.strip():
         needle = _escape_like(q.strip()[:MAX_QUERY_CHARS])
         query = query.filter(column.ilike(f"%{needle}%", escape="\\"))
-        rank = case(
+        ordering.insert(0, case(
             (column.ilike(f"{needle}%", escape="\\"), 0),
             (column.ilike(f"% {needle}%", escape="\\"), 1),
             else_=2,
-        )
+        ))
 
     rows = (
         query.group_by(column)
-        .order_by(rank, hits.desc(), func.length(column).asc(), column.asc())
+        .order_by(*ordering)
         .limit(max(1, min(limit, MAX_LIMIT)))
         .all()
     )

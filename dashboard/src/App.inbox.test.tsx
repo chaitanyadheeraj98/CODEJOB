@@ -158,6 +158,7 @@ describe('Inbox dashboard', () => {
       if (url.includes('/recruiter-numbers')) return makeResponse({ items: [], next_cursor: null, has_next: false })
       if (url.includes('/employer-numbers')) return makeResponse({ items: [], next_cursor: null, has_next: false })
       if (url.includes('/recruiter-opportunities')) return makeResponse({ items: [], next_cursor: null, has_next: false })
+      if (url.includes('/filter-options?')) return makeResponse({ values: ['RTR Requested'] })
       if (url.includes('/inbox/conversations?')) return makeResponse(conversations)
       if (url.endsWith('/inbox/conversations/1')) return makeResponse(detail)
       throw new Error(`Unhandled fetch: ${url}`)
@@ -186,7 +187,7 @@ describe('Inbox dashboard', () => {
 
     const refreshButton = container.querySelector<HTMLButtonElement>('button[aria-label="Refresh conversations"]')
     expect(refreshButton?.title).toBe('Refresh')
-    expect(container.querySelectorAll('.filterSortBar input[role="combobox"]')).toHaveLength(4)
+    expect(container.querySelectorAll('.filterSortBar input[role="combobox"]')).toHaveLength(5)
 
     const unreadRow = container.querySelector<HTMLButtonElement>('.conversationListItem.unread')
     expect(unreadRow?.querySelector('.unreadDot')).not.toBeNull()
@@ -215,5 +216,23 @@ describe('Inbox dashboard', () => {
       }
     })
     expect(sendButton?.disabled).toBe(false)
+    const labelInput = Array.from(container.querySelectorAll<HTMLInputElement>('input[role="combobox"]')).find((input) => input.closest('label')?.textContent?.includes('Gmail label'))!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(labelInput, 'RTR Requested')
+      labelInput.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => {
+      labelInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+      await flushPromises(10)
+    })
+    const unread = Array.from(container.querySelectorAll<HTMLSelectElement>('select')).find((select) => select.closest('label')?.textContent?.includes('Unread only'))!
+    await act(async () => {
+      unread.value = 'yes'
+      unread.dispatchEvent(new Event('change', { bubbles: true }))
+      await flushPromises(10)
+    })
+    const requests = vi.mocked(fetch).mock.calls.map(([url]) => new URL(String(url)))
+    expect(requests.some((url) => url.pathname === '/inbox/conversations' && url.searchParams.get('label') === 'RTR Requested' && url.searchParams.get('unread_only') === 'true')).toBe(true)
+
   })
 })

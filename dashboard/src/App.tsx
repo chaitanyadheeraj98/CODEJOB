@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import './App.css'
+import './labels.css'
 import Sidebar, { type SidebarProps } from './components/Sidebar'
 import CandidateCard from './components/CandidateCard'
 import ResumeTrackingPage from './features/resume_tracking/ResumeTrackingPage'
@@ -22,6 +23,7 @@ import { getChatStatus } from './features/chat/api'
 import type { ChatStatus } from './features/chat/types'
 import PremiumNumbersPage from './features/premium_numbers/PremiumNumbersPage'
 import AppTSPage from './features/application_tracking/AppTSPage'
+import LabelsPage from './features/labels/LabelsPage'
 import VerificationBadge from './features/premium_numbers/VerificationBadge'
 import { type CandidateState, useCandidateBuckets } from './candidateBuckets'
 import type { CandidateQueryOptions } from './candidateBuckets'
@@ -36,6 +38,7 @@ import { buildUrlSearch, parseFilterValuesFromParams } from './useUrlSync'
 import { addCcEmail, removeCcEmail } from './ccEmails'
 import { addEmployerDomain, removeEmployerDomain } from './employerDomains'
 import { formatRelativeInboxTime, getInitials } from './inboxFormat'
+import { createRequestSequence } from './latestRequest'
 import type { EmailSearchHit } from './emailSearch'
 
 const GMAIL_OAUTH_POLL_INTERVAL_MS = 2000
@@ -83,13 +86,18 @@ const DRAFT_TEXT_SIZE_STYLES: Record<DraftTextSize, { fontSize: string; lineHeig
   huge: { fontSize: '28px', lineHeight: '1.4' },
 }
 
-type ActivePage = 'assistant' | 'run_queue' | 'manual_intake' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'inbox' | 'premium_numbers' | 'resume_tracking' | 'application_tracking' | 'relationship_labeling' | 'scheduled_tasks' | 'scheduled_review' | 'settings'
+type ActivePage = 'assistant' | 'run_queue' | 'manual_intake' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'inbox' | 'labels' | 'premium_numbers' | 'resume_tracking' | 'application_tracking' | 'relationship_labeling' | 'scheduled_tasks' | 'scheduled_review' | 'settings'
 // relationship_labeling is deliberately absent from the sidebar: it is an
 // internal calibration tool, reachable only by ?page=relationship_labeling, and
 // its routes 404 unless the feature is switched on.
-const ACTIVE_PAGES = new Set<ActivePage>(['assistant', 'run_queue', 'manual_intake', 'needs_review', 'failed_mapping', 'recent_runs', 'sent_items', 'inbox', 'premium_numbers', 'resume_tracking', 'application_tracking', 'relationship_labeling', 'scheduled_tasks', 'scheduled_review', 'settings'])
+const ACTIVE_PAGES = new Set<ActivePage>(['assistant', 'run_queue', 'manual_intake', 'needs_review', 'failed_mapping', 'recent_runs', 'sent_items', 'inbox', 'labels', 'premium_numbers', 'resume_tracking', 'application_tracking', 'relationship_labeling', 'scheduled_tasks', 'scheduled_review', 'settings'])
 const initialActivePage = (): ActivePage => {
-  const page = new URLSearchParams(window.location.search).get('page') as ActivePage | null
+  const params = new URLSearchParams(window.location.search)
+  const page = params.get('page') as ActivePage | null
+  // The Gmail-labels view left Application Tracking for its own page, because a
+  // tab could show the thread list but had nowhere to put the conversation. Old
+  // links keep working rather than landing on Bookmarked Requirements.
+  if (page === 'application_tracking' && params.get('tab') === 'labels') return 'labels'
   return page && ACTIVE_PAGES.has(page) ? page : 'run_queue'
 }
 
@@ -128,7 +136,7 @@ const PAGE_TITLES: Record<ActivePage, string> = {
   failed_mapping: 'Failed Mapping',
   recent_runs: 'Recent Runs',
   sent_items: 'Sent Items',
-  inbox: 'Reply Inbox',
+  inbox: 'Reply Inbox', labels: 'Labels',
   premium_numbers: 'Premium Numbers',
   resume_tracking: 'Resume Tracking',
   application_tracking: 'Application Tracking',
@@ -147,6 +155,7 @@ const PAGE_SUBTITLES: Record<ActivePage, string> = {
   recent_runs: 'See automation run history and outcomes.',
   sent_items: 'Review emails that have already been sent.',
   inbox: 'Review recruiter replies and continue Gmail conversations.',
+  labels: 'Threads you filed under a Gmail label, and every later email from that recruiter or company.',
   premium_numbers: 'Manage inventory, assignments, and rescoring operations.',
   resume_tracking: 'See which roles your resumes keep failing, and what a winning variant would need.',
   application_tracking: 'Review bookmarked requirements and explicitly tracked applications.',
@@ -333,6 +342,7 @@ type SettingsPayload = {
   feature_strict_candidate_screening_enabled: boolean
   feature_email_tracking_enabled: boolean
   feature_reply_inbox_enabled: boolean
+  feature_label_tracking_enabled?: boolean
   feature_applications_enabled: boolean
   feature_application_automation_enabled: boolean
   feature_application_outreach_drafts_enabled: boolean
@@ -1572,7 +1582,9 @@ export type SentItemDetails = {
 
 type ConversationSummary = {
   id: number
-  root_recruiter_email_id: number
+  root_recruiter_email_id: number | null
+  origin?: string
+  labels?: string[]
   recruiter: string
   recruiter_email: string | null
   subject: string
@@ -2996,6 +3008,7 @@ function App() {
     feature_strict_candidate_screening_enabled: false,
     feature_email_tracking_enabled: false,
     feature_reply_inbox_enabled: false,
+    feature_label_tracking_enabled: false,
     feature_applications_enabled: false,
     feature_application_automation_enabled: false,
     feature_application_outreach_drafts_enabled: false,
@@ -3113,6 +3126,21 @@ function App() {
   const [failedMappingSelected, setFailedMappingSelected] = useState<Set<number>>(new Set())
   const [failedMappingBulkAction, setFailedMappingBulkAction] = useState<string | null>(null)
   const [emailSearchTarget, setEmailSearchTarget] = useState<EmailSearchHit | null>(null)
+  const [gmailLabelCatalog, setGmailLabelCatalog] = useState<{ items: { external_label_id: string; name: string; label_type: string; is_tracked: boolean; last_synced_at: string }[]; synced_at: string | null; tracking_available: boolean; watch_limit_reached: boolean }>({ items: [], synced_at: null, tracking_available: false, watch_limit_reached: false })
+  const [gmailLabelsBusy, setGmailLabelsBusy] = useState(false)
+  const [gmailLabelsError, setGmailLabelsError] = useState('')
+  const loadGmailLabels = async (method = 'GET', externalLabelIds?: string[]) => {
+    setGmailLabelsBusy(true)
+    setGmailLabelsError('')
+    try {
+      const suffix = method === 'POST' ? '/sync' : method === 'PATCH' ? '/tracked' : ''
+      const response = await fetch(`${apiBase}/gmail/labels${suffix}`, { method, headers: externalLabelIds ? { 'Content-Type': 'application/json' } : undefined, body: externalLabelIds ? JSON.stringify({ external_label_ids: externalLabelIds }) : undefined })
+      if (!response.ok) throw new Error('Unable to update Gmail labels')
+      setGmailLabelCatalog(await response.json())
+    } catch (err) { setGmailLabelsError(err instanceof Error ? err.message : 'Unable to load Gmail labels') }
+    finally { setGmailLabelsBusy(false) }
+  }
+  useEffect(() => { if (activePage === 'settings') void loadGmailLabels() }, [activePage])
   const [inboxConversations, setInboxConversations] = useState<ConversationSummary[]>([])
   const [selectedConversationId, setSelectedConversationId] = useState<number | null>(null)
   const [selectedConversation, setSelectedConversation] = useState<ConversationDetail | null>(null)
@@ -3149,6 +3177,7 @@ function App() {
   const oauthPollingStartedAtRef = useRef<number | null>(null)
   const refreshTimerRef = useRef<number | null>(null)
   const filterRequestControllerRef = useRef<AbortController | null>(null)
+  const inboxRequests = useRef(createRequestSequence()).current
 
   const {
     queue,
@@ -3880,6 +3909,13 @@ function App() {
   }
 
   const loadInboxConversations = async (options?: { signal?: AbortSignal }): Promise<ConversationSummary[]> => {
+    // Only the newest request may write the list. The unfiltered load fired on
+    // mount returns every conversation, so it is by far the slowest one in
+    // flight - it was landing after the filtered request the user triggered
+    // seconds later and replacing 8 labeled threads with all 1495. The mount
+    // fetch carries no abort signal, so aborting the previous request is not
+    // enough on its own.
+    const seq = inboxRequests.next()
     setInboxLoading(true)
     setInboxError('')
     try {
@@ -3888,17 +3924,21 @@ function App() {
       const res = await fetch(`${apiBase}/inbox/conversations?${params}`, { signal: options?.signal })
       if (!res.ok) throw new Error('Failed to load inbox conversations')
       const payload = (await res.json()) as ConversationSummary[]
+      if (!inboxRequests.isCurrent(seq)) return payload
       setInboxConversations(payload)
       return payload
     } catch (e) {
-      if ((e as Error).name !== 'AbortError') setInboxError((e as Error).message)
+      if ((e as Error).name !== 'AbortError' && inboxRequests.isCurrent(seq)) setInboxError((e as Error).message)
       return []
     } finally {
-      setInboxLoading(false)
+      if (inboxRequests.isCurrent(seq)) setInboxLoading(false)
     }
   }
 
   const refreshInboxReplies = async (): Promise<ConversationSummary[]> => {
+    // Same sequence as loadInboxConversations: both write the same list, so a
+    // refresh that overtakes a filter change must not resurrect the old rows.
+    const seq = inboxRequests.next()
     setInboxLoading(true)
     setInboxError('')
     try {
@@ -3910,13 +3950,14 @@ function App() {
         throw new Error(details?.detail ?? 'Failed to refresh conversations')
       }
       const payload = (await res.json()) as ConversationSummary[]
+      if (!inboxRequests.isCurrent(seq)) return payload
       setInboxConversations(payload)
       return payload
     } catch (e) {
-      setInboxError((e as Error).message)
+      if (inboxRequests.isCurrent(seq)) setInboxError((e as Error).message)
       return []
     } finally {
-      setInboxLoading(false)
+      if (inboxRequests.isCurrent(seq)) setInboxLoading(false)
     }
   }
 
@@ -4119,6 +4160,7 @@ function App() {
       recent_runs: 'view_recent_runs',
       sent_items: 'view_sent_items',
       inbox: 'view_sent_items',
+      labels: 'view_sent_items',
       premium_numbers: 'view_premium_numbers',
       resume_tracking: 'view_premium_numbers',
       application_tracking: 'view_premium_numbers',
@@ -5667,6 +5709,7 @@ function App() {
         sentCount={bucketMeta.approved_sent.total ?? sentQueue.length}
         inboxCount={inboxUnreadCount}
         premiumCount={premiumPendingCount}
+        labelTrackingEnabled={settings.feature_label_tracking_enabled ?? false}
         resumeTrackingEnabled={settings.feature_resume_tracking_enabled}
         applicationsEnabled={settings.feature_applications_enabled}
         schedulingEnabled={schedulingEnabled}
@@ -5779,7 +5822,12 @@ function App() {
             </p>
           </div>
 
-          {activePage !== 'settings' && activePage !== 'assistant' ? renderQueueStatusBar() : null}
+          {/* Labels joins settings and assistant in skipping this: the stat
+              cards, the Gmail sync query and the shared filter bar all belong
+              to the candidate queue. On this page they were three rows of
+              controls that did nothing, above a workspace that carries its own
+              label rail and its own search. */}
+          {activePage !== 'settings' && activePage !== 'assistant' && activePage !== 'labels' ? renderQueueStatusBar() : null}
 
           {activePage === 'assistant' ? <AssistantPage /> : null}
 
@@ -6851,6 +6899,26 @@ function App() {
                     </span>
                   </label>
                   <p className="subtle">Checks unread Gmail on the existing polling interval and captures replies from previously sent threads before JD parsing.</p>
+                  <fieldset>
+                    <legend>Gmail label tracking</legend>
+                    <label className="toggleRow pillRow">
+                      <span>Enable Gmail label tracking</span>
+                      <input type="checkbox" checked={settings.feature_label_tracking_enabled ?? false} onChange={(e) => setSettings({ ...settings, feature_label_tracking_enabled: e.target.checked })} />
+                    </label>
+                    {!gmailLabelCatalog.tracking_available && <p className="subtle">Tracking is disabled on the server. Your label choices will be saved.</p>}
+                    <button type="button" className="secondary" disabled={gmailLabelsBusy} onClick={() => void loadGmailLabels('POST')}>Sync labels from Gmail</button>
+                    <p className="subtle">Last synced: {gmailLabelCatalog.synced_at ? new Date(gmailLabelCatalog.synced_at).toLocaleString() : 'Never'}</p>
+                    {gmailLabelsError && <p role="alert">{gmailLabelsError}</p>}
+                    {gmailLabelCatalog.watch_limit_reached && <p role="status">Recruiter watch limit reached. New recruiters cannot be followed until watches are released.</p>}
+                    {/* User labels only. The backend refuses to track a system
+                        label, and offering SENT or TRASH here would be offering
+                        to pull the whole mailbox in. */}
+                    {gmailLabelCatalog.items.filter((label) => label.label_type === 'user').map((label) => <label key={label.external_label_id} className="toggleRow">
+                      <input type="checkbox" checked={label.is_tracked} disabled={gmailLabelsBusy} onChange={(e) => void loadGmailLabels('PATCH', [...gmailLabelCatalog.items.filter((item) => item.is_tracked && item.external_label_id !== label.external_label_id).map((item) => item.external_label_id), ...(e.target.checked ? [label.external_label_id] : [])])} />
+                      {label.name}
+                    </label>)}
+                    <p className="subtle">Follows labeled threads and their recruiters. Removing labels stops future tracking. BCC coverage is limited on received mail.</p>
+                  </fieldset>
                   <label className="toggleRow pillRow">
                     <span>Application Tracker</span>
                     <span className="toggleSwitch">
@@ -7812,6 +7880,20 @@ function App() {
 
           {activePage === 'application_tracking' ? <AppTSPage apiBase={apiBase} refreshToken={premiumRefreshToken} activeTab={applicationTrackingTab} onTabChange={setApplicationTrackingTab} filterValues={activeFilterValues} sortValue={activeSortValue} /> : null}
 
+          {activePage === 'labels' ? (
+            <section className="card pageSection">
+              <LabelsPage
+                apiBase={apiBase}
+                refreshToken={premiumRefreshToken}
+                /* Catalog sync then capture, the same pairing the Inbox button
+                   needed: syncing the catalog alone changes nothing visible on
+                   this page. */
+                onSyncLabels={() => loadGmailLabels('POST').then(() => refreshInboxReplies())}
+                onOpenSettings={() => setActivePage('settings')}
+              />
+            </section>
+          ) : null}
+
           {activePage === 'resume_tracking' ? <ResumeTrackingPage apiBase={apiBase} onNavigateToSettings={(resumeId) => { setFocusResumeId(resumeId); setActivePage('settings') }} onLibraryChanged={() => { void loadSettingsBootstrap().catch(() => undefined) }} activeTab={resumeTrackingTab} onTabChange={setResumeTrackingTab} filterValues={activeFilterValues} sortValue={activeSortValue} /> : null}
 
           {activePage === 'inbox' ? (
@@ -7837,6 +7919,15 @@ function App() {
                   </button>
                 </div>
               </div>
+              {/* Catalog then capture. Syncing the catalog alone only refreshes
+                  the label list behind the filter - nothing the user can see
+                  from this page - so a button called "Sync labels" that stopped
+                  there looked like it had done nothing at all. */}
+              <button type="button" className="secondary" disabled={gmailLabelsBusy || inboxLoading} onClick={() => void loadGmailLabels('POST').then(() => refreshInboxReplies())}>Sync labels</button>
+              {gmailLabelsError && <p role="alert">{gmailLabelsError}</p>}
+              {!gmailLabelsBusy && !gmailLabelsError && gmailLabelCatalog.synced_at && !gmailLabelCatalog.items.some((label) => label.is_tracked) ? (
+                <p className="inboxNotice">No Gmail labels are tracked yet. Choose which ones to follow in Settings.</p>
+              ) : null}
               {!settings.feature_reply_inbox_enabled ? (
                 <p className="inboxNotice">Reply capture is off. Enable Reply Inbox in Settings to scan sent Gmail threads.</p>
               ) : null}
@@ -7865,6 +7956,8 @@ function App() {
                             <span className="conversationListIdentity">
                               <span className="conversationListSender">{conversation.recruiter}</span>
                               <span className="conversationListSubject">{conversation.subject}</span>
+                              {conversation.origin && conversation.origin !== 'sent' && <span className="statusBadge">Externally tracked</span>}
+                              <span>{(conversation.labels ?? []).map((label) => <span className="statusBadge" key={label}>{label}</span>)}</span>
                             </span>
                             <span className="conversationListMeta">
                               {isUnread ? <span className="unreadDot" aria-hidden="true" /> : null}

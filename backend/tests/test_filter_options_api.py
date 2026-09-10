@@ -1,5 +1,7 @@
 import os
+import re
 import unittest
+from unittest.mock import patch
 
 os.environ["DEBUG"] = "false"
 
@@ -11,6 +13,9 @@ from sqlalchemy.pool import StaticPool
 from app import main
 from app.db import Base
 from app.models import EmailConversation, RecruiterEmail, RecruiterOpportunity, UserSettings
+from sqlalchemy.dialects import postgresql
+from sqlalchemy.orm import Query
+from app.services import filter_options_service
 
 
 class FilterOptionsApiTests(unittest.TestCase):
@@ -226,6 +231,63 @@ class FilterOptionsApiTests(unittest.TestCase):
         candidates = self.client.get("/candidates", params={"state": "approved_sent", "company": "Acme Corp"})
         self.assertEqual(candidates.status_code, 200)
         self.assertEqual(candidates.json()["total"], 1)
+
+
+class FilterOptionsDialectTests(unittest.TestCase):
+    """Postgres-specific, because the bug this covers cannot fail on SQLite.
+
+    The no-query branch used to sort by a constant, which compiles to
+    `ORDER BY 0`. Postgres reads a bare integer there as an ordinal position and
+    rejects it - "ORDER BY position 0 is not in select list" - so every combobox
+    500'd the moment it was opened before typing. SQLite treats the same literal
+    as a constant expression and sorts happily, which is why the suite above
+    stayed green while the picker was broken in production.
+    """
+
+    ORDINAL = re.compile(r"(?:^|,)\s*\d+\s*(?:,|$|ASC|DESC)", re.I)
+
+    def _order_by_clauses(self, **kwargs) -> list[str]:
+        """Compile what distinct_values itself builds, for Postgres.
+
+        Intercepts Query.all so the real function runs and its real query object
+        is captured - rebuilding an equivalent query here would test this test.
+        """
+        captured: list[str] = []
+
+        def capture(query_self):
+            # literal_binds, or the constant compiles to "%(param_1)s" and the
+            # ordinal this test hunts for is invisible - psycopg2 only turns it
+            # back into a bare 0 at execution time, which is where Postgres
+            # rejects it.
+            sql = str(query_self.statement.compile(
+                dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True},
+            ))
+            captured.append(sql.split("ORDER BY", 1)[1] if "ORDER BY" in sql else "")
+            return []
+
+        engine = create_engine("sqlite://")
+        Base.metadata.create_all(engine)
+        with Session(engine) as db:
+            with patch.object(Query, "all", capture):
+                for bucket, fields in filter_options_service.FILTER_OPTION_COLUMNS.items():
+                    for field in fields:
+                        filter_options_service.distinct_values(db, "owner", bucket, field, **kwargs)
+        engine.dispose()
+        self.assertTrue(captured, "no queries were compiled")
+        return captured
+
+    def test_no_query_never_orders_by_a_bare_ordinal(self) -> None:
+        for order_by in self._order_by_clauses():
+            self.assertNotRegex(order_by, self.ORDINAL, f"orders by an ordinal position: {order_by}")
+
+    def test_a_search_still_ranks_by_match_position(self) -> None:
+        clauses = self._order_by_clauses(q="java")
+        for order_by in clauses:
+            self.assertNotRegex(order_by, self.ORDINAL, f"orders by an ordinal position: {order_by}")
+        # The CASE ranking is the point of the q branch; losing it silently would
+        # turn the picker back into "most frequent", which the docstring above
+        # says is not good enough.
+        self.assertTrue(all("CASE" in order_by for order_by in clauses), clauses[:1])
 
 
 if __name__ == "__main__":

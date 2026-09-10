@@ -13,6 +13,22 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 describe('AppTSPage filter/sort wiring', () => {
   const cleanups: Array<() => void> = []
+  // The Gmail-labels view is its own page now; see features/labels. What is
+  // pinned here is that Application Tracking no longer offers it as a tab, so
+  // the two lists cannot drift back into showing the same threads twice.
+  it('offers only the bookmarked and tracked tabs', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ items: [], total: 0, has_next: false })))
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    cleanups.push(() => { act(() => root.unmount()); container.remove(); vi.unstubAllGlobals() })
+    await act(async () => { root.render(<AppTSPage apiBase="http://localhost:8000" refreshToken={0} />) })
+
+    const tabs = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="tab"]')).map((b) => b.textContent)
+
+    expect(tabs).toEqual(['Bookmarked Requirements', 'Tracked and Applied'])
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes('/appts/label-threads?'))).toBe(false)
+  })
   afterEach(() => {
     vi.restoreAllMocks()
     while (cleanups.length) cleanups.pop()?.()

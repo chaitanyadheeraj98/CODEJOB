@@ -27,3 +27,6 @@ e2e/chat-report/
 *.njsproj
 *.sln
 *.sw?
+e2e/out/
+e2e/out*/
+e2e/label-report/

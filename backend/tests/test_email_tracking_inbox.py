@@ -97,6 +97,15 @@ class EmailTrackingInboxTests(unittest.TestCase):
     def test_tracking_token_and_public_url_are_safe_by_default(self) -> None:
         token = generate_tracking_token("secret", 42)
         self.assertEqual(len(token), 22)
+        with Session(self.engine) as db:
+            email = self._add_sent_email(db)
+            conversation = ensure_sent_conversation(db, owner_id=main.settings.owner_id, root_email=email, thread_id="thread-123")
+            db.flush()
+            summary = list_conversations(db, main.settings.owner_id)[0]
+            self.assertEqual(summary.root_recruiter_email_id, email.id)
+            self.assertEqual(summary.origin, "sent")
+            self.assertEqual(summary.labels, [])
+            self.assertEqual(summary.subject, email.subject)
         self.assertIsNone(tracking_pixel_url("http://localhost:8000", token))
         self.assertEqual(
             tracking_pixel_url("https://mail.example.com/", token),

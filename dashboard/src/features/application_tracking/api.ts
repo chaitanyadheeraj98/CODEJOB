@@ -7,6 +7,19 @@ export { ApplicationDuplicateConflictError, RoleManifestForkRequiredError }
 const json = (method: string, body?: unknown): RequestInit => ({ method, headers: body === undefined ? undefined : { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
 export type BookmarkedRequirement = Candidate
 
+export type LabelThread = {
+  thread_id: string; subject: string; recruiter: string; recruiter_email: string | null; labels: string[]
+  last_message_at: string; message_count: number; unread_count: number; conversation_id: number | null
+  gmail_thread_link: string | null; appts_application_id: number | null; record_id: string | null
+}
+export function fetchLabelThreads(apiBase: string, filters: Record<string, string> = {}, sort = 'newest', page = 1) {
+  const params = new URLSearchParams({ ...filters, sort, page: String(page), limit: '25' })
+  return requestJson<{ items: LabelThread[]; total: number; has_next: boolean; next_cursor: number | null }>(`${apiBase}/appts/label-threads?${params}`)
+}
+export function promoteLabelThread(apiBase: string, threadId: string, resumeAssetId: number) {
+  return requestJson<ApplicationCard>(`${apiBase}/appts/label-threads/${encodeURIComponent(threadId)}/promote`, json('POST', { resume_asset_id: resumeAssetId }))
+}
+
 export async function listBookmarkedRequirements(apiBase: string, filters: Record<string, string> = {}, sort = 'newest'): Promise<BookmarkedRequirement[]> {
   const params = new URLSearchParams({ ...filters, sort })
   return (await requestJson<{ items: BookmarkedRequirement[] }>(`${apiBase}/appts/bookmarked-requirements?${params}`)).items

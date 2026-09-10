@@ -162,6 +162,23 @@ export const PROPOSAL_HANDLERS: Record<string, ProposalHandler> = {
         : []),
     ],
   },
+  propose_track_record: {
+    endpoint: (fields) => fields.record_kind === 'label_thread'
+      ? `/appts/label-threads/${encodeURIComponent(text(fields.thread_id))}/promote`
+      : fields.record_kind === 'requirement' ? '/appts/applications' : '',
+    method: 'POST',
+    buildBody: (fields) => {
+      const payload = record(fields.fields)
+      return fields.record_kind === 'label_thread' ? { resume_asset_id: payload.resume_asset_id }
+        : { resume_asset_id: payload.resume_asset_id, recruiter_email_id: payload.recruiter_email_id, dedupe_key: payload.dedupe_key }
+    },
+    confirmLabel: () => 'Confirm & Track',
+    pendingNotice: 'Tracking begins only after you confirm this resume version.',
+    summary: (fields) => [
+      ['Subject', text(fields.record_label)], ['Recruiter', text(fields.recruiter)],
+      ['Labels', strings(fields.labels).join(', ')], ['Resume', text(fields.resume)],
+    ],
+  },
   propose_add_note: {
     endpoint: (fields) => (
       fields.record_kind === 'application'
@@ -590,6 +607,12 @@ export function proposalResultDetail(payload: Record<string, unknown>, fields: P
   // falling through would report a new resume draft as a saved contact.
   if (fields.action === 'propose_resume_draft') {
     return `Draft "${text(payload.name)}" created - open the Editor tab in Resume Tracking to write it.`
+  }
+  // Both promote routes echo an ApplicationResponse, so this has to sit above
+  // the generic `id` branch too - otherwise tracking an RTR thread reports
+  // itself as a saved contact.
+  if (fields.action === 'propose_track_record') {
+    return `Tracked as application ${Number(payload.id ?? 0)} - it is in Application Tracking, not submitted yet.`
   }
   if (typeof payload.id === 'number') return `Saved as contact ${payload.id}.`
   // A queued job, not a finished one. Every other branch here reports something
