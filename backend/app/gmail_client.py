@@ -130,6 +130,7 @@ def _load_credentials(owner_id: str | None = None) -> Credentials:
         creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
 
     if creds and creds.valid:
+        _backfill_profile_email(owner_id, creds)
         return creds
 
     if creds and creds.expired and creds.refresh_token:
@@ -147,6 +148,7 @@ def _load_credentials(owner_id: str | None = None) -> Credentials:
         if settings.feature_db_credentials_enabled:
             with session_scope() as db:
                 gmail_credential_service.mark_refreshed(db, owner_id, creds)
+            _backfill_profile_email(owner_id, creds)
         else:
             _ensure_token_parent()
             token_path.write_text(creds.to_json(), encoding="utf-8")
@@ -238,9 +240,44 @@ def _profile_email(creds: Credentials) -> str:
     try:
         profile = build("gmail", "v1", credentials=creds).users().getProfile(userId="me").execute()
         return str(_as_dict(profile).get("emailAddress") or "")
-    except Exception:
-        logger.warning("gmail_profile_lookup_failed", exc_info=True)
+    except Exception as exc:
+        # Type only, never the message. A provider error reaching this path can
+        # carry response text, and A5 established that provider errors do not
+        # go to the log.
+        logger.warning("gmail_profile_lookup_failed error=%s", type(exc).__name__)
         return ""
+
+
+def _backfill_profile_email(owner_id: str, creds: Credentials) -> None:
+    """Fill in `google_email` for a row that arrived without one.
+
+    Found by flipping the flag on live data: the legacy token file's `account`
+    field is empty, so an imported credential has no address, and nothing would
+    ever fill it in - `save_credentials` only runs on a fresh consent, which an
+    imported owner never performs. That left the Settings card with no address
+    to show and, more seriously, no value in the column Pub/Sub will route on.
+
+    One getProfile call, once, only when the column is empty. A failure is
+    ignored: this is cosmetic until Pub/Sub lands, and must never break a Gmail
+    call that was about to succeed.
+    """
+    try:
+        with session_scope() as db:
+            row = gmail_credential_service.get_row(db, owner_id)
+            if row is None or row.google_email:
+                return
+        email = _profile_email(creds)
+        if not email:
+            return
+        with session_scope() as db:
+            row = gmail_credential_service.get_row(db, owner_id)
+            if row is not None and not row.google_email:
+                row.google_email = email[:320]
+        logger.info("gmail_credentials_email_backfilled owner_id=%s", owner_id)
+    except Exception as exc:
+        logger.warning(
+            "gmail_credentials_email_backfill_failed owner_id=%s error=%s", owner_id, type(exc).__name__
+        )
 
 
 def _persist_new_credentials(creds: Credentials, owner_id: str | None = None) -> None:
@@ -881,6 +918,16 @@ def gmail_connection_state(owner_id: str | None = None) -> tuple[str, str]:
     if settings.feature_db_credentials_enabled:
         owner_id = owner_id or settings.owner_id
         with session_scope() as db:
+            # Adopt an existing token file here too, not only in
+            # _load_credentials. Found by flipping the flag live: Settings said
+            # "Not connected" on a perfectly working install until something
+            # happened to make a Gmail call, which is the same class of lie A7
+            # exists to remove. Idempotent, and a no-op once a row exists.
+            if (
+                owner_id == settings.owner_id
+                and gmail_credential_service.get_row(db, owner_id) is None
+            ):
+                gmail_credential_service.import_legacy_token_file(db, owner_id)
             status = gmail_credential_service.connection_status(db, owner_id)
         if status.revoked:
             return GMAIL_STATE_NEEDS_RECONNECT, status.last_error or "Access was revoked. Reconnect Gmail."

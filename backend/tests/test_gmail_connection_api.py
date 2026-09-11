@@ -75,6 +75,8 @@ class GmailConnectionApiTests(unittest.TestCase):
         main.settings.google_client_secret = "secret"
         main.settings.google_redirect_uri = "http://localhost:8080/"
         database.SessionLocal = self.SessionLocal
+        self._real_profile_email = gmail_client._profile_email
+        self._profile_stub()
         with Session(self.engine) as db:
             db.add(UserSettings(owner_id=self.owner))
             db.commit()
@@ -89,10 +91,14 @@ class GmailConnectionApiTests(unittest.TestCase):
             main.settings.google_redirect_uri,
             database.SessionLocal,
         ) = self._previous
+        gmail_client._profile_email = self._real_profile_email
         main.app.dependency_overrides.clear()
         self.client.close()
         self.engine.dispose()
         self.tmp.cleanup()
+
+    def _profile_stub(self) -> None:
+        gmail_client._profile_email = lambda creds: "backfilled@example.com"
 
     def _store(self, creds: Credentials, email: str = "owner@example.com") -> None:
         with Session(self.engine) as db:
@@ -218,3 +224,61 @@ class GmailConnectionApiTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class A9LiveFlipRegressionTests(GmailConnectionApiTests):
+    """Two defects that only appeared when the flag was flipped on real data."""
+
+    def test_status_adopts_an_existing_token_file_rather_than_saying_not_connected(self) -> None:
+        """Flipping the flag must not make a working install look disconnected."""
+        Path(main.settings.google_token_path).write_text(
+            _credentials(expired=True).to_json(), encoding="utf-8"
+        )
+
+        body = self.client.get("/gmail/status").json()
+
+        self.assertTrue(body["authenticated"])
+        self.assertEqual(body["state"], gmail_client.GMAIL_STATE_CONNECTED_REFRESHABLE)
+
+    def test_the_adoption_from_status_is_idempotent(self) -> None:
+        Path(main.settings.google_token_path).write_text(
+            _credentials().to_json(), encoding="utf-8"
+        )
+
+        self.client.get("/gmail/status")
+        self.client.get("/gmail/status")
+
+        with Session(self.engine) as db:
+            self.assertEqual(db.query(GmailCredential).count(), 1)
+
+    def test_an_imported_credential_gets_its_address_backfilled(self) -> None:
+        """The live token file's `account` field is empty, so nothing else would."""
+        self._store(_credentials(), email="")
+        with Session(self.engine) as db:
+            self.assertEqual(db.query(GmailCredential).one().google_email, "")
+
+        gmail_client._backfill_profile_email(self.owner, _credentials())
+
+        with Session(self.engine) as db:
+            self.assertEqual(db.query(GmailCredential).one().google_email, "backfilled@example.com")
+
+    def test_the_backfill_never_overwrites_a_known_address(self) -> None:
+        self._store(_credentials(), email="already@example.com")
+
+        gmail_client._backfill_profile_email(self.owner, _credentials())
+
+        with Session(self.engine) as db:
+            self.assertEqual(db.query(GmailCredential).one().google_email, "already@example.com")
+
+    def test_a_backfill_failure_is_swallowed(self) -> None:
+        """It is cosmetic until Pub/Sub; it must never break a working Gmail call."""
+        self._store(_credentials(), email="")
+        original = gmail_client._profile_email
+        gmail_client._profile_email = lambda creds: (_ for _ in ()).throw(RuntimeError("network"))
+        try:
+            gmail_client._backfill_profile_email(self.owner, _credentials())
+        finally:
+            gmail_client._profile_email = original
+
+        with Session(self.engine) as db:
+            self.assertEqual(db.query(GmailCredential).one().google_email, "")
