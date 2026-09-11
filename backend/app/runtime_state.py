@@ -60,8 +60,11 @@ class AppRuntimeState:
     auto_runner_thread: threading.Thread | None = None
     auto_runner_stop_event: threading.Event = field(default_factory=threading.Event)
     gmail_labeling_service: GmailLabelingService | None = None
-    live_reply_count: int = 0
-    live_reply_checked_at: datetime | None = None
+    # Keyed by owner. A single pair of fields was correct while one tenant's
+    # automation was the only thing writing them; once the auto-runner services
+    # every tenant it would hold whichever ran last, and /gmail/live-replies
+    # would show one account's unread count to all of them.
+    live_replies: dict[str, tuple[int, datetime]] = field(default_factory=dict)
 
 
 runtime_state = AppRuntimeState()

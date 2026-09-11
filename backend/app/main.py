@@ -39,7 +39,7 @@ from app.automation import (
     RunOrchestratorDependencies,
     RunOrchestratorRequest,
 )
-from app.db import SessionLocal, get_db
+from app.db import SessionLocal, get_db, session_scope
 from app.gates import classify_email_intent
 from app.ai.groq_client import groq_request_mode_for_model
 from app.gmail_client import (
@@ -110,7 +110,7 @@ from app.models import (
     UserSettings,
     utc_now,
 )
-from app.models import RecipientRoutingFeedback
+from app.models import RecipientRoutingFeedback, User
 from app.parsing.document_extraction import prepare_gmail_parse_body
 from app.parsing.skill_audit import analyze_skill_candidate, is_safe_for_bulk_skill_approval
 from app.telegram_bot import TelegramBotService, TelegramReply
@@ -1620,8 +1620,10 @@ def _check_live_replies(db: Session) -> None:
     _, authenticated, _ = gmail_auth_status()
     if not authenticated:
         return
-    runtime_state.live_reply_count = _get_orchestration_service().count_live_unread_replies(db)
-    runtime_state.live_reply_checked_at = datetime.now(UTC)
+    runtime_state.live_replies[tenancy.owner_id()] = (
+        _get_orchestration_service().count_live_unread_replies(db),
+        datetime.now(UTC),
+    )
 
 
 def _run_reminder_sweep(db: Session) -> None:
@@ -1662,6 +1664,33 @@ def _run_relationship_sweep(db: Session) -> None:
     )
 
 
+def _automation_owners() -> list[str]:
+    """The tenants the auto-runner services this tick.
+
+    With sign-in off there is one owner and it is the configured constant -
+    exactly the behaviour this replaces.
+
+    With sign-in on it is every account that has not been disabled. A disabled
+    account keeps its data but stops being synced, which is what "disabled"
+    should mean; `disabled_at` is the app's own switch, because removing
+    someone from the GCP test-user list stops new sign-ins and nothing else.
+
+    The fallback when sign-in is on but nobody has signed in yet is
+    deliberate. A working single-user install that has just turned the flag on
+    still has its mailbox connected and its data present, and silently
+    stopping its automation until the first sign-in would be a regression with
+    no error attached to it.
+    """
+    if not settings.feature_auth_enabled:
+        return [settings.owner_id]
+    with session_scope() as db:
+        owners = [
+            row[0]
+            for row in db.query(User.owner_id).filter(User.disabled_at.is_(None)).all()
+        ]
+    return owners or [settings.owner_id]
+
+
 def _get_auto_runner_service() -> AutoRunnerService:
     global auto_runner_service
     if auto_runner_service is None:
@@ -1677,6 +1706,7 @@ def _get_auto_runner_service() -> AutoRunnerService:
             run_scheduling_sweep=_run_scheduling_sweep,
             action_lock=telegram_action_lock,
             stop_event=auto_runner_stop_event,
+            list_owners=_automation_owners,
         )
     return auto_runner_service
 
@@ -4962,10 +4992,8 @@ def jobs_summary(db: Session = Depends(get_db)) -> JobQueueSummaryResponse:
 
 @app.get("/gmail/live-replies", response_model=LiveReplyStatusResponse)
 def live_replies() -> LiveReplyStatusResponse:
-    return LiveReplyStatusResponse(
-        count=runtime_state.live_reply_count,
-        checked_at=runtime_state.live_reply_checked_at,
-    )
+    count, checked_at = runtime_state.live_replies.get(tenancy.owner_id(), (0, None))
+    return LiveReplyStatusResponse(count=count, checked_at=checked_at)
 
 
 @app.post("/jobs/gmail-sync", response_model=JobEnqueueResponse, status_code=202)
