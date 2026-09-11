@@ -34,6 +34,20 @@ from app.services import google_identity_service
 logger = logging.getLogger(__name__)
 
 STATE_COOKIE = "codejob_oauth_state"
+# PKCE. `Flow.authorization_url()` generates a code verifier, hashes it into the
+# `code_challenge` it sends to Google, and keeps the verifier on the Flow
+# object. The token exchange has to present that same verifier - and the
+# exchange happens in a *different* request, against a new Flow, so the
+# verifier has to travel with the state or Google answers
+# "invalid_grant: Missing code verifier".
+#
+# Carried rather than disabled (`autogenerate_code_verifier = False` would also
+# have "worked"): PKCE is what stops an intercepted authorization code being
+# redeemed by anyone but this browser, and dropping a protection to avoid
+# plumbing it is not a trade worth making. The cookie is httpOnly and expires
+# with the state, so the verifier is bound to the browser that started the
+# flow, which is exactly PKCE's premise.
+VERIFIER_COOKIE = "codejob_oauth_verifier"
 
 
 class LoginError(RuntimeError):
@@ -44,6 +58,7 @@ class LoginError(RuntimeError):
 class StartedLogin:
     authorization_url: str
     state: str
+    code_verifier: str
 
 
 def hash_session_token(token: str) -> str:
@@ -74,7 +89,8 @@ def _flow(state: str | None = None) -> Flow:
 def begin_login() -> StartedLogin:
     if not (settings.google_client_id and settings.google_client_secret):
         raise LoginError("Google sign-in is not configured.")
-    authorization_url, state = _flow().authorization_url(
+    flow = _flow()
+    authorization_url, state = flow.authorization_url(
         # offline + consent so the exchange returns a refresh token. Without
         # `prompt=consent` Google omits it on every sign-in after the first,
         # and this flow is also how the mailbox gets connected.
@@ -82,16 +98,25 @@ def begin_login() -> StartedLogin:
         prompt="consent",
         include_granted_scopes="true",
     )
-    return StartedLogin(authorization_url=authorization_url, state=state)
+    return StartedLogin(
+        authorization_url=authorization_url, state=state, code_verifier=flow.code_verifier or ""
+    )
 
 
-def exchange_code(*, code: str, state: str):
+def exchange_code(*, code: str, state: str, code_verifier: str = ""):
     """Swap the authorization code for credentials.
 
     Kept here rather than in the router so the router holds no OAuth mechanics,
     and so this is unit-testable without a request.
+
+    `code_verifier` is the PKCE secret minted by `begin_login`. It must be the
+    one that produced the challenge Google already holds; a fresh Flow would
+    generate a different one and the exchange fails with
+    "invalid_grant: Missing code verifier".
     """
     flow = _flow(state=state)
+    if code_verifier:
+        flow.code_verifier = code_verifier
     flow.fetch_token(code=code)
     return flow.credentials
 

@@ -294,3 +294,84 @@ class SessionTests(AuthTestBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PkceTests(AuthTestBase):
+    """PKCE, and the bug that made the first live sign-in fail.
+
+    `Flow.authorization_url()` mints a code verifier, hashes it into the
+    `code_challenge` sent to Google, and keeps the verifier on that Flow
+    object. The exchange happens in a different request against a new Flow, so
+    unless the verifier travels with the state Google answers
+    "invalid_grant: Missing code verifier" - which is exactly what the first
+    real sign-in got.
+
+    Every earlier auth test stubbed `exchange_code`, so none of them could see
+    it. These do not stub the flow's own plumbing.
+    """
+
+    def test_start_sends_a_code_challenge_to_google(self) -> None:
+        url = self.client.get("/auth/google/start").json()["authorization_url"]
+
+        self.assertIn("code_challenge=", url)
+        self.assertIn("code_challenge_method=S256", url)
+
+    def test_start_keeps_the_verifier_in_an_http_only_cookie(self) -> None:
+        response = self.client.get("/auth/google/start")
+
+        self.assertIn(auth_service.VERIFIER_COOKIE, response.cookies)
+        header = response.headers["set-cookie"]
+        self.assertIn("httponly", header.lower())
+
+    def test_the_verifier_is_the_one_that_produced_the_challenge(self) -> None:
+        """The whole bug: a second Flow would mint a different verifier."""
+        import base64
+        import hashlib
+        from urllib.parse import parse_qs, urlparse
+
+        response = self.client.get("/auth/google/start")
+        verifier = response.cookies[auth_service.VERIFIER_COOKIE]
+        challenge = parse_qs(urlparse(response.json()["authorization_url"]).query)["code_challenge"][0]
+
+        digest = hashlib.sha256(verifier.encode()).digest()
+        expected = base64.urlsafe_b64encode(digest).decode().rstrip("=")
+
+        self.assertEqual(challenge, expected)
+
+    def test_the_exchange_replays_the_stored_verifier(self) -> None:
+        captured = {}
+
+        def fake_fetch_token(self, **kwargs):
+            # Read off the Flow itself: this is the value google-auth-oauthlib
+            # would send to Google, and sending the wrong one is the bug.
+            captured["verifier"] = self.code_verifier
+
+        with (
+            patch("google_auth_oauthlib.flow.Flow.fetch_token", fake_fetch_token),
+            patch("google_auth_oauthlib.flow.Flow.credentials", new_callable=lambda: property(lambda self: Mock())),
+        ):
+            auth_service.exchange_code(code="c", state="s", code_verifier="the-verifier")
+
+        self.assertEqual(captured["verifier"], "the-verifier")
+
+    def test_the_callback_passes_the_cookie_through_to_the_exchange(self) -> None:
+        self.client.cookies.set(auth_service.STATE_COOKIE, "the-state")
+        self.client.cookies.set(auth_service.VERIFIER_COOKIE, "the-verifier")
+
+        with (
+            patch.object(auth_service, "exchange_code", return_value=Mock(id_token="raw")) as exchange,
+            patch("app.services.google_identity_service.verify_id_token", return_value=IDENTITY),
+            patch("app.gmail_client._profile_email", return_value=IDENTITY.email),
+            patch("app.gmail_client.store_credentials_for_owner"),
+        ):
+            self.client.get("/auth/google/callback", params={"code": "c", "state": "the-state"})
+
+        self.assertEqual(exchange.call_args.kwargs["code_verifier"], "the-verifier")
+
+    def test_the_verifier_cookie_is_cleared_after_a_successful_sign_in(self) -> None:
+        """Single use. A verifier left lying about outlives its own protection."""
+        self._sign_in()
+
+        header = self.response.headers["set-cookie"]
+        self.assertIn(auth_service.VERIFIER_COOKIE, header)
+        self.assertIn('Max-Age=0', header)

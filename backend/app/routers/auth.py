@@ -57,6 +57,10 @@ def start_google_login(response: Response) -> LoginStartResponse:
     # in an httpOnly cookie rather than server-side because it is single-use,
     # short-lived, and needs no coordination between workers.
     _set_cookie(response, auth_service.STATE_COOKIE, started.state, max_age=600)
+    # The PKCE verifier travels with the state, for the same 10 minutes. Both
+    # are httpOnly: the point of PKCE is that only the browser that began the
+    # flow can complete it.
+    _set_cookie(response, auth_service.VERIFIER_COOKIE, started.code_verifier, max_age=600)
     return LoginStartResponse(authorization_url=started.authorization_url, state=started.state)
 
 
@@ -93,7 +97,9 @@ def google_callback(
         return failed("state_mismatch")
 
     try:
-        credentials = auth_service.exchange_code(code=code, state=state)
+        credentials = auth_service.exchange_code(
+            code=code, state=state, code_verifier=request.cookies.get(auth_service.VERIFIER_COOKIE, "")
+        )
         identity = google_identity_service.verify_id_token(str(getattr(credentials, "id_token", "") or ""))
         mailbox = gmail_client._profile_email(credentials)
         google_identity_service.assert_identity_matches_mailbox(identity, mailbox)
@@ -120,6 +126,7 @@ def google_callback(
     redirect = RedirectResponse(settings.dashboard_base_url, status_code=303)
     _set_cookie(redirect, settings.session_cookie_name, token, max_age=settings.session_ttl_hours * 3600)
     redirect.delete_cookie(auth_service.STATE_COOKIE, path="/")
+    redirect.delete_cookie(auth_service.VERIFIER_COOKIE, path="/")
     return redirect
 
 
