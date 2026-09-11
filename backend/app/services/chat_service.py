@@ -19,6 +19,8 @@ from app.ai.chat.history import db_messages_to_langchain, langchain_message_to_d
 from app.ai.chat.system_prompt import prompt_sha256
 from app.config import settings
 from app.models import ChatMessage, ChatSession, ChatTurn, UserSettings
+from app.services import admission_service
+from app.services.admission_service import CHAT_TURN_POOL, AdmissionRejected
 from app.services.chat_attachment_service import ChatAttachmentService
 from app import tenancy
 
@@ -264,16 +266,27 @@ class ChatService:
                            model: str | None = None, attachment_ids: list[int] | None = None) -> AsyncIterator[str]:
         self.validate_message(user_text)
         self._session_or_404(db, session_id)
-        if not turns.slots.acquire(blocking=False):
+        try:
+            lease = await admission_service.acquire_async(
+                CHAT_TURN_POOL,
+                owner_id=tenancy.owner_id(),
+                global_limit=settings.chat_max_concurrent_turns,
+                per_user_limit=settings.chat_max_turns_per_user,
+                # Beyond the budget, so a turn that runs its full length keeps
+                # its slot, but a worker killed mid-turn gives it back.
+                ttl_seconds=settings.chat_turn_budget_seconds + 60,
+                local_limit=settings.chat_local_fallback_turns,
+            )
+        except AdmissionRejected as exc:
             self._record_turn(db, session_id=session_id, message_id=None, requested_model=model or "auto",
                               failure_code="admission_rejected", prompt_sha256=prompt_sha256())
-            raise HTTPException(status_code=503, detail="The assistant is handling other turns. Try again in a moment.")
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         try:
             async with aclosing(self._send_message(db, session_id, user_text, model, attachment_ids)) as stream:
                 async for event in stream:
                     yield event
         finally:
-            turns.slots.release()
+            admission_service.release(lease)
 
     async def _send_message(
         self,

@@ -96,7 +96,25 @@ class Settings(BaseSettings):
     chat_turn_budget_seconds: float = Field(default=240.0, gt=0)
     chat_tool_timeout_seconds: float = Field(default=180.0, ge=180)
     chat_model_max_attempts: int = Field(default=2, ge=1, le=5)
-    chat_max_concurrent_turns: int = Field(default=3, ge=1)
+    # C1. Was 3, and was a per-process semaphore - so it capped one API process
+    # and silently became 3xN with more. Now a shared cap across every process,
+    # sized for a realistic peak of 5-15 concurrent turns among 100 registered
+    # users rather than for one.
+    chat_max_concurrent_turns: int = Field(default=24, ge=1)
+    # One user must not be able to hold every slot. Checked before the global
+    # cap, so a heavy user is told they are at their own limit rather than that
+    # the service is busy.
+    chat_max_turns_per_user: int = Field(default=2, ge=1)
+    # C2: wait this long for a slot before answering 503. At peak a two-second
+    # wait beats "try again in a moment" for someone who would have waited.
+    chat_admission_wait_seconds: float = Field(default=10.0, ge=0)
+    # The cap to fall back to if Redis is unreachable: exactly the pre-C1
+    # per-process limit, so an outage degrades to the old behaviour rather than
+    # inventing a new one.
+    chat_local_fallback_turns: int = Field(default=3, ge=1)
+    # LibreOffice rendering, previously a bare BoundedSemaphore(4).
+    resume_render_max_concurrent: int = Field(default=4, ge=1)
+    resume_render_max_per_user: int = Field(default=2, ge=1)
     ollama_task_model: str = ""
     feature_chat_title_generation: bool = False
     feature_chat_enabled: bool = False

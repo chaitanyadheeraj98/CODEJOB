@@ -19,6 +19,8 @@ from app.ai.chat.history import db_messages_to_langchain
 from app.ai.chat.system_prompt import build_system_prompt, prompt_sha256
 from app.config import settings
 from app.db import Base
+from app.services import admission_service
+from app.services.admission_service import AdmissionRejected
 from app.mcp_server.tools import needs, refused, untrusted
 from app.models import ChatMessage, ChatTurn
 from app.runtime_state import runtime_state
@@ -256,15 +258,19 @@ def test_a_rejected_turn_is_recorded_rather_than_silently_dropped():
     Base.metadata.create_all(engine)
     with Session(engine) as db:
         service, session = _service_session(db)
-        held = [turns.slots.acquire(blocking=False) for _ in range(settings.chat_max_concurrent_turns)]
-        try:
-            assert all(held)
+        # The refusal is forced rather than produced by filling a real pool.
+        # Admission moved to Redis in C1, and what this test is named for is
+        # that a *rejected* turn leaves a row - not how the rejection was
+        # reached. The caps themselves are covered against a real Redis in
+        # test_admission_service.py, including under a concurrent burst.
+        with patch.object(
+            admission_service,
+            "acquire_async",
+            side_effect=AdmissionRejected("global", "The assistant is handling other turns."),
+        ):
             with pytest.raises(HTTPException) as rejected:
                 asyncio.run(anext(service.send_message(db, session.id, "hi")))
             assert rejected.value.status_code == 503
-        finally:
-            for _ in held:
-                turns.slots.release()
         turn = db.query(ChatTurn).one()
         assert turn.failure_code == "admission_rejected" and turn.message_id is None
 
