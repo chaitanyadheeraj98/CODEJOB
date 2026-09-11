@@ -169,6 +169,11 @@ class Settings(BaseSettings):
     # works in local development. Kept configurable for anything that does not.
     session_cookie_secure: bool = True
     session_cookie_name: str = "codejob_session"
+    # The one address that inherits the existing single-tenant install: on its
+    # first sign-in it adopts `owner_id` (below) instead of a generated one, so
+    # every row already in the database is simply theirs, and it is made admin.
+    # Empty disables both behaviours entirely. See temp176 B7.
+    bootstrap_owner_email: str = ""
     gmail_label_filter: str = ""
     google_login_hint: str = ""
     public_base_url: str = ""

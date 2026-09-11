@@ -105,6 +105,37 @@ def _new_owner_id() -> str:
     return f"usr_{uuid.uuid4().hex}"
 
 
+def _claims_the_legacy_install(db: Session, email: str) -> bool:
+    """True when this sign-in should inherit the existing single-tenant data.
+
+    The alternative was rewriting `owner_id` across 84 columns to point at a
+    freshly generated id. That is a long, irreversible data migration with a
+    partial-failure mode, run against a live database, to achieve exactly what
+    reusing the existing string achieves for free.
+
+    So the first sign-in by the configured address **adopts**
+    `settings.owner_id` rather than being given a new one. Every row, credential
+    and label already in the database is theirs immediately, and nothing is
+    written.
+
+    Guarded three ways, because this hands over an entire install:
+
+    - the address must be configured explicitly in `bootstrap_owner_email`;
+    - the address must match, and it has already been verified by Google
+      (`email_verified`) and admitted by the test-user list;
+    - nobody may already hold that `owner_id` - a second claimant gets a
+      generated id and no special treatment.
+    """
+    configured = (settings.bootstrap_owner_email or "").strip().lower()
+    if not configured or email.strip().lower() != configured:
+        return False
+    taken = db.query(User).filter(User.owner_id == settings.owner_id).first()
+    if taken is not None:
+        logger.warning("bootstrap_owner_already_claimed by=%s", taken.email)
+        return False
+    return True
+
+
 def upsert_user(db: Session, identity: google_identity_service.VerifiedIdentity) -> User:
     """Find or create the account for a verified Google identity.
 
@@ -118,15 +149,23 @@ def upsert_user(db: Session, identity: google_identity_service.VerifiedIdentity)
         if user is not None and not user.google_subject:
             user.google_subject = identity.subject
     if user is None:
+        claims_legacy = _claims_the_legacy_install(db, identity.email)
         user = User(
-            owner_id=_new_owner_id(),
+            owner_id=settings.owner_id if claims_legacy else _new_owner_id(),
             email=identity.email,
             google_subject=identity.subject,
             display_name=identity.name[:120],
+            # Admin comes with the legacy claim and from nowhere else at
+            # sign-in. Every other route to it is an existing admin promoting
+            # somebody through /admin/users.
+            is_admin=claims_legacy,
         )
         db.add(user)
         db.flush()
-        logger.info("user_created owner_id=%s", user.owner_id)
+        logger.info(
+            "user_created owner_id=%s legacy_claim=%s admin=%s",
+            user.owner_id, claims_legacy, user.is_admin,
+        )
     else:
         # The address can change on Google's side; the subject cannot.
         user.email = identity.email
