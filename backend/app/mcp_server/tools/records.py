@@ -7,6 +7,7 @@ from app.db import SessionLocal
 from app.models import AppTSApplication, EmailConversation, EmailReplyMessage, RecruiterEmail, ResumeAsset, TrackedThread
 from app.mcp_server.tools import needs, refused, untrusted
 from app.services.email_inbox_service import conversation_label_names
+from app import tenancy
 
 
 def lookup_record(db, owner_id: str, message_id: str, *, recruiter_email_id: int | None = None) -> dict[str, object] | None:
@@ -71,7 +72,7 @@ def _safe(result: dict[str, object]) -> dict[str, object]:
 def resolve_record_by_message_id(message_id: str) -> dict[str, object]:
     """Find the record behind a Gmail message id, RFC Message-ID or thread id. Read-only."""
     with SessionLocal() as db:
-        result = lookup_record(db, settings.owner_id, message_id)
+        result = lookup_record(db, tenancy.owner_id(), message_id)
         return _safe(result) if result else refused("no record for that message id", hint="Sync the tracked Gmail label, or provide a stored message or thread id.")
 
 
@@ -79,17 +80,17 @@ def propose_track_record(record_id: str = "", message_id: str = "", resume_asset
     """Prepare application tracking with an explicitly chosen resume. Never performs it."""
     with SessionLocal() as db:
         if record_id:
-            email = db.query(RecruiterEmail).filter(RecruiterEmail.owner_id == settings.owner_id, RecruiterEmail.record_id == record_id).order_by(RecruiterEmail.id).first()
-            result = lookup_record(db, settings.owner_id, "", recruiter_email_id=email.id) if email else None
+            email = db.query(RecruiterEmail).filter(RecruiterEmail.owner_id == tenancy.owner_id(), RecruiterEmail.record_id == record_id).order_by(RecruiterEmail.id).first()
+            result = lookup_record(db, tenancy.owner_id(), "", recruiter_email_id=email.id) if email else None
         else:
-            result = lookup_record(db, settings.owner_id, message_id)
+            result = lookup_record(db, tenancy.owner_id(), message_id)
         if not result:
             return refused("no record for that message id", hint="Resolve a stored Gmail message or provide its Record ID first.")
         if result["appts_application_id"]:
             return {"status": "already_tracked", "appts_application_id": result["appts_application_id"], "record_id": result["record_id"]}
         if resume_asset_id <= 0:
             return needs(["resume_asset_id"], hint="Choose a stored resume version to lock into the application; use list_resumes to see the options.")
-        resume = db.query(ResumeAsset).filter(ResumeAsset.owner_id == settings.owner_id, ResumeAsset.id == resume_asset_id).first()
+        resume = db.query(ResumeAsset).filter(ResumeAsset.owner_id == tenancy.owner_id(), ResumeAsset.id == resume_asset_id).first()
         if resume is None:
             return refused("resume not found", hint="Select a resume returned by list_resumes.")
         if not result["label_thread"] and result["recruiter_email_id"] is None:
@@ -97,7 +98,7 @@ def propose_track_record(record_id: str = "", message_id: str = "", resume_asset
         label_thread = bool(result["label_thread"])
         payload = {"resume_asset_id": resume.id} if label_thread else {
             "resume_asset_id": resume.id, "recruiter_email_id": result["recruiter_email_id"],
-            "dedupe_key": hashlib.sha256(f'record:{settings.owner_id}:{result["recruiter_email_id"]}'.encode()).hexdigest(),
+            "dedupe_key": hashlib.sha256(f'record:{tenancy.owner_id()}:{result["recruiter_email_id"]}'.encode()).hexdigest(),
         }
         return {
             "action": "propose_track_record", "record_kind": "label_thread" if label_thread else "requirement",

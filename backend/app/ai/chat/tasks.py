@@ -8,6 +8,7 @@ from app.ai.chat.llm import build_chat_llm
 from app.config import settings
 from app.db import SessionLocal
 from app.models import ChatSession, ChatTurn
+from app import tenancy
 
 _pending: set[asyncio.Task] = set()
 
@@ -29,7 +30,7 @@ async def generate_title(session_id: int, message_id: int, text: str, original_t
     try:
         with SessionLocal() as db:
             session = db.get(ChatSession, session_id)
-            if session and session.owner_id == settings.owner_id and session.title == original_title and title:
+            if session and session.owner_id == tenancy.owner_id() and session.title == original_title and title:
                 session.title = title
             turn = db.query(ChatTurn).filter(ChatTurn.session_id == session_id, ChatTurn.message_id == message_id).first()
             if turn:

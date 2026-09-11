@@ -23,6 +23,7 @@ from app.models import OpportunityCluster, OpportunityClusterMember, RecruiterOp
 from app.services import relationship_clustering_service as clustering
 from app.services import relationship_scoring as scoring
 from app.services import recruiter_ranking_service as ranking
+from app import tenancy
 
 MAX_MEMBERS = 25
 MAX_RECOMMENDED = 10
@@ -92,7 +93,7 @@ def _evidence_from(members: list[OpportunityClusterMember]) -> list[provenance.E
 
 def _visible_clusters(db, cluster_ids: list[str] | None = None) -> list[OpportunityCluster]:
     query = db.query(OpportunityCluster).filter(
-        OpportunityCluster.owner_id == settings.owner_id,
+        OpportunityCluster.owner_id == tenancy.owner_id(),
         # Shadow clusters are recorded and never shown. This filter is one of
         # four independent points enforcing that, deliberately redundant.
         OpportunityCluster.status != clustering.STATUS_SHADOW,
@@ -113,7 +114,7 @@ def _cluster_payload(db, cluster: OpportunityCluster, mode: str) -> dict[str, ob
     rows = {
         int(row.id): row
         for row in db.query(RecruiterOpportunity).filter(
-            RecruiterOpportunity.owner_id == settings.owner_id,
+            RecruiterOpportunity.owner_id == tenancy.owner_id(),
             RecruiterOpportunity.id.in_([int(member.opportunity_id) for member in members] or [0]),
         )
     }
@@ -200,7 +201,7 @@ def get_relationships(subject: str, subject_id: str, mode: str = "siblings") -> 
                 str(row[0])
                 for row in db.query(OpportunityClusterMember.cluster_id)
                 .filter(
-                    OpportunityClusterMember.owner_id == settings.owner_id,
+                    OpportunityClusterMember.owner_id == tenancy.owner_id(),
                     OpportunityClusterMember.opportunity_id == opportunity_id,
                 )
                 .distinct()
@@ -235,7 +236,7 @@ def recommend_recruiter(opportunity_id: int, limit: int = 5) -> dict[str, object
     try:
         try:
             ranked = ranking.rank_recruiters_for_opportunity(
-                db, owner_id=settings.owner_id, opportunity_id=int(opportunity_id), limit=capped
+                db, owner_id=tenancy.owner_id(), opportunity_id=int(opportunity_id), limit=capped
             )
         except LookupError:
             return {"error": "Requirement not found."}

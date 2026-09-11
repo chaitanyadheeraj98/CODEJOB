@@ -5,6 +5,7 @@ from app.config import settings
 from app.db import SessionLocal
 from app.models import RecentRun, RecentRunSkippedItem
 from app.recent_runs import row_to_recent_run_dict
+from app import tenancy
 
 
 def _json_ready(payload: dict[str, object]) -> dict[str, object]:
@@ -20,7 +21,7 @@ def get_recent_runs(limit: int = 10) -> dict[str, object]:
     try:
         rows = (
             db.query(RecentRun)
-            .filter(RecentRun.owner_id == settings.owner_id)
+            .filter(RecentRun.owner_id == tenancy.owner_id())
             .order_by(RecentRun.created_at.desc(), RecentRun.id.desc())
             .limit(max(1, min(limit, 25)))
             .all()
@@ -37,7 +38,7 @@ def get_run_items(run_key: str, limit: int = 25) -> dict[str, object]:
         rows = (
             db.query(RecentRunSkippedItem)
             .filter(
-                RecentRunSkippedItem.owner_id == settings.owner_id,
+                RecentRunSkippedItem.owner_id == tenancy.owner_id(),
                 RecentRunSkippedItem.run_key == run_key,
             )
             .order_by(RecentRunSkippedItem.created_at.desc(), RecentRunSkippedItem.id.desc())

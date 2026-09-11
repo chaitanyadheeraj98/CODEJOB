@@ -3,6 +3,7 @@ from __future__ import annotations
 from app.config import settings
 from app.db import SessionLocal
 from app.models import CandidateDocument
+from app import tenancy
 
 
 # Words that carry no identifying information in a request for a document, and
@@ -46,7 +47,7 @@ def list_candidate_documents(query: str = "") -> dict[str, object]:
     try:
         rows = (
             db.query(CandidateDocument)
-            .filter(CandidateDocument.owner_id == settings.owner_id)
+            .filter(CandidateDocument.owner_id == tenancy.owner_id())
             .order_by(CandidateDocument.created_at.desc(), CandidateDocument.id.desc())
             .all()
         )

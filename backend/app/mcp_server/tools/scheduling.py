@@ -39,6 +39,7 @@ from app.services.scheduling.schedule import (
     parse_when,
 )
 from app.services.scheduling.timezone import user_zone
+from app import tenancy
 
 MAX_TASKS = 25
 OPERATIONS = ("create", "pause", "resume", "edit", "delete")
@@ -99,7 +100,7 @@ def list_scheduled_tasks(status: str = "active", limit: int = 20) -> dict[str, o
 
     db = SessionLocal()
     try:
-        query = db.query(ScheduledTask).filter(ScheduledTask.owner_id == settings.owner_id)
+        query = db.query(ScheduledTask).filter(ScheduledTask.owner_id == tenancy.owner_id())
         if normalized == "all":
             query = query.filter(ScheduledTask.status != "deleted")
         else:
@@ -171,13 +172,13 @@ def propose_scheduled_task(
 
     db = SessionLocal()
     try:
-        zone = str(user_zone(db, owner_id=settings.owner_id))
+        zone = str(user_zone(db, owner_id=tenancy.owner_id()))
         existing = None
         if action == "edit":
             existing = (
                 db.query(ScheduledTask)
                 .filter(
-                    ScheduledTask.owner_id == settings.owner_id,
+                    ScheduledTask.owner_id == tenancy.owner_id(),
                     ScheduledTask.id == int(task_id or 0),
                 )
                 .first()
@@ -240,7 +241,7 @@ def _lifecycle_preview(action: str, task_id: int) -> dict[str, object]:
     try:
         task = (
             db.query(ScheduledTask)
-            .filter(ScheduledTask.owner_id == settings.owner_id, ScheduledTask.id == task_id)
+            .filter(ScheduledTask.owner_id == tenancy.owner_id(), ScheduledTask.id == task_id)
             .first()
         )
         if task is None:

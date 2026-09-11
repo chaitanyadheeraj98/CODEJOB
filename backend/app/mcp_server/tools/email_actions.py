@@ -3,6 +3,7 @@ from __future__ import annotations
 from app.config import settings
 from app.db import SessionLocal
 from app.models import CandidateDocument, RecruiterEmail
+from app import tenancy
 
 # Matches the cap on ChatSendReplyRequest.document_ids, so a proposal that the
 # server would refuse is never drawn as a confirmable card.
@@ -27,7 +28,7 @@ def propose_send_email(
         row = (
             db.query(RecruiterEmail)
             .filter(
-                RecruiterEmail.owner_id == settings.owner_id,
+                RecruiterEmail.owner_id == tenancy.owner_id(),
                 RecruiterEmail.id == candidate_email_id,
             )
             .first()
@@ -51,7 +52,7 @@ def propose_send_email(
             found = {
                 item.id: item
                 for item in db.query(CandidateDocument).filter(
-                    CandidateDocument.owner_id == settings.owner_id,
+                    CandidateDocument.owner_id == tenancy.owner_id(),
                     CandidateDocument.id.in_(requested),
                 )
             }

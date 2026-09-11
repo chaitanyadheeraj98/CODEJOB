@@ -18,6 +18,7 @@ from app.ai.chat.llm import build_chat_llm
 from app.mcp_server.tools import untrusted
 from app.config import settings
 from app.models import ChatMessage, ChatSession, EmailConversation, EmailReplyMessage, RecruiterEmail, utc_now
+from app import tenancy
 
 logger = logging.getLogger(__name__)
 
@@ -53,12 +54,12 @@ async def _classify_reply(*, sender: str, subject: str, body: str) -> str | None
 def _target_session(db: Session) -> ChatSession:
     session = (
         db.query(ChatSession)
-        .filter(ChatSession.owner_id == settings.owner_id)
+        .filter(ChatSession.owner_id == tenancy.owner_id())
         .order_by(ChatSession.updated_at.desc())
         .first()
     )
     if session is None:
-        session = ChatSession(owner_id=settings.owner_id, title="Notifications")
+        session = ChatSession(owner_id=tenancy.owner_id(), title="Notifications")
         db.add(session)
         db.flush()
     return session
@@ -78,14 +79,14 @@ def _notifications_session(db: Session) -> ChatSession:
     session = (
         db.query(ChatSession)
         .filter(
-            ChatSession.owner_id == settings.owner_id,
+            ChatSession.owner_id == tenancy.owner_id(),
             ChatSession.title == NOTIFICATIONS_SESSION_TITLE,
         )
         .order_by(ChatSession.id.asc())
         .first()
     )
     if session is None:
-        session = ChatSession(owner_id=settings.owner_id, title=NOTIFICATIONS_SESSION_TITLE)
+        session = ChatSession(owner_id=tenancy.owner_id(), title=NOTIFICATIONS_SESSION_TITLE)
         db.add(session)
         db.flush()
     return session
@@ -139,7 +140,7 @@ def generate_reply_notifications(db: Session, *, limit: int = 20) -> int:
     pending = (
         db.query(EmailReplyMessage)
         .filter(
-            EmailReplyMessage.owner_id == settings.owner_id,
+            EmailReplyMessage.owner_id == tenancy.owner_id(),
             EmailReplyMessage.direction == "inbound",
             EmailReplyMessage.notified_at.is_(None),
         )

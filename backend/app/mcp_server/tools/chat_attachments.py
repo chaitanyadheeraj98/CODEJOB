@@ -4,6 +4,7 @@ from app.mcp_server.tools import untrusted
 from app.config import settings
 from app.db import SessionLocal
 from app.models import ChatAttachment
+from app import tenancy
 
 
 def list_chat_attachments(session_id: int) -> dict[str, object]:
@@ -16,7 +17,7 @@ def list_chat_attachments(session_id: int) -> dict[str, object]:
         rows = (
             db.query(ChatAttachment)
             .filter(
-                ChatAttachment.owner_id == settings.owner_id,
+                ChatAttachment.owner_id == tenancy.owner_id(),
                 ChatAttachment.session_id == session_id,
             )
             .order_by(ChatAttachment.id.asc())
@@ -51,7 +52,7 @@ def read_chat_attachment(attachment_id: int) -> dict[str, object]:
         row = (
             db.query(ChatAttachment)
             .filter(
-                ChatAttachment.owner_id == settings.owner_id,
+                ChatAttachment.owner_id == tenancy.owner_id(),
                 ChatAttachment.id == attachment_id,
             )
             .first()

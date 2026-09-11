@@ -20,6 +20,7 @@ from app.ai.chat.system_prompt import prompt_sha256
 from app.config import settings
 from app.models import ChatMessage, ChatSession, ChatTurn, UserSettings
 from app.services.chat_attachment_service import ChatAttachmentService
+from app import tenancy
 
 
 def _sse(event: str, payload: dict[str, object]) -> str:
@@ -118,7 +119,7 @@ class ChatService:
     def _session_or_404(db: Session, session_id: int) -> ChatSession:
         row = (
             db.query(ChatSession)
-            .filter(ChatSession.owner_id == settings.owner_id, ChatSession.id == session_id)
+            .filter(ChatSession.owner_id == tenancy.owner_id(), ChatSession.id == session_id)
             .first()
         )
         if row is None:
@@ -135,7 +136,7 @@ class ChatService:
         """
         row = (
             db.query(UserSettings.candidate_profile_markdown)
-            .filter(UserSettings.owner_id == settings.owner_id)
+            .filter(UserSettings.owner_id == tenancy.owner_id())
             .first()
         )
         return (row[0] if row else "") or ""
@@ -153,7 +154,7 @@ class ChatService:
         return cleaned
 
     def create_session(self, db: Session) -> ChatSession:
-        row = ChatSession(owner_id=settings.owner_id)
+        row = ChatSession(owner_id=tenancy.owner_id())
         db.add(row)
         db.commit()
         db.refresh(row)
@@ -162,7 +163,7 @@ class ChatService:
     def list_sessions(self, db: Session) -> list[ChatSession]:
         return (
             db.query(ChatSession)
-            .filter(ChatSession.owner_id == settings.owner_id)
+            .filter(ChatSession.owner_id == tenancy.owner_id())
             .order_by(ChatSession.updated_at.desc(), ChatSession.id.desc())
             .all()
         )

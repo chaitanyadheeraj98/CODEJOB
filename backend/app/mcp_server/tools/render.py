@@ -3,6 +3,7 @@ from __future__ import annotations
 from app.config import settings
 from app.db import SessionLocal
 from app.models import RecruiterEmail
+from app import tenancy
 
 # Every column the table may show, mapped to how its value is read off the row.
 # An allowlist rather than getattr(row, column): the model chooses the columns,
@@ -72,7 +73,7 @@ def render_candidate_table(
             row.id: row
             for row in db.query(RecruiterEmail)
             .filter(
-                RecruiterEmail.owner_id == settings.owner_id,
+                RecruiterEmail.owner_id == tenancy.owner_id(),
                 RecruiterEmail.id.in_(requested),
             )
             .all()

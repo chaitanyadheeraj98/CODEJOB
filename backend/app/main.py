@@ -735,7 +735,7 @@ def _record_productivity_event(
 ) -> ProductivityEvent:
     return analytics_service.record_productivity_event(
         db,
-        owner_id=settings.owner_id,
+        owner_id=tenancy.owner_id(),
         event_weights=EVENT_WEIGHTS,
         event_type=event_type,
         event_source=event_source,
@@ -959,7 +959,7 @@ def _load_external_opportunity_for_sent_details(db: Session, email: RecruiterEma
     return (
         db.query(ExternalOpportunity)
         .filter(
-            ExternalOpportunity.owner_id == settings.owner_id,
+            ExternalOpportunity.owner_id == tenancy.owner_id(),
             ExternalOpportunity.external_post_id == external_post_id,
         )
         .first()
@@ -970,7 +970,7 @@ def _load_recruiter_opportunity_for_sent_details(db: Session, email: RecruiterEm
     row = (
         db.query(RecruiterOpportunity)
         .filter(
-            RecruiterOpportunity.owner_id == settings.owner_id,
+            RecruiterOpportunity.owner_id == tenancy.owner_id(),
             RecruiterOpportunity.source_email_id == email.id,
         )
         .first()
@@ -982,7 +982,7 @@ def _load_recruiter_opportunity_for_sent_details(db: Session, email: RecruiterEm
     return (
         db.query(RecruiterOpportunity)
         .filter(
-            RecruiterOpportunity.owner_id == settings.owner_id,
+            RecruiterOpportunity.owner_id == tenancy.owner_id(),
             RecruiterOpportunity.gmail_message_id == email.external_message_id,
         )
         .first()
@@ -998,7 +998,7 @@ def _load_recruiter_number_for_sent_details(
         row = (
             db.query(PremiumNumberContact)
             .filter(
-                PremiumNumberContact.owner_id == settings.owner_id,
+                PremiumNumberContact.owner_id == tenancy.owner_id(),
                 PremiumNumberContact.id == email.resolved_recruiter_contact_id,
                 PremiumNumberContact.is_recruiter.is_(True),
                 PremiumNumberContact.deleted_at.is_(None),
@@ -1010,7 +1010,7 @@ def _load_recruiter_number_for_sent_details(
     row = (
         db.query(PremiumNumberContact)
         .filter(
-            PremiumNumberContact.owner_id == settings.owner_id,
+            PremiumNumberContact.owner_id == tenancy.owner_id(),
             PremiumNumberContact.is_recruiter.is_(True),
             PremiumNumberContact.first_detected_email_id == email.id,
             PremiumNumberContact.deleted_at.is_(None),
@@ -1024,13 +1024,13 @@ def _load_recruiter_number_for_sent_details(
     return (
         db.query(PremiumNumberContact)
         .filter(
-            PremiumNumberContact.owner_id == settings.owner_id,
+            PremiumNumberContact.owner_id == tenancy.owner_id(),
             PremiumNumberContact.is_recruiter.is_(True),
             or_(
                 PremiumNumberContact.recruiter_email == recruiter_email,
                 PremiumNumberContact.id.in_(
                     db.query(PremiumContactEmail.premium_contact_id).filter(
-                        PremiumContactEmail.owner_id == settings.owner_id,
+                        PremiumContactEmail.owner_id == tenancy.owner_id(),
                         PremiumContactEmail.normalized_email == recruiter_email.strip().lower(),
                     )
                 ),
@@ -1080,7 +1080,7 @@ def _load_employer_number_for_sent_details(
     row = (
         db.query(PremiumNumberContact)
         .filter(
-            PremiumNumberContact.owner_id == settings.owner_id,
+            PremiumNumberContact.owner_id == tenancy.owner_id(),
             PremiumNumberContact.is_employer.is_(True),
             PremiumNumberContact.first_detected_email_id == email.id,
             PremiumNumberContact.deleted_at.is_(None),
@@ -1094,7 +1094,7 @@ def _load_employer_number_for_sent_details(
     return (
         db.query(PremiumNumberContact)
         .filter(
-            PremiumNumberContact.owner_id == settings.owner_id,
+            PremiumNumberContact.owner_id == tenancy.owner_id(),
             PremiumNumberContact.is_employer.is_(True),
             PremiumNumberContact.employer_email == employer_email,
             PremiumNumberContact.deleted_at.is_(None),
@@ -1108,7 +1108,7 @@ def _load_premium_lead_for_sent_details(
     db: Session, email: RecruiterEmail, *, role: str | None = None
 ) -> PremiumNumberLead | None:
     query = db.query(PremiumNumberLead).filter(
-        PremiumNumberLead.owner_id == settings.owner_id,
+        PremiumNumberLead.owner_id == tenancy.owner_id(),
         PremiumNumberLead.recruiter_email_id == email.id,
     )
     if role is not None:
@@ -1206,7 +1206,7 @@ def _build_sent_item_details(db: Session, email: RecruiterEmail) -> SentItemDeta
         or _clean_optional_text(recruiter_number.company if recruiter_number else None)
         or _clean_optional_text(recruiter_premium_lead.company if recruiter_premium_lead else None)
         or _clean_optional_text(
-            recruiter_identity_service.domain_company_for(db, settings.owner_id, recruiter_email)
+            recruiter_identity_service.domain_company_for(db, tenancy.owner_id(), recruiter_email)
         )
     )
     company = recruiter_company
@@ -1381,7 +1381,7 @@ def _enqueue_background_job(
     if current_job_id:
         existing_row = (
             db.query(RecentRun)
-            .filter(RecentRun.owner_id == settings.owner_id, RecentRun.job_backend_id == current_job_id)
+            .filter(RecentRun.owner_id == tenancy.owner_id(), RecentRun.job_backend_id == current_job_id)
             .first()
         )
         raise HTTPException(
@@ -1396,7 +1396,7 @@ def _enqueue_background_job(
     job_id = uuid.uuid4().hex
     recent_run = create_recent_run(
         db,
-        owner_id=settings.owner_id,
+        owner_id=tenancy.owner_id(),
         run_source=run_source,
         run_key=run_key,
         status="queued",
@@ -1433,7 +1433,7 @@ def _get_manual_intake_service() -> ManualIntakeService:
     if manual_intake_service is None:
         manual_intake_service = ManualIntakeService(
             ManualIntakeDeps(
-                owner_id=settings.owner_id,
+                owner_id=tenancy.owner_id(),
                 model_name=settings.deepseek_model_fast,
                 get_settings=_get_settings,
                 active_resume=_active_resume,
@@ -1591,8 +1591,8 @@ def _run_relationship_sweep(db: Session) -> None:
     `max_pairs` and the blocking keys rather than by a watermark, so a record
     whose neighbours arrive later is still reconsidered.
     """
-    entity_embedding_job.embed_pending_entities_all_types(db, owner_id=settings.owner_id)
-    result = relationship_clustering_service.run_clustering_pass(db, owner_id=settings.owner_id)
+    entity_embedding_job.embed_pending_entities_all_types(db, owner_id=tenancy.owner_id())
+    result = relationship_clustering_service.run_clustering_pass(db, owner_id=tenancy.owner_id())
     logger.info(
         "Relationship sweep: scored=%s clusters=%s suppressed=%s surfaced=%s",
         result.scored_pairs,
@@ -1693,7 +1693,7 @@ def _init_telegram_service() -> TelegramBotService | None:
             get_candidate_review=_get_candidate_review,
             approve_and_send=approve_and_send,
             reject_candidate=reject_candidate,
-            owner_id=settings.owner_id,
+            owner_id=tenancy.owner_id(),
             action_lock=telegram_action_lock,
             action_pin=lambda: (settings.telegram_action_pin or "").strip(),
             auth_ttl_minutes=lambda: max(1, int(settings.telegram_auth_ttl_minutes or 30)),
@@ -1716,7 +1716,7 @@ def _get_routing_runtime_service() -> RoutingRuntimeService:
     if routing_runtime_service is None:
         routing_runtime_service = RoutingRuntimeService(
             RoutingRuntimeDeps(
-                owner_id=settings.owner_id,
+                owner_id=tenancy.owner_id(),
                 get_employer_domains=lambda db: _csv_to_list(_get_settings(db).employer_domains),
                 get_preferred_employer_cc_emails=lambda db: _preferred_employer_cc_emails(_get_settings(db)),
                 get_default_employer_cc_emails=lambda db: _csv_to_list(_get_settings(db).default_employer_cc_emails),
@@ -1754,7 +1754,7 @@ def _get_orchestration_service() -> OrchestrationService:
     if orchestration_service is None:
         orchestration_service = OrchestrationService(
             OrchestrationDeps(
-                owner_id=settings.owner_id,
+                owner_id=tenancy.owner_id(),
                 model_name=settings.deepseek_model_fast,
                 get_settings=_get_settings,
                 active_resume=_active_resume,
@@ -1879,7 +1879,7 @@ def _policy_f2f_block(parsed: dict[str, str | int | bool], policy: PolicyConfig,
 def _active_resume(db: Session) -> ResumeAsset | None:
     return (
         db.query(ResumeAsset)
-        .filter(ResumeAsset.owner_id == settings.owner_id, ResumeAsset.is_current.is_(True))
+        .filter(ResumeAsset.owner_id == tenancy.owner_id(), ResumeAsset.is_current.is_(True))
         .order_by(ResumeAsset.version.desc())
         .first()
     )
@@ -1888,7 +1888,7 @@ def _active_resume(db: Session) -> ResumeAsset | None:
 def _list_resumes(db: Session) -> list[ResumeAsset]:
     return (
         db.query(ResumeAsset)
-        .filter(ResumeAsset.owner_id == settings.owner_id)
+        .filter(ResumeAsset.owner_id == tenancy.owner_id())
         .order_by(ResumeAsset.version.desc(), ResumeAsset.updated_at.desc())
         .all()
     )
@@ -1903,7 +1903,7 @@ def _resume_response(resume: ResumeAsset) -> ResumeResponse:
 def _enabled_resumes(db: Session) -> list[ResumeAsset]:
     return (
         db.query(ResumeAsset)
-        .filter(ResumeAsset.owner_id == settings.owner_id, ResumeAsset.is_enabled.is_(True))
+        .filter(ResumeAsset.owner_id == tenancy.owner_id(), ResumeAsset.is_enabled.is_(True))
         .order_by(ResumeAsset.is_current.desc(), ResumeAsset.updated_at.desc(), ResumeAsset.version.desc(), ResumeAsset.id.desc())
         .all()
     )
@@ -1912,7 +1912,7 @@ def _enabled_resumes(db: Session) -> list[ResumeAsset]:
 def _most_recent_enabled_resume(db: Session, *, exclude_resume_id: int | None = None) -> ResumeAsset | None:
     query = (
         db.query(ResumeAsset)
-        .filter(ResumeAsset.owner_id == settings.owner_id, ResumeAsset.is_enabled.is_(True))
+        .filter(ResumeAsset.owner_id == tenancy.owner_id(), ResumeAsset.is_enabled.is_(True))
     )
     if exclude_resume_id is not None:
         query = query.filter(ResumeAsset.id != exclude_resume_id)
@@ -1926,7 +1926,7 @@ def _set_legacy_current_resume(
 ) -> None:
     current_items = (
         db.query(ResumeAsset)
-        .filter(ResumeAsset.owner_id == settings.owner_id, ResumeAsset.is_current.is_(True))
+        .filter(ResumeAsset.owner_id == tenancy.owner_id(), ResumeAsset.is_current.is_(True))
         .all()
     )
     target_id = target_resume.id if target_resume else None
@@ -1995,7 +1995,7 @@ def _select_best_resume_match(
 def _list_attachment_assets(db: Session) -> list[AttachmentAsset]:
     return (
         db.query(AttachmentAsset)
-        .filter(AttachmentAsset.owner_id == settings.owner_id)
+        .filter(AttachmentAsset.owner_id == tenancy.owner_id())
         .order_by(AttachmentAsset.created_at.desc(), AttachmentAsset.id.desc())
         .all()
     )
@@ -2004,7 +2004,7 @@ def _list_attachment_assets(db: Session) -> list[AttachmentAsset]:
 def _enabled_attachment_assets(db: Session) -> list[AttachmentAsset]:
     return (
         db.query(AttachmentAsset)
-        .filter(AttachmentAsset.owner_id == settings.owner_id, AttachmentAsset.is_enabled.is_(True))
+        .filter(AttachmentAsset.owner_id == tenancy.owner_id(), AttachmentAsset.is_enabled.is_(True))
         .order_by(AttachmentAsset.created_at.asc(), AttachmentAsset.id.asc())
         .all()
     )
@@ -2017,7 +2017,7 @@ def _enabled_attachment_file_names(db: Session) -> list[str]:
 def _list_candidate_documents(db: Session) -> list[CandidateDocument]:
     return (
         db.query(CandidateDocument)
-        .filter(CandidateDocument.owner_id == settings.owner_id)
+        .filter(CandidateDocument.owner_id == tenancy.owner_id())
         .order_by(CandidateDocument.created_at.desc(), CandidateDocument.id.desc())
         .all()
     )
@@ -2026,7 +2026,7 @@ def _list_candidate_documents(db: Session) -> list[CandidateDocument]:
 def _get_candidate_document(db: Session, document_id: int) -> CandidateDocument:
     document = (
         db.query(CandidateDocument)
-        .filter(CandidateDocument.owner_id == settings.owner_id, CandidateDocument.id == document_id)
+        .filter(CandidateDocument.owner_id == tenancy.owner_id(), CandidateDocument.id == document_id)
         .first()
     )
     if document is None:
@@ -2048,7 +2048,7 @@ def _resolve_candidate_documents(db: Session, document_ids: list[int]) -> list[C
     found = {
         row.id: row
         for row in db.query(CandidateDocument).filter(
-            CandidateDocument.owner_id == settings.owner_id,
+            CandidateDocument.owner_id == tenancy.owner_id(),
             CandidateDocument.id.in_(wanted),
         )
     }
@@ -2127,7 +2127,7 @@ def _list_approved_custom_skill_entries(db: Session) -> list[CustomSkillTaxonomy
     return (
         db.query(CustomSkillTaxonomyEntry)
         .filter(
-            CustomSkillTaxonomyEntry.owner_id == settings.owner_id,
+            CustomSkillTaxonomyEntry.owner_id == tenancy.owner_id(),
             CustomSkillTaxonomyEntry.status == "approved",
         )
         .order_by(CustomSkillTaxonomyEntry.canonical_name.asc(), CustomSkillTaxonomyEntry.id.asc())
@@ -2140,7 +2140,7 @@ def _known_or_suppressed_pending_skill_keys(db: Session) -> set[str]:
         normalize_taxonomy_text(row.canonical_name)
         for row in db.query(CustomSkillTaxonomyEntry)
         .filter(
-            CustomSkillTaxonomyEntry.owner_id == settings.owner_id,
+            CustomSkillTaxonomyEntry.owner_id == tenancy.owner_id(),
             CustomSkillTaxonomyEntry.status.in_(("approved", "dismissed")),
         )
         .all()
@@ -2156,7 +2156,7 @@ def _list_pending_unknown_skills(db: Session) -> list[PendingSkillResponse]:
     rows = (
         db.query(RecruiterEmail.id, RecruiterEmail.skills_json, RecruiterEmail.parser_details_json)
         .filter(
-            RecruiterEmail.owner_id == settings.owner_id,
+            RecruiterEmail.owner_id == tenancy.owner_id(),
             or_(
                 RecruiterEmail.skills_json.is_not(None),
                 RecruiterEmail.parser_details_json.is_not(None),
@@ -2262,7 +2262,7 @@ def _upsert_custom_skill_entry(
     normalized_aliases = _normalize_custom_skill_aliases(aliases, canonical_name=effective_canonical_name)
     existing = (
         db.query(CustomSkillTaxonomyEntry)
-        .filter(CustomSkillTaxonomyEntry.owner_id == settings.owner_id)
+        .filter(CustomSkillTaxonomyEntry.owner_id == tenancy.owner_id())
         .order_by(CustomSkillTaxonomyEntry.id.asc())
         .all()
     )
@@ -2283,7 +2283,7 @@ def _upsert_custom_skill_entry(
             db.refresh(row)
         return row
     created = CustomSkillTaxonomyEntry(
-        owner_id=settings.owner_id,
+        owner_id=tenancy.owner_id(),
         canonical_name=effective_canonical_name,
         aliases_json=json.dumps(normalized_aliases, separators=(",", ":")),
         category=normalized_category,
@@ -2314,7 +2314,7 @@ def _list_job_intent_entries(db: Session, *, status: str) -> list[JobIntentTaxon
     return (
         db.query(JobIntentTaxonomyEntry)
         .filter(
-            JobIntentTaxonomyEntry.owner_id == settings.owner_id,
+            JobIntentTaxonomyEntry.owner_id == tenancy.owner_id(),
             JobIntentTaxonomyEntry.status == status,
         )
         .order_by(
@@ -2345,7 +2345,7 @@ def _upsert_job_intent_entry(
     existing = (
         db.query(JobIntentTaxonomyEntry)
         .filter(
-            JobIntentTaxonomyEntry.owner_id == settings.owner_id,
+            JobIntentTaxonomyEntry.owner_id == tenancy.owner_id(),
             JobIntentTaxonomyEntry.normalized_phrase == normalized_phrase,
             JobIntentTaxonomyEntry.polarity == cleaned_polarity,
         )
@@ -2363,7 +2363,7 @@ def _upsert_job_intent_entry(
         clear_job_intent_signal_embedding_cache()
         return existing
     created = JobIntentTaxonomyEntry(
-        owner_id=settings.owner_id,
+        owner_id=tenancy.owner_id(),
         phrase=cleaned_phrase,
         normalized_phrase=normalized_phrase,
         polarity=cleaned_polarity,
@@ -2708,7 +2708,7 @@ def _json_object(raw: str | None) -> dict[str, object] | None:
 def _list_gmail_requirement_groups(db: Session) -> list[GmailRequirementGroup]:
     return (
         db.query(GmailRequirementGroup)
-        .filter(GmailRequirementGroup.owner_id == settings.owner_id)
+        .filter(GmailRequirementGroup.owner_id == tenancy.owner_id())
         .order_by(GmailRequirementGroup.display_name.asc(), GmailRequirementGroup.id.asc())
         .all()
     )
@@ -2732,7 +2732,7 @@ def _create_gmail_requirement_group(
     existing = (
         db.query(GmailRequirementGroup)
         .filter(
-            GmailRequirementGroup.owner_id == settings.owner_id,
+            GmailRequirementGroup.owner_id == tenancy.owner_id(),
             GmailRequirementGroup.normalized_group_email == normalized_group_email,
         )
         .first()
@@ -2747,7 +2747,7 @@ def _create_gmail_requirement_group(
         db.refresh(existing)
         return existing
     row = GmailRequirementGroup(
-        owner_id=settings.owner_id,
+        owner_id=tenancy.owner_id(),
         display_name=canonical_group_display_name(normalized_group_email, display_name),
         group_email=normalized_group_email,
         normalized_group_email=normalized_group_email,
@@ -2982,7 +2982,7 @@ def _populate_badge_fields(
 def _get_candidate_for_review(db: Session, email_id: int) -> RecruiterEmail:
     email = (
         db.query(RecruiterEmail)
-        .filter(RecruiterEmail.owner_id == settings.owner_id, RecruiterEmail.id == email_id)
+        .filter(RecruiterEmail.owner_id == tenancy.owner_id(), RecruiterEmail.id == email_id)
         .first()
     )
     if not email:
@@ -3212,7 +3212,7 @@ def update_gmail_requirement_group(
     row = (
         db.query(GmailRequirementGroup)
         .filter(
-            GmailRequirementGroup.owner_id == settings.owner_id,
+            GmailRequirementGroup.owner_id == tenancy.owner_id(),
             GmailRequirementGroup.id == group_id,
         )
         .first()
@@ -3234,7 +3234,7 @@ def delete_gmail_requirement_group(group_id: int, db: Session = Depends(get_db))
     row = (
         db.query(GmailRequirementGroup)
         .filter(
-            GmailRequirementGroup.owner_id == settings.owner_id,
+            GmailRequirementGroup.owner_id == tenancy.owner_id(),
             GmailRequirementGroup.id == group_id,
         )
         .first()
@@ -3431,7 +3431,7 @@ def store_resume_asset(
 
     current = (
         db.query(ResumeAsset)
-        .filter(ResumeAsset.owner_id == settings.owner_id, ResumeAsset.is_current.is_(True))
+        .filter(ResumeAsset.owner_id == tenancy.owner_id(), ResumeAsset.is_current.is_(True))
         .all()
     )
     for item in current:
@@ -3439,14 +3439,14 @@ def store_resume_asset(
 
     last_version = (
         db.query(ResumeAsset)
-        .filter(ResumeAsset.owner_id == settings.owner_id)
+        .filter(ResumeAsset.owner_id == tenancy.owner_id())
         .order_by(ResumeAsset.version.desc())
         .first()
     )
     next_version = 1 if not last_version else last_version.version + 1
 
     resume = ResumeAsset(
-        owner_id=settings.owner_id,
+        owner_id=tenancy.owner_id(),
         file_path=str(target_path),
         file_name=file_name,
         mime_type=mime_type,
@@ -3508,7 +3508,7 @@ def list_resumes(db: Session = Depends(get_db)) -> list[ResumeResponse]:
 
 @app.post("/settings/resumes/backfill-enrichment")
 def backfill_resume_enrichment(force: bool = False, db: Session = Depends(get_db)) -> dict[str, object]:
-    query = db.query(ResumeAsset).filter(ResumeAsset.owner_id == settings.owner_id)
+    query = db.query(ResumeAsset).filter(ResumeAsset.owner_id == tenancy.owner_id())
     if not force:
         query = query.filter(ResumeAsset.content_markdown.is_(None))
     rows = query.order_by(ResumeAsset.id).all()
@@ -3531,7 +3531,7 @@ def backfill_resume_enrichment(force: bool = False, db: Session = Depends(get_db
         label_rows = (
             db.query(ResumeAsset)
             .filter(
-                ResumeAsset.owner_id == settings.owner_id,
+                ResumeAsset.owner_id == tenancy.owner_id(),
                 ResumeAsset.content_markdown.is_not(None),
                 or_(ResumeAsset.primary_role == "", ResumeAsset.variant_label == ""),
             )
@@ -3557,7 +3557,7 @@ def backfill_resume_enrichment(force: bool = False, db: Session = Depends(get_db
 def update_resume(resume_id: int, payload: ResumeUpdateRequest, db: Session = Depends(get_db)) -> ResumeResponse:
     resume = (
         db.query(ResumeAsset)
-        .filter(ResumeAsset.owner_id == settings.owner_id, ResumeAsset.id == resume_id)
+        .filter(ResumeAsset.owner_id == tenancy.owner_id(), ResumeAsset.id == resume_id)
         .first()
     )
     if not resume:
@@ -3597,7 +3597,7 @@ def update_resume(resume_id: int, payload: ResumeUpdateRequest, db: Session = De
 def delete_resume(resume_id: int, db: Session = Depends(get_db)) -> dict[str, object]:
     resume = (
         db.query(ResumeAsset)
-        .filter(ResumeAsset.owner_id == settings.owner_id, ResumeAsset.id == resume_id)
+        .filter(ResumeAsset.owner_id == tenancy.owner_id(), ResumeAsset.id == resume_id)
         .first()
     )
     if not resume:
@@ -3606,7 +3606,7 @@ def delete_resume(resume_id: int, db: Session = Depends(get_db)) -> dict[str, ob
     active_application = any(
         db.query(model.id)
         .filter(
-            model.owner_id == settings.owner_id,
+            model.owner_id == tenancy.owner_id(),
             model.resume_asset_id == resume_id,
             model.deleted_at.is_(None),
             model.status.not_in(APPLICATION_CLOSED_STATUS_VALUES),
@@ -3653,7 +3653,7 @@ def upload_attachment_files(files: list[UploadFile] = File(...), db: Session = D
         target_path.write_bytes(content)
         created.append(
             AttachmentAsset(
-                owner_id=settings.owner_id,
+                owner_id=tenancy.owner_id(),
                 file_path=str(target_path),
                 file_name=file.filename,
                 mime_type=file.content_type or "application/octet-stream",
@@ -3682,7 +3682,7 @@ def update_attachment_file(
 ) -> AttachmentAssetResponse:
     attachment = (
         db.query(AttachmentAsset)
-        .filter(AttachmentAsset.owner_id == settings.owner_id, AttachmentAsset.id == attachment_id)
+        .filter(AttachmentAsset.owner_id == tenancy.owner_id(), AttachmentAsset.id == attachment_id)
         .first()
     )
     if not attachment:
@@ -3697,7 +3697,7 @@ def update_attachment_file(
 def delete_attachment_file(attachment_id: int, db: Session = Depends(get_db)) -> dict[str, object]:
     attachment = (
         db.query(AttachmentAsset)
-        .filter(AttachmentAsset.owner_id == settings.owner_id, AttachmentAsset.id == attachment_id)
+        .filter(AttachmentAsset.owner_id == tenancy.owner_id(), AttachmentAsset.id == attachment_id)
         .first()
     )
     if not attachment:
@@ -3763,7 +3763,7 @@ def upload_candidate_documents(
         target_path.write_bytes(content)
         created.append(
             CandidateDocument(
-                owner_id=settings.owner_id,
+                owner_id=tenancy.owner_id(),
                 file_path=str(target_path),
                 file_name=file_name,
                 label="",
@@ -3897,7 +3897,7 @@ def skill_embedding_status(db: Session = Depends(get_db)) -> EmbeddingStatusResp
     pending_count = (
         db.query(CustomSkillTaxonomyEntry)
         .filter(
-            CustomSkillTaxonomyEntry.owner_id == settings.owner_id,
+            CustomSkillTaxonomyEntry.owner_id == tenancy.owner_id(),
             CustomSkillTaxonomyEntry.status == "approved",
             CustomSkillTaxonomyEntry.embedding_status == "pending",
         )
@@ -3912,7 +3912,7 @@ def embed_approved_skills(db: Session = Depends(get_db)) -> EmbedPendingSkillsRe
         raise HTTPException(status_code=409, detail="A taxonomy embedding batch is already running")
     try:
         return EmbedPendingSkillsResponse.model_validate(
-            embed_pending_skills(db, owner_id=settings.owner_id)
+            embed_pending_skills(db, owner_id=tenancy.owner_id())
         )
     finally:
         runtime_state.taxonomy_embedding_lock.release()
@@ -3924,7 +3924,7 @@ def list_pending_taxonomy_entities(
     db: Session = Depends(get_db),
 ) -> list[PendingEntityResponse]:
     try:
-        rows = list_pending_entities(db, owner_id=settings.owner_id, entity_type=entity_type)
+        rows = list_pending_entities(db, owner_id=tenancy.owner_id(), entity_type=entity_type)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return [PendingEntityResponse.model_validate(row) for row in rows]
@@ -3940,7 +3940,7 @@ def list_approved_taxonomy_entities(
     rows = (
         db.query(CanonicalEntityTaxonomyEntry)
         .filter(
-            CanonicalEntityTaxonomyEntry.owner_id == settings.owner_id,
+            CanonicalEntityTaxonomyEntry.owner_id == tenancy.owner_id(),
             CanonicalEntityTaxonomyEntry.entity_type == entity_type,
             CanonicalEntityTaxonomyEntry.status == "approved",
         )
@@ -3959,12 +3959,12 @@ def approve_taxonomy_entity(
     try:
         pending = {
             str(item["normalized_name"]): item
-            for item in list_pending_entities(db, owner_id=settings.owner_id, entity_type=entity_type)
+            for item in list_pending_entities(db, owner_id=tenancy.owner_id(), entity_type=entity_type)
         }
         item = pending.get(normalize_taxonomy_text(payload.display_name), {})
         row = upsert_entity(
             db,
-            owner_id=settings.owner_id,
+            owner_id=tenancy.owner_id(),
             entity_type=entity_type,
             display_name=payload.display_name,
             canonical_name=payload.canonical_name,
@@ -3986,7 +3986,7 @@ def approve_all_taxonomy_entities(
     db: Session = Depends(get_db),
 ) -> BulkApproveEntitiesResponse:
     try:
-        pending = list_pending_entities(db, owner_id=settings.owner_id, entity_type=entity_type)
+        pending = list_pending_entities(db, owner_id=tenancy.owner_id(), entity_type=entity_type)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     approved: list[str] = []
@@ -3998,7 +3998,7 @@ def approve_all_taxonomy_entities(
             continue
         upsert_entity(
             db,
-            owner_id=settings.owner_id,
+            owner_id=tenancy.owner_id(),
             entity_type=entity_type,
             display_name=str(item["display_name"]),
             canonical_name=None,
@@ -4028,7 +4028,7 @@ def dismiss_taxonomy_entity(
     try:
         row = upsert_entity(
             db,
-            owner_id=settings.owner_id,
+            owner_id=tenancy.owner_id(),
             entity_type=entity_type,
             display_name=payload.display_name,
             canonical_name=None,
@@ -4047,7 +4047,7 @@ def dismiss_taxonomy_entity(
 def _classify_pending_for_scope(db: Session, scope: str) -> list[Recommendation]:
     if scope == SKILL_SCOPE:
         return classify_skills(_list_pending_unknown_skills(db))
-    return classify_entities(list_pending_entities(db, owner_id=settings.owner_id, entity_type=scope))
+    return classify_entities(list_pending_entities(db, owner_id=tenancy.owner_id(), entity_type=scope))
 
 
 def _serialize_bulk_review_recommendation(item: Recommendation) -> BulkReviewRecommendation:
@@ -4138,7 +4138,7 @@ def apply_taxonomy_bulk_review(
                 else:
                     upsert_entity(
                         db,
-                        owner_id=settings.owner_id,
+                        owner_id=tenancy.owner_id(),
                         entity_type=payload.scope,
                         display_name=item.display_name,
                         canonical_name=None,
@@ -4176,7 +4176,7 @@ def apply_taxonomy_bulk_review(
 def taxonomy_learning_metrics(db: Session = Depends(get_db)) -> TaxonomyMetricsResponse:
     rows = (
         db.query(RecruiterEmail.skills_json, RecruiterEmail.parser_details_json)
-        .filter(RecruiterEmail.owner_id == settings.owner_id)
+        .filter(RecruiterEmail.owner_id == tenancy.owner_id())
         .all()
     )
     unknown_emails = 0
@@ -4192,8 +4192,8 @@ def taxonomy_learning_metrics(db: Session = Depends(get_db)) -> TaxonomyMetricsR
         emails_with_unknown_skills=unknown_emails,
         unknown_skill_rate=round(unknown_emails / parsed_count, 4) if parsed_count else 0.0,
         pending_skill_count=len(_list_pending_unknown_skills(db)),
-        pending_company_count=len(list_pending_entities(db, owner_id=settings.owner_id, entity_type="company")),
-        pending_location_count=len(list_pending_entities(db, owner_id=settings.owner_id, entity_type="location")),
+        pending_company_count=len(list_pending_entities(db, owner_id=tenancy.owner_id(), entity_type="company")),
+        pending_location_count=len(list_pending_entities(db, owner_id=tenancy.owner_id(), entity_type="location")),
         alias_collision_count=len(load_skill_taxonomy().ambiguous_aliases),
     )
 
@@ -4270,7 +4270,7 @@ def dismiss_job_intent_learning(
 def toggle_job_intent_polarity(entry_id: int, db: Session = Depends(get_db)) -> JobIntentTaxonomyEntryResponse:
     entry = (
         db.query(JobIntentTaxonomyEntry)
-        .filter(JobIntentTaxonomyEntry.id == entry_id, JobIntentTaxonomyEntry.owner_id == settings.owner_id)
+        .filter(JobIntentTaxonomyEntry.id == entry_id, JobIntentTaxonomyEntry.owner_id == tenancy.owner_id())
         .first()
     )
     if entry is None:
@@ -4284,7 +4284,7 @@ def toggle_job_intent_polarity(entry_id: int, db: Session = Depends(get_db)) -> 
 
 @app.get("/settings/job-intent-learning/embedded", response_model=list[EmbeddedJobIntentSignalResponse])
 def list_embedded_job_intent_signals(db: Session = Depends(get_db)) -> list[EmbeddedJobIntentSignalResponse]:
-    approved = approved_learning_signals_for_owner(db, settings.owner_id)
+    approved = approved_learning_signals_for_owner(db, tenancy.owner_id())
     positive, negative = prioritized_learning_signals(approved)
     selected = [*positive, *negative]
     if not selected:
@@ -4308,7 +4308,7 @@ def gmail_status(db: Session = Depends(get_db)) -> GmailStatusResponse:
     state, detail = gmail_client.gmail_connection_state()
     account_email = ""
     if settings.feature_db_credentials_enabled:
-        account_email = gmail_credential_service.connection_status(db, settings.owner_id).google_email
+        account_email = gmail_credential_service.connection_status(db, tenancy.owner_id()).google_email
     return GmailStatusResponse(
         configured=state != gmail_client.GMAIL_STATE_NOT_CONFIGURED,
         authenticated=state in (
@@ -4337,7 +4337,7 @@ def gmail_connection(db: Session = Depends(get_db)) -> GmailConnectionResponse:
             state=state,
             detail=detail,
         )
-    status = gmail_credential_service.connection_status(db, settings.owner_id)
+    status = gmail_credential_service.connection_status(db, tenancy.owner_id())
     return GmailConnectionResponse(
         connected=status.connected,
         state=state,
@@ -4361,7 +4361,7 @@ def disconnect_gmail(db: Session = Depends(get_db)) -> GmailConnectionResponse:
     """
     if not settings.feature_db_credentials_enabled:
         raise HTTPException(409, "Database credential storage is off; there is nothing to disconnect.")
-    gmail_credential_service.mark_revoked(db, settings.owner_id, "disconnected_by_user")
+    gmail_credential_service.mark_revoked(db, tenancy.owner_id(), "disconnected_by_user")
     db.commit()
     return gmail_connection(db)
 
@@ -4600,7 +4600,7 @@ def create_view_event(payload: ProductivityEventCreateRequest, db: Session = Dep
         now = datetime.now(UTC)
         return ProductivityEventResponse(
             id=0,
-            owner_id=settings.owner_id,
+            owner_id=tenancy.owner_id(),
             event_type=payload.event_type,
             event_source=event_source,
             entity_id=payload.entity_id,
@@ -4624,7 +4624,7 @@ def list_productivity_events(
     start, end = _range_bounds(range)
     rows = (
         db.query(ProductivityEvent)
-        .filter(ProductivityEvent.owner_id == settings.owner_id)
+        .filter(ProductivityEvent.owner_id == tenancy.owner_id())
         .filter(ProductivityEvent.occurred_at >= start, ProductivityEvent.occurred_at <= end)
         .order_by(ProductivityEvent.occurred_at.desc())
         .limit(limit)
@@ -4664,7 +4664,7 @@ def productivity_trend(
             recent_run_count=row["recent_run_count"],
         )
         for row in analytics_service.productivity_trend_bars(
-            db, owner_id=settings.owner_id, start=start, end=end, bucket=resolved_bucket
+            db, owner_id=tenancy.owner_id(), start=start, end=end, bucket=resolved_bucket
         )
     ]
 
@@ -4685,7 +4685,7 @@ def productivity_trend(
         )
 
     previous_total_sent = analytics_service.previous_period_sent_count(
-        db, owner_id=settings.owner_id, start=start, end=end
+        db, owner_id=tenancy.owner_id(), start=start, end=end
     )
     delta = current_total_sent - previous_total_sent
     direction = "flat"
@@ -4709,7 +4709,7 @@ def productivity_trend(
 def _update_manifest_run_counts(db: Session, run_key: str | None, source_rows: list[RecruiterEmail]) -> None:
     if not run_key:
         return
-    recent_run = db.query(RecentRun).filter(RecentRun.owner_id == settings.owner_id, RecentRun.run_key == run_key).first()
+    recent_run = db.query(RecentRun).filter(RecentRun.owner_id == tenancy.owner_id(), RecentRun.run_key == run_key).first()
     if recent_run is None:
         return
     recent_run.source_count = len(source_rows)
@@ -4833,7 +4833,7 @@ def _run_nvoids_sync(
     }
     result = external_feed_service.sync_nvoids(
         db,
-        owner_id=settings.owner_id,
+        owner_id=tenancy.owner_id(),
         max_items=max_items,
         run_key_override=run_key_override,
         progress_callback=progress_callback,
@@ -4884,12 +4884,12 @@ def jobs_summary(db: Session = Depends(get_db)) -> JobQueueSummaryResponse:
         logger.exception("jobs_summary_redis_unavailable")
     succeeded = (
         db.query(RecentRun)
-        .filter(RecentRun.owner_id == settings.owner_id, RecentRun.status == "ok")
+        .filter(RecentRun.owner_id == tenancy.owner_id(), RecentRun.status == "ok")
         .count()
     )
     failed = (
         db.query(RecentRun)
-        .filter(RecentRun.owner_id == settings.owner_id, RecentRun.status == "failed")
+        .filter(RecentRun.owner_id == tenancy.owner_id(), RecentRun.status == "failed")
         .count()
     )
     return JobQueueSummaryResponse(queued=queued, processing=processing, succeeded=succeeded, failed=failed)
@@ -5019,7 +5019,7 @@ def list_jobs(limit: int = Query(20, ge=1, le=50), db: Session = Depends(get_db)
     """
     rows = (
         db.query(RecentRun)
-        .filter(RecentRun.owner_id == settings.owner_id)
+        .filter(RecentRun.owner_id == tenancy.owner_id())
         .order_by(RecentRun.created_at.desc(), RecentRun.id.desc())
         .limit(limit)
         .all()
@@ -5050,7 +5050,7 @@ def list_jobs(limit: int = Query(20, ge=1, le=50), db: Session = Depends(get_db)
 def job_status(run_key: str, db: Session = Depends(get_db)) -> JobStatusResponse:
     row = (
         db.query(RecentRun)
-        .filter(RecentRun.owner_id == settings.owner_id, RecentRun.run_key == run_key)
+        .filter(RecentRun.owner_id == tenancy.owner_id(), RecentRun.run_key == run_key)
         .first()
     )
     if row is None:
@@ -5062,7 +5062,7 @@ def job_status(run_key: str, db: Session = Depends(get_db)) -> JobStatusResponse
 def cancel_job(run_key: str, db: Session = Depends(get_db)) -> JobStatusResponse:
     row = (
         db.query(RecentRun)
-        .filter(RecentRun.owner_id == settings.owner_id, RecentRun.run_key == run_key)
+        .filter(RecentRun.owner_id == tenancy.owner_id(), RecentRun.run_key == run_key)
         .first()
     )
     if row is None:
@@ -5124,8 +5124,8 @@ def gmail_oauth_url() -> OAuthUrlResponse:
 
 
 def _gmail_label_catalog(db: Session, *, tracked_only=False, include_deleted=False) -> GmailLabelListResponse:
-    rows = gmail_label_service.list_labels(db, settings.owner_id, tracked_only=tracked_only, include_deleted=include_deleted)
-    watch_count = db.query(RecruiterWatch).filter(RecruiterWatch.owner_id == settings.owner_id, RecruiterWatch.released_at.is_(None)).count()
+    rows = gmail_label_service.list_labels(db, tenancy.owner_id(), tracked_only=tracked_only, include_deleted=include_deleted)
+    watch_count = db.query(RecruiterWatch).filter(RecruiterWatch.owner_id == tenancy.owner_id(), RecruiterWatch.released_at.is_(None)).count()
     return GmailLabelListResponse(
         items=[GmailLabelResponse(external_label_id=r.external_label_id, name=r.name, label_type=r.label_type,
             is_tracked=r.is_tracked, color_background=r.color_background, color_text=r.color_text,
@@ -5236,7 +5236,7 @@ def _get_application(db: Session, application_id: int) -> Application:
     row = (
         db.query(Application)
         .filter(
-            Application.owner_id == settings.owner_id,
+            Application.owner_id == tenancy.owner_id(),
             Application.id == application_id,
             Application.deleted_at.is_(None),
         )
@@ -5248,7 +5248,7 @@ def _get_application(db: Session, application_id: int) -> Application:
 
 
 def _get_appts_application(db: Session, application_id: int) -> AppTSApplication:
-    row = db.query(AppTSApplication).filter(AppTSApplication.owner_id == settings.owner_id, AppTSApplication.id == application_id, AppTSApplication.deleted_at.is_(None)).first()
+    row = db.query(AppTSApplication).filter(AppTSApplication.owner_id == tenancy.owner_id(), AppTSApplication.id == application_id, AppTSApplication.deleted_at.is_(None)).first()
     if not row:
         raise HTTPException(status_code=404, detail="AppTS application not found")
     return row
@@ -5258,7 +5258,7 @@ def _get_application_rtr(db: Session, application: Application, rtr_id: int) -> 
     row = (
         db.query(ApplicationRTR)
         .filter(
-            ApplicationRTR.owner_id == settings.owner_id,
+            ApplicationRTR.owner_id == tenancy.owner_id(),
             ApplicationRTR.application_id == application.id,
             ApplicationRTR.id == rtr_id,
         )
@@ -5277,7 +5277,7 @@ def _get_application_interview(
     row = (
         db.query(ApplicationInterview)
         .filter(
-            ApplicationInterview.owner_id == settings.owner_id,
+            ApplicationInterview.owner_id == tenancy.owner_id(),
             ApplicationInterview.application_id == application.id,
             ApplicationInterview.id == interview_id,
             ApplicationInterview.deleted_at.is_(None),
@@ -5293,7 +5293,7 @@ def _get_application_suggestion(db: Session, suggestion_id: int) -> ApplicationS
     row = (
         db.query(ApplicationSuggestion)
         .filter(
-            ApplicationSuggestion.owner_id == settings.owner_id,
+            ApplicationSuggestion.owner_id == tenancy.owner_id(),
             ApplicationSuggestion.id == suggestion_id,
             ApplicationSuggestion.status == "pending",
         )
@@ -5380,20 +5380,20 @@ def _application_response(
     opportunity = (
         db.query(RecruiterOpportunity)
         .filter(
-            RecruiterOpportunity.owner_id == settings.owner_id,
+            RecruiterOpportunity.owner_id == tenancy.owner_id(),
             RecruiterOpportunity.id == row.recruiter_opportunity_id,
         )
         .first()
     )
     source_email_id = _source_recruiter_email_id(row)
     source_email = (
-        db.query(RecruiterEmail).filter(RecruiterEmail.owner_id == settings.owner_id, RecruiterEmail.id == source_email_id).first()
+        db.query(RecruiterEmail).filter(RecruiterEmail.owner_id == tenancy.owner_id(), RecruiterEmail.id == source_email_id).first()
         if source_email_id else None
     )
     recruiter = (
         db.query(PremiumNumberContact)
         .filter(
-            PremiumNumberContact.owner_id == settings.owner_id,
+            PremiumNumberContact.owner_id == tenancy.owner_id(),
             PremiumNumberContact.id == row.recruiter_contact_id,
             PremiumNumberContact.deleted_at.is_(None),
         )
@@ -5402,7 +5402,7 @@ def _application_response(
     events = (
         db.query(models.event_cls)
         .filter(
-            models.event_cls.owner_id == settings.owner_id,
+            models.event_cls.owner_id == tenancy.owner_id(),
             models.event_cls.application_id == row.id,
         )
         .order_by(models.event_cls.occurred_at.asc(), models.event_cls.id.asc())
@@ -5413,7 +5413,7 @@ def _application_response(
     rtr_history = (
         db.query(models.rtr_cls)
         .filter(
-            models.rtr_cls.owner_id == settings.owner_id,
+            models.rtr_cls.owner_id == tenancy.owner_id(),
             models.rtr_cls.application_id == row.id,
         )
         .order_by(models.rtr_cls.requested_at.desc(), models.rtr_cls.id.desc())
@@ -5424,7 +5424,7 @@ def _application_response(
     interviews = (
         db.query(models.interview_cls)
         .filter(
-            models.interview_cls.owner_id == settings.owner_id,
+            models.interview_cls.owner_id == tenancy.owner_id(),
             models.interview_cls.application_id == row.id,
             models.interview_cls.deleted_at.is_(None),
         )
@@ -5440,7 +5440,7 @@ def _application_response(
     skill_gap = (
         db.query(models.skill_gap_snapshot_cls)
         .filter(
-            models.skill_gap_snapshot_cls.owner_id == settings.owner_id,
+            models.skill_gap_snapshot_cls.owner_id == tenancy.owner_id(),
             models.skill_gap_snapshot_cls.application_id == row.id,
         )
         .first()
@@ -5458,7 +5458,7 @@ def _application_response(
             "resume_skills_snapshot": resume_skills_snapshot if isinstance(resume_skills_snapshot, list) else [],
             "record_id": opportunity_lineage_service.record_id_for_application(
                 db,
-                owner_id=settings.owner_id,
+                owner_id=tenancy.owner_id(),
                 application=row,
             ),
             "current_recruiter_name": recruiter.recruiter_name if recruiter else "",
@@ -5470,7 +5470,7 @@ def _application_response(
                 _clean_optional_text(recruiter.company if recruiter else None)
                 or recruiter_identity_service.domain_company_for(
                     db,
-                    settings.owner_id,
+                    tenancy.owner_id(),
                     (recruiter.recruiter_email if recruiter else None) or row.manual_recruiter_email,
                 )
             ),
@@ -5566,7 +5566,7 @@ def create_manual_requirement_from_chat(
     """
     document = user_supplied_document(
         db,
-        settings.owner_id,
+        tenancy.owner_id(),
         attachment_id=payload.attachment_id,
         message_id=payload.message_id,
     )
@@ -5596,7 +5596,7 @@ def list_filter_options(
         field=field,
         values=filter_options_service.distinct_values(
             db,
-            settings.owner_id,
+            tenancy.owner_id(),
             bucket,
             field,
             q=q,
@@ -5725,7 +5725,7 @@ def list_candidates(
     if min_ats_score is not None and max_ats_score is not None and min_ats_score > max_ats_score:
         raise HTTPException(status_code=422, detail="min_ats_score must be <= max_ats_score")
     states = [s.strip() for s in state.split(",") if s.strip()]
-    query = db.query(RecruiterEmail).filter(RecruiterEmail.owner_id == settings.owner_id)
+    query = db.query(RecruiterEmail).filter(RecruiterEmail.owner_id == tenancy.owner_id())
     if states:
         query = query.filter(or_(*[RecruiterEmail.state == s for s in states]))
 
@@ -5820,7 +5820,7 @@ def list_candidates(
 
     badge_selection = _badge_filter_selection(contact_status=contact_status, verification=verification, following=following)
     if badge_selection:
-        matching = _filter_rows_by_badges(db, settings.owner_id, query.all(), badge_selection)
+        matching = _filter_rows_by_badges(db, tenancy.owner_id(), query.all(), badge_selection)
         total = len(matching)
         visible, next_cursor, has_next = _paginate_items(matching, cursor=cursor, limit=limit)
     else:
@@ -5829,7 +5829,7 @@ def list_candidates(
         visible = items[:limit]
         next_cursor = cursor + limit if has_next else None
     _hydrate_candidates_for_review(db, visible)
-    badge_fields = _populate_badge_fields(db, settings.owner_id, visible)
+    badge_fields = _populate_badge_fields(db, tenancy.owner_id(), visible)
     attachment_file_names = _enabled_attachment_file_names(db)
     serialized_items: list[EmailResponse] = []
     for item in visible:
@@ -5890,7 +5890,7 @@ def list_premium_numbers(
     mail_date: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
     db: Session = Depends(get_db),
 ) -> PremiumNumberListResponse:
-    query = db.query(PremiumNumberLead).filter(PremiumNumberLead.owner_id == settings.owner_id)
+    query = db.query(PremiumNumberLead).filter(PremiumNumberLead.owner_id == tenancy.owner_id())
     if recruiter_only:
         query = query.filter(PremiumNumberLead.is_recruiter_relevant.is_(True))
 
@@ -5963,7 +5963,7 @@ def list_premium_number_inventory(
 ) -> PremiumNumberInventoryListResponse:
     if sort not in {"newest", "oldest", "highest_score", "lowest_score"}: raise HTTPException(status_code=422, detail="Invalid sort. Must be one of: newest, oldest, highest_score, lowest_score")
     if min_score is not None and max_score is not None and min_score > max_score: raise HTTPException(status_code=422, detail="min_score must be <= max_score")
-    owner = settings.owner_id
+    owner = tenancy.owner_id()
     review = sa.select(NumberReviewQueue.id.label("id"), sa.literal("review").label("kind"), NumberReviewQueue.display_phone_number.label("number"), NumberReviewQueue.normalized_phone_number.label("normalized_number"), NumberReviewQueue.owner_name.label("owner"), NumberReviewQueue.company.label("company"), (NumberReviewQueue.role == "recruiter").label("is_recruiter"), (NumberReviewQueue.role == "employer").label("is_employer"), sa.literal("Pending").label("status"), NumberReviewQueue.recruiter_relevance_score.label("score"), sa.case((NumberReviewQueue.source_external_opportunity_id.is_not(None), "nvoids"), else_="gmail").label("source_type"), NumberReviewQueue.updated_at.label("last_checked_at")).where(NumberReviewQueue.owner_id == owner, NumberReviewQueue.state == "pending")
     active_score = sa.func.coalesce(sa.select(PremiumNumberLead.recruiter_relevance_score).where(PremiumNumberLead.id == PremiumNumberContact.active_recruiter_lead_id).scalar_subquery(), sa.select(PremiumNumberLead.recruiter_relevance_score).where(PremiumNumberLead.id == PremiumNumberContact.active_employer_lead_id).scalar_subquery())
     flagged = _contact_is_flagged_expr()
@@ -6302,7 +6302,7 @@ def list_premium_number_companies(
 ) -> PremiumCompanyListResponse:
     if sort not in _COMPANY_SORTS:
         raise HTTPException(status_code=422, detail=f"Invalid sort. Must be one of: {', '.join(sorted(_COMPANY_SORTS))}")
-    owner = settings.owner_id
+    owner = tenancy.owner_id()
     grouped = _company_grouped_query(owner, q, date_filter, date_from, date_to).subquery()
     total = db.execute(sa.select(sa.func.count()).select_from(grouped)).scalar_one()
     order = {
@@ -6349,7 +6349,7 @@ def get_premium_number_company(
         raise HTTPException(status_code=422, detail="Pass a domain or a company")
     if domain:
         company = ""
-    owner = settings.owner_id
+    owner = tenancy.owner_id()
     grouped = _company_grouped_query(owner, None, None, None, None).subquery()
     row = db.execute(
         sa.select(grouped).where(grouped.c.domain == domain, grouped.c.company == company)
@@ -6452,7 +6452,7 @@ def list_deleted_premium_contacts(
 ) -> PremiumNumberInventoryListResponse:
     if sort not in {"newest", "oldest"}:
         raise HTTPException(status_code=422, detail="Invalid sort. Must be one of: newest, oldest")
-    owner = settings.owner_id
+    owner = tenancy.owner_id()
     query = db.query(PremiumNumberContact).filter(
         PremiumNumberContact.owner_id == owner,
         PremiumNumberContact.deleted_at.is_not(None),
@@ -6507,7 +6507,7 @@ def _restore_contact_claims(db: Session, contact_id: int) -> list[str]:
     """Undelete and put back every identifier the soft delete had to give up. Returns the
     ones another contact has claimed since, which cannot be handed back."""
     contact = db.query(PremiumNumberContact).filter(
-        PremiumNumberContact.owner_id == settings.owner_id,
+        PremiumNumberContact.owner_id == tenancy.owner_id(),
         PremiumNumberContact.id == contact_id,
         PremiumNumberContact.deleted_at.is_not(None),
     ).first()
@@ -6550,7 +6550,7 @@ def _purge_contact(db: Session, contact_id: int) -> str:
     # Only ever called on a contact that's already soft-deleted (Recycle Bin only) - this
     # is the one irreversible step, so it requires that prior confirmation to have happened.
     contact = db.query(PremiumNumberContact).filter(
-        PremiumNumberContact.owner_id == settings.owner_id,
+        PremiumNumberContact.owner_id == tenancy.owner_id(),
         PremiumNumberContact.id == contact_id,
         PremiumNumberContact.deleted_at.is_not(None),
     ).first()
@@ -6602,7 +6602,7 @@ def create_premium_contact(
         raise HTTPException(status_code=422, detail="Provide a phone number, an email address, or both")
 
     result = contact_identity_service.reconcile(
-        db, owner_id=settings.owner_id, normalized_phone=canonical_phone, normalized_email=email,
+        db, owner_id=tenancy.owner_id(), normalized_phone=canonical_phone, normalized_email=email,
         name=payload.name, company=payload.company, role=payload.role, human_confirmed=True,
     )
     if result.contact is None:
@@ -6682,7 +6682,7 @@ def list_premium_number_extraction_audit(
             detail="Provide exactly one source_email_id or source_external_opportunity_id",
         )
     query = db.query(PremiumNumberExtractionAudit).filter(
-        PremiumNumberExtractionAudit.owner_id == settings.owner_id
+        PremiumNumberExtractionAudit.owner_id == tenancy.owner_id()
     )
     if source_email_id is not None:
         query = query.filter(PremiumNumberExtractionAudit.source_email_id == source_email_id)
@@ -6706,7 +6706,7 @@ def list_premium_number_extraction_audit(
 def get_premium_number(lead_id: int, db: Session = Depends(get_db)) -> PremiumNumberLead:
     lead = (
         db.query(PremiumNumberLead)
-        .filter(PremiumNumberLead.owner_id == settings.owner_id, PremiumNumberLead.id == lead_id)
+        .filter(PremiumNumberLead.owner_id == tenancy.owner_id(), PremiumNumberLead.id == lead_id)
         .first()
     )
     if not lead:
@@ -6723,7 +6723,7 @@ def search_email(
     normalized = q.strip()
     if len(normalized) < 2 and not normalized.isdecimal():
         raise HTTPException(status_code=422, detail="q must be a numeric Email ID or contain at least 2 characters")
-    hits = email_lookup_service.search_email(db, owner_id=settings.owner_id, query=normalized, current_section=section)
+    hits = email_lookup_service.search_email(db, owner_id=tenancy.owner_id(), query=normalized, current_section=section)
     visible = hits[: email_lookup_service.MAX_EMAIL_SEARCH_HITS]
     return EmailSearchResponse(
         query=normalized,
@@ -6736,7 +6736,7 @@ def search_email(
 def reextract_premium_numbers(recruiter_email_id: int, db: Session = Depends(get_db)) -> dict[str, int]:
     email = (
         db.query(RecruiterEmail)
-        .filter(RecruiterEmail.owner_id == settings.owner_id, RecruiterEmail.id == recruiter_email_id)
+        .filter(RecruiterEmail.owner_id == tenancy.owner_id(), RecruiterEmail.id == recruiter_email_id)
         .first()
     )
     if not email:
@@ -6753,7 +6753,7 @@ def list_number_review_queue(
     db: Session = Depends(get_db),
 ) -> UnknownNumberReviewCardListResponse:
     query = db.query(NumberReviewQueue).filter(
-        NumberReviewQueue.owner_id == settings.owner_id,
+        NumberReviewQueue.owner_id == tenancy.owner_id(),
         NumberReviewQueue.state == "pending",
     )
     if q:
@@ -6789,7 +6789,7 @@ def pending_number_review_count(db: Session = Depends(get_db)) -> PendingNumberR
     count = (
         db.query(func.count(NumberReviewQueue.id))
         .filter(
-            NumberReviewQueue.owner_id == settings.owner_id,
+            NumberReviewQueue.owner_id == tenancy.owner_id(),
             NumberReviewQueue.state == "pending",
         )
         .scalar()
@@ -6801,7 +6801,7 @@ def pending_number_review_count(db: Session = Depends(get_db)) -> PendingNumberR
 def _review_card(db: Session, review_id: int) -> NumberReviewQueue:
     card = (
         db.query(NumberReviewQueue)
-        .filter(NumberReviewQueue.owner_id == settings.owner_id, NumberReviewQueue.id == review_id)
+        .filter(NumberReviewQueue.owner_id == tenancy.owner_id(), NumberReviewQueue.id == review_id)
         .first()
     )
     if not card:
@@ -6869,7 +6869,7 @@ def _review_version(
         existing = (
             db.query(PremiumNumberLead)
             .filter(
-                PremiumNumberLead.owner_id == settings.owner_id,
+                PremiumNumberLead.owner_id == tenancy.owner_id(),
                 PremiumNumberLead.id == card.source_lead_id,
             )
             .first()
@@ -6879,7 +6879,7 @@ def _review_version(
 
     canonical_phone, display_phone, extension = _parsed_review_phone(values["display_phone_number"])
     version = PremiumNumberLead(
-        owner_id=settings.owner_id,
+        owner_id=tenancy.owner_id(),
         recruiter_email_id=card.source_email_id,
         external_opportunity_id=card.source_external_opportunity_id,
         phone_number_normalized=canonical_phone,
@@ -6941,7 +6941,7 @@ def _contact_for_review(
         raise HTTPException(status_code=422, detail="Review card has no phone number or email to identify a contact")
     resolution = contact_identity_service.resolve_identity(
         db,
-        owner_id=settings.owner_id,
+        owner_id=tenancy.owner_id(),
         phone=canonical_phone,
         extension=extension,
         email=candidate_email,
@@ -6955,7 +6955,7 @@ def _contact_for_review(
         })
     result = contact_identity_service.reconcile(
         db,
-        owner_id=settings.owner_id,
+        owner_id=tenancy.owner_id(),
         normalized_phone=canonical_phone,
         normalized_email=candidate_email,
         name=values.get("owner_name", ""),
@@ -6987,7 +6987,7 @@ def _ensure_review_opportunity(
         email = (
             db.query(RecruiterEmail)
             .filter(
-                RecruiterEmail.owner_id == settings.owner_id,
+                RecruiterEmail.owner_id == tenancy.owner_id(),
                 RecruiterEmail.id == card.source_email_id,
             )
             .first()
@@ -6996,7 +6996,7 @@ def _ensure_review_opportunity(
         external = (
             db.query(ExternalOpportunity)
             .filter(
-                ExternalOpportunity.owner_id == settings.owner_id,
+                ExternalOpportunity.owner_id == tenancy.owner_id(),
                 ExternalOpportunity.id == card.source_external_opportunity_id,
             )
             .first()
@@ -7009,7 +7009,7 @@ def _ensure_review_opportunity(
     exists = (
         db.query(RecruiterOpportunity.id)
         .filter(
-            RecruiterOpportunity.owner_id == settings.owner_id,
+            RecruiterOpportunity.owner_id == tenancy.owner_id(),
             RecruiterOpportunity.recruiter_number_id == contact.id,
             RecruiterOpportunity.gmail_message_id == gmail_message_id,
         )
@@ -7019,7 +7019,7 @@ def _ensure_review_opportunity(
         return
     is_nvoids = external is not None
     row = RecruiterOpportunity(
-        owner_id=settings.owner_id,
+        owner_id=tenancy.owner_id(),
         recruiter_number_id=contact.id,
         source_email_id=card.source_email_id,
         gmail_message_id=gmail_message_id,
@@ -7066,7 +7066,7 @@ def _ensure_review_opportunity(
         source_row_id = card.source_external_opportunity_id if is_nvoids else card.source_email_id
         lineage = opportunity_lineage_service.create_lineage(
             db,
-            owner_id=settings.owner_id,
+            owner_id=tenancy.owner_id(),
             origin_type=source_type,
             source_type=source_type,
             external_id=str(source_row_id) if source_row_id is not None else "",
@@ -7093,7 +7093,7 @@ def _mark_number_as_recruiter(
     if not values["owner_name"] or values["owner_name"].strip().lower() == "unknown":
         values["owner_name"] = derive_name_from_contact_email(candidate_email) or "Unknown"
     if not values["company"] or values["company"].strip().lower() == "unknown":
-        if is_derivable_company_domain(db, settings.owner_id, candidate_email):
+        if is_derivable_company_domain(db, tenancy.owner_id(), candidate_email):
             values["company"] = derive_company_from_email_domain(candidate_email) or "Unknown"
     values["contact_email"] = candidate_email
     contact = _contact_for_review(db, card, values)
@@ -7203,7 +7203,7 @@ def bulk_rescore_number_review_cards(
     rows = (
         db.query(NumberReviewQueue)
         .filter(
-            NumberReviewQueue.owner_id == settings.owner_id,
+            NumberReviewQueue.owner_id == tenancy.owner_id(),
             NumberReviewQueue.id.in_(payload.review_ids),
         )
         .all()
@@ -7220,7 +7220,7 @@ def bulk_rescore_number_review_cards(
     for email in (
         db.query(RecruiterEmail)
         .filter(
-            RecruiterEmail.owner_id == settings.owner_id,
+            RecruiterEmail.owner_id == tenancy.owner_id(),
             RecruiterEmail.id.in_(gmail_ids),
         )
         .all()
@@ -7231,7 +7231,7 @@ def bulk_rescore_number_review_cards(
     for item in (
         db.query(ExternalOpportunity)
         .filter(
-            ExternalOpportunity.owner_id == settings.owner_id,
+            ExternalOpportunity.owner_id == tenancy.owner_id(),
             ExternalOpportunity.id.in_(external_ids),
         )
         .all()
@@ -7248,7 +7248,7 @@ def bulk_rescore_number_review_cards(
         row.id: row.state
         for row in db.query(NumberReviewQueue)
         .filter(
-            NumberReviewQueue.owner_id == settings.owner_id,
+            NumberReviewQueue.owner_id == tenancy.owner_id(),
             NumberReviewQueue.id.in_(payload.review_ids),
         )
         .all()
@@ -7317,7 +7317,7 @@ def _contact_merge_preview_side(db: Session, contact_id: int) -> ContactMergePre
     contact = (
         db.query(PremiumNumberContact)
         .filter(
-            PremiumNumberContact.owner_id == settings.owner_id,
+            PremiumNumberContact.owner_id == tenancy.owner_id(),
             PremiumNumberContact.id == contact_id,
             PremiumNumberContact.deleted_at.is_(None),
         )
@@ -7327,7 +7327,7 @@ def _contact_merge_preview_side(db: Session, contact_id: int) -> ContactMergePre
         raise HTTPException(status_code=404, detail=f"Contact {contact_id} not found")
     leads = (
         db.query(PremiumNumberLead)
-        .filter(PremiumNumberLead.owner_id == settings.owner_id, PremiumNumberLead.contact_id == contact_id)
+        .filter(PremiumNumberLead.owner_id == tenancy.owner_id(), PremiumNumberLead.contact_id == contact_id)
         .order_by(PremiumNumberLead.created_at.desc())
         .all()
     )
@@ -7389,7 +7389,7 @@ def merge_premium_contacts(payload: ContactMergeRequest, db: Session = Depends(g
     try:
         canonical = contact_identity_service.merge_contacts(
             db,
-            owner_id=settings.owner_id,
+            owner_id=tenancy.owner_id(),
             canonical_contact_id=payload.canonical_contact_id,
             loser_contact_id=payload.loser_contact_id,
             source="manual_merge_ui",
@@ -7407,7 +7407,7 @@ def backfill_duplicate_contacts(db: Session = Depends(get_db)) -> DuplicateConta
     # phone_intelligence_workflow_service's contact_enriched flow) - explicitly
     # human-triggered, so unlike that background flow this merges immediately instead of
     # queuing a review for each group.
-    owner = settings.owner_id
+    owner = tenancy.owner_id()
     groups_merged = 0
     contacts_merged = 0
     emails = [
@@ -7568,7 +7568,7 @@ def _contact_source_fields(
         contact.active_recruiter_lead_id if role == "recruiter" else contact.active_employer_lead_id
     )
     versions = db.query(PremiumNumberLead).filter(
-        PremiumNumberLead.owner_id == settings.owner_id,
+        PremiumNumberLead.owner_id == tenancy.owner_id(),
         PremiumNumberLead.contact_id == contact.id,
     )
     count = versions.count()
@@ -7626,7 +7626,7 @@ def _recruiter_number_response(
     total = (
         db.query(func.count(RecruiterOpportunity.id))
         .filter(
-            RecruiterOpportunity.owner_id == settings.owner_id,
+            RecruiterOpportunity.owner_id == tenancy.owner_id(),
             RecruiterOpportunity.recruiter_number_id == contact.id,
         )
         .scalar()
@@ -7635,7 +7635,7 @@ def _recruiter_number_response(
     last_received = (
         db.query(func.max(RecruiterOpportunity.received_at))
         .filter(
-            RecruiterOpportunity.owner_id == settings.owner_id,
+            RecruiterOpportunity.owner_id == tenancy.owner_id(),
             RecruiterOpportunity.recruiter_number_id == contact.id,
         )
         .scalar()
@@ -7734,7 +7734,7 @@ def list_recruiter_numbers(
     db: Session = Depends(get_db),
 ) -> RecruiterNumberListResponse:
     query = db.query(PremiumNumberContact).filter(
-        PremiumNumberContact.owner_id == settings.owner_id,
+        PremiumNumberContact.owner_id == tenancy.owner_id(),
         PremiumNumberContact.is_recruiter.is_(True),
         PremiumNumberContact.deleted_at.is_(None),
     )
@@ -7760,7 +7760,7 @@ def list_recruiter_numbers(
         .order_by(PremiumNumberContact.updated_at.desc())
         .all()
     )
-    employer_domains = employer_domains_for_owner(db, settings.owner_id)
+    employer_domains = employer_domains_for_owner(db, tenancy.owner_id())
     results = [
         _recruiter_number_response(db, row, employer_domains)
         for row in rows
@@ -7864,7 +7864,7 @@ def patch_recruiter_number(
     contact = (
         db.query(PremiumNumberContact)
         .filter(
-            PremiumNumberContact.owner_id == settings.owner_id,
+            PremiumNumberContact.owner_id == tenancy.owner_id(),
             PremiumNumberContact.id == recruiter_number_id,
             PremiumNumberContact.is_recruiter.is_(True),
             PremiumNumberContact.deleted_at.is_(None),
@@ -7931,7 +7931,7 @@ def patch_employer_number(
     contact = (
         db.query(PremiumNumberContact)
         .filter(
-            PremiumNumberContact.owner_id == settings.owner_id,
+            PremiumNumberContact.owner_id == tenancy.owner_id(),
             PremiumNumberContact.id == employer_number_id,
             PremiumNumberContact.is_employer.is_(True),
             PremiumNumberContact.deleted_at.is_(None),
@@ -7982,7 +7982,7 @@ def get_recruiter_number(
     contact = (
         db.query(PremiumNumberContact)
         .filter(
-            PremiumNumberContact.owner_id == settings.owner_id,
+            PremiumNumberContact.owner_id == tenancy.owner_id(),
             PremiumNumberContact.id == recruiter_number_id,
             PremiumNumberContact.is_recruiter.is_(True),
             PremiumNumberContact.deleted_at.is_(None),
@@ -8002,7 +8002,7 @@ def get_employer_number(
     contact = (
         db.query(PremiumNumberContact)
         .filter(
-            PremiumNumberContact.owner_id == settings.owner_id,
+            PremiumNumberContact.owner_id == tenancy.owner_id(),
             PremiumNumberContact.id == employer_number_id,
             PremiumNumberContact.is_employer.is_(True),
             PremiumNumberContact.deleted_at.is_(None),
@@ -8020,7 +8020,7 @@ def list_recruiter_number_versions(
     db: Session = Depends(get_db),
 ) -> list[PremiumNumberResponse]:
     contact = db.query(PremiumNumberContact.id).filter(
-        PremiumNumberContact.owner_id == settings.owner_id,
+        PremiumNumberContact.owner_id == tenancy.owner_id(),
         PremiumNumberContact.id == contact_id,
         PremiumNumberContact.is_recruiter.is_(True),
         PremiumNumberContact.deleted_at.is_(None),
@@ -8028,7 +8028,7 @@ def list_recruiter_number_versions(
     if not contact:
         raise HTTPException(status_code=404, detail="Recruiter number not found")
     rows = db.query(PremiumNumberLead).filter(
-        PremiumNumberLead.owner_id == settings.owner_id,
+        PremiumNumberLead.owner_id == tenancy.owner_id(),
         PremiumNumberLead.contact_id == contact_id,
     ).order_by(PremiumNumberLead.created_at.desc(), PremiumNumberLead.id.desc()).all()
     return [PremiumNumberResponse.model_validate(row) for row in rows]
@@ -8041,7 +8041,7 @@ def _select_contact_version(
     role: str,
 ) -> PremiumNumberContact:
     contact_query = db.query(PremiumNumberContact).filter(
-        PremiumNumberContact.owner_id == settings.owner_id,
+        PremiumNumberContact.owner_id == tenancy.owner_id(),
         PremiumNumberContact.id == contact_id,
         PremiumNumberContact.deleted_at.is_(None),
     )
@@ -8052,7 +8052,7 @@ def _select_contact_version(
     )
     contact = contact_query.first()
     lead = db.query(PremiumNumberLead).filter(
-        PremiumNumberLead.owner_id == settings.owner_id,
+        PremiumNumberLead.owner_id == tenancy.owner_id(),
         PremiumNumberLead.id == lead_id,
         PremiumNumberLead.contact_id == contact_id,
     ).first()
@@ -8146,7 +8146,7 @@ def swap_recruiter_number_to_employer(
     contact = (
         db.query(PremiumNumberContact)
         .filter(
-            PremiumNumberContact.owner_id == settings.owner_id,
+            PremiumNumberContact.owner_id == tenancy.owner_id(),
             PremiumNumberContact.id == recruiter_number_id,
             PremiumNumberContact.is_recruiter.is_(True),
             PremiumNumberContact.deleted_at.is_(None),
@@ -8170,7 +8170,7 @@ def list_employer_numbers(
     db: Session = Depends(get_db),
 ) -> EmployerNumberListResponse:
     query = db.query(PremiumNumberContact).filter(
-        PremiumNumberContact.owner_id == settings.owner_id,
+        PremiumNumberContact.owner_id == tenancy.owner_id(),
         PremiumNumberContact.is_employer.is_(True),
         PremiumNumberContact.deleted_at.is_(None),
     )
@@ -8212,7 +8212,7 @@ def swap_employer_number_to_recruiter(employer_number_id: int, db: Session = Dep
     contact = (
         db.query(PremiumNumberContact)
         .filter(
-            PremiumNumberContact.owner_id == settings.owner_id,
+            PremiumNumberContact.owner_id == tenancy.owner_id(),
             PremiumNumberContact.id == employer_number_id,
             PremiumNumberContact.is_employer.is_(True),
             PremiumNumberContact.deleted_at.is_(None),
@@ -8232,7 +8232,7 @@ def list_employer_number_versions(
     db: Session = Depends(get_db),
 ) -> list[PremiumNumberResponse]:
     contact = db.query(PremiumNumberContact.id).filter(
-        PremiumNumberContact.owner_id == settings.owner_id,
+        PremiumNumberContact.owner_id == tenancy.owner_id(),
         PremiumNumberContact.id == contact_id,
         PremiumNumberContact.is_employer.is_(True),
         PremiumNumberContact.deleted_at.is_(None),
@@ -8240,7 +8240,7 @@ def list_employer_number_versions(
     if not contact:
         raise HTTPException(status_code=404, detail="Employer number not found")
     rows = db.query(PremiumNumberLead).filter(
-        PremiumNumberLead.owner_id == settings.owner_id,
+        PremiumNumberLead.owner_id == tenancy.owner_id(),
         PremiumNumberLead.contact_id == contact_id,
     ).order_by(PremiumNumberLead.created_at.desc(), PremiumNumberLead.id.desc()).all()
     return [PremiumNumberResponse.model_validate(row) for row in rows]
@@ -8258,7 +8258,7 @@ def select_employer_number_version(
 
 def _delete_contact_version(db: Session, contact_id: int, lead_id: int, role: str) -> None:
     contact_query = db.query(PremiumNumberContact).filter(
-        PremiumNumberContact.owner_id == settings.owner_id,
+        PremiumNumberContact.owner_id == tenancy.owner_id(),
         PremiumNumberContact.id == contact_id,
         PremiumNumberContact.deleted_at.is_(None),
     )
@@ -8269,14 +8269,14 @@ def _delete_contact_version(db: Session, contact_id: int, lead_id: int, role: st
     )
     contact = contact_query.first()
     lead = db.query(PremiumNumberLead).filter(
-        PremiumNumberLead.owner_id == settings.owner_id,
+        PremiumNumberLead.owner_id == tenancy.owner_id(),
         PremiumNumberLead.id == lead_id,
         PremiumNumberLead.contact_id == contact_id,
     ).first()
     if not contact or not lead:
         raise HTTPException(status_code=404, detail="Contact version not found")
     remaining = db.query(PremiumNumberLead).filter(
-        PremiumNumberLead.owner_id == settings.owner_id,
+        PremiumNumberLead.owner_id == tenancy.owner_id(),
         PremiumNumberLead.contact_id == contact_id,
         PremiumNumberLead.id != lead_id,
     ).order_by(PremiumNumberLead.created_at.desc(), PremiumNumberLead.id.desc()).all()
@@ -8319,7 +8319,7 @@ def _delete_older_contact_versions(db: Session, contact_id: int, role: str) -> i
     contact = _contact_for_bulk_action(db, contact_id, role)
     keep_ids = {contact.active_recruiter_lead_id, contact.active_employer_lead_id} - {None}
     query = db.query(PremiumNumberLead).filter(
-        PremiumNumberLead.owner_id == settings.owner_id,
+        PremiumNumberLead.owner_id == tenancy.owner_id(),
         PremiumNumberLead.contact_id == contact_id,
     )
     if keep_ids:
@@ -8343,7 +8343,7 @@ def delete_older_employer_number_versions(contact_id: int, db: Session = Depends
 
 def _contact_for_bulk_action(db: Session, contact_id: int, role: str) -> PremiumNumberContact:
     query = db.query(PremiumNumberContact).filter(
-        PremiumNumberContact.owner_id == settings.owner_id,
+        PremiumNumberContact.owner_id == tenancy.owner_id(),
         PremiumNumberContact.id == contact_id,
         PremiumNumberContact.deleted_at.is_(None),
     )
@@ -8387,7 +8387,7 @@ def _soft_delete_contact(db: Session, contact_id: int, role: str) -> str:
     # once it's gone - leaving it "pending" strands it in Needs Review forever,
     # showing an unlabeled "existing contact" with no way to see who it was.
     db.query(NumberReviewQueue).filter(
-        NumberReviewQueue.owner_id == settings.owner_id,
+        NumberReviewQueue.owner_id == tenancy.owner_id(),
         NumberReviewQueue.state == "pending",
         or_(
             NumberReviewQueue.target_contact_id == contact_id,
@@ -8414,7 +8414,7 @@ def _rescore_contact(db: Session, contact_id: int, role: str) -> str:
     source_type, source_id, _, _, _, _ = _contact_source_fields(db, contact, role)
     if source_type == "gmail" and source_id:
         source = db.query(RecruiterEmail).filter(
-            RecruiterEmail.owner_id == settings.owner_id,
+            RecruiterEmail.owner_id == tenancy.owner_id(),
             RecruiterEmail.id == source_id,
         ).first()
         if not source:
@@ -8422,7 +8422,7 @@ def _rescore_contact(db: Session, contact_id: int, role: str) -> str:
         _get_candidate_runtime_service().capture_premium_numbers(db, source)
     elif source_type == "nvoids" and source_id:
         source = db.query(ExternalOpportunity).filter(
-            ExternalOpportunity.owner_id == settings.owner_id,
+            ExternalOpportunity.owner_id == tenancy.owner_id(),
             ExternalOpportunity.id == source_id,
         ).first()
         if not source:
@@ -8600,7 +8600,7 @@ def list_recruiter_opportunities(
     db: Session = Depends(get_db),
 ) -> RecruiterOpportunityListResponse:
     if sort not in {"newest", "oldest"}: raise HTTPException(status_code=422, detail="Invalid sort. Must be one of: newest, oldest")
-    query = db.query(RecruiterOpportunity).outerjoin(PremiumNumberContact, PremiumNumberContact.id == RecruiterOpportunity.recruiter_number_id).filter(RecruiterOpportunity.owner_id == settings.owner_id)
+    query = db.query(RecruiterOpportunity).outerjoin(PremiumNumberContact, PremiumNumberContact.id == RecruiterOpportunity.recruiter_number_id).filter(RecruiterOpportunity.owner_id == tenancy.owner_id())
     if status:
         status_values = [value.strip() for value in status.split(",") if value.strip() in OPPORTUNITY_STATUS_VALUES]
         if status_values:
@@ -8657,7 +8657,7 @@ def list_recruiter_opportunities(
     recruiter_rows = (
         db.query(PremiumNumberContact)
         .filter(
-            PremiumNumberContact.owner_id == settings.owner_id,
+            PremiumNumberContact.owner_id == tenancy.owner_id(),
             PremiumNumberContact.id.in_(recruiter_ids),
             PremiumNumberContact.is_recruiter.is_(True),
             PremiumNumberContact.deleted_at.is_(None),
@@ -8697,7 +8697,7 @@ def sync_external_nvoids(
     except Exception as exc:
         logger.exception(
             "nvoids_sync_endpoint_failed owner_id=%r batch_limit=%s semantic_enabled=%s ai_enabled=%s",
-            settings.owner_id,
+            tenancy.owner_id(),
             resolved_batch_limit,
             getattr(user_settings, "feature_semantic_enabled", None),
             getattr(user_settings, "feature_ai_enabled", None),
@@ -8722,7 +8722,7 @@ def backfill_external_nvoids_phones(
     limit: int = Query(default=5000, ge=1, le=50000),
     db: Session = Depends(get_db),
 ) -> dict[str, int]:
-    result = external_feed_service.backfill_nvoids_contact_phones(db, owner_id=settings.owner_id, limit=limit)
+    result = external_feed_service.backfill_nvoids_contact_phones(db, owner_id=tenancy.owner_id(), limit=limit)
     return result
 
 
@@ -8730,7 +8730,7 @@ def backfill_external_nvoids_phones(
 def list_external_feed_runs(limit: int = Query(default=20, ge=1, le=200), db: Session = Depends(get_db)) -> list[ExternalScrapeRunResponse]:
     rows = (
         db.query(ExternalScrapeRun)
-        .filter(ExternalScrapeRun.owner_id == settings.owner_id)
+        .filter(ExternalScrapeRun.owner_id == tenancy.owner_id())
         .order_by(ExternalScrapeRun.created_at.desc())
         .limit(limit)
         .all()
@@ -8760,7 +8760,7 @@ def list_recent_runs(
 ) -> RecentRunListResponse:
     query = (
         db.query(RecentRun)
-        .filter(RecentRun.owner_id == settings.owner_id)
+        .filter(RecentRun.owner_id == tenancy.owner_id())
     )
     if mail_date:
         try:
@@ -8786,7 +8786,7 @@ def list_recent_run_items(
     query = (
         db.query(RecentRunSkippedItem)
         .filter(
-            RecentRunSkippedItem.owner_id == settings.owner_id,
+            RecentRunSkippedItem.owner_id == tenancy.owner_id(),
             RecentRunSkippedItem.run_key == run_key,
         )
         .order_by(RecentRunSkippedItem.created_at.desc(), RecentRunSkippedItem.id.desc())
@@ -8809,7 +8809,7 @@ def retry_recent_run_skipped_items(
     rows = (
         db.query(RecentRunSkippedItem)
         .filter(
-            RecentRunSkippedItem.owner_id == settings.owner_id,
+            RecentRunSkippedItem.owner_id == tenancy.owner_id(),
             RecentRunSkippedItem.id.in_(payload.skipped_item_ids),
         )
         .all()
@@ -8824,7 +8824,7 @@ def retry_recent_run_skipped_items(
 def get_record_detail(record_id: str, db: Session = Depends(get_db)) -> RecordDetailResponse:
     record = opportunity_lineage_service.get_record(
         db,
-        owner_id=settings.owner_id,
+        owner_id=tenancy.owner_id(),
         record_id=record_id,
     )
     if record is None:
@@ -8832,13 +8832,13 @@ def get_record_detail(record_id: str, db: Session = Depends(get_db)) -> RecordDe
 
     emails = (
         db.query(RecruiterEmail)
-        .filter(RecruiterEmail.owner_id == settings.owner_id, RecruiterEmail.record_id == record.id)
+        .filter(RecruiterEmail.owner_id == tenancy.owner_id(), RecruiterEmail.record_id == record.id)
         .order_by(RecruiterEmail.created_at.asc(), RecruiterEmail.id.asc())
         .all()
     )
     external = (
         db.query(ExternalOpportunity)
-        .filter(ExternalOpportunity.owner_id == settings.owner_id, ExternalOpportunity.record_id == record.id)
+        .filter(ExternalOpportunity.owner_id == tenancy.owner_id(), ExternalOpportunity.record_id == record.id)
         .order_by(ExternalOpportunity.created_at.asc(), ExternalOpportunity.id.asc())
         .first()
     )
@@ -8863,7 +8863,7 @@ def get_record_detail(record_id: str, db: Session = Depends(get_db)) -> RecordDe
     lineage = (
         db.query(OpportunityLineage)
         .filter(
-            OpportunityLineage.owner_id == settings.owner_id,
+            OpportunityLineage.owner_id == tenancy.owner_id(),
             OpportunityLineage.id == record.internal_lineage_id,
         )
         .first()
@@ -8871,7 +8871,7 @@ def get_record_detail(record_id: str, db: Session = Depends(get_db)) -> RecordDe
         else None
     )
     event_query = db.query(OpportunityLifecycleEvent).filter(
-        OpportunityLifecycleEvent.owner_id == settings.owner_id,
+        OpportunityLifecycleEvent.owner_id == tenancy.owner_id(),
         OpportunityLifecycleEvent.lineage_id == lineage.id,
     ) if lineage else None
     events = (
@@ -8887,7 +8887,7 @@ def get_record_detail(record_id: str, db: Session = Depends(get_db)) -> RecordDe
     opportunity = (
         db.query(RecruiterOpportunity)
         .filter(
-            RecruiterOpportunity.owner_id == settings.owner_id,
+            RecruiterOpportunity.owner_id == tenancy.owner_id(),
             RecruiterOpportunity.record_id == record.id,
         )
         .order_by(RecruiterOpportunity.created_at.asc(), RecruiterOpportunity.id.asc())
@@ -8896,7 +8896,7 @@ def get_record_detail(record_id: str, db: Session = Depends(get_db)) -> RecordDe
     recruiter = (
         db.query(PremiumNumberContact)
         .filter(
-            PremiumNumberContact.owner_id == settings.owner_id,
+            PremiumNumberContact.owner_id == tenancy.owner_id(),
             PremiumNumberContact.id == opportunity.recruiter_number_id,
             PremiumNumberContact.deleted_at.is_(None),
         )
@@ -8910,7 +8910,7 @@ def get_record_detail(record_id: str, db: Session = Depends(get_db)) -> RecordDe
     appts_rows = (
         opportunity_lineage_service.applications_for_record(
             db,
-            owner_id=settings.owner_id,
+            owner_id=tenancy.owner_id(),
             record_id=record.id,
             model=AppTSApplication,
         )
@@ -8922,7 +8922,7 @@ def get_record_detail(record_id: str, db: Session = Depends(get_db)) -> RecordDe
             row
             for row in opportunity_lineage_service.applications_for_record(
                 db,
-                owner_id=settings.owner_id,
+                owner_id=tenancy.owner_id(),
                 record_id=record.id,
                 model=Application,
             )
@@ -8973,7 +8973,7 @@ def get_record_detail(record_id: str, db: Session = Depends(get_db)) -> RecordDe
         ],
         outcomes=opportunity_lineage_service.record_outcomes(
             db,
-            owner_id=settings.owner_id,
+            owner_id=tenancy.owner_id(),
             record_id=record.id,
         ),
         lifecycle_events=[
@@ -9001,7 +9001,7 @@ def patch_recruiter_opportunity(
 ) -> RecruiterOpportunityResponse:
     row = (
         db.query(RecruiterOpportunity)
-        .filter(RecruiterOpportunity.owner_id == settings.owner_id, RecruiterOpportunity.id == opportunity_id)
+        .filter(RecruiterOpportunity.owner_id == tenancy.owner_id(), RecruiterOpportunity.id == opportunity_id)
         .first()
     )
     if not row:
@@ -9014,7 +9014,7 @@ def patch_recruiter_opportunity(
         if payload.status != old_status:
             lineage = opportunity_lineage_service.get_lineage_for_opportunity(
                 db,
-                owner_id=settings.owner_id,
+                owner_id=tenancy.owner_id(),
                 recruiter_opportunity_id=row.id,
             )
             if lineage is None:
@@ -9072,7 +9072,7 @@ def patch_recruiter_opportunity(
     recruiter = (
         db.query(PremiumNumberContact)
         .filter(
-            PremiumNumberContact.owner_id == settings.owner_id,
+            PremiumNumberContact.owner_id == tenancy.owner_id(),
             PremiumNumberContact.id == row.recruiter_number_id,
             PremiumNumberContact.deleted_at.is_(None),
             PremiumNumberContact.deleted_at.is_(None),
@@ -9089,7 +9089,7 @@ def delete_recruiter_opportunity(
 ) -> RecruiterOpportunityDeleteResponse:
     row = (
         db.query(RecruiterOpportunity)
-        .filter(RecruiterOpportunity.owner_id == settings.owner_id, RecruiterOpportunity.id == opportunity_id)
+        .filter(RecruiterOpportunity.owner_id == tenancy.owner_id(), RecruiterOpportunity.id == opportunity_id)
         .first()
     )
     if not row:
@@ -9098,7 +9098,7 @@ def delete_recruiter_opportunity(
     active_application = (
         db.query(Application.id)
         .filter(
-            Application.owner_id == settings.owner_id,
+            Application.owner_id == tenancy.owner_id(),
             Application.recruiter_opportunity_id == opportunity_id,
             Application.deleted_at.is_(None),
             Application.status.not_in(APPLICATION_CLOSED_STATUS_VALUES),
@@ -9114,7 +9114,7 @@ def delete_recruiter_opportunity(
     recruiter_number_id = row.recruiter_number_id
     lineage = opportunity_lineage_service.detach_recruiter_opportunity_for_deletion(
         db,
-        owner_id=settings.owner_id,
+        owner_id=tenancy.owner_id(),
         recruiter_opportunity_id=row.id,
         process_name="main_api",
     )
@@ -9129,7 +9129,7 @@ def delete_recruiter_opportunity(
     remaining_count = (
         db.query(func.count(RecruiterOpportunity.id))
         .filter(
-            RecruiterOpportunity.owner_id == settings.owner_id,
+            RecruiterOpportunity.owner_id == tenancy.owner_id(),
             RecruiterOpportunity.recruiter_number_id == recruiter_number_id,
         )
         .scalar()
@@ -9141,7 +9141,7 @@ def delete_recruiter_opportunity(
         recruiter = (
             db.query(PremiumNumberContact)
             .filter(
-                PremiumNumberContact.owner_id == settings.owner_id,
+                PremiumNumberContact.owner_id == tenancy.owner_id(),
                 PremiumNumberContact.id == recruiter_number_id,
                 PremiumNumberContact.deleted_at.is_(None),
                 PremiumNumberContact.deleted_at.is_(None),
@@ -9168,7 +9168,7 @@ def _requirement_text_for_opportunity(db: Session, row: RecruiterOpportunity) ->
     if row.source_email_id:
         email = (
             db.query(RecruiterEmail)
-            .filter(RecruiterEmail.owner_id == settings.owner_id, RecruiterEmail.id == row.source_email_id)
+            .filter(RecruiterEmail.owner_id == tenancy.owner_id(), RecruiterEmail.id == row.source_email_id)
             .first()
         )
         if email:
@@ -9176,7 +9176,7 @@ def _requirement_text_for_opportunity(db: Session, row: RecruiterOpportunity) ->
     elif row.external_opportunity_id:
         external = (
             db.query(ExternalOpportunity)
-            .filter(ExternalOpportunity.owner_id == settings.owner_id, ExternalOpportunity.id == row.external_opportunity_id)
+            .filter(ExternalOpportunity.owner_id == tenancy.owner_id(), ExternalOpportunity.id == row.external_opportunity_id)
             .first()
         )
         if external:
@@ -9193,7 +9193,7 @@ def generate_recruiter_opportunity_cold_call_script(
 ) -> RecruiterOpportunityResponse:
     row = (
         db.query(RecruiterOpportunity)
-        .filter(RecruiterOpportunity.owner_id == settings.owner_id, RecruiterOpportunity.id == opportunity_id)
+        .filter(RecruiterOpportunity.owner_id == tenancy.owner_id(), RecruiterOpportunity.id == opportunity_id)
         .first()
     )
     if not row:
@@ -9217,7 +9217,7 @@ def generate_recruiter_opportunity_cold_call_script(
     recruiter = (
         db.query(PremiumNumberContact)
         .filter(
-            PremiumNumberContact.owner_id == settings.owner_id,
+            PremiumNumberContact.owner_id == tenancy.owner_id(),
             PremiumNumberContact.id == row.recruiter_number_id,
             PremiumNumberContact.deleted_at.is_(None),
             PremiumNumberContact.deleted_at.is_(None),
@@ -9252,7 +9252,7 @@ def refresh_recruiter_opportunity_ai_metadata(
 ) -> RecruiterOpportunityResponse:
     row = (
         db.query(RecruiterOpportunity)
-        .filter(RecruiterOpportunity.owner_id == settings.owner_id, RecruiterOpportunity.id == opportunity_id)
+        .filter(RecruiterOpportunity.owner_id == tenancy.owner_id(), RecruiterOpportunity.id == opportunity_id)
         .first()
     )
     if not row:
@@ -9264,14 +9264,14 @@ def refresh_recruiter_opportunity_ai_metadata(
         item = (
             db.query(ExternalOpportunity)
             .filter(
-                ExternalOpportunity.owner_id == settings.owner_id,
+                ExternalOpportunity.owner_id == tenancy.owner_id(),
                 ExternalOpportunity.id == row.external_opportunity_id,
             )
             .first()
         )
         if not item:
             raise HTTPException(status_code=404, detail="Source Nvoids posting not found")
-        parsed, parser_details = external_feed_service.compute_nvoids_ai_parse(db, owner_id=settings.owner_id, item=item)
+        parsed, parser_details = external_feed_service.compute_nvoids_ai_parse(db, owner_id=tenancy.owner_id(), item=item)
         ai_extraction = job_metadata_ai_extraction_from_parsed(parsed, parser_details)
         external_feed_service.phone_intelligence_workflow.refresh_nvoids_opportunity_metadata(
             db,
@@ -9285,7 +9285,7 @@ def refresh_recruiter_opportunity_ai_metadata(
             raise HTTPException(status_code=422, detail="Gmail opportunity is missing its source email")
         email = (
             db.query(RecruiterEmail)
-            .filter(RecruiterEmail.owner_id == settings.owner_id, RecruiterEmail.id == row.source_email_id)
+            .filter(RecruiterEmail.owner_id == tenancy.owner_id(), RecruiterEmail.id == row.source_email_id)
             .first()
         )
         if not email:
@@ -9313,7 +9313,7 @@ def refresh_recruiter_opportunity_ai_metadata(
     recruiter = (
         db.query(PremiumNumberContact)
         .filter(
-            PremiumNumberContact.owner_id == settings.owner_id,
+            PremiumNumberContact.owner_id == tenancy.owner_id(),
             PremiumNumberContact.id == row.recruiter_number_id,
             PremiumNumberContact.deleted_at.is_(None),
         )
@@ -9352,7 +9352,7 @@ def list_appts_bookmarked_requirements(
         raise HTTPException(status_code=422, detail=f"Invalid sort. Must be one of: {', '.join(sorted(valid_sorts))}")
     if min_ats_score is not None and max_ats_score is not None and min_ats_score > max_ats_score:
         raise HTTPException(status_code=422, detail="min_ats_score must be <= max_ats_score")
-    query = db.query(RecruiterEmail).filter(RecruiterEmail.owner_id == settings.owner_id, RecruiterEmail.state == "needs_review", RecruiterEmail.marked_for_tracking.is_(True))
+    query = db.query(RecruiterEmail).filter(RecruiterEmail.owner_id == tenancy.owner_id(), RecruiterEmail.state == "needs_review", RecruiterEmail.marked_for_tracking.is_(True))
     if date_filter:
         start, end = _date_range_utc_window(date_filter, date_from, date_to)
         query = query.filter(RecruiterEmail.created_at >= start, RecruiterEmail.created_at < end)
@@ -9393,7 +9393,7 @@ def list_appts_bookmarked_requirements(
         query = query.order_by(RecruiterEmail.created_at.desc(), RecruiterEmail.id.desc())
     badge_selection = _badge_filter_selection(contact_status=contact_status, verification=verification, following=following)
     if badge_selection:
-        matching = _filter_rows_by_badges(db, settings.owner_id, query.all(), badge_selection)
+        matching = _filter_rows_by_badges(db, tenancy.owner_id(), query.all(), badge_selection)
         total = len(matching)
         visible, next_cursor, has_next = _paginate_items(matching, cursor=cursor, limit=limit)
     else:
@@ -9408,7 +9408,7 @@ def list_appts_bookmarked_requirements(
 @app.get("/records/by-message/{message_id:path}", response_model=RecordLookupResponse)
 def get_record_by_message(message_id: str, db: Session = Depends(get_db)):
     from app.mcp_server.tools.records import lookup_record
-    result = lookup_record(db, settings.owner_id, message_id)
+    result = lookup_record(db, tenancy.owner_id(), message_id)
     if result is None:
         raise HTTPException(404, "No record for that message id")
     return result
@@ -9420,7 +9420,7 @@ def list_appts_label_threads(label: str | None = Query(default=None, max_length=
     date_filter: str | None = None, date_from: date | None = None, date_to: date | None = None, db: Session = Depends(get_db)):
     _require_applications_enabled(db)
     start, end = _date_range_utc_window(date_filter, date_from, date_to) if date_filter else (None, None)
-    return _get_orchestration_service().list_label_threads(db, owner_id=settings.owner_id, label=label, q=q, status=status, sort=sort, page=page, limit=limit, date_from=start, date_to=end)
+    return _get_orchestration_service().list_label_threads(db, owner_id=tenancy.owner_id(), label=label, q=q, status=status, sort=sort, page=page, limit=limit, date_from=start, date_to=end)
 
 
 def _require_label_tracking_enabled(db: Session) -> None:
@@ -9431,7 +9431,7 @@ def _require_label_tracking_enabled(db: Session) -> None:
 @app.get("/labels/overview", response_model=LabelOverviewResponse)
 def labels_overview(db: Session = Depends(get_db)):
     _require_label_tracking_enabled(db)
-    return label_dossier_service.label_overview(db, settings.owner_id)
+    return label_dossier_service.label_overview(db, tenancy.owner_id())
 
 
 @app.get("/labels/threads/{thread_id}/dossier", response_model=ThreadDossierResponse)
@@ -9445,7 +9445,7 @@ def label_thread_dossier(thread_id: str, db: Session = Depends(get_db)):
     _require_label_tracking_enabled(db)
     user_settings = _get_settings(db)
     owner_email = (user_settings.signature_email or "").strip() or DEFAULT_SIGNATURE_EMAIL
-    return label_dossier_service.thread_dossier(db, settings.owner_id, thread_id, owner_email=owner_email)
+    return label_dossier_service.thread_dossier(db, tenancy.owner_id(), thread_id, owner_email=owner_email)
 
 
 @app.post("/labels/threads/{thread_id}/read", response_model=ThreadDossierResponse)
@@ -9458,21 +9458,21 @@ def mark_label_thread_read(thread_id: str, db: Session = Depends(get_db)):
     _require_label_tracking_enabled(db)
     user_settings = _get_settings(db)
     owner_email = (user_settings.signature_email or "").strip() or DEFAULT_SIGNATURE_EMAIL
-    dossier = label_dossier_service.thread_dossier(db, settings.owner_id, thread_id, owner_email=owner_email)
+    dossier = label_dossier_service.thread_dossier(db, tenancy.owner_id(), thread_id, owner_email=owner_email)
     for conversation_id in sorted({message.conversation_id for message in dossier.messages}):
-        email_inbox_service.mark_conversation_read(db, settings.owner_id, conversation_id)
+        email_inbox_service.mark_conversation_read(db, tenancy.owner_id(), conversation_id)
     db.commit()
-    return label_dossier_service.thread_dossier(db, settings.owner_id, thread_id, owner_email=owner_email)
+    return label_dossier_service.thread_dossier(db, tenancy.owner_id(), thread_id, owner_email=owner_email)
 
 
 @app.post("/appts/label-threads/{thread_id}/promote", response_model=ApplicationResponse, status_code=201)
 def promote_appts_label_thread(thread_id: str, payload: LabelThreadPromoteRequest, response: Response, db: Session = Depends(get_db)):
     _require_applications_enabled(db)
-    thread = db.query(TrackedThread).filter(TrackedThread.owner_id == settings.owner_id, TrackedThread.external_thread_id == thread_id).first()
+    thread = db.query(TrackedThread).filter(TrackedThread.owner_id == tenancy.owner_id(), TrackedThread.external_thread_id == thread_id).first()
     if thread is None:
         raise HTTPException(404, "Label thread not found")
     try:
-        row, created = appts_service.create_tracked_application_from_label_thread(db, owner_id=settings.owner_id, thread=thread, resume_asset_id=payload.resume_asset_id)
+        row, created = appts_service.create_tracked_application_from_label_thread(db, owner_id=tenancy.owner_id(), thread=thread, resume_asset_id=payload.resume_asset_id)
     except application_service.ApplicationReferenceNotFoundError as exc:
         raise HTTPException(404, str(exc)) from exc
     except application_service.ApplicationValidationError as exc:
@@ -9489,7 +9489,7 @@ def promote_appts_label_thread(thread_id: str, payload: LabelThreadPromoteReques
 def create_appts_manual(payload: ManualApplicationCreateRequest, response: Response, db: Session = Depends(get_db)) -> ApplicationResponse:
     _require_applications_enabled(db)
     try:
-        row, created = appts_service.create_tracked_application_manual(db, owner_id=settings.owner_id, **payload.model_dump())
+        row, created = appts_service.create_tracked_application_manual(db, owner_id=tenancy.owner_id(), **payload.model_dump())
     except application_service.ApplicationReferenceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except application_service.ApplicationValidationError as exc:
@@ -9505,9 +9505,9 @@ def create_appts_from_opportunity(payload: AppTSApplicationCreateRequest, respon
     _require_applications_enabled(db)
     try:
         if payload.recruiter_email_id is not None:
-            row, created = appts_service.create_tracked_application_from_record(db, owner_id=settings.owner_id, **payload.model_dump(exclude={"recruiter_opportunity_id"}))
+            row, created = appts_service.create_tracked_application_from_record(db, owner_id=tenancy.owner_id(), **payload.model_dump(exclude={"recruiter_opportunity_id"}))
         else:
-            row, created = appts_service.create_tracked_application_from_opportunity(db, owner_id=settings.owner_id, **payload.model_dump(exclude={"recruiter_email_id"}))
+            row, created = appts_service.create_tracked_application_from_opportunity(db, owner_id=tenancy.owner_id(), **payload.model_dump(exclude={"recruiter_email_id"}))
     except application_service.ApplicationReferenceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     db.commit(); db.refresh(row)
@@ -9519,7 +9519,7 @@ def create_appts_from_opportunity(payload: AppTSApplicationCreateRequest, respon
 @app.post("/appts/applications/from-submission/{legacy_application_id}", response_model=ApplicationResponse, status_code=201)
 def promote_submission_to_appts(legacy_application_id: int, response: Response, db: Session = Depends(get_db)) -> ApplicationResponse:
     _require_applications_enabled(db)
-    row, created = appts_service.promote_legacy_application(db, _get_application(db, legacy_application_id), owner_id=settings.owner_id)
+    row, created = appts_service.promote_legacy_application(db, _get_application(db, legacy_application_id), owner_id=tenancy.owner_id())
     db.commit(); db.refresh(row)
     if created: appts_service.enqueue_embedding_generation(row.id)
     response.status_code = 201 if created else 200
@@ -9538,7 +9538,7 @@ def list_appts_applications(
 ) -> ApplicationListResponse:
     _require_applications_enabled(db)
     if sort not in {"newest", "oldest", "next_action"}: raise HTTPException(status_code=422, detail="Invalid sort")
-    query = db.query(AppTSApplication).filter(AppTSApplication.owner_id == settings.owner_id, AppTSApplication.deleted_at.is_(None))
+    query = db.query(AppTSApplication).filter(AppTSApplication.owner_id == tenancy.owner_id(), AppTSApplication.deleted_at.is_(None))
     if status:
         if status not in APPLICATION_STATUS_VALUES: raise HTTPException(status_code=422, detail="Invalid application status")
         query = query.filter(AppTSApplication.status == status)
@@ -9605,7 +9605,7 @@ def create_appts_rtr(application_id: int, payload: ApplicationRTRRequest, db: Se
 def update_appts_rtr(application_id: int, rtr_id: int, payload: ApplicationRTRUpdateRequest, db: Session = Depends(get_db)) -> ApplicationResponse:
     _require_applications_enabled(db)
     row = _get_appts_application(db, application_id)
-    rtr = db.query(appts_service.APPTS_MODELS.rtr_cls).filter_by(owner_id=settings.owner_id, application_id=row.id, id=rtr_id).first()
+    rtr = db.query(appts_service.APPTS_MODELS.rtr_cls).filter_by(owner_id=tenancy.owner_id(), application_id=row.id, id=rtr_id).first()
     if rtr is None:
         raise HTTPException(status_code=404, detail="Application RTR not found")
     try:
@@ -9642,7 +9642,7 @@ def create_appts_interview(application_id: int, payload: ApplicationInterviewCre
 def patch_appts_interview(application_id: int, interview_id: int, payload: ApplicationInterviewPatchRequest, db: Session = Depends(get_db)) -> ApplicationResponse:
     _require_applications_enabled(db)
     row = _get_appts_application(db, application_id)
-    interview = db.query(appts_service.APPTS_MODELS.interview_cls).filter_by(owner_id=settings.owner_id, application_id=row.id, id=interview_id).first()
+    interview = db.query(appts_service.APPTS_MODELS.interview_cls).filter_by(owner_id=tenancy.owner_id(), application_id=row.id, id=interview_id).first()
     if interview is None:
         raise HTTPException(status_code=404, detail="Application interview not found")
     application_service.update_interview(db, interview, **payload.model_dump(exclude_unset=True), models=appts_service.APPTS_MODELS)
@@ -9654,7 +9654,7 @@ def patch_appts_interview(application_id: int, interview_id: int, payload: Appli
 def delete_appts_interview(application_id: int, interview_id: int, db: Session = Depends(get_db)) -> ApplicationResponse:
     _require_applications_enabled(db)
     row = _get_appts_application(db, application_id)
-    interview = db.query(appts_service.APPTS_MODELS.interview_cls).filter_by(owner_id=settings.owner_id, application_id=row.id, id=interview_id).first()
+    interview = db.query(appts_service.APPTS_MODELS.interview_cls).filter_by(owner_id=tenancy.owner_id(), application_id=row.id, id=interview_id).first()
     if interview is None:
         raise HTTPException(status_code=404, detail="Application interview not found")
     application_service.delete_interview(db, interview, models=appts_service.APPTS_MODELS)
@@ -9671,7 +9671,7 @@ def create_application_route(
     try:
         row, created = application_service.create_application(
             db,
-            owner_id=settings.owner_id,
+            owner_id=tenancy.owner_id(),
             resume_asset_id=payload.resume_asset_id,
             recruiter_opportunity_id=payload.recruiter_opportunity_id,
             dedupe_key=payload.dedupe_key,
@@ -9694,7 +9694,7 @@ def create_manual_application_route(
     try:
         row, created = resume_tracking_service.create_manual_application(
             db,
-            owner_id=settings.owner_id,
+            owner_id=tenancy.owner_id(),
             **payload.model_dump(exclude={"location_snapshot"}),
         )
     except application_service.ApplicationReferenceNotFoundError as exc:
@@ -9732,7 +9732,7 @@ def list_applications(
 ) -> ApplicationListResponse:
     if sort not in {"newest", "oldest", "next_action"}: raise HTTPException(status_code=422, detail="Invalid sort. Must be one of: newest, oldest, next_action")
     query = db.query(Application).outerjoin(RecruiterOpportunity, RecruiterOpportunity.id == Application.recruiter_opportunity_id).outerjoin(PremiumNumberContact, PremiumNumberContact.id == Application.recruiter_contact_id).filter(
-        Application.owner_id == settings.owner_id,
+        Application.owner_id == tenancy.owner_id(),
         Application.deleted_at.is_(None),
     )
     if status:
@@ -9787,14 +9787,14 @@ def applications_dashboard_summary(db: Session = Depends(get_db)) -> Application
     pending_suggestions = int(
         db.query(func.count(ApplicationSuggestion.id))
         .filter(
-            ApplicationSuggestion.owner_id == settings.owner_id,
+            ApplicationSuggestion.owner_id == tenancy.owner_id(),
             ApplicationSuggestion.status == "pending",
         )
         .scalar()
         or 0
     )
     return ApplicationDashboardSummaryResponse(
-        **application_service.dashboard_summary(db, settings.owner_id),
+        **application_service.dashboard_summary(db, tenancy.owner_id()),
         pending_suggestions=pending_suggestions,
     )
 
@@ -9809,7 +9809,7 @@ def match_opportunities_for_resume(
     try:
         matches = application_intelligence_service.rank_opportunities_for_resume(
             db,
-            owner_id=settings.owner_id,
+            owner_id=tenancy.owner_id(),
             resume_asset_id=resume_asset_id,
             limit=limit,
             exclude_already_applied=exclude_already_applied,
@@ -9822,7 +9822,7 @@ def match_opportunities_for_resume(
         for row in (
             db.query(RecruiterOpportunity)
             .filter(
-                RecruiterOpportunity.owner_id == settings.owner_id,
+                RecruiterOpportunity.owner_id == tenancy.owner_id(),
                 RecruiterOpportunity.id.in_(opportunity_ids),
             )
             .all()
@@ -9836,7 +9836,7 @@ def match_opportunities_for_resume(
         for row in (
             db.query(PremiumNumberContact)
             .filter(
-                PremiumNumberContact.owner_id == settings.owner_id,
+                PremiumNumberContact.owner_id == tenancy.owner_id(),
                 PremiumNumberContact.id.in_(recruiter_ids),
                 PremiumNumberContact.deleted_at.is_(None),
             )
@@ -9870,7 +9870,7 @@ def get_recruiter_reputation(
     recruiter = (
         db.query(PremiumNumberContact.id)
         .filter(
-            PremiumNumberContact.owner_id == settings.owner_id,
+            PremiumNumberContact.owner_id == tenancy.owner_id(),
             PremiumNumberContact.id == recruiter_number_id,
             PremiumNumberContact.is_recruiter.is_(True),
             PremiumNumberContact.deleted_at.is_(None),
@@ -9882,7 +9882,7 @@ def get_recruiter_reputation(
     return RecruiterReputationResponse.model_validate(
         application_intelligence_service.compute_recruiter_reputation(
             db,
-            owner_id=settings.owner_id,
+            owner_id=tenancy.owner_id(),
             recruiter_contact_id=recruiter_number_id,
         )
     )
@@ -9898,7 +9898,7 @@ def list_application_suggestions(
     rows = (
         db.query(ApplicationSuggestion)
         .filter(
-            ApplicationSuggestion.owner_id == settings.owner_id,
+            ApplicationSuggestion.owner_id == tenancy.owner_id(),
             ApplicationSuggestion.status == status,
         )
         .order_by(ApplicationSuggestion.created_at.desc(), ApplicationSuggestion.id.desc())
@@ -9949,7 +9949,7 @@ def dismiss_application_suggestion(
 def run_reminder_sweep_now(db: Session = Depends(get_db)) -> ApplicationSuggestionListResponse:
     created = application_intelligence_service.generate_reminder_sweep_suggestions(
         db,
-        owner_id=settings.owner_id,
+        owner_id=tenancy.owner_id(),
     )
     db.commit()
     return ApplicationSuggestionListResponse(
@@ -9962,7 +9962,7 @@ def run_resume_tracking_sweep_now(db: Session = Depends(get_db)) -> ApplicationS
     _require_resume_tracking_enabled(db)
     created = resume_tracking_service.generate_resume_tracking_suggestions(
         db,
-        owner_id=settings.owner_id,
+        owner_id=tenancy.owner_id(),
     )
     db.commit()
     return ApplicationSuggestionListResponse(
@@ -9976,7 +9976,7 @@ def resume_performance_summary_route(sort: str = Query("recent"), db: Session = 
     if sort not in {"recent", "acceptance_desc", "acceptance_asc", "submissions_desc"}: raise HTTPException(status_code=422, detail="Invalid sort")
     items = resume_tracking_service.resume_performance_summary(
         db,
-        owner_id=settings.owner_id,
+        owner_id=tenancy.owner_id(),
         sort=sort,
         combined=True,
     )
@@ -10002,7 +10002,7 @@ def resume_role_gaps_route(
     _require_resume_tracking_enabled(db)
     report = role_gap_service.role_gap_report(
         db,
-        owner_id=settings.owner_id,
+        owner_id=tenancy.owner_id(),
         window_days=window_days,
         min_jds=min_jds,
     )
@@ -10023,7 +10023,7 @@ def resume_role_target_route(
     _require_resume_tracking_enabled(db)
     report = role_target_service.analyse_role_target(
         db,
-        owner_id=settings.owner_id,
+        owner_id=tenancy.owner_id(),
         target_role=role,
         window_days=window_days,
     )
@@ -10046,7 +10046,7 @@ def resume_variant_lookup_route(
     variant_code, email_id = parsed
     email = (
         db.query(RecruiterEmail)
-        .filter(RecruiterEmail.owner_id == settings.owner_id, RecruiterEmail.id == email_id)
+        .filter(RecruiterEmail.owner_id == tenancy.owner_id(), RecruiterEmail.id == email_id)
         .first()
     )
     if email is None:
@@ -10061,7 +10061,7 @@ def resume_variant_lookup_route(
         )
     resume = (
         db.query(ResumeAsset)
-        .filter(ResumeAsset.owner_id == settings.owner_id, ResumeAsset.id == email.resume_asset_id)
+        .filter(ResumeAsset.owner_id == tenancy.owner_id(), ResumeAsset.id == email.resume_asset_id)
         .first()
         if email.resume_asset_id is not None
         else None
@@ -10086,7 +10086,7 @@ def resume_funnel_route(
     _require_resume_tracking_enabled(db)
     resume = (
         db.query(ResumeAsset.id)
-        .filter(ResumeAsset.owner_id == settings.owner_id, ResumeAsset.id == resume_asset_id)
+        .filter(ResumeAsset.owner_id == tenancy.owner_id(), ResumeAsset.id == resume_asset_id)
         .first()
     )
     if resume is None:
@@ -10094,7 +10094,7 @@ def resume_funnel_route(
     return ResumeFunnelMetricsResponse(
         **resume_tracking_service.combined_resume_funnel_metrics(
             db,
-            owner_id=settings.owner_id,
+            owner_id=tenancy.owner_id(),
             resume_asset_id=resume_asset_id,
         )
     )
@@ -10193,7 +10193,7 @@ def get_application_outreach_message(
     row = (
         db.query(ApplicationOutreachMessage)
         .filter(
-            ApplicationOutreachMessage.owner_id == settings.owner_id,
+            ApplicationOutreachMessage.owner_id == tenancy.owner_id(),
             ApplicationOutreachMessage.application_id == application_id,
             ApplicationOutreachMessage.id == message_id,
         )
@@ -10667,7 +10667,7 @@ def toggle_candidate_tracking(email_id: int, db: Session = Depends(get_db)) -> E
         _get_orchestration_service().set_tracking(email_id, not email.marked_for_tracking, db)
     elif email.state == "approved_sent":
         _require_applications_enabled(db)
-        result = appts_service.create_tracked_application_from_email(db, email, owner_id=settings.owner_id)
+        result = appts_service.create_tracked_application_from_email(db, email, owner_id=tenancy.owner_id())
         db.commit()
         if result and result[1]:
             appts_service.enqueue_embedding_generation(result[0].id)
@@ -10795,12 +10795,12 @@ def approve_bulk_candidates(payload: BulkApproveRequest, db: Session = Depends(g
     if payload.idempotency_key:
         db.query(BulkActionIdempotencyKey).filter(BulkActionIdempotencyKey.created_at < datetime.now(UTC) - timedelta(hours=24)).delete()
         db.commit()
-        cached = db.get(BulkActionIdempotencyKey, (settings.owner_id, payload.idempotency_key))
+        cached = db.get(BulkActionIdempotencyKey, (tenancy.owner_id(), payload.idempotency_key))
         if cached is not None:
             if cached.response_json is None:
                 raise HTTPException(status_code=409, detail="A request with this idempotency_key is already in progress")
             return BulkCandidateActionResponse.model_validate_json(cached.response_json)
-        claim = BulkActionIdempotencyKey(owner_id=settings.owner_id, key=payload.idempotency_key, response_json=None)
+        claim = BulkActionIdempotencyKey(owner_id=tenancy.owner_id(), key=payload.idempotency_key, response_json=None)
         db.add(claim)
         try:
             db.commit()
@@ -10880,7 +10880,7 @@ def resolve_recipients(
 
 # --- v3 relationship intelligence -------------------------------------------
 #
-# Ten routes, all owner-scoped on settings.owner_id. The judgment route is the
+# Ten routes, all owner-scoped on tenancy.owner_id(). The judgment route is the
 # only write path v3 exposes to the chat surface, and it is reached by a user's
 # click on a rendered control - v3 registers no propose_* tool and no
 # model-callable write.
@@ -10902,11 +10902,11 @@ def embed_canonical_entities(
     if entity_type:
         return {
             entity_type: entity_embedding_job.embed_pending_entities(
-                db, owner_id=settings.owner_id, entity_type=entity_type, batch_size=batch_size
+                db, owner_id=tenancy.owner_id(), entity_type=entity_type, batch_size=batch_size
             )
         }
     return entity_embedding_job.embed_pending_entities_all_types(
-        db, owner_id=settings.owner_id, batch_size=batch_size
+        db, owner_id=tenancy.owner_id(), batch_size=batch_size
     )
 
 
@@ -10918,12 +10918,12 @@ def list_entity_alias_suggestions(
     """Entries that are probably the same entity. Suggestions only - never applied."""
     _require_relationship_intelligence()
     suggestions = entity_resolution_service.suggest_aliases(
-        db, owner_id=settings.owner_id, entity_type=entity_type
+        db, owner_id=tenancy.owner_id(), entity_type=entity_type
     )
     rows = {
         int(row.id): row
         for row in db.query(CanonicalEntityTaxonomyEntry).filter(
-            CanonicalEntityTaxonomyEntry.owner_id == settings.owner_id,
+            CanonicalEntityTaxonomyEntry.owner_id == tenancy.owner_id(),
             CanonicalEntityTaxonomyEntry.id.in_([item for pair in suggestions for item in pair[:2]] or [0]),
         )
     }
@@ -10955,7 +10955,7 @@ def merge_entity_alias(
     try:
         return entity_resolution_service.apply_alias_merge(
             db,
-            owner_id=settings.owner_id,
+            owner_id=tenancy.owner_id(),
             entity_type=payload.entity_type,
             keep_id=payload.keep_id,
             alias_id=payload.alias_id,
@@ -10975,11 +10975,11 @@ def get_relationship_label_queue(
     """Unlabeled pairs to judge, with exactly the fields the scorer reads."""
     _require_relationship_intelligence()
     candidates = relationship_labeling_service.sample_pairs_for_labeling(
-        db, owner_id=settings.owner_id, limit=limit, hard_negative_ratio=hard_negative_ratio
+        db, owner_id=tenancy.owner_id(), limit=limit, hard_negative_ratio=hard_negative_ratio
     )
     return {
         "verdicts": list(relationship_labeling_service.VERDICTS),
-        "remaining": relationship_labeling_service.unlabeled_count(db, owner_id=settings.owner_id),
+        "remaining": relationship_labeling_service.unlabeled_count(db, owner_id=tenancy.owner_id()),
         "candidates": [candidate.as_dict() for candidate in candidates],
     }
 
@@ -10993,7 +10993,7 @@ def record_relationship_label(
     try:
         row = relationship_labeling_service.record_label(
             db,
-            owner_id=settings.owner_id,
+            owner_id=tenancy.owner_id(),
             left_opportunity_id=payload.left_opportunity_id,
             right_opportunity_id=payload.right_opportunity_id,
             verdict=payload.verdict,
@@ -11009,7 +11009,7 @@ def record_relationship_label(
 @app.get("/relationships/labels/summary")
 def get_relationship_label_summary(db: Session = Depends(get_db)) -> dict[str, object]:
     _require_relationship_intelligence()
-    return relationship_labeling_service.label_summary(db, owner_id=settings.owner_id)
+    return relationship_labeling_service.label_summary(db, owner_id=tenancy.owner_id())
 
 
 @app.post("/relationships/cluster-pass")
@@ -11022,7 +11022,7 @@ def run_relationship_cluster_pass(
     is enabled *and* the thresholds have been calibrated."""
     _require_relationship_intelligence()
     return relationship_clustering_service.run_clustering_pass(
-        db, owner_id=settings.owner_id, dry_run=dry_run, max_pairs=max_pairs
+        db, owner_id=tenancy.owner_id(), dry_run=dry_run, max_pairs=max_pairs
     ).as_dict()
 
 
@@ -11031,7 +11031,7 @@ def get_relationship_cluster(cluster_id: str, db: Session = Depends(get_db)) -> 
     _require_relationship_intelligence()
     try:
         return relationship_judgment_service.cluster_detail(
-            db, owner_id=settings.owner_id, cluster_id=cluster_id
+            db, owner_id=tenancy.owner_id(), cluster_id=cluster_id
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -11042,7 +11042,7 @@ def get_clusters_for_opportunity(opportunity_id: int, db: Session = Depends(get_
     _require_relationship_intelligence()
     return {
         "clusters": relationship_judgment_service.clusters_for_opportunity(
-            db, owner_id=settings.owner_id, opportunity_id=opportunity_id
+            db, owner_id=tenancy.owner_id(), opportunity_id=opportunity_id
         )
     }
 
@@ -11062,7 +11062,7 @@ def record_relationship_judgment(
     try:
         return relationship_judgment_service.record_judgment(
             db,
-            owner_id=settings.owner_id,
+            owner_id=tenancy.owner_id(),
             cluster_id=cluster_id,
             verdict=payload.verdict,
             note=payload.note,
@@ -11076,7 +11076,7 @@ def record_relationship_judgment(
 
 # --- v4 scheduling ----------------------------------------------------------
 #
-# Nine routes, all owner-scoped on settings.owner_id, all 404 when the feature
+# Nine routes, all owner-scoped on tenancy.owner_id(), all 404 when the feature
 # is off. Approval is a user's click on a rendered control - v4 registers no
 # model-callable path that approves, sends, or changes a record.
 #
@@ -11103,7 +11103,7 @@ def list_scheduled_tasks_route(
 ) -> dict[str, object]:
     """Every task the user owns. No kind or flag may hide one from this list."""
     _require_scheduling()
-    rows = task_service.list_tasks(db, owner_id=settings.owner_id, status=status)
+    rows = task_service.list_tasks(db, owner_id=tenancy.owner_id(), status=status)
     return {
         "tasks": [task_service.task_payload(db, row) for row in rows],
         "granularity_note": scheduling_schedule.granularity_note(),
@@ -11114,7 +11114,7 @@ def list_scheduled_tasks_route(
 def scheduled_pending_work(db: Session = Depends(get_db)) -> dict[str, object]:
     """One review surface: prepared runs and application suggestions together."""
     _require_scheduling()
-    items = pending_work.pending_work(db, owner_id=settings.owner_id)
+    items = pending_work.pending_work(db, owner_id=tenancy.owner_id())
     return {"items": [item.as_dict() for item in items]}
 
 
@@ -11127,7 +11127,7 @@ def create_scheduled_task(
     try:
         task = task_service.create_task(
             db,
-            owner_id=settings.owner_id,
+            owner_id=tenancy.owner_id(),
             title=payload.title,
             kind=payload.kind,
             when=payload.when,
@@ -11154,7 +11154,7 @@ def patch_scheduled_task(
     try:
         task = task_service.patch_task(
             db,
-            owner_id=settings.owner_id,
+            owner_id=tenancy.owner_id(),
             task_id=task_id,
             operation=payload.operation,
             title=payload.title,
@@ -11174,7 +11174,7 @@ def delete_scheduled_task(task_id: int, db: Session = Depends(get_db)) -> dict[s
     """Soft delete: the task stops running and its history stays readable."""
     _require_scheduling()
     try:
-        task = task_service.delete_task(db, owner_id=settings.owner_id, task_id=task_id)
+        task = task_service.delete_task(db, owner_id=tenancy.owner_id(), task_id=task_id)
     except task_service.TaskNotFound as exc:
         raise _scheduling_error(exc) from exc
     return {"id": int(task.id), "status": task.status}
@@ -11184,8 +11184,8 @@ def delete_scheduled_task(task_id: int, db: Session = Depends(get_db)) -> dict[s
 def scheduled_task_runs(task_id: int, db: Session = Depends(get_db)) -> dict[str, object]:
     _require_scheduling()
     try:
-        runs = task_service.task_runs(db, owner_id=settings.owner_id, task_id=task_id)
-        items = task_service.task_items(db, owner_id=settings.owner_id, task_id=task_id)
+        runs = task_service.task_runs(db, owner_id=tenancy.owner_id(), task_id=task_id)
+        items = task_service.task_items(db, owner_id=tenancy.owner_id(), task_id=task_id)
     except task_service.TaskNotFound as exc:
         raise _scheduling_error(exc) from exc
     return {
@@ -11219,7 +11219,7 @@ def approve_scheduled_run(
     try:
         result = task_service.approve_run(
             db,
-            owner_id=settings.owner_id,
+            owner_id=tenancy.owner_id(),
             run_id=run_id,
             item_ids=payload.item_ids,
             edits=payload.edits,
@@ -11239,7 +11239,7 @@ def approve_scheduled_run(
 def discard_scheduled_run(run_id: int, db: Session = Depends(get_db)) -> dict[str, object]:
     _require_scheduling()
     try:
-        run = task_service.discard_run(db, owner_id=settings.owner_id, run_id=run_id)
+        run = task_service.discard_run(db, owner_id=tenancy.owner_id(), run_id=run_id)
     except (task_service.TaskInvalid, task_service.TaskNotFound) as exc:
         raise _scheduling_error(exc) from exc
     return task_service.run_payload(run)
@@ -11257,7 +11257,7 @@ def patch_scheduled_task_item(
     try:
         item = task_service.patch_item(
             db,
-            owner_id=settings.owner_id,
+            owner_id=tenancy.owner_id(),
             task_id=task_id,
             item_id=item_id,
             done=payload.done,
@@ -11277,7 +11277,7 @@ def patch_scheduled_task_item(
 
 def _run_scheduling_sweep(db: Session) -> None:
     """The auto-runner callback. Enqueues into the worker's scheduled_task queue."""
-    scheduling_sweep.run_scheduling_sweep(db, owner_id=settings.owner_id)
+    scheduling_sweep.run_scheduling_sweep(db, owner_id=tenancy.owner_id())
 
 
 # Root mounting preserves FastMCP's exact /mcp endpoint. It must remain last so

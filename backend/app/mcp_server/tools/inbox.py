@@ -7,6 +7,7 @@ from app.config import settings
 from app.db import SessionLocal
 from app.models import EmailConversation, EmailReplyMessage, RecruiterEmail, RecruiterOpportunity
 from app.services.email_inbox_service import conversation_detail, list_conversations as list_inbox
+from app import tenancy
 
 # Deterministic urgency signals only, per the "no clear urgency signal" fallback rule: no ML
 # scoring, so results are reproducible and every "urgent" call is traceable to a matched phrase.
@@ -60,7 +61,7 @@ def list_conversations(limit: int = 10) -> dict[str, object]:
     """List recent owner-scoped reply conversations without changing read state."""
     db = SessionLocal()
     try:
-        rows = list_inbox(db, settings.owner_id)[: max(1, min(limit, 25))]
+        rows = list_inbox(db, tenancy.owner_id())[: max(1, min(limit, 25))]
         return {
             "conversations": [_safe_summary(row.model_dump(mode="json")) for row in rows]
         }
@@ -73,7 +74,7 @@ def get_conversation(conversation_id: int) -> dict[str, object]:
     db = SessionLocal()
     try:
         try:
-            detail = conversation_detail(db, settings.owner_id, conversation_id)
+            detail = conversation_detail(db, tenancy.owner_id(), conversation_id)
         except Exception as exc:
             if getattr(exc, "status_code", None) == 404:
                 return {"error": "Conversation not found"}
@@ -110,7 +111,7 @@ def get_recruiter_replies(urgent_only: bool = False, limit: int = 25) -> dict[st
     try:
         conversations = (
             db.query(EmailConversation)
-            .filter(EmailConversation.owner_id == settings.owner_id)
+            .filter(EmailConversation.owner_id == tenancy.owner_id())
             .order_by(EmailConversation.last_message_at.desc())
             .all()
         )
@@ -122,20 +123,20 @@ def get_recruiter_replies(urgent_only: bool = False, limit: int = 25) -> dict[st
         roots = {
             row.id: row
             for row in db.query(RecruiterEmail).filter(
-                RecruiterEmail.owner_id == settings.owner_id, RecruiterEmail.id.in_(root_email_ids)
+                RecruiterEmail.owner_id == tenancy.owner_id(), RecruiterEmail.id.in_(root_email_ids)
             )
         }
         opportunity_by_email_id = {
             row.source_email_id: row.id
             for row in db.query(RecruiterOpportunity).filter(
-                RecruiterOpportunity.owner_id == settings.owner_id,
+                RecruiterOpportunity.owner_id == tenancy.owner_id(),
                 RecruiterOpportunity.source_email_id.in_(root_email_ids),
             )
         }
         inbound = (
             db.query(EmailReplyMessage)
             .filter(
-                EmailReplyMessage.owner_id == settings.owner_id,
+                EmailReplyMessage.owner_id == tenancy.owner_id(),
                 EmailReplyMessage.conversation_id.in_(conversation_ids),
                 EmailReplyMessage.direction == "inbound",
             )

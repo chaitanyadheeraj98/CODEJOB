@@ -4,6 +4,7 @@ from app.config import settings
 from app.db import SessionLocal
 from app.models import APPLICATION_STATUS_VALUES, Application, PremiumNumberContact, RecruiterOpportunity
 from app.premium_numbers.intelligence import OPPORTUNITY_STATUS_VALUES
+from app import tenancy
 
 MAX_NOTE_CHARS = 2000
 MAX_VALUE_CHARS = 500
@@ -53,7 +54,7 @@ _NOTE_KINDS = ("opportunity", "application")
 
 def _load(db, record_kind: str, record_id: int):
     model = _MODELS[record_kind]
-    query = db.query(model).filter(model.owner_id == settings.owner_id, model.id == int(record_id))
+    query = db.query(model).filter(model.owner_id == tenancy.owner_id(), model.id == int(record_id))
     if record_kind in ("application", "contact"):
         query = query.filter(model.deleted_at.is_(None))
     return query.first()

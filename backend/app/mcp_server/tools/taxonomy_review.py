@@ -13,6 +13,7 @@ from app.services.taxonomy_bulk_review_service import (
     refine_with_model,
 )
 from app.services.taxonomy_learning_service import list_pending_entities
+from app import tenancy
 
 
 # The card carries the exact keys it will write, so the list has to stay small
@@ -71,7 +72,7 @@ def propose_taxonomy_bulk_review(
             recommendations = classify_skills(_list_pending_unknown_skills(db))
         else:
             recommendations = classify_entities(
-                list_pending_entities(db, owner_id=settings.owner_id, entity_type=normalized_scope)
+                list_pending_entities(db, owner_id=tenancy.owner_id(), entity_type=normalized_scope)
             )
     finally:
         db.close()

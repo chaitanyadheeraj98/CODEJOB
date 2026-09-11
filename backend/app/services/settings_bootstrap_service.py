@@ -12,6 +12,7 @@ from app.models import UserSettings
 from app.phase0 import DEFAULT_FALLBACK_DRAFT_TEMPLATE, DEFAULT_SIGNATURE_EMAIL, DEFAULT_SIGNATURE_NAME, DEFAULT_SIGNATURE_PHONE, normalize_employer_domains
 from app.query_bucket import sanitize_saved_queries
 from app.services import policy_service
+from app import tenancy
 
 
 class SettingsBootstrapService:
@@ -50,7 +51,7 @@ class SettingsBootstrapService:
     def ensure_default_settings(self) -> None:
         db = self._session_factory()
         try:
-            existing = db.query(UserSettings).filter(UserSettings.owner_id == settings.owner_id).first()
+            existing = db.query(UserSettings).filter(UserSettings.owner_id == tenancy.owner_id()).first()
             if existing:
                 normalized_saved_queries_json = json.dumps(
                     self._read_saved_gmail_queries(existing.saved_gmail_queries_json), separators=(",", ":")
@@ -97,7 +98,7 @@ class SettingsBootstrapService:
                 return
 
             default_settings = UserSettings(
-                owner_id=settings.owner_id,
+                owner_id=tenancy.owner_id(),
                 enabled=True,
                 gmail_query="is:unread in:inbox recruiter",
                 default_gmail_query="is:unread in:inbox recruiter",
@@ -153,7 +154,7 @@ class SettingsBootstrapService:
             db.close()
 
     def get_settings(self, db: Session) -> UserSettings:
-        user_settings = db.query(UserSettings).filter(UserSettings.owner_id == settings.owner_id).first()
+        user_settings = db.query(UserSettings).filter(UserSettings.owner_id == tenancy.owner_id()).first()
         if not user_settings:
             raise HTTPException(status_code=500, detail="Settings not initialized")
         return user_settings

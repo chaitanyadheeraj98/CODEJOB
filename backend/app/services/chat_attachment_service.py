@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.models import ChatAttachment
 from app.parsing.document_extraction import extract_document_text
+from app import tenancy
 
 # Extension -> (accepted mime types, magic-byte prefixes). An empty prefix tuple
 # means the format has no signature and is validated by decoding instead.
@@ -145,7 +146,7 @@ class ChatAttachmentService:
         existing = (
             db.query(ChatAttachment)
             .filter(
-                ChatAttachment.owner_id == settings.owner_id,
+                ChatAttachment.owner_id == tenancy.owner_id(),
                 ChatAttachment.sha256 == sha256,
                 ChatAttachment.session_id == session_id,
             )
@@ -164,7 +165,7 @@ class ChatAttachmentService:
 
         markdown, error = cls.extract(target, display_name)
         row = ChatAttachment(
-            owner_id=settings.owner_id,
+            owner_id=tenancy.owner_id(),
             session_id=session_id,
             file_path=str(target),
             file_name=display_name,
@@ -184,7 +185,7 @@ class ChatAttachmentService:
         return (
             db.query(ChatAttachment)
             .filter(
-                ChatAttachment.owner_id == settings.owner_id,
+                ChatAttachment.owner_id == tenancy.owner_id(),
                 ChatAttachment.session_id == session_id,
             )
             .order_by(ChatAttachment.id.asc())
@@ -196,7 +197,7 @@ class ChatAttachmentService:
         row = (
             db.query(ChatAttachment)
             .filter(
-                ChatAttachment.owner_id == settings.owner_id,
+                ChatAttachment.owner_id == tenancy.owner_id(),
                 ChatAttachment.id == attachment_id,
             )
             .first()
@@ -214,7 +215,7 @@ class ChatAttachmentService:
         rows = (
             db.query(ChatAttachment)
             .filter(
-                ChatAttachment.owner_id == settings.owner_id,
+                ChatAttachment.owner_id == tenancy.owner_id(),
                 ChatAttachment.session_id == session_id,
                 ChatAttachment.id.in_(attachment_ids),
                 ChatAttachment.message_id.is_(None),

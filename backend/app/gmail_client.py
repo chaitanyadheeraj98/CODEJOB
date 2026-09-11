@@ -22,6 +22,7 @@ from googleapiclient.errors import HttpError
 
 from app.ai.draft_formatting import draft_text_to_html
 from app.config import settings
+from app import tenancy
 from app.db import session_scope
 from app.parsing.document_extraction import clean_html_text
 from app.services import gmail_credential_service, google_identity_service
@@ -128,7 +129,7 @@ class GmailReconnectRequired(RuntimeError):
 
 
 def _load_credentials(owner_id: str | None = None) -> Credentials:
-    owner_id = owner_id or settings.owner_id
+    owner_id = owner_id or tenancy.owner_id()
     if not is_gmail_configured():
         raise RuntimeError("Gmail OAuth is not configured")
 
@@ -139,6 +140,9 @@ def _load_credentials(owner_id: str | None = None) -> Credentials:
             creds = gmail_credential_service.get_credentials(db, owner_id)
             if (
                 creds is None
+                # settings.owner_id, deliberately, not tenancy.owner_id():
+                # the shared token file belongs to the legacy single-tenant
+                # owner, and a signed-in user must never be able to adopt it.
                 and owner_id == settings.owner_id
                 and gmail_credential_service.import_legacy_token_file(db, owner_id)
             ):
@@ -331,7 +335,7 @@ def store_credentials_for_owner(owner_id: str, creds: Credentials, *, identity=N
 
 
 def _persist_new_credentials(creds: Credentials, owner_id: str | None = None) -> None:
-    owner_id = owner_id or settings.owner_id
+    owner_id = owner_id or tenancy.owner_id()
     if not settings.feature_db_credentials_enabled:
         _ensure_token_parent()
         Path(settings.google_token_path).write_text(creds.to_json(), encoding="utf-8")
@@ -977,7 +981,7 @@ def gmail_connection_state(owner_id: str | None = None) -> tuple[str, str]:
         return GMAIL_STATE_NOT_CONFIGURED, "Missing Gmail OAuth configuration"
 
     if settings.feature_db_credentials_enabled:
-        owner_id = owner_id or settings.owner_id
+        owner_id = owner_id or tenancy.owner_id()
         with session_scope() as db:
             # Adopt an existing token file here too, not only in
             # _load_credentials. Found by flipping the flag live: Settings said
@@ -985,6 +989,8 @@ def gmail_connection_state(owner_id: str | None = None) -> tuple[str, str]:
             # happened to make a Gmail call, which is the same class of lie A7
             # exists to remove. Idempotent, and a no-op once a row exists.
             if (
+                # Same reasoning as the adoption guard in _load_credentials:
+                # only the legacy owner may adopt the shared token file.
                 owner_id == settings.owner_id
                 and gmail_credential_service.get_row(db, owner_id) is None
             ):
