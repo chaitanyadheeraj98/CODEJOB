@@ -1,0 +1,104 @@
+"""Admin routes: see and disable accounts.
+
+Not *create* accounts. Provisioning is implicit — Google's test-user list
+decides who may enter, and a `users` row appears on first successful sign-in.
+There is deliberately no invite endpoint here to drift out of step with the GCP
+console.
+
+Everything is gated on the `is_admin` **database column**, checked server-side
+on every request. It is never read from a token claim and never settable
+through a request body, because a claim is whatever the client last persuaded
+somebody to sign.
+"""
+
+from __future__ import annotations
+
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy.orm import Session
+
+from app.config import settings
+from app.db import get_db
+from app.models import User
+from app.schemas import AdminUserResponse, AdminUserUpdateRequest
+from app.services import auth_service, gmail_credential_service
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/admin", tags=["admin"])
+
+
+def require_admin(request: Request, db: Session = Depends(get_db)) -> User:
+    if not settings.feature_auth_enabled:
+        raise HTTPException(status_code=404, detail="Sign-in is not enabled.")
+    user = auth_service.resolve_session(db, request.cookies.get(settings.session_cookie_name))
+    if user is None:
+        raise HTTPException(status_code=401, detail="Not signed in.")
+    if not user.is_admin:
+        # 403 rather than 404: the caller is authenticated, and pretending the
+        # route does not exist would only make a real admin's life harder.
+        raise HTTPException(status_code=403, detail="Administrator access is required.")
+    return user
+
+
+def _to_response(db: Session, user: User) -> AdminUserResponse:
+    status = gmail_credential_service.connection_status(db, user.owner_id)
+    return AdminUserResponse(
+        id=user.id,
+        email=user.email,
+        display_name=user.display_name,
+        owner_id=user.owner_id,
+        is_admin=user.is_admin,
+        disabled=user.disabled_at is not None,
+        created_at=user.created_at,
+        last_login_at=user.last_login_at,
+        gmail_connected=status.connected,
+        gmail_email=status.google_email,
+    )
+
+
+@router.get("/users", response_model=list[AdminUserResponse])
+def list_users(_: User = Depends(require_admin), db: Session = Depends(get_db)) -> list[AdminUserResponse]:
+    return [_to_response(db, user) for user in db.query(User).order_by(User.email).all()]
+
+
+@router.patch("/users/{user_id}", response_model=AdminUserResponse)
+def update_user(
+    user_id: int,
+    payload: AdminUserUpdateRequest,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> AdminUserResponse:
+    user = db.query(User).filter(User.id == user_id).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="No such user.")
+
+    if payload.disabled is not None:
+        if payload.disabled and user.id == admin.id:
+            # Locking the last admin out of the admin panel is a support call
+            # nobody can answer from inside the product.
+            raise HTTPException(status_code=422, detail="You cannot disable your own account.")
+        if payload.disabled:
+            user.disabled_at = user.disabled_at or _now()
+            # Disabling has to end live sessions, not only refuse new sign-ins.
+            # Removing somebody from the GCP test-user list does neither.
+            revoked = auth_service.revoke_all_sessions(db, user.id)
+            logger.info("admin_disabled_user target=%s sessions_revoked=%s", user.owner_id, revoked)
+        else:
+            user.disabled_at = None
+
+    if payload.is_admin is not None:
+        if not payload.is_admin and user.id == admin.id:
+            raise HTTPException(status_code=422, detail="You cannot remove your own administrator access.")
+        user.is_admin = payload.is_admin
+
+    db.commit()
+    db.refresh(user)
+    return _to_response(db, user)
+
+
+def _now():
+    from datetime import UTC, datetime
+
+    return datetime.now(UTC)

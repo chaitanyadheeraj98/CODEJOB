@@ -523,12 +523,13 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
-from app.routers import auth as auth_router  # noqa: E402
+from app.routers import admin as admin_router, auth as auth_router  # noqa: E402
 
 # Registered unconditionally; every route inside 404s while
 # feature_auth_enabled is off, so the flag is the switch rather than the
 # presence of the router.
 app.include_router(auth_router.router)
+app.include_router(admin_router.router)
 
 
 @app.middleware("http")

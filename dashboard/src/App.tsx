@@ -24,6 +24,8 @@ import type { ChatStatus } from './features/chat/types'
 import PremiumNumbersPage from './features/premium_numbers/PremiumNumbersPage'
 import AppTSPage from './features/application_tracking/AppTSPage'
 import LabelsPage from './features/labels/LabelsPage'
+import LoginPage from './features/auth/LoginPage'
+import { fetchAuthState, logout as signOut, type AuthState } from './features/auth/api'
 import VerificationBadge from './features/premium_numbers/VerificationBadge'
 import { type CandidateState, useCandidateBuckets } from './candidateBuckets'
 import type { CandidateQueryOptions } from './candidateBuckets'
@@ -8214,4 +8216,43 @@ function App() {
   )
 }
 
-export default App
+/**
+ * Decides whether the app or the login page is shown.
+ *
+ * Wraps App rather than living inside it so that App's own tests - which
+ * render <App /> directly - are untouched by sign-in. That also means the
+ * guard has exactly one job and no access to App's state.
+ *
+ * `disabled` renders the app unchanged. The backend is the authority on
+ * whether sign-in exists, and when it says no this must behave exactly as it
+ * did before any of this was written.
+ */
+function AuthGate() {
+  const apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+  const [state, setState] = useState<AuthState>({ status: 'loading' })
+  const loginError = new URLSearchParams(window.location.search).get('login_error')
+
+  useEffect(() => {
+    let cancelled = false
+    fetchAuthState(apiBase).then((next) => {
+      if (!cancelled) setState(next)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [apiBase])
+
+  // Nothing, not a spinner: the check is a single local request, and a spinner
+  // that flashes for 30ms reads as jank. What must not happen is rendering the
+  // login page first and replacing it a moment later.
+  if (state.status === 'loading') return null
+  if (state.status === 'anonymous') return <LoginPage apiBase={apiBase} loginError={loginError} />
+  return <App />
+}
+
+export async function signOutAndReload(apiBase: string): Promise<void> {
+  await signOut(apiBase)
+  window.location.href = window.location.pathname
+}
+
+export default AuthGate

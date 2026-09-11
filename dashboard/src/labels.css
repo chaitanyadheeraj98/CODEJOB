@@ -675,3 +675,99 @@
   margin: 0;
   font-size: 12px;
 }
+
+/* Sign-in ----------------------------------------------------------------
+ *
+ * A single centred card. There is no form to lay out - access is Google's
+ * test-user list, so the only control is one button, and the page's job is to
+ * say what is about to happen before it happens.
+ */
+
+.loginShell {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 24px;
+  background: #f7f8fc;
+}
+
+.loginCard {
+  display: flex;
+  width: 100%;
+  max-width: 420px;
+  flex-direction: column;
+  gap: 18px;
+  border: 1px solid #e6e9f2;
+  border-radius: 16px;
+  padding: 32px;
+  background: #fff;
+  box-shadow: 0 12px 32px -20px rgba(23, 32, 51, 0.45);
+}
+
+.loginBrand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.loginBrand h1 {
+  margin: 0;
+  color: #172033;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.loginBrand .subtle {
+  margin: 0;
+  font-size: 12.5px;
+}
+
+.loginLead {
+  margin: 0;
+  color: #334155;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.loginGoogleBtn {
+  display: inline-flex;
+  height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  border: 1px solid #d7dcec;
+  border-radius: 10px;
+  background: #fff;
+  color: #1c2535;
+  font-size: 14px;
+  font-weight: 600;
+  transition: background 150ms ease, border-color 150ms ease;
+}
+
+.loginGoogleBtn:hover:not(:disabled) {
+  border-color: #c3cade;
+  background: #f7f9ff;
+}
+
+.loginGoogleBtn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.22);
+}
+
+.loginGoogleBtn:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.loginFootnote {
+  margin: 0;
+  color: #5b6478;
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.loginCard .errorBanner {
+  margin: 0;
+}

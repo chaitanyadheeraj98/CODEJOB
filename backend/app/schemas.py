@@ -1223,6 +1223,33 @@ class AuthUserResponse(BaseModel):
     owner_id: str
 
 
+class AdminUserResponse(BaseModel):
+    """What an admin may see about another account.
+
+    Identifiers, state and timings only. No message content, no mailbox
+    contents, no token material - see temp176 §12.1. An admin page that renders
+    other people's mail is the highest-value target in the product.
+    """
+
+    id: int
+    email: str
+    display_name: str = ""
+    owner_id: str
+    is_admin: bool = False
+    disabled: bool = False
+    created_at: datetime | None = None
+    last_login_at: datetime | None = None
+    gmail_connected: bool = False
+    gmail_email: str = ""
+
+
+class AdminUserUpdateRequest(BaseModel):
+    """Only these two fields, and only from an admin-authenticated route."""
+
+    disabled: bool | None = None
+    is_admin: bool | None = None
+
+
 class GmailConnectionResponse(BaseModel):
     """Deliberately carries no token material, encrypted or otherwise.
 
