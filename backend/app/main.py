@@ -218,6 +218,7 @@ from app.services import (
     email_lookup_service,
     end_client_validation,
     filter_options_service,
+    gmail_credential_service,
     label_dossier_service,
     email_inbox_service,
     nvoids_search_job,
@@ -374,6 +375,7 @@ from app.schemas import (
     ConversationReplyRequest,
     ConversationSummaryResponse,
     GmailLabelResponse, GmailLabelListResponse, TrackedLabelsRequest,
+    GmailConnectionResponse,
     LabelThreadListResponse, LabelThreadPromoteRequest, RecordLookupResponse,
     LabelOverviewResponse, ThreadDossierResponse,
     ChatSendReplyRequest,
@@ -4261,15 +4263,66 @@ def list_embedded_job_intent_signals(db: Session = Depends(get_db)) -> list[Embe
 
 
 @app.get("/gmail/status", response_model=GmailStatusResponse)
-def gmail_status() -> GmailStatusResponse:
-    configured, authenticated, detail = gmail_auth_status()
+def gmail_status(db: Session = Depends(get_db)) -> GmailStatusResponse:
+    state, detail = gmail_client.gmail_connection_state()
+    account_email = ""
+    if settings.feature_db_credentials_enabled:
+        account_email = gmail_credential_service.connection_status(db, settings.owner_id).google_email
     return GmailStatusResponse(
-        configured=configured,
-        authenticated=authenticated,
+        configured=state != gmail_client.GMAIL_STATE_NOT_CONFIGURED,
+        authenticated=state in (
+            gmail_client.GMAIL_STATE_CONNECTED,
+            gmail_client.GMAIL_STATE_CONNECTED_REFRESHABLE,
+        ),
         token_path=settings.google_token_path,
         last_sync_at=last_gmail_sync_at,
         detail=detail,
+        state=state,
+        account_email=account_email,
     )
+
+
+@app.get("/gmail/connection", response_model=GmailConnectionResponse)
+def gmail_connection(db: Session = Depends(get_db)) -> GmailConnectionResponse:
+    state, detail = gmail_client.gmail_connection_state()
+    if not settings.feature_db_credentials_enabled:
+        # Honest rather than empty: the file-backed path has no per-connection
+        # metadata to report, and inventing zeros would read as "disconnected".
+        return GmailConnectionResponse(
+            connected=state in (
+                gmail_client.GMAIL_STATE_CONNECTED,
+                gmail_client.GMAIL_STATE_CONNECTED_REFRESHABLE,
+            ),
+            state=state,
+            detail=detail,
+        )
+    status = gmail_credential_service.connection_status(db, settings.owner_id)
+    return GmailConnectionResponse(
+        connected=status.connected,
+        state=state,
+        google_email=status.google_email,
+        expires_at=status.expires_at,
+        connected_at=status.connected_at,
+        last_refreshed_at=status.last_refreshed_at,
+        revoked=status.revoked,
+        last_error=status.last_error,
+        scopes=list(status.scopes),
+        detail=detail,
+    )
+
+
+@app.post("/gmail/connection/disconnect", response_model=GmailConnectionResponse)
+def disconnect_gmail(db: Session = Depends(get_db)) -> GmailConnectionResponse:
+    """Retire the connection and clear the stored token material.
+
+    Clearing the ciphertext is the point, not the flag: a revoked row still
+    holding a usable refresh token is a credential nobody is watching.
+    """
+    if not settings.feature_db_credentials_enabled:
+        raise HTTPException(409, "Database credential storage is off; there is nothing to disconnect.")
+    gmail_credential_service.mark_revoked(db, settings.owner_id, "disconnected_by_user")
+    db.commit()
+    return gmail_connection(db)
 
 
 @app.get("/ai/status", response_model=AIStatusResponse)

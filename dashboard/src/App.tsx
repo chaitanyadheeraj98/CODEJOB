@@ -240,10 +240,31 @@ export function draftToPreviewHtml(draftText: string): string {
 
 type GmailStatus = {
   configured: boolean
+  // True for a refreshable credential too. It means the app can act on the
+  // mailbox without asking the user, not that the access token is fresh.
   authenticated: boolean
   token_path: string
   last_sync_at: string | null
   detail: string
+  state?: string
+  account_email?: string
+}
+
+// The five backend states, rendered as something a person can act on. The old
+// card showed "Not authenticated" whenever the access token was over an hour
+// old, which is most of the time, and read as "you must reconnect".
+const GMAIL_STATE_LABELS: Record<string, string> = {
+  not_configured: 'Not configured',
+  not_connected: 'Not connected',
+  connected: 'Connected',
+  connected_refreshable: 'Connected',
+  needs_reconnect: 'Reconnect needed',
+}
+
+export function gmailStatusLabel(status: { state?: string; authenticated?: boolean } | null | undefined): string {
+  if (!status) return 'Unknown'
+  if (status.state && GMAIL_STATE_LABELS[status.state]) return GMAIL_STATE_LABELS[status.state]
+  return status.authenticated ? 'Connected' : 'Not connected'
 }
 
 type AiStatus = {
@@ -5935,9 +5956,9 @@ function App() {
               <section className="liveMonitorCard configSummaryCard">
                 <h3>Gmail Access</h3>
                 <div className="configSummaryList">
-                  {configRow('Status', status?.authenticated ? 'Authenticated' : 'Not authenticated')}
+                  {configRow('Status', gmailStatusLabel(status))}
                   {configRow('Configured', status?.configured ? 'Yes' : 'No')}
-                  {configRow('Account', status?.token_path ?? '-')}
+                  {configRow('Account', status?.account_email || status?.token_path || '-')}
                   {configRow('Last Sync', status?.last_sync_at ?? 'Never')}
                   {configRow('Telegram', telegramStatus?.polling ? 'Connected' : telegramStatus?.enabled ? 'Starting' : 'Disabled')}
                   {configRow('Authorized Chats', telegramStatus?.authorized_chats ?? 0)}

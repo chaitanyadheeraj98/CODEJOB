@@ -1196,10 +1196,36 @@ class EmailResponse(BaseModel):
 
 class GmailStatusResponse(BaseModel):
     configured: bool
+    # True for a refreshable credential too. It means "this app can act on the
+    # mailbox without asking the user", not "the access token is fresh".
     authenticated: bool
     token_path: str
     last_sync_at: datetime | None
     detail: str
+    # One of gmail_client.GMAIL_STATE_*. Lets the UI distinguish "reconnect" from
+    # "nothing connected yet", which two booleans could not.
+    state: str = "not_configured"
+    # The address that consented. Replaces showing a file path as the account.
+    account_email: str = ""
+
+
+class GmailConnectionResponse(BaseModel):
+    """Deliberately carries no token material, encrypted or otherwise.
+
+    There is no field here a future edit could accidentally fill with a token,
+    which is the point - a test asserts the serialised body contains none.
+    """
+
+    connected: bool = False
+    state: str = "not_connected"
+    google_email: str = ""
+    expires_at: datetime | None = None
+    connected_at: datetime | None = None
+    last_refreshed_at: datetime | None = None
+    revoked: bool = False
+    last_error: str = ""
+    scopes: list[str] = Field(default_factory=list)
+    detail: str = ""
 
 
 class AIStatusResponse(BaseModel):

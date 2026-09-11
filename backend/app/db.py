@@ -1,4 +1,5 @@
 from collections.abc import Generator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 
 from sqlalchemy import DateTime, create_engine, event
@@ -56,6 +57,12 @@ if is_sqlite:
 
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+
+@contextmanager
+def session_scope() -> Generator[Session, None, None]:
+    with SessionLocal.begin() as db:
+        yield db
 
 
 def get_db() -> Generator[Session, None, None]:
