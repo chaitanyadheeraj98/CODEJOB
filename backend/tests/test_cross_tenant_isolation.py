@@ -285,3 +285,71 @@ class SingletonOwnerCaptureTests(CrossTenantIsolationTests):
         self.assertEqual(bob_first, ["BOB-THREAD"])
         self.assertEqual(alice_second, ["ALICE-THREAD"])
         self.assertEqual(bob_again, bob_first, "the second caller contaminated the first")
+
+
+class UnauthenticatedAccessTests(CrossTenantIsolationTests):
+    """With sign-in on, no session means no data. Found in live use.
+
+    The login page is a *frontend* gate: it decides what to render and never
+    stopped the API answering. An incognito window with no cookie was served
+    the configured owner's data in full, because `tenancy.owner_id()` falls
+    back to the constant - correct while the flag is off, a hole the moment it
+    is on.
+    """
+
+    def test_an_anonymous_request_is_refused_rather_than_served_the_fallback(self) -> None:
+        self._seed_candidate(settings.owner_id, "CONSTANT-OWNER-ONLY")
+        self.client.cookies.clear()
+
+        response = self.client.get("/candidates", params={"state": "needs_review"})
+
+        self.assertEqual(response.status_code, 401)
+        self.assertNotIn("CONSTANT-OWNER-ONLY", response.text)
+
+    def test_a_made_up_cookie_is_refused(self) -> None:
+        self.client.cookies.clear()
+        self.client.cookies.set(settings.session_cookie_name, "not-a-real-token")
+
+        self.assertEqual(
+            self.client.get("/candidates", params={"state": "needs_review"}).status_code, 401
+        )
+
+    def test_a_revoked_session_stops_reaching_data(self) -> None:
+        alice_token, _ = self._both_signed_in_with_data()
+        self._as(alice_token)
+        self.assertEqual(self._subjects(), ["ALICE-ONLY"])
+
+        self.client.post("/auth/logout")
+        self._as(alice_token)
+
+        self.assertEqual(
+            self.client.get("/candidates", params={"state": "needs_review"}).status_code, 401
+        )
+
+    def test_sign_in_routes_stay_reachable_without_a_session(self) -> None:
+        """Otherwise nobody could ever obtain one."""
+        self.client.cookies.clear()
+
+        self.assertEqual(self.client.get("/auth/google/start").status_code, 200)
+        self.assertEqual(self.client.get("/auth/me").status_code, 401)
+
+    def test_the_open_tracking_pixel_stays_public(self) -> None:
+        """It is fetched by a recruiter's mail client, which has no session."""
+        self.client.cookies.clear()
+
+        response = self.client.get("/track/open/sometoken.png")
+
+        self.assertNotEqual(response.status_code, 401)
+
+    def test_the_health_probe_stays_public(self) -> None:
+        self.client.cookies.clear()
+
+        self.assertEqual(self.client.get("/health").status_code, 200)
+
+    def test_with_sign_in_off_anonymous_access_still_works(self) -> None:
+        """The revert route: turning the flag off restores single-tenant use."""
+        settings.feature_auth_enabled = False
+        self._seed_candidate(settings.owner_id, "CONSTANT-OWNER-ONLY")
+        self.client.cookies.clear()
+
+        self.assertEqual(self._subjects(), ["CONSTANT-OWNER-ONLY"])

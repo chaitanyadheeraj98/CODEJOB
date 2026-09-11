@@ -259,6 +259,7 @@ from app.services.email_inbox_service import TRANSPARENT_PIXEL_PNG, record_open,
 from app.services.github_issue_service import GithubIssueServiceError, create_github_issue
 from app.services import gmail_label_service
 from app.models import RecruiterWatch, TrackedThread
+from fastapi.responses import JSONResponse
 from app import gmail_client, tenancy
 from app.services import auth_service
 from app.services.orchestration_service import OrchestrationDeps, OrchestrationService
@@ -532,6 +533,21 @@ app.include_router(auth_router.router)
 app.include_router(admin_router.router)
 
 
+# Paths that must answer without a session, even with sign-in on.
+#
+# /track/ is the email open pixel: it is fetched by a recruiter's mail client,
+# which has no session and never will. Protecting it would break open
+# tracking entirely.
+# /auth/ is how a session is obtained in the first place.
+# /health is for the container probe.
+PUBLIC_PATH_PREFIXES = ("/auth/", "/track/")
+PUBLIC_PATHS = {"/health", "/docs", "/redoc", "/openapi.json"}
+
+
+def _is_public_path(path: str) -> bool:
+    return path in PUBLIC_PATHS or path.startswith(PUBLIC_PATH_PREFIXES)
+
+
 @app.middleware("http")
 async def resolve_owner_from_session(request: Request, call_next):
     """Set the request's owner from its session cookie, once, here.
@@ -558,6 +574,17 @@ async def resolve_owner_from_session(request: Request, call_next):
             logger.warning("session_resolution_failed", exc_info=True)
         finally:
             db.close()
+
+    # With sign-in on, an unauthenticated request must be refused rather than
+    # served under the fallback owner.
+    #
+    # This was found in live use: the login page is a *frontend* gate - it
+    # decides what to render and never stopped the API answering. An incognito
+    # window with no cookie was served the configured owner's data in full,
+    # because tenancy.owner_id() falls back to the constant. That fallback is
+    # correct while the flag is off and a hole the moment it is on.
+    if owner is None and not _is_public_path(request.url.path) and request.method != "OPTIONS":
+        return JSONResponse(status_code=401, content={"detail": "Not signed in."})
 
     reset = tenancy.set_owner_id(owner)
     try:
