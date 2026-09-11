@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import time
 import uuid
 from dataclasses import dataclass
@@ -267,7 +268,10 @@ async def acquire_async(
             # to finish first, and holding the request open pretends otherwise.
             if exc.scope == "user" or time.monotonic() + poll_seconds >= deadline:
                 raise
-        await asyncio.sleep(poll_seconds)
+        # Jittered, so waiters that arrived together do not poll in lockstep
+        # and collide on the same freed slot over and over. Without this, a
+        # burst stays a burst for as long as it waits.
+        await asyncio.sleep(poll_seconds * (0.5 + random.random()))
         if time.monotonic() >= deadline:
             raise last
 

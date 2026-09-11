@@ -275,6 +275,35 @@ def test_a_rejected_turn_is_recorded_rather_than_silently_dropped():
         assert turn.failure_code == "admission_rejected" and turn.message_id is None
 
 
+def test_a_turn_waits_for_a_slot_before_being_refused():
+    """C2 - the wiring, not the waiting.
+
+    `acquire_async` is tested against a real Redis in test_admission_service.py.
+    What cannot be seen there is whether the chat path actually asks it to
+    wait: passing no wait leaves C1's refuse-on-sight behaviour in place and
+    every timing test still passes.
+    """
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        service, session = _service_session(db)
+        captured = {}
+
+        async def capture(*args, **kwargs):
+            captured.update(kwargs)
+            raise AdmissionRejected("global", "busy")
+
+        with patch.object(admission_service, "acquire_async", side_effect=capture):
+            with pytest.raises(HTTPException):
+                asyncio.run(anext(service.send_message(db, session.id, "hi")))
+
+        assert captured["wait_seconds"] == settings.chat_admission_wait_seconds
+        assert captured["wait_seconds"] > 0, "a wait of zero is C1, not C2"
+        # The per-user cap must still be the one checked first.
+        assert captured["per_user_limit"] == settings.chat_max_turns_per_user
+        assert captured["global_limit"] == settings.chat_max_concurrent_turns
+
+
 def test_telemetry_summarises_only_the_window_and_says_nothing_when_empty():
     engine = create_engine("sqlite://")
     Base.metadata.create_all(engine)

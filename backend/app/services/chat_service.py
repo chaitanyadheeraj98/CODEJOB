@@ -276,6 +276,11 @@ class ChatService:
                 # its slot, but a worker killed mid-turn gives it back.
                 ttl_seconds=settings.chat_turn_budget_seconds + 60,
                 local_limit=settings.chat_local_fallback_turns,
+                # C2: queue rather than refuse on sight. At peak, "try again in
+                # a moment" for someone who would have waited two seconds is a
+                # worse answer than waiting. 503 becomes the timeout, not the
+                # first response.
+                wait_seconds=settings.chat_admission_wait_seconds,
             )
         except AdmissionRejected as exc:
             self._record_turn(db, session_id=session_id, message_id=None, requested_model=model or "auto",

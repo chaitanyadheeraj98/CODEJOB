@@ -9,6 +9,7 @@ Every test uses a unique pool name, so they share a Redis safely and leave
 nothing behind for the next one.
 """
 
+import asyncio
 import os
 import time
 import unittest
@@ -250,3 +251,99 @@ class FailOpenTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(REDIS_READY, "needs the Redis that ships with the stack")
+class WaitingForASlotTests(unittest.IsolatedAsyncioTestCase):
+    """C2 - queue for a slot rather than refusing on sight.
+
+    A 503 to someone who would have waited two seconds is a worse answer than
+    the wait. 503 stays as the *timeout*, not the first response.
+    """
+
+    def setUp(self):
+        self.pool = f"test-{uuid.uuid4().hex[:12]}"
+        self.held: list = []
+
+    def tearDown(self):
+        for lease in self.held:
+            admission_service.release(lease, connection=_redis)
+        for key in _redis.scan_iter(f"{admission_service.KEY_PREFIX}:{self.pool}:*"):
+            _redis.delete(key)
+        admission_service.reset_local_semaphores()
+
+    def fill(self, owner="usr_a", *, global_limit=1, per_user=5):
+        lease = admission_service.acquire(
+            self.pool, owner_id=owner, global_limit=global_limit,
+            per_user_limit=per_user, ttl_seconds=60.0, local_limit=3, connection=_redis,
+        )
+        self.held.append(lease)
+        return lease
+
+    async def wait_for(self, owner="usr_b", *, wait=1.0, global_limit=1, per_user=5):
+        return await admission_service.acquire_async(
+            self.pool, owner_id=owner, global_limit=global_limit, per_user_limit=per_user,
+            ttl_seconds=60.0, local_limit=3, wait_seconds=wait, poll_seconds=0.05,
+            connection=_redis,
+        )
+
+    async def test_a_waiter_is_admitted_when_a_slot_frees(self):
+        blocker = self.fill()
+
+        async def release_shortly():
+            await asyncio.sleep(0.2)
+            admission_service.release(blocker, connection=_redis)
+            self.held.remove(blocker)
+
+        releaser = asyncio.create_task(release_shortly())
+        lease = await self.wait_for(wait=3.0)
+        self.held.append(lease)
+        await releaser
+        self.assertFalse(lease.local)
+
+    async def test_the_wait_is_bounded_and_ends_in_a_refusal(self):
+        self.fill()
+        started = time.monotonic()
+        with self.assertRaises(AdmissionRejected) as caught:
+            await self.wait_for(wait=0.4)
+        elapsed = time.monotonic() - started
+        self.assertEqual(caught.exception.scope, "global")
+        self.assertGreaterEqual(elapsed, 0.2, "it should actually have waited")
+        self.assertLess(elapsed, 3.0, "and not much beyond the deadline")
+
+    async def test_no_wait_refuses_immediately(self):
+        """C1 behaviour must remain available and remain the default."""
+        self.fill()
+        started = time.monotonic()
+        with self.assertRaises(AdmissionRejected):
+            await self.wait_for(wait=0.0)
+        self.assertLess(time.monotonic() - started, 0.2)
+
+    async def test_a_per_user_refusal_does_not_wait(self):
+        """Waiting cannot help: the caller's own turn has to finish first.
+
+        Holding the request open for ten seconds would pretend otherwise.
+        """
+        self.fill(owner="usr_a", global_limit=10, per_user=1)
+        started = time.monotonic()
+        with self.assertRaises(AdmissionRejected) as caught:
+            await self.wait_for(owner="usr_a", wait=5.0, global_limit=10, per_user=1)
+        self.assertEqual(caught.exception.scope, "user")
+        self.assertLess(time.monotonic() - started, 0.5, "a per-user refusal must be immediate")
+
+    async def test_waiting_does_not_block_the_event_loop(self):
+        """The Redis call runs in a thread; the wait must stay cooperative."""
+        self.fill()
+        ticks = 0
+
+        async def ticker():
+            nonlocal ticks
+            while True:
+                await asyncio.sleep(0.05)
+                ticks += 1
+
+        beat = asyncio.create_task(ticker())
+        with self.assertRaises(AdmissionRejected):
+            await self.wait_for(wait=0.6)
+        beat.cancel()
+        self.assertGreater(ticks, 3, "other coroutines must keep running while one waits")
