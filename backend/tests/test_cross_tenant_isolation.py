@@ -209,3 +209,79 @@ class CrossTenantIsolationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SingletonOwnerCaptureTests(CrossTenantIsolationTests):
+    """The leak the first isolation tests missed, and the shape of it.
+
+    `/candidates` filters inside the request, so it was correct as soon as the
+    owner_id sweep landed. `/inbox/conversations` goes through
+    `_get_orchestration_service()`, a **module-level singleton** that captured
+    `tenancy.owner_id()` once, on the first request, and then served every user
+    with that owner. A second test user saw the first one's entire inbox.
+
+    The sweep could not have found this: the call site read
+    `tenancy.owner_id()`, which is correct - it was simply evaluated once and
+    cached. Any long-lived object that stores an owner has the same defect, so
+    what is tested here is *ordering*, not just the value.
+    """
+
+    def _seed_conversation(self, owner_id: str, thread: str) -> None:
+        from app.models import EmailConversation
+
+        with Session(self.engine) as db:
+            db.add(
+                EmailConversation(
+                    owner_id=owner_id,
+                    external_thread_id=thread,
+                    origin="label",
+                    subject_snapshot=thread,
+                    recruiter_snapshot="R",
+                    recruiter_email_snapshot=f"{thread}@example.com",
+                    last_message_at=datetime.now(UTC),
+                    unread_reply_count=0,
+                    status="replied",
+                )
+            )
+            db.commit()
+
+    def _threads(self) -> list[str]:
+        body = self.client.get("/inbox/conversations", params={"limit": 50}).json()
+        return sorted(row["subject"] for row in body)
+
+    def test_a_singleton_backed_endpoint_does_not_serve_the_first_callers_owner(self) -> None:
+        alice_token = self._sign_in(ALICE)
+        alice_owner = self._owner_of(ALICE)
+        bob_token = self._sign_in(BOB)
+        bob_owner = self._owner_of(BOB)
+        self._seed_conversation(alice_owner, "ALICE-THREAD")
+        self._seed_conversation(bob_owner, "BOB-THREAD")
+
+        # Alice calls first, so she is the owner any singleton would capture.
+        self._as(alice_token)
+        alice_sees = self._threads()
+        self._as(bob_token)
+        bob_sees = self._threads()
+
+        self.assertEqual(alice_sees, ["ALICE-THREAD"])
+        self.assertEqual(bob_sees, ["BOB-THREAD"], "Bob was served the first caller's owner")
+
+    def test_the_result_is_the_same_whichever_user_calls_first(self) -> None:
+        """Order-dependence is the signature of a captured owner."""
+        alice_token = self._sign_in(ALICE)
+        alice_owner = self._owner_of(ALICE)
+        bob_token = self._sign_in(BOB)
+        bob_owner = self._owner_of(BOB)
+        self._seed_conversation(alice_owner, "ALICE-THREAD")
+        self._seed_conversation(bob_owner, "BOB-THREAD")
+
+        self._as(bob_token)
+        bob_first = self._threads()
+        self._as(alice_token)
+        alice_second = self._threads()
+        self._as(bob_token)
+        bob_again = self._threads()
+
+        self.assertEqual(bob_first, ["BOB-THREAD"])
+        self.assertEqual(alice_second, ["ALICE-THREAD"])
+        self.assertEqual(bob_again, bob_first, "the second caller contaminated the first")

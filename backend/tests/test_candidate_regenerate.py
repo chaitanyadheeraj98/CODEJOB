@@ -24,7 +24,7 @@ from app.services.role_manifest_service import MaterializedRequirement, RoleMani
 
 class CandidateRegenerateTests(unittest.TestCase):
     def setUp(self) -> None:
-        main.orchestration_service = None
+        main.reset_owner_scoped_services()
         self.engine = create_engine(
             "sqlite://",
             connect_args={"check_same_thread": False},
@@ -65,7 +65,7 @@ class CandidateRegenerateTests(unittest.TestCase):
             db.commit()
 
     def tearDown(self) -> None:
-        main.orchestration_service = None
+        main.reset_owner_scoped_services()
         main.app.dependency_overrides.clear()
         Base.metadata.drop_all(bind=self.engine)
         self.engine.dispose()

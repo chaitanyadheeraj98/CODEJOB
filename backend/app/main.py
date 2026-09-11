@@ -595,12 +595,34 @@ thread_snapshot_used: bool | None = None
 thread_snapshot_email_id: int | None = None
 telegram_service: TelegramBotService | None = runtime_state.telegram_service
 telegram_runtime: TelegramRuntime | None = None
-orchestration_service: OrchestrationService | None = None
+# Keyed by owner, not a single global. The previous single instance captured
+# whichever owner made the *first* request and then served every user with it -
+# a live cross-tenant leak, found when a second test user saw the first one's
+# inbox. Mutating one shared instance per request would also be wrong: FastAPI
+# runs sync endpoints in a threadpool, so two requests would interleave the
+# write. A dict keyed by owner is both correct and lock-free.
+orchestration_services: dict[str, OrchestrationService] = {}
 auto_runner_service: AutoRunnerService | None = None
-routing_runtime_service: RoutingRuntimeService | None = None
+routing_runtime_services: dict[str, RoutingRuntimeService] = {}
+
+
+def reset_owner_scoped_services() -> None:
+    """Drop every per-owner service cache.
+
+    Exists because tests monkeypatch module-level functions that these
+    services capture in their deps, so a cached instance would keep calling
+    the original. It replaces the old `main.orchestration_service = None`
+    idiom, which silently stopped working when these became dicts - assigning
+    that name just created an unrelated attribute while the real cache
+    survived, and three tests failed in a way that pointed nowhere near the
+    cause.
+    """
+    orchestration_services.clear()
+    manual_intake_services.clear()
+    routing_runtime_services.clear()
 candidate_runtime_service: CandidateRuntimeService | None = None
 scoring_runtime_service: ScoringRuntimeService | None = None
-manual_intake_service: ManualIntakeService | None = None
+manual_intake_services: dict[str, ManualIntakeService] = {}
 settings_bootstrap_service = SettingsBootstrapService(session_factory=SessionLocal)
 gmail_labeling_runtime_service = GmailLabelingRuntimeService()
 telegram_action_lock = runtime_state.telegram_action_lock
@@ -1432,7 +1454,10 @@ def _enqueue_background_job(
 
 
 def _get_manual_intake_service() -> ManualIntakeService:
-    global manual_intake_service
+    # Keyed by owner. See orchestration_services for why a single instance is a
+    # cross-tenant leak and mutating a shared one is a race.
+    owner = tenancy.owner_id()
+    manual_intake_service = manual_intake_services.get(owner)
     if manual_intake_service is None:
         manual_intake_service = ManualIntakeService(
             ManualIntakeDeps(
@@ -1448,6 +1473,7 @@ def _get_manual_intake_service() -> ManualIntakeService:
                 capture_premium_numbers=_capture_premium_numbers,
             )
         )
+        manual_intake_services[owner] = manual_intake_service
     return manual_intake_service
 
 
@@ -1715,7 +1741,9 @@ def _init_telegram_service() -> TelegramBotService | None:
 
 
 def _get_routing_runtime_service() -> RoutingRuntimeService:
-    global routing_runtime_service
+    # Keyed by owner, for the same reason as orchestration_services.
+    owner = tenancy.owner_id()
+    routing_runtime_service = routing_runtime_services.get(owner)
     if routing_runtime_service is None:
         routing_runtime_service = RoutingRuntimeService(
             RoutingRuntimeDeps(
@@ -1725,6 +1753,7 @@ def _get_routing_runtime_service() -> RoutingRuntimeService:
                 get_default_employer_cc_emails=lambda db: _csv_to_list(_get_settings(db).default_employer_cc_emails),
             )
         )
+        routing_runtime_services[owner] = routing_runtime_service
     return routing_runtime_service
 
 
@@ -1753,9 +1782,10 @@ def _get_scoring_runtime_service() -> ScoringRuntimeService:
 
 
 def _get_orchestration_service() -> OrchestrationService:
-    global orchestration_service
-    if orchestration_service is None:
-        orchestration_service = OrchestrationService(
+    owner = tenancy.owner_id()
+    existing = orchestration_services.get(owner)
+    if existing is None:
+        existing = OrchestrationService(
             OrchestrationDeps(
                 owner_id=tenancy.owner_id(),
                 model_name=settings.deepseek_model_fast,
@@ -1830,7 +1860,8 @@ def _get_orchestration_service() -> OrchestrationService:
                 list_unread_thread_ids=lambda: list_unread_thread_ids(),
             )
         )
-    return orchestration_service
+        orchestration_services[owner] = existing
+    return existing
 
 
 def _ensure_default_settings() -> None:
