@@ -98,7 +98,10 @@ def test_round_trips_down_and_up(tmp_path, monkeypatch):
     config, engine, _ = _prepare(tmp_path, monkeypatch, "d76.db")
     command.upgrade(config, "head")
 
-    command.downgrade(config, "-1")
+    # Named, not "-1". "-1" meant 0076 only while 0076 was head, and silently
+    # started undoing 0077 the moment that landed - the same trap 0074's test
+    # had with 0075.
+    command.downgrade(config, "20260924_0075")
     with engine.connect() as conn:
         assert not sa.inspect(conn).has_table(TABLE)
 
