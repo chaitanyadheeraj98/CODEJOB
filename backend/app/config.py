@@ -153,6 +153,22 @@ class Settings(BaseSettings):
     # Required once feature_db_credentials_enabled is on - see the validator
     # below. Never stored in the database; lives only in backend/.env.
     credential_encryption_key: str = ""
+    # --- B3: sign-in ---------------------------------------------------
+    # Off by default. With the flag clear there is no login page, the /auth
+    # routes 404, and tenancy.owner_id() keeps returning the configured
+    # constant - i.e. exactly today's single-tenant behaviour.
+    feature_auth_enabled: bool = False
+    session_ttl_hours: int = Field(default=168, gt=0)
+    # The web callback, which must be registered on the OAuth client. Separate
+    # from google_redirect_uri, which is the loopback URI the Phase A desktop
+    # flow still uses; changing that one would break Gmail connect.
+    google_auth_redirect_uri: str = "http://localhost:8000/auth/google/callback"
+    # Where the callback sends the browser once a session exists.
+    dashboard_base_url: str = "http://localhost:5173"
+    # Browsers treat http://localhost as a secure context, so a Secure cookie
+    # works in local development. Kept configurable for anything that does not.
+    session_cookie_secure: bool = True
+    session_cookie_name: str = "codejob_session"
     gmail_label_filter: str = ""
     google_login_hint: str = ""
     public_base_url: str = ""

@@ -1209,6 +1209,20 @@ class GmailStatusResponse(BaseModel):
     account_email: str = ""
 
 
+class LoginStartResponse(BaseModel):
+    authorization_url: str
+    state: str
+
+
+class AuthUserResponse(BaseModel):
+    """What the route guard is allowed to know. No token, no session id."""
+
+    email: str
+    display_name: str = ""
+    is_admin: bool = False
+    owner_id: str
+
+
 class GmailConnectionResponse(BaseModel):
     """Deliberately carries no token material, encrypted or otherwise.
 

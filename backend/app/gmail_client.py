@@ -311,6 +311,25 @@ def verified_identity(creds: Credentials):
     return google_identity_service.verify_id_token(str(raw))
 
 
+def store_credentials_for_owner(owner_id: str, creds: Credentials, *, identity=None) -> None:
+    """Persist a credential for a specific owner, from the web sign-in flow.
+
+    Distinct from `_persist_new_credentials` because the caller has already
+    verified the identity and matched it against the mailbox - repeating either
+    would mean a second getProfile call and a second verification of the same
+    token. The owner is passed explicitly, since sign-in is the one path where
+    it is emphatically not the configured constant.
+    """
+    with session_scope() as db:
+        gmail_credential_service.save_credentials(
+            db,
+            owner_id,
+            creds,
+            google_email=identity.email if identity is not None else _profile_email(creds),
+            google_subject=identity.subject if identity is not None else None,
+        )
+
+
 def _persist_new_credentials(creds: Credentials, owner_id: str | None = None) -> None:
     owner_id = owner_id or settings.owner_id
     if not settings.feature_db_credentials_enabled:

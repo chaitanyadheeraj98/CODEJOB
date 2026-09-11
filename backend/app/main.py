@@ -259,7 +259,8 @@ from app.services.email_inbox_service import TRANSPARENT_PIXEL_PNG, record_open,
 from app.services.github_issue_service import GithubIssueServiceError, create_github_issue
 from app.services import gmail_label_service
 from app.models import RecruiterWatch, TrackedThread
-from app import gmail_client
+from app import gmail_client, tenancy
+from app.services import auth_service
 from app.services.orchestration_service import OrchestrationDeps, OrchestrationService
 from app.services.requirement_expansion_service import RequirementExpansionService
 from app.services.resume_enrichment_service import (
@@ -522,6 +523,46 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
+from app.routers import auth as auth_router  # noqa: E402
+
+# Registered unconditionally; every route inside 404s while
+# feature_auth_enabled is off, so the flag is the switch rather than the
+# presence of the router.
+app.include_router(auth_router.router)
+
+
+@app.middleware("http")
+async def resolve_owner_from_session(request: Request, call_next):
+    """Set the request's owner from its session cookie, once, here.
+
+    This is the only place an owner is derived from a request, which is what
+    makes rule 1 checkable: `owner_id` comes from a verified session and never
+    from a parameter. A request without a valid session leaves the ContextVar
+    unset, and `tenancy.owner_id()` falls back to the configured constant -
+    i.e. exactly today's single-tenant behaviour.
+    """
+    if not settings.feature_auth_enabled:
+        return await call_next(request)
+
+    token = request.cookies.get(settings.session_cookie_name)
+    owner = None
+    if token:
+        db = SessionLocal()
+        try:
+            user = auth_service.resolve_session(db, token)
+            owner = user.owner_id if user else None
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.warning("session_resolution_failed", exc_info=True)
+        finally:
+            db.close()
+
+    reset = tenancy.set_owner_id(owner)
+    try:
+        return await call_next(request)
+    finally:
+        tenancy.reset_owner_id(reset)
 if settings.feature_chat_enabled:
     from app.mcp_server.server import mcp as chat_mcp, mcp_app as chat_mcp_app
 else:
