@@ -25,7 +25,7 @@ import PremiumNumbersPage from './features/premium_numbers/PremiumNumbersPage'
 import AppTSPage from './features/application_tracking/AppTSPage'
 import LabelsPage from './features/labels/LabelsPage'
 import LoginPage from './features/auth/LoginPage'
-import { fetchAuthState, logout as signOut, type AuthState } from './features/auth/api'
+import { fetchAuthState, logout as signOut, type AuthState, type AuthUser } from './features/auth/api'
 import VerificationBadge from './features/premium_numbers/VerificationBadge'
 import { type CandidateState, useCandidateBuckets } from './candidateBuckets'
 import type { CandidateQueryOptions } from './candidateBuckets'
@@ -2918,11 +2918,20 @@ function CcEmailList({
 // Endpoints that apply the implicit one-day mail_date scope; only these widen on text search.
 const MAIL_DATE_SCOPED_BUCKETS = new Set(['needs_review', 'failed', 'approved_sent', 'recruiter_opportunities'])
 
-function App() {
+function App({ account }: { account?: AuthUser }) {
   const INITIAL_BUCKET_LIMIT = 25
   const PAGE_BUCKET_LIMIT = 25
   const RECENT_RUNS_LIMIT = 100
   const apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+  // Disables the button for the moment between the request and the reload, so
+  // an impatient second click cannot fire a second logout.
+  const [signingOut, setSigningOut] = useState(false)
+  const handleSignOut = () => {
+    setSigningOut(true)
+    // Reloads on success, so nothing here re-enables the button. On failure it
+    // must come back: the server may simply have been restarting.
+    signOutAndReload(apiBase).catch(() => setSigningOut(false))
+  }
   const defaultPolicy: DynamicPolicy = buildDefaultPolicy()
   const policyProfiles: Record<PolicyProfileName, DynamicPolicy> = {
     'Flexible Drafting': {
@@ -5738,6 +5747,9 @@ function App() {
         schedulingEnabled={schedulingEnabled}
         activePage={activePage}
         onNavigate={(page) => { window.history.pushState(null, '', `${window.location.pathname}?page=${page}`); setActivePage(page) }}
+        account={account ? { email: account.email, isAdmin: account.is_admin } : undefined}
+        onSignOut={handleSignOut}
+        signingOut={signingOut}
       />
 
       <section className="mainPane">
@@ -8247,7 +8259,7 @@ function AuthGate() {
   // login page first and replacing it a moment later.
   if (state.status === 'loading') return null
   if (state.status === 'anonymous') return <LoginPage apiBase={apiBase} loginError={loginError} />
-  return <App />
+  return <App account={state.status === 'signed_in' ? state.user : undefined} />
 }
 
 export async function signOutAndReload(apiBase: string): Promise<void> {

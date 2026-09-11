@@ -201,6 +201,68 @@ input[type='radio'] {
   font-variant-numeric: tabular-nums;
 }
 
+/* ---- Signed-in account, foot of the rail ---- */
+
+/* Below the nav and divided from it: this is session identity, not a place to
+   go. Present only when sign-in is on. */
+.accountBlock {
+  display: grid;
+  gap: 6px;
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.accountEmail {
+  /* Addresses are long and the rail is fixed-width, so this must truncate
+     rather than widen the rail or wrap to three lines. The full address stays
+     available on hover via title. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 12px;
+  color: #34405a;
+  font-size: var(--text-sm);
+}
+
+.accountRole {
+  justify-self: start;
+  margin: 0 12px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: #e7edfb;
+  color: var(--primary-strong);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.signOutBtn {
+  /* Quiet by default - signing out is deliberate, not something to invite by
+     accident - but a full-width target with a real border, not a text link
+     hidden among the nav rows. */
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: #293246;
+  padding: 8px 12px;
+  text-align: left;
+  font-size: var(--text-md);
+  cursor: pointer;
+}
+
+.signOutBtn:hover {
+  border-color: var(--danger);
+  background: #fdf2f3;
+  color: var(--danger);
+}
+
+.signOutBtn:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
 .mainPane {
   min-width: 0;
 }
@@ -2212,6 +2274,13 @@ button.emailSearchResult:focus-visible {
 }
 
 @media (max-width: 900px) {
+  /* The rail stacks above the content here, so its last row sits under the
+     fixed chat launcher. Clearing the launcher's 58px plus its offset keeps
+     Sign out fully clickable rather than half-covered. */
+  .accountBlock {
+    padding-bottom: 76px;
+  }
+
   .topHeader {
     padding: 0 14px;
     gap: 8px;
