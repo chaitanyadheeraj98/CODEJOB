@@ -49,7 +49,7 @@ def enqueue_embedding_generation(record_id: int) -> None:
     try:
         get_queue(EMBEDDING_QUEUE).enqueue(
             run_generate_embedding_job,
-            kwargs={"record_type": "appts_application", "record_id": record_id},
+            kwargs={"record_type": "appts_application", "record_id": record_id, "owner_id": tenancy.owner_id()},
             retry=Retry(max=3, interval=[10, 30, 90]),
             job_timeout=60,
             result_ttl=3600,

@@ -786,7 +786,9 @@ def _enqueue_embedding_generation(*, record_type: str, record_id: int) -> None:
     try:
         get_queue(EMBEDDING_QUEUE).enqueue(
             run_generate_embedding_job,
-            kwargs={"record_type": record_type, "record_id": record_id},
+            # The job runs in the worker, which has no request context, so the
+            # owner travels with it. See tenancy.owner_scoped.
+            kwargs={"record_type": record_type, "record_id": record_id, "owner_id": tenancy.owner_id()},
             retry=Retry(max=3, interval=[10, 30, 90]),
             job_timeout=60,
             result_ttl=3600,
@@ -1413,7 +1415,7 @@ def _enqueue_background_job(
         queue = get_queue(queue_name)
         queue.enqueue(
             task,
-            kwargs=task_kwargs,
+            kwargs={**task_kwargs, "owner_id": tenancy.owner_id()},
             job_id=job_id,
             retry=Retry(max=2, interval=[15, 60]),
             job_timeout=1800,

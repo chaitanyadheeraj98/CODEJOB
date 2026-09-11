@@ -5,12 +5,14 @@ import json
 from typing import Any
 
 from app.db import SessionLocal
+from app.tenancy import owner_scoped
 from app.jobs.progress import update_job_progress
 from app.schemas import AutomationRunRequest
 
 logger = logging.getLogger(__name__)
 
 
+@owner_scoped
 def run_generate_embedding_job(*, record_type: str, record_id: int) -> dict[str, Any]:
     from app.config import settings
     from app.models import AppTSApplication, RecruiterEmail
@@ -42,6 +44,7 @@ def run_generate_embedding_job(*, record_type: str, record_id: int) -> dict[str,
         db.close()
 
 
+@owner_scoped
 def run_scheduled_task_job(*, task_id: int) -> dict[str, Any]:
     """Execute one scheduled task run.
 
@@ -156,6 +159,7 @@ def _mark_failed(run_key: str, exc: Exception) -> None:
         db.close()
 
 
+@owner_scoped
 def run_gmail_sync_job(*, run_key: str, sync_batch_id: str) -> dict[str, Any]:
     from app import main
 
@@ -200,6 +204,7 @@ def run_gmail_sync_job(*, run_key: str, sync_batch_id: str) -> dict[str, Any]:
         db.close()
 
 
+@owner_scoped
 def run_nvoids_sync_job(
     *, run_key: str, max_items: int, criteria: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -279,6 +284,7 @@ def run_nvoids_sync_job(
         db.close()
 
 
+@owner_scoped
 def run_manual_intake_job(*, run_key: str, text: str) -> dict[str, Any]:
     """Ingest one pasted requirement.
 
@@ -320,6 +326,7 @@ def run_manual_intake_job(*, run_key: str, text: str) -> dict[str, Any]:
         db.close()
 
 
+@owner_scoped
 def run_retry_selected_messages_job(*, run_key: str, external_message_ids: list[str]) -> dict[str, Any]:
     from app import main
 
@@ -352,6 +359,7 @@ def run_retry_selected_messages_job(*, run_key: str, external_message_ids: list[
         db.close()
 
 
+@owner_scoped
 def run_automation_job(*, run_key: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
     from app import main
 

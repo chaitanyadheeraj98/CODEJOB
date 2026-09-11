@@ -69,3 +69,30 @@ def owner_scope(value: str | None) -> Generator[str, None, None]:
         yield owner_id()
     finally:
         _current_owner_id.reset(token)
+
+
+def owner_scoped(func):
+    """Run a background job as the owner who enqueued it.
+
+    A job has no request and therefore no middleware. Without this it runs
+    under `owner_id()`'s fallback - the configured constant - which means one
+    user's job quietly writes into another account and raises nothing at all.
+    That silence is what makes it dangerous.
+
+    Applied as a decorator rather than left to each job body for the same
+    reason: a body that forgets looks exactly like one that remembered. A test
+    enumerates the task module and fails if any job function is undecorated, so
+    forgetting is caught at the suite rather than in production.
+
+    `owner_id` is popped from the kwargs, so task signatures stay unchanged and
+    RQ serialises one extra string.
+    """
+    import functools
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        with owner_scope(kwargs.pop("owner_id", None)):
+            return func(*args, **kwargs)
+
+    wrapper.__owner_scoped__ = True
+    return wrapper

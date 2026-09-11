@@ -59,7 +59,9 @@ def _default_enqueue(task_id: int) -> None:
     from app.jobs.queues import SCHEDULED_TASK_QUEUE, get_queue
     from app.jobs.tasks import run_scheduled_task_job
 
-    get_queue(SCHEDULED_TASK_QUEUE).enqueue(run_scheduled_task_job, task_id=task_id)
+    get_queue(SCHEDULED_TASK_QUEUE).enqueue(
+        run_scheduled_task_job, task_id=task_id, owner_id=tenancy.owner_id()
+    )
 
 
 def expire_due_runs(db: Session, *, owner_id: str, now: datetime) -> int:
