@@ -735,7 +735,11 @@ def _read_saved_gmail_queries(raw: str | None) -> list[str]:
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    # An explicit allowlist, never "*". The session lives in a cookie, and
+    # Starlette echoes the requesting origin back when a request carries one -
+    # so a wildcard here plus allow_credentials would let any site call this
+    # API with the signed-in user's session and read the answer.
+    allow_origins=settings.effective_cors_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

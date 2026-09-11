@@ -169,6 +169,14 @@ class Settings(BaseSettings):
     # works in local development. Kept configurable for anything that does not.
     session_cookie_secure: bool = True
     session_cookie_name: str = "codejob_session"
+    # Origins allowed to make credentialed cross-origin calls. Comma separated;
+    # empty falls back to dashboard_base_url plus the Vite dev server.
+    #
+    # This cannot be "*". Starlette echoes the requesting origin back when a
+    # request carries a cookie, so a wildcard combined with
+    # allow_credentials=True would let any site on the internet call this API
+    # with the signed-in user's session and read the response.
+    cors_allowed_origins: str = ""
     # The one address that inherits the existing single-tenant install: on its
     # first sign-in it adopts `owner_id` (below) instead of a generated one, so
     # every row already in the database is simply theirs, and it is made admin.
@@ -313,6 +321,21 @@ class Settings(BaseSettings):
             dims = max(32, int(self.semantic_embedding_dimension or 256))
             return f"hash:{dims}"
         return (self.semantic_embedding_sbert_model or "sentence-transformers/all-MiniLM-L6-v2").strip() or "sentence-transformers/all-MiniLM-L6-v2"
+
+    @property
+    def effective_cors_allowed_origins(self) -> list[str]:
+        """The exact origins allowed to send credentials, never a wildcard.
+
+        The default covers both the built dashboard and `npm run dev` on 5174,
+        which is how frontend work is done here; anything else is configured
+        explicitly. A trailing slash is stripped because browsers send the
+        bare origin and Starlette compares the string.
+        """
+        configured = [o.strip().rstrip("/") for o in self.cors_allowed_origins.split(",") if o.strip()]
+        if configured:
+            return [o for o in configured if o != "*"]
+        defaults = [self.dashboard_base_url.strip().rstrip("/"), "http://localhost:5174"]
+        return list(dict.fromkeys(o for o in defaults if o))
 
 
 settings = Settings()

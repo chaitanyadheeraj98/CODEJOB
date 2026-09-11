@@ -4,6 +4,7 @@ import json
 from collections.abc import Callable
 
 from fastapi import HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.ai.draft_formatting import normalize_draft_text_size
@@ -149,12 +150,32 @@ class SettingsBootstrapService:
                 policy_json=json.dumps(policy_service.default_policy()),
             )
             db.add(default_settings)
-            db.commit()
+            try:
+                db.commit()
+            except IntegrityError:
+                # owner_id is unique and sync endpoints run in a threadpool, so
+                # two first requests from the same new tenant can both reach
+                # here. Losing the race is success: the row exists.
+                db.rollback()
         finally:
             db.close()
 
     def get_settings(self, db: Session) -> UserSettings:
         user_settings = db.query(UserSettings).filter(UserSettings.owner_id == tenancy.owner_id()).first()
+        if user_settings is None:
+            # Seed this tenant now rather than failing.
+            #
+            # `ensure_default_settings()` runs once, in startup_service, when
+            # the owner in scope is still the fallback constant - so exactly
+            # one owner ever got a row, and the second user to sign in got a
+            # 500 from /settings/bootstrap and /ai/status and an app that
+            # loaded but could not read its own configuration.
+            #
+            # Done here rather than at sign-in because this is the only place
+            # that knows a tenant needs settings, and it repairs the users who
+            # already exist as well as the next one. Idempotent.
+            self.ensure_default_settings()
+            user_settings = db.query(UserSettings).filter(UserSettings.owner_id == tenancy.owner_id()).first()
         if not user_settings:
             raise HTTPException(status_code=500, detail="Settings not initialized")
         return user_settings
