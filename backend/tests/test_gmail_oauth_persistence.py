@@ -137,3 +137,75 @@ def test_the_state_parameter_is_still_passed_to_the_local_server(storage, monkey
     gmail_client._run_prepared_oauth_flow(flow, "the-state", {"prompt": "select_account"})
 
     assert flow.run_local_server.call_args.kwargs["state"] == "the-state"
+
+
+# -- B2: identity verification at the point of persistence -------------------
+
+
+def _identity(email: str = "owner@example.com", subject: str = "sub-1"):
+    from app.services.google_identity_service import VerifiedIdentity
+
+    return VerifiedIdentity(subject=subject, email=email, email_verified=True)
+
+
+def test_the_verified_subject_and_email_are_stored(storage, monkeypatch):
+    """google_subject was nullable until the identity scopes arrived."""
+    _stub_profile(monkeypatch, "owner@example.com")
+    monkeypatch.setattr(gmail_client, "verified_identity", lambda creds: _identity())
+
+    gmail_client._persist_new_credentials(_credentials())
+
+    with database.session_scope() as db:
+        row = db.query(GmailCredential).one()
+        assert row.google_subject == "sub-1"
+        assert row.google_email == "owner@example.com"
+
+
+def test_a_mailbox_that_is_not_the_signed_in_account_is_refused(storage, monkeypatch):
+    """The check that stops one account attaching another's mailbox."""
+    from app.services.google_identity_service import IdentityVerificationError
+
+    _stub_profile(monkeypatch, "someone.else@example.com")
+    monkeypatch.setattr(gmail_client, "verified_identity", lambda creds: _identity())
+
+    with pytest.raises(IdentityVerificationError):
+        gmail_client._persist_new_credentials(_credentials())
+
+    with database.session_scope() as db:
+        assert db.query(GmailCredential).count() == 0, "nothing is stored on a mismatch"
+
+
+def test_a_credential_with_no_id_token_still_connects(storage, monkeypatch):
+    """Anything issued before the identity scopes must keep working."""
+    _stub_profile(monkeypatch)
+    monkeypatch.setattr(gmail_client, "verified_identity", lambda creds: None)
+
+    gmail_client._persist_new_credentials(_credentials())
+
+    with database.session_scope() as db:
+        row = db.query(GmailCredential).one()
+        assert row.google_subject is None
+        assert row.google_email == "owner@example.com"
+
+
+def test_the_identity_email_wins_over_the_profile_lookup(storage, monkeypatch):
+    """Both name the same account by then; the verified one is the evidence."""
+    _stub_profile(monkeypatch, "Owner@Example.com")
+    monkeypatch.setattr(gmail_client, "verified_identity", lambda creds: _identity("owner@example.com"))
+
+    gmail_client._persist_new_credentials(_credentials())
+
+    with database.session_scope() as db:
+        assert db.query(GmailCredential).one().google_email == "owner@example.com"
+
+
+def test_identity_scopes_are_requested():
+    assert "openid" in gmail_client.SCOPES
+    assert "https://www.googleapis.com/auth/userinfo.email" in gmail_client.SCOPES
+
+
+def test_oauthlib_scope_relaxation_is_set():
+    """Google reorders the scope list once openid is in it; oauthlib calls that tampering."""
+    import os
+
+    assert os.environ.get("OAUTHLIB_RELAX_TOKEN_SCOPE") == "1"

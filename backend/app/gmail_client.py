@@ -24,11 +24,28 @@ from app.ai.draft_formatting import draft_text_to_html
 from app.config import settings
 from app.db import session_scope
 from app.parsing.document_extraction import clean_html_text
-from app.services import gmail_credential_service
+from app.services import gmail_credential_service, google_identity_service
 
 logger = logging.getLogger(__name__)
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.modify", "https://www.googleapis.com/auth/gmail.send"]
+# Identity scopes, added for B2. They are what makes one consent serve both
+# sign-in and mailbox access, and they are the only way to obtain the stable
+# `sub` claim - which is why GmailCredential.google_subject was nullable until
+# now. Adding them forces a one-time re-consent for anyone already connected.
+IDENTITY_SCOPES = ["openid", "https://www.googleapis.com/auth/userinfo.email"]
+for _scope in IDENTITY_SCOPES:
+    if _scope not in SCOPES:
+        SCOPES.append(_scope)
+
+# Google does not echo the requested scope list verbatim once `openid` is in
+# it: it reorders, and it adds the userinfo.profile scope that `openid` implies.
+# oauthlib treats any difference as tampering and raises "Scope has changed",
+# which would abort every consent with an error that looks nothing like its
+# cause. Relaxing the check is the documented remedy and is safe here because
+# the token's audience and signature are verified separately, in
+# google_identity_service.verify_id_token.
+os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
 SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
 if SHEETS_SCOPE not in SCOPES:
     SCOPES.append(SHEETS_SCOPE)
@@ -280,6 +297,20 @@ def _backfill_profile_email(owner_id: str, creds: Credentials) -> None:
         )
 
 
+def verified_identity(creds: Credentials):
+    """The verified Google identity behind a freshly issued credential.
+
+    Returns None when the credential carries no ID token, which is the case for
+    anything issued before the identity scopes were added. That is deliberate:
+    an existing connection must keep working until its owner happens to
+    reconnect, rather than being invalidated by a deploy.
+    """
+    raw = getattr(creds, "id_token", None)
+    if not raw:
+        return None
+    return google_identity_service.verify_id_token(str(raw))
+
+
 def _persist_new_credentials(creds: Credentials, owner_id: str | None = None) -> None:
     owner_id = owner_id or settings.owner_id
     if not settings.feature_db_credentials_enabled:
@@ -288,8 +319,19 @@ def _persist_new_credentials(creds: Credentials, owner_id: str | None = None) ->
         return
 
     google_email = _profile_email(creds)
+    identity = verified_identity(creds)
+    google_subject = None
+    if identity is not None:
+        # The check that stops somebody signing in as themselves and attaching
+        # another account's mailbox. A mismatch raises, and nothing is stored.
+        google_identity_service.assert_identity_matches_mailbox(identity, google_email)
+        google_subject = identity.subject
+        google_email = identity.email
+
     with session_scope() as db:
-        gmail_credential_service.save_credentials(db, owner_id, creds, google_email=google_email)
+        gmail_credential_service.save_credentials(
+            db, owner_id, creds, google_email=google_email, google_subject=google_subject
+        )
 
 
 def _gmail_service(owner_id: str | None = None) -> Any:
