@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import AsyncExitStack
 import json
 
 from collections.abc import AsyncIterator
@@ -13,7 +14,7 @@ from langgraph.prebuilt import ToolNode, create_react_agent
 from app.ai.chat.failures import FAILURE_MESSAGES, FALLBACK_MESSAGE, _RETRYABLE, _TERMINAL, classify_ollama_error, tool_error
 from app.ai.chat.history import message_text
 from app.ai.chat.llm import build_chat_llm
-from app.ai.chat.mcp_client import get_mcp_tools, tools_cached
+from app.ai.chat.mcp_client import mcp_tools
 from app.ai.chat.system_prompt import build_system_prompt, prompt_sha256
 from app.config import settings
 from app.runtime_state import runtime_state
@@ -86,9 +87,10 @@ def tool_call_budget() -> int:
     return 2 * max(1, settings.ollama_max_tool_iterations) + 2
 
 
-async def build_chat_agent(model: str, candidate_profile: str = "", *, tools=None, timeout: float | None = None):
-    if tools is None:
-        tools = await get_mcp_tools()
+async def build_chat_agent(model: str, candidate_profile: str = "", *, tools, timeout: float | None = None):
+    # `tools` is required rather than lazily loaded. Tools are bound to an MCP
+    # session that has to outlive them, so a function that opened its own would
+    # hand back tools whose session had already closed.
     return create_react_agent(
         build_chat_llm(model, timeout), ToolNode(tools, handle_tool_errors=tool_error),
         prompt=build_system_prompt(candidate_profile),
@@ -103,7 +105,11 @@ async def stream_chat_agent(
     runtime_state.chat_last_attempted_at = datetime.now(UTC)
     metrics = {"model": "", "attempts": 0, "failed_over": False, "prompt_tokens": None,
                "completion_tokens": None, "tool_calls": [], "time_to_first_token_ms": None,
-               "failure_code": None, "budget_exhausted": False, "mcp_cached": tools_cached(),
+               "failure_code": None, "budget_exhausted": False,
+               # Vestigial since the tools moved in-process: there is no longer a
+               # cross-process cache to hit or miss. The column stays so this needs
+               # no migration for a telemetry-only field.
+               "mcp_cached": False,
                "prompt_sha256": prompt_sha256()}
     yield "telemetry", metrics
     streamed = ""
@@ -111,10 +117,15 @@ async def stream_chat_agent(
     usage = {}
     pending_tools = {}
     code = None
+    # The tool session lives as long as the turn: the tools talk over its
+    # streams, so it cannot be closed until the last one has been called. Held
+    # on a stack rather than an `async with` so the existing failure handling
+    # below keeps its shape.
+    tool_session = AsyncExitStack()
     try:
         try:
             async with asyncio.timeout(max(0, deadline - perf_counter())):
-                tools = await get_mcp_tools()
+                tools = await tool_session.enter_async_context(mcp_tools())
             runtime_state.chat_mcp_status = "ready"
         except Exception:
             code = "budget_exhausted" if perf_counter() >= deadline else "mcp_unavailable"
@@ -204,6 +215,7 @@ async def stream_chat_agent(
         for name, tool_started in pending_tools.values():
             metrics["tool_calls"].append({"name": name, "duration_ms": int((perf_counter() - tool_started) * 1000), "status": "interrupted"})
         runtime_state.chat_last_duration_ms = metrics["duration_ms"]
+        await tool_session.aclose()
     runtime_state.chat_last_error = code
     runtime_state.chat_last_failure_code = code
     failure = FAILURE_MESSAGES.get(code, FALLBACK_MESSAGE)

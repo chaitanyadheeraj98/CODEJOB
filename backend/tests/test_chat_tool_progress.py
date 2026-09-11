@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import asynccontextmanager
 import unittest
 from unittest import mock
 
@@ -18,10 +19,39 @@ class FakeGraph:
             yield event
 
 
+class FakeToolSession:
+    """Stand in for the per-turn MCP session, counting opens and closes.
+
+    The real one yields tools bound to a session that must stay open for the
+    whole turn, so a plain AsyncMock returning a list no longer matches the
+    shape - and the counts are the point: one session per turn however many
+    model attempts it takes, and always closed.
+    """
+
+    def __init__(self, tools=None, *, error=None):
+        self.tools = list(tools or [])
+        self.error = error
+        self.opens = 0
+        self.closes = 0
+
+    def __call__(self):
+        return self._session()
+
+    @asynccontextmanager
+    async def _session(self):
+        self.opens += 1
+        if self.error is not None:
+            raise self.error
+        try:
+            yield list(self.tools)
+        finally:
+            self.closes += 1
+
+
 def drain(events, messages):
     async def run():
         collected = []
-        with mock.patch.object(chat_agent, "get_mcp_tools", return_value=[]), mock.patch.object(chat_agent, "build_chat_agent", return_value=FakeGraph(events)):
+        with mock.patch.object(chat_agent, "mcp_tools", FakeToolSession([])), mock.patch.object(chat_agent, "build_chat_agent", return_value=FakeGraph(events)):
             async for kind, payload in chat_agent.stream_chat_agent(messages, model="test-model"):
                 collected.append((kind, payload))
         return collected
