@@ -1,0 +1,2351 @@
+{
+  "entries": [
+    {
+      "confidence": 0.5666666666666667,
+      "normalized_phrase": "add our email address to your distribution list",
+      "phrase": "add our email address to your distribution list",
+      "polarity": "negative_candidate_hotlist"
+    },
+    {
+      "confidence": 0.4,
+      "normalized_phrase": "available c2c opportunities",
+      "phrase": "available C2C opportunities",
+      "polarity": "negative_candidate_hotlist"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "budgetsf  cheap spots in sf",
+      "phrase": "BudgetSF — Cheap Spots in SF",
+      "polarity": "negative_candidate_hotlist"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "curated hotlist of highly qualified consultants",
+      "phrase": "curated hotlist of highly qualified consultants",
+      "polarity": "negative_candidate_hotlist"
+    },
+    {
+      "confidence": 0.52,
+      "normalized_phrase": "direct client reqs only",
+      "phrase": "Direct Client REQ's Only",
+      "polarity": "negative_candidate_hotlist"
+    },
+    {
+      "confidence": 0.5,
+      "normalized_phrase": "group may not be open to posting",
+      "phrase": "group may not be open to posting",
+      "polarity": "negative_candidate_hotlist"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "group you tried to contact may not exist",
+      "phrase": "group you tried to contact may not exist",
+      "polarity": "negative_candidate_hotlist"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "if youre not interested feel free to send me your resume",
+      "phrase": "If you're not interested feel free to send me your resume",
+      "polarity": "negative_candidate_hotlist"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "immediately available for new projects",
+      "phrase": "immediately available for new projects",
+      "polarity": "negative_candidate_hotlist"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "job search",
+      "phrase": "job search",
+      "polarity": "negative_candidate_hotlist"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "join the group before receiving permission to post",
+      "phrase": "join the group before receiving permission to post",
+      "polarity": "negative_candidate_hotlist"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "mutual connections",
+      "phrase": "mutual connections",
+      "polarity": "negative_candidate_hotlist"
+    },
+    {
+      "confidence": 0.5,
+      "normalized_phrase": "non-local profiles",
+      "phrase": "non-local profiles",
+      "polarity": "negative_candidate_hotlist"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "only h1b accepted",
+      "phrase": "Only H1b accepted",
+      "polarity": "negative_candidate_hotlist"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "permission to post messages to the group",
+      "phrase": "permission to post messages to the group",
+      "polarity": "negative_candidate_hotlist"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "quickly connect with skilled professionals",
+      "phrase": "quickly connect with skilled professionals",
+      "polarity": "negative_candidate_hotlist"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "surprise summer sale",
+      "phrase": "Surprise Summer Sale!",
+      "polarity": "negative_candidate_hotlist"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "thanks  regards shruteesh kumar",
+      "phrase": "Thanks & Regards Shruteesh Kumar",
+      "polarity": "negative_candidate_hotlist"
+    },
+    {
+      "confidence": 0.5,
+      "normalized_phrase": "to unsubscribe from this group",
+      "phrase": "To unsubscribe from this group",
+      "polarity": "negative_candidate_hotlist"
+    },
+    {
+      "confidence": 0.4,
+      "normalized_phrase": "unsubscribe from this group",
+      "phrase": "unsubscribe from this group",
+      "polarity": "negative_candidate_hotlist"
+    },
+    {
+      "confidence": 0.4,
+      "normalized_phrase": "update your experience to receive relevant insights",
+      "phrase": "Update your experience to receive relevant insights",
+      "polarity": "negative_candidate_hotlist"
+    },
+    {
+      "confidence": 0.5,
+      "normalized_phrase": "us it jobs hub",
+      "phrase": "US IT Jobs Hub",
+      "polarity": "negative_candidate_hotlist"
+    },
+    {
+      "confidence": 0.48529411764705893,
+      "normalized_phrase": "you received this message because you are subscribed to the google groups",
+      "phrase": "You received this message because you are subscribed to the Google Groups",
+      "polarity": "negative_candidate_hotlist"
+    },
+    {
+      "confidence": 0.5,
+      "normalized_phrase": "you received this message because you are subscribed to the google groups direct client c2c requirements group.",
+      "phrase": "You received this message because you are subscribed to the Google Groups \"Direct Client C2C requirements\" group.",
+      "polarity": "negative_candidate_hotlist"
+    },
+    {
+      "confidence": 0.5,
+      "normalized_phrase": "you received this message because you are subscribed to the google groups only c2c group.",
+      "phrase": "You received this message because you are subscribed to the Google Groups \"Only C2C\" group.",
+      "polarity": "negative_candidate_hotlist"
+    },
+    {
+      "confidence": 0.5,
+      "normalized_phrase": "rate",
+      "phrase": "rate",
+      "polarity": "negative_job_board"
+    },
+    {
+      "confidence": 0.5,
+      "normalized_phrase": "w2",
+      "phrase": "w2",
+      "polarity": "negative_job_board"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "50% off every evergreen cultivated culture product",
+      "phrase": "50% off every evergreen Cultivated Culture product",
+      "polarity": "negative_newsletter"
+    },
+    {
+      "confidence": 0.5,
+      "normalized_phrase": "does your teams component library make the accessible choice the easy choice",
+      "phrase": "Does your team's component library make the accessible choice the easy choice?",
+      "polarity": "negative_newsletter"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "job title: hrit workday extend architect / developer",
+      "phrase": "Job Title: HRIT Workday Extend Architect / Developer",
+      "polarity": "negative_newsletter"
+    },
+    {
+      "confidence": 0.5,
+      "normalized_phrase": "people you may know notification emails",
+      "phrase": "People You May Know notification emails",
+      "polarity": "negative_platform_notification"
+    },
+    {
+      "confidence": 0.5,
+      "normalized_phrase": "unsubscribe",
+      "phrase": "Unsubscribe",
+      "polarity": "negative_platform_notification"
+    },
+    {
+      "confidence": 0.78,
+      "normalized_phrase": "visa/work authorization",
+      "phrase": "visa/work authorization",
+      "polarity": "negative_platform_notification"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "securityalert:google account",
+      "phrase": "security_alert:google account",
+      "polarity": "negative_security_alert"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "securityalert:security alert",
+      "phrase": "security_alert:security alert",
+      "polarity": "negative_security_alert"
+    },
+    {
+      "confidence": 0.5,
+      "normalized_phrase": "$45  $55/hr",
+      "phrase": "$45 – $55/hr",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "$53/hr on c2c",
+      "phrase": "$53/hr on C2C",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "1 year",
+      "phrase": "1 Year",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7499999999999999,
+      "normalized_phrase": "10+ years",
+      "phrase": "10+ Years",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "10+ years experience candidates only local",
+      "phrase": "10+ Years experience candidates only Local",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8333333333333334,
+      "normalized_phrase": "10+ years of experience",
+      "phrase": "10+ years of experience",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "10+ years of experience in site reliability engineering devops or infrastructure engineering",
+      "phrase": "10+ years of experience in Site Reliability Engineering, DevOps, or Infrastructure Engineering",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.95,
+      "normalized_phrase": "10+ years of hands-on experience with oracle cloud infrastructure oci and related technologies",
+      "phrase": "10+ years of hands-on experience with Oracle Cloud Infrastructure (OCI) and related technologies",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "10+ years of it experience and minimum 5+ years as an aem architect",
+      "phrase": "10+ years of IT experience and minimum 5+ years as an AEM architect",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "10+ years of overall it experience",
+      "phrase": "10+ years of overall IT experience",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "10+ years of professional software development experience",
+      "phrase": "10+ years of professional software development experience",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8000000000000002,
+      "normalized_phrase": "10+ years of real-time experience",
+      "phrase": "10+ years of real-time experience",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "10+ years of relevant experience in enterprise network environment/customers",
+      "phrase": "10+ Years of relevant experience in enterprise network environment/customers",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "10+ years of software engineering and architecture experience",
+      "phrase": "10+ years of software engineering and architecture experience",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "10+ years of software engineering and architecture experience.",
+      "phrase": "10+ Years of software engineering and architecture experience.",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.5,
+      "normalized_phrase": "10+years exp",
+      "phrase": "10+Years Exp",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.5,
+      "normalized_phrase": "100% onsite  5 days/week",
+      "phrase": "100% Onsite – 5 Days/Week",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "100% onsite 5 days per week",
+      "phrase": "100% onsite 5 days per week",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7333333333333334,
+      "normalized_phrase": "100% onsite role",
+      "phrase": "100% onsite role",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "12 years of it experience",
+      "phrase": "12 years of IT experience",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "12 years of it experience with at least 5 years of hands-on experience in dynamics 365 fo or ax development",
+      "phrase": "12 years of IT experience, with at least 5 years of hands-on experience in Dynamics 365 F&O or AX development",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "12+ month",
+      "phrase": "12+ Month",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "12+ years as a snowflake architect",
+      "phrase": "12+ years as a Snowflake Architect",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7599999999999999,
+      "normalized_phrase": "12+ years of experience",
+      "phrase": "12+ years of experience",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.55,
+      "normalized_phrase": "13+ years",
+      "phrase": "13+ Years",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "14 plus year - long term",
+      "phrase": "14 Plus Year - Long Term",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6499999999999999,
+      "normalized_phrase": "14k+ network",
+      "phrase": "14k+ Network",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6999999999999998,
+      "normalized_phrase": "15+ years",
+      "phrase": "15+ Years",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "15+ years of exp needed",
+      "phrase": "15+ years of exp needed",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8222222222222223,
+      "normalized_phrase": "15+ years of experience",
+      "phrase": "15+ years of experience",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "2 months +",
+      "phrase": "2 Months +",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "4 days onsite look for local only",
+      "phrase": "4 days onsite (look for local Only)",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "4 months",
+      "phrase": "4 Months",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "4-6 years of experience with servicenow development",
+      "phrase": "4-6 years of experience with ServiceNow Development",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "5+ years of backend software engineering experience",
+      "phrase": "5+ years of backend software engineering experience",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "5+ years of experience with appium espresso and xcuitest",
+      "phrase": "5+ years of experience with Appium, Espresso, and XCUITest",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "5+ years of hands-on experience with cobol programming on ibm z/os",
+      "phrase": "5+ years of hands-on experience with COBOL programming on IBM z/OS",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "5+ years of java/j2ee enterprise application development",
+      "phrase": "5+ years of Java/J2EE Enterprise Application Development",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "5+ years of software engineering experience.",
+      "phrase": "5+ years of software engineering experience.",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "6 months contract",
+      "phrase": "6 Months Contract",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "6 months to hire",
+      "phrase": "6 months to hire",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.5,
+      "normalized_phrase": "6+ month contract",
+      "phrase": "6+ month contract",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7949999999999999,
+      "normalized_phrase": "6+ months",
+      "phrase": "6+ months",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7285714285714285,
+      "normalized_phrase": "6+ months contract",
+      "phrase": "6+ Months Contract",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "6+months contract",
+      "phrase": "6+Months Contract",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "7+ years of data engineering experience",
+      "phrase": "7+ years of Data Engineering experience",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.85,
+      "normalized_phrase": "7+ years of data engineering experience with 3+ years in a lead role",
+      "phrase": "7+ years of Data Engineering experience with 3+ years in a Lead role",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "7+ years of experience",
+      "phrase": "7+ years of experience",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "7+ years of experience in qa automation and software testing",
+      "phrase": "7+ years of experience in QA Automation and Software Testing",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "8+ years in archer solution design and implementation",
+      "phrase": "8+ years in Archer solution design and implementation",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8500000000000001,
+      "normalized_phrase": "8+ years of experience as a solution architect",
+      "phrase": "8+ years of experience as a Solution Architect",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "ai data engineer",
+      "phrase": "AI Data Engineer",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "ai interview assesment required",
+      "phrase": "AI interview assesment required",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "ai threat profiling: assess risks unique to genai llms and agentic integrations using frameworks like the owasp top 10 for llms.",
+      "phrase": "AI Threat Profiling: Assess risks unique to GenAI, LLMs, and agentic integrations using frameworks like the OWASP Top 10 for LLMs.",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "ai/ml engineer",
+      "phrase": "AI/ML Engineer",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "ai/ml engineers with azure",
+      "phrase": "AI/ML Engineers with Azure",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "api integration  pytest  appium",
+      "phrase": "API Integration | Pytest | Appium",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "app sec engineer with ai",
+      "phrase": "App Sec Engineer with AI",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "application security architect with ai",
+      "phrase": "Application security Architect with AI",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "appsec assessments: evaluate client software practices using bsimm or owasp samm to build maturity roadmaps.",
+      "phrase": "AppSec Assessments: Evaluate client software practices using BSIMM or OWASP SAMM to build maturity roadmaps.",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.475,
+      "normalized_phrase": "architect",
+      "phrase": "architect",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "austin tx- on-site",
+      "phrase": "Austin, TX- On-site",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6499999999999999,
+      "normalized_phrase": "available immediately",
+      "phrase": "available immediately",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "aws cloud/devops engineer resume",
+      "phrase": "AWS Cloud/Devops Engineer Resume",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "aws data engineer",
+      "phrase": "AWS Data Engineer",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.5285714285714286,
+      "normalized_phrase": "backend",
+      "phrase": "Backend",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.85,
+      "normalized_phrase": "backend 50%: strong hands-on experience with java spring boot kafka reactive programming and sql",
+      "phrase": "Backend (50%): Strong hands-on experience with Java, Spring Boot, Kafka, Reactive Programming, and SQL",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "backend developer with java spring boot",
+      "phrase": "Backend Developer with Java, Spring boot",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "backend engineer java python typescript",
+      "phrase": "Backend Engineer (Java, Python, TypeScript)",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.5,
+      "normalized_phrase": "backend engineering experience",
+      "phrase": "Backend engineering experience",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.92,
+      "normalized_phrase": "banking industry. combinatorial test design - ignite hexawise automation tools - selenium",
+      "phrase": "Banking Industry. Combinatorial Test Design - IGNITE, Hexawise Automation tools - Selenium",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "berkeley heights nj",
+      "phrase": "Berkeley Heights, NJ",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "big data engineer with hadoop and java coding",
+      "phrase": "Big Data Engineer with Hadoop and Java Coding",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.75,
+      "normalized_phrase": "bill rate - 60/hr max",
+      "phrase": "Bill Rate - 60/hr Max",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "billings montana onsite",
+      "phrase": "Billings, Montana (Onsite)",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "boston ma",
+      "phrase": "Boston, MA",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6499999999999999,
+      "normalized_phrase": "business analyst",
+      "phrase": "Business Analyst",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "business analyst at carlsbad ca onsite",
+      "phrase": "Business Analyst at Carlsbad, CA (Onsite)",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "business data analyst",
+      "phrase": "Business Data Analyst",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "business development manager",
+      "phrase": "Business Development Manager",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "business systems analyst",
+      "phrase": "Business Systems Analyst",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "c2c",
+      "phrase": "c2c",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "c2c candidates available",
+      "phrase": "C2C Candidates Available",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "c2c for java developer",
+      "phrase": "C2C for Java developer",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "c2c green card fraud is rising",
+      "phrase": "C2C 'Green Card' Fraud is Rising",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8000000000000002,
+      "normalized_phrase": "c2c only",
+      "phrase": "C2C Only",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "c2c only tx locals no",
+      "phrase": "C2C Only TX Locals No",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.825,
+      "normalized_phrase": "c2c vendor language",
+      "phrase": "C2C vendor language",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8166666666666668,
+      "normalized_phrase": "c2c/1099/w2",
+      "phrase": "C2C/1099/W2",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "c2c/w2/vendor/client language",
+      "phrase": "C2C/W2/vendor/client language",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.92,
+      "normalized_phrase": "candidate is expected to be at the office 4/5 days a week",
+      "phrase": "Candidate is expected to be at the office 4/5 days a week",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.85,
+      "normalized_phrase": "charlotte nc or pennington njonsite",
+      "phrase": "Charlotte, NC or Pennington, NJ(Onsite)",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "charlotte or remote",
+      "phrase": "Charlotte or Remote",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "chicago il 60606-hybrid",
+      "phrase": "Chicago, IL 60606-Hybrid",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "client",
+      "phrase": "client",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "client is looking for a project team to support various integrations in fi custom sma",
+      "phrase": "Client is looking for a project team to support various integrations in FI Custom SMA",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.5,
+      "normalized_phrase": "client: birlasoft",
+      "phrase": "Client: Birlasoft",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "client: sapient",
+      "phrase": "Client: SAPIENT",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.605,
+      "normalized_phrase": "cloud",
+      "phrase": "cloud",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "cloud security engineer",
+      "phrase": "Cloud Security Engineer",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.82,
+      "normalized_phrase": "columbus oh onsite",
+      "phrase": "Columbus, OH Onsite",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "companies with the most job openings in your role",
+      "phrase": "Companies with the most job openings in your role",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.661111111111111,
+      "normalized_phrase": "contract",
+      "phrase": "Contract",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "contract engagement",
+      "phrase": "Contract engagement",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.78,
+      "normalized_phrase": "contract role",
+      "phrase": "Contract role",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6666666666666666,
+      "normalized_phrase": "contract to hire",
+      "phrase": "Contract to hire",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.75,
+      "normalized_phrase": "contract visa",
+      "phrase": "Contract Visa",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "contract-to-hire 12-month contract with potential for full-time conversion",
+      "phrase": "Contract-to-Hire (12-Month Contract with Potential for Full-Time Conversion)",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.5,
+      "normalized_phrase": "contractual role",
+      "phrase": "Contractual Role",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.5,
+      "normalized_phrase": "coppell tx 75019-hybrid",
+      "phrase": "Coppell, TX 75019-Hybrid",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.75,
+      "normalized_phrase": "curated hotlist of highly qualified consultants",
+      "phrase": "curated hotlist of highly qualified consultants",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "dallas tx -onsite",
+      "phrase": "Dallas, TX -Onsite",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "dallas tx 3 days onsite / week",
+      "phrase": "Dallas TX 3 days onsite / week",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "data analytics engineer gcp",
+      "phrase": "Data Analytics Engineer (GCP)",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7666666666666666,
+      "normalized_phrase": "data architect",
+      "phrase": "Data Architect",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "data solutions architect",
+      "phrase": "Data Solutions Architect",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "database admin",
+      "phrase": "Database Admin",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.55,
+      "normalized_phrase": "dearborn mi day1 onsite",
+      "phrase": "Dearborn, MI (Day1 onsite)",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "define end-to-end crm solution architecture for dynamics 365 ce implementations.",
+      "phrase": "Define end-to-end CRM solution architecture for Dynamics 365 CE implementations.",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "design and develop aws-based data pipelines and data lake solutions",
+      "phrase": "Design and develop AWS-based data pipelines and data lake solutions",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.5266666666666667,
+      "normalized_phrase": "developer",
+      "phrase": "developer",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.75,
+      "normalized_phrase": "direct client reqs only",
+      "phrase": "Direct Client REQ's Only",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "direct client reqs only contract job opportunity",
+      "phrase": "Direct Client REQ's Only Contract job opportunity",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "duration: contract",
+      "phrase": "Duration: Contract",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.75,
+      "normalized_phrase": "duration: long term",
+      "phrase": "Duration: Long Term",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "dynamics 365 crm solution architect",
+      "phrase": "Dynamics 365 CRM Solution Architect",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "dynamics 365 fo or ax development",
+      "phrase": "Dynamics 365 F&O or AX development",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7000000000000001,
+      "normalized_phrase": "engineer",
+      "phrase": "engineer",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "enterprise architect role with ms dynamics 365",
+      "phrase": "Enterprise Architect role with MS Dynamics 365",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "enterprise architect role with ms dynamics 365 customer engagement and finance  operations and power platform",
+      "phrase": "Enterprise Architect role with MS Dynamics 365 (Customer Engagement and Finance & Operations) and Power Platform",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "experience  qualifications experience: cybersecurity consulting application security engineering.vulnerability management ai security",
+      "phrase": "Experience & Qualifications Experience: cybersecurity consulting, application security engineering.Vulnerability Management, AI Security",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "experience designing ata models across third party fourth party and engagement records",
+      "phrase": "Experience designing ata models across Third Party, Fourth Party, and Engagement records",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "experience implementing enterprise ai governance and compliance frameworks.",
+      "phrase": "Experience implementing enterprise AI governance and compliance frameworks.",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.4,
+      "normalized_phrase": "experience with control-d control-m file-aid",
+      "phrase": "Experience with Control-D, Control-M, File-AID",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6999999999999998,
+      "normalized_phrase": "face to face",
+      "phrase": "Face to Face",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "face-to-face interview",
+      "phrase": "Face-to-Face Interview",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "frontend 50%: strong expertise in angular latest versions",
+      "phrase": "Frontend (50%): Strong expertise in Angular (latest versions)",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "full stack ai engineer",
+      "phrase": "Full Stack AI Engineer",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8222222222222224,
+      "normalized_phrase": "full stack developer",
+      "phrase": "Full stack developer",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "full stack lead developer",
+      "phrase": "Full Stack Lead Developer",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "gcp cloud engineer position",
+      "phrase": "GCP Cloud Engineer position",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "gcp devops engineer",
+      "phrase": "GCP DevOps Engineer",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "gcp iam engineer associate",
+      "phrase": "GCP IAM Engineer (Associate)",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "gcp iam lead / manager",
+      "phrase": "GCP IAM Lead / Manager",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "gcp network engineer",
+      "phrase": "GCP Network Engineer",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.95,
+      "normalized_phrase": "gis business analyst",
+      "phrase": "GIS Business Analyst",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6599999999999999,
+      "normalized_phrase": "github copilot experience",
+      "phrase": "GitHub Copilot experience",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "h-1b  tech recruitment expert",
+      "phrase": "H-1B & Tech Recruitment Expert",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6599999999999999,
+      "normalized_phrase": "h1b",
+      "phrase": "H1B",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6499999999999999,
+      "normalized_phrase": "h1b also works.",
+      "phrase": "H1B also works.",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.55,
+      "normalized_phrase": "h1b and gc ead and h4ead with ppn and usc",
+      "phrase": "H1B and Gc EAD and H4EAD with PPN and USC",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8000000000000002,
+      "normalized_phrase": "h1b only",
+      "phrase": "H1B Only",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "h1b visa",
+      "phrase": "H1b visa",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7333333333333333,
+      "normalized_phrase": "h1b with pp number",
+      "phrase": "H1b With PP Number",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.5,
+      "normalized_phrase": "h1b/h4-ead",
+      "phrase": "H1B/H4-EAD",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6499999999999999,
+      "normalized_phrase": "h1b/h4-ead only",
+      "phrase": "H1B/H4-EAD only",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "h4 eads only",
+      "phrase": "H4 EADs Only",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "h4ead opt ead l2s j2ead and usc and greencard",
+      "phrase": "H4EAD, OPT EAD, L2S, J2EAD and USC and GreenCard",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.5,
+      "normalized_phrase": "hands-on test automation expertise for salesforce applications",
+      "phrase": "Hands-on test automation expertise for Salesforce applications",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8500000000000001,
+      "normalized_phrase": "healthcare solution architect",
+      "phrase": "Healthcare Solution Architect",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6000000000000001,
+      "normalized_phrase": "hybrid",
+      "phrase": "hybrid",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "hybrid 2 days onsite at nearby deloitte office",
+      "phrase": "Hybrid (2 Days onsite at nearby Deloitte office)",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "hybrid 3 days",
+      "phrase": "Hybrid 3 days",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "hybrid in coppell tx 75019",
+      "phrase": "Hybrid in Coppell, TX 75019",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "i have extensive experience in pki design and implementation within aws environments and i am confident that my technical skills in scripting and certificate life cycle management align well with the requirements of this role.",
+      "phrase": "I have extensive experience in PKI design and implementation within AWS environments, and I am confident that my technical skills in scripting and certificate life cycle management align well with the requirements of this role.",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "immediate availability",
+      "phrase": "Immediate availability",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.95,
+      "normalized_phrase": "immediate requirement for qa automation role in pittsburgh pa need locals",
+      "phrase": "Immediate Requirement for QA Automation role in Pittsburgh, PA (Need Locals)",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.75,
+      "normalized_phrase": "immediately available for new projects",
+      "phrase": "immediately available for new projects",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.625,
+      "normalized_phrase": "implementation partner : wipro",
+      "phrase": "Implementation Partner : Wipro",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.5,
+      "normalized_phrase": "implementation partner language",
+      "phrase": "Implementation partner language",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "implementation partner: wipro",
+      "phrase": "Implementation Partner: Wipro",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8000000000000002,
+      "normalized_phrase": "in person interview",
+      "phrase": "In person Interview",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "interested candidates please share your updated resume at:",
+      "phrase": "Interested candidates, please share your updated resume at:",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.5,
+      "normalized_phrase": "itsm certification mandatory",
+      "phrase": "ITSM Certification Mandatory",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7333333333333334,
+      "normalized_phrase": "java 8",
+      "phrase": "Java 8",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8000000000000002,
+      "normalized_phrase": "java developer",
+      "phrase": "Java Developer",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.75,
+      "normalized_phrase": "java developer with aws",
+      "phrase": "Java Developer with AWS",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8055555555555556,
+      "normalized_phrase": "java full stack developer",
+      "phrase": "Java Full Stack Developer",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "java full stack developer vue.js",
+      "phrase": "Java Full Stack Developer (Vue.JS)",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "java full stack technical lead requirement",
+      "phrase": "Java Full Stack Technical Lead Requirement",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "java fullstack developer with ui and ux",
+      "phrase": "Java FullStack Developer with UI And UX",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "java solution architect",
+      "phrase": "Java Solution Architect",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "java with api",
+      "phrase": "Java With API",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "job description job summary core: application security and vulnerability management",
+      "phrase": "Job Description; Job Summary Core: Application Security and Vulnerability Management",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "job description knowledge skills abilities",
+      "phrase": "Job Description Knowledge, Skills, Abilities",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8300000000000001,
+      "normalized_phrase": "job description structure",
+      "phrase": "Job description structure",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "job title",
+      "phrase": "job title",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "job title: crm solution architect microsoft dynamics 365 ce",
+      "phrase": "Job Title: CRM Solution Architect (Microsoft Dynamics 365 CE)",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.5,
+      "normalized_phrase": "jobs where you are the top candidate",
+      "phrase": "Jobs where you are the top candidate",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "join our team as a .net java full-stack developer devops python qa gen ai itss cyber security  workday servicenow product manager  data center operator",
+      "phrase": "Join Our Team as a .NET, Java Full-Stack Developer, DevOps, Python, QA, GEN AI, ITSS, Cyber security , Workday, ServiceNow, Product Manager & Data Center Operator !",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "las vegas nevada onsite",
+      "phrase": "Las Vegas, Nevada (Onsite)",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "lead and successfully deliver sap implementation enhancement migration and support projects",
+      "phrase": "Lead and successfully deliver SAP implementation, enhancement, migration, and support projects",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8666666666666667,
+      "normalized_phrase": "lead it security endpoint engineer",
+      "phrase": "Lead IT Security Endpoint Engineer",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "lead mulesoft developer",
+      "phrase": "Lead MuleSoft Developer",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "lead network engineer l3 routing  switching",
+      "phrase": "Lead Network Engineer (L3) Routing & Switching",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "lead solution architecture for archer tprm modernization",
+      "phrase": "Lead solution architecture for Archer TPRM modernization",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "local 9+ profiles",
+      "phrase": "Local 9+ Profiles",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6416666666666669,
+      "normalized_phrase": "local candidates",
+      "phrase": "local candidates",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "local candidates only",
+      "phrase": "Local candidates only",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "local to new jersey nj or cary nc only",
+      "phrase": "Local to New Jersey, NJ or Cary NC only",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "local to nj",
+      "phrase": "Local to NJ",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7777777777777778,
+      "normalized_phrase": "locals only",
+      "phrase": "Locals Only",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.515,
+      "normalized_phrase": "location",
+      "phrase": "Location",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7000000000000001,
+      "normalized_phrase": "location: remote",
+      "phrase": "Location: Remote",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "location: remote / hybrid",
+      "phrase": "Location: Remote / Hybrid",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "location: remote usa",
+      "phrase": "Location: Remote (USA)",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "location: santa clara ca",
+      "phrase": "Location: Santa Clara, CA",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "locations: tx ca nj ny il nc pa az sc fl  ho az  usa",
+      "phrase": "Locations: TX, CA, NJ, NY, IL, NC, PA, AZ, SC ,FL , HO, AZ ( USA )",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "long term",
+      "phrase": "long Term",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7434999999999998,
+      "normalized_phrase": "long term contract",
+      "phrase": "Long Term Contract",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "long-term contract opportunities with leading clients",
+      "phrase": "long-term contract opportunities with leading clients",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "looking for a minimum of 18+ years of ms dynamics solution architect",
+      "phrase": "Looking for a minimum of 18+ years of MS Dynamics Solution Architect",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "looking for a service desk team lead position",
+      "phrase": "looking for a service desk team lead position",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "machine learning engineer iii",
+      "phrase": "Machine Learning Engineer III",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8500000000000001,
+      "normalized_phrase": "mainframe developer ims/idms specialist",
+      "phrase": "Mainframe Developer IMS/IDMS Specialist",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "max rate $50/hr c2c",
+      "phrase": "Max Rate $50/hr C2C",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "max rate: 52/hr c2c",
+      "phrase": "Max rate: 52/hr C2C",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.4,
+      "normalized_phrase": "microsoft certifications",
+      "phrase": "Microsoft certifications",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "microsoft dynamics 365 developer",
+      "phrase": "Microsoft Dynamics 365 Developer",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "mobile automation test engineer",
+      "phrase": "Mobile Automation Test Engineer",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "multiple it opportunities across the usa",
+      "phrase": "Multiple IT Opportunities Across the USA",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "must be proficient in jcl cobol vsam and cics",
+      "phrase": "Must be proficient in JCL, COBOL, VSAM, and CICS",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "must have expertise in aws platform as a service",
+      "phrase": "Must have expertise in AWS Platform as a Service",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "must have previous usaa experience mandatory",
+      "phrase": "Must have previous USAA experience (Mandatory)",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.72,
+      "normalized_phrase": "must have skills",
+      "phrase": "Must have skills",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "must have skills - d365 crm sales marketing and customer service",
+      "phrase": "Must Have Skills - D365, CRM, Sales, Marketing and Customer Service",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "must share the pp copy and linkedin url",
+      "phrase": "Must share the PP copy and LinkedIn URL",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7000000000000001,
+      "normalized_phrase": "must-have skills",
+      "phrase": "Must-Have Skills",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "need a local candidate with a linkedin id/dl/gc",
+      "phrase": "Need a local candidate with a LinkedIn ID/DL/GC!!",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "need locals to tx",
+      "phrase": "Need Locals to TX",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "need only locals",
+      "phrase": "Need only Locals",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "need only visa independent candidates",
+      "phrase": "Need Only Visa Independent Candidates",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "new job openings offering over $190k/yr for software engineer in the united states",
+      "phrase": "New job openings offering over $190K/yr for Software Engineer in the United States",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "new york plaza new york ny 10004 hybrid  3 days must",
+      "phrase": "New York Plaza, New York, NY 10004 (Hybrid – 3 days Must)",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "newark nj 07102 usa",
+      "phrase": "Newark, NJ 07102, USA",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "nyc ny",
+      "phrase": "NYC, NY",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.5,
+      "normalized_phrase": "o fallon mo",
+      "phrase": "O Fallon, MO",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "only h1b accepted",
+      "phrase": "Only H1b accepted",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6619047619047619,
+      "normalized_phrase": "onsite",
+      "phrase": "Onsite",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "onsite  hybrid opportunities available",
+      "phrase": "Onsite & Hybrid Opportunities Available",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6499999999999999,
+      "normalized_phrase": "onsite from day 1",
+      "phrase": "onsite from Day 1",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "onsite interview",
+      "phrase": "onsite interview",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "onsite role to mclean va",
+      "phrase": "onsite role to McLean, VA",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "onsite roles",
+      "phrase": "onsite roles",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.5,
+      "normalized_phrase": "open for relocation",
+      "phrase": "open for relocation",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "open requirements",
+      "phrase": "open requirements",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.5,
+      "normalized_phrase": "oracle pl/sql: advanced",
+      "phrase": "Oracle PL/SQL: Advanced",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6499999999999999,
+      "normalized_phrase": "phoenix az",
+      "phrase": "Phoenix, AZ",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.85,
+      "normalized_phrase": "pittsburgh pa need locals",
+      "phrase": "Pittsburgh, PA (Need Locals)",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "plano tx",
+      "phrase": "Plano, TX",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.82,
+      "normalized_phrase": "please carefully read the job description below",
+      "phrase": "Please carefully read the Job Description below",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7600000000000001,
+      "normalized_phrase": "please email me an updated ms word version of your resume",
+      "phrase": "Please email me an updated MS Word version of your resume",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "please find my resume attached for your review",
+      "phrase": "Please find my resume attached for your review",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "please find my resume attached for your review.",
+      "phrase": "Please find my resume attached for your review.",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7440000000000001,
+      "normalized_phrase": "please share resume",
+      "phrase": "Please Share Resume",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6666666666666666,
+      "normalized_phrase": "please share resume to email",
+      "phrase": "Please Share Resume to [email]",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "postgresql database admin",
+      "phrase": "PostgreSQL Database Admin",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "princeton nj",
+      "phrase": "Princeton NJ",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "principal level fse",
+      "phrase": "Principal Level FSE",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "proficiency in jcl vsam db2 ims and cics",
+      "phrase": "Proficiency in JCL, VSAM, DB2, IMS, and CICS",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "raritan nj onsite",
+      "phrase": "Raritan NJ onsite",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "rate is fine",
+      "phrase": "rate is fine ??",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.75,
+      "normalized_phrase": "rate-working from home",
+      "phrase": "Rate-Working from Home",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7450000000000001,
+      "normalized_phrase": "rate/location terms",
+      "phrase": "Rate/location terms",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "rate: $35 - 40/hr c2c",
+      "phrase": "Rate: $35 - 40/hr C2C",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.5,
+      "normalized_phrase": "regulated industries",
+      "phrase": "regulated industries",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "relocation will work",
+      "phrase": "Relocation will work",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.71,
+      "normalized_phrase": "remote",
+      "phrase": "remote",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7428571428571428,
+      "normalized_phrase": "remote job opportunity",
+      "phrase": "Remote Job Opportunity",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "remote location",
+      "phrase": "Remote location",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6666666666666666,
+      "normalized_phrase": "remote usa",
+      "phrase": "Remote (USA)",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "remote w2 usc/gc",
+      "phrase": "Remote W2 USC/GC",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "required experience with gcp services terraform and ci/cd pipelines",
+      "phrase": "required experience with GCP services, Terraform, and CI/CD pipelines",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8428571428571429,
+      "normalized_phrase": "required skills",
+      "phrase": "Required skills",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.5833333333333334,
+      "normalized_phrase": "required skills:",
+      "phrase": "Required Skills:",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "required skills: java j2ee javascript vue.js sql  oracle db for queries and changes.",
+      "phrase": "Required Skills: Java, J2EE, Javascript, Vue.js, SQL & Oracle DB for queries and changes.",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.85,
+      "normalized_phrase": "required technical skills appsec tooling: hands-on experience with enterprise suites like snyk checkmarx ghas wiz or veracode.",
+      "phrase": "Required Technical Skills AppSec Tooling: Hands-on experience with enterprise suites like Snyk, Checkmarx, GHAS, Wiz, or Veracode.",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6499999999999999,
+      "normalized_phrase": "responsibilities",
+      "phrase": "Responsibilities",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.5750000000000001,
+      "normalized_phrase": "responsibilities:",
+      "phrase": "Responsibilities:",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6433333333333332,
+      "normalized_phrase": "resume",
+      "phrase": "Resume",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.5333333333333333,
+      "normalized_phrase": "resume of my consultant",
+      "phrase": "Resume of my consultant",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.85,
+      "normalized_phrase": "resume-submission",
+      "phrase": "resume-submission",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "resume-submission requests",
+      "phrase": "Resume-submission requests",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.5,
+      "normalized_phrase": "resume:",
+      "phrase": "Resume:",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "richmond va",
+      "phrase": "Richmond, VA",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "role",
+      "phrase": "Role",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.85,
+      "normalized_phrase": "role-dynamics 365 crm solution architect",
+      "phrase": "Role-Dynamics 365 CRM Solution Architect",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.95,
+      "normalized_phrase": "ruby on rails java spring boot postgresql aws services",
+      "phrase": "Ruby on Rails, Java, Spring Boot, PostgreSQL, AWS Services",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.85,
+      "normalized_phrase": "saas security posture management sspm",
+      "phrase": "SaaS Security Posture Management (SSPM)",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "sailpoint developer at morristown nj  onsite",
+      "phrase": "SailPoint Developer at Morristown, NJ || Onsite",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.725,
+      "normalized_phrase": "salesforce developer",
+      "phrase": "Salesforce Developer",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "san antonio tx need locals",
+      "phrase": "San Antonio, TX (Need Locals)",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "san francisco ca onsite",
+      "phrase": "San Francisco, CA (Onsite)",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "san jose ca primary or chicago il",
+      "phrase": "San Jose, CA (primary) or Chicago, IL",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "santa clara ca onsite",
+      "phrase": "Santa Clara, CA (Onsite)",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "sap fico",
+      "phrase": "SAP FICO",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "sap material management mm consultant",
+      "phrase": "SAP Material Management (MM) Consultant",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "sap project manager",
+      "phrase": "SAP Project Manager",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "senior full stack backend engineer java  .net",
+      "phrase": "Senior Full Stack Backend Engineer (Java & .NET)",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.875,
+      "normalized_phrase": "senior java developer",
+      "phrase": "Senior Java Developer",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "senior sailpoint software engineer with mortgage experience",
+      "phrase": "Senior SailPoint Software Engineer with Mortgage experience",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "senior talent acquisition executive",
+      "phrase": "Senior Talent Acquisition Executive",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "senior talent acquisition executive  career counsellor  connecting top tech talent with opportunities  h-1b amp tech recruitment expert",
+      "phrase": "Senior Talent Acquisition Executive | Career Counsellor | Connecting Top Tech Talent with Opportunities | H-1B &amp; Tech Recruitment Expert",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "service desk team lead",
+      "phrase": "Service Desk Team Lead",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "servicenow certified system administrator csa",
+      "phrase": "ServiceNow Certified System Administrator (CSA)",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "servicenow senior developer secops",
+      "phrase": "ServiceNow Senior Developer (secops)",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "share only suitable resume",
+      "phrase": "Share only suitable resume",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "share only suitable resume to email",
+      "phrase": "Share only suitable resume to [email]",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "share updated resume along with linkedin profile url",
+      "phrase": "Share updated resume along with LinkedIn profile URL",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "skype interview",
+      "phrase": "Skype interview",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "software developer",
+      "phrase": "Software Developer",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "software engineer roles with over $190k/yr salary",
+      "phrase": "Software Engineer roles with over $190K/yr salary",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.65,
+      "normalized_phrase": "solution architect",
+      "phrase": "Solution Architect",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "solution architecture experience",
+      "phrase": "Solution architecture experience",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "somerset nj",
+      "phrase": "Somerset, NJ",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "strong background in system integration and platform engineering.",
+      "phrase": "Strong background in system integration and platform engineering.",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.72,
+      "normalized_phrase": "strong experience in accessibility testing",
+      "phrase": "Strong experience in Accessibility Testing",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "strong experience with bdd testing methodologies",
+      "phrase": "Strong experience with BDD testing methodologies",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "strong experience with cloud platforms aws azure or gcp",
+      "phrase": "Strong experience with cloud platforms (AWS, Azure, or GCP)",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "strong in data platform design data modeling  elt pipelines",
+      "phrase": "Strong in Data Platform Design, Data Modeling & ELT pipelines",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.5,
+      "normalized_phrase": "strong knowledge of batch processing and online transaction processing",
+      "phrase": "Strong knowledge of batch processing and online transaction processing",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "strong knowledge of x++ visual studio azure devops and power platform",
+      "phrase": "Strong knowledge of X++, Visual Studio, Azure DevOps, and Power Platform",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "strong programming expertise in java",
+      "phrase": "Strong programming expertise in Java",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "strong skills in microservices architecture",
+      "phrase": "Strong skills in microservices architecture",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "submit only local candidates allowed",
+      "phrase": "submit only local candidates allowed",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "technical lead developer",
+      "phrase": "Technical Lead Developer",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.5857142857142857,
+      "normalized_phrase": "technical skills",
+      "phrase": "Technical Skills",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "tx locals",
+      "phrase": "TX Locals",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8333333333333334,
+      "normalized_phrase": "urgently required",
+      "phrase": "Urgently required",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "us it staffing",
+      "phrase": "US IT Staffing",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "usc gc visa",
+      "phrase": "USC, GC visa",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7000000000000001,
+      "normalized_phrase": "usc/gc only",
+      "phrase": "USC/GC Only",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.4,
+      "normalized_phrase": "usc/h1b/ead h4/ead l2",
+      "phrase": "USC/H1B/EAD H4/EAD L2",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "valid u.s. work authorization required",
+      "phrase": "Valid U.S. Work Authorization Required",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.5,
+      "normalized_phrase": "visa",
+      "phrase": "Visa",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.62,
+      "normalized_phrase": "visa : gc",
+      "phrase": "Visa : GC",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "visa : h1b",
+      "phrase": "Visa : h1b",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "visa h1b",
+      "phrase": "Visa H1B",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "visa independent consultants",
+      "phrase": "visa independent consultants",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6749999999999999,
+      "normalized_phrase": "visa only",
+      "phrase": "Visa Only",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.825,
+      "normalized_phrase": "visa only : h1b and gc ead and h4ead with ppn and usc",
+      "phrase": "Visa Only : (H1B and Gc EAD and H4EAD with PPN and USC)",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "visa only h1b",
+      "phrase": "Visa Only H1B",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8833333333333333,
+      "normalized_phrase": "visa/work authorization",
+      "phrase": "Visa/work authorization",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "visa: gc gcead usc",
+      "phrase": "Visa: GC, GCEAD, USC",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "visa: need only independent visa no h1s",
+      "phrase": "Visa: Need Only Independent Visa No H1's",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "w2 only",
+      "phrase": "W2 Only",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "w2 visa: h4ead gc gcead usc",
+      "phrase": "W2 Visa: H4EAD, GC, GCEAD, USC",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.7,
+      "normalized_phrase": "we are seeking an experienced dynamics 365 crm solution architect",
+      "phrase": "We are seeking an experienced Dynamics 365 CRM Solution Architect",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.8,
+      "normalized_phrase": "were actively hiring experienced professionals",
+      "phrase": "We're actively hiring experienced professionals",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "were hiring",
+      "phrase": "WE'RE HIRING!",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "were hiring multiple it opportunities across the usa",
+      "phrase": "We're Hiring! Multiple IT Opportunities Across the USA",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.9,
+      "normalized_phrase": "were hiring: mobile automation engineer",
+      "phrase": "We're Hiring: Mobile Automation Engineer",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.5,
+      "normalized_phrase": "wipro",
+      "phrase": "Wipro",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.807142857142857,
+      "normalized_phrase": "woodland hills ca or mason oh",
+      "phrase": "Woodland Hills, CA or Mason, OH",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.5,
+      "normalized_phrase": "workday extend solutions and integrations",
+      "phrase": "Workday Extend solutions and integrations",
+      "polarity": "positive_recruiter_jd"
+    },
+    {
+      "confidence": 0.6,
+      "normalized_phrase": "zero accessibility violations in production audits.",
+      "phrase": "Zero accessibility violations in production audits.",
+      "polarity": "positive_recruiter_jd"
+    }
+  ],
+  "schema_version": 1
+}

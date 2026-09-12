@@ -1,0 +1,2486 @@
+{
+  "entity_type": "company",
+  "entries": [
+    {
+      "aliases": [],
+      "canonical_name": "1Point System LLC.",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "1PointSys",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "1Pro",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "1RPO",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "3B Staffing LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "3K Technologies",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "3ktechnologies",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "3ktechnologies.com",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "3MK Software Solutions LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "3mkllc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "4A IT Services LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Absolute IT",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Ace Technologies",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Adam Infotech",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Aditi LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ADP",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ADVENTA",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Agile Enterprise Solutions Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Aivanta Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Alchemy Solutions",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Alliance IT",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Allied Technologies",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "alltech",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Alltech Consulting",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Alltech Consulting Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Alltech Consulting Services Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "alltechconsultinginc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Alpha silicon",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Amaze Systems Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Amber IT Staffing",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Amber IT Staffing Solutions LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "American Airlines",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "American Express",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "American IT Systems",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "American IT Systems LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Ameyaa Group",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AmitiTech",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Ampstek",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Anna Global Tech",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Anveta Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Aphrosoft",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Aphrosoft Technologies",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "APN Consulting Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Apokrin",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Apptad Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ApTask",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Aptiva Corp",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Argyll Info Tech",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Argyll Infotech",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Ark Infotech Spectrum",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Arkhya Tech",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Arkhya Tech Inc.",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "arkhyatech",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ArkInfotech Spectrum Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Ascent Logistics (Michigan-based)",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ASCI Group",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Aspire IT LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AT&T",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ATVS LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AutoNation",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Avance Consulting",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Avance Services",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Avanciers",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Avanciers, Inc.",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Avventis Inc.",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "BA IT Consulting",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "BCG",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Bellatrix",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Best H Tech",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Best Pegasus",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "BestH Tech",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Bilabs Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "BinTech Group",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Birlasoft",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Black Rock Solutions Corporation",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "BlackRock Group",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Bravens Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Brightsol",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Brightspeed",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Brilliant Infotech Inc.",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Brillio",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Brown Brothers Harriman",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "BZ Analytics",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "CAGUS",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Caliber Technologies, LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "California Soft Tech",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Capital One",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "CCS Global Tech",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Centraprise",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Centraprise Corp",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Chandra Technologies",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "CIS-TEC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "CIS Technologies",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Clevanoo LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cloud Eminent",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "cloudrann",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "CloudThink Tech Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Code Crewzs",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Codebase Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Codinix",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cognivaton",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cognize Tech Solutions",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cognowiz Solutions",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Compunnel",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Concept Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Config USA",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ConfigUSA",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ConvexTech Inc.",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cortex Consultants",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cozen",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cozen Tech",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cozentech",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "CREA Services LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Creaservices",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "CTS",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "cyberThink",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cynosure Technologies",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cynosure Technologies, LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "DataQ Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Decision six",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Deloitte",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Deloitte Digital",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Deloitte/Humana",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Delta Dental",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Delta Dental Plan of Michigan",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Delta System & Software, Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Devfi",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Dews of Tech",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Digital Dhara",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Digitive LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Dimcon",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Diverse Lynx",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Diverse Lynx LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Dizer Corp",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Droisys",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "DVG Tech Solutions LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Dynasticx LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "E-IT Professionals",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "E-Solutions",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "E-Solutions Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "e-solutionsinc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Ecom Solutions Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ED Jones Through Deloitte",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Edge Global",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "eHub",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "eHub Global",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Emphasis Soft Tech",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Empower Professionals",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Empower Professionals Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "eNcloud Services",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "eNcloud Services LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Eniac System Inc.",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Eniac Systems",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Eniac Systems Inc.",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Eniacsys",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Enin Systems",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Enterprise Solution Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Enterprise Solutions, Inc.",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Envision Technology Solutions",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Epssoft Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Eraytec",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Eros Technologies",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Eros Technologies Inc.",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Eteam Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Everest Global Solutions INC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Eversoft Technologies LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Exaways",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Excelon Solutions",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Exemplar IT Solutions",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ExemplarITS",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Extend InfoSys",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Federal Soft Systems",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Fidelity Investments",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "FIRSTNET GLOBAL LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Flexon Technologies",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Flexon Technologies Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Floga Technologies",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "FSTONE Technologies",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Fugetec",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Fusion Gridtek",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Futran Solutions",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GAC IT Solutions",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GAC Solutions",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Galactic Mind",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Galaxy ITech",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Galent",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Global IT Family",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Global IT Family LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Global Techno IT",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GVR infotek",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "gvrinfotek",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Hallmark Global",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Hallmark global Solutions Ltd",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Hallmark Global Technologies",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Hallmark Global Technologies Inc.",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Hallmark Global Technologies Ltd.",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Han Staffing",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "HCL",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "HCL Global",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "HCL GLOBAL SYSTEMS",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "HCL Global Systems INC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "HCLGlobal",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Heliogic",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "HexGS",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "HG Tech",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "HGTech Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Hierarchsoft",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "HighFalutin LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Hire'in Solutions",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "HireX Corp",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "HireX Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "HMG America LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Horizon Soft Tech",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Horizon Softech Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Horizon Softs",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Horizons of Tech",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Horizons Tech",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "HR Pundits",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Humac Inc.",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "I Tech US Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "iBusiness Solution",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ICONMA",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ICS Global Soft",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ICS GlobalSoft",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ICS Globalsoft INC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Ideate Technologies",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "iFlow Global",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "iFlow Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "IMCS Group",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "IMR Soft",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "IMR Soft LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Incorporan Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "InfoLogitech, Inc.",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Infoserv LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Infosoft Corporation",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Infoway Group",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Innova Solutions",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "INNOZA TECH LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Insoursys",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Intellyk",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "iPivot",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "iPolarity LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "IT Syntax",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "IT Vision Group",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ITB Talent",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ITBrainiac",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ITBrainiac Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "iTech-US",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "iTech US, Inc.",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ITECSUS",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ITGEN LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "JSM Consulting",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "K Anand Corporation",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "K-Tek Resourcing",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Kanak IT Services",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "KAnand Corporation",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Kastech",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Keshav Consulting Solutions, LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Key2Source Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "KFORCE",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "KK Associates LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "KK Software Associates",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "KK Software Associates LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "KLNtek",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Kloud Hire Inc.",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Kloudhire",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "KTEK Resourcing LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Laiba Technologies",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Laiba Technology",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Laiba Technology, LLC.",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lancesoft INC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "LARGETON INC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lightning Minds Inc.",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Livemindz",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Loan Depot",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Logic Planet",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Magnus Technology Solutions",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Malla systems Inc dba eFulgent",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Mango Analytics",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Mastercard",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Maxon IT Solutions",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "MenzoTech",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Metasis",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Metrix IT",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Metrix IT Solutions INC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "MetrixIT",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Microtek Learning LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Millennium software inc.",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Mindfore",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Mindlance",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "MITS LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Momentousa",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Mphasis",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Mphasis / T-Mobile",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "MR Technosoft",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "MRTechnosoft",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Nam Info Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "NeoDym Technologies",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Neodym Technologies, Inc.",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "NeonIT",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Net2Source",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Net2Source Inc.",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "New York Technology Partners",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Nexen Consulting Pvt. Ltd.",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Next Level Business Services, Inc.",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Nexwave Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Nexxora Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Nitya Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Nitya Software Solutions",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Nityo Infotech",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Nityo Infotech Corp.",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "NLB Services",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "NLB Technologies",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "NMK Global Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Novia infotech",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Nvoids",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Ocean blue solutions",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "OMNISTARR Solutions",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Orange Top Services LLC.",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Osairtech",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "OSG",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "OTB Tech LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Pacer Group",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Pacer Staffing",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Paramount Software Solutions",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "People Integra LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Percient",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Percient Technologies",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "pransutech solutions",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Prideveterans",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "PrismIT",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ProCorp Systems",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "procropsystems",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Prophecy Techs",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Pyramid Consulting",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Pyramidci",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Q1 Technologies",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Qualis1 Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Qualis1inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Qualtrix Consulting",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Quantum World IT",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Quantum world Technologies",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Quantum World Technologies Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Rackera Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Realtek",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Realtek Consulting",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Realtek Consulting, LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Resource Logistics",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Resource Logistics, Inc.",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Rohatech LLC.",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "RPA TECHNOLOGY INC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "RPATECHNOLOGY INC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Russell Tobin",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Russell Tobin/Pride Global",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "S3 Staffing USA",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "S4Cloud LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "SAPIENT",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Sapphire Software Solutions",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Sapphire Software Solutions Inc.",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Saransh Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "savi Tech",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Savi Technologies Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Scalable systems",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Scalable Systems Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Sibi Talent",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Sierra",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Simba Staffing",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Sira Consulting Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Siri Info Solutions",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Siri InfoSolutions Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Smart Folks Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Smart It Frame",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Smart IT Frame LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Smart Tech Link",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Smartfolks",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Softcom System",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Softcom Systems",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Softcom Systems, Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Softtek",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Solaztek Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Somos",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Source Infotech INC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Spar Infosys",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "SPTec Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "SquareHiring",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Sritech Solutions",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "StaffXpert LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "State of North Carolina",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "State of North Carolina - NCDHHS",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "State of Texas",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Stellar Consulting Solutions LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Stellarwins Solutions",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Stellent IT",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Synapse Tech Services Inc.",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Synchrony Corp",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Synchrony Systems Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Synechron",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Synkriom",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Synkriom Inc.",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Sysmind",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "SYSMIND LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Sysmind Tech Pvt Ltd",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "T3 Pillars",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Talent Groups",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "TalentOla",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "TalentVista",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Tanisha System INC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Tanisha Systems",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Tanisha Systems Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "TCS",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Team Ware Solutions",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Teamware Solutions",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Teamware Solutions Inc.",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Tech Rakers",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Techgene Solutions",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "TechM",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "TechnoComp Inc.",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "technocraft solution",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "TechSource Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Tek Inspirations",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Tek Inspirations LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Tek Integral Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Tek Pyramids",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "TekAccel",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "TEKformer",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Tekgence",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "tekinspirations",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "TekIntegral",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Tekintegral INC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Tekishub",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Tekishub Consulting",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "TekisHub Consulting Services",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Tekjobs",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Tekskills Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "TekWings",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "testingxperts",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "TestingXperts Inc.",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Tetrahed",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "TetraX AI Solutions Inc.",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Texas Department of Public Safety",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "The Judge Group",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Themesoft",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Themesoft Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Thoughtwave Software and Solutions Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Thunderhawk Technology Partners",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Tiny Planet Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Triano Technologies",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Unify Solutions Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Unique Hire",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "United Software Group",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Up2Date Corp",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "UpStream Global Services",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "US Group",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "USA Laiba Technology, LLC.",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "USG Inc.",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "UST",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "UST/Equifax",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ValueBase Consulting",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Valzo Soft",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Valzo Soft Solutions",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Valzo Soft Solutions LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Valzosoft",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ValzoSoft Solutions",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Varite",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Vbeyond",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "VBeyond Corporation",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "VDart",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "VDART Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Vertex Elites",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Vervenest",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Vitsus",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Vizplum",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "VJ Technosoft",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "VKore Solutions",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Volto Consulting",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "VRN Tech",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "VRN Technologies LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "VTal Technology Solutions",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "VTekis.com",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Vy Systems",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "VY Systems Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "vysystems",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Vyze Inc",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "W3Global",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "WebMSI",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Webster Tech Solutions INC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Wipro",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "WISE EQUATION SOLUTION INC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Worknovas LLC",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "X-Axis Solutions",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "X-Axis Solutions Inc.",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Xcelo Group",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Zenfair Solutions Inc.",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Zodiac Solutions",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Ztek Consulting",
+      "entity_type": "company"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Ztek Consulting Inc",
+      "entity_type": "company"
+    }
+  ],
+  "schema_version": 1
+}

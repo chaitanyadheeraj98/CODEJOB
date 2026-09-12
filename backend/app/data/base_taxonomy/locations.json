@@ -1,0 +1,3831 @@
+{
+  "entity_type": "location",
+  "entries": [
+    {
+      "aliases": [],
+      "canonical_name": "1 New York Plaza, New York, NY 10004",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "1 Skyview Drive, Fort Worth, TX 76155, USA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "100% Remote",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "100 Riverview Plaza, Trenton, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "1020 Birch Ridge Drive, Raleigh, NC 27610",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "1100 Louisiana, Houston, Texas",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "1133 Westchester Ave, White Plains, NY 10604",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "1221 Avenue of the Americas, 10th Floor",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "125 park avenue - New York City, NY",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "14050 FAA Blvd., Fort Worth, TX 76155",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "1585 Broadway, New York, NY 10036",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "2 Broadway, MTA Headquarters, New York, NY",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "210 Hudson Street, Suite 600, Jersey City, New Jersey, United States",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "233 S. Wacker Dr. #9500, Chicago, IL 60606",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "240 Greenwich St. NYC, Floor 04",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "25 Lafayette St, Newark, NJ 07102, United States",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "333 S Wabash Ave, Chicago, IL",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "3500 Ave Maria Dr, Ann Arbor, MI 48105",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "50 Wolf Road, Albany, New York, 12232",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "6565 Headquarters Drive, Plano, Texas 75024",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "695 Atlantic Avenue, Boston, MA 02111",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "711 Atlantic Ave, Downtown Boston",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "7150 Harris Dr Dimondale 48821",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Ada, Michigan",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Addison, IL",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Addison, TX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Aguadilla, PR",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AL - Birmingham",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Alabama",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Alameda, CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Albany, New York",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Albany, New York, 12240",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Albany, NY",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Albany, NY 12237",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Alexandria, VA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Alpharetta",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Alpharetta-GA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Alpharetta GA 30004",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Alpharetta GA, 30005",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Alpharetta, GA, 30009",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Alpharetta, Georgia",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "America",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Ann Arbor, MI",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Ann Arbor, MI 48105",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Any Where In US",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AP",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Arcadia, California",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Arden Hills, MN",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Arizona",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Arizona, AZ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Arizona – Gilbert",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Arizona – Gilbert, Phoenix",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Arizona – Phoenix",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Arkansas",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Arkansas (AR)",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Arlington, Texas, USA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Arlington, TX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Arlington, VA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "As per client requirement",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Ashburn, Virginia",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Atlanta",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Atlanta 30339",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Atlanta, GA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Atlanta, GA 30303",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Atlanta, GA 30345",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Atlanta, GA 30354",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Atlanta, GA / Dallas, TX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Atlanta, GA--USA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Atlanta, Georgia",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Atlanta, Illinois",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Atlanta or San Francisco (Preferred)",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Atlanta US",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Auburn, WA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Auburn, Washington",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Austin",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Austin, AR",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Austin, PA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Austin, Texas",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Austin, Texas, USA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Austin, TX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Austin, TX 78701",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Austin, TX-78751",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Austin, TX or Westlake, TX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Austin, TX / Sunnyvale, CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Australia",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Aventura, FL",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AZ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AZ - Phoenix",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Bala Cynwyd, PA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Baltimore, MD",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Baltimore (Woodlawn area)",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Bangalore",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Bangalore, KA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Baskin Ridge, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Basking Ridge, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "bay area",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Bay Area, CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Bedford",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Bedminster, New Jersey",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Bedminster, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Bellevue, WA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Bengaluru",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Benton Harbor, MI",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Bentonville, AR",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Berkeley Heights, New Jersey",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Berkeley Heights, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Berkeley Heights, NJ / Alpharetta, GA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Berkely NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Berkley Heights NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Berkley Hills NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Bethesda, MD",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Birmingham, MI",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Bishop Gate, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "BISHOPS GATE, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Bloomfield, CT",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Blue Ash, OH",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Blue Ash, OH-45241",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Boston",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Boston, MA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Boston, MA or Lake Mary, FL",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Boston, Massachusetts 02111",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Boston/Springfield, MA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Bothell, WA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Boynton Beach, FL",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Brentwood, TN",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Bridgewater, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Brooklyn, NY",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Brooklyn, NY 11201",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Buffalo",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Buffalo, NY",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Buffalo NYC",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Burlington, MA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Burlington, NC",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "California",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Canada",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Carlsbad, CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Carrollton",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Carrollton, Texas",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Carrollton, TX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cary NC",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cedar Park, TX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cedar Rapids, IA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Center 2: 5th Floor (19050-0500)",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Chalotte",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Chalotte (Secondary)",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Chandler, Arizona",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Chandler, AZ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Chantilly, VA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Charlotte",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Charlotte, NC",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Charlotte, NC 28202",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Charlotte, NC/Irving, TX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Charlotte, NC or Phoenix, AZ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Charlotte, North Carolina",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Charlotte, North Carolina, USA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Chennai",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cheyenne, WY",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cheyenne Wyoming",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Chicago",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Chicago-IL",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Chicago, IL 60604",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Chicago, IL 60606",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Chicago, IL 60661",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Chicago, IL or Houston, TX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Chicago, Illinois",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Chicago, Illinois, USA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Chicago Ridge, IL",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cincinnati",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cincinnati, OH",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cincinnati, Ohio",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cincinnati, Ohio, USA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cleveland, OH",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cleveland, Ohio",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cleveland, Ohio, USA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cleveland/Strongsville, OH",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Clifton, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "CO",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Colombus, OH",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Colorado",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Columbia, SC",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Columbus",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Columbus GA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Columbus, OH",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Columbus, OH / Jersey City NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Columbus, Ohio",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Columbus, Ohio - 43235",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Concord, CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Concord, CA / Charlotte, NC",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Connecticut",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Coppell, TX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Coppell, TX 75019",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Coppell, TX, US",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Coral Springs, FL",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cork",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cranbury, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "CST",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "CT",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Culver City, CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cumming",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cupertino",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cupertino, CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Dallas",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Dallas / Tampa / Jersey City",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Dallas, Texas",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Dallas, Texas, USA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Dallas, TX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Dallas, TX/Jersey City, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Dallas, TX / Plano, TX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Dallas, TX / Scottsdale, AZ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Dallas TX/ Tampa FL",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "DC",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "DC Metro area",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "DE",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Dearborn, MI",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Delaware",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Denver",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Denver, CO",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Des Moines, IA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Des Moines, IO",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Des Moines, Iowa",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Detroit",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Detroit, MI",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "DFW",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "DFW Airport",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "DHHS Headquarters, 1910 Human Services Lane, Raleigh, NC 27607",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "DHHS HQ Building - 1910 Human Services Lane, Raleigh 27607",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Dimondale, MI",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "DMV area",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Downtown Houston, TX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Doylestown, PA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Dublin, OH",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Dulles VA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Duluth, GA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Duluth, GA 30097",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Duluth, Georgia",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Durham, NC",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Durham, North Carolina",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Eagan, MN",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "East Brunswick NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "East Coast",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "East Coast, USA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Edison - IL",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Edison, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Edison NJ 08817",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Edison, NJ 08837",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Elkhart, IN",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Englewood Cliffs, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Englewood, CO 80111",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "EST",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Europe",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Ewing, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Exton, PA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Exton, Pennsylvania",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Fairfax, VA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Farmers Branch (Dallas), TX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Farmers Branch TX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Farmington Hills",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Farmington Hills, MI",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Farmington Hills, MI or Okemos, MI",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Farmington, MI",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "FL",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Florham Park, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Florida",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Florida (Jacksonville)",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Florida – Lake Mary",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Florida – Lake Mary, Orlando, Tampa",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Florida – Orlando",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Florida – Tampa",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Flower Mound, TX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Folsom, CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Fort Lauderdale, FL",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Fort Lee, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Fort Mill, SC",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Fort Washington, PA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Fort Washington, PA 19034",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Fort Worth, Texas",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Fort Worth, Texas, USA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Fort Worth, TX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Fort Worth, TX 76102",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Fort Worth, TX 76155",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Fort Worth, TX (Skyview 7, 76155)",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Fortworth, TX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Frederick, MD",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Frederick, MD 21704",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Fremont, CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Fremont, CA, 94555",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Frisco, Texas, USA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Frisco, TX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Ft. Lauderdale, FL",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Ft Washington, PA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GA - Alpharetta",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Georgia",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Georgia - Atlanta",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Georgia, OH",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Gilbert",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Gilbert, AZ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Glen Allen, VA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Goodlettsville, TN",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Grand Rapids, MI",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Greensboro, NC",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Greenville, SC",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Greenwood Village, CO",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Greenwood Village, Denver, CO",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Gwynn Oak, MD",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Hamilton Square, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Hanover",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Hanover, MD",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Hanover, NH",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Hanover, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Hanover, VA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Harrisburg, PA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Hartford, CT",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Herndon, VA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Herndon, VA 20171, USA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Herndon, VA, USA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Herndon, Virginia",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Hicksville, NY",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Hillsborough, New Jersey, USA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Hillsborough, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "HO",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Hoboken, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Houston",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Houston, Texas",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Houston, Texas, USA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Houston TX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Hybrid",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Hybrid (2 Days onsite at nearby Deloitte office)",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Hybrid – NYC 3 days",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "HYD",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Hyderabad",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Hyderabad – Somajiguda",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Hyderabad, TG",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Idaho",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "IL",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Illinois",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "IN",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "India",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Indiana",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Indianapolis",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Indianapolis, IN",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Indianapolis, Indiana",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Iowa",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Irvine, CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Irvine, California",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Irvine, US",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Irving",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Irving, Texas",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Irving, Texas, USA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Irving, TX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Irving, TX 75039",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Irving, TX 75062",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Irving TX 75063",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Irving (Tx) office",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Irving (Tx) office (Primary)",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Iselin, New Jersey",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Iselin, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Issaquah, WA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Issaquah, Washington",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Jacksonville, FL",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Jacksonville, Florida",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Jacksonville, NY",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Japan",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Jefferson City, MO",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Jersey City",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Jersey City/ Dallas, TX/ Tampa, FL",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Jersey City, New Jersey",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Jersey City, New Jersey, United States",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "JERSEY CITY, New Jersey, USA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Jersey City, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Jersey City, NJ, 07302",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Jersey City, NJ and NYC",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Jersey city, NJ /NYC, NY/ Columbus, OH",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Johns Creek, GA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Johnston, RI",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Juno Beach, FL",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Kansas",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Kansas City, KS",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Katy, TX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Kendall Park, New Jersey",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "KS",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "KY",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lafayette, LA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lafayette, LA or Bloomfield, CT",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lafayette, Louisiana, United States",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Laguna Hills, CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lake Mary",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lake Mary, FL",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lansing",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lansing, KS",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lansing, MI",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lansing, Michigan",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Las Vegas, Nevada",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Las Vegas, Nevada, US",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Las Vegas, NV",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Las Vegas, NV, USA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Laurel, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lawrenceville, GA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lewisville, TX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lexington, SC",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Libertyville, IL",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lincolnshire, IL",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "London",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Long Beach, CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Longmont, Colorado",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Los Alamitos, CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Los Angeles",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Los Angeles, CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Los Angeles, California",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Louisville",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Louisville, Kentucky",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Louisville, KY",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "MA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Madison, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Madison, WI",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Mahwah, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Malvern PA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Malvern, PA 19355",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Malvern, PA or Plano, TX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Manhattan Beach, California",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Marietta, Georgia",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Marlborough MA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Maryland",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Mason, OH",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Massachusetts",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Massachusetts – Boston",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Mc Lean, VA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "McKinney, TX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "McLean, VA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "MD",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "MD/VA/DC",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Mechanicsburg PA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Mechanicsville, VA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Memphis",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Memphis, TN",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Menlo Park, CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Merrill Lynch, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Merrimack, NH",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Merrimack, NH or Plano TX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Metro Atlanta, GA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "MI",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Miami",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Miami, FL",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Michigan",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Middletown, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Milpitas, CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Minneapolis",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Minneapolis, Minn",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Minneapolis, Minnesota",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Minneapolis, MN",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Minnesota",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Minnesota, MN",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Minnetonka Mills, MN",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Mississippi",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Missouri",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "MN",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "MO",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Molesworth, UK",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Montana",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Morristown, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Morrisville NC",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Mount Laurel, New Jersey",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Mount Laurel, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Mountain View",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Mountain View, CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Mountainview",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Mt Laurel NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "MTV, CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Multiple locations",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "NA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Naperville",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Naperville, IL",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Naperville, IL or Chicago, IL",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Nashville",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "NC",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Nearby states",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Nebraska",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Needham, MA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Netherlands",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "New Albany, OH",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "New Castle, DE",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "New Jersey",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "New Jersey (Hybrid)",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "New Jersey, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "New Jersey, NJ or Cary NC",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "New York",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "New York and New Jersey",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "New York City",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "New York city, New York",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "New York City, NY",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "New York/New Jersey",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "New York/ New Jersey, Columbus OH, Wilmington DE",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "New York, NY",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "New York, NY 10286",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "New York Plaza, New York, NY",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "New York Plaza, New York, NY 10004",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Newark, CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Newark, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Newark, NJ 07102, USA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "NewYork, NY",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "NH",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "NJ, NC",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Noida, UP",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "North America",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "North Carolina",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "North Carolina – Charlotte",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "North Carolina, NC",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "North Quincy, MA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Northbrook, IL",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Northridge, CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Northville, MI",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Northville, MI 48167",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "NY",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "NY / NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "NY / NJ / DE",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "NY, NYC",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "NYC",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "NYC and NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "NYC/NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "NYC NY",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "NYC or Chicago, IL",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "O'Fallon, Missouri",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "O'Fallon, MO",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "O' Lakes, Florida, United States",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Oakland, CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Ofallon, MO",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Ofallon, STL MO",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "OH",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "OH - Cleveland",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Ohio",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Ohio (Mason)",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Ohio (Mason) & Los Angeles (CA)",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Ohio, OH",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Okemos",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Okemos/Farmington hills, MI",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Okemos/Farmington, MI",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Okemos, MI",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Okemos, Michigan",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Okemos or Farmington Hills, MI",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Omaha",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Omaha, NE",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Omaha, NE 68106",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Omaha, Nebraska",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Onshore",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Onsite",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Orlando",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Orlando, FL",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "PA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "PA,FL,NJ,NY(Onsite)",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "PA - Pittsburgh",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Palo Alto, CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "PAN India",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Parsippany, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Pasadena, CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Peachtree Dunwoody, Atlanta",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Pennington, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Pennsylvania",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Pennsylvania (PA)",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Peoria, IL",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Philadelphia",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Philadelphia, PA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Philadelphia US",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Phoenix",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Phoenix, AZ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Phoenix, AZ 85027",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Phoenix, AZ 85054",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Phoenix, AZ / Austin, TX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Phoenix, AZ / Charlotte, NC",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Phoenix, AZ / Johnston, RI",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Phoenix, AZ or Salt Lake City, Utah",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Phoenix, AZ or San Antonio, TX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "PHX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "PHX, AZ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Piscataway, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Piscataway Township, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Pittsburg PA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Pittsburgh, PA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Pittsburgh, PL",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Plainsboro NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Plano",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Plano, Texas",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Plano Texas 75024",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Plano, Texas, USA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Plano TX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Plano, TX 75075",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Plano, TX 75093",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Plano, TX / Columbus OH",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Plantation, FL",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Pleasant Prairie, WI",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Pleasant Prairie, WI or Waukegan, IL",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Pleasanton, CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Pleasanton, Texas, USA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Pleasaton, CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Polaris, OH",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Portsmouth",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Portsmouth, NH",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Pottstown, PA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Princeton, New Jersey",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Princeton, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Prosper, TX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Pune",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Raleigh",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Raleigh/Durham/Chapel Hill, NC",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Raleigh/Durham/Chapel Hill, NC area",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Raleigh, NC",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Raleigh, NC 27604",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Raleigh, NC, 27607",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Raleigh NC/ San Jose CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Rancho Cordova, CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Raritan, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Reading, PA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Reading, PA or Tampa, FL",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Relaigh",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Remote",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Remote (Benton Harbor, MI)",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Remote Denver, Colorado",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Remote – EST",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Remote – EST Only",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Remote (Houston, TX candidates preferred)",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Remote Local to MN",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Remote, Ohio",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Remote, Remote, USA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Remote (Texas)",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Remote – US",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Remote (USA)",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "RESTON",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "RESTON / DC",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Reston, VA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Rhode Island",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "RI",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Richardson",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Richardson, Texas",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Richardson, Texas, USA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Richardson, TX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Richardson, TX 75080",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Richardson TX 75082",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Richardson, TX75082",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Richfield, Minnesota",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Richfield, MN",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Richmond, VA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Richmond, VA or Atlanta, GA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Richmond, Virginia",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Rosemead, CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Roseville, MN",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Round Rock, TX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Saint Louis, MO",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Salem, OR",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Salt Lake City, UT",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Salt Lake City, Utah",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Salt Lake, UT",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "San Antonio, Texas",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "San Antonio, Texas, USA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "San Antonio, TX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "San Antonio, TX or Plano, TX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "San Diego, CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "San Francisco",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "San Francisco, CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "San Jose, CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "San Leandro, CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "San Leandro, CA / Charlotte, NC",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "San Leandro, CA / Concord, CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "San Ramon CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Santa Ana, CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Santa Clara, CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Santa Clarita, CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "SC",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Schaumburg",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Schaumburg, IL",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Scottsdale, Arizona",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Scottsdale, AZ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Seattle",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Seattle, WA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Seattle, WA 98109",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "SFO, CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "SFO, CA / Alameda, CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Shea, AZ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Sheridan, WY",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Silicon Valley, CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Simpsonville, SC",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Singapore",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Somerset, New Jersey",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Somerset NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "South Australia",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Southlake",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Southlake, TX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Spring, Texas, USA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Spring, TX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Springfield, MO",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "St. Louis, MO",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Stafford, TX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Stamford, CT",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Stockholm",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Strongsville, OH",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Sugar Land, TX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Summit, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Sunnyvale",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Sunnyvale, CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Sunnyvale, CA/ Austin, TX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Sunrise, FL",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Sunrise, Florida",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Tampa",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Tampa, FL",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Tempe, AZ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Tennessee",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Texas",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Texas – Austin",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Texas – Austin, Dallas, Houston",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Texas, Plano",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "TN",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Toronto, ON",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Trenton, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "TX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "TX, DE, OH, NJ (Onsite)",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "TX/NJ/NY/FL/Ohio/DE/Chicago",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Tyson Virginia",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Tysons, VA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "UK",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "United States",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "United States (Remote)",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "US",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "US - Remote",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "USA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "USA (Remote)",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "VA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Vancouver, WA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Vegas, NV",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Vermont",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Vienna",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Virginia",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "VY",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "WA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Warren, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Warren, Texas, USA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Washington",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Washington D.C.",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Washington, DC",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Washington, District Of Columbia",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Waukegan, IL",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Waukesha WI",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "West Chester, PA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Westborough, MA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Westerville, OH",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Westlake, TX",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Whippany, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "White House Station New Jersey",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "White House Station, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "White Plains, NY",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Whitehouse station, New Jersey",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Whitehouse Station, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "WI",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Wilmington, DE",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Wilmington, DE and Columbus, OH",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Wisconsin",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Wood bridge NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Woodbridge, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Woodbridge Township, NJ",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Woodland Hill, CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Woodland Hills, CA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Woodland Hills, CA-91367",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Woodlawn, MD",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Woonsocket, RI",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Worcester, MA",
+      "entity_type": "location"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "WV",
+      "entity_type": "location"
+    }
+  ],
+  "schema_version": 1
+}
