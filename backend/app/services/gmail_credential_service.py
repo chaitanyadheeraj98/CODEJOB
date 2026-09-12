@@ -18,23 +18,14 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from cryptography.fernet import Fernet, InvalidToken
 from google.oauth2.credentials import Credentials
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models import GmailCredential
+from app.services.secret_crypto import CredentialEncryptionUnavailable, decrypt, encrypt
 
 logger = logging.getLogger(__name__)
-
-
-class CredentialEncryptionUnavailable(RuntimeError):
-    """Raised when the Fernet key is missing or unusable at call time.
-
-    Config validation makes this unreachable in a correctly started process;
-    it exists so that a mis-wired test or a settings object built by hand
-    fails loudly rather than storing plaintext.
-    """
 
 
 @dataclass(frozen=True)
@@ -54,41 +45,6 @@ class GmailConnectionStatus:
     revoked: bool = False
     last_error: str = ""
     scopes: tuple[str, ...] = ()
-
-
-def _fernet() -> Fernet:
-    key = (settings.credential_encryption_key or "").strip()
-    if not key:
-        raise CredentialEncryptionUnavailable(
-            "CREDENTIAL_ENCRYPTION_KEY is not set; refusing to handle Gmail credentials."
-        )
-    try:
-        return Fernet(key.encode())
-    except Exception as exc:
-        raise CredentialEncryptionUnavailable("CREDENTIAL_ENCRYPTION_KEY is not a valid Fernet key.") from exc
-
-
-def encrypt(value: str) -> str:
-    return _fernet().encrypt(value.encode()).decode() if value else ""
-
-
-def decrypt(value: str | None) -> str:
-    """Return "" for absent ciphertext, but raise on ciphertext we cannot read.
-
-    The distinction is the point. An empty column means "no token stored",
-    which is an ordinary state. Ciphertext that will not decrypt means the key
-    changed or the row is corrupt, and silently treating that as "no token"
-    would send the user through a reconnect while the real cause went unlogged.
-    """
-    if not value:
-        return ""
-    try:
-        return _fernet().decrypt(value.encode()).decode()
-    except InvalidToken as exc:
-        raise CredentialEncryptionUnavailable(
-            "Stored Gmail credential could not be decrypted with the current "
-            "CREDENTIAL_ENCRYPTION_KEY. The key has changed, or the row is corrupt."
-        ) from exc
 
 
 def get_row(db: Session, owner_id: str) -> GmailCredential | None:
