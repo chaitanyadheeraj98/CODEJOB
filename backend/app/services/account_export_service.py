@@ -13,13 +13,19 @@ account rather than contents of it. G3's deletion must be generated from
 metadata precisely so nothing is missed; an export must be curated precisely so
 nothing is *added* by accident. Opposite problems, opposite mechanisms.
 
-**A column denylist on top, spelled out per table.** `recruiter_emails`
-carries `tracking_token`, which is the open-tracking capability for mail
-already sent - a value someone else could use to forge an open event. It is
-excluded by name. Note that a substring rule over column names would be worse
-than useless here: it would strip `chat_turn.prompt_tokens`, which is a count,
-while telling you nothing about a column called `tracking_token` that happened
-to be spelled differently. Names, not patterns.
+**A column denylist on top, spelled out per table.** Two kinds of column are
+dropped. `tracking_token` is the open-tracking capability for mail already
+sent - a value someone else could use to forge an open event. The embeddings
+and the resume-picker blobs are **machinery rather than correspondence**: they
+were 1.53 GB of a 1.93 GB export measured against one real account, next to
+31 MB of actual message bodies. Nobody asking for their data means "the float
+vector you derived from it".
+
+Note that a substring rule over column names would be worse than useless here:
+it would strip `chat_turn.prompt_tokens`, which is a count, while telling you
+nothing about a capability spelled some other way. Names, not patterns - and
+`MUST_KEEP` exists so that trimming this list further has to argue with a test
+rather than quietly drop the part people actually wanted.
 
 **Streamed, not assembled.** One real account holds ~19,000 rows across these
 tables, most of them `recruiter_emails` carrying message bodies. The
@@ -68,7 +74,27 @@ BATCH = 500
 #: readable as "this column of this table", never as a pattern - see the module
 #: docstring for why a substring rule is actively harmful here.
 DENIED_COLUMNS: dict[str, frozenset[str]] = {
-    "recruiter_emails": frozenset({"tracking_token"}),
+    "recruiter_emails": frozenset({
+        "tracking_token",
+        # Machinery, not correspondence. Measured against one real account:
+        # these four columns are 1.53 GB of a 1.93 GB export, against 31 MB of
+        # actual message bodies. A float vector is not a conversation, and the
+        # scratch record of which resumes were considered for an email is this
+        # application thinking aloud, not something its user wrote or received.
+        "semantic_embedding",
+        "resume_picker_candidates_json",
+        "resume_picker_breakdown_json",
+        "parser_details_json",
+    }),
+    "appts_applications": frozenset({"embedding"}),
+    "canonical_entity_taxonomy_entries": frozenset({"embedding_json"}),
+}
+
+#: Kept deliberately, so a later "trim the export" change has to argue with a
+#: test rather than quietly drop the part that matters.
+MUST_KEEP: dict[str, frozenset[str]] = {
+    "recruiter_emails": frozenset({"subject", "body", "sender", "created_at"}),
+    "chat_messages": frozenset({"role", "content"}),
 }
 
 #: The export, in order. Everything here is content the account owns; nothing

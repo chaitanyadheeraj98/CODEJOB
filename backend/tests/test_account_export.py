@@ -180,6 +180,35 @@ class LeakTests(_Base):
         self.assertNotIn("cipher-a", blob)
         self.assertNotIn("cipher-b", blob)
 
+    def test_the_derived_machinery_is_left_behind(self):
+        """1.53 GB of a 1.93 GB export, measured on one real account, against
+        31 MB of actual message bodies. An embedding is not a conversation."""
+        self._seed(MINE)
+        email = self._export(MINE)["sections"]["recruiter_emails"][0]
+        for column in ("semantic_embedding", "resume_picker_candidates_json",
+                       "resume_picker_breakdown_json", "parser_details_json"):
+            self.assertNotIn(column, email, f"{column} is machinery, not correspondence")
+
+    def test_what_people_actually_asked_for_survives_the_trimming(self):
+        """The counterweight to the denylist. Trimming further should have to
+        argue with this rather than quietly drop the part that matters."""
+        self._seed(MINE)
+        sections = self._export(MINE)["sections"]
+        for table, required in account_export_service.MUST_KEEP.items():
+            section = next(
+                name for name, model in account_export_service.SECTIONS
+                if model.__table__.name == table
+            )
+            row = sections[section][0]
+            for column in required:
+                self.assertIn(column, row, f"{table}.{column} must survive the denylist")
+
+    def test_no_must_keep_column_is_also_denied(self):
+        """The two lists could contradict each other silently."""
+        for table, required in account_export_service.MUST_KEEP.items():
+            denied = account_export_service.DENIED_COLUMNS.get(table, frozenset())
+            self.assertEqual(required & denied, set(), f"{table} both keeps and denies a column")
+
     def test_every_section_is_owner_scoped(self):
         """A section with no owner scope would export the whole table to
         whoever asked. Enumerated rather than trusted."""
