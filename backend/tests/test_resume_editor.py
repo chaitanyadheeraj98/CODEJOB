@@ -19,6 +19,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 os.environ["DEBUG"] = "false"
 
@@ -247,6 +248,11 @@ class ResumeEditorApiTests(unittest.TestCase):
             self.assertEqual(self.client.post("/resume-editor/profiles", data={"name": "Invalid", "spec_json": json.dumps(invalid)}).status_code, 422)
 
     def setUp(self) -> None:
+        self.enrichment_llm = patch(
+            "app.services.resume_enrichment_service.build_chat_llm",
+            side_effect=RuntimeError("unavailable in resume editor tests"),
+        )
+        self.enrichment_llm.start()
         self.engine = create_engine(
             "sqlite://",
             connect_args={"check_same_thread": False},
@@ -285,6 +291,7 @@ class ResumeEditorApiTests(unittest.TestCase):
             self.resume_id = resume.id
 
     def tearDown(self) -> None:
+        self.enrichment_llm.stop()
         main.settings.resume_storage_dir = self.original_storage
         main.app.dependency_overrides.clear()
         Base.metadata.drop_all(self.engine)
