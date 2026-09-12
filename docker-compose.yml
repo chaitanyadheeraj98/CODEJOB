@@ -9,9 +9,18 @@ services:
     environment:
       REDIS_URL: redis://redis:6379/0
       OLLAMA_BASE_URL: http://host.docker.internal:11434
+    # `exec` so uvicorn replaces the shell and becomes PID 1. Without it the
+    # shell is PID 1, SIGTERM stops at the shell, uvicorn never sees it, and
+    # the container is SIGKILLed at the end of the grace period - exit 137, no
+    # graceful shutdown, so lifespan teardown never runs.
     command: >
       sh -c "alembic upgrade head &&
-      uvicorn app.main:app --host 0.0.0.0 --port 8000"
+      exec uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    # The default 10s is not enough for lifespan teardown: it stops the
+    # auto-runner thread and the Telegram poller, each joined with a 5s
+    # timeout. Cut short, the container dies with 137 instead of exiting
+    # cleanly.
+    stop_grace_period: 30s
     ports:
       - "8000:8000"
       - "8080:8080"

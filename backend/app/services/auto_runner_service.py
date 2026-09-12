@@ -82,6 +82,10 @@ class AutoRunnerService:
         # here so this service keeps knowing nothing about the User model, and
         # so a test can drive several tenants without a users table.
         list_owners: Callable[[], list[str]] = lambda: [settings.owner_id],
+        # Whether this process should be the one doing the work. Injected so
+        # the loop's own behaviour can be tested without Redis, and defaulted
+        # so every existing construction site keeps working.
+        is_leader: Callable[[], bool] = lambda: True,
     ) -> None:
         self._session_factory = session_factory
         self._get_settings = get_settings
@@ -95,6 +99,7 @@ class AutoRunnerService:
         self._action_lock = action_lock
         self._stop_event = stop_event
         self._list_owners = list_owners
+        self._is_leader = is_leader
 
     @staticmethod
     def poll_interval_minutes(user_settings: UserSettings) -> int:
@@ -133,7 +138,20 @@ class AutoRunnerService:
 
     def run_loop(self) -> None:
         schedules: dict[str, _Schedule] = {}
+        was_leader = False
         while not self._stop_event.wait(5):
+            # Claimed or renewed every tick, so a process that starts second
+            # does nothing and a process whose leader died takes over on its
+            # own. Deciding this once at start-up would leave the work stopped
+            # until somebody restarted the survivor.
+            if not self._is_leader():
+                if was_leader:
+                    logger.info("Auto runner lost leadership; standing by")
+                    was_leader = False
+                continue
+            if not was_leader:
+                logger.info("Auto runner is the leader for this deployment")
+                was_leader = True
             try:
                 owners = list(self._list_owners())
             except Exception:

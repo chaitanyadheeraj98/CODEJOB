@@ -274,6 +274,7 @@ from app.services.role_manifest_service import RoleManifestService
 from app.services.sendability_service import SENDABILITY_BUCKETS, resolve_sendability_status
 from app.services.routing_runtime_service import RoutingRuntimeDeps, RoutingRuntimeService
 from app.services.scoring_runtime_service import ScoringRuntimeDeps, ScoringRuntimeService
+from app.services import leader_election
 from app.services.settings_bootstrap_service import SettingsBootstrapService
 from app.services.startup_service import StartupService
 from app.services.role_taxonomy import clear_role_taxonomy_cache
@@ -516,11 +517,19 @@ async def lifespan(_: FastAPI):
         auto_runner_thread = runtime_state.auto_runner_thread
         telegram_service = runtime_state.telegram_service
         gmail_labeling_service = runtime_state.gmail_labeling_service
-        yield
-        startup_service.shutdown()
-        auto_runner_thread = runtime_state.auto_runner_thread
-        telegram_service = runtime_state.telegram_service
-        gmail_labeling_service = runtime_state.gmail_labeling_service
+        try:
+            yield
+        finally:
+            # In a `finally`, because shutdown arrives as a cancellation thrown
+            # at the `yield` - so plain statements after it never ran on
+            # SIGTERM, which is how every real shutdown happens. The auto-runner
+            # thread and the Telegram poller were never stopped cleanly either;
+            # it only became visible when the leader lease stopped being handed
+            # back and failover waited out the TTL instead.
+            startup_service.shutdown()
+            auto_runner_thread = runtime_state.auto_runner_thread
+            telegram_service = runtime_state.telegram_service
+            gmail_labeling_service = runtime_state.gmail_labeling_service
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
@@ -1707,6 +1716,7 @@ def _get_auto_runner_service() -> AutoRunnerService:
             action_lock=telegram_action_lock,
             stop_event=auto_runner_stop_event,
             list_owners=_automation_owners,
+            is_leader=lambda: leader_election.is_leader(leader_election.AUTO_RUNNER),
         )
     return auto_runner_service
 
@@ -1795,6 +1805,7 @@ def _init_telegram_service() -> TelegramBotService | None:
         alerts_enabled=settings.telegram_alerts_enabled,
         command_handler=telegram_runtime.handle_command,
         callback_handler=telegram_runtime.handle_callback,
+        is_leader=lambda: leader_election.is_leader(leader_election.TELEGRAM_POLLER),
     )
     service.start()
     logger.info("Telegram bot started with %s authorized chat(s)", len(allowed_chat_ids))

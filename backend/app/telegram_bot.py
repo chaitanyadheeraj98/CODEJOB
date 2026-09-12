@@ -39,12 +39,17 @@ class TelegramBotService:
         alerts_enabled: bool,
         command_handler: CommandHandler,
         callback_handler: CallbackHandler,
+        # Whether this process should be the one polling. Injected and
+        # defaulted so existing construction sites and tests keep working
+        # without Redis.
+        is_leader: Callable[[], bool] = lambda: True,
     ) -> None:
         self._token = token.strip()
         self._allowed_chat_ids = set(allowed_chat_ids)
         self._alerts_enabled = alerts_enabled
         self._command_handler = command_handler
         self._callback_handler = callback_handler
+        self._is_leader = is_leader
         self._offset = 0
         self._running = False
         self._thread: threading.Thread | None = None
@@ -197,7 +202,25 @@ class TelegramBotService:
         return False
 
     def _run_loop(self) -> None:
+        standing_by = False
         while self._running:
+            # One poller per deployment. Telegram answers a second concurrent
+            # getUpdates on the same token with 409 Conflict, and splits
+            # updates unpredictably between the two - so a user's multi-step
+            # flow would half-work depending on which process received which
+            # message.
+            if not self._is_leader():
+                if not standing_by:
+                    logger.info("Telegram poller standing by; another process holds the lease")
+                    standing_by = True
+                with self._lock:
+                    self._polling = False
+                    self._detail = "Telegram bot standing by (another process is polling)"
+                time.sleep(5)
+                continue
+            if standing_by:
+                logger.info("Telegram poller taking over")
+                standing_by = False
             try:
                 with self._lock:
                     self._polling = True
