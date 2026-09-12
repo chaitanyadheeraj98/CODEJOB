@@ -4,7 +4,7 @@ import logging
 import re
 import uuid
 from collections.abc import Callable
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import AsyncExitStack, ExitStack, asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from dataclasses import dataclass
 from email.utils import parseaddr
@@ -274,7 +274,7 @@ from app.services.role_manifest_service import RoleManifestService
 from app.services.sendability_service import SENDABILITY_BUCKETS, resolve_sendability_status
 from app.services.routing_runtime_service import RoutingRuntimeDeps, RoutingRuntimeService
 from app.services.scoring_runtime_service import ScoringRuntimeDeps, ScoringRuntimeService
-from app.services import leader_election
+from app.services import distributed_lock, leader_election
 from app.services.settings_bootstrap_service import SettingsBootstrapService
 from app.services.startup_service import StartupService
 from app.services.role_taxonomy import clear_role_taxonomy_cache
@@ -4014,14 +4014,15 @@ def skill_embedding_status(db: Session = Depends(get_db)) -> EmbeddingStatusResp
 
 @app.post("/settings/skills/embed-pending", response_model=EmbedPendingSkillsResponse)
 def embed_approved_skills(db: Session = Depends(get_db)) -> EmbedPendingSkillsResponse:
-    if not runtime_state.taxonomy_embedding_lock.acquire(blocking=False):
-        raise HTTPException(status_code=409, detail="A taxonomy embedding batch is already running")
     try:
-        return EmbedPendingSkillsResponse.model_validate(
-            embed_pending_skills(db, owner_id=tenancy.owner_id())
-        )
-    finally:
-        runtime_state.taxonomy_embedding_lock.release()
+        with distributed_lock.hold(
+            distributed_lock.TAXONOMY_EMBEDDING, owner_id=tenancy.owner_id()
+        ):
+            return EmbedPendingSkillsResponse.model_validate(
+                embed_pending_skills(db, owner_id=tenancy.owner_id())
+            )
+    except distributed_lock.LockBusy:
+        raise HTTPException(status_code=409, detail="A taxonomy embedding batch is already running") from None
 
 
 @app.get("/settings/entities/{entity_type}/pending", response_model=list[PendingEntityResponse])
@@ -4208,8 +4209,16 @@ def apply_taxonomy_bulk_review(
             status_code=400,
             detail=f"At most {MAX_APPLY_KEYS} records can be applied in one request",
         )
-    if not runtime_state.taxonomy_bulk_review_lock.acquire(blocking=False):
-        raise HTTPException(status_code=409, detail="A bulk review apply is already running")
+    # Entered on a stack rather than with `async with`, so the body below keeps
+    # its shape - the lock moved from a process-local mutex to a Redis one, the
+    # work it guards did not change.
+    lock = ExitStack()
+    try:
+        lock.enter_context(
+            distributed_lock.hold(distributed_lock.TAXONOMY_BULK_REVIEW, owner_id=tenancy.owner_id())
+        )
+    except distributed_lock.LockBusy:
+        raise HTTPException(status_code=409, detail="A bulk review apply is already running") from None
     try:
         # Re-derived, never trusted from the request body. The browser's copy can be
         # minutes old, and this is the only thing standing between a stale preview
@@ -4275,7 +4284,7 @@ def apply_taxonomy_bulk_review(
             skipped=skipped,
         )
     finally:
-        runtime_state.taxonomy_bulk_review_lock.release()
+        lock.close()
 
 
 @app.get("/settings/taxonomy/metrics", response_model=TaxonomyMetricsResponse)
@@ -8790,8 +8799,13 @@ def sync_external_nvoids(
     if not user_settings.feature_nvoids_enabled:
         raise HTTPException(status_code=400, detail="Nvoids sync is disabled in settings")
     resolved_batch_limit = batch_limit if batch_limit is not None else _nvoids_batch_limit(user_settings)
-    if not telegram_action_lock.acquire(blocking=False):
-        raise HTTPException(status_code=409, detail="another_run_in_progress")
+    lock = ExitStack()
+    try:
+        lock.enter_context(
+            distributed_lock.hold(distributed_lock.AUTOMATION_ACTION, owner_id=tenancy.owner_id())
+        )
+    except distributed_lock.LockBusy:
+        raise HTTPException(status_code=409, detail="another_run_in_progress") from None
     try:
         result = _run_nvoids_sync(
             db,
@@ -8808,7 +8822,7 @@ def sync_external_nvoids(
         )
         raise HTTPException(status_code=502, detail=f"nvoids_sync_failed: {exc}") from exc
     finally:
-        telegram_action_lock.release()
+        lock.close()
     return ExternalFeedSyncResponse(
         source_type=result.source_type,
         run_key=result.run_key,

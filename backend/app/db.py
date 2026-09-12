@@ -38,7 +38,27 @@ class UTCDateTime(TypeDecorator):
 
 is_sqlite = settings.database_url.startswith("sqlite")
 connect_args = {"check_same_thread": False, "timeout": 10} if is_sqlite else {}
-engine = create_engine(settings.database_url, connect_args=connect_args)
+# SQLAlchemy's QueuePool defaults to 5 connections plus 10 overflow - fifteen -
+# and those defaults were never changed. FastAPI runs this application's 261
+# sync endpoints in the anyio threadpool, which holds **40** threads, so forty
+# requests can each want a connection while fifteen exist. The rest queue on
+# the pool and, past `pool_timeout`, fail.
+#
+# Sized here rather than left implicit, and configurable because the right
+# number depends on the process count:
+#
+#     total connections = (pool_size + max_overflow) x API processes + worker
+#
+# At the defaults below that is 30 for a single API process, comfortably under
+# PostgreSQL's default `max_connections` of 100 alongside the RQ worker. Four
+# uvicorn workers would need 120 and would exhaust it, so raising the worker
+# count means lowering these or raising `max_connections` - see C3.
+pool_args = (
+    {}
+    if is_sqlite
+    else {"pool_size": settings.db_pool_size, "max_overflow": settings.db_max_overflow}
+)
+engine = create_engine(settings.database_url, connect_args=connect_args, **pool_args)
 
 
 if is_sqlite:

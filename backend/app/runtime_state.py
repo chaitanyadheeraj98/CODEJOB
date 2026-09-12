@@ -21,10 +21,11 @@ class AppRuntimeState:
     embedding_last_attempted_at: datetime | None = None
     embedding_last_success_at: datetime | None = None
     embedding_last_duration_ms: int | None = None
-    taxonomy_embedding_lock: threading.Lock = field(default_factory=threading.Lock)
-    # Separate from the embedding lock: a bulk review apply and an embedding
-    # batch touch the same tables but neither should block on the other.
-    taxonomy_bulk_review_lock: threading.Lock = field(default_factory=threading.Lock)
+    # The taxonomy embedding and bulk-review locks used to live here as
+    # threading.Lock. Both guarded endpoints, which any worker can serve, so
+    # neither excluded anything once there was more than one process - and both
+    # were global, so one tenant's batch blocked every other tenant's. They are
+    # `distributed_lock` entries now, keyed by name *and* owner.
     groq_last_error: str | None = None
     groq_last_attempted_at: datetime | None = None
     groq_last_success_at: datetime | None = None
@@ -54,6 +55,11 @@ class AppRuntimeState:
     chat_mcp_status: str = "disabled"
     chat_active_model: str | None = None
     telegram_service: TelegramBotService | None = None
+    # Still process-local, and correct that way: its only remaining user is the
+    # auto-runner, which runs in the elected leader and nowhere else, so one
+    # process is the whole population. The endpoint that used to share it holds
+    # a `distributed_lock` instead, and the auto-runner's other sweeps enqueue
+    # rather than run inline - where the queue already rejects a second job.
     telegram_action_lock: threading.Lock = field(default_factory=threading.Lock)
     telegram_auth_sessions: dict[int, datetime] = field(default_factory=dict)
     telegram_pending_inputs: dict[int, str] = field(default_factory=dict)

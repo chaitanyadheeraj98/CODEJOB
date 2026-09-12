@@ -11,6 +11,10 @@ class Settings(BaseSettings):
 
     database_url: str = "sqlite:///./data/codejob.db"
     redis_url: str = "redis://localhost:6379/0"
+    # See app/db.py for the arithmetic. Ignored for SQLite, which does not use
+    # a queue pool.
+    db_pool_size: int = Field(default=20, ge=1)
+    db_max_overflow: int = Field(default=10, ge=0)
     openai_api_key: str = ""
     deepseek_api_key: str = Field(default="", validation_alias="Deepseek_API_KEY")
     deepseek_base_url: str = "https://api.deepseek.com"
