@@ -7,6 +7,7 @@ from typing import Iterable, Sequence
 
 from sqlalchemy.orm import Session
 
+from app.base_taxonomy import base_job_intent_entries
 from app.config import settings
 from app.models import JobIntentTaxonomyEntry
 
@@ -135,21 +136,58 @@ def approved_learning_signals_for_owner(db: Session, owner_id: str) -> list[JobI
         db.query(JobIntentTaxonomyEntry)
         .filter(
             JobIntentTaxonomyEntry.owner_id == owner_id,
-            JobIntentTaxonomyEntry.status == "approved",
         )
         .order_by(JobIntentTaxonomyEntry.polarity.asc(), JobIntentTaxonomyEntry.phrase.asc(), JobIntentTaxonomyEntry.id.asc())
         .all()
     )
-    return [
+    decisions: dict[tuple[str, str], JobIntentTaxonomyEntry] = {}
+    for row in rows:
+        phrase = str(row.phrase or "").strip()
+        normalized = normalize_job_intent_phrase(row.normalized_phrase or phrase)
+        polarity = str(row.polarity or "").strip()
+        if normalized and polarity in VALID_JOB_INTENT_POLARITIES and row.status in {"approved", "dismissed"}:
+            decisions.setdefault((normalized, polarity), row)
+
+    signals: list[JobIntentLearningSignal] = []
+    base_keys: set[tuple[str, str]] = set()
+    for index, entry in enumerate(base_job_intent_entries(), start=1):
+        normalized = normalize_job_intent_phrase(entry.normalized_phrase or entry.phrase)
+        key = (normalized, entry.polarity)
+        if not normalized or entry.polarity not in VALID_JOB_INTENT_POLARITIES:
+            continue
+        base_keys.add(key)
+        row = decisions.get(key)
+        if row is not None:
+            if row.status == "approved":
+                signals.append(
+                    JobIntentLearningSignal(
+                        phrase=str(row.phrase or "").strip(),
+                        polarity=str(row.polarity or "").strip(),
+                        confidence=float(row.confidence_aggregate or 0.0),
+                        id=row.id,
+                    )
+                )
+            continue
+        signals.append(
+            JobIntentLearningSignal(
+                phrase=entry.phrase,
+                polarity=entry.polarity,
+                confidence=entry.confidence,
+                id=-index,
+            )
+        )
+
+    signals.extend(
         JobIntentLearningSignal(
             phrase=str(row.phrase or "").strip(),
             polarity=str(row.polarity or "").strip(),
             confidence=float(row.confidence_aggregate or 0.0),
             id=row.id,
         )
-        for row in rows
-        if str(row.phrase or "").strip() and str(row.polarity or "").strip() in VALID_JOB_INTENT_POLARITIES
-    ]
+        for key, row in decisions.items()
+        if key not in base_keys and row.status == "approved" and str(row.phrase or "").strip()
+    )
+    return sorted(signals, key=lambda item: (item.polarity, item.phrase.casefold(), item.id))
 
 
 def record_pending_job_intent_learning(

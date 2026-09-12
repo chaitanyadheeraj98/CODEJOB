@@ -816,6 +816,7 @@ class CanonicalEntityTaxonomyEntry(Base):
     embedding_status: Mapped[str] = mapped_column(String(40), default="pending", index=True)
     embedding_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(40), default="approved", index=True)
+    suppressed: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
 

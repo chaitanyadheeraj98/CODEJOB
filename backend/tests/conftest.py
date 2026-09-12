@@ -20,7 +20,16 @@ from app.config import settings
 
 # Runtime switches the suite must not inherit from .env. Add to this list when
 # a new feature flag changes request handling rather than only adding routes.
-_PINNED_OFF = ("feature_auth_enabled",)
+_PINNED_OFF = (
+    "feature_auth_enabled",
+    # E2 put a reviewed base taxonomy underneath every owner's rows. It is on
+    # in production - a new account inherits it on day one - but it makes 1,326
+    # bundled roles visible to every test, and a test asserting what *one
+    # owner's* vocabulary contains is not wrong to expect only that owner's
+    # rows. Pinned off here so those tests keep testing the overlay;
+    # test_base_taxonomy_overlay.py turns it on for itself.
+    "feature_base_taxonomy_enabled",
+)
 
 
 @pytest.fixture(autouse=True)

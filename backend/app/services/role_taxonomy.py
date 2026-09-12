@@ -29,6 +29,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
+from app.base_taxonomy import base_entity_entries, clear_base_taxonomy_cache
 from app.models import CanonicalEntityTaxonomyEntry
 from app.services.role_provenance import RoleSource, TaxonomyMatch
 from app.skill_taxonomy import normalize_taxonomy_text
@@ -85,6 +86,7 @@ def clear_role_taxonomy_cache() -> None:
     role one.
     """
     _CACHE.clear()
+    clear_base_taxonomy_cache()
 
 
 def _aliases(row: CanonicalEntityTaxonomyEntry) -> list[str]:
@@ -112,17 +114,38 @@ def load_entity_taxonomy(db: Session, *, owner_id: str, entity_type: str) -> Ent
         .filter(
             CanonicalEntityTaxonomyEntry.owner_id == owner_id,
             CanonicalEntityTaxonomyEntry.entity_type == entity_type,
-            CanonicalEntityTaxonomyEntry.status == "approved",
         )
+        # Newest first, so the *latest* decision wins below. The unique
+        # constraint is on the raw `canonical_name`, not the normalized one, so
+        # "Java Developer" and "java developer" are two permitted rows that
+        # collapse to one key here - and a user who dismissed a name and later
+        # approved it must get the approval, not the dismissal.
+        .order_by(CanonicalEntityTaxonomyEntry.id.desc())
         .all()
     )
 
-    lookup: dict[str, str] = {}
+    decisions: dict[str, CanonicalEntityTaxonomyEntry] = {}
     for row in rows:
-        canonical = str(row.canonical_name or "").strip()
+        normalized = normalize_taxonomy_text(row.canonical_name)
+        if normalized and (row.suppressed or row.status in {"approved", "dismissed"}):
+            decisions.setdefault(normalized, row)
+
+    entries: list[tuple[str, list[str]]] = [
+        (str(row.canonical_name or "").strip(), _aliases(row))
+        for row in decisions.values()
+        if row.status == "approved" and not row.suppressed
+    ]
+    entries.extend(
+        (entry.canonical_name, list(entry.aliases))
+        for entry in base_entity_entries(entity_type)
+        if normalize_taxonomy_text(entry.canonical_name) not in decisions
+    )
+
+    lookup: dict[str, str] = {}
+    for canonical, aliases in entries:
         if not canonical:
             continue
-        for surface in [canonical, *_aliases(row)]:
+        for surface in [canonical, *aliases]:
             normalized = normalize_taxonomy_text(surface)
             if not normalized or len(normalized.split()) < config.min_alias_words:
                 continue

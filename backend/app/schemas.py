@@ -744,6 +744,7 @@ class CanonicalEntityTaxonomyEntryResponse(BaseModel):
     occurrence_count: int
     embedding_status: str
     status: str
+    suppressed: bool = False
     created_at: datetime
     updated_at: datetime
 

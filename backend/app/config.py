@@ -26,6 +26,11 @@ class Settings(BaseSettings):
     # switch that *proves* those paths have been moved, not a way to skip
     # moving them.
     api_embeddings_enabled: bool = True
+    # E2. The reviewed taxonomy bundled with the application, read beneath every
+    # owner's own rows. On in production - a new account inherits it on day one
+    # - and pinned off in the test suite, because 1,326 bundled roles are noise
+    # to a test asserting what *one owner's* vocabulary contains.
+    feature_base_taxonomy_enabled: bool = True
     db_pool_size: int = Field(default=15, ge=1)
     db_max_overflow: int = Field(default=5, ge=0)
     openai_api_key: str = ""
