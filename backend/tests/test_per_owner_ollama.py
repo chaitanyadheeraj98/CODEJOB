@@ -2,7 +2,11 @@ import asyncio
 from contextlib import contextmanager
 from unittest.mock import patch
 
+import httpx
+import pytest
 from cryptography.fernet import Fernet
+from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
@@ -12,6 +16,7 @@ from app.ai.chat.failures import FAILURE_MESSAGES, classify_ollama_error
 from app.config import settings
 from app.db import Base
 from app.routers import chat
+from app.schemas import OllamaCredentialRequest
 from app.services import provider_credential_service as credentials
 
 
@@ -114,3 +119,62 @@ def test_status_probe_does_not_fall_back_to_a_shared_key(monkeypatch):
     assert "Settings" in (chat.runtime_state.ollama_last_error or "")
     db.close()
     engine.dispose()
+
+
+def test_settings_validation_stores_only_a_working_key_and_never_returns_it(monkeypatch):
+    engine, db = _database(monkeypatch)
+    credentials.save_credentials(db, "owner", "ollama", "original-key")
+    db.commit()
+    captured = {}
+    response = httpx.Response(
+        401,
+        request=httpx.Request("GET", "https://provider.example/api/tags"),
+    )
+
+    class Client:
+        def __init__(self, **kwargs):
+            captured["client"] = kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, url, **kwargs):
+            captured["url"] = url
+            captured["request"] = kwargs
+            return response
+
+    payload = OllamaCredentialRequest(
+        api_key="replacement-secret-key",
+        base_url="https://provider.example/",
+    )
+    with tenancy.owner_scope("owner"), patch.object(chat.httpx, "AsyncClient", Client):
+        with pytest.raises(HTTPException, match="rejected"):
+            asyncio.run(chat.update_ollama_credentials(payload, db))
+        assert credentials.require_credentials(db, "owner", "ollama").api_key == "original-key"
+
+        response = httpx.Response(
+            200,
+            json={"models": []},
+            request=httpx.Request("GET", "https://provider.example/api/tags"),
+        )
+        saved = asyncio.run(chat.update_ollama_credentials(payload, db))
+
+    result = saved.model_dump_json()
+    assert "replacement-secret-key" not in result
+    assert saved.masked_api_key == "sk-…-key"
+    assert saved.base_url == "https://provider.example"
+    assert captured["url"] == "https://provider.example/api/tags"
+    assert captured["request"]["headers"] == {
+        "Authorization": "Bearer replacement-secret-key"
+    }
+    assert credentials.require_credentials(db, "owner", "ollama").api_key == "replacement-secret-key"
+    db.close()
+    engine.dispose()
+
+
+def test_settings_rejects_non_http_provider_urls():
+    with pytest.raises(ValidationError, match=r"HTTP\(S\)"):
+        OllamaCredentialRequest(api_key="long-enough-key", base_url="file:///tmp/tags")

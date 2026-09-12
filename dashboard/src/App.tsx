@@ -19,7 +19,7 @@ import ChatProvider from './features/chat/ChatProvider'
 import AddProfileEntry from './features/settings/AddProfileEntry'
 import { useChat } from './features/chat/chatContext'
 import ChatWidget from './features/chat/ChatWidget'
-import { getChatStatus } from './features/chat/api'
+import { getChatStatus, saveOllamaCredential } from './features/chat/api'
 import type { ChatStatus } from './features/chat/types'
 import PremiumNumbersPage from './features/premium_numbers/PremiumNumbersPage'
 import AppTSPage from './features/application_tracking/AppTSPage'
@@ -2999,6 +2999,10 @@ function App({ account }: { account?: AuthUser }) {
   const [status, setStatus] = useState<GmailStatus | null>(null)
   const [aiStatus, setAiStatus] = useState<AiStatus | null>(null)
   const [chatStatus, setChatStatus] = useState<ChatStatus | null>(null)
+  const [ollamaApiKey, setOllamaApiKey] = useState('')
+  const [ollamaBaseUrl, setOllamaBaseUrl] = useState('')
+  const [ollamaCredentialBusy, setOllamaCredentialBusy] = useState(false)
+  const [ollamaCredentialMessage, setOllamaCredentialMessage] = useState('')
   const [telegramStatus, setTelegramStatus] = useState<TelegramStatus | null>(null)
   const [settings, setSettingsState] = useState<SettingsPayload>({
     enabled: true,
@@ -3443,7 +3447,9 @@ function App({ account }: { account?: AuthUser }) {
   }
 
   const loadChatStatus = async () => {
-    setChatStatus(await getChatStatus(apiBase))
+    const nextStatus = await getChatStatus(apiBase)
+    setChatStatus(nextStatus)
+    setOllamaBaseUrl(nextStatus.ollama_base_url ?? '')
   }
 
   const loadTelegramStatus = async () => {
@@ -4636,6 +4642,30 @@ function App({ account }: { account?: AuthUser }) {
       setError((e as Error).message)
     } finally {
       setSaving(false)
+    }
+  }
+
+  const saveOllamaCredentials = async () => {
+    setOllamaCredentialBusy(true)
+    setOllamaCredentialMessage('')
+    try {
+      const saved = await saveOllamaCredential(apiBase, ollamaApiKey, ollamaBaseUrl)
+      setOllamaApiKey('')
+      setOllamaBaseUrl(saved.base_url)
+      setChatStatus((current) => current ? {
+        ...current,
+        ollama_running: true,
+        ollama_configured: saved.configured,
+        ollama_masked_api_key: saved.masked_api_key,
+        ollama_base_url: saved.base_url,
+        ollama_last_error: null,
+        ollama_last_success_at: new Date().toISOString(),
+      } : current)
+      setOllamaCredentialMessage(`Validated and saved ${saved.masked_api_key ?? 'Ollama key'}.`)
+    } catch (reason) {
+      setOllamaCredentialMessage(reason instanceof Error ? reason.message : 'Failed to validate Ollama credentials')
+    } finally {
+      setOllamaCredentialBusy(false)
     }
   }
 
@@ -6219,6 +6249,41 @@ function App({ account }: { account?: AuthUser }) {
                   ))}
                   {aiStatus?.last_draft_source ? <div className="row"><span className="label">Draft Source</span><span>{getDraftSourceLabel(aiStatus.last_draft_source)}</span></div> : null}
                   {aiLastDuration ? <div className="row"><span className="label">Last Duration</span><span>{aiLastDuration}</span></div> : null}
+                </div>
+              </section>
+
+              <section className="card">
+                <h2>Ollama Access</h2>
+                <div className="stack">
+                  <div className="row"><span className="label">Status</span><span>{chatStatus?.ollama_configured ? 'Configured' : 'API key required'}</span></div>
+                  {chatStatus?.ollama_masked_api_key ? <div className="row"><span className="label">Stored key</span><span className="tag">{chatStatus.ollama_masked_api_key}</span></div> : null}
+                  <label>
+                    API key
+                    <input
+                      type="password"
+                      autoComplete="new-password"
+                      value={ollamaApiKey}
+                      onChange={(event) => setOllamaApiKey(event.target.value)}
+                      placeholder={chatStatus?.ollama_configured ? 'Paste a new key to replace it' : 'Paste your Ollama API key'}
+                    />
+                  </label>
+                  <label>
+                    Base URL (optional)
+                    <input
+                      type="url"
+                      value={ollamaBaseUrl}
+                      onChange={(event) => setOllamaBaseUrl(event.target.value)}
+                      placeholder="https://ollama.com"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    disabled={ollamaCredentialBusy || ollamaApiKey.trim().length < 8}
+                    onClick={() => void saveOllamaCredentials()}
+                  >
+                    {ollamaCredentialBusy ? 'Validating...' : 'Validate and save'}
+                  </button>
+                  {ollamaCredentialMessage ? <p className="subtle" aria-live="polite">{ollamaCredentialMessage}</p> : null}
                 </div>
               </section>
 

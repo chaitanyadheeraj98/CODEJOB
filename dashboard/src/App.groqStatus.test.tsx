@@ -81,13 +81,21 @@ describe('Groq status UI', () => {
     vi.restoreAllMocks()
   })
 
-  async function renderWithAiStatus(aiStatus: unknown) {
+  async function renderWithAiStatus(aiStatus: unknown, options?: {
+    chatStatus?: unknown
+    onOllamaSave?: (body: Record<string, unknown>) => void
+  }) {
     vi.stubGlobal(
       'fetch',
-      vi.fn(async (input: RequestInfo | URL) => {
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input)
         if (url.endsWith('/gmail/status')) return makeResponse({ configured: true, authenticated: true, token_path: 'token.json', last_sync_at: null, detail: 'ok' })
         if (url.endsWith('/ai/status')) return makeResponse(aiStatus)
+        if (url.endsWith('/chat/status')) return makeResponse(options?.chatStatus ?? { enabled: false, ollama_running: false, available_models: [], model: '' })
+        if (url.endsWith('/chat/credentials/ollama') && init?.method === 'PUT') {
+          options?.onOllamaSave?.(JSON.parse(String(init.body)) as Record<string, unknown>)
+          return makeResponse({ provider: 'ollama', configured: true, masked_api_key: 'sk-…7890', base_url: 'https://ollama.example' })
+        }
         if (url.endsWith('/telegram/status')) return makeResponse({ enabled: false, polling: false, alerts_enabled: false, authorized_chats: 0, detail: 'off' })
         if (url.endsWith('/gmail/oauth/url')) return makeResponse({ authorization_url: null })
         if (url.includes('/settings/bootstrap')) return makeResponse(makeBootstrapPayload())
@@ -216,6 +224,68 @@ describe('Groq status UI', () => {
     expect(text).toContain('Intent Gate Duration')
     expect(text).toContain('1.2s')
     expect(text).toContain('Groq is idle: the intent gate is running on deepseek.')
+  })
+
+  it('validates and replaces an Ollama key without rendering the secret', async () => {
+    let savedBody: Record<string, unknown> | null = null
+    const { container } = await renderWithAiStatus({
+      configured: true,
+      connected: true,
+      running: false,
+      provider: 'deepseek',
+      model: 'deepseek-chat',
+      detail: 'ok',
+      last_error: null,
+      last_started_at: null,
+      last_finished_at: null,
+      last_duration_ms: null,
+      last_draft_source: null,
+    }, {
+      chatStatus: {
+        enabled: true,
+        ollama_running: true,
+        ollama_configured: true,
+        ollama_masked_api_key: 'sk-…1234',
+        ollama_base_url: 'https://ollama.example',
+        ollama_last_error: null,
+        ollama_last_success_at: null,
+        available_models: [],
+        model: 'test',
+        mcp_status: 'connected',
+      },
+      onOllamaSave: (body) => { savedBody = body },
+    })
+
+    const section = Array.from(container.querySelectorAll('section')).find(
+      (candidate) => candidate.querySelector('h2')?.textContent === 'Ollama Access',
+    )
+    const keyInput = section?.querySelector<HTMLInputElement>('input[type="password"]')
+    const baseUrlInput = section?.querySelector<HTMLInputElement>('input[type="url"]')
+    expect(section?.textContent).toContain('sk-…1234')
+    expect(keyInput?.value).toBe('')
+    expect(baseUrlInput?.value).toBe('https://ollama.example')
+
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+      setter?.call(keyInput, 'never-render-this-secret')
+      keyInput?.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    const saveButton = Array.from(section?.querySelectorAll('button') ?? []).find(
+      (button) => button.textContent === 'Validate and save',
+    )
+    await act(async () => {
+      saveButton?.click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(savedBody).toEqual({
+      api_key: 'never-render-this-secret',
+      base_url: 'https://ollama.example',
+    })
+    expect(keyInput?.value).toBe('')
+    expect(section?.textContent).toContain('Validated and saved sk-…7890.')
+    expect(section?.textContent).not.toContain('never-render-this-secret')
   })
 
   it('applies the standardized run queue grid layout hook', async () => {

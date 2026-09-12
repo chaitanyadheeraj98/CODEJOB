@@ -1,4 +1,4 @@
-import type { ChatAttachment, ChatSession, ChatSessionDetail, ChatStatus } from './types'
+import type { ChatAttachment, ChatSession, ChatSessionDetail, ChatStatus, OllamaCredential } from './types'
 import type { ProposalFields, ProposalHandler } from './proposals'
 
 async function responseError(response: Response, fallback: string): Promise<Error> {
@@ -21,6 +21,20 @@ export async function getChatStatus(apiBase: string): Promise<ChatStatus> {
   const response = await fetch(`${apiBase}/chat/status`)
   if (!response.ok) throw await responseError(response, 'Failed to check chat status')
   return (await response.json()) as ChatStatus
+}
+
+export async function saveOllamaCredential(
+  apiBase: string,
+  apiKey: string,
+  baseUrl: string,
+): Promise<OllamaCredential> {
+  const response = await fetch(`${apiBase}/chat/credentials/ollama`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ api_key: apiKey, base_url: baseUrl }),
+  })
+  if (!response.ok) throw await responseError(response, 'Failed to validate Ollama credentials')
+  return (await response.json()) as OllamaCredential
 }
 
 export async function listChatSessions(apiBase: string): Promise<ChatSession[]> {

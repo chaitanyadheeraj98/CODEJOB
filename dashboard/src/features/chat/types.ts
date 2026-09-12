@@ -27,6 +27,9 @@ export type ChatSessionDetail = ChatSession & {
 export type ChatStatus = {
   enabled: boolean
   ollama_running: boolean
+  ollama_configured?: boolean
+  ollama_masked_api_key?: string | null
+  ollama_base_url?: string
   ollama_last_error: string | null
   ollama_last_success_at: string | null
   chat_last_error: string | null
@@ -35,6 +38,13 @@ export type ChatStatus = {
   model: string
   available_models: string[]
   telemetry?: ChatTelemetry | null
+}
+
+export type OllamaCredential = {
+  provider: 'ollama'
+  configured: boolean
+  masked_api_key: string | null
+  base_url: string
 }
 
 export type ChatTelemetry = {

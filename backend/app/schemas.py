@@ -2,6 +2,7 @@ from datetime import datetime
 import json
 import re
 from typing import Any, Literal, cast
+from urllib.parse import urlsplit
 from zoneinfo import available_timezones
 
 from pydantic import AliasChoices, BaseModel, Field, computed_field, field_validator, model_validator
@@ -1458,9 +1459,46 @@ class ChatTelemetryResponse(BaseModel):
     top_failure_code: str | None = None
 
 
+class OllamaCredentialRequest(BaseModel):
+    api_key: str = Field(min_length=8, max_length=4096)
+    base_url: str = Field(default="", max_length=255)
+
+    @field_validator("api_key", "base_url", mode="before")
+    @classmethod
+    def strip_ollama_credentials(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("base_url")
+    @classmethod
+    def validate_ollama_base_url(cls, value: str) -> str:
+        if not value:
+            return value
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.netloc
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("Base URL must be an HTTP(S) URL without credentials, query, or fragment.")
+        return value.rstrip("/")
+
+
+class OllamaCredentialResponse(BaseModel):
+    provider: Literal["ollama"] = "ollama"
+    configured: bool
+    masked_api_key: str | None = None
+    base_url: str = ""
+
+
 class ChatStatusResponse(BaseModel):
     enabled: bool
     ollama_running: bool
+    ollama_configured: bool = False
+    ollama_masked_api_key: str | None = None
+    ollama_base_url: str = ""
     ollama_last_error: str | None = None
     ollama_last_success_at: datetime | None = None
     chat_last_error: str | None = None
