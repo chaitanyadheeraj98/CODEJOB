@@ -183,12 +183,37 @@ class ConnectionPoolSizingTests(unittest.TestCase):
     which holds 40 threads. SQLAlchemy's untouched defaults give 5 + 10.
     """
 
-    def test_the_pool_is_sized_against_the_threadpool_not_left_at_the_default(self):
-        self.assertGreaterEqual(
-            settings.db_pool_size + settings.db_max_overflow,
-            30,
-            "a ceiling below the 40-thread limiter makes requests queue on the pool",
+    # The deployment: `uvicorn --workers 2` plus the RQ worker.
+    API_WORKERS = 2
+    BACKGROUND_WORKERS = 1
+    POSTGRES_MAX_CONNECTIONS = 100
+
+    def test_the_pool_is_not_left_at_sqlalchemys_default(self):
+        """5 + 10 against a 40-thread limiter is the bug this replaced."""
+        self.assertNotEqual(
+            (settings.db_pool_size, settings.db_max_overflow),
+            (5, 10),
+            "the untouched default is below the threadpool and queues requests",
         )
+        self.assertGreaterEqual(settings.db_pool_size + settings.db_max_overflow, 20)
+
+    def test_the_whole_deployment_fits_inside_max_connections(self):
+        """The arithmetic that decides how many workers may be run.
+
+        Asserted rather than written in a comment, because the failure mode is
+        a deploy that exhausts PostgreSQL and refuses connections to everything
+        including migrations.
+        """
+        per_process = settings.db_pool_size + settings.db_max_overflow
+        worst_case = per_process * (self.API_WORKERS + self.BACKGROUND_WORKERS)
+        self.assertLess(
+            worst_case,
+            self.POSTGRES_MAX_CONNECTIONS,
+            f"{self.API_WORKERS} API workers + {self.BACKGROUND_WORKERS} background worker "
+            f"want {worst_case} connections; raise max_connections or lower the pool",
+        )
+        # Headroom for migrations, psql and the healthcheck.
+        self.assertLessEqual(worst_case, self.POSTGRES_MAX_CONNECTIONS - 20)
 
     def test_the_engine_actually_uses_the_configured_size(self):
         """A setting nothing reads would be worse than no setting."""

@@ -49,10 +49,16 @@ connect_args = {"check_same_thread": False, "timeout": 10} if is_sqlite else {}
 #
 #     total connections = (pool_size + max_overflow) x API processes + worker
 #
-# At the defaults below that is 30 for a single API process, comfortably under
-# PostgreSQL's default `max_connections` of 100 alongside the RQ worker. Four
-# uvicorn workers would need 120 and would exhaust it, so raising the worker
-# count means lowering these or raising `max_connections` - see C3.
+# At the defaults below that is 20 per process. The deployment runs **two**
+# uvicorn workers plus the RQ worker, so 3 x 20 = 60 against PostgreSQL's
+# default `max_connections` of 100, leaving headroom for migrations and a psql
+# session.
+#
+# Two workers rather than four is the deliberate choice: realistic peak is
+# 5-15 concurrent turns among 100 registered users, so two processes remove the
+# single-process failure mode without needing `max_connections` raised or a
+# pooler introduced. Four would want 100 connections on their own and leave
+# nothing for the worker.
 pool_args = (
     {}
     if is_sqlite

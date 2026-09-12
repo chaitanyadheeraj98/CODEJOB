@@ -26,8 +26,8 @@ class Settings(BaseSettings):
     # switch that *proves* those paths have been moved, not a way to skip
     # moving them.
     api_embeddings_enabled: bool = True
-    db_pool_size: int = Field(default=20, ge=1)
-    db_max_overflow: int = Field(default=10, ge=0)
+    db_pool_size: int = Field(default=15, ge=1)
+    db_max_overflow: int = Field(default=5, ge=0)
     openai_api_key: str = ""
     deepseek_api_key: str = Field(default="", validation_alias="Deepseek_API_KEY")
     deepseek_base_url: str = "https://api.deepseek.com"

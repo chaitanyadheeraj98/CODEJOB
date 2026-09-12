@@ -18,7 +18,7 @@ services:
     # graceful shutdown, so lifespan teardown never runs.
     command: >
       sh -c "alembic upgrade head &&
-      exec uvicorn app.main:app --host 0.0.0.0 --port 8000"
+      exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2"
     # The default 10s is not enough for lifespan teardown: it stops the
     # auto-runner thread and the Telegram poller, each joined with a 5s
     # timeout. Cut short, the container dies with 137 instead of exiting
