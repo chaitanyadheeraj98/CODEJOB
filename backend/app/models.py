@@ -605,6 +605,23 @@ class GmailCredential(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
 
 
+class ProviderCredential(Base):
+    __tablename__ = "provider_credentials"
+    __table_args__ = (
+        UniqueConstraint("owner_id", "provider", name="ux_provider_credentials_owner_provider"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    provider: Mapped[str] = mapped_column(String(40), index=True)
+    api_key_encrypted: Mapped[str] = mapped_column(Text, default="")
+    base_url: Mapped[str] = mapped_column(String(255), default="")
+    label: Mapped[str] = mapped_column(String(120), default="")
+    last_used_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    last_error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+
+
 class GmailLabel(Base):
     __tablename__ = "gmail_labels"
     __table_args__ = (UniqueConstraint("owner_id", "external_label_id", name="ux_gmail_labels_owner_external"),)
