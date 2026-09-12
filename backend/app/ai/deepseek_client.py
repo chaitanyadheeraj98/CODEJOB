@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import random
+import re
 import time
 from dataclasses import dataclass
 from typing import Any, Literal
 
 import instructor
-from openai import OpenAI
+from openai import APIConnectionError, APITimeoutError, OpenAI, RateLimitError
 
 from app.config import settings
 from app.ai.json_object import JSONObjectParseError, parse_json_object
@@ -38,6 +40,71 @@ class DeepSeekJSONResult:
     # per-email would cost ~31x on that segment with nothing in the logs to show it.
     prompt_cache_hit_tokens: int | None = None
     prompt_cache_miss_tokens: int | None = None
+
+
+class DeepSeekEmptyResponse(RuntimeError):
+    """The model returned nothing. Under load this is transient, not a refusal.
+
+    DeepSeek holds a connection open above its concurrency limit rather than
+    rejecting: blank lines on a non-streaming call, `: keep-alive` comments on
+    a streaming one. A response that arrives with no content is that, not an
+    answer of "nothing", so it is retried rather than parsed.
+    """
+
+
+def _request_user_id() -> str | None:
+    """The value DeepSeek segments rate limits by.
+
+    The owner id is already opaque by construction - `usr_<uuid4hex>`, or the
+    configured constant - so it satisfies the API's `[a-zA-Z0-9_-]+` rule and
+    its "no private data" rule without any transformation. Sanitised anyway,
+    because the cost of being wrong is leaking an identifier to a third party
+    and the cost of the check is nothing.
+    """
+    if not settings.deepseek_send_user_id:
+        return None
+    from app import tenancy
+
+    raw = (tenancy.owner_id() or "").strip()
+    cleaned = re.sub(r"[^a-zA-Z0-9_-]", "", raw)[:512]
+    return cleaned or None
+
+
+def _sleep_before_retry(attempt: int) -> None:
+    # Jittered, so a crowd that hit the limit together does not retry together
+    # and recreate it - the same reasoning as the admission queue in C2.
+    base = settings.deepseek_retry_base_seconds * (2 ** attempt)
+    time.sleep(min(base, 8.0) * (0.5 + random.random()))
+
+
+def _call_with_retries(send, *, what: str):
+    """Run `send`, retrying the failures DeepSeek documents as transient.
+
+    A 429 above the concurrency limit and an empty keep-alive response are the
+    two shapes that mean "busy, ask again". Everything else is returned to the
+    caller unchanged: retrying a bad request would just spend the budget three
+    times before failing identically.
+    """
+    attempts = max(1, settings.deepseek_max_attempts)
+    last: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            return send()
+        except RateLimitError as exc:
+            last = exc
+            logger.warning("deepseek_rate_limited what=%s attempt=%s/%s", what, attempt + 1, attempts)
+        except (APITimeoutError, APIConnectionError) as exc:
+            last = exc
+            logger.warning(
+                "deepseek_transport_retry what=%s attempt=%s/%s error=%s",
+                what, attempt + 1, attempts, type(exc).__name__,
+            )
+        except DeepSeekEmptyResponse as exc:
+            last = exc
+            logger.warning("deepseek_empty_response what=%s attempt=%s/%s", what, attempt + 1, attempts)
+        if attempt + 1 < attempts:
+            _sleep_before_retry(attempt)
+    raise last if last is not None else RuntimeError("DeepSeek call failed")
 
 
 def _build_client(*, timeout_seconds: float | None = None) -> OpenAI:
@@ -84,19 +151,29 @@ def deepseek_chat_completion(system_prompt: str, user_prompt: str, *, model_name
         raise RuntimeError("DeepSeek API key is missing")
 
     client = _build_client()
-    response = client.chat.completions.create(
-        model=model_name or settings.deepseek_model_fast or "deepseek-v4-flash",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        temperature=0.35,
-        max_tokens=550,
-    )
-    content = response.choices[0].message.content if response.choices else ""
-    if not content:
-        raise RuntimeError("DeepSeek returned empty content")
-    return content.strip()
+
+    def send() -> str:
+        request: dict[str, Any] = {
+            "model": model_name or settings.deepseek_model_fast or "deepseek-v4-flash",
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": 0.35,
+            "max_tokens": 550,
+        }
+        user_id = _request_user_id()
+        if user_id:
+            request["user"] = user_id
+        response = client.chat.completions.create(**request)
+        content = response.choices[0].message.content if response.choices else ""
+        # `.strip()` before the emptiness test: under load the body can be
+        # whitespace holding the connection open rather than an answer.
+        if not (content or "").strip():
+            raise DeepSeekEmptyResponse("DeepSeek returned empty content")
+        return content.strip()
+
+    return _call_with_retries(send, what="chat_completion")
 
 
 def deepseek_json_completion(
@@ -147,7 +224,22 @@ def deepseek_json_completion_with_diagnostics(
     extra_body = thinking_extra_body(thinking)
     if extra_body:
         request["extra_body"] = extra_body
-    response = client.chat.completions.create(**request)
+    user_id = _request_user_id()
+    if user_id:
+        request["user"] = user_id
+
+    def send():
+        answer = client.chat.completions.create(**request)
+        text = answer.choices[0].message.content if answer.choices else ""
+        # Retried rather than parsed: above the concurrency limit DeepSeek
+        # holds the connection with blank lines instead of rejecting, so an
+        # empty body means "busy", not "no answer". Parsing it would raise
+        # `DeepSeekJSONError` and spend a whole ladder rung on a non-answer.
+        if not (text or "").strip():
+            raise DeepSeekEmptyResponse("DeepSeek returned empty content")
+        return answer
+
+    response = _call_with_retries(send, what="json_completion")
     content = response.choices[0].message.content if response.choices else ""
     finish_reason = str(getattr(response.choices[0], "finish_reason", "") or "") if response.choices else ""
     raw_content = content or ""

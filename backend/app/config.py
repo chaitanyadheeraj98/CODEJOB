@@ -34,6 +34,18 @@ class Settings(BaseSettings):
     deepseek_model_fast: str = "deepseek-v4-flash"
     deepseek_model_pro: str = Field(default="deepseek-v4-pro", validation_alias="DEEPSEEK_MODEL_PRO")
     deepseek_timeout_seconds: float = 20.0
+    # C5. DeepSeek's documented behaviour above the concurrency limit is a 429,
+    # not a rejection, so the call is retried rather than surfaced as a failure.
+    # Three attempts with exponential backoff and jitter: enough to ride out a
+    # brief crowd, short enough not to sit on a request.
+    deepseek_max_attempts: int = Field(default=3, ge=1, le=6)
+    deepseek_retry_base_seconds: float = Field(default=0.5, ge=0)
+    # Sent as `user` on every request. DeepSeek segments rate limits by it, so
+    # one tenant's burst stops eating another's headroom once quota is
+    # expanded, and it is harmless before that. The owner id is already opaque
+    # - `usr_<uuid4hex>` - so it carries no private data, which the API
+    # requires.
+    deepseek_send_user_id: bool = True
     feature_deepseek_enabled: bool = False
     role_manifest_child_creation_enabled: bool = Field(
         default=False,
