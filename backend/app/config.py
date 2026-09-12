@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     # - and pinned off in the test suite, because 1,326 bundled roles are noise
     # to a test asserting what *one owner's* vocabulary contains.
     feature_base_taxonomy_enabled: bool = True
+    # E2/E3. Whether a user may keep a taxonomy of their own on top of the base.
+    # Off hides the overlay, the Settings UI and the endpoints - and deletes
+    # nothing, so turning it back on restores every entry. That reversibility
+    # is the point: it is the switch for "the developer improves the base
+    # parser and user editing is switched off".
+    feature_user_taxonomy_enabled: bool = True
     db_pool_size: int = Field(default=15, ge=1)
     db_max_overflow: int = Field(default=5, ge=0)
     openai_api_key: str = ""

@@ -29,6 +29,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.base_taxonomy import base_entity_entries, clear_base_taxonomy_cache
 from app.models import CanonicalEntityTaxonomyEntry
 from app.services.role_provenance import RoleSource, TaxonomyMatch
@@ -125,7 +126,10 @@ def load_entity_taxonomy(db: Session, *, owner_id: str, entity_type: str) -> Ent
     )
 
     decisions: dict[str, CanonicalEntityTaxonomyEntry] = {}
-    for row in rows:
+    # With user taxonomy off the owner's rows are ignored rather than removed,
+    # so nothing decides and nothing is suppressed: the base stands alone and
+    # every entry comes back the moment the flag returns.
+    for row in rows if settings.feature_user_taxonomy_enabled else []:
         normalized = normalize_taxonomy_text(row.canonical_name)
         if normalized and (row.suppressed or row.status in {"approved", "dismissed"}):
             decisions.setdefault(normalized, row)

@@ -141,7 +141,8 @@ def approved_learning_signals_for_owner(db: Session, owner_id: str) -> list[JobI
         .all()
     )
     decisions: dict[tuple[str, str], JobIntentTaxonomyEntry] = {}
-    for row in rows:
+    # Ignored rather than deleted when user taxonomy is off - see role_taxonomy.
+    for row in rows if settings.feature_user_taxonomy_enabled else []:
         phrase = str(row.phrase or "").strip()
         normalized = normalize_job_intent_phrase(row.normalized_phrase or phrase)
         polarity = str(row.polarity or "").strip()

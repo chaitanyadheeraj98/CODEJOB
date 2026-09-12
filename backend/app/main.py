@@ -563,6 +563,34 @@ def _is_public_path(path: str) -> bool:
     return path in PUBLIC_PATHS or path.startswith(PUBLIC_PATH_PREFIXES)
 
 
+# Every path that reads or writes a user's own taxonomy. A prefix list rather
+# than a dependency on each of the 22 endpoints: a per-route decorator is 22
+# chances to miss one, and a missed one is a route still editing a taxonomy the
+# deployment has switched off.
+USER_TAXONOMY_PATH_PREFIXES = (
+    "/settings/skills/",
+    "/settings/entities/",
+    "/settings/taxonomy/",
+    "/settings/job-intent-learning/",
+    "/taxonomy/",
+)
+
+
+@app.middleware("http")
+async def refuse_user_taxonomy_when_disabled(request: Request, call_next):
+    """404 the taxonomy surface when user taxonomy is off.
+
+    404 rather than 403, matching `require_chat_enabled`: a disabled feature
+    should look absent, not forbidden. The dashboard hides the UI, and this is
+    what makes hiding it true rather than cosmetic.
+    """
+    if not settings.feature_user_taxonomy_enabled and request.url.path.startswith(
+        USER_TAXONOMY_PATH_PREFIXES
+    ):
+        return JSONResponse(status_code=404, content={"detail": "Not found"})
+    return await call_next(request)
+
+
 @app.middleware("http")
 async def resolve_owner_from_session(request: Request, call_next):
     """Set the request's owner from its session cookie, once, here.
@@ -3147,6 +3175,10 @@ def get_settings_bootstrap(
     db: Session = Depends(get_db),
 ) -> SettingsBootstrapResponse:
     user_settings = _get_settings(db)
+    # Nothing to review when user taxonomy is off, and returning rows the UI
+    # cannot act on - every endpoint that would act on them 404s - would be a
+    # queue that cannot be emptied.
+    include_learning_data = include_learning_data and settings.feature_user_taxonomy_enabled
     pending_skills = _list_pending_unknown_skills(db) if include_learning_data else []
     pending_job_intent_signals = (
         [_serialize_job_intent_entry(item) for item in _list_job_intent_entries(db, status="pending")]
@@ -3162,6 +3194,7 @@ def get_settings_bootstrap(
         settings=_settings_response_from_model(user_settings),
         role_manifest_child_creation_enabled=settings.role_manifest_child_creation_enabled,
         scheduling_enabled=settings.feature_scheduling_enabled,
+        user_taxonomy_enabled=settings.feature_user_taxonomy_enabled,
         gmail_requirement_groups=[_gmail_requirement_group_response(item) for item in _list_gmail_requirement_groups(db)],
         resumes=[_resume_response(item) for item in _list_resumes(db)],
         attachments=[AttachmentAssetResponse.model_validate(item) for item in _list_attachment_assets(db)],

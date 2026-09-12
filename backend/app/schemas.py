@@ -952,6 +952,11 @@ class SettingsBootstrapResponse(BaseModel):
     # Without this the page exists but nothing links to it, and temp157 §8.1
     # requires the user to be able to see every scheduled task.
     scheduling_enabled: bool = False
+    # E3 / §11.4. Surfaced the same way, so the dashboard can hide the taxonomy
+    # cards exactly when the deployment has switched user editing off. The
+    # endpoints 404 regardless; this is what stops the UI offering a door that
+    # is not there.
+    user_taxonomy_enabled: bool = True
     gmail_requirement_groups: list["GmailRequirementGroupResponse"] = Field(default_factory=list)
     resumes: list[ResumeResponse] = Field(default_factory=list)
     attachments: list[AttachmentAssetResponse] = Field(default_factory=list)

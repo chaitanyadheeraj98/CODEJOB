@@ -763,6 +763,7 @@ type SettingsBootstrapPayload = {
   settings: SettingsPayload
   role_manifest_child_creation_enabled: boolean
   scheduling_enabled?: boolean
+  user_taxonomy_enabled?: boolean
   gmail_requirement_groups: TrustedGmailGroup[]
   resumes: ResumeAsset[]
   attachments: AttachmentAsset[]
@@ -3195,6 +3196,9 @@ function App({ account }: { account?: AuthUser }) {
   const [hasLoadedLearningData, setHasLoadedLearningData] = useState(false)
   const [roleManifestChildCreationEnabled, setRoleManifestChildCreationEnabled] = useState(false)
   const [schedulingEnabled, setSchedulingEnabled] = useState(false)
+  // Defaults true so the cards are present on an older backend that does
+  // not send the flag; the endpoints remain the authority either way.
+  const [userTaxonomyEnabled, setUserTaxonomyEnabled] = useState(true)
   const [skillDraft, setSkillDraft] = useState('')
   const [nvoidsLocationDraft, setNvoidsLocationDraft] = useState('')
   const [acceptedLocationDraft, setAcceptedLocationDraft] = useState('')
@@ -3587,6 +3591,7 @@ function App({ account }: { account?: AuthUser }) {
     setSettings(normalized)
     setRoleManifestChildCreationEnabled(Boolean(payload.role_manifest_child_creation_enabled))
     setSchedulingEnabled(Boolean(payload.scheduling_enabled))
+    setUserTaxonomyEnabled(payload.user_taxonomy_enabled !== false)
     setGmailRequirementGroups(payload.gmail_requirement_groups ?? [])
     setResumeAssets(payload.resumes ?? [])
     setResumeSkillEdits(Object.fromEntries((payload.resumes ?? []).map((resume) => [resume.id, resume.skills_text ?? ''])))
@@ -7447,64 +7452,73 @@ function App({ account }: { account?: AuthUser }) {
 
           {activePage === 'settings' && hasLoadedSettingsBootstrap ? (
             <div className="configGrid runQueueGrid">
-              <SkillUpgradeSection
-                pendingSkills={pendingSkills}
-                loading={skillsLoading}
-                busySkillKey={skillActionKey}
-                approveAllSkills={approveAllPendingSkills}
-                approveSkill={approvePendingSkill}
-                dismissSkill={dismissPendingSkill}
-                embeddingPendingCount={embeddingPendingCount}
-                embeddingSummary={embeddingSummary}
-                embedSkills={embedPendingSkills}
-                onBulkReview={() => setBulkReviewScope('skill')}
-              />
+              {/* §11.4: hidden when the deployment has switched user
+                  taxonomy off. The endpoints 404 either way; this is
+                  what stops the UI offering a door that is not there. */}
+              {userTaxonomyEnabled ? (
+                <SkillUpgradeSection
+                  pendingSkills={pendingSkills}
+                  loading={skillsLoading}
+                  busySkillKey={skillActionKey}
+                  approveAllSkills={approveAllPendingSkills}
+                  approveSkill={approvePendingSkill}
+                  dismissSkill={dismissPendingSkill}
+                  embeddingPendingCount={embeddingPendingCount}
+                  embeddingSummary={embeddingSummary}
+                  embedSkills={embedPendingSkills}
+                  onBulkReview={() => setBulkReviewScope('skill')}
+                />
+              ) : null}
               <FilterVisibilitySettings
                 visibleFilters={settings.visible_filters}
                 onChange={updateVisibleFilters}
                 resumeAssets={resumeAssets}
                 savingLabel={filterVisibilityStatus}
               />
-              <EntityUpgradeSection
-                title="Upgrade Companies"
-                pendingEntities={pendingCompanies}
-                loading={skillsLoading}
-                busyKey={entityActionKey?.startsWith('company:') ? entityActionKey.slice('company:'.length) : null}
-                approveAll={() => runEntityAction('company', 'approve-all')}
-                approve={(entity) => runEntityAction('company', 'approve', entity)}
-                dismiss={(entity) => runEntityAction('company', 'dismiss', entity)}
-              />
-              <EntityUpgradeSection
-                title="Upgrade Locations"
-                pendingEntities={pendingLocations}
-                loading={skillsLoading}
-                busyKey={entityActionKey?.startsWith('location:') ? entityActionKey.slice('location:'.length) : null}
-                approveAll={() => runEntityAction('location', 'approve-all')}
-                approve={(entity) => runEntityAction('location', 'approve', entity)}
-                dismiss={(entity) => runEntityAction('location', 'dismiss', entity)}
-                onBulkReview={() => setBulkReviewScope('location')}
-              />
-              <EntityUpgradeSection
-                title="Upgrade Job Roles"
-                pendingEntities={pendingRoles}
-                loading={skillsLoading}
-                busyKey={entityActionKey?.startsWith('role:') ? entityActionKey.slice('role:'.length) : null}
-                approveAll={() => runEntityAction('role', 'approve-all')}
-                approve={(entity) => runEntityAction('role', 'approve', entity)}
-                dismiss={(entity) => runEntityAction('role', 'dismiss', entity)}
-                onBulkReview={() => setBulkReviewScope('role')}
-              />
-              <JobIntentLearningSection
-                pendingSignals={pendingJobIntentSignals}
-                approvedSignals={approvedJobIntentSignals}
-                embeddedSignals={embeddedJobIntentSignals}
-                loading={jobIntentLoading}
-                busySignalKey={jobIntentActionKey}
-                approveAllSignals={approveAllPendingJobIntentSignals}
-                approveSignal={approvePendingJobIntentSignal}
-                dismissSignal={dismissPendingJobIntentSignal}
-                togglePolarity={toggleJobIntentSignalPolarity}
-              />
+              {userTaxonomyEnabled ? (
+                <>
+                <EntityUpgradeSection
+                  title="Upgrade Companies"
+                  pendingEntities={pendingCompanies}
+                  loading={skillsLoading}
+                  busyKey={entityActionKey?.startsWith('company:') ? entityActionKey.slice('company:'.length) : null}
+                  approveAll={() => runEntityAction('company', 'approve-all')}
+                  approve={(entity) => runEntityAction('company', 'approve', entity)}
+                  dismiss={(entity) => runEntityAction('company', 'dismiss', entity)}
+                />
+                <EntityUpgradeSection
+                  title="Upgrade Locations"
+                  pendingEntities={pendingLocations}
+                  loading={skillsLoading}
+                  busyKey={entityActionKey?.startsWith('location:') ? entityActionKey.slice('location:'.length) : null}
+                  approveAll={() => runEntityAction('location', 'approve-all')}
+                  approve={(entity) => runEntityAction('location', 'approve', entity)}
+                  dismiss={(entity) => runEntityAction('location', 'dismiss', entity)}
+                  onBulkReview={() => setBulkReviewScope('location')}
+                />
+                <EntityUpgradeSection
+                  title="Upgrade Job Roles"
+                  pendingEntities={pendingRoles}
+                  loading={skillsLoading}
+                  busyKey={entityActionKey?.startsWith('role:') ? entityActionKey.slice('role:'.length) : null}
+                  approveAll={() => runEntityAction('role', 'approve-all')}
+                  approve={(entity) => runEntityAction('role', 'approve', entity)}
+                  dismiss={(entity) => runEntityAction('role', 'dismiss', entity)}
+                  onBulkReview={() => setBulkReviewScope('role')}
+                />
+                <JobIntentLearningSection
+                  pendingSignals={pendingJobIntentSignals}
+                  approvedSignals={approvedJobIntentSignals}
+                  embeddedSignals={embeddedJobIntentSignals}
+                  loading={jobIntentLoading}
+                  busySignalKey={jobIntentActionKey}
+                  approveAllSignals={approveAllPendingJobIntentSignals}
+                  approveSignal={approvePendingJobIntentSignal}
+                  dismissSignal={dismissPendingJobIntentSignal}
+                  togglePolarity={toggleJobIntentSignalPolarity}
+                />
+                </>
+              ) : null}
               <TrustedGmailGroupsPanel
                 featureEnabled={settings.feature_gmail_requirement_groups_enabled}
                 groups={gmailRequirementGroups}
