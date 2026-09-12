@@ -8,6 +8,7 @@ from contextlib import AsyncExitStack, ExitStack, asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from dataclasses import dataclass
 from email.utils import parseaddr
+from time import perf_counter
 from pathlib import Path
 from typing import Annotated, Any, Mapping, TypedDict, TypeVar, cast
 import threading
@@ -266,7 +267,7 @@ from app.services.github_issue_service import GithubIssueServiceError, create_gi
 from app.services import gmail_label_service
 from app.models import RecruiterWatch, TrackedThread
 from fastapi.responses import JSONResponse
-from app import correlation, gmail_client, tenancy
+from app import correlation, gmail_client, request_log, tenancy
 from app.services import auth_service
 from app.services.orchestration_service import OrchestrationDeps, OrchestrationService
 from app.services.requirement_expansion_service import RequirementExpansionService
@@ -602,6 +603,9 @@ async def resolve_owner_from_session(request: Request, call_next):
     i.e. exactly today's single-tenant behaviour.
     """
     if not settings.feature_auth_enabled:
+        # Still recorded, so a single-tenant deployment's log lines say which
+        # owner served the request rather than leaving the field empty.
+        request.state.owner_id = tenancy.owner_id()
         return await call_next(request)
 
     token = request.cookies.get(settings.session_cookie_name)
@@ -629,11 +633,46 @@ async def resolve_owner_from_session(request: Request, call_next):
     if owner is None and not _is_public_path(request.url.path) and request.method != "OPTIONS":
         return JSONResponse(status_code=401, content={"detail": "Not signed in."})
 
+    # On the request as well as in the ContextVar. `log_request_summary` runs
+    # outside this middleware, so by the time it logs, the ContextVar has
+    # already been reset in the `finally` below; the scope has not.
+    request.state.owner_id = owner
     reset = tenancy.set_owner_id(owner)
     try:
         return await call_next(request)
     finally:
         tenancy.reset_owner_id(reset)
+
+
+# At import, not in the lifespan: uvicorn imports this module in each worker
+# and tests drive the app without running the lifespan. Configuring here means
+# the suite exercises the same logger production does. `configure` is
+# idempotent, so a second worker does not log every request twice.
+request_log.configure()
+
+
+@app.middleware("http")
+async def log_request_summary(request: Request, call_next):
+    """One line per request: id, owner, route, status, duration.
+
+    F3 / §12. Registered between the correlation middleware and the session
+    middleware on purpose - inside the first, so the id is set; outside the
+    second, so a 401 is logged rather than silently dropped.
+
+    §12.1: the route *template*, never the path, and never the query string.
+    See `app.request_log` for why.
+    """
+    started = perf_counter()
+    response = await call_next(request)
+    request_log.log_request(
+        correlation_id=correlation.correlation_id() or "",
+        owner_id=getattr(request.state, "owner_id", None),
+        method=request.method,
+        route=request_log.route_template(request.scope),
+        status=response.status_code,
+        duration_ms=int((perf_counter() - started) * 1000),
+    )
+    return response
 
 
 @app.middleware("http")

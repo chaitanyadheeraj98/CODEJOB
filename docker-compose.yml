@@ -16,9 +16,16 @@ services:
     # shell is PID 1, SIGTERM stops at the shell, uvicorn never sees it, and
     # the container is SIGKILLed at the end of the grace period - exit 137, no
     # graceful shutdown, so lifespan teardown never runs.
+    # `--no-access-log` because F3's `log_request_summary` replaces it, and
+    # uvicorn's version writes the full request line - **including the query
+    # string**. Nine endpoints take a free-text `q`, and people paste recruiter
+    # addresses and subject lines into search boxes, so that line was writing
+    # exactly the content §12.1 forbids recording. Ours logs the route
+    # template and never the query.
     command: >
       sh -c "alembic upgrade head &&
-      exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2"
+      exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
+      --no-access-log"
     # The default 10s is not enough for lifespan teardown: it stops the
     # auto-runner thread and the Telegram poller, each joined with a 5s
     # timeout. Cut short, the container dies with 137 instead of exiting
