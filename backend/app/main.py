@@ -266,7 +266,7 @@ from app.services.github_issue_service import GithubIssueServiceError, create_gi
 from app.services import gmail_label_service
 from app.models import RecruiterWatch, TrackedThread
 from fastapi.responses import JSONResponse
-from app import gmail_client, tenancy
+from app import correlation, gmail_client, tenancy
 from app.services import auth_service
 from app.services.orchestration_service import OrchestrationDeps, OrchestrationService
 from app.services.requirement_expansion_service import RequirementExpansionService
@@ -634,6 +634,39 @@ async def resolve_owner_from_session(request: Request, call_next):
         return await call_next(request)
     finally:
         tenancy.reset_owner_id(reset)
+
+
+@app.middleware("http")
+async def stamp_correlation_id(request: Request, call_next):
+    """Mint one id per request, return it, and leave it where everything can find it.
+
+    F2 / §12: the id a user can quote when they say "it hung at 3pm". It is put
+    on the response before anything else looks at the response, and held in a
+    ContextVar so the chat turn and (F3) the log line record the same string
+    without threading an argument through every layer.
+
+    Registered *after* `resolve_owner_from_session`, which makes it the outer
+    of the two: a request refused with 401 or 404 still comes back with an id.
+    Those are the requests people ask about.
+
+    An inbound `X-Request-ID` is ignored rather than honoured - see
+    `app.correlation`. Nothing upstream mints one, so trusting the client would
+    only let a caller choose what lands in our logs and collide two requests
+    onto one id.
+    """
+    cid = correlation.new_correlation_id()
+    reset = correlation.set_correlation_id(cid)
+    try:
+        response = await call_next(request)
+    finally:
+        correlation.reset_correlation_id(reset)
+    # An unhandled exception has no response to stamp; it escapes to
+    # ServerErrorMiddleware, which sits outside every middleware here. The id
+    # is still in the log line F3 writes, which is where that request is found.
+    response.headers[correlation.HEADER] = cid
+    return response
+
+
 if settings.feature_chat_enabled:
     from app.mcp_server.server import mcp as chat_mcp, mcp_app as chat_mcp_app
 else:
@@ -786,6 +819,11 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # `allow_headers=["*"]` governs what may be *sent*; a response header stays
+    # invisible to cross-origin JavaScript unless it is named here. The
+    # dashboard is a different origin, so without this the id is returned and
+    # the browser hides it - and the user has nothing to quote.
+    expose_headers=[correlation.HEADER],
 )
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 

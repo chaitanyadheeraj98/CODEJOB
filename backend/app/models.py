@@ -772,6 +772,12 @@ class ChatTurn(Base):
     budget_exhausted: Mapped[bool] = mapped_column(Boolean, default=False)
     mcp_cached: Mapped[bool] = mapped_column(Boolean, default=False)
     prompt_sha256: Mapped[str] = mapped_column(String(64))
+    # F2: the id this turn's request returned in its X-Request-ID header.
+    # Nullable because a turn recorded outside a request genuinely has none,
+    # and history predates the column. Indexed because the question it answers
+    # is a point lookup - "find the turn with this id" - on a bounded,
+    # high-cardinality string.
+    correlation_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, index=True)
 
 

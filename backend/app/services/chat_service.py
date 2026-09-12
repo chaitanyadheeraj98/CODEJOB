@@ -22,7 +22,7 @@ from app.models import ChatMessage, ChatSession, ChatTurn, UserSettings
 from app.services import admission_service
 from app.services.admission_service import CHAT_TURN_POOL, AdmissionRejected
 from app.services.chat_attachment_service import ChatAttachmentService
-from app import tenancy
+from app import correlation, tenancy
 
 
 def _sse(event: str, payload: dict[str, object]) -> str:
@@ -37,6 +37,9 @@ class ChatService:
             # place a ChatTurn is created, so it cannot be forgotten, and the
             # owner comes from the verified session like everywhere else.
             values.setdefault("owner_id", tenancy.owner_id())
+            # F2: the same id the request returned in its header. None outside
+            # a request, which is honest - see app.correlation.
+            values.setdefault("correlation_id", correlation.correlation_id())
             row = ChatTurn(**values)
             db.add(row)
             db.commit()

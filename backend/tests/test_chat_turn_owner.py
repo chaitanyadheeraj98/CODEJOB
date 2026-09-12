@@ -100,6 +100,7 @@ class ChatTurnOwnerTests(unittest.TestCase):
         """
         allowed = {
             "id", "owner_id", "session_id", "message_id",          # identifiers
+            "correlation_id",  # F2: which request produced this turn
             "model", "requested_model", "attempts", "failed_over",  # routing
             "prompt_tokens", "completion_tokens", "tool_calls",     # counts
             "duration_ms", "time_to_first_token_ms", "created_at",  # timings
