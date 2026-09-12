@@ -15,14 +15,14 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db import get_db
 from app.models import User
-from app.schemas import AdminUserResponse, AdminUserUpdateRequest
-from app.services import auth_service, gmail_credential_service
+from app.schemas import AdminUserResponse, AdminUserUpdateRequest, ObservabilityResponse
+from app.services import auth_service, gmail_credential_service, observability_service
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +40,26 @@ def require_admin(request: Request, db: Session = Depends(get_db)) -> User:
         # route does not exist would only make a real admin's life harder.
         raise HTTPException(status_code=403, detail="Administrator access is required.")
     return user
+
+
+@router.get("/observability", response_model=ObservabilityResponse)
+def observability(
+    window_hours: int = Query(
+        default=observability_service.DEFAULT_WINDOW_HOURS,
+        ge=1,
+        le=observability_service.MAX_WINDOW_HOURS,
+    ),
+    _admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> ObservabilityResponse:
+    """§12.4: latency, errors and who is stuck - without reading anyone's mail.
+
+    Admin-gated like everything else here, on the `is_admin` database column.
+    The window is capped in the signature rather than in the service so that an
+    out-of-range value is a 422 the caller can see, not a silent clamp that
+    answers a different question than the one asked.
+    """
+    return ObservabilityResponse(**observability_service.summarise(db, window_hours=window_hours))
 
 
 def _to_response(db: Session, user: User) -> AdminUserResponse:

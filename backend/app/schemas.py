@@ -1257,6 +1257,64 @@ class AdminUserUpdateRequest(BaseModel):
     is_admin: bool | None = None
 
 
+class ObservabilityPercentiles(BaseModel):
+    """Null when no turn in the window carried the metric, never zero."""
+
+    p50: int | None = None
+    p95: int | None = None
+
+
+class ObservabilityHourBucket(BaseModel):
+    hour: datetime
+    turns: int = 0
+
+
+class ObservabilityFailureCode(BaseModel):
+    code: str
+    turns: int = 0
+
+
+class ObservabilityUser(BaseModel):
+    """One account's slice of the same numbers. §12.2's "for me" case.
+
+    `owner_id` only, never the email. An admin can map it through
+    `/admin/users`, and the fewer places an account's address is rendered, the
+    fewer places it leaks from.
+    """
+
+    owner_id: str
+    turns: int = 0
+    failed: int = 0
+    admission_rejected: int = 0
+    duration_ms: ObservabilityPercentiles = ObservabilityPercentiles()
+    time_to_first_token_ms: ObservabilityPercentiles = ObservabilityPercentiles()
+
+
+class ObservabilityResponse(BaseModel):
+    """§12.1: identifiers, timings, counts and error codes. Nothing else.
+
+    The model is the control, not the comment. A response model emits exactly
+    the fields declared here, so a column that finds its way into the service's
+    output cannot reach the page without someone adding it here first - which
+    is the moment to ask whether it is content.
+    """
+
+    window_hours: int
+    since: datetime
+    until: datetime
+    #: True when the row cap bit, so a partial percentile is never read as a
+    #: complete one.
+    truncated: bool = False
+    turns: int = 0
+    failed: int = 0
+    admission_rejected: int = 0
+    duration_ms: ObservabilityPercentiles = ObservabilityPercentiles()
+    time_to_first_token_ms: ObservabilityPercentiles = ObservabilityPercentiles()
+    turns_per_hour: list[ObservabilityHourBucket] = []
+    failure_codes: list[ObservabilityFailureCode] = []
+    per_user: list[ObservabilityUser] = []
+
+
 class GmailConnectionResponse(BaseModel):
     """Deliberately carries no token material, encrypted or otherwise.
 
