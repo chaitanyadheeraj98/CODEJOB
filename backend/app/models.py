@@ -751,6 +751,10 @@ class ChatTurn(Base):
     __tablename__ = "chat_turn"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # F1: denormalised from chat_sessions. A turn reached its user only through
+    # session_id, so "this user's last 50 turns" was a join before it was a
+    # query - and that is the shape every observability question takes.
+    owner_id: Mapped[str] = mapped_column(String(100), default="default-owner", index=True)
     session_id: Mapped[int] = mapped_column(ForeignKey("chat_sessions.id"), index=True)
     message_id: Mapped[int | None] = mapped_column(ForeignKey("chat_messages.id"), nullable=True)
     model: Mapped[str] = mapped_column(String(200), default="")

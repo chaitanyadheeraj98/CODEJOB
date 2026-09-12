@@ -33,6 +33,10 @@ class ChatService:
     @staticmethod
     def _record_turn(db: Session, **values) -> ChatTurn | None:
         try:
+            # Stamped here rather than at each call site: this is the only
+            # place a ChatTurn is created, so it cannot be forgotten, and the
+            # owner comes from the verified session like everywhere else.
+            values.setdefault("owner_id", tenancy.owner_id())
             row = ChatTurn(**values)
             db.add(row)
             db.commit()
