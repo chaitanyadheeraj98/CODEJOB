@@ -13,6 +13,19 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     # See app/db.py for the arithmetic. Ignored for SQLite, which does not use
     # a queue pool.
+    # C4. Which process this is. The worker sets PROCESS_ROLE=worker; anything
+    # else is an API process. Used to keep embeddings - and the ~540 MB of
+    # torch that comes with them - out of the request-serving processes.
+    process_role: Literal["api", "worker"] = "api"
+    # Off means the API refuses to compute an embedding and declines the
+    # `transformers` import, which is what drags torch in. Measured at 746 MB
+    # -> 204 MB for `import app.main`.
+    #
+    # Default True, because turning it off breaks any request path that still
+    # embeds - scoring on manual intake and the inline nvoids sync. It is the
+    # switch that *proves* those paths have been moved, not a way to skip
+    # moving them.
+    api_embeddings_enabled: bool = True
     db_pool_size: int = Field(default=20, ge=1)
     db_max_overflow: int = Field(default=10, ge=0)
     openai_api_key: str = ""

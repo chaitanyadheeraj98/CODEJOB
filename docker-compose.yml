@@ -9,6 +9,9 @@ services:
     environment:
       REDIS_URL: redis://redis:6379/0
       OLLAMA_BASE_URL: http://host.docker.internal:11434
+      # C4: the API serves requests and must not carry torch. Every embedding
+      # belongs to the worker. See app/torch_guard.py for the measurement.
+      API_EMBEDDINGS_ENABLED: "false"
     # `exec` so uvicorn replaces the shell and becomes PID 1. Without it the
     # shell is PID 1, SIGTERM stops at the shell, uvicorn never sees it, and
     # the container is SIGKILLed at the end of the grace period - exit 137, no
@@ -43,6 +46,9 @@ services:
       - ./backend/.env.postgres
     environment:
       REDIS_URL: redis://redis:6379/0
+      # C4: the worker is where embeddings run, so it is never guarded
+      # against the transformers/torch import. See app/torch_guard.py.
+      PROCESS_ROLE: worker
     # Every name in QUEUE_NAMES must stay on this list. A queue nothing consumes
     # accepts jobs silently and runs none of them - no error, no log, jobs sit
     # queued forever. No unit test can see it, because a fake queue always

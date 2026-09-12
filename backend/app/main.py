@@ -26,6 +26,12 @@ from rq.command import send_stop_job_command
 from rq.job import Job, JobStatus
 from rq.exceptions import NoSuchJobError
 
+# Before anything that reaches langchain_core: it imports `transformers` when
+# present, which pulls in 483 MB of torch at start-up. See app/torch_guard.py.
+from app import torch_guard
+
+torch_guard.install()
+
 from app.config import settings
 from app.ai.reply_service import generate_reply_with_ai_or_fallback
 from app.ai.draft_formatting import normalize_draft_text_size

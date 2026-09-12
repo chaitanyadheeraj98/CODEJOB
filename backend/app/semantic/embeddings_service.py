@@ -67,7 +67,36 @@ def end_embedding_latency_capture() -> list[float]:
     return list(samples)
 
 
+class EmbeddingNotAvailableHere(RuntimeError):
+    """This process is not allowed to compute embeddings.
+
+    Raised rather than quietly falling back to hash, because hash and SBERT
+    give different answers and a scoring path that silently changed provider
+    would be a correctness change wearing a memory optimisation's clothes.
+    """
+
+
+def _embeddings_allowed_here() -> None:
+    """C4: keep torch out of the request-serving processes.
+
+    `langchain_core` imports `transformers` for a GPT-2 tokenizer whenever it
+    is installed, and that one optional import pulls in ~483 MB of torch at
+    application start - before any embedding runs. Declining it takes
+    `import app.main` from 746 MB to 204 MB, which is the difference between
+    `--workers 4` costing 3 GB and costing 0.8 GB.
+
+    Declining it is only safe if nothing in this process embeds, so that is
+    enforced here rather than assumed.
+    """
+    if settings.process_role != "worker" and not settings.api_embeddings_enabled:
+        raise EmbeddingNotAvailableHere(
+            "Embeddings are disabled in this process. Enqueue the work to the "
+            "worker, or set API_EMBEDDINGS_ENABLED=true."
+        )
+
+
 def _load_sbert_model(model_name: str, device: str):
+    _embeddings_allowed_here()
     global _sbert_model_instance, _sbert_model_name, _sbert_model_device
     if (
         _sbert_model_instance is not None
