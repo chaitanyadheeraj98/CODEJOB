@@ -109,50 +109,78 @@ export default function AccountControls({ apiBase, accountEmail, onDeactivated }
   }
 
   return (
-    <section className="card">
+    <section className="card accountCard">
       <h2>Account</h2>
 
-      <p className="subtle">Download a copy of your applications, conversations and taxonomy before you go — deactivation ends the session this download needs.</p>
-      <button type="button" disabled={busy !== ''} onClick={() => void exportData()}>
-        {busy === 'export' ? 'Preparing download...' : 'Export my data'}
-      </button>
+      <div className="accountSection">
+        <h3 className="accountSection__title">Export your data</h3>
+        <p className="subtle accountSection__blurb">
+          A JSON copy of your applications, conversations and taxonomy. Take it before you go —
+          deactivating ends the session this download needs.
+        </p>
+        <button type="button" disabled={busy !== ''} onClick={() => void exportData()}>
+          {busy === 'export' ? 'Preparing download...' : 'Export my data'}
+        </button>
+      </div>
 
-      <p className="subtle">Deactivation ends access and removes connected credentials now. An administrator can restore the account for 30 days; remaining data is then permanently deleted.</p>
-      <button type="button" className="dangerButton" disabled={busy !== ''} onClick={() => void deactivate()}>
-        {busy === 'deactivate' ? 'Deactivating...' : 'Deactivate account'}
-      </button>
+      <div className="accountSection accountSection--caution">
+        <h3 className="accountSection__title">Deactivate</h3>
+        <p className="subtle accountSection__blurb">
+          Ends access and removes connected credentials now. An administrator can restore the
+          account for 30 days; after that the remaining data is permanently deleted.
+        </p>
+        <button type="button" className="dangerButton" disabled={busy !== ''} onClick={() => void deactivate()}>
+          {busy === 'deactivate' ? 'Deactivating...' : 'Deactivate account'}
+        </button>
+      </div>
 
-      {confirming ? (
-        <div className="confirmDeletion">
-          <p className="subtle">
-            Type <strong>{accountEmail || 'your account email address'}</strong> to confirm. Your
-            data is permanently deleted after 30 days; until then an administrator can restore it.
-          </p>
-          <label htmlFor="confirm-delete-email">Email address</label>
-          <input
-            id="confirm-delete-email"
-            type="email"
-            value={typed}
-            autoComplete="off"
-            onChange={(event) => setTyped(event.target.value)}
-          />
-          <button type="button" className="dangerButton" disabled={busy !== '' || !typed}
-                  onClick={() => void requestDeletion()}>
-            {busy === 'delete' ? 'Requesting...' : 'Permanently delete my account'}
-          </button>
-          <button type="button" disabled={busy !== ''} onClick={cancelDeletion}>Cancel</button>
-        </div>
-      ) : (
-        <>
-          <p className="subtle">Deleting removes your account and all of its data permanently. You will be asked to sign in again first.</p>
-          <button type="button" className="dangerButton" disabled={busy !== ''}
-                  onClick={() => { setError(''); setConfirming(true) }}>
-            Delete account
-          </button>
-        </>
-      )}
+      <div className="accountSection accountSection--refusal">
+        <h3 className="accountSection__title">Delete permanently</h3>
+        {confirming ? (
+          <div className="confirmDeletion">
+            <p className="accountSection__blurb">
+              To confirm, type <code className="confirmDeletion__literal">{accountEmail || 'your account email address'}</code> below.
+              You will be asked to sign in again before this takes effect.
+            </p>
+            <label className="confirmDeletion__label" htmlFor="confirm-delete-email">
+              Email address
+            </label>
+            <input
+              id="confirm-delete-email"
+              className="confirmDeletion__input"
+              type="email"
+              value={typed}
+              autoComplete="off"
+              spellCheck={false}
+              placeholder={accountEmail || ''}
+              onChange={(event) => setTyped(event.target.value)}
+            />
+            <div className="confirmDeletion__actions">
+              <button type="button" className="dangerButtonSolid" disabled={busy !== '' || !typed}
+                      onClick={() => void requestDeletion()}>
+                {busy === 'delete' ? 'Requesting...' : 'Permanently delete my account'}
+              </button>
+              <button type="button" className="confirmDeletion__cancel" disabled={busy !== ''}
+                      onClick={cancelDeletion}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <p className="subtle accountSection__blurb">
+              Removes your account and everything in it. Your data stays recoverable for 30 days,
+              then it is gone for good.
+            </p>
+            <button type="button" className="dangerButton" disabled={busy !== ''}
+                    onClick={() => { setError(''); setConfirming(true) }}>
+              Delete account
+            </button>
+          </>
+        )}
+      </div>
 
-      {error ? <p className="dangerText" role="alert">{error}</p> : null}
+      {error ? <p className="dangerText accountCard__error" role="alert">{error}</p> : null}
     </section>
   )
 }

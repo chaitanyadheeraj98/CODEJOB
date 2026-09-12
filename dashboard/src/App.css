@@ -7840,3 +7840,130 @@ button.chatRankedLabel:focus-visible {
 .assistantMessages::-webkit-scrollbar-thumb:hover {
   background: var(--muted);
 }
+
+/* ---------------------------------------------------------------------------
+   Account card (§13: export, deactivate, delete)
+
+   Three zones, graded by how hard the action is to undo. The palette already
+   encodes that distinction, so it is reused rather than reinvented: --caution-*
+   is documented as "a qualification, not a failure" and fits deactivation,
+   which an administrator can reverse for 30 days; --refusal-* carries the
+   danger hue for the one action that ends in nothing being left.
+
+   The grading is the whole design. Three identical rows of buttons would make
+   "export" and "delete for ever" look like the same kind of decision.
+   --------------------------------------------------------------------------- */
+
+.accountSection {
+  padding: 16px 0;
+}
+
+.accountSection + .accountSection {
+  border-top: 1px solid var(--line);
+}
+
+.accountSection__title {
+  margin: 0 0 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  letter-spacing: 0.01em;
+}
+
+.accountSection__blurb {
+  margin: 0 0 12px;
+  max-width: 62ch;  /* Measure, not container width: these are read, not scanned. */
+  line-height: 1.55;
+}
+
+.accountSection--caution .accountSection__title { color: var(--caution-ink); }
+
+/* The irreversible zone is inset rather than merely tinted text, so it reads as
+   a different place on the page and not just a redder paragraph. */
+.accountSection--refusal {
+  margin-top: 4px;
+  padding: 16px;
+  border: 1px solid var(--refusal-line);
+  border-radius: 10px;
+  background: var(--refusal-surface);
+}
+
+.accountSection--refusal + .accountSection,
+.accountSection--refusal {
+  border-top: 0;
+}
+
+.accountSection--refusal .accountSection__title { color: var(--refusal-ink); }
+.accountSection--refusal .accountSection__blurb { color: #7c2a33; }
+
+.confirmDeletion__literal {
+  padding: 1px 6px;
+  border: 1px solid var(--refusal-line);
+  border-radius: 5px;
+  background: #fff;
+  color: var(--refusal-ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.92em;
+  /* Selectable on purpose: the point of typing it is deliberation, but nobody
+     should be defeated by a long address they cannot read back. */
+  user-select: all;
+}
+
+.confirmDeletion__label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--refusal-ink);
+}
+
+.card .confirmDeletion__input {
+  max-width: 380px;
+  border-color: var(--refusal-line);
+  background: #fff;
+}
+
+.card .confirmDeletion__input:focus-visible {
+  outline: 2px solid var(--danger);
+  outline-offset: 1px;
+}
+
+.confirmDeletion__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+/* Solid, unlike .dangerButton's outline. This is the last click before an
+   account stops existing; the outline treatment is right for "open the
+   confirmation" and too quiet for the confirmation itself. */
+.card .dangerButtonSolid {
+  border-color: var(--danger) !important;
+  background: var(--danger) !important;
+  color: #fff !important;
+  font-weight: 600;
+}
+
+.card .dangerButtonSolid:hover:not(:disabled) {
+  background: #9c0d1a !important;
+  border-color: #9c0d1a !important;
+}
+
+.card .confirmDeletion__cancel {
+  background: transparent !important;
+  border-color: var(--refusal-line) !important;
+}
+
+.card .confirmDeletion__cancel:hover:not(:disabled) {
+  background: #fff !important;
+}
+
+.accountCard__error {
+  margin: 14px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--refusal-line);
+  border-radius: 8px;
+  background: var(--refusal-surface);
+  font-size: 13px;
+}

@@ -167,6 +167,26 @@ describe('AccountControls', () => {
     expect(host?.querySelector('[role="alert"]')?.textContent).toMatch(/did not match/i)
   })
 
+  it('grades the three zones by how hard the action is to undo', () => {
+    // The information architecture, not the pixels. Three identical rows would
+    // make "export" and "delete for ever" look like the same kind of decision.
+    render()
+    const zones = Array.from(host!.querySelectorAll('.accountSection'))
+    expect(zones).toHaveLength(3)
+    expect(zones[1].className).toMatch(/accountSection--caution/)
+    expect(zones[2].className).toMatch(/accountSection--refusal/)
+    expect(zones.map((z) => z.querySelector('h3')?.textContent)).toEqual([
+      'Export your data', 'Deactivate', 'Delete permanently',
+    ])
+  })
+
+  it('gives the final irreversible click more weight than the one that opens it', async () => {
+    render()
+    expect(button(/^delete account$/i).className).toBe('dangerButton')
+    await act(async () => button(/^delete account$/i).click())
+    expect(button(/permanently delete/i).className).toMatch(/dangerButtonSolid/)
+  })
+
   it('offers the export above deactivation, since deactivating revokes the session it needs', () => {
     render()
     const labels = Array.from(host!.querySelectorAll('button')).map((b) => b.textContent ?? '')
