@@ -1629,10 +1629,15 @@ def _check_live_replies(db: Session) -> None:
     _, authenticated, _ = gmail_auth_status()
     if not authenticated:
         return
-    runtime_state.live_replies[tenancy.owner_id()] = (
+    # Read-modify-write, not `live_replies[owner] = ...`. The field is shared
+    # across processes now, so reading it returns a decoded copy and mutating
+    # that copy would write nowhere - silently, and only for this one field.
+    counts = dict(runtime_state.live_replies)
+    counts[tenancy.owner_id()] = (
         _get_orchestration_service().count_live_unread_replies(db),
         datetime.now(UTC),
     )
+    runtime_state.live_replies = counts
 
 
 def _run_reminder_sweep(db: Session) -> None:
