@@ -36,8 +36,16 @@ export async function fetchAuthState(apiBase: string): Promise<AuthState> {
   return { status: 'signed_in', user: (await response.json()) as AuthUser }
 }
 
-export async function startGoogleLogin(apiBase: string): Promise<string> {
-  const response = await fetch(`${apiBase}/auth/google/start`, { credentials: 'include' })
+/**
+ * Begin a Google sign-in.
+ *
+ * `reauth` forces Google to ask for credentials rather than accepting the
+ * session the browser already holds. Only the account-deletion flow uses it:
+ * ordinary sign-in would then re-prompt people who signed in a minute ago.
+ */
+export async function startGoogleLogin(apiBase: string, options: { reauth?: boolean } = {}): Promise<string> {
+  const query = options.reauth ? '?reauth=true' : ''
+  const response = await fetch(`${apiBase}/auth/google/start${query}`, { credentials: 'include' })
   if (!response.ok) {
     throw new Error(
       response.status === 503

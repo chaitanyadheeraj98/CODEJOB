@@ -48,9 +48,14 @@ def _set_cookie(response: Response, name: str, value: str, *, max_age: int) -> N
 
 
 @router.get("/google/start", response_model=LoginStartResponse, dependencies=[Depends(require_auth_enabled)])
-def start_google_login(response: Response) -> LoginStartResponse:
+def start_google_login(response: Response, reauth: bool = False) -> LoginStartResponse:
+    """`?reauth=true` forces Google to ask for credentials again.
+
+    Used by the account-deletion flow, which needs proof the person is still
+    at the keyboard rather than proof a cookie exists.
+    """
     try:
-        started = auth_service.begin_login()
+        started = auth_service.begin_login(force_reauth=reauth)
     except auth_service.LoginError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     # The state is echoed back by Google and compared in the callback. Stored

@@ -86,7 +86,17 @@ def _flow(state: str | None = None) -> Flow:
     return flow
 
 
-def begin_login() -> StartedLogin:
+def begin_login(*, force_reauth: bool = False) -> StartedLogin:
+    """Start a Google sign-in.
+
+    `force_reauth` adds `login` to the prompt, which makes Google ask for
+    credentials again rather than accepting whatever session the browser
+    already holds. Ordinary sign-in does not want that - it would re-prompt
+    people who just signed in - but account deletion does: §13 says a live
+    session is not authority to destroy an account, "and neither is a borrowed
+    laptop". `prompt=consent` alone only guarantees a *click*, and an unlocked
+    laptop supplies clicks.
+    """
     if not (settings.google_client_id and settings.google_client_secret):
         raise LoginError("Google sign-in is not configured.")
     flow = _flow()
@@ -95,7 +105,7 @@ def begin_login() -> StartedLogin:
         # `prompt=consent` Google omits it on every sign-in after the first,
         # and this flow is also how the mailbox gets connected.
         access_type="offline",
-        prompt="consent",
+        prompt="consent login" if force_reauth else "consent",
         include_granted_scopes="true",
     )
     return StartedLogin(

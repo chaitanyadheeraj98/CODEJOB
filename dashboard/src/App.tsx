@@ -7557,6 +7557,7 @@ function App({ account }: { account?: AuthUser }) {
               {account ? (
                 <AccountControls
                   apiBase={apiBase}
+                  accountEmail={account.email}
                   onDeactivated={() => { window.location.href = window.location.pathname }}
                 />
               ) : null}
