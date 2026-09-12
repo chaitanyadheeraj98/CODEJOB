@@ -529,6 +529,7 @@ class User(Base):
     # Soft disable. Removing someone from the GCP test-user list stops new
     # sign-ins but does not end a live session, so the app needs its own switch.
     disabled_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
+    deletion_requested_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
     last_login_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 

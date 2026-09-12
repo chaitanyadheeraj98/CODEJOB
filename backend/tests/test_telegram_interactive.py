@@ -8,8 +8,9 @@ from sqlalchemy.orm import sessionmaker
 os.environ["DEBUG"] = "false"
 
 from app import main
+from app.config import settings
 from app.db import Base
-from app.models import RecruiterEmail, UserSettings
+from app.models import RecruiterEmail, User, UserSettings
 from app.schemas import AIStatusResponse, AutomationRunResponse, EmailResponse
 from app.services.telegram_runtime_service import TelegramRuntime, TelegramRuntimeDeps
 from app.telegram_bot import TelegramBotService, TelegramReply
@@ -225,6 +226,23 @@ class TelegramReviewCommandTests(unittest.TestCase):
         self.assertIn(f"#{first.id} - First candidate subject", text)
         self.assertNotIn("To:", text)
         self.assertNotIn("Draft Preview:", text)
+
+    def test_a_deactivated_owner_cannot_run_telegram_commands(self) -> None:
+        with self.session_factory() as db:
+            db.add(User(
+                owner_id="default-owner",
+                email="disabled@example.com",
+                disabled_at=datetime.now(UTC),
+            ))
+            db.commit()
+        previous = settings.feature_auth_enabled
+        settings.feature_auth_enabled = True
+        try:
+            reply = self.runtime.handle_command(123, "u1", "tester", "/needs_review")
+        finally:
+            settings.feature_auth_enabled = previous
+
+        self.assertEqual(reply, "Account is deactivated.")
 
     def test_review_message_truncates_long_draft_preview(self) -> None:
         candidate = EmailResponse.model_validate(

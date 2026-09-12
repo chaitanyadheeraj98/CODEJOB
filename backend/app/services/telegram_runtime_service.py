@@ -9,8 +9,10 @@ from typing import Any, Callable
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.models import RecruiterEmail, SyncRun, UserSettings
 from app.schemas import ApproveSendRequest, AutomationRunResponse, EmailResponse, RejectRequest
+from app.services import account_service
 from app.services.telegram_runtime import TelegramRuntimeState
 from app.telegram_bot import TelegramReply
 
@@ -357,6 +359,9 @@ class TelegramRuntime:
 
         db = self.deps.session_factory()
         try:
+            if settings.feature_auth_enabled and account_service.is_owner_disabled(db, self.deps.owner_id):
+                TelegramRuntimeState.clear_session(chat_id)
+                return "Account is deactivated."
             if cmd == "/auth":
                 if not args:
                     return "Usage: /auth <PIN>"

@@ -107,6 +107,7 @@ def update_user(
             logger.info("admin_disabled_user target=%s sessions_revoked=%s", user.owner_id, revoked)
         else:
             user.disabled_at = None
+            user.deletion_requested_at = None
 
     if payload.is_admin is not None:
         if not payload.is_admin and user.id == admin.id:

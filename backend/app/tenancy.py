@@ -91,7 +91,15 @@ def owner_scoped(func):
 
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
-        with owner_scope(kwargs.pop("owner_id", None)):
+        value = kwargs.pop("owner_id", None)
+        with owner_scope(value):
+            if settings.feature_auth_enabled:
+                from app.db import SessionLocal
+                from app.services.account_service import is_owner_disabled
+
+                with SessionLocal() as db:
+                    if is_owner_disabled(db, owner_id()):
+                        return {"status": "skipped", "reason": "account_disabled"}
             return func(*args, **kwargs)
 
     wrapper.__owner_scoped__ = True

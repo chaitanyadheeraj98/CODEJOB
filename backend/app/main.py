@@ -540,13 +540,14 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
-from app.routers import admin as admin_router, auth as auth_router  # noqa: E402
+from app.routers import account as account_router, admin as admin_router, auth as auth_router  # noqa: E402
 
 # Registered unconditionally; every route inside 404s while
 # feature_auth_enabled is off, so the flag is the switch rather than the
 # presence of the router.
 app.include_router(auth_router.router)
 app.include_router(admin_router.router)
+app.include_router(account_router.router)
 
 
 # Paths that must answer without a session, even with sign-in on.

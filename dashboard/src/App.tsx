@@ -26,6 +26,7 @@ import AppTSPage from './features/application_tracking/AppTSPage'
 import LabelsPage from './features/labels/LabelsPage'
 import LoginPage from './features/auth/LoginPage'
 import { fetchAuthState, logout as signOut, type AuthState, type AuthUser } from './features/auth/api'
+import AccountControls from './components/AccountControls'
 import VerificationBadge from './features/premium_numbers/VerificationBadge'
 import { type CandidateState, useCandidateBuckets } from './candidateBuckets'
 import type { CandidateQueryOptions } from './candidateBuckets'
@@ -7553,6 +7554,12 @@ function App({ account }: { account?: AuthUser }) {
                 toggleResumeAsset={toggleResumeAsset}
                 deleteResumeAsset={deleteResumeAsset}
               />
+              {account ? (
+                <AccountControls
+                  apiBase={apiBase}
+                  onDeactivated={() => { window.location.href = window.location.pathname }}
+                />
+              ) : null}
             </div>
           ) : null}
 

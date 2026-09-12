@@ -1230,6 +1230,13 @@ class AuthUserResponse(BaseModel):
     owner_id: str
 
 
+class AccountDeactivationResponse(BaseModel):
+    deactivated_at: datetime
+    purge_after: datetime
+    sessions_revoked: int
+    jobs_stopped: int
+
+
 class AdminUserResponse(BaseModel):
     """What an admin may see about another account.
 

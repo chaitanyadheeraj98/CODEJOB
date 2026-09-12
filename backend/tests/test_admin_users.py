@@ -193,10 +193,15 @@ class AdminUsersTests(unittest.TestCase):
         member_id = self._member_id()
         self._as(admin_token)
         self.client.patch(f"/admin/users/{member_id}", json={"disabled": True})
+        with Session(self.engine) as db:
+            db.query(User).filter(User.id == member_id).one().deletion_requested_at = datetime.now(UTC)
+            db.commit()
 
         body = self.client.patch(f"/admin/users/{member_id}", json={"disabled": False}).json()
 
         self.assertFalse(body["disabled"])
+        with Session(self.engine) as db:
+            self.assertIsNone(db.query(User).filter(User.id == member_id).one().deletion_requested_at)
 
     def test_an_admin_cannot_disable_themselves(self) -> None:
         admin_token, _ = self._both()
