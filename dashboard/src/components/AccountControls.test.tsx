@@ -10,12 +10,21 @@ import AccountControls from './AccountControls'
 let root: Root | null = null
 let host: HTMLDivElement | null = null
 
+// Selected by label rather than by position. There are two buttons now, and a
+// positional selector would silently start testing the other one.
+function button(text: RegExp): HTMLButtonElement {
+  const found = Array.from(host!.querySelectorAll('button'))
+    .find((element) => text.test(element.textContent ?? ''))
+  if (!found) throw new Error(`no button matching ${text}`)
+  return found as HTMLButtonElement
+}
+
 function render(onDeactivated = vi.fn()) {
   host = document.createElement('div')
   document.body.appendChild(host)
   root = createRoot(host)
   act(() => root!.render(<AccountControls apiBase="http://api" onDeactivated={onDeactivated} />))
-  return { button: host.querySelector('button')!, onDeactivated }
+  return { onDeactivated }
 }
 
 afterEach(() => {
@@ -39,13 +48,53 @@ describe('AccountControls', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true)
     const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
-    const { button, onDeactivated } = render()
+    const { onDeactivated } = render()
 
-    await act(async () => button.click())
+    await act(async () => button(/deactivate account/i).click())
 
     expect(fetchMock).toHaveBeenCalledWith('http://api/account/deactivate', {
       method: 'POST', credentials: 'include',
     })
     expect(onDeactivated).toHaveBeenCalledOnce()
+  })
+
+  it('downloads the export without confirmation and without signing the user out', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    const fetchMock = vi.fn(async () => new Response('{"sections":{}}', { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('URL', { ...URL, createObjectURL: () => 'blob:x', revokeObjectURL: () => {} })
+    const clicks: string[] = []
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      clicks.push(this.download)
+    })
+    const { onDeactivated } = render()
+
+    await act(async () => button(/export my data/i).click())
+
+    expect(fetchMock).toHaveBeenCalledWith('http://api/account/export', {
+      method: 'POST', credentials: 'include',
+    })
+    // Reading your own data is not a destructive act, so it does not ask, and
+    // it must not end the session the way deactivation does.
+    expect(confirmSpy).not.toHaveBeenCalled()
+    expect(onDeactivated).not.toHaveBeenCalled()
+    expect(clicks[0]).toMatch(/^codejob-export-\d{4}-\d{2}-\d{2}\.json$/)
+  })
+
+  it('surfaces an export failure and leaves the buttons usable', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('nope', { status: 500 })))
+    render()
+
+    await act(async () => button(/export my data/i).click())
+
+    expect(host?.querySelector('[role="alert"]')?.textContent).toMatch(/unable to export/i)
+    expect(button(/export my data/i).disabled).toBe(false)
+  })
+
+  it('offers the export above deactivation, since deactivating revokes the session it needs', () => {
+    render()
+    const labels = Array.from(host!.querySelectorAll('button')).map((b) => b.textContent ?? '')
+    expect(labels[0]).toMatch(/export my data/i)
+    expect(labels[1]).toMatch(/deactivate account/i)
   })
 })
