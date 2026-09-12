@@ -97,7 +97,7 @@ class Settings(BaseSettings):
     role_manifest_max_tokens_groq: int = 1600
     role_manifest_max_calls_per_email: int = 12
     role_manifest_max_source_chars: int = 12000
-    ollama_base_url: str = "http://localhost:11434"
+    ollama_base_url: str = "https://ollama.com"
     ollama_chat_model: str = "gemma4:31b-cloud"
     ollama_chat_model_fallback: str = "minimax-m3:cloud"
     ollama_chat_model_fallback2: str = "nemotron-3-nano:30b-cloud"

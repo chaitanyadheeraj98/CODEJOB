@@ -17,6 +17,10 @@ class ProviderCredentials:
     label: str = ""
 
 
+class ProviderCredentialsUnavailable(RuntimeError):
+    pass
+
+
 def get_row(db: Session, owner_id: str, provider: str) -> ProviderCredential | None:
     return (
         db.query(ProviderCredential)
@@ -39,6 +43,15 @@ def get_credentials(db: Session, owner_id: str, provider: str) -> ProviderCreden
         base_url=row.base_url or "",
         label=row.label or "",
     )
+
+
+def require_credentials(db: Session, owner_id: str, provider: str) -> ProviderCredentials:
+    credentials = get_credentials(db, owner_id, provider)
+    if credentials is None:
+        raise ProviderCredentialsUnavailable(
+            f"No {provider.strip().title()} API key is configured. Add one in Settings."
+        )
+    return credentials
 
 
 def save_credentials(

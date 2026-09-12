@@ -35,6 +35,8 @@ from app.services.chat_attachment_service import ChatAttachmentService
 from app.services.chat_export_service import TRANSCRIPT_SPEC, download_name, transcript_markdown
 from app.services.resume_render_service import build_docx, build_pdf
 from app.services.chat_service import ChatService
+from app.services.provider_credential_service import require_credentials
+from app import tenancy
 
 
 logger = logging.getLogger(__name__)
@@ -60,13 +62,18 @@ def require_chat_actions_enabled() -> None:
         raise HTTPException(status_code=404, detail="Chat actions are disabled")
 
 
-async def _ollama_running() -> bool:
+async def _ollama_running(db: Session) -> bool:
     started = perf_counter()
     runtime_state.ollama_last_attempted_at = datetime.now(UTC)
     try:
+        credentials = require_credentials(db, tenancy.owner_id(), "ollama")
+        base_url = (credentials.base_url or settings.ollama_base_url).rstrip("/")
         timeout = max(0.25, min(settings.ollama_timeout_seconds, 3.0))
         async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.get(f"{settings.ollama_base_url.rstrip('/')}/api/tags")
+            response = await client.get(
+                f"{base_url}/api/tags",
+                headers={"Authorization": f"Bearer {credentials.api_key}"},
+            )
             response.raise_for_status()
         runtime_state.ollama_last_error = None
         runtime_state.ollama_last_success_at = datetime.now(UTC)
@@ -83,7 +90,7 @@ async def chat_status(
     db: Session = Depends(get_db),
     service: ChatService = Depends(get_chat_service),
 ) -> ChatStatusResponse:
-    running = await _ollama_running() if settings.feature_chat_enabled else False
+    running = await _ollama_running(db) if settings.feature_chat_enabled else False
     # Read here rather than from a second endpoint: this is what the AI Access
     # card already fetches, and the summary belongs beside the health it explains.
     telemetry = service.telemetry_summary(db) if settings.feature_chat_enabled else None
