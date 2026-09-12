@@ -43,7 +43,7 @@ describe('fetchAuthState', () => {
   })
 
   it('sends the cookie', async () => {
-    const fetchMock = vi.fn(async () => respond(401))
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => respond(401))
     vi.stubGlobal('fetch', fetchMock)
 
     await fetchAuthState(API)
