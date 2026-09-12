@@ -37,9 +37,15 @@ class AutoRunnerApplicationReminderTests(unittest.TestCase):
 
     def _run(self, settings: SimpleNamespace) -> Mock:
         db = Mock()
+        opened = []
         reminder = Mock()
+
+        def session_factory():
+            opened.append(db)
+            return db
+
         service = AutoRunnerService(
-            session_factory=lambda: db,
+            session_factory=session_factory,
             get_settings=lambda _db: settings,
             run_once=Mock(),
             run_nvoids_once=Mock(),
@@ -50,7 +56,11 @@ class AutoRunnerApplicationReminderTests(unittest.TestCase):
             stop_event=_OneIterationStop(),
         )
         service.run_loop()
-        db.close.assert_called_once()
+        # Opened equals closed, rather than "exactly one". The property this
+        # guards is that the loop leaks no session; the count was incidental,
+        # and G3's hourly purge sweep legitimately opens a second one because
+        # it is global work rather than part of any owner's tick.
+        self.assertEqual(db.close.call_count, len(opened))
         return reminder
 
     def test_reminder_sweep_runs_on_its_own_clamped_interval(self) -> None:

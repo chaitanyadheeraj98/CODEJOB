@@ -18,6 +18,9 @@ logger = logging.getLogger(__name__)
 
 LIVE_REPLY_CHECK_INTERVAL_SECONDS = 60
 
+# The recovery window is measured in days; checking it hourly is ample.
+PURGE_SWEEP_INTERVAL = timedelta(hours=1)
+
 
 @dataclass
 class _Schedule:
@@ -100,6 +103,7 @@ class AutoRunnerService:
         self._stop_event = stop_event
         self._list_owners = list_owners
         self._is_leader = is_leader
+        self._last_purge_sweep: datetime | None = None
 
     @staticmethod
     def poll_interval_minutes(user_settings: UserSettings) -> int:
@@ -152,6 +156,12 @@ class AutoRunnerService:
             if not was_leader:
                 logger.info("Auto runner is the leader for this deployment")
                 was_leader = True
+            # G3: global, leader-only, and deliberately *not* inside
+            # `tenancy.owner_scope`. The accounts this removes are disabled by
+            # definition, and G1's `owner_scoped` guard skips disabled owners -
+            # so running it as per-owner work would skip exactly the accounts
+            # it exists to remove.
+            self._maybe_purge_due_accounts()
             try:
                 owners = list(self._list_owners())
             except Exception:
@@ -174,6 +184,35 @@ class AutoRunnerService:
                 except Exception:
                     # One tenant's failure must not stop the other ninety-nine.
                     logger.exception("Auto runner tick failed owner=%s", owner_id)
+
+    def _maybe_purge_due_accounts(self) -> None:
+        """Drain accounts whose 30-day recovery window has closed.
+
+        Hourly rather than every tick: the window is measured in days, so
+        checking it more often buys nothing and a deletion is the last thing
+        that should run in a tight loop. Failures are logged and the sweep is
+        retried next hour - a purge that could not finish left the account
+        intact, by construction.
+        """
+        now = datetime.now(UTC)
+        if self._last_purge_sweep and now - self._last_purge_sweep < PURGE_SWEEP_INTERVAL:
+            return
+        self._last_purge_sweep = now
+
+        from app.services import account_purge_service
+
+        db = self._session_factory()
+        try:
+            purged = account_purge_service.purge_due_accounts(db)
+            if purged:
+                logger.info(
+                    "account_purge_sweep_completed accounts=%s rows=%s",
+                    len(purged), sum(result.rows for result in purged),
+                )
+        except Exception:
+            logger.exception("account_purge_sweep_failed")
+        finally:
+            db.close()
 
     def _run_owner_tick(self, owner_id: str, schedule: _Schedule) -> None:
         db = self._session_factory()

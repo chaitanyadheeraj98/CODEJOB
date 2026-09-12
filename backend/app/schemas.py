@@ -1237,6 +1237,17 @@ class AccountDeactivationResponse(BaseModel):
     jobs_stopped: int
 
 
+class AccountDeletionRequest(BaseModel):
+    """§13: a typed confirmation, not a checkbox.
+
+    The user types their own email address. A fixed phrase like "DELETE" is
+    typed without reading; an address is specific to the account in front of
+    you, which is the point when someone is signed in to two of them.
+    """
+
+    confirm_email: str
+
+
 class AdminUserResponse(BaseModel):
     """What an admin may see about another account.
 
