@@ -243,7 +243,7 @@ class WatchRegistrationTests(_Base):
         self.assertEqual(outcome.reason, "owner_disabled")
         call.assert_not_called()
 
-    def test_a_reply_inbox_that_is_off_gets_no_watch(self):
+    def test_a_mailbox_with_every_consumer_off_gets_no_watch(self):
         row = self.db.query(UserSettings).filter(UserSettings.owner_id == OWNER).one()
         row.feature_reply_inbox_enabled = False
         self.db.commit()
@@ -251,7 +251,7 @@ class WatchRegistrationTests(_Base):
         with patch.object(gmail_client, "watch_mailbox") as call:
             outcome = service.register_or_renew_watch(OWNER)
 
-        self.assertEqual(outcome.reason, "reply_inbox_off")
+        self.assertEqual(outcome.reason, "inbox_features_off")
         call.assert_not_called()
 
     def test_a_revoked_credential_gets_no_watch(self):
@@ -536,7 +536,7 @@ class DrainTests(_DrainBase):
 
         self.assertEqual(held, [(distributed_lock.GMAIL_HISTORY, OWNER)])
 
-    def test_an_ineligible_mailbox_ingests_nothing(self):
+    def test_a_mailbox_with_every_consumer_off_ingests_nothing(self):
         self.set_cursor("100")
         row = self.db.query(UserSettings).filter(UserSettings.owner_id == OWNER).one()
         row.feature_reply_inbox_enabled = False
@@ -545,7 +545,7 @@ class DrainTests(_DrainBase):
         with patch.object(gmail_client, "list_history") as call:
             outcome = service.process_history(OWNER)
 
-        self.assertEqual(outcome.reason, "reply_inbox_off")
+        self.assertEqual(outcome.reason, "inbox_features_off")
         call.assert_not_called()
 
     def test_no_session_is_open_while_gmail_is_being_called(self):
@@ -711,3 +711,79 @@ class CaptureTests(_Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ConsumerTests(_Base):
+    """Two features consume Gmail change events, switched independently.
+
+    Conflating them is how this went wrong in production: eligibility asked
+    only about the Reply Inbox, so an account with label tracking on and the
+    Reply Inbox off registered no watch - while Phase D had already stopped its
+    scans. The scans went away and nothing replaced them, with nothing saying
+    so. These tests exist because that shipped.
+    """
+
+    def _flags(self, *, replies: bool, labels: bool, global_labels: bool = True):
+        row = self.db.query(UserSettings).filter(UserSettings.owner_id == OWNER).one()
+        row.feature_reply_inbox_enabled = replies
+        row.feature_label_tracking_enabled = labels
+        self.db.commit()
+        return patch.object(settings, "feature_label_tracking_enabled", global_labels)
+
+    def test_label_tracking_alone_is_enough_to_earn_a_watch(self):
+        """The regression. Without this, its scans stop and nothing replaces
+        them."""
+        with self._flags(replies=False, labels=True):
+            self.assertEqual(service.owners_due_for_watch(self.db), [OWNER])
+
+    def test_the_reply_inbox_alone_is_enough_to_earn_a_watch(self):
+        with self._flags(replies=True, labels=False):
+            self.assertEqual(service.owners_due_for_watch(self.db), [OWNER])
+
+    def test_neither_consumer_earns_nothing(self):
+        with self._flags(replies=False, labels=False):
+            self.assertEqual(service.owners_due_for_watch(self.db), [])
+
+    def test_label_tracking_switched_off_globally_does_not_count(self):
+        """`_sync_label_tracking` needs both halves of the flag. Eligibility
+        matching it approximately would register watches for a feature the
+        deployment has switched off."""
+        with self._flags(replies=False, labels=True, global_labels=False):
+            self.assertEqual(service.owners_due_for_watch(self.db), [])
+
+    def test_consumers_reports_each_switch_separately(self):
+        with self._flags(replies=True, labels=False):
+            self.assertEqual(service.consumers(self.db, OWNER), (True, False))
+        with self._flags(replies=False, labels=True):
+            self.assertEqual(service.consumers(self.db, OWNER), (False, True))
+
+    def test_a_label_only_mailbox_does_not_capture_replies(self):
+        """A watch registered for one feature must not quietly do the other's
+        work. The scan it replaces returned early on exactly this flag."""
+        captured = []
+        with self.tracker.begin() as db:
+            with patch.object(service.email_inbox_service, "capture_inbound_reply",
+                              side_effect=lambda *a, **k: captured.append(1) or (True, True)):
+                service.capture_message(
+                    db, OWNER, _item("m1"),
+                    owner_email="me@example.com",
+                    tracked_label_ids=set(), watches=[],
+                    capture_replies=False,
+                )
+
+        self.assertEqual(captured, [])
+
+    def test_a_reply_only_mailbox_still_captures_replies(self):
+        captured = []
+        with self.tracker.begin() as db:
+            with patch.object(service.email_inbox_service, "capture_inbound_reply",
+                              side_effect=lambda *a, **k: captured.append(1) or (True, False)):
+                outcome = service.capture_message(
+                    db, OWNER, _item("m1"),
+                    owner_email="me@example.com",
+                    tracked_label_ids=set(), watches=[],
+                    capture_replies=True,
+                )
+
+        self.assertEqual(captured, [1])
+        self.assertEqual(outcome, "reply")

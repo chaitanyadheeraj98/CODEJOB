@@ -16,7 +16,13 @@ class Settings(BaseSettings):
     # C4. Which process this is. The worker sets PROCESS_ROLE=worker; anything
     # else is an API process. Used to keep embeddings - and the ~540 MB of
     # torch that comes with them - out of the request-serving processes.
-    process_role: Literal["api", "worker"] = "api"
+    # "gmail-pubsub" is the Pub/Sub subscriber. It behaves exactly like "api"
+    # everywhere this is read - both call sites ask `== "worker"` - which is
+    # what it wants: it never embeds, so it must not carry torch either. A
+    # third name rather than reusing "api" because it is not one, and a
+    # process that lies about its role is the thing that makes the next
+    # role-dependent decision wrong.
+    process_role: Literal["api", "worker", "gmail-pubsub"] = "api"
     # Off means the API refuses to compute an embedding and declines the
     # `transformers` import, which is what drags torch in. Measured at 746 MB
     # -> 204 MB for `import app.main`.

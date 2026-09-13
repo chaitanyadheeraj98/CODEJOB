@@ -107,12 +107,38 @@ class HistoryOutcome:
 # --- eligibility --------------------------------------------------------
 
 
+def consumers(db: Session, owner_id: str) -> tuple[bool, bool]:
+    """Which features would use a Gmail change event: (replies, labels).
+
+    Two consumers, switched independently, and conflating them is how this
+    went wrong once already: eligibility asked only about the Reply Inbox, so
+    an account with label tracking on and the Reply Inbox off registered no
+    watch - while Phase D had already stopped its scans. The scans went away
+    and nothing replaced them, silently, which is the exact failure the global
+    half of this switch is written to prevent.
+
+    Label tracking needs both halves of its own flag, matching
+    `_sync_label_tracking`'s gate exactly rather than approximately.
+    """
+    user_settings = (
+        db.query(UserSettings).filter(UserSettings.owner_id == owner_id).first()
+    )
+    if user_settings is None:
+        return False, False
+    replies = bool(user_settings.feature_reply_inbox_enabled)
+    labels = bool(
+        settings.feature_label_tracking_enabled
+        and user_settings.feature_label_tracking_enabled
+    )
+    return replies, labels
+
+
 def _ineligible(db: Session, owner_id: str) -> str:
     """Why this mailbox must not receive push delivery, or "" if it may.
 
     Checked before registering, before renewing and before ingesting, because
-    the answer changes underneath all three: someone turns the Reply Inbox off,
-    an administrator disables the account, Google revokes a token.
+    the answer changes underneath all three: someone turns a feature off, an
+    administrator disables the account, Google revokes a token.
     """
     if account_service.is_owner_disabled(db, owner_id):
         return "owner_disabled"
@@ -123,11 +149,8 @@ def _ineligible(db: Session, owner_id: str) -> str:
         return "credential_revoked"
     if not (row.refresh_token_encrypted or row.access_token_encrypted):
         return "no_credential"
-    user_settings = (
-        db.query(UserSettings).filter(UserSettings.owner_id == owner_id).first()
-    )
-    if user_settings is None or not user_settings.feature_reply_inbox_enabled:
-        return "reply_inbox_off"
+    if not any(consumers(db, owner_id)):
+        return "inbox_features_off"
     return ""
 
 
@@ -342,6 +365,7 @@ def capture_message(
     owner_email: str,
     tracked_label_ids: set[str],
     watches: list,
+    capture_replies: bool = True,
 ) -> str:
     """Apply the existing capture rules to one fetched message.
 
@@ -357,11 +381,16 @@ def capture_message(
     """
     outcome = ""
 
-    matched, created = email_inbox_service.capture_inbound_reply(
-        db, owner_id=owner_id, item=item, owner_email=owner_email
-    )
-    if matched:
-        outcome = "new_reply" if created else "reply"
+    # Gated, because a watch registered for label tracking must not quietly do
+    # the Reply Inbox's work as well. The scan it replaces returned early on
+    # exactly this flag, and a feature that switches itself back on through a
+    # different door is worse than one that stays off.
+    if capture_replies:
+        matched, created = email_inbox_service.capture_inbound_reply(
+            db, owner_id=owner_id, item=item, owner_email=owner_email
+        )
+        if matched:
+            outcome = "new_reply" if created else "reply"
 
     current_labels = set(item.get("label_ids") or [])
     for label_id in sorted(current_labels & tracked_label_ids):
@@ -509,11 +538,14 @@ def _capture_batch(owner_id: str, items: list) -> int:
     new_reply_ids: list[str] = []
     with session_scope() as db:
         owner_email = _owner_email(db, owner_id)
+        replies_on, labels_on = consumers(db, owner_id)
+        # Empty rather than conditional branches further down: with no tracked
+        # labels and no watches, the label and watch paths are already no-ops.
         tracked_label_ids = {
             label.external_label_id
             for label in gmail_label_service.list_labels(db, owner_id, tracked_only=True)
-        }
-        watches = label_tracking_service.active_watches(db, owner_id)
+        } if labels_on else set()
+        watches = label_tracking_service.active_watches(db, owner_id) if labels_on else []
         for item in items:
             try:
                 with db.begin_nested():
@@ -522,6 +554,7 @@ def _capture_batch(owner_id: str, items: list) -> int:
                         owner_email=owner_email,
                         tracked_label_ids=tracked_label_ids,
                         watches=watches,
+                        capture_replies=replies_on,
                     )
             except Exception:
                 # One unparseable message must not cost the rest of the batch,

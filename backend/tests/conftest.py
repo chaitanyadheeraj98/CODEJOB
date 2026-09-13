@@ -29,6 +29,13 @@ _PINNED_OFF = (
     # rows. Pinned off here so those tests keep testing the overlay;
     # test_base_taxonomy_overlay.py turns it on for itself.
     "feature_base_taxonomy_enabled",
+    # Push delivery stops the recurring Gmail scans. Every test that asserts
+    # what a scan does would quietly assert nothing instead - three of them did,
+    # the moment this was switched on in a developer's `.env`. Exactly the
+    # failure this file was written for, one flag later.
+    #
+    # The push tests turn it on in their own `setUp`, which runs after this.
+    "feature_gmail_pubsub_enabled",
 )
 
 
