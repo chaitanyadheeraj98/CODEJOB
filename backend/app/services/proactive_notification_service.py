@@ -130,7 +130,7 @@ def _notify_telegram(text: str) -> None:
 
         service = runtime_state.telegram_service
         if service is not None:
-            service.notify(text)
+            service.notify_owner(tenancy.owner_id(), text)
     except Exception:
         logger.warning("scheduled_notification_telegram_failed", exc_info=True)
 

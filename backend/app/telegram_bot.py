@@ -35,8 +35,10 @@ class TelegramBotService:
         self,
         *,
         token: str,
-        allowed_chat_ids: set[int],
         alerts_enabled: bool,
+        is_authorized: Callable[[int, str], bool],
+        chat_ids_for_owner: Callable[[str], list[int]],
+        authorized_chat_count: Callable[[], int],
         command_handler: CommandHandler,
         callback_handler: CallbackHandler,
         # Whether this process should be the one polling. Injected and
@@ -45,8 +47,10 @@ class TelegramBotService:
         is_leader: Callable[[], bool] = lambda: True,
     ) -> None:
         self._token = token.strip()
-        self._allowed_chat_ids = set(allowed_chat_ids)
         self._alerts_enabled = alerts_enabled
+        self._is_authorized = is_authorized
+        self._chat_ids_for_owner = chat_ids_for_owner
+        self._authorized_chat_count = authorized_chat_count
         self._command_handler = command_handler
         self._callback_handler = callback_handler
         self._is_leader = is_leader
@@ -69,7 +73,7 @@ class TelegramBotService:
                 enabled=self.enabled,
                 polling=self._polling,
                 alerts_enabled=self._alerts_enabled,
-                authorized_chats=len(self._allowed_chat_ids),
+                authorized_chats=self._authorized_chat_count(),
                 detail=self._detail,
             )
 
@@ -94,13 +98,13 @@ class TelegramBotService:
             self._polling = False
             self._detail = "Telegram bot stopped"
 
-    def notify(self, text: str) -> None:
+    def notify_owner(self, owner_id: str, text: str) -> None:
         if not self._alerts_enabled:
             return
         safe_text = text.strip()
         if not safe_text:
             return
-        for chat_id in self._allowed_chat_ids:
+        for chat_id in self._chat_ids_for_owner(owner_id):
             self._send_message(chat_id, safe_text)
 
     def _api_url(self, method: str) -> str:
@@ -262,7 +266,12 @@ class TelegramBotService:
         user_id = str(from_user.get("id", "unknown"))
         username = str(from_user.get("username", "")).strip() or user_id
 
-        if chat_id not in self._allowed_chat_ids:
+        parts = text.split(maxsplit=1)
+        is_link_start = len(parts) == 2 and parts[0].lower() == "/start"
+        if is_link_start and str(chat.get("type", "")) != "private":
+            self._send_message(chat_id, "Only private Telegram chats can be linked.")
+            return
+        if not self._is_authorized(chat_id, text):
             self._send_message(chat_id, "Unauthorized chat. Access denied.")
             return
 
@@ -294,7 +303,7 @@ class TelegramBotService:
         user_id = str(from_user.get("id", "unknown"))
         username = str(from_user.get("username", "")).strip() or user_id
 
-        if chat_id not in self._allowed_chat_ids:
+        if not self._is_authorized(chat_id, ""):
             self._answer_callback_query(callback_query_id, "Unauthorized")
             self._send_message(chat_id, "Unauthorized chat. Access denied.")
             return

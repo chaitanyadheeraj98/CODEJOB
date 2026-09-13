@@ -72,8 +72,10 @@ class TelegramBotServiceCallbackTests(unittest.TestCase):
 
         service = TelegramBotService(
             token="x",
-            allowed_chat_ids={999},
             alerts_enabled=True,
+            is_authorized=lambda chat_id, _text: chat_id == 999,
+            chat_ids_for_owner=lambda _owner_id: [999],
+            authorized_chat_count=lambda: 1,
             command_handler=command_handler,
             callback_handler=callback_handler,
         )

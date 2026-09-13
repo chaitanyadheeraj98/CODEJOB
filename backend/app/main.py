@@ -114,6 +114,7 @@ from app.models import (
     RecruiterOpportunity,
     ResumeAsset,
     SyncRun,
+    TelegramLink,
     UserSettings,
     utc_now,
 )
@@ -1910,14 +1911,30 @@ def _verify_telegram_action_pin(owner_id: str, pin: str) -> bool:
         return telegram_link_service.verify_action_pin(db, owner_id, pin)
 
 
+def _telegram_update_authorized(chat_id: int, text: str) -> bool:
+    with SessionLocal() as db:
+        if telegram_link_service.resolve_owner(db, chat_id) is not None:
+            telegram_link_service.touch_last_seen(db, chat_id)
+            db.commit()
+            return True
+    parts = text.strip().split(maxsplit=1)
+    return len(parts) == 2 and parts[0].lower() == "/start" and bool(re.fullmatch(r"[A-Za-z0-9_-]{1,64}", parts[1]))
+
+
+def _telegram_chat_ids_for_owner(owner_id: str) -> list[int]:
+    with SessionLocal() as db:
+        return telegram_link_service.chat_ids_for_owner(db, owner_id)
+
+
+def _telegram_link_count() -> int:
+    with SessionLocal() as db:
+        return db.query(TelegramLink).filter(TelegramLink.chat_id.is_not(None)).count()
+
+
 def _init_telegram_service() -> TelegramBotService | None:
     global telegram_runtime
     token = (settings.telegram_bot_token or "").strip()
     if not token:
-        return None
-    allowed_chat_ids = TelegramRuntime.parse_allowed_chat_ids(settings.telegram_allowed_chat_ids)
-    if not allowed_chat_ids:
-        logger.warning("Telegram bot token exists but TELEGRAM_ALLOWED_CHAT_IDS is empty. Bot will not start.")
         return None
     telegram_runtime = TelegramRuntime(
         TelegramRuntimeDeps(
@@ -1944,14 +1961,16 @@ def _init_telegram_service() -> TelegramBotService | None:
     )
     service = TelegramBotService(
         token=token,
-        allowed_chat_ids=allowed_chat_ids,
         alerts_enabled=settings.telegram_alerts_enabled,
+        is_authorized=_telegram_update_authorized,
+        chat_ids_for_owner=_telegram_chat_ids_for_owner,
+        authorized_chat_count=_telegram_link_count,
         command_handler=telegram_runtime.handle_command,
         callback_handler=telegram_runtime.handle_callback,
         is_leader=lambda: leader_election.is_leader(leader_election.TELEGRAM_POLLER),
     )
     service.start()
-    logger.info("Telegram bot started with %s authorized chat(s)", len(allowed_chat_ids))
+    logger.info("Telegram bot started with %s linked chat(s)", _telegram_link_count())
     return service
 
 
@@ -2049,7 +2068,7 @@ def _get_orchestration_service() -> OrchestrationService:
                 evaluate_routing_for_email=_evaluate_routing_for_email,
                 is_terminal_state=_is_terminal_state,
                 email_domain=_email_domain,
-                telegram_notify=lambda msg: telegram_service.notify(msg) if telegram_service else None,
+                telegram_notify=lambda msg: telegram_service.notify_owner(tenancy.owner_id(), msg) if telegram_service else None,
                 build_telegram_digest=_build_telegram_digest,
                 set_last_gmail_sync_at=lambda ts: _set_last_gmail_sync_at(ts),
                 set_ai_runtime=lambda vals: _set_ai_runtime(vals),
@@ -4837,18 +4856,13 @@ def ai_status(db: Session = Depends(get_db)) -> AIStatusResponse:
 @app.get("/telegram/status", response_model=TelegramStatusResponse)
 def telegram_status() -> TelegramStatusResponse:
     if not telegram_service:
-        configured_ids = TelegramRuntime.parse_allowed_chat_ids(settings.telegram_allowed_chat_ids)
         enabled = bool((settings.telegram_bot_token or "").strip())
-        detail = "Telegram bot disabled"
-        if enabled and not configured_ids:
-            detail = "TELEGRAM_ALLOWED_CHAT_IDS is empty"
-        elif enabled:
-            detail = "Telegram bot not initialized"
+        detail = "Telegram bot not initialized" if enabled else "Telegram bot disabled"
         return TelegramStatusResponse(
             enabled=enabled,
             polling=False,
             alerts_enabled=settings.telegram_alerts_enabled,
-            authorized_chats=len(configured_ids),
+            authorized_chats=_telegram_link_count(),
             detail=detail,
         )
     status = telegram_service.status()
