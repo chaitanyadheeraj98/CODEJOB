@@ -219,6 +219,41 @@ def sweep_watches() -> tuple[int, int]:
         return 0, 0
 
 
+def sweep_pending_drains() -> int:
+    """Re-enqueue a drain for any mailbox whose last notification went unread.
+
+    A notification is acked as soon as it is enqueued, so a job that declines
+    to run - most ordinarily because the first-registration migration scan holds
+    the per-owner lock - leaves nothing for Pub/Sub to redeliver. Without this,
+    those changes wait for the next notification to arrive on its own.
+
+    The job id is per **owner**, not per notification, and that distinction is
+    the whole point: it makes a repeat tick replace the pending catch-up rather
+    than stack another one behind it, while still never deduplicating the real
+    notifications, which legitimately coalesce into one history range.
+    """
+    try:
+        with distributed_lock.hold(WATCH_LEADER_LOCK, owner_id=LEADER_SCOPE):
+            with session_scope() as db:
+                waiting = gmail_pubsub_service.owners_awaiting_drain(db)
+            for owner_id in waiting:
+                get_queue(GMAIL_EVENT_QUEUE).enqueue(
+                    "app.jobs.tasks.run_gmail_history_job",
+                    owner_id=owner_id,
+                    notification_history_id="",
+                    job_timeout=600,
+                    # Dashes, not a colon: RQ rejects a job id containing anything
+                    # outside letters, numbers, underscores and dashes.
+                    job_id=f"gmail-catchup-{owner_id}",
+                    retry=Retry(max=3, interval=[30, 120, 300]),
+                )
+            if waiting:
+                logger.info("gmail_catchup_enqueued count=%s", len(waiting))
+            return len(waiting)
+    except distributed_lock.LockBusy:
+        return 0
+
+
 def write_heartbeat(connection=None) -> None:
     """Say the subscriber is alive, with a TTL short enough to expire fast."""
     (connection or get_redis_connection()).set(
@@ -251,6 +286,13 @@ def _background_loop(stop: threading.Event) -> None:
                     )
             except Exception:
                 logger.exception("gmail_watch_sweep_failed")
+            # After the watch sweep, not before: a registration that just
+            # happened is the commonest reason a drain is owed, and running
+            # this first would miss it by one tick.
+            try:
+                sweep_pending_drains()
+            except Exception:
+                logger.exception("gmail_catchup_sweep_failed")
         ticks += 1
         stop.wait(HEARTBEAT_INTERVAL_SECONDS)
 

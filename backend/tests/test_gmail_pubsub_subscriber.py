@@ -566,3 +566,108 @@ class StreamingTests(unittest.TestCase):
                 patch.object(subscriber, "_background_loop", lambda stop: None):
             setattr(cloud, "pubsub_v1", module)
             self.assertEqual(subscriber.run(), 1)
+
+
+class CatchUpTests(_Base):
+    """A notification is acked when it is enqueued, so a job that declines to
+    run leaves nothing for Pub/Sub to redeliver.
+
+    The ordinary cause is `LockBusy` against the first-registration migration
+    scan, which holds the per-owner lock and drains nothing - so the first
+    notification after every registration was dropped. It happened on both real
+    mailboxes. This closes the gap by timestamps rather than by special-casing
+    that race, because a worker restart or an evicted job leaves the same one.
+    """
+
+    def _mark(self, *, notified, processed, owner=MINE):
+        row = self.credential(owner)
+        row.gmail_last_notification_at = notified
+        row.gmail_last_event_processed_at = processed
+        self.db.commit()
+
+    @contextmanager
+    def _lease(self, name, *, owner_id, **kwargs):
+        yield
+
+    def test_a_notification_never_drained_is_re_enqueued(self):
+        now = datetime.now(UTC)
+        self._mark(notified=now, processed=None)
+
+        with patch.object(distributed_lock, "hold", self._lease):
+            self.assertEqual(subscriber.sweep_pending_drains(), 1)
+
+        self.assertEqual(self.queue.jobs[0][1]["owner_id"], MINE)
+
+    def test_a_drain_older_than_its_notification_is_re_enqueued(self):
+        now = datetime.now(UTC)
+        self._mark(notified=now, processed=now - timedelta(minutes=5))
+
+        with patch.object(distributed_lock, "hold", self._lease):
+            self.assertEqual(subscriber.sweep_pending_drains(), 1)
+
+    def test_a_drained_mailbox_is_left_alone(self):
+        now = datetime.now(UTC)
+        self._mark(notified=now - timedelta(minutes=5), processed=now)
+
+        with patch.object(distributed_lock, "hold", self._lease):
+            self.assertEqual(subscriber.sweep_pending_drains(), 0)
+
+        self.assertEqual(self.queue.jobs, [])
+
+    def test_a_mailbox_that_never_had_a_notification_is_left_alone(self):
+        with patch.object(distributed_lock, "hold", self._lease):
+            self.assertEqual(subscriber.sweep_pending_drains(), 0)
+
+    def test_an_ineligible_mailbox_is_never_caught_up(self):
+        row = self.db.query(UserSettings).filter(UserSettings.owner_id == MINE).one()
+        row.feature_reply_inbox_enabled = False
+        row.feature_label_tracking_enabled = False
+        self.db.commit()
+        self._mark(notified=datetime.now(UTC), processed=None)
+
+        with patch.object(distributed_lock, "hold", self._lease):
+            self.assertEqual(subscriber.sweep_pending_drains(), 0)
+
+    def test_a_mailbox_with_no_cursor_is_not_caught_up(self):
+        """Nothing to drain from. The watch sweep owes it a registration."""
+        row = self.credential()
+        row.gmail_history_id = None
+        self.db.commit()
+        self._mark(notified=datetime.now(UTC), processed=None)
+
+        with patch.object(distributed_lock, "hold", self._lease):
+            self.assertEqual(subscriber.sweep_pending_drains(), 0)
+
+    def test_repeated_ticks_replace_rather_than_stack(self):
+        """Per-owner job id. Without it, a mailbox whose drain keeps failing
+        collects one queued job a minute forever."""
+        self._mark(notified=datetime.now(UTC), processed=None)
+
+        with patch.object(distributed_lock, "hold", self._lease):
+            subscriber.sweep_pending_drains()
+            subscriber.sweep_pending_drains()
+
+        ids = {job[1]["job_id"] for job in self.queue.jobs}
+        self.assertEqual(ids, {f"gmail-catchup-{MINE}"})
+        # RQ refuses anything outside letters, numbers, underscores and dashes.
+        # The fake queue above does not, so a colon here passed the test and
+        # raised in the container - checked explicitly for that reason.
+        import re
+        self.assertRegex(ids.pop(), r"^[A-Za-z0-9_-]+$")
+
+    def test_real_notifications_are_still_never_deduplicated(self):
+        """Several legitimately coalesce into one history range; a job id on
+        those would drop drains that were needed. Only the catch-up has one."""
+        self.deliver()
+
+        self.assertNotIn("job_id", self.queue.jobs[0][1])
+
+    def test_a_second_subscriber_does_not_double_enqueue(self):
+        @contextmanager
+        def busy(name, *, owner_id, **kwargs):
+            raise distributed_lock.LockBusy(name)
+            yield
+
+        self._mark(notified=datetime.now(UTC), processed=None)
+        with patch.object(distributed_lock, "hold", busy):
+            self.assertEqual(subscriber.sweep_pending_drains(), 0)

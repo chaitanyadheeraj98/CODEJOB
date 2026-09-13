@@ -339,6 +339,41 @@ def owners_due_for_watch(db: Session) -> list[str]:
     return due
 
 
+def owners_awaiting_drain(db: Session) -> list[str]:
+    """Mailboxes whose newest notification is newer than their last drain.
+
+    The catch-up. A notification is acknowledged the moment it is enqueued, so
+    once the job behind it declines to run there is nothing left to redeliver -
+    the changes sit in Gmail's history until *another* notification happens to
+    arrive, which on a quiet mailbox can be days.
+
+    The job declines for one ordinary reason: `LockBusy`. `process_history`
+    treats that as benign on the grounds that the lock holder's drain covers
+    the same range, and for a concurrent drain that is true. It is **not** true
+    of the first-registration migration scan, which holds the same lock and
+    drains nothing - so the first notification after every registration was
+    being dropped. Observed on both mailboxes here.
+
+    Deliberately expressed as a gap between two timestamps rather than as a
+    special case of that one race. A drain lost to a worker restart, an evicted
+    job or a failed batch leaves exactly the same gap, and this closes all of
+    them the same way.
+    """
+    return [
+        row.owner_id
+        for row in db.query(GmailCredential).filter(
+            GmailCredential.revoked_at.is_(None),
+            GmailCredential.gmail_history_id.is_not(None),
+            GmailCredential.gmail_last_notification_at.is_not(None),
+        )
+        if (
+            row.gmail_last_event_processed_at is None
+            or row.gmail_last_event_processed_at < row.gmail_last_notification_at
+        )
+        and not _ineligible(db, row.owner_id)
+    ]
+
+
 def owners_due_for_stop(db: Session) -> list[str]:
     """Mailboxes holding watch state that are no longer allowed to.
 
