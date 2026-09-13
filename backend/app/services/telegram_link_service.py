@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from app.models import TelegramLink, utc_now
 from app.services.telegram_runtime import TelegramRuntimeState
@@ -193,6 +194,10 @@ def backfill_legacy_link(db: Session, owner_id: str, chat_ids: str, action_pin: 
     row = TelegramLink(owner_id=owner_id, chat_id=chat_id, linked_at=now, last_seen_at=now)
     if action_pin.strip():
         row.action_pin_hash = _pin_hash(action_pin.strip(), secrets.token_bytes(16))
-    db.add(row)
-    db.flush()
+    try:
+        with db.begin_nested():
+            db.add(row)
+            db.flush()
+    except IntegrityError:
+        return 0
     return 1

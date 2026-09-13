@@ -53,3 +53,26 @@ def test_empty_legacy_chat_setting_is_a_no_op():
     assert db.query(TelegramLink).count() == 0
     db.close()
     engine.dispose()
+
+
+def test_concurrent_worker_unique_conflict_is_an_idempotent_no_op(monkeypatch):
+    engine, db = _database()
+    db.add(TelegramLink(owner_id="default-owner", chat_id=101))
+    db.commit()
+    original_query = db.query
+    first_query = True
+
+    def racing_query(*entities):
+        nonlocal first_query
+        query = original_query(*entities)
+        if first_query:
+            first_query = False
+            monkeypatch.setattr(query, "first", lambda: None)
+        return query
+
+    monkeypatch.setattr(db, "query", racing_query)
+
+    assert telegram_link_service.backfill_legacy_link(db, "default-owner", "101", "1234") == 0
+    assert original_query(TelegramLink).count() == 1
+    db.close()
+    engine.dispose()
