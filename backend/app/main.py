@@ -273,7 +273,7 @@ from app import gmail_pubsub_subscriber
 from app.models import RecruiterWatch, TrackedThread
 from fastapi.responses import JSONResponse
 from app import correlation, gmail_client, request_log, tenancy
-from app.services import auth_service, telegram_link_service
+from app.services import auth_service, telegram_chat_service, telegram_link_service
 from app.services.orchestration_service import OrchestrationDeps, OrchestrationService
 from app.services.requirement_expansion_service import RequirementExpansionService
 from app.services.resume_enrichment_service import (
@@ -1776,6 +1776,18 @@ def _run_resume_tracking_sweep(db: Session) -> None:
     db.commit()
 
 
+def _run_telegram_retention_sweep(db: Session) -> None:
+    deleted = telegram_chat_service.purge_expired(db)
+    db.commit()
+    if deleted["messages"] or deleted["sessions"]:
+        logger.info(
+            "Telegram chat retention: owner=%s messages=%s sessions=%s",
+            tenancy.owner_id(),
+            deleted["messages"],
+            deleted["sessions"],
+        )
+
+
 def _run_relationship_sweep(db: Session) -> None:
     """Top up entity embeddings, then run one clustering pass.
 
@@ -1836,6 +1848,7 @@ def _get_auto_runner_service() -> AutoRunnerService:
             run_resume_tracking_sweep=_run_resume_tracking_sweep,
             run_relationship_sweep=_run_relationship_sweep,
             run_scheduling_sweep=_run_scheduling_sweep,
+            run_telegram_retention_sweep=_run_telegram_retention_sweep,
             action_lock=telegram_action_lock,
             stop_event=auto_runner_stop_event,
             list_owners=_automation_owners,

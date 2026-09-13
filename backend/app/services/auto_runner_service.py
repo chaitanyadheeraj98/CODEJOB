@@ -20,6 +20,7 @@ LIVE_REPLY_CHECK_INTERVAL_SECONDS = 60
 
 # The recovery window is measured in days; checking it hourly is ample.
 PURGE_SWEEP_INTERVAL = timedelta(hours=1)
+TELEGRAM_RETENTION_SWEEP_INTERVAL = timedelta(days=1)
 
 
 @dataclass
@@ -38,6 +39,7 @@ class _Schedule:
     next_resume_tracking_sweep_at: datetime
     next_relationship_sweep_at: datetime
     next_scheduling_sweep_at: datetime
+    next_telegram_retention_sweep_at: datetime
 
     @classmethod
     def starting_now(cls, owner_id: str) -> "_Schedule":
@@ -58,6 +60,7 @@ class _Schedule:
             next_resume_tracking_sweep_at=now,
             next_relationship_sweep_at=now,
             next_scheduling_sweep_at=now,
+            next_telegram_retention_sweep_at=now,
         )
 
 
@@ -79,6 +82,7 @@ class AutoRunnerService:
         # every existing construction site working, and the feature flag gates
         # the sweep either way.
         run_scheduling_sweep: Callable[[Session], None] = lambda _db: None,
+        run_telegram_retention_sweep: Callable[[Session], None] = lambda _db: None,
         action_lock: Lock,
         stop_event: Event,
         # Which tenants to service this tick. Injected rather than queried
@@ -99,6 +103,7 @@ class AutoRunnerService:
         self._run_resume_tracking_sweep = run_resume_tracking_sweep
         self._run_relationship_sweep = run_relationship_sweep
         self._run_scheduling_sweep = run_scheduling_sweep
+        self._run_telegram_retention_sweep = run_telegram_retention_sweep
         self._action_lock = action_lock
         self._stop_event = stop_event
         self._list_owners = list_owners
@@ -221,6 +226,17 @@ class AutoRunnerService:
             if not user_settings.enabled or not user_settings.feature_auto_polling:
                 schedule.next_run_at = datetime.now(UTC)
             now_utc = datetime.now(UTC)
+
+            if (
+                user_settings.enabled
+                and settings.feature_telegram_chat_enabled
+                and now_utc >= schedule.next_telegram_retention_sweep_at
+            ):
+                try:
+                    self._run_telegram_retention_sweep(db)
+                except Exception:
+                    logger.exception("Telegram chat retention sweep crashed")
+                schedule.next_telegram_retention_sweep_at = datetime.now(UTC) + TELEGRAM_RETENTION_SWEEP_INTERVAL
 
             # Runs on its own cadence, outside action_lock, so a live count is
             # visible even while a full sync is in progress under that lock.
