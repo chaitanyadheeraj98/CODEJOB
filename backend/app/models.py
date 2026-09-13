@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from urllib.parse import quote
 
-from sqlalchemy import Boolean, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, synonym
 
 from app.ai.draft_quality import assess_draft_quality
@@ -656,6 +656,27 @@ class ProviderCredential(Base):
     label: Mapped[str] = mapped_column(String(120), default="")
     last_used_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     last_error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+
+
+class TelegramLink(Base):
+    __tablename__ = "telegram_links"
+    __table_args__ = (
+        UniqueConstraint("owner_id", name="ux_telegram_links_owner_id"),
+        UniqueConstraint("chat_id", name="ux_telegram_links_chat_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    telegram_user_id: Mapped[str] = mapped_column(String(40), default="")
+    telegram_username: Mapped[str] = mapped_column(String(64), default="")
+    link_code_hash: Mapped[str] = mapped_column(String(64), default="")
+    link_code_expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    linked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    alerts_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    action_pin_hash: Mapped[str] = mapped_column(String(128), default="")
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
 
 
