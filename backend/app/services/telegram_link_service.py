@@ -178,3 +178,21 @@ def touch_last_seen(db: Session, chat_id: int) -> None:
     if row is not None:
         row.last_seen_at = utc_now()
         db.flush()
+
+
+def backfill_legacy_link(db: Session, owner_id: str, chat_ids: str, action_pin: str) -> int:
+    if db.query(TelegramLink.id).first() is not None:
+        return 0
+    chat_id = next(
+        (int(value) for value in (part.strip() for part in chat_ids.split(",")) if re.fullmatch(r"-?\d+", value)),
+        None,
+    )
+    if chat_id is None:
+        return 0
+    now = utc_now()
+    row = TelegramLink(owner_id=owner_id, chat_id=chat_id, linked_at=now, last_seen_at=now)
+    if action_pin.strip():
+        row.action_pin_hash = _pin_hash(action_pin.strip(), secrets.token_bytes(16))
+    db.add(row)
+    db.flush()
+    return 1

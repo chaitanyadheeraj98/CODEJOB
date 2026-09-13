@@ -1933,11 +1933,24 @@ def _telegram_link_count() -> int:
         return db.query(TelegramLink).filter(TelegramLink.chat_id.is_not(None)).count()
 
 
+def _backfill_telegram_links() -> None:
+    with SessionLocal() as db:
+        created = telegram_link_service.backfill_legacy_link(
+            db,
+            settings.owner_id,
+            settings.telegram_allowed_chat_ids,
+            settings.telegram_action_pin,
+        )
+        db.commit()
+    logger.info("Telegram legacy link backfill created %s row(s)", created)
+
+
 def _init_telegram_service() -> TelegramBotService | None:
     global telegram_runtime
     token = (settings.telegram_bot_token or "").strip()
     if not token:
         return None
+    _backfill_telegram_links()
     telegram_runtime = TelegramRuntime(
         TelegramRuntimeDeps(
             session_factory=SessionLocal,

@@ -315,7 +315,9 @@ class Settings(BaseSettings):
     semantic_keyword_weight: float = 0.6
     semantic_similarity_weight: float = 0.4
     telegram_bot_token: str = ""
+    # Deprecated: read only by the one-time telegram_links startup backfill.
     telegram_allowed_chat_ids: str = ""
+    # Deprecated: read only by the one-time telegram_links startup backfill.
     telegram_action_pin: str = ""
     telegram_alerts_enabled: bool = True
     telegram_auth_ttl_minutes: int = 30
