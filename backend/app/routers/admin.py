@@ -14,6 +14,7 @@ somebody to sign.
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
@@ -21,8 +22,14 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.db import get_db
 from app.models import User
-from app.schemas import AdminUserResponse, AdminUserUpdateRequest, ObservabilityResponse
+from app.schemas import (
+    AdminUserResponse,
+    AdminUserUpdateRequest,
+    ObservabilityResponse,
+    TaxonomyPublishResponse,
+)
 from app.services import auth_service, gmail_credential_service, observability_service
+from scripts import export_base_taxonomy
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +47,32 @@ def require_admin(request: Request, db: Session = Depends(get_db)) -> User:
         # route does not exist would only make a real admin's life harder.
         raise HTTPException(status_code=403, detail="Administrator access is required.")
     return user
+
+
+@router.post("/taxonomy/publish", response_model=TaxonomyPublishResponse)
+def publish_taxonomy(
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> TaxonomyPublishResponse:
+    """§14 H2: export the calling admin's overlay as the base artefact, for review.
+
+    **It writes to nobody.** Not to the repo, not to the database, not to
+    another account. It returns the files a developer would commit, and the
+    commit is what ships them - deliberate, reviewable, revertible, the same
+    argument §11.1 makes for the base taxonomy generally. An endpoint that
+    changed what 100 accounts see would be none of those three.
+
+    The calling admin's own overlay, resolved from the session like everywhere
+    else - never an `owner_id` parameter, which would make this a way to read
+    another account's vocabulary.
+    """
+    artefact = export_base_taxonomy.build_base_taxonomy(db, owner_id=admin.owner_id)
+    return TaxonomyPublishResponse(
+        owner_id=admin.owner_id,
+        generated_at=datetime.now(UTC),
+        counts=export_base_taxonomy.counts_for(artefact),
+        files=artefact,
+    )
 
 
 @router.get("/observability", response_model=ObservabilityResponse)

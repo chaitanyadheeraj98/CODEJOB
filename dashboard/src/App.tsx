@@ -7453,6 +7453,16 @@ function App({ account }: { account?: AuthUser }) {
 
           {activePage === 'settings' && hasLoadedSettingsBootstrap ? (
             <div className="configGrid runQueueGrid">
+              {/* §14 H1. The failure mode this exists for is silent: change
+                  something here, watch it work, assume it shipped - when it
+                  changed one row out of a hundred. Said once, at the top,
+                  quietly, because a banner nobody reads twice is worse than
+                  no banner. */}
+              <p className="boundaryNote">
+                <strong>These settings apply to your account only.</strong> Nothing on this page
+                changes what anyone else sees. Shared behaviour — the parsers, the base
+                vocabulary and the app&rsquo;s own configuration — ships with a deployment.
+              </p>
               {/* §11.4: hidden when the deployment has switched user
                   taxonomy off. The endpoints 404 either way; this is
                   what stops the UI offering a door that is not there. */}

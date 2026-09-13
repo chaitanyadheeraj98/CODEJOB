@@ -1275,6 +1275,22 @@ class AdminUserUpdateRequest(BaseModel):
     is_admin: bool | None = None
 
 
+class TaxonomyPublishResponse(BaseModel):
+    """§14 H2: the base artefact, returned for review and written to nobody.
+
+    `files` is keyed by the name each payload would be committed as, so what an
+    admin reads here is byte-for-byte what the developer puts in the repo. The
+    endpoint deliberately has no write side: publishing to everyone is a deploy,
+    reviewable and revertible, and an API call that changed what 100 accounts
+    see would be none of those things.
+    """
+
+    owner_id: str
+    generated_at: datetime
+    counts: dict[str, int] = {}
+    files: dict[str, object] = {}
+
+
 class ObservabilityPercentiles(BaseModel):
     """Null when no turn in the window carried the metric, never zero."""
 

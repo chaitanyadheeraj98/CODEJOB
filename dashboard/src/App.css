@@ -7967,3 +7967,27 @@ button.chatRankedLabel:focus-visible {
   background: var(--refusal-surface);
   font-size: 13px;
 }
+
+/* §14 H1: the app-wide / per-user boundary, said once at the top of Settings.
+
+   Deliberately quiet. The failure mode is silent - change something here,
+   watch it work, assume it shipped - and the fix is one clear sentence in the
+   right place, not a banner. Anything loud becomes noise you stop seeing,
+   which would leave the page exactly as it was before. */
+.boundaryNote {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--primary);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.boundaryNote strong {
+  color: var(--ink);
+  font-weight: 600;
+}

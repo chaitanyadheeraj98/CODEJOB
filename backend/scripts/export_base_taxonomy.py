@@ -58,13 +58,21 @@ def _write_json(path: Path, payload: dict[str, object]) -> None:
     )
 
 
-def export_base_taxonomy(db: Session, *, owner_id: str, output_dir: Path) -> dict[str, int]:
+def build_base_taxonomy(db: Session, *, owner_id: str) -> dict[str, dict[str, object]]:
+    """The artefact, in memory, keyed by the file name it would be written to.
+
+    Split out for H2. `POST /admin/taxonomy/publish` returns this for review and
+    writes nothing; the CLI below writes exactly these payloads to disk.
+    Building it once is the point - if the endpoint assembled its own version,
+    the artefact an admin reviewed and the artefact a developer commits could
+    differ, which is what the review exists to prevent. The contact-identifier
+    filter therefore covers both by construction, not by two places remembering.
+    """
     owner_id = owner_id.strip()
     if not owner_id:
         raise ValueError("owner_id is required")
-    output_dir.mkdir(parents=True, exist_ok=True)
 
-    counts: dict[str, int] = {}
+    artefact: dict[str, dict[str, object]] = {}
     for entity_type, file_name in ENTITY_FILES.items():
         rows = (
             db.query(
@@ -94,11 +102,9 @@ def export_base_taxonomy(db: Session, *, owner_id: str, output_dir: Path) -> dic
                 str(item["canonical_name"]),
             )
         )
-        _write_json(
-            output_dir / file_name,
-            {"schema_version": 1, "entity_type": entity_type, "entries": entries},
-        )
-        counts[entity_type] = len(entries)
+        artefact[file_name] = {
+            "schema_version": 1, "entity_type": entity_type, "entries": entries,
+        }
 
     intent_rows = (
         db.query(
@@ -130,8 +136,30 @@ def export_base_taxonomy(db: Session, *, owner_id: str, output_dir: Path) -> dic
             str(item["phrase"]),
         )
     )
-    _write_json(output_dir / "job_intent.json", {"schema_version": 1, "entries": intents})
-    counts["job_intent"] = len(intents)
+    artefact["job_intent.json"] = {"schema_version": 1, "entries": intents}
+    return artefact
+
+
+def counts_for(artefact: dict[str, dict[str, object]]) -> dict[str, int]:
+    """Entries per section, keyed by `entity_type` - not by file name.
+
+    `roles.json` holds `entity_type: "role"`, and the counts this returns are
+    read by callers that think in entity types. Keying on the file stem instead
+    silently renames every key.
+    """
+    return {
+        str(payload.get("entity_type") or Path(file_name).stem):
+            len(payload.get("entries", []))  # type: ignore[arg-type]
+        for file_name, payload in artefact.items()
+    }
+
+
+def export_base_taxonomy(db: Session, *, owner_id: str, output_dir: Path) -> dict[str, int]:
+    """Write the artefact to disk and bump `VERSION`. The CLI path."""
+    artefact = build_base_taxonomy(db, owner_id=owner_id)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for file_name, payload in artefact.items():
+        _write_json(output_dir / file_name, payload)
 
     version_path = output_dir / "VERSION"
     try:
@@ -139,7 +167,7 @@ def export_base_taxonomy(db: Session, *, owner_id: str, output_dir: Path) -> dic
     except (FileNotFoundError, ValueError):
         version = 1
     version_path.write_text(f"{version}\n", encoding="utf-8")
-    return counts
+    return counts_for(artefact)
 
 
 def main() -> None:

@@ -106,7 +106,9 @@ describe('AccountControls', () => {
   })
 
   it('sends the typed confirmation and finishes when the server accepts', async () => {
-    const fetchMock = vi.fn(async () => new Response('{"purge_after":"2026-10-12T00:00:00Z"}', { status: 200 }))
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => (
+      new Response('{"purge_after":"2026-10-12T00:00:00Z"}', { status: 200 })
+    ))
     vi.stubGlobal('fetch', fetchMock)
     const { onDeactivated } = render()
 
@@ -117,7 +119,7 @@ describe('AccountControls', () => {
     const [url, init] = fetchMock.mock.calls.at(-1)!
     expect(url).toBe('http://api/account')
     expect(init).toMatchObject({ method: 'DELETE', credentials: 'include' })
-    expect(JSON.parse(init.body as string)).toEqual({ confirm_email: EMAIL })
+    expect(JSON.parse(init!.body as string)).toEqual({ confirm_email: EMAIL })
     expect(onDeactivated).toHaveBeenCalledOnce()
   })
 
