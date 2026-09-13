@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 from fastapi.testclient import TestClient
@@ -12,6 +13,21 @@ from app.db import Base
 from app.runtime_state import runtime_state
 from app.services import telegram_link_service
 from app.telegram_bot import TelegramBotService
+
+
+def test_runtime_initialization_reuses_the_configured_chat_service():
+    previous_runtime = main.telegram_runtime
+    try:
+        with patch.object(settings, "telegram_bot_token", "token"), patch.object(
+            main, "_backfill_telegram_links"
+        ), patch.object(main, "_telegram_link_count", return_value=0), patch.object(
+            TelegramBotService, "start"
+        ):
+            assert main._init_telegram_service() is not None
+            callback = main.telegram_runtime.deps.record_proposal_outcome
+            assert callback.__self__ is main._get_chat_service()
+    finally:
+        main.telegram_runtime = previous_runtime
 
 
 def test_bot_username_is_loaded_once_when_service_starts():
