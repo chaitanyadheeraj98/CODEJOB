@@ -18,10 +18,12 @@ class TelegramReply:
     edit_message_id: int | None = None
     callback_notice: str | None = None
     html: bool = False
+    enqueue_chat_text: str | None = None
 
 
 CommandHandler = Callable[[int, str, str, str], str | TelegramReply]
 CallbackHandler = Callable[[int, str, str, str, int], str | TelegramReply]
+ChatTurnHandler = Callable[[int, int, str], None]
 
 
 @dataclass
@@ -170,6 +172,7 @@ class TelegramBotService:
         authorized_chat_count: Callable[[], int],
         command_handler: CommandHandler,
         callback_handler: CallbackHandler,
+        chat_turn_handler: ChatTurnHandler | None = None,
         # Whether this process should be the one polling. Injected and
         # defaulted so existing construction sites and tests keep working
         # without Redis.
@@ -183,6 +186,7 @@ class TelegramBotService:
         self._authorized_chat_count = authorized_chat_count
         self._command_handler = command_handler
         self._callback_handler = callback_handler
+        self._chat_turn_handler = chat_turn_handler
         self._is_leader = is_leader
         self._offset = 0
         self._running = False
@@ -258,11 +262,12 @@ class TelegramBotService:
         *,
         inline_keyboard: list[list[dict[str, str]]] | None = None,
         html: bool = False,
-    ) -> None:
+    ) -> int | None:
         try:
-            self.transport.send_message(chat_id, text if html else escape(text), inline_keyboard=inline_keyboard)
+            return self.transport.send_message(chat_id, text if html else escape(text), inline_keyboard=inline_keyboard)
         except Exception as exc:
             logger.warning("Failed to send Telegram message to chat_id=%s: %s", chat_id, exc)
+            return None
 
     def _edit_message(
         self,
@@ -387,17 +392,33 @@ class TelegramBotService:
             self._send_message(chat_id, "Unauthorized chat. Access denied.")
             return
 
-        action_key = f"{chat_id}:{text.lower()}"
-        if self._is_duplicate_action(action_key):
-            self._send_message(chat_id, "Duplicate command ignored (tap detected twice).")
-            return
+        if text.startswith("/"):
+            action_key = f"{chat_id}:{text.lower()}"
+            if self._is_duplicate_action(action_key):
+                self._send_message(chat_id, "Duplicate command ignored (tap detected twice).")
+                return
 
         try:
             reply = self._command_handler(chat_id, user_id, username, text)
         except Exception as exc:
             logger.exception("Telegram command handler failure")
             reply = f"Command failed: {exc}"
-        self._send_reply(chat_id, reply)
+        sent_message_id = self._send_reply(chat_id, reply)
+        if (
+            isinstance(reply, TelegramReply)
+            and reply.enqueue_chat_text is not None
+            and sent_message_id is not None
+            and self._chat_turn_handler is not None
+        ):
+            try:
+                self._chat_turn_handler(chat_id, sent_message_id, reply.enqueue_chat_text)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to enqueue Telegram chat turn chat_id=%s error_type=%s",
+                    chat_id,
+                    type(exc).__name__,
+                )
+                self._edit_message(chat_id, sent_message_id, "Something went wrong on my side.")
 
     def _handle_callback_query(self, callback_query: dict) -> None:
         callback_query_id = str(callback_query.get("id", "")).strip()
@@ -437,7 +458,7 @@ class TelegramBotService:
         self._answer_callback_query(callback_query_id, notice)
         self._send_reply(chat_id, reply)
 
-    def _send_reply(self, chat_id: int, reply: str | TelegramReply) -> None:
+    def _send_reply(self, chat_id: int, reply: str | TelegramReply) -> int | None:
         if isinstance(reply, TelegramReply):
             if reply.edit_message_id:
                 self._edit_message(
@@ -447,7 +468,6 @@ class TelegramBotService:
                     inline_keyboard=reply.inline_keyboard,
                     html=reply.html,
                 )
-            else:
-                self._send_message(chat_id, reply.text, inline_keyboard=reply.inline_keyboard, html=reply.html)
-            return
-        self._send_message(chat_id, reply)
+                return reply.edit_message_id
+            return self._send_message(chat_id, reply.text, inline_keyboard=reply.inline_keyboard, html=reply.html)
+        return self._send_message(chat_id, reply)

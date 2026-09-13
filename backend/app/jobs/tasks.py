@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import json
 from typing import Any
+from uuid import uuid4
 
 from app.db import SessionLocal
 from app.tenancy import owner_scoped
@@ -10,6 +12,68 @@ from app.jobs.progress import update_job_progress
 from app.schemas import AutomationRunRequest
 
 logger = logging.getLogger(__name__)
+
+
+@owner_scoped
+def run_telegram_chat_turn(*, chat_id: int, message_id: int, text: str) -> dict[str, Any]:
+    from fastapi import HTTPException
+
+    from app import tenancy
+    from app.config import settings
+    from app.services.chat_service import ChatService
+    from app.services.telegram_chat_service import current_session
+    from app.services.telegram_format import format_answer
+    from app.telegram_bot import TelegramTransport
+
+    correlation_id = uuid4().hex
+    response = ""
+    status = "ok"
+    db = SessionLocal()
+    try:
+        session = current_session(db, tenancy.owner_id(), chat_id)
+        result = asyncio.run(ChatService().complete_message(db, session.id, text, model=None))
+        if result.failure_code in {"budget_exhausted", "tool_budget_exhausted"}:
+            response = "That took too long and I stopped. Try narrowing the question."
+            status = "timeout"
+        else:
+            response = format_answer(result.assistant_text or "Something went wrong on my side.")
+            status = "ok" if result.assistant_text else "failed"
+    except HTTPException as exc:
+        if exc.status_code == 503:
+            response = "I'm at capacity right now — send that again in a moment."
+            status = "capacity"
+        elif exc.status_code == 422:
+            response = "That message is too long for me to read — try splitting it."
+            status = "invalid"
+        else:
+            response = f"Something went wrong on my side. Reference: <code>{correlation_id}</code>"
+            status = "failed"
+    except (TimeoutError, asyncio.TimeoutError):
+        response = "That took too long and I stopped. Try narrowing the question."
+        status = "timeout"
+    except Exception as exc:
+        logger.warning(
+            "telegram_chat_turn_failed correlation_id=%s chat_id=%s error_type=%s",
+            correlation_id,
+            chat_id,
+            type(exc).__name__,
+        )
+        response = f"Something went wrong on my side. Reference: <code>{correlation_id}</code>"
+        status = "failed"
+    finally:
+        db.close()
+
+    try:
+        TelegramTransport(settings.telegram_bot_token).edit_message(chat_id, message_id, response)
+    except Exception as exc:
+        logger.warning(
+            "telegram_chat_reply_failed correlation_id=%s chat_id=%s error_type=%s",
+            correlation_id,
+            chat_id,
+            type(exc).__name__,
+        )
+        return {"status": "delivery_failed", "correlation_id": correlation_id}
+    return {"status": status, "correlation_id": correlation_id}
 
 
 @owner_scoped

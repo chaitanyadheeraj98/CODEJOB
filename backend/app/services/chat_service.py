@@ -4,7 +4,8 @@ import json
 import logging
 from collections import Counter
 from collections.abc import AsyncIterator
-from contextlib import aclosing
+from contextlib import aclosing, asynccontextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from time import perf_counter
 from uuid import uuid4
@@ -27,6 +28,13 @@ from app import correlation, tenancy
 
 def _sse(event: str, payload: dict[str, object]) -> str:
     return f"event: {event}\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n"
+
+
+@dataclass(frozen=True)
+class ChatTurnResult:
+    assistant_text: str
+    tool_rows: list[ChatMessage]
+    failure_code: str | None = None
 
 
 class ChatService:
@@ -269,10 +277,8 @@ class ChatService:
         db.refresh(row)
         return row
 
-    async def send_message(self, db: Session, session_id: int, user_text: str,
-                           model: str | None = None, attachment_ids: list[int] | None = None) -> AsyncIterator[str]:
-        self.validate_message(user_text)
-        self._session_or_404(db, session_id)
+    @asynccontextmanager
+    async def _admission_lease(self, db: Session, session_id: int, model: str | None):
         try:
             lease = await admission_service.acquire_async(
                 CHAT_TURN_POOL,
@@ -294,11 +300,54 @@ class ChatService:
                               failure_code="admission_rejected", prompt_sha256=prompt_sha256())
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         try:
+            yield
+        finally:
+            admission_service.release(lease)
+
+    async def send_message(self, db: Session, session_id: int, user_text: str,
+                           model: str | None = None, attachment_ids: list[int] | None = None) -> AsyncIterator[str]:
+        self.validate_message(user_text)
+        self._session_or_404(db, session_id)
+        async with self._admission_lease(db, session_id, model):
             async with aclosing(self._send_message(db, session_id, user_text, model, attachment_ids)) as stream:
                 async for event in stream:
                     yield event
-        finally:
-            admission_service.release(lease)
+
+    async def complete_message(
+        self,
+        db: Session,
+        session_id: int,
+        user_text: str,
+        model: str | None = None,
+    ) -> ChatTurnResult:
+        self.validate_message(user_text)
+        self._session_or_404(db, session_id)
+        latest = db.query(ChatMessage.id).filter(ChatMessage.session_id == session_id).order_by(ChatMessage.id.desc()).first()
+        previous_id = latest[0] if latest else 0
+        async with self._admission_lease(db, session_id, model):
+            async with aclosing(self._send_message(db, session_id, user_text, model, None)) as stream:
+                async for _ in stream:
+                    pass
+        rows = (
+            db.query(ChatMessage)
+            .filter(ChatMessage.session_id == session_id, ChatMessage.id > previous_id)
+            .order_by(ChatMessage.id.asc())
+            .all()
+        )
+        assistant = next((row for row in reversed(rows) if row.role == "assistant"), None)
+        turn = (
+            db.query(ChatTurn)
+            .filter(ChatTurn.message_id == assistant.id)
+            .order_by(ChatTurn.id.desc())
+            .first()
+            if assistant is not None
+            else None
+        )
+        return ChatTurnResult(
+            assistant_text=assistant.content if assistant is not None else "",
+            tool_rows=[row for row in rows if row.role == "tool"],
+            failure_code=turn.failure_code if turn is not None else None,
+        )
 
     async def _send_message(
         self,

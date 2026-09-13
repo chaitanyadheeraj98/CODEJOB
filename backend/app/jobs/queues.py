@@ -21,6 +21,7 @@ MANUAL_INTAKE_QUEUE = "manual_intake"
 # queued behind a sync that takes minutes, which is the delay this feature
 # exists to remove.
 GMAIL_EVENT_QUEUE = "gmail_event"
+TELEGRAM_CHAT_QUEUE = "telegram_chat"
 QUEUE_NAMES = frozenset(
     {
         GMAIL_SYNC_QUEUE,
@@ -30,6 +31,7 @@ QUEUE_NAMES = frozenset(
         SCHEDULED_TASK_QUEUE,
         MANUAL_INTAKE_QUEUE,
         GMAIL_EVENT_QUEUE,
+        TELEGRAM_CHAT_QUEUE,
     }
 )
 

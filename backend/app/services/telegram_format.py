@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from html import escape as html_escape
 from html.parser import HTMLParser
+import re
 
 
 def escape(value: object) -> str:
@@ -64,3 +65,17 @@ def chunk(text: str, limit: int = 4096) -> list[str]:
     if remaining:
         chunks.append(remaining)
     return chunks
+
+
+def format_answer(text: str) -> str:
+    sections = text.split("```")
+    rendered: list[str] = []
+    for index, section in enumerate(sections):
+        safe = html_escape(section, quote=True)
+        if index % 2:
+            rendered.append(f"<pre>{safe}</pre>")
+            continue
+        safe = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", safe, flags=re.DOTALL)
+        safe = re.sub(r"`([^`\n]+)`", r"<code>\1</code>", safe)
+        rendered.append(safe)
+    return "".join(rendered)

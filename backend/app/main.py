@@ -160,6 +160,7 @@ from app.jobs.queues import (
     GMAIL_SYNC_QUEUE,
     MANUAL_INTAKE_QUEUE,
     NVOIDS_SYNC_QUEUE,
+    TELEGRAM_CHAT_QUEUE,
     active_job_id,
     get_queue,
     get_redis_connection,
@@ -172,6 +173,7 @@ from app.jobs.tasks import (
     run_manual_intake_job,
     run_nvoids_sync_job,
     run_retry_selected_messages_job,
+    run_telegram_chat_turn,
 )
 from app.skill_taxonomy import (
     TAXONOMY_PLACEHOLDER_KEYS,
@@ -1933,6 +1935,20 @@ def _telegram_link_count() -> int:
         return db.query(TelegramLink).filter(TelegramLink.chat_id.is_not(None)).count()
 
 
+def _enqueue_telegram_chat_turn(chat_id: int, message_id: int, text: str) -> None:
+    owner = _resolve_telegram_owner(chat_id)
+    if owner is None:
+        raise RuntimeError("Telegram chat is not linked")
+    get_queue(TELEGRAM_CHAT_QUEUE).enqueue(
+        run_telegram_chat_turn,
+        kwargs={"chat_id": chat_id, "message_id": message_id, "text": text, "owner_id": owner},
+        job_id=f"telegram-chat-{uuid.uuid4().hex}",
+        job_timeout=max(60, int(settings.chat_turn_budget_seconds) + 60),
+        result_ttl=86400,
+        failure_ttl=604800,
+    )
+
+
 def _backfill_telegram_links() -> None:
     with SessionLocal() as db:
         created = telegram_link_service.backfill_legacy_link(
@@ -1982,6 +1998,7 @@ def _init_telegram_service() -> TelegramBotService | None:
         authorized_chat_count=_telegram_link_count,
         command_handler=telegram_runtime.handle_command,
         callback_handler=telegram_runtime.handle_callback,
+        chat_turn_handler=_enqueue_telegram_chat_turn,
         is_leader=lambda: leader_election.is_leader(leader_election.TELEGRAM_POLLER),
     )
     service.start()

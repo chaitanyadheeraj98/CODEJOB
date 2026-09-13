@@ -394,6 +394,9 @@ class TelegramRuntime:
             if pending_mode == "await_auth_pin":
                 return self.handle_command(chat_id, user_id, username, f"/auth {command_line}")
 
+        if not command_line.startswith("/") and settings.feature_telegram_chat_enabled:
+            return TelegramReply(text="Thinking…", enqueue_chat_text=command_line)
+
         parts = command_line.split()
         cmd = parts[0].lower()
         args, pin = self._extract_pin(parts[1:])

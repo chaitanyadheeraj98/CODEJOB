@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from app.services.telegram_format import chunk, escape
+from app.services.telegram_format import chunk, escape, format_answer
 from app.telegram_bot import TelegramAPIError, TelegramTransport
 
 
@@ -20,6 +20,12 @@ class TelegramFormatTests(unittest.TestCase):
         parts = chunk("<pre>" + "x" * 5000 + "</pre>")
         self.assertTrue(all(part.startswith("<pre>") and part.endswith("</pre>") for part in parts))
         self.assertTrue(all(len(part) <= 4096 for part in parts))
+
+    def test_assistant_markdown_becomes_safe_telegram_html(self) -> None:
+        self.assertEqual(
+            format_answer("**Role** <Lead> & `Python`\n```x < y```"),
+            "<b>Role</b> &lt;Lead&gt; &amp; <code>Python</code>\n<pre>x &lt; y</pre>",
+        )
 
 
 class TelegramTransportTests(unittest.TestCase):
