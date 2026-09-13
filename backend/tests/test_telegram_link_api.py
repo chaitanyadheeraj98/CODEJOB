@@ -25,7 +25,7 @@ def test_bot_username_is_loaded_once_when_service_starts():
         callback_handler=lambda _chat_id, _user_id, _username, _data, _message_id: "ok",
     )
     calls: list[str] = []
-    service._post_json = lambda method, _payload: calls.append(method) or {
+    service.transport._post_json = lambda method, _payload: calls.append(method) or {
         "ok": True,
         "result": {"username": "codejob_bot"},
     }

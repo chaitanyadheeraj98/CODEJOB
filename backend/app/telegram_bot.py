@@ -4,7 +4,9 @@ import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Callable
-from urllib import error, parse, request
+from urllib import error, request
+
+from app.services.telegram_format import chunk, escape, plain_text
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +17,7 @@ class TelegramReply:
     inline_keyboard: list[list[dict[str, str]]] | None = None
     edit_message_id: int | None = None
     callback_notice: str | None = None
+    html: bool = False
 
 
 CommandHandler = Callable[[int, str, str, str], str | TelegramReply]
@@ -28,6 +31,132 @@ class TelegramBotStatus:
     alerts_enabled: bool
     authorized_chats: int
     detail: str
+
+
+class TelegramAPIError(RuntimeError):
+    def __init__(self, error_code: int, description: str, retry_after: float | None = None) -> None:
+        super().__init__(f"Telegram API error {error_code}: {description}")
+        self.error_code = error_code
+        self.description = description
+        self.retry_after = retry_after
+
+
+class TelegramTransport:
+    def __init__(self, token: str) -> None:
+        self._token = token.strip()
+        self._edit_lock = threading.Lock()
+        self._last_edit_at: dict[int, float] = {}
+
+    def _api_url(self, method: str) -> str:
+        return f"https://api.telegram.org/bot{self._token}/{method}"
+
+    def _request_json(self, method: str, payload: dict) -> dict:
+        data = json.dumps(payload).encode("utf-8")
+        req = request.Request(
+            self._api_url(method),
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with request.urlopen(req, timeout=35) as resp:
+                body = resp.read().decode("utf-8")
+        except error.HTTPError as exc:
+            body = exc.read().decode("utf-8")
+        parsed = json.loads(body)
+        if not parsed.get("ok"):
+            parameters = parsed.get("parameters") if isinstance(parsed.get("parameters"), dict) else {}
+            retry_after = parameters.get("retry_after")
+            raise TelegramAPIError(
+                int(parsed.get("error_code", 0)),
+                str(parsed.get("description", "request failed")),
+                float(retry_after) if retry_after is not None else None,
+            )
+        return parsed
+
+    def _post_json(self, method: str, payload: dict) -> dict:
+        try:
+            return self._request_json(method, payload)
+        except TelegramAPIError as exc:
+            if exc.error_code != 429 or exc.retry_after is None:
+                raise
+            time.sleep(exc.retry_after)
+            return self._request_json(method, payload)
+
+    def _formatted_post(self, method: str, payload: dict, text: str) -> dict:
+        try:
+            return self._post_json(method, payload)
+        except TelegramAPIError as exc:
+            if exc.error_code != 400 or "parse" not in exc.description.lower():
+                raise
+            logger.warning("Telegram formatting rejected method=%s code=%s", method, exc.error_code)
+            fallback = dict(payload)
+            fallback.pop("parse_mode", None)
+            fallback["text"] = plain_text(text)
+            return self._post_json(method, fallback)
+
+    def send_message(
+        self,
+        chat_id: int,
+        text: str,
+        *,
+        inline_keyboard: list[list[dict[str, str]]] | None = None,
+    ) -> int | None:
+        message_id: int | None = None
+        parts = chunk(text) or [""]
+        for index, part in enumerate(parts):
+            payload: dict[str, Any] = {
+                "chat_id": chat_id,
+                "text": part,
+                "parse_mode": "HTML",
+                "disable_web_page_preview": True,
+            }
+            if inline_keyboard and index == len(parts) - 1:
+                payload["reply_markup"] = {"inline_keyboard": inline_keyboard}
+            result = self._formatted_post("sendMessage", payload, part).get("result")
+            if message_id is None and isinstance(result, dict) and result.get("message_id") is not None:
+                message_id = int(result["message_id"])
+        return message_id
+
+    def edit_message(
+        self,
+        chat_id: int,
+        message_id: int,
+        text: str,
+        *,
+        inline_keyboard: list[list[dict[str, str]]] | None = None,
+    ) -> None:
+        parts = chunk(text) or [""]
+        with self._edit_lock:
+            wait = 2.0 - (time.monotonic() - self._last_edit_at.get(chat_id, 0.0))
+            if wait > 0:
+                time.sleep(wait)
+            payload: dict[str, Any] = {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "text": parts[0],
+                "parse_mode": "HTML",
+                "disable_web_page_preview": True,
+            }
+            if inline_keyboard and len(parts) == 1:
+                payload["reply_markup"] = {"inline_keyboard": inline_keyboard}
+            self._formatted_post("editMessageText", payload, parts[0])
+            self._last_edit_at[chat_id] = time.monotonic()
+        for index, part in enumerate(parts[1:], start=1):
+            self.send_message(
+                chat_id,
+                part,
+                inline_keyboard=inline_keyboard if index == len(parts) - 1 else None,
+            )
+
+    def answer_callback_query(self, callback_query_id: str, text: str | None = None) -> None:
+        payload: dict[str, Any] = {"callback_query_id": callback_query_id}
+        if text:
+            payload["text"] = text[:180]
+        self._post_json("answerCallbackQuery", payload)
+
+    def send_photo(self, chat_id: int, photo: bytes, *, caption: str | None = None) -> None:
+        raise NotImplementedError
 
 
 class TelegramBotService:
@@ -47,6 +176,7 @@ class TelegramBotService:
         is_leader: Callable[[], bool] = lambda: True,
     ) -> None:
         self._token = token.strip()
+        self.transport = TelegramTransport(self._token)
         self._alerts_enabled = alerts_enabled
         self._is_authorized = is_authorized
         self._chat_ids_for_owner = chat_ids_for_owner
@@ -90,7 +220,7 @@ class TelegramBotService:
         if self._thread and self._thread.is_alive():
             return
         try:
-            result = self._post_json("getMe", {}).get("result", {})
+            result = self.transport._post_json("getMe", {}).get("result", {})
             self._bot_username = str(result.get("username", "")).strip() if isinstance(result, dict) else ""
         except Exception:
             self._bot_username = ""
@@ -118,23 +248,8 @@ class TelegramBotService:
         for chat_id in self._chat_ids_for_owner(owner_id):
             self._send_message(chat_id, safe_text)
 
-    def _api_url(self, method: str) -> str:
-        return f"https://api.telegram.org/bot{self._token}/{method}"
-
     def _post_json(self, method: str, payload: dict) -> dict:
-        data = json.dumps(payload).encode("utf-8")
-        req = request.Request(
-            self._api_url(method),
-            data=data,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with request.urlopen(req, timeout=35) as resp:
-            body = resp.read().decode("utf-8")
-        parsed = json.loads(body)
-        if not parsed.get("ok"):
-            raise RuntimeError(f"Telegram API error: {parsed!r}")
-        return parsed
+        return self.transport._post_json(method, payload)
 
     def _send_message(
         self,
@@ -142,19 +257,10 @@ class TelegramBotService:
         text: str,
         *,
         inline_keyboard: list[list[dict[str, str]]] | None = None,
+        html: bool = False,
     ) -> None:
         try:
-            payload: dict[str, Any] = {
-                "chat_id": chat_id,
-                "text": text[:3900],
-                "disable_web_page_preview": True,
-            }
-            if inline_keyboard:
-                payload["reply_markup"] = {"inline_keyboard": inline_keyboard}
-            self._post_json(
-                "sendMessage",
-                payload,
-            )
+            self.transport.send_message(chat_id, text if html else escape(text), inline_keyboard=inline_keyboard)
         except Exception as exc:
             logger.warning("Failed to send Telegram message to chat_id=%s: %s", chat_id, exc)
 
@@ -165,17 +271,15 @@ class TelegramBotService:
         text: str,
         *,
         inline_keyboard: list[list[dict[str, str]]] | None = None,
+        html: bool = False,
     ) -> None:
         try:
-            payload: dict[str, Any] = {
-                "chat_id": chat_id,
-                "message_id": message_id,
-                "text": text[:3900],
-                "disable_web_page_preview": True,
-            }
-            if inline_keyboard:
-                payload["reply_markup"] = {"inline_keyboard": inline_keyboard}
-            self._post_json("editMessageText", payload)
+            self.transport.edit_message(
+                chat_id,
+                message_id,
+                text if html else escape(text),
+                inline_keyboard=inline_keyboard,
+            )
         except Exception as exc:
             logger.warning(
                 "Failed to edit Telegram message chat_id=%s message_id=%s: %s",
@@ -186,10 +290,7 @@ class TelegramBotService:
 
     def _answer_callback_query(self, callback_query_id: str, text: str | None = None) -> None:
         try:
-            payload: dict[str, Any] = {"callback_query_id": callback_query_id}
-            if text:
-                payload["text"] = text[:180]
-            self._post_json("answerCallbackQuery", payload)
+            self.transport.answer_callback_query(callback_query_id, text)
         except Exception as exc:
             logger.warning("Failed to answer callback query id=%s: %s", callback_query_id, exc)
 
@@ -344,8 +445,9 @@ class TelegramBotService:
                     reply.edit_message_id,
                     reply.text,
                     inline_keyboard=reply.inline_keyboard,
+                    html=reply.html,
                 )
             else:
-                self._send_message(chat_id, reply.text, inline_keyboard=reply.inline_keyboard)
+                self._send_message(chat_id, reply.text, inline_keyboard=reply.inline_keyboard, html=reply.html)
             return
         self._send_message(chat_id, reply)

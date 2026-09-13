@@ -53,6 +53,24 @@ class TelegramInteractiveMainTests(unittest.TestCase):
 
 
 class TelegramBotServiceCallbackTests(unittest.TestCase):
+    def test_plain_reply_escapes_telegram_html_characters(self) -> None:
+        sent: list[dict] = []
+        service = TelegramBotService(
+            token="x",
+            alerts_enabled=True,
+            is_authorized=lambda _chat_id, _text: True,
+            chat_ids_for_owner=lambda _owner_id: [],
+            authorized_chat_count=lambda: 1,
+            command_handler=lambda _chat_id, _user_id, _username, _text: "Subject: <script> &",
+            callback_handler=lambda _chat_id, _user_id, _username, _data, _message_id: "ok",
+        )
+        service.transport._post_json = lambda _method, payload: sent.append(payload) or {"ok": True}
+
+        service._handle_update({"message": {"text": "/review", "chat": {"id": 999}, "from": {"id": 1}}})
+
+        self.assertEqual(sent[0]["parse_mode"], "HTML")
+        self.assertEqual(sent[0]["text"], "Subject: &lt;script&gt; &amp;")
+
     def test_callback_update_is_processed(self) -> None:
         sent: list[tuple[str, dict]] = []
         callback_calls: list[str] = []
@@ -79,7 +97,7 @@ class TelegramBotServiceCallbackTests(unittest.TestCase):
             command_handler=command_handler,
             callback_handler=callback_handler,
         )
-        service._post_json = fake_post  # type: ignore[method-assign]
+        service.transport._post_json = fake_post  # type: ignore[method-assign]
         update = {
             "callback_query": {
                 "id": "cb1",
