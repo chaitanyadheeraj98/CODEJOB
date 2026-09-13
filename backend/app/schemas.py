@@ -3177,6 +3177,41 @@ class TelegramStatusResponse(BaseModel):
     detail: str
 
 
+class TelegramLinkResponse(BaseModel):
+    linked: bool
+    chat_masked: str | None = None
+    telegram_username: str = ""
+    linked_at: datetime | None = None
+    alerts_enabled: bool = True
+    pin_set: bool = False
+    bot_username: str = ""
+    pending_code_expires_at: datetime | None = None
+
+
+class TelegramLinkCodeResponse(BaseModel):
+    deep_link: str
+    expires_at: datetime
+
+
+class TelegramLinkSettingsRequest(BaseModel):
+    alerts_enabled: bool | None = None
+    action_pin: str | None = Field(default=None, max_length=6)
+
+    @field_validator("action_pin")
+    @classmethod
+    def validate_action_pin(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if value and not re.fullmatch(r"\d{4,6}", value):
+            raise ValueError("Action PIN must contain 4 to 6 digits.")
+        return value
+
+
+class TelegramUnlinkResponse(BaseModel):
+    linked: Literal[False] = False
+
+
 SettingsBootstrapResponse.model_rebuild()
 
 

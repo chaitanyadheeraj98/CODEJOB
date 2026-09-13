@@ -62,10 +62,15 @@ class TelegramBotService:
         self._dedupe_ttl_seconds = 15.0
         self._polling = False
         self._detail = "Telegram bot is not running"
+        self._bot_username = ""
 
     @property
     def enabled(self) -> bool:
         return bool(self._token)
+
+    @property
+    def bot_username(self) -> str:
+        return self._bot_username
 
     def status(self) -> TelegramBotStatus:
         with self._lock:
@@ -84,6 +89,12 @@ class TelegramBotService:
             return
         if self._thread and self._thread.is_alive():
             return
+        try:
+            result = self._post_json("getMe", {}).get("result", {})
+            self._bot_username = str(result.get("username", "")).strip() if isinstance(result, dict) else ""
+        except Exception:
+            self._bot_username = ""
+            logger.warning("Telegram bot identity lookup failed", exc_info=True)
         self._running = True
         self._thread = threading.Thread(target=self._run_loop, name="telegram-bot-poller", daemon=True)
         self._thread.start()

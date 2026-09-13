@@ -200,6 +200,7 @@ from app.routers.chat import (
     router as chat_router,
 )
 from app.routers.resume_editor import router as resume_editor_router
+from app.routers.telegram import router as telegram_router
 from app.job_intent_learning import (
     NEGATIVE_NEWSLETTER,
     POSITIVE_RECRUITER_JD,
@@ -715,6 +716,7 @@ else:
     chat_mcp = None
 app.include_router(chat_router)
 app.include_router(resume_editor_router)
+app.include_router(telegram_router)
 logger = logging.getLogger(__name__)
 last_gmail_sync_at: datetime | None = None
 ai_running: bool = False
