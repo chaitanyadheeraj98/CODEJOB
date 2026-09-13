@@ -174,11 +174,18 @@ class LeakTests(_Base):
     def test_the_gmail_credential_table_is_not_reachable_through_a_section(self):
         self.db.add(GmailCredential(
             owner_id=MINE, access_token_encrypted="cipher-a", refresh_token_encrypted="cipher-b",
+            # Push watch state lives on this row too. The cursor is a position
+            # in the person's live mailbox: not a secret the way a token is,
+            # but not theirs to act on either, and an export is the one place
+            # that hands a whole row to a browser.
+            gmail_history_id="99887766", gmail_watch_last_error="watch_expired",
         ))
         self.db.commit()
         blob = json.dumps(self._export(MINE))
         self.assertNotIn("cipher-a", blob)
         self.assertNotIn("cipher-b", blob)
+        self.assertNotIn("99887766", blob)
+        self.assertNotIn("gmail_history_id", blob)
 
     def test_the_derived_machinery_is_left_behind(self):
         """1.53 GB of a 1.93 GB export, measured on one real account, against

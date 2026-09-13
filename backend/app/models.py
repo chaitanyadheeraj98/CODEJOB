@@ -605,6 +605,42 @@ class GmailCredential(Base):
     # on it on every single Gmail call.
     revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
 
+    # --- Gmail push (Pub/Sub) watch state -------------------------------
+    # All six live on this row rather than a table of their own, because they
+    # describe the connection and die with it. A separate table would need its
+    # own cascade on disconnect, deactivation and hard delete - three more
+    # places to forget.
+    #
+    # The cursor is the authoritative one of the six. A Pub/Sub notification
+    # carries a history ID too, but it is only a reason to drain; what has
+    # actually been processed is this.
+    #
+    # String, not integer, because Gmail documents `historyId` as opaque. It
+    # happens to be decimal today, and the moment code starts doing arithmetic
+    # on it that becomes a dependency on an unpromised format. Ordering
+    # comparisons belong to Gmail's history API, not to us.
+    gmail_history_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Gmail returns this as epoch milliseconds; stored as a real timestamp so
+    # "is the watch still alive" is a SQL comparison rather than a unit
+    # conversion at every call site. Roughly seven days out, renewed daily.
+    gmail_watch_expiration_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    # When renewal last succeeded, which is what the daily decision reads.
+    # Distinct from the expiration: a renewal that failed leaves the old
+    # expiration in place and this untouched, and the gap between them is the
+    # signal that delivery is about to stop.
+    gmail_watch_renewed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    # Last valid notification accepted, and last history batch committed. Two
+    # columns because the interesting failure is one without the other:
+    # notifications arriving and nothing being processed is a stuck worker,
+    # and neither moving is a stopped subscriber.
+    gmail_last_notification_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    gmail_last_event_processed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    # Operational reason the watch is not working, shown in Settings. Safe text
+    # only - a status code and what it means. Never a token, an address, a
+    # subject, a Pub/Sub payload or a Google exception body, which is why
+    # callers pass a chosen string rather than `str(exc)`.
+    gmail_watch_last_error: Mapped[str] = mapped_column(Text, default="")
+
 
 class ProviderCredential(Base):
     __tablename__ = "provider_credentials"

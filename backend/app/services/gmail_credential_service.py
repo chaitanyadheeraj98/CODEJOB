@@ -45,6 +45,19 @@ class GmailConnectionStatus:
     revoked: bool = False
     last_error: str = ""
     scopes: tuple[str, ...] = ()
+    # Gmail push delivery. Derived, never raw: `watch_active` instead of an
+    # expiry the caller has to compare, and `has_history_cursor` instead of the
+    # cursor. The cursor is a mailbox history ID, and a value that identifies a
+    # position in someone's mailbox has no business in a status response - the
+    # UI has no use for it and it would be one careless serialiser away from
+    # the browser.
+    watch_active: bool = False
+    watch_expires_at: datetime | None = None
+    watch_renewed_at: datetime | None = None
+    has_history_cursor: bool = False
+    last_notification_at: datetime | None = None
+    last_event_processed_at: datetime | None = None
+    watch_error: str = ""
 
 
 def get_row(db: Session, owner_id: str) -> GmailCredential | None:
@@ -117,6 +130,21 @@ def save_credentials(
     if credentials.scopes:
         row.scopes_json = json.dumps(sorted(credentials.scopes))
     row.expires_at = _as_utc(credentials.expiry)
+    if google_email or google_subject:
+        # Watch state belongs to the mailbox it was registered against, so a
+        # row that starts describing a different one must not keep it. The
+        # ordinary case - the same person re-consenting, which Testing-status
+        # OAuth forces weekly - changes neither value and keeps the cursor,
+        # because a reconnect is not a reason to re-scan a mailbox.
+        #
+        # Both identifiers are checked. The subject is the stable one, but it
+        # is nullable (reading it needs the openid scope), so on a row that has
+        # never had one the address is all there is to notice a swap by.
+        changed_mailbox = bool(google_email) and bool(row.google_email) and row.google_email != google_email[:320]
+        changed_subject = bool(google_subject) and bool(row.google_subject) and row.google_subject != google_subject[:64]
+        if changed_mailbox or changed_subject:
+            logger.info("gmail_watch_state_cleared owner_id=%s reason=mailbox_changed", owner_id)
+            clear_watch_state(row)
     if google_email:
         row.google_email = google_email[:320]
     if google_subject:
@@ -155,7 +183,45 @@ def mark_revoked(db: Session, owner_id: str, reason: str) -> None:
     row.refresh_token_encrypted = None
     row.last_error = (reason or "")[:2000]
     db.flush()
+    clear_watch_state(row)
+    db.flush()
     logger.warning("gmail_credentials_revoked owner_id=%s reason=%s", owner_id, row.last_error)
+
+
+def clear_watch_state(row: GmailCredential, *, error: str = "") -> None:
+    """Forget everything about this mailbox's push watch.
+
+    The cursor is the reason this exists. A Gmail history ID is a position in
+    one specific mailbox, and resuming from a position that belongs to a
+    different mailbox is not a stale read - it is Gmail either rejecting it or,
+    worse, returning a range from the wrong account's history. So the cursor
+    goes whenever the row stops describing the mailbox it was taken from.
+
+    Does not flush. The caller is already inside a unit of work, and a flush
+    here would commit a half-finished one.
+    """
+    row.gmail_history_id = None
+    row.gmail_watch_expiration_at = None
+    row.gmail_watch_renewed_at = None
+    row.gmail_last_notification_at = None
+    row.gmail_last_event_processed_at = None
+    # Kept, unlike the rest, when the caller has something to say. Clearing the
+    # watch is usually the visible symptom of a problem, and blanking the
+    # explanation at the same moment leaves Settings saying nothing at all.
+    row.gmail_watch_last_error = (error or "")[:2000]
+
+
+def _watch_is_active(row: GmailCredential) -> bool:
+    """A watch Gmail would still deliver through, as far as this row knows.
+
+    Revoked counts as inactive even if an unexpired expiry is sitting there.
+    `mark_revoked` clears it, so that combination means a row written before
+    this code existed - and the honest answer for it is still "no events".
+    """
+    if row.revoked_at is not None:
+        return False
+    expires = _as_utc(row.gmail_watch_expiration_at)
+    return expires is not None and expires > datetime.now(UTC)
 
 
 def connection_status(db: Session, owner_id: str) -> GmailConnectionStatus:
@@ -172,6 +238,13 @@ def connection_status(db: Session, owner_id: str) -> GmailConnectionStatus:
         revoked=row.revoked_at is not None,
         last_error=row.last_error or "",
         scopes=tuple(json.loads(row.scopes_json or "[]")),
+        watch_active=_watch_is_active(row),
+        watch_expires_at=row.gmail_watch_expiration_at,
+        watch_renewed_at=row.gmail_watch_renewed_at,
+        has_history_cursor=bool(row.gmail_history_id),
+        last_notification_at=row.gmail_last_notification_at,
+        last_event_processed_at=row.gmail_last_event_processed_at,
+        watch_error=row.gmail_watch_last_error or "",
     )
 
 

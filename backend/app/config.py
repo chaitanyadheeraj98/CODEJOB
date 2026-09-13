@@ -315,6 +315,24 @@ class Settings(BaseSettings):
     telegram_auth_ttl_minutes: int = 30
     github_token: str = Field(default="", validation_alias=AliasChoices("GITHUB_TOKEN"))
     github_repo: str = Field(default="", validation_alias=AliasChoices("GITHUB_REPO"))
+    # Gmail push delivery. The topic and subscription are operator-created in
+    # Google Cloud; this application is only ever told their names. It must not
+    # create or mutate cloud resources or IAM, so there is nothing here that
+    # could - only identifiers it reads.
+    feature_gmail_pubsub_enabled: bool = False
+    gmail_pubsub_project_id: str = ""
+    gmail_pubsub_topic_id: str = ""
+    gmail_pubsub_subscription_id: str = ""
+    # There is deliberately no renewal-interval setting. Gmail expires a watch
+    # after seven days, and renewing daily is its operational requirement
+    # rather than a preference. A configurable value here would only ever be a
+    # way to set it too high, and the failure is silent: delivery stops and
+    # nothing errors.
+    #
+    # GOOGLE_APPLICATION_CREDENTIALS is intentionally absent too. The Google
+    # client reads it from the process environment itself, and a settings field
+    # holding the path to a service-account key is one `repr()` away from
+    # putting it in a log line.
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -354,6 +372,67 @@ class Settings(BaseSettings):
                 "(expected urlsafe-base64, 32 bytes)."
             ) from exc
         return self
+
+    @model_validator(mode="after")
+    def _require_gmail_pubsub_resource_names(self) -> "Settings":
+        """Refuse to start with push delivery on and nothing to connect to.
+
+        Normalised whether or not the feature is on, for the same reason the
+        encryption key is: a trailing newline from a copy-paste turns into a
+        subscription path Google cannot resolve, and the resulting error names
+        the wrong problem.
+
+        Fatal rather than degraded. The degraded mode - push enabled, no topic,
+        so no watch is ever registered - looks exactly like a working system
+        with a quiet mailbox, and the Inbox scans this feature replaces are
+        already switched off by then.
+        """
+        self.gmail_pubsub_project_id = (self.gmail_pubsub_project_id or "").strip()
+        self.gmail_pubsub_topic_id = (self.gmail_pubsub_topic_id or "").strip()
+        self.gmail_pubsub_subscription_id = (self.gmail_pubsub_subscription_id or "").strip()
+        if not self.feature_gmail_pubsub_enabled:
+            return self
+        missing = [
+            name
+            for name, value in (
+                ("GMAIL_PUBSUB_PROJECT_ID", self.gmail_pubsub_project_id),
+                ("GMAIL_PUBSUB_TOPIC_ID", self.gmail_pubsub_topic_id),
+                ("GMAIL_PUBSUB_SUBSCRIPTION_ID", self.gmail_pubsub_subscription_id),
+            )
+            if not value
+        ]
+        if missing:
+            # One error listing every missing name, not the first one. Fixing
+            # three of these one restart at a time is three deployments.
+            raise ValueError(
+                "FEATURE_GMAIL_PUBSUB_ENABLED is on but "
+                + ", ".join(missing)
+                + " is empty. These name the topic and pull subscription created in "
+                "Google Cloud; this application does not create them."
+            )
+        return self
+
+    @property
+    def gmail_pubsub_topic_name(self) -> str:
+        """The fully qualified topic `users.watch` requires.
+
+        Empty when unconfigured, rather than `projects//topics/`: a half-formed
+        name would reach Google and come back as an argument error about a
+        topic, which reads like a Cloud problem instead of a missing setting.
+        """
+        if not (self.gmail_pubsub_project_id and self.gmail_pubsub_topic_id):
+            return ""
+        return f"projects/{self.gmail_pubsub_project_id}/topics/{self.gmail_pubsub_topic_id}"
+
+    @property
+    def gmail_pubsub_subscription_name(self) -> str:
+        """The fully qualified pull subscription, or "" when unconfigured."""
+        if not (self.gmail_pubsub_project_id and self.gmail_pubsub_subscription_id):
+            return ""
+        return (
+            f"projects/{self.gmail_pubsub_project_id}"
+            f"/subscriptions/{self.gmail_pubsub_subscription_id}"
+        )
 
     def _normalize_runtime_embedding_provider(self, provider: str | None) -> str | None:
         normalized = (provider or "").strip().lower()
