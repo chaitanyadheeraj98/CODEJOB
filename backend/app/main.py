@@ -264,7 +264,7 @@ from app.services.gmail_group_source_service import (
 from app.services.gmail_labeling_runtime_service import GmailLabelingRuntimeService
 from app.services.email_inbox_service import TRANSPARENT_PIXEL_PNG, record_open, reply_count_for_email
 from app.services.github_issue_service import GithubIssueServiceError, create_github_issue
-from app.services import gmail_label_service
+from app.services import gmail_label_service, gmail_pubsub_service
 from app.models import RecruiterWatch, TrackedThread
 from fastapi.responses import JSONResponse
 from app import correlation, gmail_client, request_log, tenancy
@@ -4598,6 +4598,10 @@ def disconnect_gmail(db: Session = Depends(get_db)) -> GmailConnectionResponse:
     """
     if not settings.feature_db_credentials_enabled:
         raise HTTPException(409, "Database credential storage is off; there is nothing to disconnect.")
+    # Before `mark_revoked`, which clears the ciphertext `users.stop` needs to
+    # authenticate with. Afterwards there is nothing left to ask Google with,
+    # and Gmail would keep publishing this mailbox to the topic.
+    gmail_pubsub_service.stop_watch(tenancy.owner_id())
     gmail_credential_service.mark_revoked(db, tenancy.owner_id(), "disconnected_by_user")
     db.commit()
     return gmail_connection(db)

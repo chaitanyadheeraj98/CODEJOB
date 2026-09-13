@@ -61,6 +61,21 @@ def _revoke_google_access(db: Session, owner_id: str) -> None:
         logger.exception("account_google_revoke_failed owner=%s", owner_id)
 
 
+def _stop_push_watch(owner_id: str) -> None:
+    """Best-effort, and never fatal to the deactivation it is part of.
+
+    Refusing to deactivate an account because Google was slow would be the
+    wrong trade in both directions: the user asked to leave, and the watch
+    expires on its own within seven days regardless.
+    """
+    try:
+        from app.services import gmail_pubsub_service
+
+        gmail_pubsub_service.stop_watch(owner_id)
+    except Exception:
+        logger.exception("account_watch_stop_failed owner=%s", owner_id)
+
+
 def _stop_jobs(db: Session, owner_id: str) -> int:
     rows = (
         db.query(RecentRun)
@@ -97,6 +112,11 @@ def deactivate(db: Session, user: User) -> DeactivationResult:
     user.deletion_requested_at = user.deletion_requested_at or now
     sessions_revoked = auth_service.revoke_all_sessions(db, user.id)
     jobs_stopped = _stop_jobs(db, user.owner_id)
+    # Before the revoke, not after. `users.stop` authenticates with the token
+    # being revoked two lines down, so the order is the difference between
+    # stopping delivery and leaving Gmail publishing to a topic for a mailbox
+    # nobody here can read any more.
+    _stop_push_watch(user.owner_id)
     _revoke_google_access(db, user.owner_id)
     db.query(GmailCredential).filter(GmailCredential.owner_id == user.owner_id).delete(
         synchronize_session=False

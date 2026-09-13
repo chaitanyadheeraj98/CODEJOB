@@ -118,6 +118,20 @@ def _ineligible(db: Session, owner_id: str) -> str:
     return ""
 
 
+def push_delivery_active() -> bool:
+    """Whether Gmail changes arrive by notification rather than by scanning.
+
+    The single switch every scheduled scan asks before running. Deliberately
+    also false when the topic is unnamed: a flag switched on against a
+    half-configured project would stop the scans while nothing replaced them,
+    which is the one outcome worse than either mode on its own.
+
+    Not a per-user setting. Whether the mailbox is watched is per user; whether
+    this deployment has push delivery at all is not.
+    """
+    return not _configured()
+
+
 def eligibility_reason(db: Session, owner_id: str) -> str:
     """Public door to `_ineligible`, for the subscriber.
 
