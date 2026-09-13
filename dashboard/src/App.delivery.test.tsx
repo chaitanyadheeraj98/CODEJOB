@@ -139,3 +139,23 @@ describe('the Settings copy', () => {
     expect(source).toContain('aria-label="Reload inbox"')
   })
 })
+
+describe('the live reply badge', () => {
+  it('no longer hedges a number that is now exact', () => {
+    // The old caveat described a Gmail unread query. Under push delivery the
+    // count is replies already captured and stored, so the hedge understates
+    // it rather than qualifying it.
+    expect(source).not.toContain('not confirmed recruiter replies')
+    expect(source).not.toContain('unread in Primary inbox')
+  })
+
+  it('says what the number actually counts', () => {
+    expect(source).toContain('in your Reply Inbox')
+  })
+
+  it('reads the count from stored conversations, not a Gmail poll', () => {
+    // `/gmail/live-replies` is served from the database since the scans
+    // stopped; a fetch added here would quietly reintroduce one.
+    expect(source).toContain('liveReplyStatus.count')
+  })
+})

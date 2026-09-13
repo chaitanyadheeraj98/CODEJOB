@@ -5883,7 +5883,12 @@ function App({ account }: { account?: AuthUser }) {
               {!running && liveReplyStatus && liveReplyStatus.count > 0 ? (
                 <span
                   className="liveReplyBadge"
-                  title={`${liveReplyStatus.count} unread in Primary inbox (approx., not confirmed recruiter replies)${liveReplyStatus.checked_at ? ` — checked ${liveReplyStatus.checked_at}` : ''}`}
+                  // The caveat this used to carry - "approx., not confirmed
+                  // recruiter replies" - described a Gmail unread query that no
+                  // longer runs. Under push delivery the number is a count of
+                  // replies already captured and stored, so the hedge would now
+                  // understate it rather than qualify it.
+                  title={`${liveReplyStatus.count} unread ${liveReplyStatus.count === 1 ? 'reply' : 'replies'} in your Reply Inbox${liveReplyStatus.checked_at ? ` — as of ${new Date(liveReplyStatus.checked_at).toLocaleTimeString()}` : ''}`}
                 >
                   {liveReplyStatus.count > 99 ? '99+' : liveReplyStatus.count}
                 </span>
