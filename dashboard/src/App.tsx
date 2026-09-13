@@ -19,7 +19,16 @@ import ChatProvider from './features/chat/ChatProvider'
 import AddProfileEntry from './features/settings/AddProfileEntry'
 import { useChat } from './features/chat/chatContext'
 import ChatWidget from './features/chat/ChatWidget'
-import { getChatStatus, saveOllamaCredential } from './features/chat/api'
+import {
+  createTelegramLink,
+  getChatStatus,
+  getTelegramLink,
+  saveOllamaCredential,
+  unlinkTelegram,
+  updateTelegramLink,
+  type TelegramDeepLink,
+  type TelegramLink,
+} from './features/chat/api'
 import type { ChatStatus } from './features/chat/types'
 import PremiumNumbersPage from './features/premium_numbers/PremiumNumbersPage'
 import AppTSPage from './features/application_tracking/AppTSPage'
@@ -3055,6 +3064,12 @@ function App({ account }: { account?: AuthUser }) {
   const [ollamaCredentialBusy, setOllamaCredentialBusy] = useState(false)
   const [ollamaCredentialMessage, setOllamaCredentialMessage] = useState('')
   const [telegramStatus, setTelegramStatus] = useState<TelegramStatus | null>(null)
+  const [telegramLink, setTelegramLink] = useState<TelegramLink | null>(null)
+  const [telegramLinkBusy, setTelegramLinkBusy] = useState(false)
+  const [telegramDeepLink, setTelegramDeepLink] = useState<TelegramDeepLink | null>(null)
+  const [telegramLinkMessage, setTelegramLinkMessage] = useState('')
+  const [telegramActionPin, setTelegramActionPin] = useState('')
+  const [telegramNow, setTelegramNow] = useState(Date.now())
   const [settings, setSettingsState] = useState<SettingsPayload>({
     enabled: true,
     gmail_query: 'is:unread',
@@ -3512,6 +3527,19 @@ function App({ account }: { account?: AuthUser }) {
     if (!res.ok) throw new Error('Failed to load Telegram status')
     setTelegramStatus((await res.json()) as TelegramStatus)
   }
+
+  const loadTelegramLink = async () => {
+    const nextLink = await getTelegramLink(apiBase)
+    setTelegramLink(nextLink)
+    return nextLink
+  }
+
+  useEffect(() => {
+    if (!telegramDeepLink) return
+    setTelegramNow(Date.now())
+    const timer = window.setInterval(() => setTelegramNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [telegramDeepLink])
 
   const loadOauthAuthorizationUrl = async () => {
     const res = await fetch(`${apiBase}/gmail/oauth/url`)
@@ -4386,11 +4414,12 @@ function App({ account }: { account?: AuthUser }) {
   useEffect(() => {
     const bootstrap = async () => {
       try {
-        const [, , , , normalizedSettings] = await Promise.all([
+        const [, , , , , normalizedSettings] = await Promise.all([
           loadStatus(),
           loadAiStatus(),
           loadChatStatus().catch(() => {}),
           loadTelegramStatus(),
+          loadTelegramLink().catch(() => {}),
           loadSettingsBootstrap(),
         ])
         loadJobsSummary().catch(() => {})
@@ -4736,6 +4765,52 @@ function App({ account }: { account?: AuthUser }) {
       setOllamaCredentialBusy(false)
     }
   }
+
+  const beginTelegramLink = async () => {
+    setTelegramLinkBusy(true)
+    setTelegramLinkMessage('')
+    try {
+      setTelegramDeepLink(await createTelegramLink(apiBase))
+    } catch (reason) {
+      setTelegramLinkMessage(reason instanceof Error ? reason.message : 'Failed to create Telegram link')
+    } finally {
+      setTelegramLinkBusy(false)
+    }
+  }
+
+  const saveTelegramLinkSettings = async (values: { alerts_enabled?: boolean; action_pin?: string }) => {
+    setTelegramLinkBusy(true)
+    setTelegramLinkMessage('')
+    try {
+      setTelegramLink(await updateTelegramLink(apiBase, values))
+      setTelegramActionPin('')
+      setTelegramLinkMessage('Telegram settings saved.')
+    } catch (reason) {
+      setTelegramLinkMessage(reason instanceof Error ? reason.message : 'Failed to update Telegram settings')
+    } finally {
+      setTelegramLinkBusy(false)
+    }
+  }
+
+  const removeTelegramLink = async () => {
+    if (!window.confirm('Unlink this Telegram account from CodeJob?')) return
+    setTelegramLinkBusy(true)
+    setTelegramLinkMessage('')
+    try {
+      await unlinkTelegram(apiBase)
+      setTelegramDeepLink(null)
+      await loadTelegramLink()
+      await loadTelegramStatus()
+    } catch (reason) {
+      setTelegramLinkMessage(reason instanceof Error ? reason.message : 'Failed to unlink Telegram')
+    } finally {
+      setTelegramLinkBusy(false)
+    }
+  }
+
+  const telegramLinkSeconds = telegramDeepLink
+    ? Math.max(0, Math.ceil((Date.parse(telegramDeepLink.expires_at) - telegramNow) / 1000))
+    : 0
 
   const uploadResume = async () => {
     if (!resumeFile) return
@@ -6075,7 +6150,7 @@ function App({ account }: { account?: AuthUser }) {
                   {configRow('Account', status?.account_email || status?.token_path || '-')}
                   {configRow('Last Sync', status?.last_sync_at ?? 'Never')}
                   {configRow('Telegram', telegramStatus?.polling ? 'Connected' : telegramStatus?.enabled ? 'Starting' : 'Disabled')}
-                  {configRow('Authorized Chats', telegramStatus?.authorized_chats ?? 0)}
+                  {configRow('Linked Accounts', telegramStatus?.authorized_chats ?? 0)}
                 </div>
               </section>
 
@@ -6275,7 +6350,7 @@ function App({ account }: { account?: AuthUser }) {
                   <div className="row"><span className="label">Account</span><span>{status?.token_path ?? '-'}</span></div>
                   <div className="row"><span className="label">Last Sync</span><span>{status?.last_sync_at ?? 'Never'}</span></div>
                   <div className="row"><span className="label">Telegram</span><span>{telegramStatus?.polling ? 'Connected' : telegramStatus?.enabled ? 'Starting' : 'Disabled'}</span></div>
-                  <div className="row"><span className="label">Authorized Chats</span><span>{telegramStatus?.authorized_chats ?? 0}</span></div>
+                  <div className="row"><span className="label">Linked Accounts</span><span>{telegramStatus?.authorized_chats ?? 0}</span></div>
                 </div>
               </section>
 
@@ -6323,8 +6398,9 @@ function App({ account }: { account?: AuthUser }) {
               </section>
 
               <section className="card">
-                <h2>Ollama Access</h2>
+                <h2>Integrations</h2>
                 <div className="stack">
+                  <h3>Ollama</h3>
                   <div className="row"><span className="label">Status</span><span>{chatStatus?.ollama_configured ? 'Configured' : 'API key required'}</span></div>
                   {chatStatus?.ollama_masked_api_key ? <div className="row"><span className="label">Stored key</span><span className="tag">{chatStatus.ollama_masked_api_key}</span></div> : null}
                   <label>
@@ -6354,6 +6430,76 @@ function App({ account }: { account?: AuthUser }) {
                     {ollamaCredentialBusy ? 'Validating...' : 'Validate and save'}
                   </button>
                   {ollamaCredentialMessage ? <p className="subtle" aria-live="polite">{ollamaCredentialMessage}</p> : null}
+                  <h3>Telegram</h3>
+                  {telegramLink?.linked ? (
+                    <>
+                      <p>Connected as {telegramLink.telegram_username ? `@${telegramLink.telegram_username}` : 'Telegram user'} · chat {telegramLink.chat_masked}</p>
+                      <p className="subtle">Linked {formatSettingsDate(telegramLink.linked_at)}</p>
+                      <label className="toggleRow">
+                        <span>Telegram alerts</span>
+                        <span className="toggleSwitch">
+                          <input
+                            type="checkbox"
+                            checked={telegramLink.alerts_enabled}
+                            disabled={telegramLinkBusy}
+                            onChange={(event) => void saveTelegramLinkSettings({ alerts_enabled: event.target.checked })}
+                          />
+                          <span className="toggleTrack" />
+                        </span>
+                      </label>
+                      <label>
+                        Action PIN
+                        <input
+                          type="password"
+                          inputMode="numeric"
+                          autoComplete="new-password"
+                          value={telegramActionPin}
+                          onChange={(event) => setTelegramActionPin(event.target.value.replace(/\D/g, '').slice(0, 6))}
+                          placeholder={telegramLink.pin_set ? 'Enter 4-6 digits to change' : 'Set a 4-6 digit PIN'}
+                        />
+                      </label>
+                      <div className="buttonRow">
+                        <button
+                          type="button"
+                          disabled={telegramLinkBusy || !/^\d{4,6}$/.test(telegramActionPin)}
+                          onClick={() => void saveTelegramLinkSettings({ action_pin: telegramActionPin })}
+                        >
+                          {telegramLink.pin_set ? 'Change PIN' : 'Set PIN'}
+                        </button>
+                        {telegramLink.pin_set ? (
+                          <button type="button" disabled={telegramLinkBusy} onClick={() => void saveTelegramLinkSettings({ action_pin: '' })}>
+                            Clear PIN
+                          </button>
+                        ) : null}
+                        <button type="button" disabled={telegramLinkBusy} onClick={() => void removeTelegramLink()}>
+                          Unlink
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <p className="subtle">Connect your Telegram account to the CodeJob bot for account-scoped status, actions, and alerts.</p>
+                      <button type="button" disabled={telegramLinkBusy} onClick={() => void beginTelegramLink()}>
+                        {telegramLinkBusy ? 'Creating link...' : 'Link Telegram'}
+                      </button>
+                      {telegramDeepLink ? (
+                        <div className="stack">
+                          <a href={telegramDeepLink.deep_link} target="_blank" rel="noreferrer">Open the CodeJob bot in Telegram</a>
+                          <button
+                            type="button"
+                            onClick={() => void navigator.clipboard.writeText(telegramDeepLink.deep_link).then(
+                              () => setTelegramLinkMessage('Link copied.'),
+                              () => setTelegramLinkMessage('Could not copy the link.'),
+                            )}
+                          >
+                            Copy link
+                          </button>
+                          <p className="subtle">{telegramLinkSeconds > 0 ? `Expires in ${Math.floor(telegramLinkSeconds / 60)}m ${telegramLinkSeconds % 60}s` : 'Link expired'}</p>
+                        </div>
+                      ) : null}
+                    </>
+                  )}
+                  {telegramLinkMessage ? <p className="subtle" aria-live="polite">{telegramLinkMessage}</p> : null}
                 </div>
               </section>
 

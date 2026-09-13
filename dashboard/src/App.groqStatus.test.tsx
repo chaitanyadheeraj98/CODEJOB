@@ -257,7 +257,7 @@ describe('Groq status UI', () => {
     })
 
     const section = Array.from(container.querySelectorAll('section')).find(
-      (candidate) => candidate.querySelector('h2')?.textContent === 'Ollama Access',
+      (candidate) => candidate.querySelector('h2')?.textContent === 'Integrations',
     )
     const keyInput = section?.querySelector<HTMLInputElement>('input[type="password"]')
     const baseUrlInput = section?.querySelector<HTMLInputElement>('input[type="url"]')

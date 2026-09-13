@@ -1,6 +1,22 @@
 import type { ChatAttachment, ChatSession, ChatSessionDetail, ChatStatus, OllamaCredential } from './types'
 import type { ProposalFields, ProposalHandler } from './proposals'
 
+export type TelegramLink = {
+  linked: boolean
+  chat_masked: string | null
+  telegram_username: string
+  linked_at: string | null
+  alerts_enabled: boolean
+  pin_set: boolean
+  bot_username: string
+  pending_code_expires_at: string | null
+}
+
+export type TelegramDeepLink = {
+  deep_link: string
+  expires_at: string
+}
+
 async function responseError(response: Response, fallback: string): Promise<Error> {
   const payload = (await response.json().catch(() => null)) as { detail?: unknown } | null
   const detail = payload?.detail
@@ -35,6 +51,36 @@ export async function saveOllamaCredential(
   })
   if (!response.ok) throw await responseError(response, 'Failed to validate Ollama credentials')
   return (await response.json()) as OllamaCredential
+}
+
+export async function getTelegramLink(apiBase: string): Promise<TelegramLink> {
+  const response = await fetch(`${apiBase}/telegram/link`)
+  if (!response.ok) throw await responseError(response, 'Failed to load Telegram link')
+  return (await response.json()) as TelegramLink
+}
+
+export async function createTelegramLink(apiBase: string): Promise<TelegramDeepLink> {
+  const response = await fetch(`${apiBase}/telegram/link/code`, { method: 'POST' })
+  if (!response.ok) throw await responseError(response, 'Failed to create Telegram link')
+  return (await response.json()) as TelegramDeepLink
+}
+
+export async function unlinkTelegram(apiBase: string): Promise<void> {
+  const response = await fetch(`${apiBase}/telegram/link`, { method: 'DELETE' })
+  if (!response.ok) throw await responseError(response, 'Failed to unlink Telegram')
+}
+
+export async function updateTelegramLink(
+  apiBase: string,
+  settings: { alerts_enabled?: boolean; action_pin?: string },
+): Promise<TelegramLink> {
+  const response = await fetch(`${apiBase}/telegram/link/settings`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(settings),
+  })
+  if (!response.ok) throw await responseError(response, 'Failed to update Telegram settings')
+  return (await response.json()) as TelegramLink
 }
 
 export async function listChatSessions(apiBase: string): Promise<ChatSession[]> {
