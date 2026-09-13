@@ -22,12 +22,13 @@ def run_telegram_chat_turn(*, chat_id: int, message_id: int, text: str) -> dict[
     from app.config import settings
     from app.services.chat_service import ChatService
     from app.services.telegram_chat_service import current_session
-    from app.services.telegram_format import email_proposal, format_answer
+    from app.services.telegram_format import email_proposal, format_answer, unicode_chart
     from app.telegram_bot import TelegramTransport
 
     correlation_id = uuid4().hex
     response = ""
     proposal_replies: list[tuple[str, list[list[dict[str, str]]] | None]] = []
+    chart_replies: list[str] = []
     status = "ok"
     db = SessionLocal()
     try:
@@ -44,6 +45,13 @@ def run_telegram_chat_turn(*, chat_id: int, message_id: int, text: str) -> dict[
                 for row in result.tool_rows
                 if row.tool_name == "propose_send_email"
                 for rendered in [email_proposal(row.content, row.id)]
+                if rendered is not None
+            ]
+            chart_replies = [
+                rendered
+                for row in result.tool_rows
+                if row.tool_name == "get_chart"
+                for rendered in [unicode_chart(row.content)]
                 if rendered is not None
             ]
     except HTTPException as exc:
@@ -76,6 +84,8 @@ def run_telegram_chat_turn(*, chat_id: int, message_id: int, text: str) -> dict[
         transport.edit_message(chat_id, message_id, response)
         for proposal_text, keyboard in proposal_replies:
             transport.send_message(chat_id, proposal_text, inline_keyboard=keyboard)
+        for chart_text in chart_replies:
+            transport.send_message(chat_id, chart_text)
     except Exception as exc:
         logger.warning(
             "telegram_chat_reply_failed correlation_id=%s chat_id=%s error_type=%s",

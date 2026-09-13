@@ -128,3 +128,65 @@ def email_proposal(content: str, message_id: int) -> tuple[str, list[list[dict[s
     ]]
     assert all(len(button["callback_data"].encode()) <= 64 for row in keyboard for button in row)
     return "\n".join(lines), keyboard
+
+
+def unicode_chart(content: str) -> str | None:
+    try:
+        payload = json.loads(content)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict) or payload.get("action") != "render_chart":
+        return None
+    provenance = payload.get("provenance")
+    if not isinstance(provenance, dict):
+        return "Chart omitted: source provenance was missing."
+    series = payload.get("series")
+    max_value = payload.get("max_value")
+    if (
+        not isinstance(payload.get("chart_type"), str)
+        or not payload["chart_type"]
+        or not isinstance(series, list)
+        or isinstance(max_value, bool)
+        or not isinstance(max_value, (int, float))
+        or max_value < 0
+        or not isinstance(provenance.get("source"), str)
+        or not provenance["source"]
+        or isinstance(provenance.get("row_count"), bool)
+        or not isinstance(provenance.get("row_count"), int)
+    ):
+        return None
+    points: list[tuple[str, float, object]] = []
+    for point in series:
+        if not isinstance(point, dict) or not isinstance(point.get("label"), str):
+            return None
+        value = point.get("value")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        points.append((point["label"][:40], float(value), point.get("rate_of_previous")))
+    title = str(payload.get("title") or "Chart")
+    if not points:
+        lines = [title, "No data in this range."]
+    else:
+        label_width = max(len(label) for label, _, _ in points)
+        lines = [title]
+        is_funnel = payload["chart_type"] in {"resume_funnel", "application_pipeline"}
+        for label, value, rate in points:
+            ratio = min(1.0, max(0.0, value / max_value)) if max_value else 0.0
+            filled = int(ratio * 8 + 0.5)
+            bar = "█" * filled + " " * (8 - filled)
+            shown = f"{value:g}"
+            if is_funnel and isinstance(rate, (int, float)) and not isinstance(rate, bool):
+                shown += f" ({float(rate):g}%)"
+            lines.append(f"{label:<{label_width}}  {bar}  {shown}")
+    source = str(provenance["source"])
+    source_line = f"Source: {source} · {provenance['row_count']} rows"
+    date_range = provenance.get("date_range")
+    if isinstance(date_range, dict) and date_range.get("from") and date_range.get("to"):
+        source_line += f" · {date_range['from']} → {date_range['to']}"
+    lines.append(source_line)
+    assumptions = provenance.get("assumptions")
+    if isinstance(assumptions, list):
+        clean = [str(value) for value in assumptions if str(value).strip()]
+        if clean:
+            lines.append("Assumptions: " + " ".join(clean))
+    return f"<pre>{escape(chr(10).join(lines))}</pre>"

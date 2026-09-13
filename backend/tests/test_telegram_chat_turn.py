@@ -198,6 +198,20 @@ def test_worker_sends_email_proposal_card_from_persisted_tool_row(monkeypatch) -
     assert seen["sent"][0][2][0][0]["callback_data"] == "act:prop:send:91"
 
 
+def test_worker_keeps_answer_when_chart_has_no_provenance(monkeypatch) -> None:
+    payload = {
+        "action": "render_chart",
+        "chart_type": "activity_trend",
+        "title": "Approved sends",
+        "max_value": 1,
+        "series": [{"label": "Today", "value": 1}],
+    }
+    tool = SimpleNamespace(id=92, tool_name="get_chart", content=__import__("json").dumps(payload))
+    _result, seen = _run_worker(monkeypatch, ChatTurnResult("Owner answer", [tool]))
+    assert seen["edit"] == (11, 22, "Owner answer")
+    assert seen["sent"][0][1] == "Chart omitted: source provenance was missing."
+
+
 @pytest.mark.parametrize(
     ("outcome", "expected"),
     [
