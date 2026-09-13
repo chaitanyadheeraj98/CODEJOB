@@ -4076,6 +4076,10 @@ function App({ account }: { account?: AuthUser }) {
       setInboxConversations((rows) => rows.map((row) => (
         row.id === conversationId ? { ...row, unread_reply_count: 0 } : row
       )))
+      // The nav count now comes from the server, so reading one here has to
+      // ask again - otherwise the badge sits one higher for up to fifteen
+      // seconds after the row it counted has visibly gone grey.
+      void loadLiveReplyStatus().catch(() => {})
     }
     setSelectedConversation(detail)
   }
@@ -5698,7 +5702,12 @@ function App({ account }: { account?: AuthUser }) {
     setActivePage(hit.section)
   }
 
-  const inboxUnreadCount = inboxConversations.reduce((total, row) => total + row.unread_reply_count, 0)
+  // The server's own total, not a sum over the conversations currently
+  // loaded. The local reduce was both partial and page-dependent: it counted
+  // only the page in memory, and read zero on every screen that had not opened
+  // the Inbox yet - so Settings showed "Inbox 0" while the Inbox showed 11.
+  // `/gmail/live-replies` is polled every fifteen seconds regardless of page.
+  const inboxUnreadCount = liveReplyStatus?.count ?? 0
 
   const renderQueueStatusBar = () => (
     <>
@@ -5871,7 +5880,7 @@ function App({ account }: { account?: AuthUser }) {
             >
               {nvoidsRunning ? 'Nvoids Syncing...' : 'Sync Nvoids'}
             </button>
-            <span className="syncNowWrap">
+            <span>
               <button
                 type="button"
                 className="btnPrimary"
@@ -5880,19 +5889,11 @@ function App({ account }: { account?: AuthUser }) {
               >
                 {running ? 'Running...' : status?.authenticated ? 'Sync Now' : oauthInProgress ? 'OAuth In Progress...' : 'Connect Gmail'}
               </button>
-              {!running && liveReplyStatus && liveReplyStatus.count > 0 ? (
-                <span
-                  className="liveReplyBadge"
-                  // The caveat this used to carry - "approx., not confirmed
-                  // recruiter replies" - described a Gmail unread query that no
-                  // longer runs. Under push delivery the number is a count of
-                  // replies already captured and stored, so the hedge would now
-                  // understate it rather than qualify it.
-                  title={`${liveReplyStatus.count} unread ${liveReplyStatus.count === 1 ? 'reply' : 'replies'} in your Reply Inbox${liveReplyStatus.checked_at ? ` — as of ${new Date(liveReplyStatus.checked_at).toLocaleTimeString()}` : ''}`}
-                >
-                  {liveReplyStatus.count > 99 ? '99+' : liveReplyStatus.count}
-                </span>
-              ) : null}
+              {/* The unread count used to hang off this button. It counts
+                  replies waiting in the Inbox, and this button starts a
+                  candidate import - two unrelated things, so the number read
+                  as "work Sync Now would do". It now sits on the Inbox nav
+                  item, beside the page it sends you to. */}
             </span>
             {oauthInProgress && oauthAuthorizationUrl ? (
               <a href={oauthAuthorizationUrl} target="_blank" rel="noreferrer" className="btnMuted">

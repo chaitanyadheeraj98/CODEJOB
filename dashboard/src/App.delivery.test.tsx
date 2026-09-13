@@ -140,22 +140,33 @@ describe('the Settings copy', () => {
   })
 })
 
-describe('the live reply badge', () => {
+describe('the unread reply count', () => {
+  it('no longer hangs off Sync Now', () => {
+    // It counts replies waiting in the Inbox; Sync Now starts a candidate
+    // import. Side by side, the number read as work that button would do.
+    expect(source).not.toContain('liveReplyBadge')
+    expect(source).not.toContain('syncNowWrap')
+  })
+
   it('no longer hedges a number that is now exact', () => {
     // The old caveat described a Gmail unread query. Under push delivery the
-    // count is replies already captured and stored, so the hedge understates
-    // it rather than qualifying it.
+    // count is replies already captured and stored.
     expect(source).not.toContain('not confirmed recruiter replies')
     expect(source).not.toContain('unread in Primary inbox')
   })
 
-  it('says what the number actually counts', () => {
-    expect(source).toContain('in your Reply Inbox')
+  it("feeds the Inbox nav from the server's total, not the loaded page", () => {
+    // The local reduce counted only the conversations in memory and read zero
+    // on every screen that had not opened the Inbox - Settings showed 0 while
+    // the Inbox showed 11.
+    expect(source).toContain('const inboxUnreadCount = liveReplyStatus?.count ?? 0')
+    expect(source).not.toMatch(/inboxUnreadCount = inboxConversations\.reduce/)
   })
 
-  it('reads the count from stored conversations, not a Gmail poll', () => {
-    // `/gmail/live-replies` is served from the database since the scans
-    // stopped; a fetch added here would quietly reintroduce one.
-    expect(source).toContain('liveReplyStatus.count')
+  it('re-asks after a conversation is read', () => {
+    // The badge would otherwise sit one higher for up to fifteen seconds after
+    // the row it counted has visibly gone grey.
+    const readBlock = source.slice(source.indexOf('/read`'), source.indexOf('/read`') + 700)
+    expect(readBlock).toContain('loadLiveReplyStatus()')
   })
 })
