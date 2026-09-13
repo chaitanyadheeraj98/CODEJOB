@@ -185,8 +185,13 @@ describe('Inbox dashboard', () => {
       await flushPromises(10)
     })
 
-    const refreshButton = container.querySelector<HTMLButtonElement>('button[aria-label="Refresh conversations"]')
-    expect(refreshButton?.title).toBe('Refresh')
+    // Renamed with push delivery: under Pub/Sub this control rereads stored
+    // rows rather than going and looking, and "Refresh" promised a scan it no
+    // longer performs. Still an exact match rather than a non-empty check, so
+    // it fails the same way if the accessible name or the tooltip is dropped.
+    const refreshButton = container.querySelector<HTMLButtonElement>('button[aria-label="Reload inbox"]')
+    expect(refreshButton).not.toBeNull()
+    expect(refreshButton?.title).toBe('Reload inbox')
     expect(container.querySelectorAll('.filterSortBar input[role="combobox"]')).toHaveLength(5)
 
     const unreadRow = container.querySelector<HTMLButtonElement>('.conversationListItem.unread')

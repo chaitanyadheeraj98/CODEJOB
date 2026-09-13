@@ -7991,3 +7991,62 @@ button.chatRankedLabel:focus-visible {
   color: var(--ink);
   font-weight: 600;
 }
+
+/* Inbox delivery status.
+   One line under the Reply Inbox toggle, and the only place the app says
+   anything about push delivery. Built from the tokens already here rather than
+   new colours: a status line that introduced its own palette would be the most
+   prominent thing on a settings page full of quieter controls.
+
+   The label carries the weight and the hint carries the sentence, so the state
+   is readable at a glance and the explanation is there for the one time
+   somebody needs it. */
+.deliveryStatus {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+
+.deliveryStatus__label {
+  flex: none;
+  font-weight: 600;
+  font-size: var(--text-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface-soft);
+  color: var(--muted);
+}
+
+.deliveryStatus__hint {
+  color: var(--muted);
+}
+
+/* Live. Deliberately the calmest of the three coloured states - it is the
+   state the app is in almost always, and a permanent green badge stops being
+   information within a day. */
+.deliveryStatus--ok .deliveryStatus__label {
+  border-color: color-mix(in srgb, var(--ok) 35%, var(--line));
+  background: color-mix(in srgb, var(--ok) 8%, var(--surface));
+  color: var(--ok);
+}
+
+.deliveryStatus--pending .deliveryStatus__label {
+  border-style: dashed;
+}
+
+/* Delayed and Setup required share the caution tone rather than danger: mail
+   is queued, not lost, and red would say otherwise. */
+.deliveryStatus--warn .deliveryStatus__label {
+  border-color: var(--caution-line);
+  background: var(--caution-surface);
+  color: var(--caution-ink);
+}
+
+.deliveryStatus--warn .deliveryStatus__hint {
+  color: var(--caution-ink);
+}

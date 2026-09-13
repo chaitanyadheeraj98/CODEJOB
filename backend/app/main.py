@@ -265,6 +265,7 @@ from app.services.gmail_labeling_runtime_service import GmailLabelingRuntimeServ
 from app.services.email_inbox_service import TRANSPARENT_PIXEL_PNG, record_open, reply_count_for_email
 from app.services.github_issue_service import GithubIssueServiceError, create_github_issue
 from app.services import gmail_label_service, gmail_pubsub_service
+from app import gmail_pubsub_subscriber
 from app.models import RecruiterWatch, TrackedThread
 from fastapi.responses import JSONResponse
 from app import correlation, gmail_client, request_log, tenancy
@@ -4574,7 +4575,12 @@ def gmail_connection(db: Session = Depends(get_db)) -> GmailConnectionResponse:
             state=state,
             detail=detail,
         )
-    status = gmail_credential_service.connection_status(db, tenancy.owner_id())
+    owner_id = tenancy.owner_id()
+    status = gmail_credential_service.connection_status(db, owner_id)
+    # Heartbeat, not stored watch state. A registered watch proves Gmail was
+    # told where to publish and proves nothing about anyone listening, which is
+    # precisely the failure a status line exists to surface.
+    consumer_online = gmail_pubsub_subscriber.subscriber_is_online()
     return GmailConnectionResponse(
         connected=status.connected,
         state=state,
@@ -4586,6 +4592,16 @@ def gmail_connection(db: Session = Depends(get_db)) -> GmailConnectionResponse:
         last_error=status.last_error,
         scopes=list(status.scopes),
         detail=detail,
+        inbox_delivery=gmail_pubsub_service.delivery_state(
+            status,
+            consumer_online=consumer_online,
+            eligible=not gmail_pubsub_service.eligibility_reason(db, owner_id),
+        ),
+        watch_expires_at=status.watch_expires_at,
+        last_notification_at=status.last_notification_at,
+        last_event_processed_at=status.last_event_processed_at,
+        consumer_online=consumer_online,
+        watch_error=status.watch_error,
     )
 
 

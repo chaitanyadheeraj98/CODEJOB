@@ -64,6 +64,19 @@ FETCH_BATCH = 50
 
 DEFAULT_SIGNATURE_EMAIL = "unknown@example.com"
 
+#: How long a notification may sit unprocessed before delivery reads as
+#: delayed. A drain takes seconds; five minutes is slow enough that nothing
+#: healthy trips it and short enough to notice within one coffee.
+DELAYED_AFTER = timedelta(minutes=5)
+
+#: The five words Settings can say about delivery. Anything outside this set is
+#: a bug in the caller rather than a new state.
+DELIVERY_DISABLED = "disabled"
+DELIVERY_REGISTERING = "registering"
+DELIVERY_ACTIVE = "active"
+DELIVERY_DELAYED = "delayed"
+DELIVERY_ERROR = "error"
+
 
 class NotEligible(Exception):
     """This mailbox must not have a watch, and carries the safe reason why."""
@@ -623,3 +636,37 @@ def run_bounded_scan(owner_id: str) -> None:
             service = main._get_orchestration_service()
             user_settings = main._get_settings(db)
             service.reconcile_inbox_once(db, user_settings)
+
+
+# --- status -------------------------------------------------------------
+
+
+def delivery_state(status, *, consumer_online: bool, eligible: bool) -> str:
+    """One word for "is the Reply Inbox actually receiving anything".
+
+    Ordered by what a person can do about it, not by severity. A configuration
+    error outranks an expired watch because the watch cannot be registered
+    until the configuration is fixed; a missing consumer outranks a healthy
+    watch because a watch nobody listens to delivers nothing.
+
+    Takes a `GmailConnectionStatus` rather than a session: everything it needs
+    is already derived, and a status helper that queries is a status helper
+    that gets called in a loop.
+    """
+    if not push_delivery_active() or not eligible or not status.connected:
+        return DELIVERY_DISABLED
+    if status.watch_error:
+        return DELIVERY_ERROR
+    if not status.watch_active:
+        # No watch yet, or it lapsed. Both read as "starting": the minute loop
+        # registers one either way, and "expired" is a distinction the person
+        # reading this cannot act on.
+        return DELIVERY_REGISTERING
+    if not consumer_online:
+        return DELIVERY_DELAYED
+    pending = status.last_notification_at
+    processed = status.last_event_processed_at
+    if pending is not None and datetime.now(UTC) - pending > DELAYED_AFTER:
+        if processed is None or processed < pending:
+            return DELIVERY_DELAYED
+    return DELIVERY_ACTIVE

@@ -1366,6 +1366,16 @@ class GmailConnectionResponse(BaseModel):
     last_error: str = ""
     scopes: list[str] = Field(default_factory=list)
     detail: str = ""
+    # Push delivery. Derived values only - no topic or subscription name, no
+    # service-account detail, and no mailbox history id. The first two describe
+    # the deployment rather than the account; the third is a position in
+    # someone's mailbox and has no use in a browser.
+    inbox_delivery: str = "disabled"
+    watch_expires_at: datetime | None = None
+    last_notification_at: datetime | None = None
+    last_event_processed_at: datetime | None = None
+    consumer_online: bool = False
+    watch_error: str = ""
 
 
 class AIStatusResponse(BaseModel):

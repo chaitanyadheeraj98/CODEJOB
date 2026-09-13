@@ -1814,6 +1814,55 @@ type LiveReplyStatus = {
   checked_at: string | null
 }
 
+// Deliberately no history cursor and no resource names. A mailbox position is
+// of no use to a browser, and a topic or subscription path says more about the
+// deployment than a settings page needs to.
+type InboxDelivery = 'disabled' | 'registering' | 'active' | 'delayed' | 'error'
+
+type GmailConnectionStatus = {
+  connected: boolean
+  state: string
+  revoked: boolean
+  inbox_delivery: InboxDelivery
+  watch_expires_at: string | null
+  last_notification_at: string | null
+  last_event_processed_at: string | null
+  consumer_online: boolean
+  watch_error: string
+}
+
+// One line, five states, no jargon. "Live" and "Starting" are the only two a
+// working install ever shows; the other three each name something a person can
+// actually do something about.
+//
+// `delayed` is the one worth being careful with. It means the subscriber is not
+// answering or a notification has gone unprocessed - not that mail is lost. The
+// subscription retains events for seven days, so the honest word is late.
+export const DELIVERY_TEXT: Record<InboxDelivery, { label: string; tone: string; hint: string }> = {
+  active: { label: 'Live', tone: 'ok', hint: 'Gmail changes arrive as they happen.' },
+  registering: { label: 'Starting', tone: 'pending', hint: 'Setting up delivery with Gmail. This takes about a minute.' },
+  delayed: { label: 'Delayed', tone: 'warn', hint: 'Changes are queued and will arrive when delivery resumes. Nothing is lost.' },
+  error: { label: 'Setup required', tone: 'warn', hint: 'Gmail refused the delivery setup. Check the Pub/Sub topic.' },
+  disabled: { label: 'Off', tone: 'muted', hint: 'Turn the Reply Inbox on to receive replies automatically.' },
+}
+
+export function InboxDeliveryStatus({ status }: { status: GmailConnectionStatus | null }) {
+  if (!status) return null
+  // A credential problem outranks anything the watch says: no amount of
+  // delivery setup helps a connection that needs reconnecting, and showing
+  // "Delayed" here would send someone looking in the wrong place.
+  const needsReconnect = status.revoked === true || status.state === 'needs_reconnect'
+  const copy = needsReconnect
+    ? { label: 'Reconnect Gmail', tone: 'warn', hint: 'Sign in with Google again to resume delivery.' }
+    : DELIVERY_TEXT[status.inbox_delivery] ?? DELIVERY_TEXT.disabled
+  return (
+    <p className={`subtle deliveryStatus deliveryStatus--${copy.tone}`} role="status">
+      <span className="deliveryStatus__label">{copy.label}</span>
+      <span className="deliveryStatus__hint">{copy.hint}</span>
+    </p>
+  )
+}
+
 type VerdictLabel = 'Excellent' | 'Strong' | 'Good' | 'Review' | 'Risky'
 type VerdictTone = 'excellent' | 'strong' | 'good' | 'review' | 'risky'
 
@@ -3212,6 +3261,7 @@ function App({ account }: { account?: AuthUser }) {
   const [productivityTrend, setProductivityTrend] = useState<ProductivityTrendResponse | null>(null)
   const [jobSummary, setJobSummary] = useState<JobQueueSummary | null>(null)
   const [liveReplyStatus, setLiveReplyStatus] = useState<LiveReplyStatus | null>(null)
+  const [gmailDelivery, setGmailDelivery] = useState<GmailConnectionStatus | null>(null)
   const datePickerRef = useRef<HTMLInputElement | null>(null)
   const lastTrackedViewRef = useRef<Record<string, number>>({})
   const hasBootstrappedCandidatesRef = useRef(false)
@@ -3933,6 +3983,12 @@ function App({ account }: { account?: AuthUser }) {
     setLiveReplyStatus((await res.json()) as LiveReplyStatus)
   }
 
+  const loadGmailDelivery = async () => {
+    const res = await fetch(`${apiBase}/gmail/connection`)
+    if (!res.ok) return
+    setGmailDelivery((await res.json()) as GmailConnectionStatus)
+  }
+
   const loadRecentRuns = async (mailDate: string | null = settings.mail_date ?? null) => {
     const params = new URLSearchParams()
     params.set('limit', String(RECENT_RUNS_LIMIT))
@@ -4432,8 +4488,10 @@ function App({ account }: { account?: AuthUser }) {
 
   useEffect(() => {
     loadLiveReplyStatus().catch(() => {})
+    loadGmailDelivery().catch(() => {})
     const intervalId = window.setInterval(() => {
       loadLiveReplyStatus().catch(() => {})
+      loadGmailDelivery().catch(() => {})
     }, 15000)
     return () => window.clearInterval(intervalId)
   }, [])
@@ -7004,7 +7062,8 @@ function App({ account }: { account?: AuthUser }) {
                       <span className="toggleTrack" />
                     </span>
                   </label>
-                  <p className="subtle">Checks unread Gmail on the existing polling interval and captures replies from previously sent threads before JD parsing.</p>
+                  <p className="subtle">Receives Gmail changes through Pub/Sub and captures replies to threads you sent, as they arrive.</p>
+                  <InboxDeliveryStatus status={gmailDelivery} />
                   <fieldset>
                     <legend>Gmail label tracking</legend>
                     <label className="toggleRow pillRow">
@@ -8041,9 +8100,9 @@ function App({ account }: { account?: AuthUser }) {
                     className={`iconBtn inboxRefreshBtn ${inboxLoading ? 'loading' : ''}`}
                     onClick={() => void refreshInboxReplies()}
                     disabled={inboxLoading}
-                    aria-label="Refresh conversations"
+                    aria-label="Reload inbox"
                     aria-busy={inboxLoading}
-                    title="Refresh"
+                    title="Reload inbox"
                   >
                     <svg viewBox="0 0 24 24" aria-hidden="true">
                       <path d="M20 6v5h-5M4 18v-5h5M5.8 9a7 7 0 0 1 11.7-2.6L20 9M4 15l2.5 2.6A7 7 0 0 0 18.2 15" />
