@@ -269,7 +269,7 @@ from app import gmail_pubsub_subscriber
 from app.models import RecruiterWatch, TrackedThread
 from fastapi.responses import JSONResponse
 from app import correlation, gmail_client, request_log, tenancy
-from app.services import auth_service
+from app.services import auth_service, telegram_link_service
 from app.services.orchestration_service import OrchestrationDeps, OrchestrationService
 from app.services.requirement_expansion_service import RequirementExpansionService
 from app.services.resume_enrichment_service import (
@@ -1886,6 +1886,30 @@ def _handle_telegram_callback(
     return telegram_runtime.handle_callback(chat_id, user_id, username, callback_data, message_id)
 
 
+def _resolve_telegram_owner(chat_id: int) -> str | None:
+    with SessionLocal() as db:
+        return telegram_link_service.resolve_owner(db, chat_id)
+
+
+def _redeem_telegram_link(code: str, chat_id: int, user_id: str, username: str) -> str | None:
+    with SessionLocal() as db:
+        owner = telegram_link_service.redeem_link_code(
+            db,
+            code,
+            chat_id=chat_id,
+            telegram_user_id=user_id,
+            username=username,
+        )
+        if owner is not None:
+            db.commit()
+        return owner
+
+
+def _verify_telegram_action_pin(owner_id: str, pin: str) -> bool:
+    with SessionLocal() as db:
+        return telegram_link_service.verify_action_pin(db, owner_id, pin)
+
+
 def _init_telegram_service() -> TelegramBotService | None:
     global telegram_runtime
     token = (settings.telegram_bot_token or "").strip()
@@ -1911,9 +1935,10 @@ def _init_telegram_service() -> TelegramBotService | None:
             get_candidate_review=_get_candidate_review,
             approve_and_send=approve_and_send,
             reject_candidate=reject_candidate,
-            owner_id=tenancy.owner_id(),
+            resolve_owner=_resolve_telegram_owner,
+            redeem_link_code=_redeem_telegram_link,
             action_lock=telegram_action_lock,
-            action_pin=lambda: (settings.telegram_action_pin or "").strip(),
+            verify_action_pin=_verify_telegram_action_pin,
             auth_ttl_minutes=lambda: max(1, int(settings.telegram_auth_ttl_minutes or 30)),
         )
     )

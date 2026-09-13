@@ -9,6 +9,7 @@ from typing import Any, Callable
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from app import tenancy
 from app.config import settings
 from app.models import RecruiterEmail, SyncRun, UserSettings
 from app.schemas import ApproveSendRequest, AutomationRunResponse, EmailResponse, RejectRequest
@@ -37,9 +38,10 @@ class TelegramRuntimeDeps:
     get_candidate_review: Callable[[int, Session], EmailResponse]
     approve_and_send: Callable[[int, ApproveSendRequest, Session], Any]
     reject_candidate: Callable[[int, RejectRequest, Session], Any]
-    owner_id: str
+    resolve_owner: Callable[[int], str | None]
+    redeem_link_code: Callable[[str, int, str, str], str | None]
     action_lock: threading.Lock
-    action_pin: Callable[[], str]
+    verify_action_pin: Callable[[str, str], bool]
     auth_ttl_minutes: Callable[[], int]
 
 
@@ -303,10 +305,7 @@ class TelegramRuntime:
         return "\n".join(lines)
 
     def _action_authorized(self, pin: str | None) -> bool:
-        configured_pin = (self.deps.action_pin() or "").strip()
-        if not configured_pin:
-            return True
-        return bool(pin and pin == configured_pin)
+        return self.deps.verify_action_pin(tenancy.owner_id(), (pin or "").strip())
 
     def _session_remaining(self, chat_id: int) -> str:
         return TelegramRuntimeState.session_remaining(chat_id)
@@ -320,6 +319,27 @@ class TelegramRuntime:
         return "Action blocked. Run /auth <PIN> or provide pin=<PIN>."
 
     def handle_command(self, chat_id: int, user_id: str, username: str, text: str) -> str | TelegramReply:
+        command_line = text.strip()
+        parts = command_line.split(maxsplit=1)
+        cmd = parts[0].lower() if parts else ""
+        owner = self.deps.resolve_owner(chat_id)
+        if cmd == "/start" and len(parts) == 2:
+            linked_owner = self.deps.redeem_link_code(parts[1].strip(), chat_id, user_id, username)
+            if linked_owner is not None:
+                with tenancy.owner_scope(linked_owner):
+                    reply = self._main_menu_reply()
+                    reply.text = "Telegram account linked.\n\n" + reply.text
+                    return reply
+            if owner is None:
+                return "This link code is invalid or expired. Open Settings -> Integrations to link again."
+        if owner is None:
+            if cmd == "/start":
+                return "Open Settings -> Integrations to link this Telegram account."
+            return "This chat is not linked to an account."
+        with tenancy.owner_scope(owner):
+            return self._handle_command(chat_id, user_id, username, text)
+
+    def _handle_command(self, chat_id: int, user_id: str, username: str, text: str) -> str | TelegramReply:
         _ = user_id
         command_line = text.strip()
         if not command_line:
@@ -359,19 +379,14 @@ class TelegramRuntime:
 
         db = self.deps.session_factory()
         try:
-            if settings.feature_auth_enabled and account_service.is_owner_disabled(db, self.deps.owner_id):
+            if settings.feature_auth_enabled and account_service.is_owner_disabled(db, tenancy.owner_id()):
                 TelegramRuntimeState.clear_session(chat_id)
                 return "Account is deactivated."
             if cmd == "/auth":
                 if not args:
                     return "Usage: /auth <PIN>"
-                configured_pin = (self.deps.action_pin() or "").strip()
-                if not configured_pin:
-                    TelegramRuntimeState.activate_session(chat_id, self.deps.auth_ttl_minutes())
-                    logger.info("Telegram auth success chat_id=%s cmd=%s mode=no_configured_pin", chat_id, cmd)
-                    return f"Authenticated. Session expires in {self._session_remaining(chat_id)}."
                 supplied_pin = args[0].strip()
-                if supplied_pin != configured_pin:
+                if not self.deps.verify_action_pin(tenancy.owner_id(), supplied_pin):
                     logger.info("Telegram auth failed chat_id=%s cmd=%s reason=wrong_pin", chat_id, cmd)
                     return "Authentication failed: incorrect PIN."
                 TelegramRuntimeState.activate_session(chat_id, self.deps.auth_ttl_minutes())
@@ -500,14 +515,14 @@ class TelegramRuntime:
             if cmd == "/needs_review":
                 rows = (
                     db.query(RecruiterEmail)
-                    .filter(RecruiterEmail.owner_id == self.deps.owner_id, RecruiterEmail.state == "needs_review")
+                    .filter(RecruiterEmail.owner_id == tenancy.owner_id(), RecruiterEmail.state == "needs_review")
                     .order_by(RecruiterEmail.created_at.desc())
                     .limit(5)
                     .all()
                 )
                 count = (
                     db.query(RecruiterEmail)
-                    .filter(RecruiterEmail.owner_id == self.deps.owner_id, RecruiterEmail.state == "needs_review")
+                    .filter(RecruiterEmail.owner_id == tenancy.owner_id(), RecruiterEmail.state == "needs_review")
                     .count()
                 )
                 return f"Needs Review: {count}\nTop items:\n{self._format_candidate_lines(rows)}"
@@ -527,14 +542,14 @@ class TelegramRuntime:
             if cmd == "/failed_mapping":
                 rows = (
                     db.query(RecruiterEmail)
-                    .filter(RecruiterEmail.owner_id == self.deps.owner_id, RecruiterEmail.state == "failed")
+                    .filter(RecruiterEmail.owner_id == tenancy.owner_id(), RecruiterEmail.state == "failed")
                     .order_by(RecruiterEmail.created_at.desc())
                     .limit(5)
                     .all()
                 )
                 count = (
                     db.query(RecruiterEmail)
-                    .filter(RecruiterEmail.owner_id == self.deps.owner_id, RecruiterEmail.state == "failed")
+                    .filter(RecruiterEmail.owner_id == tenancy.owner_id(), RecruiterEmail.state == "failed")
                     .count()
                 )
                 return f"Failed Mapping: {count}\nTop items:\n{self._format_candidate_lines(rows)}"
@@ -542,7 +557,7 @@ class TelegramRuntime:
             if cmd == "/recent_runs":
                 runs = (
                     db.query(SyncRun)
-                    .filter(SyncRun.owner_id == self.deps.owner_id)
+                    .filter(SyncRun.owner_id == tenancy.owner_id())
                     .order_by(SyncRun.created_at.desc())
                     .limit(5)
                     .all()
@@ -632,6 +647,20 @@ class TelegramRuntime:
             db.close()
 
     def handle_callback(
+        self,
+        chat_id: int,
+        user_id: str,
+        username: str,
+        callback_data: str,
+        message_id: int,
+    ) -> str | TelegramReply:
+        owner = self.deps.resolve_owner(chat_id)
+        if owner is None:
+            return "This chat is not linked to an account."
+        with tenancy.owner_scope(owner):
+            return self._handle_callback(chat_id, user_id, username, callback_data, message_id)
+
+    def _handle_callback(
         self,
         chat_id: int,
         user_id: str,

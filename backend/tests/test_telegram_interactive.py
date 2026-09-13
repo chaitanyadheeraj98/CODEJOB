@@ -137,9 +137,10 @@ class TelegramReviewCommandTests(unittest.TestCase):
             get_candidate_review=lambda email_id, db: main._get_candidate_review(email_id, db),
             approve_and_send=lambda _email_id, _payload, _db: None,
             reject_candidate=lambda _email_id, _payload, _db: None,
-            owner_id="default-owner",
+            resolve_owner=lambda _chat_id: "default-owner",
+            redeem_link_code=lambda _code, _chat_id, _user_id, _username: None,
             action_lock=main.telegram_action_lock,
-            action_pin=lambda: "",
+            verify_action_pin=lambda _owner_id, _pin: True,
             auth_ttl_minutes=lambda: 30,
         )
 
