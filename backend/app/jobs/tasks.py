@@ -394,3 +394,42 @@ def run_automation_job(*, run_key: str, payload: dict[str, Any] | None = None) -
         raise
     finally:
         db.close()
+
+
+@owner_scoped
+def run_gmail_history_job(*, notification_history_id: str = "") -> dict[str, Any]:
+    """Drain one mailbox's Gmail history after a push notification.
+
+    Thin on purpose. Everything that decides what changed lives in
+    `gmail_pubsub_service`; what belongs to the job layer is the owner scope,
+    the retry policy, and returning something an operator can read in the RQ
+    dashboard.
+
+    `owner_id` is supplied by the decorator from the enqueue call, never from
+    the Pub/Sub payload - the subscriber resolves a mailbox address to an owner
+    against the credential table and enqueues that. A notification cannot name
+    the tenant it writes to.
+
+    No `job_id` derived from the notification. Several notifications can
+    legitimately coalesce into one history range, and deduplicating on the
+    number would drop drains that were needed. The per-owner history lock, the
+    committed cursor and the `UNIQUE(owner_id, external_message_id)` constraint
+    already make a repeat harmless.
+    """
+    from app.services import gmail_pubsub_service
+
+    outcome = gmail_pubsub_service.process_history(
+        _owner_id_in_scope(), notification_history_id
+    )
+    return {
+        "status": "ok" if not outcome.reason else outcome.reason,
+        "processed": outcome.processed,
+        "captured": outcome.captured,
+        "recovered": outcome.recovered,
+    }
+
+
+def _owner_id_in_scope() -> str:
+    from app import tenancy
+
+    return tenancy.owner_id()

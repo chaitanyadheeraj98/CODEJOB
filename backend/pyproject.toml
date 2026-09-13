@@ -19,6 +19,11 @@ dependencies = [
     "fastapi>=0.136.1",
     "google-api-python-client>=2.181.0",
     "google-auth-oauthlib>=1.2.2",
+    # Consumed only by the dedicated subscriber process. Worth a direct
+    # dependency rather than REST calls: StreamingPull, ack-deadline extension,
+    # flow control and reconnect are the parts of a pull subscription that are
+    # tedious to get right and silently wrong when they are not.
+    "google-cloud-pubsub>=2.31.0",
     "httpx>=0.28.1",
     "lxml>=6.0.2",
     "openai>=2.33.0",

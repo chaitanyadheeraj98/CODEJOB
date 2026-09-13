@@ -118,6 +118,16 @@ def _ineligible(db: Session, owner_id: str) -> str:
     return ""
 
 
+def eligibility_reason(db: Session, owner_id: str) -> str:
+    """Public door to `_ineligible`, for the subscriber.
+
+    The subscriber has to make the same judgement one step earlier - before
+    enqueueing rather than before draining - and reaching into a private name
+    to do it would make the one rule two.
+    """
+    return _ineligible(db, owner_id)
+
+
 def _configured() -> str:
     if not settings.feature_gmail_pubsub_enabled:
         return "push_disabled"
