@@ -165,6 +165,9 @@ def _run_worker(monkeypatch, outcome, *, owner: str = "owner-a"):
         def send_message(self, chat_id, text, *, inline_keyboard=None):
             seen.setdefault("sent", []).append((chat_id, text, inline_keyboard))
 
+        def send_photo(self, chat_id, photo, *, caption=None):
+            seen.setdefault("photos", []).append((chat_id, photo, caption))
+
     monkeypatch.setattr(tasks, "SessionLocal", lambda: _FakeDb())
     monkeypatch.setattr("app.services.chat_service.ChatService", Service)
     monkeypatch.setattr(
@@ -210,6 +213,63 @@ def test_worker_keeps_answer_when_chart_has_no_provenance(monkeypatch) -> None:
     _result, seen = _run_worker(monkeypatch, ChatTurnResult("Owner answer", [tool]))
     assert seen["edit"] == (11, 22, "Owner answer")
     assert seen["sent"][0][1] == "Chart omitted: source provenance was missing."
+
+
+def test_worker_sends_png_and_removes_temp_directory(monkeypatch, tmp_path) -> None:
+    payload = {
+        "action": "render_chart",
+        "chart_type": "activity_trend",
+        "title": "Approved sends",
+        "max_value": 1,
+        "series": [{"label": "Today", "value": 1}],
+        "provenance": {"source": "get_chart/activity_trend", "row_count": 1, "assumptions": []},
+    }
+    tool = SimpleNamespace(id=93, tool_name="get_chart", content=__import__("json").dumps(payload))
+    import tempfile
+
+    monkeypatch.setattr(tasks, "TemporaryDirectory", lambda: tempfile.TemporaryDirectory(dir=tmp_path))
+    monkeypatch.setattr(
+        "app.services.telegram_chart_render.render_chart_png_bounded",
+        lambda _content, path, _timeout: path.write_bytes(b"png"),
+    )
+    previous = settings.telegram_chart_png_enabled
+    settings.telegram_chart_png_enabled = True
+    try:
+        _result, seen = _run_worker(monkeypatch, ChatTurnResult("answer", [tool]))
+        assert seen["photos"] == [(11, b"png", None)]
+        assert "sent" not in seen
+        assert list(tmp_path.iterdir()) == []
+    finally:
+        settings.telegram_chart_png_enabled = previous
+
+
+def test_png_failure_falls_back_to_bars_and_cleans_temp(monkeypatch, tmp_path, caplog) -> None:
+    payload = {
+        "action": "render_chart",
+        "chart_type": "activity_trend",
+        "title": "Approved sends",
+        "max_value": 1,
+        "series": [{"label": "Today", "value": 1}],
+        "provenance": {"source": "get_chart/activity_trend", "row_count": 1, "assumptions": []},
+    }
+    tool = SimpleNamespace(id=94, tool_name="get_chart", content=__import__("json").dumps(payload))
+    import tempfile
+
+    monkeypatch.setattr(tasks, "TemporaryDirectory", lambda: tempfile.TemporaryDirectory(dir=tmp_path))
+    monkeypatch.setattr(
+        "app.services.telegram_chart_render.render_chart_png_bounded",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("renderer failed")),
+    )
+    previous = settings.telegram_chart_png_enabled
+    settings.telegram_chart_png_enabled = True
+    try:
+        _result, seen = _run_worker(monkeypatch, ChatTurnResult("answer", [tool]))
+        assert "████████" in seen["sent"][0][1]
+        assert "photos" not in seen
+        assert list(tmp_path.iterdir()) == []
+        assert "telegram_chart_png_failed" in caplog.text
+    finally:
+        settings.telegram_chart_png_enabled = previous
 
 
 @pytest.mark.parametrize(

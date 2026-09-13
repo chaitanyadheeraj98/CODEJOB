@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import json
+from tempfile import TemporaryDirectory
 from typing import Any
 from uuid import uuid4
 
@@ -22,13 +23,14 @@ def run_telegram_chat_turn(*, chat_id: int, message_id: int, text: str) -> dict[
     from app.config import settings
     from app.services.chat_service import ChatService
     from app.services.telegram_chat_service import current_session
+    from app.services.telegram_chart_render import render_chart_png_bounded
     from app.services.telegram_format import email_proposal, format_answer, unicode_chart
     from app.telegram_bot import TelegramTransport
 
     correlation_id = uuid4().hex
     response = ""
     proposal_replies: list[tuple[str, list[list[dict[str, str]]] | None]] = []
-    chart_replies: list[str] = []
+    chart_replies: list[tuple[str, str]] = []
     status = "ok"
     db = SessionLocal()
     try:
@@ -48,7 +50,7 @@ def run_telegram_chat_turn(*, chat_id: int, message_id: int, text: str) -> dict[
                 if rendered is not None
             ]
             chart_replies = [
-                rendered
+                (row.content, rendered)
                 for row in result.tool_rows
                 if row.tool_name == "get_chart"
                 for rendered in [unicode_chart(row.content)]
@@ -84,7 +86,25 @@ def run_telegram_chat_turn(*, chat_id: int, message_id: int, text: str) -> dict[
         transport.edit_message(chat_id, message_id, response)
         for proposal_text, keyboard in proposal_replies:
             transport.send_message(chat_id, proposal_text, inline_keyboard=keyboard)
-        for chart_text in chart_replies:
+        for chart_content, chart_text in chart_replies:
+            if settings.telegram_chart_png_enabled and chart_text.startswith("<pre>"):
+                try:
+                    with TemporaryDirectory() as directory:
+                        path = __import__("pathlib").Path(directory) / "chart.png"
+                        render_chart_png_bounded(
+                            chart_content,
+                            path,
+                            settings.telegram_chart_render_timeout_seconds,
+                        )
+                        transport.send_photo(chat_id, path.read_bytes())
+                    continue
+                except Exception as exc:
+                    logger.warning(
+                        "telegram_chart_png_failed correlation_id=%s chat_id=%s error_type=%s",
+                        correlation_id,
+                        chat_id,
+                        type(exc).__name__,
+                    )
             transport.send_message(chat_id, chart_text)
     except Exception as exc:
         logger.warning(

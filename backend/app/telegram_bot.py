@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from typing import Any, Callable
 from urllib import error, request
 
+import httpx
+
 from app.services.telegram_format import chunk, escape, plain_text
 
 logger = logging.getLogger(__name__)
@@ -158,7 +160,24 @@ class TelegramTransport:
         self._post_json("answerCallbackQuery", payload)
 
     def send_photo(self, chat_id: int, photo: bytes, *, caption: str | None = None) -> None:
-        raise NotImplementedError
+        data: dict[str, Any] = {"chat_id": str(chat_id)}
+        if caption:
+            data.update({"caption": caption, "parse_mode": "HTML"})
+        response = httpx.post(
+            self._api_url("sendPhoto"),
+            data=data,
+            files={"photo": ("chart.png", photo, "image/png")},
+            timeout=35,
+        )
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise TelegramAPIError(response.status_code, "invalid response") from exc
+        if response.status_code >= 400 or not payload.get("ok"):
+            raise TelegramAPIError(
+                int(payload.get("error_code", response.status_code)),
+                str(payload.get("description", "request failed")),
+            )
 
 
 class TelegramBotService:
