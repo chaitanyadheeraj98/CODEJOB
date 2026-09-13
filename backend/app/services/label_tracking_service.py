@@ -169,6 +169,95 @@ def participants_for(item) -> list[dict[str, str]]:
         for _, address in getaddresses([item.get(header) or ""]) if "@" in address]
 
 
+def attach_labeled_message(db: Session, owner_id: str, *, item, label_external_id: str, owner_email: str) -> tuple[bool, bool]:
+    """Fold one labelled message into its tracked thread and conversation.
+
+    Extracted from `sync_tracked_labels` so push delivery can reach the same
+    behaviour one message at a time. A scan finds messages by asking Gmail for
+    a label's contents; a notification arrives already knowing which message
+    changed. Everything after that point - the thread, the participants, the
+    conversation, the derived watches - is identical, and two implementations
+    of "identical" drift.
+
+    The caller keeps its own limits and its own idea of what it has already
+    seen. Those are properties of a scan, not of a message.
+
+    Returns (thread_created, message_captured).
+    """
+    thread_id = item.get("external_thread_id")
+    if not thread_id:
+        return False, False
+    thread = db.query(TrackedThread).filter(TrackedThread.owner_id == owner_id, TrackedThread.external_thread_id == thread_id).first()
+    created = thread is None
+    if thread is None:
+        thread = TrackedThread(owner_id=owner_id, external_thread_id=thread_id,
+            label_external_ids_json="[]", participants_json="[]", subject_snapshot=item.get("subject", "")[:500])
+        db.add(thread)
+        db.flush()
+    thread.label_external_ids_json = json.dumps(sorted(set(json.loads(thread.label_external_ids_json)) | {label_external_id}))
+    participants = {(p["address"], p["role"]) for p in json.loads(thread.participants_json) + participants_for(item)}
+    thread.participants_json = json.dumps([{"address": a, "role": r} for a, r in sorted(participants)])
+    thread.last_seen_at = datetime.now(UTC)
+    thread.untracked_at = None
+    conversation = email_inbox_service.ensure_label_conversation(db, owner_id=owner_id,
+        thread_id=thread_id, label_external_id=label_external_id, first_item=item)
+    if conversation.root_recruiter_email_id is None and normalize_address(conversation.recruiter_email_snapshot) == normalize_address(owner_email):
+        other = next((p["address"] for p in json.loads(thread.participants_json) if p["address"] != normalize_address(owner_email)), "")
+        conversation.recruiter_snapshot = other
+        conversation.recruiter_email_snapshot = other
+    thread.conversation_id = conversation.id
+    captured = email_inbox_service.capture_labeled_message(db, owner_id=owner_id, item=item, owner_email=owner_email, conversation=conversation)
+    thread.last_message_at = conversation.last_message_at
+    derive_watches(db, owner_id, thread=thread, owner_email=owner_email)
+    db.flush()
+    return created, bool(captured)
+
+
+def active_watches(db: Session, owner_id: str) -> list[RecruiterWatch]:
+    """Every watch still in force, in the order the scan applies them."""
+    return db.query(RecruiterWatch).filter(
+        RecruiterWatch.owner_id == owner_id, RecruiterWatch.released_at.is_(None),
+    ).order_by(RecruiterWatch.id).all()
+
+
+def match_watch(item, watches, owner_email: str):
+    """Which active watch, if any, this message answers to.
+
+    Pure, and pure on purpose. `sync_watch_matches` reaches messages by asking
+    Gmail a query built from these same watches; a notification hands over a
+    message with no query involved. Keeping the decision separate from the
+    search is what lets push delivery apply recruiter watches without building
+    a Gmail query at all - which is the point of replacing the scans.
+
+    Infrastructure and freemail domains are excluded here rather than at watch
+    creation, matching the scan's behaviour exactly: a watch already stored can
+    still be on a domain that should never match by domain.
+    """
+    addresses = {p["address"] for p in participants_for(item)} - {normalize_address(owner_email)}
+    return next((w for w in watches if not _is_infrastructure(
+        domain_of(w.value) if w.watch_type == "address" else w.value,
+    ) and (w.value in addresses if w.watch_type == "address" else
+        not _freemail(w.value) and any(domain_of(a) == w.value or domain_of(a).endswith("." + w.value) for a in addresses))), None)
+
+
+def attach_watch_message(db: Session, owner_id: str, *, item, watch, owner_email: str) -> bool:
+    """Fold one watch-matched message into its conversation. Returns captured."""
+    thread_id = item.get("external_thread_id")
+    if not thread_id:
+        return False
+    addresses = {p["address"] for p in participants_for(item)} - {normalize_address(owner_email)}
+    conversation = email_inbox_service.ensure_watch_conversation(db, owner_id=owner_id, thread_id=thread_id, watch=watch, first_item=item)
+    if normalize_address(conversation.recruiter_email_snapshot) == normalize_address(owner_email):
+        conversation.recruiter_email_snapshot = sorted(addresses)[0] if addresses else ""
+        conversation.recruiter_snapshot = conversation.recruiter_email_snapshot
+    captured = email_inbox_service.capture_labeled_message(db, owner_id=owner_id, item=item, owner_email=owner_email, conversation=conversation, matched_watch_id=watch.id)
+    if captured:
+        watch.match_count += 1
+        watch.last_matched_at = datetime.now(UTC)
+    db.flush()
+    return bool(captured)
+
+
 def sync_tracked_labels(db: Session, owner_id: str, *, deps, owner_email: str = "") -> LabelTrackingResult:
     result = LabelTrackingResult()
     known = {r[0] for r in db.query(EmailReplyMessage.external_message_id).filter(EmailReplyMessage.owner_id == owner_id)}
@@ -185,31 +274,12 @@ def sync_tracked_labels(db: Session, owner_id: str, *, deps, owner_email: str = 
             if thread_id not in seen_threads and len(seen_threads) >= settings.label_tracking_max_threads_per_sync:
                 continue
             seen_threads.add(thread_id)
-            thread = db.query(TrackedThread).filter(TrackedThread.owner_id == owner_id, TrackedThread.external_thread_id == thread_id).first()
-            if thread is None:
-                thread = TrackedThread(owner_id=owner_id, external_thread_id=thread_id,
-                    label_external_ids_json="[]", participants_json="[]", subject_snapshot=item.get("subject", "")[:500])
-                db.add(thread)
-                db.flush()
-                result.threads += 1
-            thread.label_external_ids_json = json.dumps(sorted(set(json.loads(thread.label_external_ids_json)) | {label.external_label_id}))
-            participants = {(p["address"], p["role"]) for p in json.loads(thread.participants_json) + participants_for(item)}
-            thread.participants_json = json.dumps([{"address": a, "role": r} for a, r in sorted(participants)])
-            thread.last_seen_at = datetime.now(UTC)
-            thread.untracked_at = None
-            conversation = email_inbox_service.ensure_label_conversation(db, owner_id=owner_id,
-                thread_id=thread_id, label_external_id=label.external_label_id, first_item=item)
-            if conversation.root_recruiter_email_id is None and normalize_address(conversation.recruiter_email_snapshot) == normalize_address(owner_email):
-                other = next((p["address"] for p in json.loads(thread.participants_json) if p["address"] != normalize_address(owner_email)), "")
-                conversation.recruiter_snapshot = other
-                conversation.recruiter_email_snapshot = other
-            thread.conversation_id = conversation.id
-            if email_inbox_service.capture_labeled_message(db, owner_id=owner_id, item=item, owner_email=owner_email, conversation=conversation):
-                result.messages += 1
+            created, captured = attach_labeled_message(
+                db, owner_id, item=item, label_external_id=label.external_label_id, owner_email=owner_email,
+            )
+            result.threads += int(created)
+            result.messages += int(captured)
             known.add(item["external_message_id"])
-            thread.last_message_at = conversation.last_message_at
-            derive_watches(db, owner_id, thread=thread, owner_email=owner_email)
-            db.flush()
     return result
 
 
@@ -254,7 +324,7 @@ def sync_watch_matches(db: Session, owner_id: str, *, deps, owner_email: str = "
     limit = settings.label_tracking_max_messages_per_sync if max_messages is None else max_messages
     for thread in db.query(TrackedThread).filter(TrackedThread.owner_id == owner_id, TrackedThread.untracked_at.is_(None)):
         derive_watches(db, owner_id, thread=thread, owner_email=owner_email)
-    watches = db.query(RecruiterWatch).filter(RecruiterWatch.owner_id == owner_id, RecruiterWatch.released_at.is_(None)).order_by(RecruiterWatch.id).all()
+    watches = active_watches(db, owner_id)
     known = {r[0] for r in db.query(EmailReplyMessage.external_message_id).filter(EmailReplyMessage.owner_id == owner_id)}
     threads = set()
     for start in range(0, len(watches), WATCH_QUERY_MAX_TERMS):
@@ -267,27 +337,16 @@ def sync_watch_matches(db: Session, owner_id: str, *, deps, owner_email: str = "
         for item in deps.list_candidates_by_query(query, max_total_results=limit - result.messages, skip_message_ids=known):
             if result.messages >= limit:
                 break
-            addresses = {p["address"] for p in participants_for(item)} - {normalize_address(owner_email)}
-            watch = next((w for w in chunk if not _is_infrastructure(
-                domain_of(w.value) if w.watch_type == "address" else w.value,
-            ) and (w.value in addresses if w.watch_type == "address" else
-                not _freemail(w.value) and any(domain_of(a) == w.value or domain_of(a).endswith("." + w.value) for a in addresses))), None)
+            watch = match_watch(item, chunk, owner_email)
             thread_id = item.get("external_thread_id")
             if watch is None or not thread_id:
                 continue
             if thread_id not in threads and len(threads) >= settings.label_tracking_max_threads_per_sync:
                 continue
             threads.add(thread_id)
-            conversation = email_inbox_service.ensure_watch_conversation(db, owner_id=owner_id, thread_id=thread_id, watch=watch, first_item=item)
-            if normalize_address(conversation.recruiter_email_snapshot) == normalize_address(owner_email):
-                conversation.recruiter_email_snapshot = sorted(addresses)[0] if addresses else ""
-                conversation.recruiter_snapshot = conversation.recruiter_email_snapshot
-            if email_inbox_service.capture_labeled_message(db, owner_id=owner_id, item=item, owner_email=owner_email, conversation=conversation, matched_watch_id=watch.id):
+            if attach_watch_message(db, owner_id, item=item, watch=watch, owner_email=owner_email):
                 result.messages += 1
-                watch.match_count += 1
-                watch.last_matched_at = datetime.now(UTC)
             known.add(item["external_message_id"])
-            db.flush()
     result.threads = len(threads)
     return result
 

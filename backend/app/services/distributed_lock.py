@@ -47,6 +47,10 @@ KEY_PREFIX = "lock"
 TAXONOMY_EMBEDDING = "taxonomy_embedding"
 TAXONOMY_BULK_REVIEW = "taxonomy_bulk_review"
 AUTOMATION_ACTION = "automation_action"
+# One Gmail history drain per mailbox. Two would fetch overlapping ranges and
+# race to write the cursor, and the loser's write can move it *backwards* -
+# which is not a duplicate but a gap, and nothing revisits it.
+GMAIL_HISTORY = "gmail_history"
 
 # Short, because the watchdog renews. This is the window a crashed holder
 # blocks for, not the time the work is allowed to take.

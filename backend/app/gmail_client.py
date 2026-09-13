@@ -654,6 +654,122 @@ def get_candidates_by_message_ids(message_ids: list[str]) -> list[GmailMessageCa
     return results
 
 
+# --- push delivery ------------------------------------------------------
+#
+# Three thin wrappers, deliberately holding no policy. When to renew a watch,
+# what to do with a stale cursor and which messages matter all belong to
+# `gmail_pubsub_service`; what belongs here is the shape of Gmail's replies,
+# because that is what the rest of the application should not have to know.
+
+
+class StaleHistoryId(RuntimeError):
+    """Gmail no longer holds history from the cursor it was given.
+
+    Its own 404, given a name. The caller cannot retry its way out of this -
+    the record is gone - so it has to be distinguishable from the transient
+    failures that are worth retrying, which is the entire reason this is not
+    just an `HttpError` reaching the service layer.
+    """
+
+
+@dataclass(frozen=True)
+class MailboxWatch:
+    """What `users.watch` promises: where history starts, and when it lapses."""
+
+    history_id: str
+    expiration_at: datetime | None
+
+
+@dataclass(frozen=True)
+class HistoryPage:
+    message_ids: tuple[str, ...]
+    next_page_token: str | None
+    history_id: str | None
+
+
+def watch_mailbox(topic_name: str) -> MailboxWatch:
+    """Ask Gmail to publish this mailbox's changes to `topic_name`.
+
+    No `labelIds` filter. Restricting the watch to INBOX would be cheaper and
+    would miss two things this application needs: replies sent from Gmail
+    itself, and the label transitions that tracked conversations are built on.
+    Filtering happens here, where the tracked-label catalog is known.
+    """
+    response = _as_dict(
+        _gmail_service().users().watch(userId="me", body={"topicName": topic_name}).execute()
+    )
+    return MailboxWatch(
+        history_id=str(response.get("historyId") or ""),
+        expiration_at=_epoch_millis_to_utc(response.get("expiration")),
+    )
+
+
+def stop_mailbox_watch() -> None:
+    """Stop push delivery for this mailbox. Idempotent at Gmail's end."""
+    _gmail_service().users().stop(userId="me").execute()
+
+
+def list_history(start_history_id: str, page_token: str | None = None) -> HistoryPage:
+    """One page of changes since `start_history_id`.
+
+    Returns message ids only, from `messagesAdded`, `labelsAdded` and
+    `labelsRemoved` together. A removal is not a separate kind of event to the
+    caller: every id here is refetched, and a refetched message carries its
+    *current* labels, which is what deciding thread membership needs whether a
+    label was just added or just taken away.
+
+    `historyTypes` is deliberately not passed, so Gmail returns every type.
+    Narrowing it would silently drop the label transitions above.
+
+    Raises `StaleHistoryId` when Gmail answers 404, which is its documented way
+    of saying the cursor has aged out.
+    """
+    try:
+        response = _as_dict(
+            _gmail_service()
+            .users()
+            .history()
+            .list(userId="me", startHistoryId=start_history_id, pageToken=page_token)
+            .execute()
+        )
+    except HttpError as exc:
+        if getattr(getattr(exc, "resp", None), "status", None) == 404:
+            raise StaleHistoryId(start_history_id) from exc
+        raise
+
+    message_ids: list[str] = []
+    seen: set[str] = set()
+    for record in _as_list_of_dicts(response.get("history")):
+        for key in ("messagesAdded", "labelsAdded", "labelsRemoved"):
+            for entry in _as_list_of_dicts(record.get(key)):
+                message = _as_dict(entry.get("message"))
+                message_id = str(message.get("id") or "")
+                # Deduped here rather than by the caller: one history page
+                # routinely carries the same message three times over - added,
+                # then labelled, then unlabelled - and each duplicate would
+                # otherwise cost a full message fetch.
+                if message_id and message_id not in seen:
+                    seen.add(message_id)
+                    message_ids.append(message_id)
+
+    return HistoryPage(
+        message_ids=tuple(message_ids),
+        next_page_token=str(response.get("nextPageToken") or "") or None,
+        history_id=str(response.get("historyId") or "") or None,
+    )
+
+
+def _epoch_millis_to_utc(value: Any) -> datetime | None:
+    """Gmail sends watch expiry as epoch milliseconds in a string."""
+    try:
+        millis = int(str(value))
+    except (TypeError, ValueError):
+        return None
+    if millis <= 0:
+        return None
+    return datetime.fromtimestamp(millis / 1000, tz=UTC)
+
+
 def list_thread_ids_by_label(label_id: str, max_results: int = 500) -> set[str]:
     response = _as_dict(_gmail_service().users().messages().list(
         userId="me", labelIds=[label_id], maxResults=min(max_results, 500),

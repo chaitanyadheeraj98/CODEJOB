@@ -440,6 +440,26 @@ class OrchestrationService:
 
         return matched_count, created_count
 
+    def reconcile_inbox_once(self, db: Session, user_settings: UserSettings) -> tuple[int, int, int]:
+        """Run the bounded Inbox and label scans deliberately, once.
+
+        The public door to `_capture_inbound_replies` and `_sync_label_tracking`
+        for push delivery, which has exactly two reasons to want them: the first
+        watch registration, and recovery from a history cursor Gmail has aged
+        out. Both are the same situation - a gap that no notification will ever
+        describe, because the notifications for it were either never sent or
+        long since acknowledged.
+
+        Named rather than reached through the private methods so that Phase D's
+        "these no longer run on a schedule" is a statement about call sites that
+        can be checked, instead of a convention.
+
+        Returns (matched_replies, created_replies, label_errors).
+        """
+        matched, created = self._capture_inbound_replies(db, user_settings)
+        _, _, errors = self._sync_label_tracking(db, user_settings)
+        return matched, created, errors
+
     def _detect_role_manifest_if_enabled(self, user_settings: UserSettings, body: str) -> RoleManifestResult | None:
         if not user_settings.feature_role_manifest_enabled:
             return None
