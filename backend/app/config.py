@@ -321,6 +321,10 @@ class Settings(BaseSettings):
     telegram_action_pin: str = ""
     telegram_alerts_enabled: bool = True
     telegram_auth_ttl_minutes: int = 30
+    feature_telegram_chat_enabled: bool = False
+    telegram_chat_retention_days: int = 90
+    telegram_chart_png_enabled: bool = False
+    telegram_chart_render_timeout_seconds: float = 10.0
     github_token: str = Field(default="", validation_alias=AliasChoices("GITHUB_TOKEN"))
     github_repo: str = Field(default="", validation_alias=AliasChoices("GITHUB_REPO"))
     # Gmail push delivery. The topic and subscription are operator-created in

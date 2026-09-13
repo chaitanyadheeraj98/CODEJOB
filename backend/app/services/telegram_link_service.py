@@ -106,6 +106,7 @@ def unlink(db: Session, owner_id: str) -> bool:
     row.link_code_expires_at = None
     row.linked_at = None
     row.last_seen_at = None
+    row.chat_session_id = None
     db.flush()
     TelegramRuntimeState.clear_session(chat_id)
     TelegramRuntimeState.clear_pending_mode(chat_id)

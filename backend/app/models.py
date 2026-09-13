@@ -677,6 +677,7 @@ class TelegramLink(Base):
     last_seen_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     alerts_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     action_pin_hash: Mapped[str] = mapped_column(String(128), default="")
+    chat_session_id: Mapped[int | None] = mapped_column(ForeignKey("chat_sessions.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
 
 
@@ -785,10 +786,12 @@ class EmailReplyMessage(Base):
 
 class ChatSession(Base):
     __tablename__ = "chat_sessions"
+    __table_args__ = (Index("ix_chat_sessions_origin_updated_at", "origin", "updated_at"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     owner_id: Mapped[str] = mapped_column(String(100), default="default-owner", index=True)
     title: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    origin: Mapped[str] = mapped_column(String(20), default="web")
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
 

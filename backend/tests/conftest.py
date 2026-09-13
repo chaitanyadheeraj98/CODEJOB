@@ -36,6 +36,7 @@ _PINNED_OFF = (
     #
     # The push tests turn it on in their own `setUp`, which runs after this.
     "feature_gmail_pubsub_enabled",
+    "feature_telegram_chat_enabled",
 )
 
 

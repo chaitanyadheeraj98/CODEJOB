@@ -13,7 +13,7 @@ from app import tenancy
 from app.config import settings
 from app.models import RecruiterEmail, SyncRun, UserSettings
 from app.schemas import ApproveSendRequest, AutomationRunResponse, EmailResponse, RejectRequest
-from app.services import account_service
+from app.services import account_service, telegram_chat_service, telegram_link_service
 from app.services.telegram_format import escape
 from app.services.telegram_runtime import TelegramRuntimeState
 from app.telegram_bot import TelegramReply
@@ -422,6 +422,26 @@ class TelegramRuntime:
                 TelegramRuntimeState.clear_session(chat_id)
                 logger.info("Telegram logout chat_id=%s cmd=%s", chat_id, cmd)
                 return "Logged out. Action commands now require /auth <PIN> or pin=<PIN>."
+
+            if cmd == "/help":
+                chat_line = "Free-text assistant chat is enabled." if settings.feature_telegram_chat_enabled else "Free-text assistant chat is disabled."
+                return (
+                    f"{chat_line}\n"
+                    "Use /new to start a fresh assistant thread.\n"
+                    "Use /menu for MailOps commands, /auth for protected actions, and /disconnect to unlink this chat."
+                )
+
+            if cmd == "/new":
+                if not settings.feature_telegram_chat_enabled:
+                    return "Telegram assistant chat is disabled."
+                telegram_chat_service.reset_session(db, tenancy.owner_id(), chat_id)
+                db.commit()
+                return "Started a new assistant conversation."
+
+            if cmd == "/disconnect":
+                telegram_link_service.unlink(db, tenancy.owner_id())
+                db.commit()
+                return "Telegram account disconnected."
 
             if cmd == "/status":
                 gmail_configured, gmail_authenticated, gmail_detail = self.deps.gmail_auth_status()
