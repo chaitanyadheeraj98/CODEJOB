@@ -162,6 +162,9 @@ def _run_worker(monkeypatch, outcome, *, owner: str = "owner-a"):
         def edit_message(self, chat_id, message_id, text):
             seen["edit"] = (chat_id, message_id, text)
 
+        def send_message(self, chat_id, text, *, inline_keyboard=None):
+            seen.setdefault("sent", []).append((chat_id, text, inline_keyboard))
+
     monkeypatch.setattr(tasks, "SessionLocal", lambda: _FakeDb())
     monkeypatch.setattr("app.services.chat_service.ChatService", Service)
     monkeypatch.setattr(
@@ -178,6 +181,21 @@ def test_worker_owner_scope_is_present_inside_asyncio_task(monkeypatch) -> None:
     assert seen["owner_in_coroutine"] == "owner-b"
     assert seen["current_owner"] == "owner-b"
     assert seen["edit"] == (11, 22, "answer")
+
+
+def test_worker_sends_email_proposal_card_from_persisted_tool_row(monkeypatch) -> None:
+    payload = {
+        "action": "send_email",
+        "candidate_email_id": 7,
+        "to": "recruiter@example.com",
+        "subject": "Role",
+        "body": "Hello",
+        "document_ids": [],
+        "document_names": [],
+    }
+    tool = SimpleNamespace(id=91, tool_name="propose_send_email", content=__import__("json").dumps(payload))
+    _result, seen = _run_worker(monkeypatch, ChatTurnResult("answer", [tool]))
+    assert seen["sent"][0][2][0][0]["callback_data"] == "act:prop:send:91"
 
 
 @pytest.mark.parametrize(

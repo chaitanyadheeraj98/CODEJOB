@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+import json
 import logging
 import threading
 from typing import Any, Callable
@@ -11,8 +12,8 @@ from sqlalchemy.orm import Session
 
 from app import tenancy
 from app.config import settings
-from app.models import RecruiterEmail, SyncRun, UserSettings
-from app.schemas import ApproveSendRequest, AutomationRunResponse, EmailResponse, RejectRequest
+from app.models import ChatMessage, ChatSession, RecruiterEmail, SyncRun, UserSettings
+from app.schemas import ApproveSendRequest, AutomationRunResponse, ChatSendReplyRequest, EmailResponse, RejectRequest
 from app.services import account_service, telegram_chat_service, telegram_link_service
 from app.services.telegram_format import escape
 from app.services.telegram_runtime import TelegramRuntimeState
@@ -44,6 +45,8 @@ class TelegramRuntimeDeps:
     action_lock: threading.Lock
     verify_action_pin: Callable[[str, str], bool]
     auth_ttl_minutes: Callable[[], int]
+    send_chat_reply: Callable[[int, ChatSendReplyRequest, Session], dict[str, object]] | None = None
+    record_proposal_outcome: Callable[..., ChatMessage] | None = None
 
 
 class TelegramRuntime:
@@ -750,6 +753,95 @@ class TelegramRuntime:
                 edit_message_id=message_id,
                 callback_notice="Awaiting input.",
             )
+
+        if callback_data.startswith("act:prop:send:") or callback_data.startswith("act:prop:cancel:"):
+            try:
+                _, _, action_name, raw_id = callback_data.split(":", 3)
+                proposal_message_id = int(raw_id)
+            except ValueError:
+                return TelegramReply(text="Invalid proposal.", edit_message_id=message_id, callback_notice="Invalid proposal.")
+            if action_name == "send" and not TelegramRuntimeState.session_is_active(chat_id):
+                TelegramRuntimeState.set_pending_mode(chat_id, f"await_auth_pin|{callback_data}|{message_id}")
+                return TelegramReply(
+                    text=self._pending_prompt("await_auth_pin"),
+                    inline_keyboard=[[self._tg_btn("Cancel", "cancel:pending")]],
+                    edit_message_id=message_id,
+                    callback_notice="Authentication required.",
+                )
+            db = self.deps.session_factory()
+            try:
+                proposal = (
+                    db.query(ChatMessage)
+                    .join(ChatSession, ChatSession.id == ChatMessage.session_id)
+                    .filter(
+                        ChatMessage.id == proposal_message_id,
+                        ChatMessage.role == "tool",
+                        ChatMessage.tool_name == "propose_send_email",
+                        ChatSession.owner_id == tenancy.owner_id(),
+                    )
+                    .first()
+                )
+                if proposal is None:
+                    return TelegramReply(text="Proposal not found.", edit_message_id=message_id, callback_notice="Not found.")
+                from app.services.telegram_format import email_proposal
+
+                rendered = email_proposal(proposal.content, proposal.id)
+                if rendered is None or rendered[1] is None:
+                    return TelegramReply(text="This proposal is incomplete.", edit_message_id=message_id, callback_notice="Incomplete.")
+                if self.deps.record_proposal_outcome is None:
+                    raise RuntimeError("Proposal outcome recorder is unavailable")
+                if action_name == "cancel":
+                    self.deps.record_proposal_outcome(
+                        db,
+                        proposal.session_id,
+                        tool_name=proposal.tool_name,
+                        outcome="cancelled",
+                        proposal_message_id=proposal.id,
+                    )
+                    return TelegramReply(
+                        text="Email cancelled. Nothing was sent.",
+                        inline_keyboard=[[self._tg_btn("Home", "menu:main:0")]],
+                        edit_message_id=message_id,
+                        callback_notice="Cancelled.",
+                    )
+                if self.deps.send_chat_reply is None:
+                    raise RuntimeError("Telegram email sender is unavailable")
+                payload = json.loads(proposal.content)
+                request = ChatSendReplyRequest(
+                    body=str(payload["body"]),
+                    subject=str(payload["subject"]),
+                    document_ids=list(payload.get("document_ids") or []),
+                )
+                try:
+                    self.deps.send_chat_reply(int(payload["candidate_email_id"]), request, db)
+                except Exception:
+                    self.deps.record_proposal_outcome(
+                        db,
+                        proposal.session_id,
+                        tool_name=proposal.tool_name,
+                        outcome="failed",
+                        proposal_message_id=proposal.id,
+                    )
+                    return TelegramReply(
+                        text="Email could not be sent. Nothing was changed.",
+                        edit_message_id=message_id,
+                        callback_notice="Send failed.",
+                    )
+                self.deps.record_proposal_outcome(
+                    db,
+                    proposal.session_id,
+                    tool_name=proposal.tool_name,
+                    outcome="confirmed",
+                    proposal_message_id=proposal.id,
+                )
+                return TelegramReply(
+                    text="Email sent.",
+                    inline_keyboard=[[self._tg_btn("Home", "menu:main:0")]],
+                    edit_message_id=message_id,
+                    callback_notice="Sent.",
+                )
+            finally:
+                db.close()
 
         if callback_data.startswith("act:approve:") or callback_data.startswith("act:reject:"):
             action_name, raw_id = callback_data.split(":", 2)[1:]

@@ -1988,6 +1988,8 @@ def _init_telegram_service() -> TelegramBotService | None:
             action_lock=telegram_action_lock,
             verify_action_pin=_verify_telegram_action_pin,
             auth_ttl_minutes=lambda: max(1, int(settings.telegram_auth_ttl_minutes or 30)),
+            send_chat_reply=send_chat_reply,
+            record_proposal_outcome=ChatService().record_proposal_outcome,
         )
     )
     service = TelegramBotService(

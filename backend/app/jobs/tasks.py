@@ -22,11 +22,12 @@ def run_telegram_chat_turn(*, chat_id: int, message_id: int, text: str) -> dict[
     from app.config import settings
     from app.services.chat_service import ChatService
     from app.services.telegram_chat_service import current_session
-    from app.services.telegram_format import format_answer
+    from app.services.telegram_format import email_proposal, format_answer
     from app.telegram_bot import TelegramTransport
 
     correlation_id = uuid4().hex
     response = ""
+    proposal_replies: list[tuple[str, list[list[dict[str, str]]] | None]] = []
     status = "ok"
     db = SessionLocal()
     try:
@@ -38,6 +39,13 @@ def run_telegram_chat_turn(*, chat_id: int, message_id: int, text: str) -> dict[
         else:
             response = format_answer(result.assistant_text or "Something went wrong on my side.")
             status = "ok" if result.assistant_text else "failed"
+            proposal_replies = [
+                rendered
+                for row in result.tool_rows
+                if row.tool_name == "propose_send_email"
+                for rendered in [email_proposal(row.content, row.id)]
+                if rendered is not None
+            ]
     except HTTPException as exc:
         if exc.status_code == 503:
             response = "I'm at capacity right now — send that again in a moment."
@@ -64,7 +72,10 @@ def run_telegram_chat_turn(*, chat_id: int, message_id: int, text: str) -> dict[
         db.close()
 
     try:
-        TelegramTransport(settings.telegram_bot_token).edit_message(chat_id, message_id, response)
+        transport = TelegramTransport(settings.telegram_bot_token)
+        transport.edit_message(chat_id, message_id, response)
+        for proposal_text, keyboard in proposal_replies:
+            transport.send_message(chat_id, proposal_text, inline_keyboard=keyboard)
     except Exception as exc:
         logger.warning(
             "telegram_chat_reply_failed correlation_id=%s chat_id=%s error_type=%s",

@@ -3,6 +3,7 @@ from __future__ import annotations
 from html import escape as html_escape
 from html.parser import HTMLParser
 import re
+import json
 
 
 def escape(value: object) -> str:
@@ -79,3 +80,51 @@ def format_answer(text: str) -> str:
         safe = re.sub(r"`([^`\n]+)`", r"<code>\1</code>", safe)
         rendered.append(safe)
     return "".join(rendered)
+
+
+def email_proposal(content: str, message_id: int) -> tuple[str, list[list[dict[str, str]]] | None] | None:
+    try:
+        payload = json.loads(content)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("status") == "missing_fields":
+        missing = payload.get("missing")
+        if not isinstance(missing, list) or not all(isinstance(value, str) and value for value in missing):
+            return None
+        return f"I need {escape(', '.join(missing))} before I can prepare that email.", None
+    required = ("candidate_email_id", "to", "subject", "body")
+    if payload.get("action") != "send_email" or any(not payload.get(key) for key in required):
+        return None
+    if not isinstance(payload["candidate_email_id"], int) or payload["candidate_email_id"] <= 0:
+        return None
+    document_ids = payload.get("document_ids", [])
+    document_names = payload.get("document_names", [])
+    if (
+        not isinstance(document_ids, list)
+        or not isinstance(document_names, list)
+        or len(document_ids) != len(document_names)
+        or not all(isinstance(value, int) and value > 0 for value in document_ids)
+        or not all(isinstance(value, str) and value.strip() for value in document_names)
+    ):
+        return None
+    body = str(payload["body"])
+    preview = body if len(body) <= 1500 else body[:1497].rstrip() + "..."
+    lines = [
+        "<b>Email ready to send</b>",
+        f"<b>To:</b> {escape(payload['to'])}",
+        f"<b>Subject:</b> {escape(payload['subject'])}",
+    ]
+    cc = str(payload.get("cc") or "").strip()
+    if cc:
+        lines.append(f"<b>CC:</b> {escape(cc)}")
+    if document_names:
+        lines.append("<b>Attachments:</b> " + ", ".join(escape(name) for name in document_names))
+    lines.extend(("<b>Body preview:</b>", f"<pre>{escape(preview)}</pre>"))
+    keyboard = [[
+        {"text": "Send", "callback_data": f"act:prop:send:{message_id}"},
+        {"text": "Cancel", "callback_data": f"act:prop:cancel:{message_id}"},
+    ]]
+    assert all(len(button["callback_data"].encode()) <= 64 for row in keyboard for button in row)
+    return "\n".join(lines), keyboard
