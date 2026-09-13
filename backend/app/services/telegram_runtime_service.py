@@ -14,6 +14,7 @@ from app.config import settings
 from app.models import RecruiterEmail, SyncRun, UserSettings
 from app.schemas import ApproveSendRequest, AutomationRunResponse, EmailResponse, RejectRequest
 from app.services import account_service
+from app.services.telegram_format import escape
 from app.services.telegram_runtime import TelegramRuntimeState
 from app.telegram_bot import TelegramReply
 
@@ -83,6 +84,7 @@ class TelegramRuntime:
 
     @staticmethod
     def _tg_btn(text: str, data: str) -> dict[str, str]:
+        assert len(data.encode("utf-8")) <= 64
         return {"text": text, "callback_data": data}
 
     @classmethod
@@ -266,43 +268,53 @@ class TelegramRuntime:
         return None
 
     @classmethod
-    def _format_review_message(cls, candidate: EmailResponse) -> str:
+    def _format_review_message(cls, candidate: EmailResponse) -> TelegramReply:
         draft_preview, was_clipped = cls._truncate_text(candidate.draft_reply, limit=600)
         subject, _ = cls._truncate_text(candidate.subject, limit=160)
         routing_reason, _ = cls._truncate_text(candidate.routing_reason, limit=220)
         lines = [
-            f"Email ID: {candidate.id}",
-            f"From: {candidate.sender}",
-            f"Subject: {subject}",
+            f"<b>Email ID:</b> <code>{candidate.id}</code>",
+            f"<b>From:</b> {escape(candidate.sender)}",
+            f"<b>Subject:</b> {escape(subject)}",
         ]
         source_listing = cls._source_listing_url(candidate)
         if source_listing:
-            lines.append(f"Source Listing: {source_listing}")
+            lines.append(f"<b>Source Listing:</b> {escape(source_listing)}")
         if candidate.gmail_message_url:
-            lines.append(f"Open: {candidate.gmail_message_url}")
+            lines.append(f"<b>Open:</b> {escape(candidate.gmail_message_url)}")
         lines.extend(
             [
-                f"To: {candidate.recipient_email or '-'}",
-                f"CC: {candidate.cc_email or '-'}",
-                f"Routing: {candidate.routing_status} ({round(float(candidate.routing_confidence or 0.0) * 100)}%)",
-                f"Routing Reason: {routing_reason or 'No routing evidence captured yet.'}",
-                f"Resume: {candidate.resume_file_name or '-'}",
+                f"<b>To:</b> {escape(candidate.recipient_email or '-')}",
+                f"<b>CC:</b> {escape(candidate.cc_email or '-')}",
+                f"<b>Routing:</b> {escape(candidate.routing_status)} ({round(float(candidate.routing_confidence or 0.0) * 100)}%)",
+                f"<b>Routing Reason:</b> {escape(routing_reason or 'No routing evidence captured yet.')}",
+                f"<b>Resume:</b> {escape(candidate.resume_file_name or '-')}",
             ]
         )
         draft_source = cls._draft_source_label(candidate.draft_source)
         if candidate.draft_model:
             draft_source = f"{draft_source} ({candidate.draft_model})"
-        lines.append(f"Draft source: {draft_source}")
-        lines.append(f"Resume Context: {cls._resume_context_label(candidate.draft_resume_context_status)}")
+        lines.append(f"<b>Draft source:</b> {escape(draft_source)}")
+        lines.append(f"<b>Resume Context:</b> {escape(cls._resume_context_label(candidate.draft_resume_context_status))}")
         if candidate.draft_ai_error:
-            lines.append(f"AI fallback: {candidate.draft_ai_error}")
+            lines.append(f"<b>AI fallback:</b> {escape(candidate.draft_ai_error)}")
         if candidate.last_error:
-            lines.append(f"Last Error: {candidate.last_error}")
-        lines.append("Draft Preview:")
-        lines.append(draft_preview or "(empty)")
+            lines.append(f"<b>Last Error:</b> {escape(candidate.last_error)}")
+        lines.append("<b>Draft Preview:</b>")
+        lines.append(f"<pre>{escape(draft_preview or '(empty)')}</pre>")
         if was_clipped:
             lines.append("[truncated]")
-        return "\n".join(lines)
+        return TelegramReply(
+            text="\n".join(lines),
+            inline_keyboard=[
+                [
+                    cls._tg_btn("Approve", f"act:approve:{candidate.id}"),
+                    cls._tg_btn("Reject", f"act:reject:{candidate.id}"),
+                ],
+                [cls._tg_btn("Home", "menu:main:0")],
+            ],
+            html=True,
+        )
 
     def _action_authorized(self, pin: str | None) -> bool:
         return self.deps.verify_action_pin(tenancy.owner_id(), (pin or "").strip())
@@ -350,6 +362,19 @@ class TelegramRuntime:
         pending_mode = TelegramRuntimeState.get_pending_mode(chat_id)
         if pending_mode and not command_line.startswith("/"):
             TelegramRuntimeState.clear_pending_mode(chat_id)
+            if pending_mode.startswith("await_auth_pin|"):
+                _, callback_data, pending_message_id = pending_mode.split("|", 2)
+                if not self.deps.verify_action_pin(tenancy.owner_id(), command_line):
+                    TelegramRuntimeState.set_pending_mode(chat_id, pending_mode)
+                    return "Authentication failed: incorrect PIN."
+                TelegramRuntimeState.activate_session(chat_id, self.deps.auth_ttl_minutes())
+                return self._handle_callback(
+                    chat_id,
+                    user_id,
+                    username,
+                    callback_data,
+                    int(pending_message_id),
+                )
             if pending_mode == "await_setquery":
                 return self.handle_command(chat_id, user_id, username, f"/setquery {command_line}")
             if pending_mode == "await_setdate":
@@ -525,7 +550,11 @@ class TelegramRuntime:
                     .filter(RecruiterEmail.owner_id == tenancy.owner_id(), RecruiterEmail.state == "needs_review")
                     .count()
                 )
-                return f"Needs Review: {count}\nTop items:\n{self._format_candidate_lines(rows)}"
+                buttons = [self._tg_btn(f"Review #{row.id}", f"cmd:/review {row.id}") for row in rows]
+                return TelegramReply(
+                    text=f"Needs Review: {count}\nTop items:\n{self._format_candidate_lines(rows)}",
+                    inline_keyboard=self._paginate_buttons(buttons, 0, menu_action="readonly"),
+                )
 
             if cmd == "/review":
                 if not args:
@@ -552,7 +581,11 @@ class TelegramRuntime:
                     .filter(RecruiterEmail.owner_id == tenancy.owner_id(), RecruiterEmail.state == "failed")
                     .count()
                 )
-                return f"Failed Mapping: {count}\nTop items:\n{self._format_candidate_lines(rows)}"
+                buttons = [self._tg_btn(f"Reject #{row.id}", f"act:reject:{row.id}") for row in rows]
+                return TelegramReply(
+                    text=f"Failed Mapping: {count}\nTop items:\n{self._format_candidate_lines(rows)}",
+                    inline_keyboard=self._paginate_buttons(buttons, 0, menu_action="readonly"),
+                )
 
             if cmd == "/recent_runs":
                 runs = (
@@ -693,6 +726,58 @@ class TelegramRuntime:
                 inline_keyboard=[[self._tg_btn("Cancel", "cancel:pending")], [self._tg_btn("Home", "menu:main:0")]],
                 edit_message_id=message_id,
                 callback_notice="Awaiting input.",
+            )
+
+        if callback_data.startswith("act:approve:") or callback_data.startswith("act:reject:"):
+            action_name, raw_id = callback_data.split(":", 2)[1:]
+            try:
+                email_id = int(raw_id)
+            except ValueError:
+                return TelegramReply(text="Invalid action.", edit_message_id=message_id, callback_notice="Invalid action.")
+            db = self.deps.session_factory()
+            try:
+                candidate = self.deps.get_candidate_review(email_id, db)
+            finally:
+                db.close()
+            card = self._format_review_message(candidate)
+            verb = "send" if action_name == "approve" else "reject"
+            card.text = f"<b>Confirm {verb}?</b>\n\n" + card.text
+            card.inline_keyboard = [
+                [self._tg_btn(f"Confirm {verb.title()}", f"act:go:{action_name}:{email_id}")],
+                [self._tg_btn("Cancel", "menu:main:0")],
+            ]
+            card.edit_message_id = message_id
+            card.callback_notice = "Confirmation required."
+            return card
+
+        if callback_data.startswith("act:go:approve:") or callback_data.startswith("act:go:reject:"):
+            try:
+                _, _, action_name, raw_id = callback_data.split(":", 3)
+                email_id = int(raw_id)
+            except ValueError:
+                return TelegramReply(text="Invalid action.", edit_message_id=message_id, callback_notice="Invalid action.")
+            auth_error = self._require_action_auth(chat_id, f"/{action_name}", None)
+            if auth_error:
+                TelegramRuntimeState.set_pending_mode(chat_id, f"await_auth_pin|{callback_data}|{message_id}")
+                return TelegramReply(
+                    text=self._pending_prompt("await_auth_pin"),
+                    inline_keyboard=[[self._tg_btn("Cancel", "cancel:pending")]],
+                    edit_message_id=message_id,
+                    callback_notice="Authentication required.",
+                )
+            command = f"/{action_name} {email_id}"
+            if action_name == "reject":
+                command += " Rejected from Telegram"
+            result = self.handle_command(chat_id, user_id, username, command)
+            if isinstance(result, TelegramReply):
+                result.edit_message_id = message_id
+                result.callback_notice = "Done."
+                return result
+            return TelegramReply(
+                text=result,
+                inline_keyboard=[[self._tg_btn("Home", "menu:main:0")]],
+                edit_message_id=message_id,
+                callback_notice="Done.",
             )
 
         if callback_data.startswith("cmd:"):

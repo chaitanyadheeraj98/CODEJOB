@@ -12,6 +12,7 @@ from app.config import settings
 from app.db import Base
 from app.models import RecruiterEmail, User, UserSettings
 from app.schemas import AIStatusResponse, AutomationRunResponse, EmailResponse
+from app.services.telegram_format import plain_text
 from app.services.telegram_runtime_service import TelegramRuntime, TelegramRuntimeDeps
 from app.telegram_bot import TelegramBotService, TelegramReply
 
@@ -210,8 +211,8 @@ class TelegramReviewCommandTests(unittest.TestCase):
         row = self._add_candidate(draft_ai_error="fallback used", last_error="sheet warning")
         reply = self.runtime.handle_command(123, "u1", "tester", f"/review {row.id}")
 
-        self.assertIsInstance(reply, str)
-        text = str(reply)
+        self.assertIsInstance(reply, TelegramReply)
+        text = plain_text(reply.text) if isinstance(reply, TelegramReply) else ""
         self.assertIn(f"Email ID: {row.id}", text)
         self.assertIn(f"Source Listing: {row.external_thread_id}", text)
         self.assertIn("To: shubham.sonkar@gvrinfotek.com", text)
@@ -241,8 +242,8 @@ class TelegramReviewCommandTests(unittest.TestCase):
         self._add_candidate(subject="Second candidate subject")
         reply = self.runtime.handle_command(123, "u1", "tester", "/needs_review")
 
-        self.assertIsInstance(reply, str)
-        text = str(reply)
+        self.assertIsInstance(reply, TelegramReply)
+        text = reply.text if isinstance(reply, TelegramReply) else ""
         self.assertIn("Needs Review: 2", text)
         self.assertIn(f"#{first.id} - First candidate subject", text)
         self.assertNotIn("To:", text)
@@ -274,7 +275,8 @@ class TelegramReviewCommandTests(unittest.TestCase):
             )
         )
 
-        text = TelegramRuntime._format_review_message(candidate)
+        reply = TelegramRuntime._format_review_message(candidate)
+        text = reply.text
 
         self.assertIn("[truncated]", text)
         self.assertLess(len(text), 2000)
