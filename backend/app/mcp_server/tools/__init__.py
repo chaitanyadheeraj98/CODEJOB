@@ -39,6 +39,7 @@ from app.mcp_server.tools.analysis import compare_records, rank_opportunities
 from app.mcp_server.tools.metrics import get_metrics
 from app.mcp_server.tools.inbox import get_conversation, get_recruiter_replies, list_conversations
 from app.mcp_server.tools.manual_intake import check_manual_intake, propose_manual_requirement
+from app.mcp_server.tools.labels import get_label_thread_dossier, list_gmail_labels
 from app.mcp_server.tools.navigation import navigate_to_queue
 from app.mcp_server.tools.candidate_documents import list_candidate_documents
 from app.mcp_server.tools.chat_attachments import list_chat_attachments, read_chat_attachment
@@ -84,6 +85,7 @@ __all__ = [
     "get_chart",
     "get_conversation",
     "get_draft_status",
+    "get_label_thread_dossier",
     "get_metrics",
     "get_recent_runs",
     "get_relationships",
@@ -99,6 +101,7 @@ __all__ = [
     "list_contact_numbers",
     "list_conversations",
     "list_external_opportunities",
+    "list_gmail_labels",
     "list_recruiter_opportunities",
     "list_resume_drafts",
     "list_resumes",
