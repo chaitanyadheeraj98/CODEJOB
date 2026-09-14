@@ -105,12 +105,27 @@ def is_gmail_configured() -> bool:
     return bool(settings.google_client_id and settings.google_client_secret and settings.google_redirect_uri)
 
 
+# Gmail connect does not use `settings.google_redirect_uri`. That one belongs to
+# app login (`/auth/google/callback`), and handing it to this flow sent the
+# Gmail code to the login handler, which rejected a state it never issued and
+# answered `?login_error=state_mismatch` while the listener below waited for a
+# code that never arrived. `run_local_server` overwrites `redirect_uri` with
+# this loopback regardless, so preparing the URL with anything else only means
+# the URL the user opens is not the one the listener is waiting for.
+OAUTH_LOOPBACK_HOST = "localhost"
+OAUTH_LOOPBACK_PORT = 8080
+
+
+def oauth_loopback_redirect_uri() -> str:
+    return f"http://{OAUTH_LOOPBACK_HOST}:{OAUTH_LOOPBACK_PORT}/"
+
+
 def _credentials_payload() -> dict[str, Any]:
     return {
         "installed": {
             "client_id": settings.google_client_id,
             "client_secret": settings.google_client_secret,
-            "redirect_uris": [settings.google_redirect_uri],
+            "redirect_uris": [oauth_loopback_redirect_uri(), settings.google_redirect_uri],
             "auth_uri": "https://accounts.google.com/o/oauth2/auth",
             "token_uri": "https://oauth2.googleapis.com/token",
         }
@@ -186,7 +201,7 @@ def _load_credentials(owner_id: str | None = None) -> Credentials:
 
     global _oauth_last_authorization_url
     flow = InstalledAppFlow.from_client_config(_credentials_payload(), SCOPES)
-    flow.redirect_uri = settings.google_redirect_uri
+    flow.redirect_uri = oauth_loopback_redirect_uri()
     # In Docker, there is no local browser in-container; user opens the printed URL manually.
     extra_auth_kwargs: dict[str, str] = {"prompt": "select_account"}
     if settings.google_login_hint:
@@ -200,9 +215,9 @@ def _load_credentials(owner_id: str | None = None) -> Credentials:
     creds = cast(
         Credentials,
         flow_any.run_local_server(
-            host="localhost",
+            host=OAUTH_LOOPBACK_HOST,
             bind_addr="0.0.0.0",
-            port=8080,
+            port=OAUTH_LOOPBACK_PORT,
             open_browser=False,
             authorization_prompt_message="Please visit this URL to authorize this application: {url}",
             state=auth_state,
@@ -216,7 +231,7 @@ def _load_credentials(owner_id: str | None = None) -> Credentials:
 
 def _prepare_oauth_flow() -> tuple[InstalledAppFlow, str, str, dict[str, str]]:
     flow = InstalledAppFlow.from_client_config(_credentials_payload(), SCOPES)
-    flow.redirect_uri = settings.google_redirect_uri
+    flow.redirect_uri = oauth_loopback_redirect_uri()
     extra_auth_kwargs: dict[str, str] = {"prompt": "select_account"}
     if settings.google_login_hint:
         extra_auth_kwargs["login_hint"] = settings.google_login_hint
@@ -229,9 +244,9 @@ def _run_prepared_oauth_flow(flow: InstalledAppFlow, auth_state: str, extra_auth
     creds = cast(
         Credentials,
         flow_any.run_local_server(
-            host="localhost",
+            host=OAUTH_LOOPBACK_HOST,
             bind_addr="0.0.0.0",
-            port=8080,
+            port=OAUTH_LOOPBACK_PORT,
             open_browser=False,
             authorization_prompt_message="Please visit this URL to authorize this application: {url}",
             state=auth_state,
