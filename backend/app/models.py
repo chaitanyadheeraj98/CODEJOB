@@ -278,6 +278,7 @@ class UserSettings(Base):
     feature_email_tracking_enabled: Mapped[bool] = mapped_column(default=False)
     feature_reply_inbox_enabled: Mapped[bool] = mapped_column(default=False)
     feature_label_tracking_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    feature_application_watches_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     feature_applications_enabled: Mapped[bool] = mapped_column(default=False)
     feature_application_automation_enabled: Mapped[bool] = mapped_column(default=False)
     feature_application_outreach_drafts_enabled: Mapped[bool] = mapped_column(default=False)

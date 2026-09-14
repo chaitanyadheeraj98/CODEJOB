@@ -2969,6 +2969,7 @@ def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
         feature_email_tracking_enabled=s.feature_email_tracking_enabled,
         feature_reply_inbox_enabled=s.feature_reply_inbox_enabled,
         feature_label_tracking_enabled=s.feature_label_tracking_enabled,
+        feature_application_watches_enabled=s.feature_application_watches_enabled,
         feature_applications_enabled=s.feature_applications_enabled,
         feature_application_automation_enabled=s.feature_application_automation_enabled,
         feature_application_outreach_drafts_enabled=s.feature_application_outreach_drafts_enabled,
@@ -3418,6 +3419,7 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
     s.feature_email_tracking_enabled = payload.feature_email_tracking_enabled
     s.feature_reply_inbox_enabled = payload.feature_reply_inbox_enabled
     s.feature_label_tracking_enabled = payload.feature_label_tracking_enabled
+    s.feature_application_watches_enabled = payload.feature_application_watches_enabled
     s.feature_applications_enabled = payload.feature_applications_enabled
     s.feature_application_automation_enabled = payload.feature_application_automation_enabled
     s.feature_application_outreach_drafts_enabled = payload.feature_application_outreach_drafts_enabled

@@ -376,6 +376,7 @@ type SettingsPayload = {
   feature_email_tracking_enabled: boolean
   feature_reply_inbox_enabled: boolean
   feature_label_tracking_enabled?: boolean
+  feature_application_watches_enabled: boolean
   feature_applications_enabled: boolean
   feature_application_automation_enabled: boolean
   feature_application_outreach_drafts_enabled: boolean
@@ -3111,6 +3112,7 @@ function App({ account }: { account?: AuthUser }) {
     feature_email_tracking_enabled: false,
     feature_reply_inbox_enabled: false,
     feature_label_tracking_enabled: false,
+    feature_application_watches_enabled: false,
     feature_applications_enabled: false,
     feature_application_automation_enabled: false,
     feature_application_outreach_drafts_enabled: false,
@@ -3567,6 +3569,7 @@ function App({ account }: { account?: AuthUser }) {
       feature_gmail_requirement_groups_enabled: Boolean(payload.feature_gmail_requirement_groups_enabled),
       feature_role_manifest_enabled: Boolean(payload.feature_role_manifest_enabled),
       feature_strict_candidate_screening_enabled: Boolean(payload.feature_strict_candidate_screening_enabled),
+      feature_application_watches_enabled: Boolean(payload.feature_application_watches_enabled),
       feature_applications_enabled: Boolean(payload.feature_applications_enabled),
       feature_application_automation_enabled: Boolean(payload.feature_application_automation_enabled),
       feature_application_outreach_drafts_enabled: Boolean(payload.feature_application_outreach_drafts_enabled),
@@ -7215,6 +7218,18 @@ function App({ account }: { account?: AuthUser }) {
                     </span>
                   </label>
                   <p className="subtle">Receives Gmail changes through Pub/Sub and captures replies to threads you sent, as they arrive.</p>
+                  <label className="toggleRow pillRow">
+                    <span>Application Recruiter Watches</span>
+                    <span className="toggleSwitch">
+                      <input
+                        type="checkbox"
+                        checked={settings.feature_application_watches_enabled}
+                        onChange={(e) => setSettings({ ...settings, feature_application_watches_enabled: e.target.checked })}
+                      />
+                      <span className="toggleTrack" />
+                    </span>
+                  </label>
+                  <p className="subtle">Follow recruiter replies for tracked applications using the shared recruiter-watch limit.</p>
                   <InboxDeliveryStatus status={gmailDelivery} />
                   <fieldset>
                     <legend>Gmail label tracking</legend>

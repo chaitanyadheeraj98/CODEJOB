@@ -284,6 +284,7 @@ class SettingsRequest(BaseModel):
     feature_email_tracking_enabled: bool = False
     feature_reply_inbox_enabled: bool = False
     feature_label_tracking_enabled: bool = False
+    feature_application_watches_enabled: bool = False
     feature_applications_enabled: bool = False
     feature_application_automation_enabled: bool = False
     feature_application_outreach_drafts_enabled: bool = False

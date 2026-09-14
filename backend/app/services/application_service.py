@@ -359,6 +359,14 @@ def update_status(
         metadata={"from": old_status, "to": new_status},
         models=models,
     )
+    if models.related_record_type == "AppTSApplication":
+        from app.services import appts_service, label_tracking_service
+
+        db.flush()
+        if new_status in label_tracking_service.APPLICATION_WATCH_TERMINAL_STATUSES:
+            label_tracking_service.reconcile_watches(db, application.owner_id)
+        elif old_status in label_tracking_service.APPLICATION_WATCH_TERMINAL_STATUSES:
+            appts_service.derive_application_watches(db, application.owner_id, application)
     should_derive = new_status in APPLICATION_CLOSED_STATUS_VALUES
     if (
         not should_derive
