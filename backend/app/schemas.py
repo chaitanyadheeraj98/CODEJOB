@@ -2487,6 +2487,9 @@ class ApplicationListResponse(BaseModel):
     next_cursor: int | None
     has_next: bool
     total: int
+    watch_count: int = 0
+    watch_limit: int = 0
+    watch_limit_reached: bool = False
 
 
 class RecordSourceResponse(BaseModel):

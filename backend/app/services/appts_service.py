@@ -133,6 +133,22 @@ def derive_application_watches(db: Session, owner_id: str, application: AppTSApp
     return watches
 
 
+def backfill_application_watches(db: Session, owner_id: str) -> int:
+    user_settings = db.query(UserSettings).filter(UserSettings.owner_id == owner_id).first()
+    if user_settings is None or not user_settings.feature_application_watches_enabled:
+        return 0
+    for application in db.query(AppTSApplication).filter(
+        AppTSApplication.owner_id == owner_id,
+        AppTSApplication.deleted_at.is_(None),
+        AppTSApplication.status.not_in(label_tracking_service.APPLICATION_WATCH_TERMINAL_STATUSES),
+    ).order_by(AppTSApplication.id):
+        derive_application_watches(db, owner_id, application)
+    return db.query(RecruiterWatch).filter(
+        RecruiterWatch.owner_id == owner_id,
+        RecruiterWatch.released_at.is_(None),
+    ).count()
+
+
 def _insert(db: Session, application: AppTSApplication) -> tuple[AppTSApplication, bool]:
     try:
         with db.begin_nested():

@@ -28,7 +28,7 @@ export async function listApplications(apiBase: string, filters: Record<string, 
   const params = new URLSearchParams({ ...filters, sort, limit: '100' })
   return (await requestJson<{ items: ApplicationCard[] }>(`${apiBase}/appts/applications?${params}`)).items
 }
-export function listApplicationPage(args: { apiBase: string; cursor: number; limit: number; q: string; status: 'all' | ApplicationStatus; filters?: Record<string, string>; sort?: string }): Promise<{ items: ApplicationCard[]; total: number }> {
+export function listApplicationPage(args: { apiBase: string; cursor: number; limit: number; q: string; status: 'all' | ApplicationStatus; filters?: Record<string, string>; sort?: string }): Promise<{ items: ApplicationCard[]; total: number; watch_count: number; watch_limit: number; watch_limit_reached: boolean }> {
   const params = new URLSearchParams({ cursor: String(args.cursor), limit: String(args.limit), sort: args.sort ?? 'newest' })
   if (args.q.trim()) params.set('q', args.q.trim())
   if (args.status !== 'all') params.set('status', args.status)

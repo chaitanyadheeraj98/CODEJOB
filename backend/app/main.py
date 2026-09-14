@@ -3381,6 +3381,7 @@ def get_settings_bootstrap(
 @app.put("/settings", response_model=SettingsResponse)
 def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> SettingsResponse:
     s = _get_settings(db)
+    application_watches_were_enabled = s.feature_application_watches_enabled
     s.enabled = payload.enabled
     s.gmail_query = payload.gmail_query
     s.default_gmail_query = payload.default_gmail_query.strip() if payload.default_gmail_query.strip() else (payload.gmail_query.strip() or "is:unread in:inbox recruiter")
@@ -3475,6 +3476,8 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
         payload.policy if payload.policy is not None else policy_service.read_policy_from_settings(s.policy_json)
     )
     s.policy_json = json.dumps(normalized_policy, separators=(",", ":"))
+    if payload.feature_application_watches_enabled and not application_watches_were_enabled:
+        appts_service.backfill_application_watches(db, s.owner_id)
     db.commit()
     db.refresh(s)
     return _settings_response_from_model(s)
@@ -9905,7 +9908,8 @@ def list_appts_applications(
     total = query.count()
     query = query.order_by(AppTSApplication.created_at.asc(), AppTSApplication.id.asc()) if sort == "oldest" else query.order_by(AppTSApplication.next_action_at.is_(None), AppTSApplication.next_action_at.asc(), AppTSApplication.id.asc()) if sort == "next_action" else query.order_by(AppTSApplication.created_at.desc(), AppTSApplication.id.desc())
     rows = query.offset(cursor).limit(limit + 1).all(); visible = rows[:limit]
-    return ApplicationListResponse(items=[_application_response(db, row, models=appts_service.APPTS_MODELS) for row in visible], next_cursor=cursor + limit if len(rows) > limit else None, has_next=len(rows) > limit, total=total)
+    watch_count = db.query(RecruiterWatch).filter(RecruiterWatch.owner_id == tenancy.owner_id(), RecruiterWatch.released_at.is_(None)).count()
+    return ApplicationListResponse(items=[_application_response(db, row, models=appts_service.APPTS_MODELS) for row in visible], next_cursor=cursor + limit if len(rows) > limit else None, has_next=len(rows) > limit, total=total, watch_count=watch_count, watch_limit=settings.label_tracking_max_watches, watch_limit_reached=watch_count >= settings.label_tracking_max_watches)
 
 
 @app.get("/appts/applications/{application_id}", response_model=ApplicationResponse)

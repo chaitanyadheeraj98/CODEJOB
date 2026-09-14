@@ -1,3 +1,4 @@
+import json
 import logging
 
 import pytest
@@ -131,3 +132,22 @@ def test_budget_refuses_at_cap_without_logging_the_watch_value(db, monkeypatch, 
     assert len(watches) == 1
     assert "label_tracking_watch_limit_reached application_id=" in caplog.text
     assert "recruiter@example.com" not in caplog.text
+
+
+def test_backfill_is_flag_gated_live_only_and_idempotent(db):
+    user_settings = add_settings(db, enabled=False)
+    corporate = add_application(db)
+    freemail = add_application(db, "recruiter@gmail.com")
+    terminal = add_application(db, "closed@example.net", status="position_closed")
+    deleted = add_application(db, "deleted@example.org")
+    deleted.deleted_at = application_service.utc_now()
+
+    assert appts_service.backfill_application_watches(db, "a") == 0
+    user_settings.feature_application_watches_enabled = True
+    assert appts_service.backfill_application_watches(db, "a") == 3
+    assert appts_service.backfill_application_watches(db, "a") == 3
+    provenances = [set(json.loads(watch.source_application_ids_json)) for watch in db.query(RecruiterWatch)]
+    assert db.query(RecruiterWatch).count() == 3
+    assert sum(corporate.id in provenance for provenance in provenances) == 2
+    assert sum(freemail.id in provenance for provenance in provenances) == 1
+    assert all(terminal.id not in provenance and deleted.id not in provenance for provenance in provenances)

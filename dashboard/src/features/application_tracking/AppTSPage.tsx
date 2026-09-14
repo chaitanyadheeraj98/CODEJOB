@@ -79,6 +79,7 @@ export default function AppTSPage({ apiBase, refreshToken, activeTab = 'bookmark
   const [bookmarkedSentDetails, setBookmarkedSentDetails] = useState<Record<number, SentItemDetails>>({})
   const [rows, setRows] = useState<ApplicationCard[]>([])
   const [total, setTotal] = useState(0)
+  const [watchBudget, setWatchBudget] = useState({ count: 0, limit: 0, reached: false })
   const [page, setPage] = useState(1)
   const [status, setStatus] = useState<'all' | ApplicationStatus>('all')
   // Starts true: a fetch is always scheduled on mount, so the first paint
@@ -118,6 +119,7 @@ export default function AppTSPage({ apiBase, refreshToken, activeTab = 'bookmark
         request = listApplicationPage({ apiBase, cursor: (page - 1) * PAGE_SIZE, limit: PAGE_SIZE, q: '', status, filters, sort: sortValue }).then((result) => {
           setRows(result.items)
           setTotal(result.total)
+          setWatchBudget({ count: result.watch_count ?? 0, limit: result.watch_limit ?? 0, reached: result.watch_limit_reached ?? false })
         })
       }
       request
@@ -418,6 +420,7 @@ export default function AppTSPage({ apiBase, refreshToken, activeTab = 'bookmark
               </select>
             </label>
           </div>
+          {watchBudget.limit > 0 ? <p role="status" className="subtle">Recruiter watch budget: {watchBudget.count} of {watchBudget.limit} used.{watchBudget.reached ? ' Limit reached.' : ''}</p> : null}
           {!loading && rows.length === 0 ? <p className="inventoryEmpty">No tracked applications match these filters.</p> : null}
           <div className="opportunityGrid">
             {rows.map((item) => {
